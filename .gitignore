@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv*/
+*.pyc
+.env
+
+data/swebench_lite/repos/
+results/raw/
+results/figures/
+/data/models/

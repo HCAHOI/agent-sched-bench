@@ -1,0 +1,10 @@
+name: continuum
+api_base: http://localhost:8001/v1
+metrics_url: http://localhost:8001/metrics
+program_id_mode: passthrough
+launch:
+  port: 8001
+  venv_dir: .venv-continuum
+  notes:
+    - pin the upstream vLLM version before install
+    - verify TTL and program_id support during ENV-3b

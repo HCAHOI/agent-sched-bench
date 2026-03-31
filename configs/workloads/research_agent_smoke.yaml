@@ -1,0 +1,6 @@
+name: research_agent_smoke
+base: research_agent
+max_steps: 3
+sample_size: 1
+sampling_strategy: smoke
+task_source: data/research_queries

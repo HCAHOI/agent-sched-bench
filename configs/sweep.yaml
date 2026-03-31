@@ -1,0 +1,21 @@
+defaults:
+  - systems: vllm_baseline
+  - workloads: code_agent
+
+matrix:
+  systems:
+    - vllm-baseline
+    - continuum
+    - thunderagent
+  workloads:
+    - code_agent
+    - data_agent
+    - research_agent
+  concurrency:
+    - 1
+    - 2
+    - 4
+    - 6
+    - 8
+    - 12
+    - 16

@@ -1,0 +1,10 @@
+name: thunderagent
+api_base: ${oc.env:THUNDERAGENT_API_BASE,"http://localhost:9000/v1"}
+metrics_url: http://localhost:9000/metrics
+program_id_mode: passthrough
+launch:
+  backend_type: vllm
+  backend_url: http://localhost:8000
+  port: 9000
+  profile: true
+  metrics: true

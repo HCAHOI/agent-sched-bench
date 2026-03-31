@@ -1,0 +1,10 @@
+name: vllm-baseline
+api_base: ${oc.env:VLLM_API_BASE,"http://localhost:8000/v1"}
+metrics_url: ${oc.env:VLLM_METRICS_URL,"http://localhost:8000/metrics"}
+program_id_mode: passthrough
+launch:
+  port: 8000
+  dtype: float16
+  max_model_len: 32768
+  gpu_memory_utilization: 0.90
+  enable_chunked_prefill: true
