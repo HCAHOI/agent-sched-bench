@@ -24,7 +24,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `HARNESS-1`: completed (code + static verification)
 - `HARNESS-2`: completed (code + static verification)
 - `HARNESS-3`: completed (code + static verification)
-- `ANALYSIS-1`: pending
+- `ANALYSIS-1`: completed (code + static verification)
 - `REPLAY-1`: pending
 
 ## Execution Rules
@@ -77,10 +77,12 @@ checkpointed commits, independent review, and GitHub sync.
   validation, GPU util CSV parsing, and metrics collector tests.
 - Implemented `HARNESS-3` assets: JSONL trace logging, run_id generation,
   duplicate-run protection, and trace logger tests.
+- Implemented `ANALYSIS-1` assets: JSONL parsing, basic throughput/JCT
+  summaries, simple plot generation, and heuristic inefficiency detection.
 
 ## Next Checkpoint
 
-- `ANALYSIS-1`: implement trace parsing, plots, and inefficiency analysis.
+- `REPLAY-1`: implement the trace replay fallback.
 
 ## ENV-1 Caveat
 
@@ -164,3 +166,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `HARNESS-3` code checkpoint is complete and reviewed, but it still needs
   one end-to-end benchmark run to validate logger integration with real trace
   emission frequency and file lifecycle.
+
+## ANALYSIS-1 Caveat
+
+- The `ANALYSIS-1` code checkpoint is complete and reviewed, but full confidence
+  still depends on running it over real benchmark traces rather than only unit
+  fixtures.
