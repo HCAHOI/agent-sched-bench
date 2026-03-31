@@ -146,6 +146,7 @@ python -m vllm.entrypoints.openai.api_server \
 - [ ] 跑通一个简单的 chat completion 请求
 - [ ] 记录 `--max-model-len` 的选择依据 (32768 tokens × 0.5MB/token ≈ 16GB KV cache pool，加上 model weights 16GB ≈ 32GB < 40GB)
 - [ ] 确认 `/metrics` endpoint 可访问 (Prometheus 格式)
+- [ ] 保存 serving 验证报告到 `results/processed/vllm_server_report.json`
 
 **验收标准**: 能通过 OpenAI-compatible API 发送 chat completion 请求并收到回复
 

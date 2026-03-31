@@ -1,6 +1,100 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "ENV-3a serve-vllm target is not implemented during BOOTSTRAP-0." >&2
-echo "Implement the real launcher in ENV-3a after checkpoint approval." >&2
-exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+VENV_DIR="${VENV_DIR:-.venv-server}"
+SERVER_PYTHON="${REPO_ROOT}/${VENV_DIR}/bin/python"
+
+MODEL_PATH="${MODEL_PATH:-/data/models/Llama-3.1-8B-Instruct}"
+VLLM_SPEC="${VLLM_SPEC:-vllm>=0.8,<0.9}"
+VLLM_HOST="${VLLM_HOST:-0.0.0.0}"
+VLLM_PORT="${VLLM_PORT:-8000}"
+VLLM_DTYPE="${VLLM_DTYPE:-float16}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+VLLM_ENABLE_CHUNKED_PREFILL="${VLLM_ENABLE_CHUNKED_PREFILL:-1}"
+VLLM_HEALTH_TIMEOUT_S="${VLLM_HEALTH_TIMEOUT_S:-180}"
+VLLM_POLL_INTERVAL_S="${VLLM_POLL_INTERVAL_S:-2.0}"
+VLLM_SMOKE_MODEL="${VLLM_SMOKE_MODEL:-auto}"
+VLLM_SMOKE_PROMPT="${VLLM_SMOKE_PROMPT:-Reply with the word READY.}"
+VLLM_LOG_PATH="${VLLM_LOG_PATH:-${REPO_ROOT}/results/processed/vllm_server.log}"
+VLLM_REPORT_PATH="${VLLM_REPORT_PATH:-${REPO_ROOT}/results/processed/vllm_server_report.json}"
+
+log() {
+  printf '[ENV-3a] %s\n' "$*"
+}
+
+require_server_python() {
+  if [[ ! -x "${SERVER_PYTHON}" ]]; then
+    printf 'Missing repo-local server Python: %s\n' "${SERVER_PYTHON}" >&2
+    printf 'Run ENV-1 first on the target server.\n' >&2
+    exit 1
+  fi
+}
+
+require_model_path() {
+  if [[ ! -d "${MODEL_PATH}" ]]; then
+    printf 'Model path does not exist: %s\n' "${MODEL_PATH}" >&2
+    printf 'Run ENV-2 successfully before ENV-3a.\n' >&2
+    exit 1
+  fi
+}
+
+install_vllm() {
+  log "Installing ${VLLM_SPEC} into ${SERVER_PYTHON}"
+  uv pip install --python "${SERVER_PYTHON}" "${VLLM_SPEC}"
+}
+
+start_server() {
+  mkdir -p "$(dirname "${VLLM_LOG_PATH}")"
+  log "Starting raw vLLM server; logs -> ${VLLM_LOG_PATH}"
+  PYTHONPATH="${REPO_ROOT}/src" "${SERVER_PYTHON}" -m serving.engine_launcher \
+    --model-path "${MODEL_PATH}" \
+    --host "${VLLM_HOST}" \
+    --port "${VLLM_PORT}" \
+    --dtype "${VLLM_DTYPE}" \
+    --max-model-len "${VLLM_MAX_MODEL_LEN}" \
+    --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION}" \
+    $( [[ "${VLLM_ENABLE_CHUNKED_PREFILL}" == "1" ]] && printf '%s ' '--enable-chunked-prefill' ) \
+    >>"${VLLM_LOG_PATH}" 2>&1 &
+  SERVER_PID=$!
+  log "vLLM server pid=${SERVER_PID}"
+}
+
+cleanup() {
+  if [[ -n "${SERVER_PID:-}" ]] && kill -0 "${SERVER_PID}" >/dev/null 2>&1; then
+    log "Stopping vLLM server pid=${SERVER_PID}"
+    kill "${SERVER_PID}" >/dev/null 2>&1 || true
+    wait "${SERVER_PID}" >/dev/null 2>&1 || true
+  fi
+}
+
+verify_server() {
+  log "Running raw vLLM readiness checks"
+  PYTHONPATH="${REPO_ROOT}/src" "${SERVER_PYTHON}" -m serving.health_check \
+    --api-base "http://127.0.0.1:${VLLM_PORT}/v1" \
+    --metrics-url "http://127.0.0.1:${VLLM_PORT}/metrics" \
+    --model "${VLLM_SMOKE_MODEL}" \
+    --timeout-s "${VLLM_HEALTH_TIMEOUT_S}" \
+    --poll-interval-s "${VLLM_POLL_INTERVAL_S}" \
+    --prompt "${VLLM_SMOKE_PROMPT}" \
+    --output "${VLLM_REPORT_PATH}" \
+    --vllm-spec "${VLLM_SPEC}" \
+    --model-path "${MODEL_PATH}" \
+    --fail-on-mismatch
+}
+
+main() {
+  require_server_python
+  require_model_path
+  install_vllm
+  trap cleanup EXIT INT TERM
+  start_server
+  verify_server
+  log "ENV-3a completed successfully; server is running. Press Ctrl-C to stop."
+  wait "${SERVER_PID}"
+}
+
+main "$@"

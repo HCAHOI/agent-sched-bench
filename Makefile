@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync verify-bootstrap verify-env1 verify-env2 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results
+.PHONY: help pull sync verify-bootstrap verify-env1 verify-env2 verify-env3a test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results
 
 help:
 	@printf "Targets:\n"
@@ -10,6 +10,7 @@ help:
 	@printf "  verify-bootstrap  Run BOOTSTRAP-0 verification\n"
 	@printf "  verify-env1       Run ENV-1 static verification\n"
 	@printf "  verify-env2       Run ENV-2 static verification\n"
+	@printf "  verify-env3a      Run ENV-3a static verification\n"
 	@printf "  test              Run the full test suite\n"
 	@printf "  lint              Run ruff\n"
 	@printf "  serve-vllm        Stub until ENV-3a implements serving launch\n"
@@ -35,6 +36,9 @@ verify-env1:
 
 verify-env2:
 	$(PYTHON) -m pytest tests/test_env2.py
+
+verify-env3a:
+	$(PYTHON) -m pytest tests/test_env3a.py
 
 test:
 	$(PYTHON) -m pytest

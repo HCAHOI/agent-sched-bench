@@ -12,7 +12,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `BOOTSTRAP-0`: completed
 - `ENV-1`: completed (code + static verification)
 - `ENV-2`: completed (code + static verification)
-- `ENV-3a`: pending
+- `ENV-3a`: completed (code + static verification)
 - `ENV-3b`: pending
 - `ENV-3c`: pending
 - `ENV-4`: pending
@@ -51,10 +51,12 @@ checkpointed commits, independent review, and GitHub sync.
 - Implemented `ENV-2` assets: real model download backends, full-load artifact
   verification, `.env` propagation after success, and static verification
   tests.
+- Implemented `ENV-3a` assets: raw vLLM launcher, readiness/metrics/chat
+  verification, serving config, and static verification tests.
 
 ## Next Checkpoint
 
-- `ENV-3a`: implement the raw vLLM serving launch and readiness checks.
+- `ENV-3b`: implement the Continuum fork path and compatibility checks.
 
 ## ENV-1 Caveat
 
@@ -67,3 +69,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `ENV-2` code checkpoint is complete and reviewed, but the real acceptance
   run still requires an approved server with model access, enough disk/RAM, and
   a successful full `AutoModelForCausalLM.from_pretrained()` load.
+
+## ENV-3a Caveat
+
+- The `ENV-3a` code checkpoint is complete and reviewed, but real acceptance
+  still requires running `scripts/serve_vllm.sh` on the approved server with
+  the actual model, GPU, and vLLM runtime.

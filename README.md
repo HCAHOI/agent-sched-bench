@@ -43,6 +43,7 @@ make sync
 make verify-bootstrap
 make verify-env1
 make verify-env2
+make verify-env3a
 make test
 ```
 
@@ -83,3 +84,17 @@ used for debugging, but it is explicitly non-acceptance.
 
 The real download and load check still must run on the approved server after
 checkpoint approval.
+
+## ENV-3a
+
+`ENV-3a` covers the raw vLLM baseline:
+
+- `scripts/serve_vllm.sh` installs the configured vLLM package into
+  `.venv-server`, launches the OpenAI-compatible server, and runs readiness
+  checks against `/v1/models`, `/v1/chat/completions`, and `/metrics`.
+- `src/serving/engine_launcher.py` owns the launch command contract.
+- `src/serving/health_check.py` writes a JSON server report after the readiness
+  checks pass.
+
+As with earlier environment checkpoints, actual acceptance still requires
+running the script on the approved server.
