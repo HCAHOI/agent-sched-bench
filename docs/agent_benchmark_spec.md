@@ -107,19 +107,17 @@ python -c "import torch; print(torch.cuda.get_device_name(0))"
 ```bash
 # scripts/download_model.sh
 # 方案 A: HuggingFace (需要 token)
-huggingface-cli download meta-llama/Llama-3.1-8B-Instruct \
-    --local-dir /data/models/Llama-3.1-8B-Instruct
+DOWNLOAD_BACKEND=huggingface ./scripts/download_model.sh
 
 # 方案 B: 如果 HF 下载太慢，用 modelscope
-pip install modelscope
-modelscope download --model LLM-Research/Meta-Llama-3.1-8B-Instruct \
-    --local_dir /data/models/Llama-3.1-8B-Instruct
+DOWNLOAD_BACKEND=modelscope ./scripts/download_model.sh
 ```
 
 **TODO**:
 - [ ] 选择模型下载方式 (HuggingFace 需要 Meta license approval，modelscope 可能更快)
 - [ ] 验证模型完整性: `python -c "from transformers import AutoModelForCausalLM; m = AutoModelForCausalLM.from_pretrained('/data/models/Llama-3.1-8B-Instruct'); print(m.config)"`
 - [ ] 记录模型路径到 `.env` 文件
+- [ ] 保存模型校验报告到 `results/processed/model_report.json`
 
 **验收标准**: 能 load 模型，config 显示 hidden_size=4096, num_layers=32
 

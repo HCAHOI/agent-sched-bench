@@ -42,6 +42,7 @@ make help
 make sync
 make verify-bootstrap
 make verify-env1
+make verify-env2
 make test
 ```
 
@@ -65,3 +66,20 @@ workload configs should describe the full benchmark dataset path.
   memory, `CUDA >= 12.1`, and `torch.cuda.is_available()`.
 
 Run the setup script only on the target Ubuntu server after approval.
+
+## ENV-2
+
+`ENV-2` adds the model download and verification path:
+
+- `scripts/download_model.sh` downloads `Llama-3.1-8B-Instruct` through either
+  HuggingFace Hub or ModelScope into `/data/models/...`, writes `MODEL_PATH`
+  into `.env`, and then runs the verification step.
+- `scripts/report_model_artifact.py` audits the downloaded artifact, records the
+  resolved package versions, inventories files, and by default performs a full
+  `AutoModelForCausalLM.from_pretrained()` check before declaring success.
+
+`ENV-2` acceptance requires the full load path. Config-only verification may be
+used for debugging, but it is explicitly non-acceptance.
+
+The real download and load check still must run on the approved server after
+checkpoint approval.

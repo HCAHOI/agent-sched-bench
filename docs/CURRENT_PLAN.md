@@ -11,7 +11,7 @@ checkpointed commits, independent review, and GitHub sync.
 
 - `BOOTSTRAP-0`: completed
 - `ENV-1`: completed (code + static verification)
-- `ENV-2`: pending
+- `ENV-2`: completed (code + static verification)
 - `ENV-3a`: pending
 - `ENV-3b`: pending
 - `ENV-3c`: pending
@@ -48,13 +48,22 @@ checkpointed commits, independent review, and GitHub sync.
   and tests.
 - Implemented `ENV-1` assets: a real Ubuntu bootstrap script, JSON environment
   reporting, and static verification tests.
+- Implemented `ENV-2` assets: real model download backends, full-load artifact
+  verification, `.env` propagation after success, and static verification
+  tests.
 
 ## Next Checkpoint
 
-- `ENV-2`: implement the model download pathway and verification steps.
+- `ENV-3a`: implement the raw vLLM serving launch and readiness checks.
 
 ## ENV-1 Caveat
 
 - The `ENV-1` code checkpoint is complete and reviewed, but the real acceptance
   run still has to happen on the approved Ubuntu+A100 server because this local
   machine cannot execute the server bootstrap path faithfully.
+
+## ENV-2 Caveat
+
+- The `ENV-2` code checkpoint is complete and reviewed, but the real acceptance
+  run still requires an approved server with model access, enough disk/RAM, and
+  a successful full `AutoModelForCausalLM.from_pretrained()` load.
