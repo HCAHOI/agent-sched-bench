@@ -15,7 +15,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `ENV-3a`: completed (code + static verification)
 - `ENV-3b`: completed (code + static verification)
 - `ENV-3c`: completed (code + static verification)
-- `ENV-4`: pending
+- `ENV-4`: completed (code + static verification)
 - `ENV-5`: pending
 - `AGENT-1`: pending
 - `AGENT-2`: pending
@@ -59,10 +59,12 @@ checkpointed commits, independent review, and GitHub sync.
 - Implemented `ENV-3c` assets: ThunderAgent clone/install/start flow, pinned-ref
   enforcement, install reporting, and proxy API checks for program/profile
   tracking.
+- Implemented `ENV-4` assets: clean pull workflow, smoke suite entry, harness
+  fail-closed sweep wrapper, and rsync-based result collection workflow.
 
 ## Next Checkpoint
 
-- `ENV-4`: implement the GitHub sync and smoke/result-sync workflow.
+- `ENV-5`: implement vLLM preemption and KV-cache observability controls.
 
 ## ENV-1 Caveat
 
@@ -93,3 +95,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `ENV-3c` code checkpoint is complete and reviewed, but real acceptance
   still requires running `scripts/serve_thunderagent.sh` on the approved server
   with the pinned `THUNDERAGENT_REF` and real ThunderAgent runtime.
+
+## ENV-4 Caveat
+
+- The `ENV-4` code checkpoint is complete and reviewed, but the clean/dirty pull
+  and rsync paths still need one real server-side exercise to validate the
+  operational assumptions.

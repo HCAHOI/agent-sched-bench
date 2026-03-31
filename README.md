@@ -44,6 +44,9 @@ make verify-bootstrap
 make verify-env1
 make verify-env2
 make verify-env3a
+make verify-env3b
+make verify-env3c
+make verify-env4
 make test
 ```
 
@@ -116,6 +119,18 @@ metrics above zero.
 
 As with the other environment checkpoints, actual acceptance still requires
 running the script on the approved server.
+
+## ENV-4
+
+`ENV-4` ties together the existing private GitHub sync workflow:
+
+- `scripts/pull_repo.sh` fast-forwards the current branch only when tracked
+  files are clean.
+- `scripts/run_smoke.sh` runs the current infrastructure smoke suite.
+- `scripts/run_sweep.sh` becomes the real harness entry once HARNESS lands, and
+  still fails closed until `src/harness/runner.py` exists.
+- `scripts/collect_results.sh` is a real `rsync` wrapper for pulling results
+  back from a remote server.
 
 ## ENV-3c
 

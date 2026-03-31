@@ -70,7 +70,6 @@ def test_placeholder_scripts_fail_closed() -> None:
         "scripts/run_sweep.sh",
         "scripts/collect_results.sh",
         "scripts/serve_vllm.sh",
-        "scripts/run_smoke.sh",
     ]:
         result = subprocess.run(
             [script],
