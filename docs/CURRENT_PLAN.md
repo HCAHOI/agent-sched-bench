@@ -18,7 +18,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `ENV-4`: completed (code + static verification)
 - `ENV-5`: completed (code + static verification)
 - `AGENT-1`: completed (code + static verification)
-- `AGENT-2`: pending
+- `AGENT-2`: completed (code + static verification)
 - `AGENT-3`: pending
 - `AGENT-4`: pending
 - `HARNESS-1`: pending
@@ -65,10 +65,12 @@ checkpointed commits, independent review, and GitHub sync.
   launcher flags, and metrics/log observability helpers for eviction evidence.
 - Implemented `AGENT-1` assets: typed `StepRecord`, shared `AgentBase`, unified
   LLM call contract, trace export, and summary aggregation.
+- Implemented `AGENT-2` assets: the SWE-style coding agent, shared tool-call
+  parser, temp-repo sandbox path, patch application, and code-agent smoke tests.
 
 ## Next Checkpoint
 
-- `AGENT-2`: implement the coding-agent workload.
+- `AGENT-3`: implement the NL2SQL data-agent workload.
 
 ## ENV-1 Caveat
 
@@ -116,3 +118,9 @@ checkpointed commits, independent review, and GitHub sync.
 
 - The `AGENT-1` code checkpoint is complete and reviewed, but `_call_llm()`
   still needs a live backend integration run for wire-level confirmation.
+
+## AGENT-2 Caveat
+
+- The `AGENT-2` code checkpoint is complete and reviewed, but full end-to-end
+  evaluation against real SWE-bench tasks and a live model backend still remains
+  a runtime acceptance item.
