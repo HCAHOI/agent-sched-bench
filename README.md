@@ -116,3 +116,22 @@ metrics above zero.
 
 As with the other environment checkpoints, actual acceptance still requires
 running the script on the approved server.
+
+## ENV-3c
+
+`ENV-3c` covers the ThunderAgent middleware path:
+
+- `scripts/serve_thunderagent.sh` clones or updates the official ThunderAgent
+  repo, installs it into `.venv-thunderagent`, records the resolved repo commit
+  and runtime package versions, starts the proxy, and verifies program/profile
+  tracking through the proxy APIs.
+- `src/serving/thunderagent_launcher.py` owns the proxy launch contract.
+- `src/serving/thunderagent_check.py` validates `/v1/models`, repeated
+  `program_id` requests, `/programs`, `/profiles/{program_id}`, and `/metrics`.
+
+`ENV-3c` only treats a run as acceptance-ready when `THUNDERAGENT_REF` is
+pinned to an immutable commit or tag and the proxy reports program/profile state
+for the repeated `program_id`.
+
+As with the other environment checkpoints, actual acceptance still requires
+running the script on the approved server.

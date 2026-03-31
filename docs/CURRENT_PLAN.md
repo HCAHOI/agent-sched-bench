@@ -14,7 +14,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `ENV-2`: completed (code + static verification)
 - `ENV-3a`: completed (code + static verification)
 - `ENV-3b`: completed (code + static verification)
-- `ENV-3c`: pending
+- `ENV-3c`: completed (code + static verification)
 - `ENV-4`: pending
 - `ENV-5`: pending
 - `AGENT-1`: pending
@@ -56,10 +56,13 @@ checkpointed commits, independent review, and GitHub sync.
 - Implemented `ENV-3b` assets: Continuum clone/install/start flow, pinned-ref
   enforcement, install reporting, and program_id-aware repeated validation with
   prefix-cache-hit gating.
+- Implemented `ENV-3c` assets: ThunderAgent clone/install/start flow, pinned-ref
+  enforcement, install reporting, and proxy API checks for program/profile
+  tracking.
 
 ## Next Checkpoint
 
-- `ENV-3c`: implement the ThunderAgent middleware path and proxy checks.
+- `ENV-4`: implement the GitHub sync and smoke/result-sync workflow.
 
 ## ENV-1 Caveat
 
@@ -84,3 +87,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `ENV-3b` code checkpoint is complete and reviewed, but real acceptance
   still requires running `scripts/serve_continuum.sh` on the approved server
   with the pinned `CONTINUUM_REF`, real model, and real Continuum runtime.
+
+## ENV-3c Caveat
+
+- The `ENV-3c` code checkpoint is complete and reviewed, but real acceptance
+  still requires running `scripts/serve_thunderagent.sh` on the approved server
+  with the pinned `THUNDERAGENT_REF` and real ThunderAgent runtime.

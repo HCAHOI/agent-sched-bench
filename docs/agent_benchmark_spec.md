@@ -235,6 +235,8 @@ client.chat.completions.create(
 - [ ] 确认 `--metrics` 暴露的 metrics endpoint URL 和字段
 - [ ] 确认 `--profile` 的 profiling 数据输出位置
 - [ ] 理解单节点模式下的行为: pause Acting program + shortest-first eviction + exponential time decay
+- [ ] 接受标准必须绑定 immutable ref，并通过 `/programs`、`/profiles/{program_id}`、`/metrics` 证实 program tracking/profiling 已开启
+- [ ] 保存 ThunderAgent 安装/启动报告到 `results/processed/thunderagent_*.json`
 
 **验收标准**: ThunderAgent proxy 启动，multi-turn 请求被正确跟踪为同一个 program
 
