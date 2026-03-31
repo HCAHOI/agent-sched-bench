@@ -22,7 +22,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `AGENT-3`: completed (code + static verification)
 - `AGENT-4`: completed (code + static verification)
 - `HARNESS-1`: completed (code + static verification)
-- `HARNESS-2`: pending
+- `HARNESS-2`: completed (code + static verification)
 - `HARNESS-3`: pending
 - `ANALYSIS-1`: pending
 - `REPLAY-1`: pending
@@ -73,10 +73,12 @@ checkpointed commits, independent review, and GitHub sync.
   search/page tools, unit tests, and a live-network smoke path.
 - Implemented `HARNESS-1` assets: the concurrent runner, CLI entry, signal-stop
   behavior, timeout/result semantics, and `N=2` harness tests.
+- Implemented `HARNESS-2` assets: vLLM metrics polling, fail-closed snapshot
+  validation, GPU util CSV parsing, and metrics collector tests.
 
 ## Next Checkpoint
 
-- `HARNESS-2`: implement metrics collection.
+- `HARNESS-3`: implement trace logging.
 
 ## ENV-1 Caveat
 
@@ -148,3 +150,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `HARNESS-1` code checkpoint is complete and reviewed, but one real sweep
   against the live backend/agents is still needed to validate end-to-end stop
   and timeout behavior under real load.
+
+## HARNESS-2 Caveat
+
+- The `HARNESS-2` code checkpoint is complete and reviewed, but final acceptance
+  still requires a live vLLM `/metrics` endpoint and real `nvidia-smi` sampling
+  during a benchmark run.
