@@ -21,7 +21,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `AGENT-2`: completed (code + static verification)
 - `AGENT-3`: completed (code + static verification)
 - `AGENT-4`: completed (code + static verification)
-- `HARNESS-1`: pending
+- `HARNESS-1`: completed (code + static verification)
 - `HARNESS-2`: pending
 - `HARNESS-3`: pending
 - `ANALYSIS-1`: pending
@@ -71,10 +71,12 @@ checkpointed commits, independent review, and GitHub sync.
   tools, denotation-based final evaluation, and data-agent smoke tests.
 - Implemented `AGENT-4` assets: the research agent, real DuckDuckGo-style
   search/page tools, unit tests, and a live-network smoke path.
+- Implemented `HARNESS-1` assets: the concurrent runner, CLI entry, signal-stop
+  behavior, timeout/result semantics, and `N=2` harness tests.
 
 ## Next Checkpoint
 
-- `HARNESS-1`: implement the concurrent runner.
+- `HARNESS-2`: implement metrics collection.
 
 ## ENV-1 Caveat
 
@@ -140,3 +142,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `AGENT-4` code checkpoint is complete and reviewed, but live-network smoke
   still depends on external DuckDuckGo/web availability and a live model
   backend for the LLM loop.
+
+## HARNESS-1 Caveat
+
+- The `HARNESS-1` code checkpoint is complete and reviewed, but one real sweep
+  against the live backend/agents is still needed to validate end-to-end stop
+  and timeout behavior under real load.
