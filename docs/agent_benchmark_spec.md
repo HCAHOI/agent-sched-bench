@@ -350,6 +350,7 @@ logger.info(f"EVICT seq_id={seq.seq_id} tokens={seq.get_len()} "
 - [ ] 确认 vLLM V1 (PagedAttention v2) 是否还支持 swap mode 或只有 recompute
 - [ ] 写一个 smoke test: N=4 跑 code agent，检查 vLLM log 里是否出现 preemption
 - [ ] 记录每个 baseline system 在不同 N 下的 preemption 频率
+- [ ] 保存 preemption 观测报告到 `results/processed/vllm_preemption_report.json`
 
 **验收标准**: 能确认在某个 N 值下 vLLM 开始频繁 preempt（`vllm:num_preemptions_total > 0`）
 

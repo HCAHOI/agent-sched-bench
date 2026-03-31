@@ -47,6 +47,7 @@ make verify-env3a
 make verify-env3b
 make verify-env3c
 make verify-env4
+make verify-env5
 make test
 ```
 
@@ -131,6 +132,19 @@ running the script on the approved server.
   still fails closed until `src/harness/runner.py` exists.
 - `scripts/collect_results.sh` is a real `rsync` wrapper for pulling results
   back from a remote server.
+
+## ENV-5
+
+`ENV-5` adds explicit preemption control and observability around the raw vLLM
+path:
+
+- `configs/systems/vllm_baseline.yaml`, `vllm_preserve.yaml`, and
+  `vllm_no_preempt.yaml` now encode the preemption-sensitive system variants.
+- `src/serving/engine_launcher.py` and `scripts/serve_vllm.sh` now accept
+  `--preemption-mode` and `--max-num-seqs`.
+- `src/harness/scheduler_hooks.py` parses `/metrics`, parses scheduler-hook log
+  lines, and emits a JSON report that distinguishes cumulative snapshots,
+  baseline deltas, and run-specific scheduler-hook evidence.
 
 ## ENV-3c
 

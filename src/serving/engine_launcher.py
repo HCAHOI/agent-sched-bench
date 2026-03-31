@@ -18,6 +18,8 @@ class VLLMServerConfig:
     max_model_len: int = 32768
     gpu_memory_utilization: float = 0.90
     enable_chunked_prefill: bool = True
+    preemption_mode: str = "recompute"
+    max_num_seqs: int = 256
 
 
 def build_vllm_command(config: VLLMServerConfig) -> list[str]:
@@ -38,6 +40,10 @@ def build_vllm_command(config: VLLMServerConfig) -> list[str]:
         str(config.max_model_len),
         "--gpu-memory-utilization",
         f"{config.gpu_memory_utilization:.2f}",
+        "--preemption-mode",
+        config.preemption_mode,
+        "--max-num-seqs",
+        str(config.max_num_seqs),
     ]
     if config.enable_chunked_prefill:
         command.append("--enable-chunked-prefill")
@@ -55,6 +61,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-model-len", type=int, default=32768)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--enable-chunked-prefill", action="store_true")
+    parser.add_argument("--preemption-mode", default="recompute")
+    parser.add_argument("--max-num-seqs", type=int, default=256)
     parser.add_argument(
         "--print-only",
         action="store_true",
@@ -73,6 +81,8 @@ def main() -> None:
         max_model_len=args.max_model_len,
         gpu_memory_utilization=args.gpu_memory_utilization,
         enable_chunked_prefill=args.enable_chunked_prefill,
+        preemption_mode=args.preemption_mode,
+        max_num_seqs=args.max_num_seqs,
     )
     command = build_vllm_command(config)
     if args.print_only:

@@ -16,7 +16,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `ENV-3b`: completed (code + static verification)
 - `ENV-3c`: completed (code + static verification)
 - `ENV-4`: completed (code + static verification)
-- `ENV-5`: pending
+- `ENV-5`: completed (code + static verification)
 - `AGENT-1`: pending
 - `AGENT-2`: pending
 - `AGENT-3`: pending
@@ -61,10 +61,12 @@ checkpointed commits, independent review, and GitHub sync.
   tracking.
 - Implemented `ENV-4` assets: clean pull workflow, smoke suite entry, harness
   fail-closed sweep wrapper, and rsync-based result collection workflow.
+- Implemented `ENV-5` assets: preemption-sensitive vLLM configs, preemption
+  launcher flags, and metrics/log observability helpers for eviction evidence.
 
 ## Next Checkpoint
 
-- `ENV-5`: implement vLLM preemption and KV-cache observability controls.
+- `AGENT-1`: implement the base agent interface and StepRecord contract.
 
 ## ENV-1 Caveat
 
@@ -101,3 +103,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `ENV-4` code checkpoint is complete and reviewed, but the clean/dirty pull
   and rsync paths still need one real server-side exercise to validate the
   operational assumptions.
+
+## ENV-5 Caveat
+
+- The `ENV-5` code checkpoint is complete and reviewed, but runtime confirmation
+  still requires a live vLLM run with scheduler instrumentation enabled and a
+  workload that actually triggers preemption or eviction.
