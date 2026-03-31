@@ -20,7 +20,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `AGENT-1`: completed (code + static verification)
 - `AGENT-2`: completed (code + static verification)
 - `AGENT-3`: completed (code + static verification)
-- `AGENT-4`: pending
+- `AGENT-4`: completed (code + static verification)
 - `HARNESS-1`: pending
 - `HARNESS-2`: pending
 - `HARNESS-3`: pending
@@ -69,10 +69,12 @@ checkpointed commits, independent review, and GitHub sync.
   parser, temp-repo sandbox path, patch application, and code-agent smoke tests.
 - Implemented `AGENT-3` assets: the read-only NL2SQL data agent, real sqlite
   tools, denotation-based final evaluation, and data-agent smoke tests.
+- Implemented `AGENT-4` assets: the research agent, real DuckDuckGo-style
+  search/page tools, unit tests, and a live-network smoke path.
 
 ## Next Checkpoint
 
-- `AGENT-4`: implement the deep-research agent workload.
+- `HARNESS-1`: implement the concurrent runner.
 
 ## ENV-1 Caveat
 
@@ -132,3 +134,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `AGENT-3` code checkpoint is complete and reviewed, but full runtime
   fidelity still requires real BIRD databases and the intended live model
   backend.
+
+## AGENT-4 Caveat
+
+- The `AGENT-4` code checkpoint is complete and reviewed, but live-network smoke
+  still depends on external DuckDuckGo/web availability and a live model
+  backend for the LLM loop.

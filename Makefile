@@ -75,8 +75,7 @@ smoke-data:
 	$(PYTHON) -m pytest tests/test_data_agent.py
 
 smoke-research:
-	@printf "AGENT-4 not implemented yet. Use after checkpoint approval.\n" >&2
-	@exit 1
+	$(PYTHON) -m pytest tests/integration_research_agent_live.py
 
 run-sweep:
 	./scripts/run_sweep.sh
