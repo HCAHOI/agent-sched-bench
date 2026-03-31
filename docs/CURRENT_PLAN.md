@@ -19,7 +19,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `ENV-5`: completed (code + static verification)
 - `AGENT-1`: completed (code + static verification)
 - `AGENT-2`: completed (code + static verification)
-- `AGENT-3`: pending
+- `AGENT-3`: completed (code + static verification)
 - `AGENT-4`: pending
 - `HARNESS-1`: pending
 - `HARNESS-2`: pending
@@ -67,10 +67,12 @@ checkpointed commits, independent review, and GitHub sync.
   LLM call contract, trace export, and summary aggregation.
 - Implemented `AGENT-2` assets: the SWE-style coding agent, shared tool-call
   parser, temp-repo sandbox path, patch application, and code-agent smoke tests.
+- Implemented `AGENT-3` assets: the read-only NL2SQL data agent, real sqlite
+  tools, denotation-based final evaluation, and data-agent smoke tests.
 
 ## Next Checkpoint
 
-- `AGENT-3`: implement the NL2SQL data-agent workload.
+- `AGENT-4`: implement the deep-research agent workload.
 
 ## ENV-1 Caveat
 
@@ -124,3 +126,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `AGENT-2` code checkpoint is complete and reviewed, but full end-to-end
   evaluation against real SWE-bench tasks and a live model backend still remains
   a runtime acceptance item.
+
+## AGENT-3 Caveat
+
+- The `AGENT-3` code checkpoint is complete and reviewed, but full runtime
+  fidelity still requires real BIRD databases and the intended live model
+  backend.

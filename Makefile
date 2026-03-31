@@ -72,8 +72,7 @@ smoke-code:
 	$(PYTHON) -m pytest tests/test_code_agent.py
 
 smoke-data:
-	@printf "AGENT-3 not implemented yet. Use after checkpoint approval.\n" >&2
-	@exit 1
+	$(PYTHON) -m pytest tests/test_data_agent.py
 
 smoke-research:
 	@printf "AGENT-4 not implemented yet. Use after checkpoint approval.\n" >&2
