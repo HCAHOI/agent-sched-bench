@@ -98,3 +98,21 @@ checkpoint approval.
 
 As with earlier environment checkpoints, actual acceptance still requires
 running the script on the approved server.
+
+## ENV-3b
+
+`ENV-3b` covers the Continuum fork path:
+
+- `scripts/serve_continuum.sh` clones or updates the official Continuum repo,
+  installs it into `.venv-continuum`, records the resolved repo commit and
+  package versions, starts the Continuum server, and runs repeated
+  `program_id`-aware health checks.
+- `src/serving/continuum_launcher.py` owns the Continuum launch contract.
+- `src/serving/health_check.py` is reused for repeated multi-turn validation.
+
+`ENV-3b` only treats a run as acceptance-ready when `CONTINUUM_REF` is pinned to
+an immutable commit or tag and the repeated checks observe prefix-cache hit
+metrics above zero.
+
+As with the other environment checkpoints, actual acceptance still requires
+running the script on the approved server.

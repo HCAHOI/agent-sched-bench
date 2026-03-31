@@ -77,9 +77,9 @@ def test_health_check_validate_report_rejects_missing_acceptance_signals() -> No
     report = {
         "models_response": {"data": []},
         "metrics_available": False,
-        "chat_response": {"choices": [{"message": {"content": ""}}]},
+        "chat_responses": [{"choices": [{"message": {"content": ""}}]}],
     }
     errors = validate_report(report)
     assert "/v1/models returned an empty model list" in errors
     assert "/metrics did not expose any vllm-prefixed metrics" in errors
-    assert "chat completion returned empty content" in errors
+    assert "chat completion #0 returned empty content" in errors

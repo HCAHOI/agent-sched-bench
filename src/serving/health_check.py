@@ -19,14 +19,21 @@ def safe_version(package: str) -> str | None:
         return None
 
 
-def build_chat_payload(model: str, prompt: str) -> dict[str, Any]:
+def build_chat_payload(
+    model: str,
+    messages: list[dict[str, str]],
+    program_id: str | None = None,
+) -> dict[str, Any]:
     """Construct a minimal OpenAI-compatible chat payload."""
-    return {
+    payload = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "max_tokens": 16,
         "temperature": 0.0,
     }
+    if program_id is not None:
+        payload["program_id"] = program_id
+    return payload
 
 
 async def wait_for_models_endpoint(
@@ -61,12 +68,14 @@ async def run_chat_smoke(
     client: httpx.AsyncClient,
     api_base: str,
     model: str,
-    prompt: str,
+    messages: list[dict[str, str]],
+    program_id: str | None = None,
 ) -> dict[str, Any]:
     """Send a minimal chat-completions request to the server."""
+    payload = build_chat_payload(model=model, messages=messages, program_id=program_id)
     response = await client.post(
         f"{api_base}/chat/completions",
-        json=build_chat_payload(model=model, prompt=prompt),
+        json=payload,
     )
     response.raise_for_status()
     return response.json()
@@ -88,13 +97,33 @@ async def verify_server(args: argparse.Namespace) -> dict[str, Any]:
             if not models:
                 raise ValueError("no models available to resolve auto model id")
             resolved_model = models[0]["id"]
-        metrics_payload = await require_metrics_endpoint(client, args.metrics_url)
-        chat_payload = await run_chat_smoke(
-            client=client,
-            api_base=args.api_base,
-            model=resolved_model,
-            prompt=args.prompt,
-        )
+        pre_metrics_payload = await require_metrics_endpoint(client, args.metrics_url)
+        chat_payloads = []
+        request_messages: list[dict[str, str]] = [{"role": "user", "content": args.prompt}]
+        for index in range(args.repeat):
+            chat_payloads.append(
+                await run_chat_smoke(
+                    client=client,
+                    api_base=args.api_base,
+                    model=resolved_model,
+                    messages=request_messages,
+                    program_id=args.program_id,
+                )
+            )
+            if index < args.repeat - 1:
+                assistant_message = (
+                    (((chat_payloads[-1].get("choices") or [{}])[0].get("message") or {}).get("content"))
+                    or ""
+                )
+                request_messages = [
+                    *request_messages,
+                    {"role": "assistant", "content": assistant_message},
+                    {"role": "user", "content": args.followup_prompt},
+                ]
+        post_metrics_payload = await require_metrics_endpoint(client, args.metrics_url)
+
+    pre_prefix_cache_hit_rates = parse_prefix_cache_hit_rates(pre_metrics_payload)
+    post_prefix_cache_hit_rates = parse_prefix_cache_hit_rates(post_metrics_payload)
 
     return {
         "timestamp": int(time.time()),
@@ -103,34 +132,50 @@ async def verify_server(args: argparse.Namespace) -> dict[str, Any]:
         "model_path": args.model_path,
         "requested_model": args.model,
         "resolved_model": resolved_model,
+        "program_id": args.program_id,
+        "repeat": args.repeat,
+        "followup_prompt": args.followup_prompt,
+        "require_prefix_cache_hit": args.require_prefix_cache_hit,
         "vllm_spec": args.vllm_spec,
         "installed_versions": {
             "vllm": safe_version("vllm"),
             "httpx": safe_version("httpx"),
         },
         "models_response": models_payload,
-        "metrics_available": "vllm:" in metrics_payload,
-        "metrics_sample": metrics_payload.splitlines()[:10],
-        "chat_response": chat_payload,
+        "metrics_available": "vllm:" in post_metrics_payload,
+        "metrics_sample": post_metrics_payload.splitlines()[:10],
+        "pre_prefix_cache_hit_rates": pre_prefix_cache_hit_rates,
+        "post_prefix_cache_hit_rates": post_prefix_cache_hit_rates,
+        "chat_responses": chat_payloads,
     }
 
 
 def validate_report(report: dict[str, Any]) -> list[str]:
-    """Validate the readiness report against ENV-3a acceptance signals."""
+    """Validate the readiness report against serving-checkpoint acceptance signals."""
     errors: list[str] = []
     if not report["models_response"].get("data"):
         errors.append("/v1/models returned an empty model list")
     if not report["metrics_available"]:
         errors.append("/metrics did not expose any vllm-prefixed metrics")
+    if report.get("require_prefix_cache_hit"):
+        pre_rates = report.get("pre_prefix_cache_hit_rates") or {}
+        post_rates = report.get("post_prefix_cache_hit_rates") or {}
+        deltas = [
+            post_rates.get(metric, 0.0) - pre_rates.get(metric, 0.0)
+            for metric in set(pre_rates) | set(post_rates)
+        ]
+        if max(deltas, default=0.0) <= 0.0:
+            errors.append("prefix cache hit rate did not increase during this run")
 
-    choices = report["chat_response"].get("choices") or []
-    if not choices:
-        errors.append("chat completion returned no choices")
-    else:
+    for index, chat_response in enumerate(report["chat_responses"]):
+        choices = chat_response.get("choices") or []
+        if not choices:
+            errors.append(f"chat completion #{index} returned no choices")
+            continue
         message = choices[0].get("message") or {}
         content = message.get("content")
         if not content:
-            errors.append("chat completion returned empty content")
+            errors.append(f"chat completion #{index} returned empty content")
 
     return errors
 
@@ -144,12 +189,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="auto")
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--prompt", default="Reply with the word READY.")
+    parser.add_argument(
+        "--followup-prompt",
+        default="Continue the same conversation and reply with READY-AGAIN.",
+    )
+    parser.add_argument("--program-id")
+    parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--timeout-s", type=float, default=180.0)
     parser.add_argument("--poll-interval-s", type=float, default=2.0)
     parser.add_argument("--output", required=True)
     parser.add_argument("--vllm-spec", required=True)
+    parser.add_argument("--require-prefix-cache-hit", action="store_true")
     parser.add_argument("--fail-on-mismatch", action="store_true")
     return parser.parse_args()
+
+
+def parse_prefix_cache_hit_rates(metrics_payload: str) -> dict[str, float]:
+    """Extract prefix cache hit-rate gauges from a Prometheus metrics payload."""
+    metrics: dict[str, float] = {}
+    for line in metrics_payload.splitlines():
+        if line.startswith("vllm:gpu_prefix_cache_hit_rate"):
+            metrics["gpu_prefix_cache_hit_rate"] = float(line.split()[-1])
+        if line.startswith("vllm:cpu_prefix_cache_hit_rate"):
+            metrics["cpu_prefix_cache_hit_rate"] = float(line.split()[-1])
+    return metrics
 
 
 def main() -> None:

@@ -1,10 +1,14 @@
 name: continuum
-api_base: http://localhost:8001/v1
-metrics_url: http://localhost:8001/metrics
+api_base: ${oc.env:CONTINUUM_API_BASE,"http://localhost:8001/v1"}
+metrics_url: ${oc.env:CONTINUUM_METRICS_URL,"http://localhost:8001/metrics"}
 program_id_mode: passthrough
 launch:
-  port: 8001
+  repo_url: ${oc.env:CONTINUUM_REPO_URL,"https://github.com/Hanchenli/vllm-continuum.git"}
+  ref: ${oc.env:CONTINUUM_REF,"REPLACE_WITH_COMMIT_OR_TAG"}
+  port: ${oc.env:CONTINUUM_PORT,8001}
   venv_dir: .venv-continuum
+  use_cpu_offload: ${oc.env:CONTINUUM_USE_CPU_OFFLOAD,0}
+  lmcache_cpu_gib: ${oc.env:CONTINUUM_LMCACHE_CPU_GIB,200}
   notes:
-    - pin the upstream vLLM version before install
-    - verify TTL and program_id support during ENV-3b
+    - verify scheduling-policy continuum starts correctly
+    - verify multi-turn program_id traffic through repeated health checks

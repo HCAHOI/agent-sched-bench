@@ -13,7 +13,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `ENV-1`: completed (code + static verification)
 - `ENV-2`: completed (code + static verification)
 - `ENV-3a`: completed (code + static verification)
-- `ENV-3b`: pending
+- `ENV-3b`: completed (code + static verification)
 - `ENV-3c`: pending
 - `ENV-4`: pending
 - `ENV-5`: pending
@@ -53,10 +53,13 @@ checkpointed commits, independent review, and GitHub sync.
   tests.
 - Implemented `ENV-3a` assets: raw vLLM launcher, readiness/metrics/chat
   verification, serving config, and static verification tests.
+- Implemented `ENV-3b` assets: Continuum clone/install/start flow, pinned-ref
+  enforcement, install reporting, and program_id-aware repeated validation with
+  prefix-cache-hit gating.
 
 ## Next Checkpoint
 
-- `ENV-3b`: implement the Continuum fork path and compatibility checks.
+- `ENV-3c`: implement the ThunderAgent middleware path and proxy checks.
 
 ## ENV-1 Caveat
 
@@ -75,3 +78,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `ENV-3a` code checkpoint is complete and reviewed, but real acceptance
   still requires running `scripts/serve_vllm.sh` on the approved server with
   the actual model, GPU, and vLLM runtime.
+
+## ENV-3b Caveat
+
+- The `ENV-3b` code checkpoint is complete and reviewed, but real acceptance
+  still requires running `scripts/serve_continuum.sh` on the approved server
+  with the pinned `CONTINUUM_REF`, real model, and real Continuum runtime.

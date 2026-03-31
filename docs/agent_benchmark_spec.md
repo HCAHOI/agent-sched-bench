@@ -181,6 +181,8 @@ python -m vllm.entrypoints.openai.api_server \
 - [ ] 如果版本冲突严重，**先跳过 Continuum**，用他们论文 Table 8B/A100 的数据做 reference
 - [ ] 理解 Continuum 的 `program_id` 机制——agent 发请求时需要附带这个字段
 - [ ] 测试 TTL 机制是否正常工作 (发两轮 multi-turn 请求，check KV cache 是否被 pin)
+- [ ] 保存 Continuum 安装/启动报告到 `results/processed/continuum_*.json`
+- [ ] 接受标准必须绑定 immutable ref，且 repeated `program_id` 请求观测到 prefix cache hit rate > 0
 
 **验收标准**: Continuum 启动无报错，multi-turn 请求 KV cache hit rate > 0
 
