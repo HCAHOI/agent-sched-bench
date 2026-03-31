@@ -89,3 +89,16 @@ def test_primary_workload_configs_default_to_full_dataset() -> None:
             data = yaml.safe_load(handle)
         assert data["sample_size"] is None
         assert data["sampling_strategy"] == "full_dataset"
+
+
+def test_primary_workload_configs_use_expected_step_budgets() -> None:
+    expected = {
+        "code_agent": 40,
+        "data_agent": 20,
+        "research_agent": 30,
+    }
+    for config_name, max_steps in expected.items():
+        path = REPO_ROOT / "configs" / "workloads" / f"{config_name}.yaml"
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+        assert data["max_steps"] == max_steps

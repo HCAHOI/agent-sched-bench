@@ -1,5 +1,5 @@
 name: data_agent
-max_steps: 10
+max_steps: 20
 sql_timeout_s: 30
 sample_size: null
 sampling_strategy: full_dataset

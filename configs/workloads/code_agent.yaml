@@ -1,5 +1,5 @@
 name: code_agent
-max_steps: 20
+max_steps: 40
 command_timeout_s: 30
 task_timeout_s: 300
 sample_size: null

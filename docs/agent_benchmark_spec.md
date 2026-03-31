@@ -468,7 +468,7 @@ then read the code, then make targeted edits, then run tests."""
 class CodeAgent(AgentBase):
     """SWE-bench Lite coding agent"""
     
-    MAX_STEPS = 20  # 防止无限循环
+    MAX_STEPS = 40  # 防止无限循环，同时保留更丰富的 trace
     
     async def run(self, task: dict) -> bool:
         """
@@ -558,7 +558,7 @@ If your SQL has errors, read the error message and try again."""
 
 class DataAgent(AgentBase):
     """NL2SQL agent on BIRD dataset"""
-    MAX_STEPS = 10
+    MAX_STEPS = 20
     
     async def run(self, task: dict) -> bool:
         """
@@ -607,7 +607,7 @@ information from multiple sources into a coherent answer."""
 
 class ResearchAgent(AgentBase):
     """Multi-step search + synthesis agent"""
-    MAX_STEPS = 15
+    MAX_STEPS = 30
     
     async def run(self, task: dict) -> bool:
         """
