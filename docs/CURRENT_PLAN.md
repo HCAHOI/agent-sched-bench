@@ -25,7 +25,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `HARNESS-2`: completed (code + static verification)
 - `HARNESS-3`: completed (code + static verification)
 - `ANALYSIS-1`: completed (code + static verification)
-- `REPLAY-1`: pending
+- `REPLAY-1`: completed (code + static verification)
 
 ## Execution Rules
 
@@ -79,10 +79,12 @@ checkpointed commits, independent review, and GitHub sync.
   duplicate-run protection, and trace logger tests.
 - Implemented `ANALYSIS-1` assets: JSONL parsing, basic throughput/JCT
   summaries, simple plot generation, and heuristic inefficiency detection.
+- Implemented `REPLAY-1` assets: trace replay sequencing, inter-program timing
+  offsets, tool-gap waiting, and replay tests.
 
 ## Next Checkpoint
 
-- `REPLAY-1`: implement the trace replay fallback.
+- Remaining planned checkpoints are complete.
 
 ## ENV-1 Caveat
 
@@ -172,3 +174,9 @@ checkpointed commits, independent review, and GitHub sync.
 - The `ANALYSIS-1` code checkpoint is complete and reviewed, but full confidence
   still depends on running it over real benchmark traces rather than only unit
   fixtures.
+
+## REPLAY-1 Caveat
+
+- The `REPLAY-1` code checkpoint is complete and reviewed, but final acceptance
+  still requires replaying against a live OpenAI-compatible serving stack under
+  real timing jitter and scheduler behavior.
