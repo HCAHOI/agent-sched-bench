@@ -41,6 +41,7 @@ agent-sched-bench/
 make help
 make sync
 make verify-bootstrap
+make verify-env1
 make test
 ```
 
@@ -50,3 +51,17 @@ message.
 
 Smoke-only subsets belong in dedicated `*_smoke.yaml` workload configs. Default
 workload configs should describe the full benchmark dataset path.
+
+## ENV-1
+
+`ENV-1` provides the first real server-side asset:
+
+- `scripts/setup_server.sh` installs Ubuntu base packages, `uv`, Python 3.11,
+  a repo-local server venv, CUDA-enabled `torch`, and writes an environment
+  report.
+- `scripts/report_server_env.py` records GPU visibility, memory, free disk, and
+  SSH-key presence to JSON for auditability, and `ENV-1` only succeeds when the
+  report confirms the expected `A100-SXM-40GB`, at least `40 GiB` of GPU
+  memory, `CUDA >= 12.1`, and `torch.cuda.is_available()`.
+
+Run the setup script only on the target Ubuntu server after approval.

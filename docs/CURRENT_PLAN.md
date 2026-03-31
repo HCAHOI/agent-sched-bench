@@ -10,7 +10,7 @@ checkpointed commits, independent review, and GitHub sync.
 ## Checkpoint Status
 
 - `BOOTSTRAP-0`: completed
-- `ENV-1`: pending
+- `ENV-1`: completed (code + static verification)
 - `ENV-2`: pending
 - `ENV-3a`: pending
 - `ENV-3b`: pending
@@ -44,7 +44,17 @@ checkpointed commits, independent review, and GitHub sync.
 - Added BOOTSTRAP-0 repository scaffold, configs, scripts, and bootstrap tests.
 - Resolved reviewer findings around install idempotence, dataset defaults,
   Makefile contract alignment, and fail-closed placeholders.
+- Doubled the primary workload step budgets to `40/20/30` and aligned the spec
+  and tests.
+- Implemented `ENV-1` assets: a real Ubuntu bootstrap script, JSON environment
+  reporting, and static verification tests.
 
 ## Next Checkpoint
 
-- `ENV-1`: implement the real server bootstrap pathway after approval.
+- `ENV-2`: implement the model download pathway and verification steps.
+
+## ENV-1 Caveat
+
+- The `ENV-1` code checkpoint is complete and reviewed, but the real acceptance
+  run still has to happen on the approved Ubuntu+A100 server because this local
+  machine cannot execute the server bootstrap path faithfully.
