@@ -17,7 +17,7 @@ checkpointed commits, independent review, and GitHub sync.
 - `ENV-3c`: completed (code + static verification)
 - `ENV-4`: completed (code + static verification)
 - `ENV-5`: completed (code + static verification)
-- `AGENT-1`: pending
+- `AGENT-1`: completed (code + static verification)
 - `AGENT-2`: pending
 - `AGENT-3`: pending
 - `AGENT-4`: pending
@@ -63,10 +63,12 @@ checkpointed commits, independent review, and GitHub sync.
   fail-closed sweep wrapper, and rsync-based result collection workflow.
 - Implemented `ENV-5` assets: preemption-sensitive vLLM configs, preemption
   launcher flags, and metrics/log observability helpers for eviction evidence.
+- Implemented `AGENT-1` assets: typed `StepRecord`, shared `AgentBase`, unified
+  LLM call contract, trace export, and summary aggregation.
 
 ## Next Checkpoint
 
-- `AGENT-1`: implement the base agent interface and StepRecord contract.
+- `AGENT-2`: implement the coding-agent workload.
 
 ## ENV-1 Caveat
 
@@ -109,3 +111,8 @@ checkpointed commits, independent review, and GitHub sync.
 - The `ENV-5` code checkpoint is complete and reviewed, but runtime confirmation
   still requires a live vLLM run with scheduler instrumentation enabled and a
   workload that actually triggers preemption or eviction.
+
+## AGENT-1 Caveat
+
+- The `AGENT-1` code checkpoint is complete and reviewed, but `_call_llm()`
+  still needs a live backend integration run for wire-level confirmation.
