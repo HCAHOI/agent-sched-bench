@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import re
 import textwrap
 import time
@@ -11,19 +12,68 @@ from typing import Any
 import httpx
 
 from agents.base import AgentBase
-from agents.tool_calling import ToolCall, parse_tool_call
 
 
 SYSTEM_PROMPT = """You are a research assistant. Given a question, search
 the web for information and synthesize a comprehensive answer.
 
-Available tools:
-- web_search(query): Search the web and return concise top results
-- read_page(url): Read the full content of a web page
-- synthesize(answer): Submit your final synthesized answer and finish
-
 Use multiple searches when needed. When you are ready to finish, call
-synthesize(answer) with your complete answer."""
+synthesize with your complete answer."""
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web and return the top results with titles and URLs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_page",
+            "description": "Read the full text content of a web page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL of the page to read.",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "synthesize",
+            "description": "Submit your final synthesized answer and finish the research task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer": {
+                        "type": "string",
+                        "description": "The complete synthesized answer.",
+                    }
+                },
+                "required": ["answer"],
+            },
+        },
+    },
+]
 
 
 RESULT_LINK_PATTERN = re.compile(
@@ -78,9 +128,6 @@ class ResearchAgent(AgentBase):
             return urllib.parse.unquote(query["uddg"][0])
         return raw_url
 
-    def _parse_tool_call(self, response: str) -> ToolCall | None:
-        return parse_tool_call(response, {"web_search", "read_page", "synthesize"})
-
     async def _respect_rate_limit(self) -> None:
         if self.search_rate_limit_qps <= 0:
             return
@@ -132,20 +179,11 @@ class ResearchAgent(AgentBase):
         extracted = self._extract_page_text(response.text)
         return extracted or "ERROR: failed to extract page text"
 
-    async def _execute_tool(self, tool_call: ToolCall) -> str:
-        if tool_call.name == "web_search":
-            try:
-                return await self._web_search(tool_call.args)
-            except httpx.HTTPError as exc:
-                return f"ERROR: {exc}"
-        if tool_call.name == "read_page":
-            try:
-                return await self._page_read(tool_call.args)
-            except httpx.HTTPError as exc:
-                return f"ERROR: {exc}"
-        if tool_call.name == "synthesize":
-            return tool_call.args
-        raise ValueError(f"Unsupported tool: {tool_call.name}")
+    def _truncate(self, text: str) -> str:
+        if len(text) <= self.max_tool_output_chars:
+            return text
+        half = self.max_tool_output_chars // 2
+        return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
 
     async def run(self, task: dict[str, Any]) -> bool:
         self.task_id = str(task.get("task_id", task.get("question", "")))
@@ -158,7 +196,7 @@ class ResearchAgent(AgentBase):
 
         for step_idx in range(self.max_steps):
             ts_start = time.time()
-            llm_result = await self._call_llm(messages)
+            llm_result = await self._call_llm(messages, tools=TOOLS)
             ts_end = time.time()
             record = self.build_step_record(
                 step_idx=step_idx,
@@ -167,29 +205,60 @@ class ResearchAgent(AgentBase):
                 ts_start=ts_start,
                 ts_end=ts_end,
             )
-            tool_call = self._parse_tool_call(llm_result.content)
-            if tool_call is None:
-                record.phase = "reasoning"
+
+            if not llm_result.tool_calls:
                 record.tool_success = bool(llm_result.content.strip())
                 self.task_success = bool(llm_result.content.strip())
                 self.trace.append(record)
                 break
 
+            tc = llm_result.tool_calls[0]
+            try:
+                args = json.loads(tc.arguments)
+            except json.JSONDecodeError:
+                args = {}
+
             record.phase = "acting"
-            record.tool_name = tool_call.name
-            record.tool_args = tool_call.args
+            record.tool_name = tc.name
+            record.tool_args = json.dumps(args)
             tool_started = time.monotonic()
-            tool_output = await self._execute_tool(tool_call)
+
+            if tc.name == "web_search":
+                try:
+                    tool_output = await self._web_search(args.get("query", ""))
+                except httpx.HTTPError as exc:
+                    tool_output = f"ERROR: {exc}"
+            elif tc.name == "read_page":
+                try:
+                    tool_output = await self._page_read(args.get("url", ""))
+                except httpx.HTTPError as exc:
+                    tool_output = f"ERROR: {exc}"
+            elif tc.name == "synthesize":
+                tool_output = args.get("answer", "")
+            else:
+                tool_output = f"ERROR: unknown tool {tc.name}"
+
             record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
             self.trace.append(record)
-            if tool_call.name == "synthesize":
+
+            if tc.name == "synthesize":
                 self.task_success = bool(tool_output.strip())
                 break
-            if len(tool_output) > self.max_tool_output_chars:
-                half = self.max_tool_output_chars // 2
-                tool_output = tool_output[:half] + f"\n[... truncated {len(tool_output) - self.max_tool_output_chars} chars ...]\n" + tool_output[-half:]
-            messages.append({"role": "assistant", "content": llm_result.content})
-            messages.append({"role": "user", "content": f"Tool output:\n{tool_output}"})
+
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": llm_result.content or ""}
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+            ]
+            messages.append(assistant_msg)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": self._truncate(tool_output),
+            })
         return bool(self.task_success)

@@ -26,6 +26,15 @@ def _message_content_to_text(content: Any) -> str:
 
 
 @dataclass(slots=True)
+class ToolCallResult:
+    """A single tool call extracted from the LLM response."""
+
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(slots=True)
 class StepRecord:
     """Full record for one reasoning or acting step in an agent run."""
 
@@ -56,6 +65,7 @@ class LLMCallResult:
     completion_tokens: int
     llm_latency_ms: float
     raw_response: dict[str, Any]
+    tool_calls: list[ToolCallResult] = field(default_factory=list)
 
 
 class AgentBase(ABC):
@@ -82,24 +92,53 @@ class AgentBase(ABC):
             timeout=request_timeout_s,
         )
 
-    async def _call_llm(self, messages: list[dict[str, Any]]) -> LLMCallResult:
-        """Call the OpenAI-compatible endpoint and normalize the response."""
+    async def _call_llm(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMCallResult:
+        """Call the OpenAI-compatible endpoint with optional tool definitions."""
+        extra_body: dict[str, Any] = {
+            "program_id": self.agent_id,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
         started = time.monotonic()
-        response = await self._client.chat.completions.create(
+        kwargs: dict[str, Any] = dict(
             model=self.model,
             messages=messages,
-            extra_body={"program_id": self.agent_id},
+            extra_body=extra_body,
         )
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        response = await self._client.chat.completions.create(**kwargs)
         elapsed_ms = (time.monotonic() - started) * 1000
         if not response.choices:
             raise RuntimeError(f"LLM returned empty choices: {response.model_dump()}")
+
+        message = response.choices[0].message
         usage = getattr(response, "usage", None)
+
+        # Extract structured tool calls if present
+        parsed_tool_calls: list[ToolCallResult] = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                parsed_tool_calls.append(
+                    ToolCallResult(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=tc.function.arguments,
+                    )
+                )
+
         return LLMCallResult(
-            content=_message_content_to_text(response.choices[0].message.content),
+            content=_message_content_to_text(message.content),
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
             llm_latency_ms=elapsed_ms,
             raw_response=response.model_dump(),
+            tool_calls=parsed_tool_calls,
         )
 
     def build_step_record(

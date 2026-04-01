@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import subprocess
 import tempfile
@@ -10,18 +11,54 @@ from pathlib import Path
 from typing import Any
 
 from agents.base import AgentBase
-from agents.tool_calling import ToolCall, parse_tool_call, strip_code_fences
+from agents.tool_calling import strip_code_fences
 
 
 SYSTEM_PROMPT = """You are a software engineer. You will be given a GitHub issue
 and a repository snapshot. Fix the bug by modifying the code.
 
-Available tools:
-- bash(command): Execute a bash command in the repository
-- submit(patch): Submit your fix as a unified diff
-
 Always think step by step. Use grep/find to locate relevant files first,
-then read the code, then make targeted edits, then run tests."""
+then read the code, then make targeted edits, then run tests.
+
+When you are done, call the submit tool with your fix as a unified diff."""
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a bash command in the repository working directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute.",
+                    }
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit",
+            "description": "Submit your fix as a unified diff patch. This ends the task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "description": "The unified diff patch to apply.",
+                    }
+                },
+                "required": ["patch"],
+            },
+        },
+    },
+]
 
 
 class CodeAgent(AgentBase):
@@ -74,9 +111,6 @@ class CodeAgent(AgentBase):
         shutil.rmtree(temp_root, ignore_errors=True)
         self._workspace_path = None
 
-    def _parse_tool_call(self, response: str) -> ToolCall | None:
-        return parse_tool_call(response, {"bash", "submit"})
-
     async def _run_subprocess(self, command: str, cwd: Path, timeout_s: float) -> subprocess.CompletedProcess[str]:
         return await asyncio.to_thread(
             subprocess.run,
@@ -88,14 +122,12 @@ class CodeAgent(AgentBase):
             timeout=timeout_s,
         )
 
-    async def _execute_tool(self, tool_call: ToolCall, task: dict[str, Any]) -> str:
+    async def _execute_bash(self, command: str) -> str:
         if self._workspace_path is None:
             raise RuntimeError("Workspace is not prepared")
-        if tool_call.name != "bash":
-            raise ValueError(f"Unsupported tool: {tool_call.name}")
         try:
             completed = await self._run_subprocess(
-                tool_call.args,
+                command,
                 cwd=self._workspace_path,
                 timeout_s=self.command_timeout_s,
             )
@@ -145,6 +177,12 @@ class CodeAgent(AgentBase):
             output += ("\n" if output else "") + test_result.stderr
         return test_result.returncode == 0, output.strip() or "(no output)"
 
+    def _truncate(self, text: str) -> str:
+        if len(text) <= self.max_tool_output_chars:
+            return text
+        half = self.max_tool_output_chars // 2
+        return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
+
     async def run(self, task: dict[str, Any]) -> bool:
         self.task_id = task["instance_id"]
         self.task_success = False
@@ -160,7 +198,7 @@ class CodeAgent(AgentBase):
                 if (time.monotonic() - started) > self.task_timeout_s:
                     break
                 ts_start = time.time()
-                llm_result = await self._call_llm(messages)
+                llm_result = await self._call_llm(messages, tools=TOOLS)
                 ts_end = time.time()
                 record = self.build_step_record(
                     step_idx=step_idx,
@@ -169,34 +207,55 @@ class CodeAgent(AgentBase):
                     ts_start=ts_start,
                     ts_end=ts_end,
                 )
-                tool_call = self._parse_tool_call(llm_result.content)
-                if tool_call is None:
+
+                if not llm_result.tool_calls:
                     self.trace.append(record)
                     break
 
+                tc = llm_result.tool_calls[0]
+                try:
+                    args = json.loads(tc.arguments)
+                except json.JSONDecodeError:
+                    args = {"command": tc.arguments} if tc.name == "bash" else {"patch": tc.arguments}
+
                 record.phase = "acting"
-                record.tool_name = tool_call.name
-                record.tool_args = tool_call.args
+                record.tool_name = tc.name
+                record.tool_args = json.dumps(args)
                 tool_started = time.monotonic()
-                if tool_call.name == "submit":
-                    success, tool_output = await self._apply_and_test(tool_call.args, task)
+
+                if tc.name == "submit":
+                    patch_text = args.get("patch", tc.arguments)
+                    success, tool_output = await self._apply_and_test(patch_text, task)
                     record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
                     record.tool_result = tool_output
                     record.tool_success = success
                     self.task_success = success
                     self.trace.append(record)
+                    # Append assistant + tool result for trace completeness
                     break
 
-                tool_output = await self._execute_tool(tool_call, task)
+                command = args.get("command", tc.arguments)
+                tool_output = await self._execute_bash(command)
                 record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
                 record.tool_result = tool_output
                 record.tool_success = not tool_output.startswith("ERROR")
                 self.trace.append(record)
-                if len(tool_output) > self.max_tool_output_chars:
-                    half = self.max_tool_output_chars // 2
-                    tool_output = tool_output[:half] + f"\n[... truncated {len(tool_output) - self.max_tool_output_chars} chars ...]\n" + tool_output[-half:]
-                messages.append({"role": "assistant", "content": llm_result.content})
-                messages.append({"role": "user", "content": f"Tool output:\n{tool_output}"})
+
+                # Build assistant message with tool_calls for multi-turn
+                assistant_msg: dict[str, Any] = {"role": "assistant", "content": llm_result.content or ""}
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": tc.arguments},
+                    }
+                ]
+                messages.append(assistant_msg)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": self._truncate(tool_output),
+                })
             return bool(self.task_success)
         finally:
             self._cleanup_workspace()

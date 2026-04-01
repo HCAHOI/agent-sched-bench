@@ -10,18 +10,52 @@ from pathlib import Path
 from typing import Any
 
 from agents.base import AgentBase
-from agents.tool_calling import ToolCall, extract_sql_block, parse_tool_call
+from agents.tool_calling import extract_sql_block
 
 
 SYSTEM_PROMPT = """You are a data analyst. Given a natural language question
 and a database schema, write SQL to answer the question.
 
-Available tools:
-- schema_inspect(table): Show column names and types for a table
-- sql_execute(query): Execute SQL on the database and return results
-
 If your SQL has errors, read the error message and try again.
-When you are ready to finish, return the final SQL in a ```sql``` block."""
+When you are ready to finish, call sql_execute with your final answer query."""
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "schema_inspect",
+            "description": "Show column names and types for a table. Pass '*' to list all tables.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {
+                        "type": "string",
+                        "description": "Table name, or '*' to list all tables.",
+                    }
+                },
+                "required": ["table"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sql_execute",
+            "description": "Execute a read-only SQL query on the database and return results.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The SQL SELECT/WITH/PRAGMA query to execute.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
 
 
 class DataAgent(AgentBase):
@@ -56,9 +90,6 @@ class DataAgent(AgentBase):
             {evidence or "(none)"}
             """
         ).strip()
-
-    def _parse_tool_call(self, response: str) -> ToolCall | None:
-        return parse_tool_call(response, {"schema_inspect", "sql_execute"})
 
     def _schema_inspect_sync(self, db_path: Path, table_name: str) -> str:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
@@ -102,14 +133,6 @@ class DataAgent(AgentBase):
             return f"ERROR: {exc}"
         return json.dumps({"columns": columns, "rows": rows}, ensure_ascii=True)
 
-    async def _execute_tool(self, tool_call: ToolCall, task: dict[str, Any]) -> str:
-        db_path = Path(task["db_path"]).resolve()
-        if tool_call.name == "schema_inspect":
-            return await self._schema_inspect(db_path, tool_call.args)
-        if tool_call.name == "sql_execute":
-            return await self._sql_execute(db_path, tool_call.args)
-        raise ValueError(f"Unsupported tool: {tool_call.name}")
-
     async def _evaluate_final_sql(self, candidate_sql: str, task: dict[str, Any]) -> tuple[bool, str]:
         db_path = Path(task["db_path"]).resolve()
         candidate_result = await self._sql_execute(db_path, candidate_sql)
@@ -136,6 +159,12 @@ class DataAgent(AgentBase):
             )
         return candidate_rows == gold_rows, candidate_result
 
+    def _truncate(self, text: str) -> str:
+        if len(text) <= self.max_tool_output_chars:
+            return text
+        half = self.max_tool_output_chars // 2
+        return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
+
     async def run(self, task: dict[str, Any]) -> bool:
         self.task_id = str(task.get("task_id", task.get("question", "")))
         self.task_success = False
@@ -144,10 +173,11 @@ class DataAgent(AgentBase):
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": self._format_task(task)},
         ]
+        db_path = Path(task["db_path"]).resolve()
 
         for step_idx in range(self.max_steps):
             ts_start = time.time()
-            llm_result = await self._call_llm(messages)
+            llm_result = await self._call_llm(messages, tools=TOOLS)
             ts_end = time.time()
             record = self.build_step_record(
                 step_idx=step_idx,
@@ -156,9 +186,10 @@ class DataAgent(AgentBase):
                 ts_start=ts_start,
                 ts_end=ts_end,
             )
-            tool_call = self._parse_tool_call(llm_result.content)
-            if tool_call is None:
-                final_sql = extract_sql_block(llm_result.content)
+
+            if not llm_result.tool_calls:
+                # No tool call — check for final SQL in text content (fallback)
+                final_sql = extract_sql_block(llm_result.content) if llm_result.content else None
                 if final_sql is None:
                     self.trace.append(record)
                     break
@@ -175,18 +206,43 @@ class DataAgent(AgentBase):
                 self.trace.append(record)
                 break
 
+            tc = llm_result.tool_calls[0]
+            try:
+                args = json.loads(tc.arguments)
+            except json.JSONDecodeError:
+                args = {}
+
             record.phase = "acting"
-            record.tool_name = tool_call.name
-            record.tool_args = tool_call.args
+            record.tool_name = tc.name
+            record.tool_args = json.dumps(args)
             tool_started = time.monotonic()
-            tool_output = await self._execute_tool(tool_call, task)
+
+            if tc.name == "schema_inspect":
+                tool_output = await self._schema_inspect(db_path, args.get("table", "*"))
+            elif tc.name == "sql_execute":
+                query = args.get("query", "")
+                tool_output = await self._sql_execute(db_path, query)
+                # Check if this might be the final answer (last step heuristic)
+            else:
+                tool_output = f"ERROR: unknown tool {tc.name}"
+
             record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
             self.trace.append(record)
-            if len(tool_output) > self.max_tool_output_chars:
-                half = self.max_tool_output_chars // 2
-                tool_output = tool_output[:half] + f"\n[... truncated {len(tool_output) - self.max_tool_output_chars} chars ...]\n" + tool_output[-half:]
-            messages.append({"role": "assistant", "content": llm_result.content})
-            messages.append({"role": "user", "content": f"Tool output:\n{tool_output}"})
+
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": llm_result.content or ""}
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+            ]
+            messages.append(assistant_msg)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": self._truncate(tool_output),
+            })
         return bool(self.task_success)
