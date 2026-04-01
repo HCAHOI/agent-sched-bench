@@ -7,8 +7,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VENV_DIR="${VENV_DIR:-.venv-server}"
 SERVER_PYTHON="${REPO_ROOT}/${VENV_DIR}/bin/python"
 
-MODEL_PATH="${MODEL_PATH:-/data/models/Llama-3.1-8B-Instruct}"
-VLLM_SPEC="${VLLM_SPEC:-vllm>=0.8,<0.9}"
+MODEL_PATH="${MODEL_PATH:-meta-llama/Llama-3.1-8B-Instruct}"
+VLLM_SPEC="${VLLM_SPEC:-vllm==0.10.2}"
 VLLM_HOST="${VLLM_HOST:-0.0.0.0}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 VLLM_DTYPE="${VLLM_DTYPE:-float16}"
@@ -40,11 +40,17 @@ require_server_python() {
 }
 
 require_model_path() {
-  if [[ ! -d "${MODEL_PATH}" ]]; then
-    printf 'Model path does not exist: %s\n' "${MODEL_PATH}" >&2
-    printf 'Run ENV-2 successfully before ENV-3a.\n' >&2
-    exit 1
+  # Accept both local directories and HuggingFace repo IDs (e.g. meta-llama/Llama-3.1-8B-Instruct)
+  if [[ -d "${MODEL_PATH}" ]]; then
+    return 0
   fi
+  if [[ "${MODEL_PATH}" == */* && "${MODEL_PATH}" != /* ]]; then
+    log "MODEL_PATH looks like an HF repo ID: ${MODEL_PATH}"
+    return 0
+  fi
+  printf 'Model path does not exist: %s\n' "${MODEL_PATH}" >&2
+  printf 'Run ENV-2 successfully before ENV-3a.\n' >&2
+  exit 1
 }
 
 install_vllm() {

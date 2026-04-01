@@ -29,7 +29,7 @@ def test_continuum_launcher_print_only_contract() -> None:
             "-m",
             "serving.continuum_launcher",
             "--model-path",
-            "/data/models/Llama-3.1-8B-Instruct",
+            "meta-llama/Llama-3.1-8B-Instruct",
             "--print-only",
         ],
         cwd=REPO_ROOT,
@@ -45,7 +45,7 @@ def test_continuum_launcher_print_only_contract() -> None:
 
 def test_build_continuum_command_includes_kv_transfer_config_when_enabled() -> None:
     config = ContinuumServerConfig(
-        model_path="/data/models/Llama-3.1-8B-Instruct",
+        model_path="meta-llama/Llama-3.1-8B-Instruct",
         enable_cpu_offload=True,
     )
     command = build_continuum_command(config)

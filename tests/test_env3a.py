@@ -28,7 +28,7 @@ def test_engine_launcher_print_only_contract() -> None:
             "-m",
             "serving.engine_launcher",
             "--model-path",
-            "/data/models/Llama-3.1-8B-Instruct",
+            "meta-llama/Llama-3.1-8B-Instruct",
             "--enable-chunked-prefill",
             "--print-only",
         ],

@@ -10,7 +10,7 @@ DOWNLOAD_BACKEND="${DOWNLOAD_BACKEND:-huggingface}"
 
 MODEL_REPO="${MODEL_REPO:-meta-llama/Llama-3.1-8B-Instruct}"
 MODELSCOPE_MODEL="${MODELSCOPE_MODEL:-LLM-Research/Meta-Llama-3.1-8B-Instruct}"
-MODEL_DIR="${MODEL_DIR:-/data/models/Llama-3.1-8B-Instruct}"
+MODEL_DIR="${MODEL_DIR:-${HOME}/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct}"
 VERIFY_REPORT="${VERIFY_REPORT:-${REPO_ROOT}/results/processed/model_report.json}"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
 VERIFY_LOAD_MODE="${VERIFY_LOAD_MODE:-full}"

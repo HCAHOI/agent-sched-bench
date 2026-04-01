@@ -10,7 +10,7 @@ CONTINUUM_REPO_DIR="${CONTINUUM_REPO_DIR:-${REPO_ROOT}/external/vllm-continuum}"
 CONTINUUM_VENV_DIR="${CONTINUUM_VENV_DIR:-${REPO_ROOT}/.venv-continuum}"
 CONTINUUM_PYTHON="${CONTINUUM_VENV_DIR}/bin/python"
 
-MODEL_PATH="${MODEL_PATH:-/data/models/Llama-3.1-8B-Instruct}"
+MODEL_PATH="${MODEL_PATH:-meta-llama/Llama-3.1-8B-Instruct}"
 CONTINUUM_PORT="${CONTINUUM_PORT:-8001}"
 CONTINUUM_TENSOR_PARALLEL_SIZE="${CONTINUUM_TENSOR_PARALLEL_SIZE:-1}"
 CONTINUUM_USE_CPU_OFFLOAD="${CONTINUUM_USE_CPU_OFFLOAD:-0}"
@@ -38,11 +38,16 @@ require_pinned_ref() {
 }
 
 require_model_path() {
-  if [[ ! -d "${MODEL_PATH}" ]]; then
-    printf 'Model path does not exist: %s\n' "${MODEL_PATH}" >&2
-    printf 'Run ENV-2 successfully before ENV-3b.\n' >&2
-    exit 1
+  if [[ -d "${MODEL_PATH}" ]]; then
+    return 0
   fi
+  if [[ "${MODEL_PATH}" == */* && "${MODEL_PATH}" != /* ]]; then
+    log "MODEL_PATH looks like an HF repo ID: ${MODEL_PATH}"
+    return 0
+  fi
+  printf 'Model path does not exist: %s\n' "${MODEL_PATH}" >&2
+  printf 'Run ENV-2 successfully before ENV-3b.\n' >&2
+  exit 1
 }
 
 ensure_repo() {

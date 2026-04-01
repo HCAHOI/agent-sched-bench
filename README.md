@@ -67,7 +67,7 @@ workload configs should describe the full benchmark dataset path.
   report.
 - `scripts/report_server_env.py` records GPU visibility, memory, free disk, and
   SSH-key presence to JSON for auditability, and `ENV-1` only succeeds when the
-  report confirms the expected `A100-SXM-40GB`, at least `40 GiB` of GPU
+  report confirms the expected `A100-PCIE-40GB`, at least `40 GiB` of GPU
   memory, `CUDA >= 12.1`, and `torch.cuda.is_available()`.
 
 Run the setup script only on the target Ubuntu server after approval.

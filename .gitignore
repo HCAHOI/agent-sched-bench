@@ -12,5 +12,8 @@ uv.lock
 
 data/swebench_lite/repos/
 results/raw/
+results/processed/
 results/figures/
 /data/models/
+models/
+.omc/

@@ -210,7 +210,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--expected-gpu-substring",
-        default="A100-SXM-40GB",
+        default="A100-PCIE-40GB",
         help="Required substring for at least one detected GPU name.",
     )
     parser.add_argument(

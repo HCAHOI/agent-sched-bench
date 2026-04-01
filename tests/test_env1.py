@@ -35,7 +35,7 @@ def test_report_server_env_writes_json(tmp_path: Path) -> None:
 
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert report["repo_root"] == str(REPO_ROOT.resolve())
-    assert report["config"]["expected_gpu_substring"] == "A100-SXM-40GB"
+    assert report["config"]["expected_gpu_substring"] == "A100-PCIE-40GB"
     assert "commands" in report
     assert "memory_total_bytes" in report
     assert "disk_free_bytes" in report
