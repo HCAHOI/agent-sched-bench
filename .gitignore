@@ -7,6 +7,8 @@ __pycache__/
 *.pyc
 .env
 uv.lock
+.omc/
+.trae/
 
 data/swebench_lite/repos/
 results/raw/
