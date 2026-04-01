@@ -41,7 +41,8 @@ class ReplayHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers["Content-Length"])
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        assert payload["program_id"] == "agent-1"
+        extra_body = payload.get("extra_body", {})
+        assert extra_body.get("program_id") == "agent-1"
         self.__class__.call_count += 1
         self.__class__.arrivals.append(time.monotonic())
         body = json.dumps(
@@ -94,7 +95,8 @@ class MultiReplayHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers["Content-Length"])
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        self.__class__.arrivals.append((payload["program_id"], time.monotonic()))
+        extra_body = payload.get("extra_body", {})
+        self.__class__.arrivals.append((extra_body.get("program_id", "unknown"), time.monotonic()))
         body = json.dumps(
             {
                 "id": "resp",

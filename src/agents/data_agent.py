@@ -35,10 +35,12 @@ class DataAgent(AgentBase):
         *,
         max_steps: int = 20,
         sql_timeout_s: float = 30.0,
+        max_tool_output_chars: int = 8000,
     ) -> None:
         super().__init__(agent_id=agent_id, api_base=api_base, model=model)
         self.max_steps = max_steps
         self.sql_timeout_s = sql_timeout_s
+        self.max_tool_output_chars = max_tool_output_chars
 
     def _format_task(self, task: dict[str, Any]) -> str:
         evidence = task.get("evidence", "")
@@ -66,6 +68,8 @@ class DataAgent(AgentBase):
                     "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
                 ).fetchall()
                 return "\n".join(row[0] for row in tables) or "(no tables)"
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', table_name):
+                return f"ERROR: Invalid table name: {table_name!r}"
             columns = cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
             if not columns:
                 return f"ERROR: table not found: {table_name}"
@@ -180,6 +184,9 @@ class DataAgent(AgentBase):
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
             self.trace.append(record)
+            if len(tool_output) > self.max_tool_output_chars:
+                half = self.max_tool_output_chars // 2
+                tool_output = tool_output[:half] + f"\n[... truncated {len(tool_output) - self.max_tool_output_chars} chars ...]\n" + tool_output[-half:]
             messages.append({"role": "assistant", "content": llm_result.content})
             messages.append({"role": "user", "content": f"Tool output:\n{tool_output}"})
         return bool(self.task_success)

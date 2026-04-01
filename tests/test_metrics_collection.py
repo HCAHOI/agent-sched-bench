@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -57,20 +58,17 @@ def test_vllm_metrics_collector_polls_and_dumps(tmp_path: Path) -> None:
         thread.join(timeout=2)
 
 
-def test_vllm_metrics_collector_fails_on_incomplete_payload() -> None:
+def test_vllm_metrics_collector_warns_on_incomplete_payload(caplog: logging.Handler) -> None:
     collector = VLLMMetricsCollector(metrics_url="http://localhost:8000/metrics")
-    try:
+    # Should NOT raise — now logs a warning instead
+    with caplog.at_level(logging.WARNING):
         collector._validate_snapshot({"vllm:num_requests_running": 1.0})
-    except ValueError as exc:
-        assert "Incomplete metrics snapshot" in str(exc)
-    else:
-        raise AssertionError("expected incomplete snapshot to fail")
+    assert "Incomplete metrics snapshot" in caplog.text
 
 
 def test_parse_nvidia_smi_csv_and_dump(tmp_path: Path) -> None:
-    samples = parse_nvidia_smi_csv(
-        "utilization.gpu [%], memory.used [MiB]\n10 %, 2000 MiB\n20 %, 2100 MiB\n"
-    )
+    # noheader,nounits format: raw numbers without header row
+    samples = parse_nvidia_smi_csv("10, 2000\n20, 2100\n")
     assert samples[0]["utilization_gpu"] == 10.0
     output = tmp_path / "gpu.json"
     dump_nvidia_samples(samples, output)

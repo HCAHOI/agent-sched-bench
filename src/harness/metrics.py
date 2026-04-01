@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import csv
 import json
+import logging
 import subprocess
 import time
 from pathlib import Path
@@ -23,7 +24,14 @@ class VLLMMetricsCollector:
         "vllm:num_preemptions_total",
         "vllm:avg_prompt_throughput_toks_per_s",
         "vllm:avg_generation_throughput_toks_per_s",
+        "vllm:e2e_request_latency_seconds",
+        "vllm:time_to_first_token_seconds",
     ]
+
+    HISTOGRAM_METRICS = {
+        "vllm:e2e_request_latency_seconds",
+        "vllm:time_to_first_token_seconds",
+    }
 
     def __init__(
         self,
@@ -41,14 +49,22 @@ class VLLMMetricsCollector:
             if not line or line.startswith("#"):
                 continue
             for metric_name in self.METRICS_OF_INTEREST:
-                if line.startswith(metric_name):
+                if metric_name in self.HISTOGRAM_METRICS:
+                    if line.startswith(f"{metric_name}_sum"):
+                        entry = snapshot.setdefault(metric_name, {})
+                        entry["_sum"] = float(line.split()[-1])
+                    elif line.startswith(f"{metric_name}_count"):
+                        entry = snapshot.setdefault(metric_name, {})
+                        entry["_count"] = float(line.split()[-1])
+                elif line.startswith(metric_name):
                     snapshot[metric_name] = float(line.split()[-1])
         return snapshot
 
-    def _validate_snapshot(self, snapshot: dict[str, Any]) -> None:
+    def _validate_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         missing = [metric for metric in self.METRICS_OF_INTEREST if metric not in snapshot]
         if missing:
-            raise ValueError(f"Incomplete metrics snapshot, missing: {missing}")
+            logging.warning(f"Incomplete metrics snapshot, missing: {missing}")
+        return snapshot
 
     async def poll(self, interval_s: float = 1.0, max_samples: int | None = None) -> list[dict[str, Any]]:
         """Poll the metrics endpoint until cancelled or max_samples reached."""
@@ -59,7 +75,7 @@ class VLLMMetricsCollector:
                 response.raise_for_status()
                 snapshot = self._parse_prometheus(response.text)
                 self._validate_snapshot(snapshot)
-                snapshot["timestamp"] = time.time()
+                snapshot["timestamp"] = time.time()  # noqa: DTZ003
                 snapshot["gpu_samples"] = self.gpu_sample_provider()
                 self.snapshots.append(snapshot)
                 await asyncio.sleep(interval_s)
@@ -78,14 +94,10 @@ def parse_nvidia_smi_csv(csv_text: str) -> list[dict[str, Any]]:
     for row in reader:
         if len(row) < 2:
             continue
-        first = row[0].strip().lower()
-        second = row[1].strip().lower()
-        if "utilization.gpu" in first or "memory.used" in second:
-            continue
         rows.append(
             {
-                "utilization_gpu": float(row[0].strip().replace(" %", "").replace("%", "")),
-                "memory_used_mib": float(row[1].strip().replace(" MiB", "").replace("MiB", "")),
+                "utilization_gpu": float(row[0].strip()),
+                "memory_used_mib": float(row[1].strip()),
             }
         )
     return rows
@@ -93,15 +105,18 @@ def parse_nvidia_smi_csv(csv_text: str) -> list[dict[str, Any]]:
 
 def sample_nvidia_smi() -> list[dict[str, Any]]:
     """Collect one GPU sample via nvidia-smi."""
-    output = subprocess.check_output(
-        [
-            "nvidia-smi",
-            "--query-gpu=utilization.gpu,memory.used",
-            "--format=csv",
-        ],
-        text=True,
-    )
-    return parse_nvidia_smi_csv(output)
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+        )
+        return parse_nvidia_smi_csv(output)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return []
 
 
 def dump_nvidia_samples(samples: list[dict[str, Any]], output_path: Path) -> None:

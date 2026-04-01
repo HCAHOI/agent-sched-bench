@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agents.base import AgentBase, LLMCallResult, StepRecord
+from agents.base import AgentBase
 from agents.tool_calling import ToolCall, parse_tool_call, strip_code_fences
 
 
@@ -36,11 +36,13 @@ class CodeAgent(AgentBase):
         max_steps: int = 40,
         command_timeout_s: float = 30.0,
         task_timeout_s: float = 300.0,
+        max_tool_output_chars: int = 8000,
     ) -> None:
         super().__init__(agent_id=agent_id, api_base=api_base, model=model)
         self.max_steps = max_steps
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
+        self.max_tool_output_chars = max_tool_output_chars
         self._workspace_path: Path | None = None
 
     def _format_issue(self, task: dict[str, Any]) -> str:
@@ -147,7 +149,7 @@ class CodeAgent(AgentBase):
         self.task_id = task["instance_id"]
         self.task_success = False
         self.trace = []
-        workspace = self._prepare_workspace(task)
+        self._prepare_workspace(task)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": self._format_issue(task)},
@@ -190,6 +192,9 @@ class CodeAgent(AgentBase):
                 record.tool_result = tool_output
                 record.tool_success = not tool_output.startswith("ERROR")
                 self.trace.append(record)
+                if len(tool_output) > self.max_tool_output_chars:
+                    half = self.max_tool_output_chars // 2
+                    tool_output = tool_output[:half] + f"\n[... truncated {len(tool_output) - self.max_tool_output_chars} chars ...]\n" + tool_output[-half:]
                 messages.append({"role": "assistant", "content": llm_result.content})
                 messages.append({"role": "user", "content": f"Tool output:\n{tool_output}"})
             return bool(self.task_success)

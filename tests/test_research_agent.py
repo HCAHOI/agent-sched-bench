@@ -33,7 +33,7 @@ class ResearchHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "page_read(http://127.0.0.1:0/page)"},
+                    "message": {"role": "assistant", "content": "read_page(http://127.0.0.1:0/page)"},
                     "finish_reason": "stop",
                 }
             ],
@@ -118,7 +118,7 @@ def test_research_agent_search_and_page_read(tmp_path: Path) -> None:
         assert success is True
         assert len(agent.trace) == 3
         assert agent.trace[0].tool_name == "web_search"
-        assert agent.trace[1].tool_name == "page_read"
+        assert agent.trace[1].tool_name == "read_page"
     finally:
         server.shutdown()
         thread.join(timeout=2)

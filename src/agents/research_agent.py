@@ -19,10 +19,11 @@ the web for information and synthesize a comprehensive answer.
 
 Available tools:
 - web_search(query): Search the web and return concise top results
-- page_read(url): Read the full content of a web page
+- read_page(url): Read the full content of a web page
+- synthesize(answer): Submit your final synthesized answer and finish
 
-Use multiple searches when needed. When you are ready to finish, answer in
-plain text without calling another tool."""
+Use multiple searches when needed. When you are ready to finish, call
+synthesize(answer) with your complete answer."""
 
 
 RESULT_LINK_PATTERN = re.compile(
@@ -45,6 +46,7 @@ class ResearchAgent(AgentBase):
         request_timeout_s: float = 30.0,
         search_rate_limit_qps: float = 1.0,
         search_base_url: str = "https://html.duckduckgo.com/html/",
+        max_tool_output_chars: int = 8000,
     ) -> None:
         super().__init__(
             agent_id=agent_id,
@@ -56,6 +58,7 @@ class ResearchAgent(AgentBase):
         self.request_timeout_s = request_timeout_s
         self.search_rate_limit_qps = search_rate_limit_qps
         self.search_base_url = search_base_url
+        self.max_tool_output_chars = max_tool_output_chars
         self._last_search_ts = 0.0
 
     def _format_task(self, task: dict[str, Any]) -> str:
@@ -76,7 +79,7 @@ class ResearchAgent(AgentBase):
         return raw_url
 
     def _parse_tool_call(self, response: str) -> ToolCall | None:
-        return parse_tool_call(response, {"web_search", "page_read"})
+        return parse_tool_call(response, {"web_search", "read_page", "synthesize"})
 
     async def _respect_rate_limit(self) -> None:
         if self.search_rate_limit_qps <= 0:
@@ -135,11 +138,13 @@ class ResearchAgent(AgentBase):
                 return await self._web_search(tool_call.args)
             except httpx.HTTPError as exc:
                 return f"ERROR: {exc}"
-        if tool_call.name == "page_read":
+        if tool_call.name == "read_page":
             try:
                 return await self._page_read(tool_call.args)
             except httpx.HTTPError as exc:
                 return f"ERROR: {exc}"
+        if tool_call.name == "synthesize":
+            return tool_call.args
         raise ValueError(f"Unsupported tool: {tool_call.name}")
 
     async def run(self, task: dict[str, Any]) -> bool:
@@ -179,6 +184,12 @@ class ResearchAgent(AgentBase):
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
             self.trace.append(record)
+            if tool_call.name == "synthesize":
+                self.task_success = bool(tool_output.strip())
+                break
+            if len(tool_output) > self.max_tool_output_chars:
+                half = self.max_tool_output_chars // 2
+                tool_output = tool_output[:half] + f"\n[... truncated {len(tool_output) - self.max_tool_output_chars} chars ...]\n" + tool_output[-half:]
             messages.append({"role": "assistant", "content": llm_result.content})
             messages.append({"role": "user", "content": f"Tool output:\n{tool_output}"})
         return bool(self.task_success)

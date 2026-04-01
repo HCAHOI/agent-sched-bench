@@ -91,6 +91,8 @@ class AgentBase(ABC):
             extra_body={"program_id": self.agent_id},
         )
         elapsed_ms = (time.monotonic() - started) * 1000
+        if not response.choices:
+            raise RuntimeError(f"LLM returned empty choices: {response.model_dump()}")
         usage = getattr(response, "usage", None)
         return LLMCallResult(
             content=_message_content_to_text(response.choices[0].message.content),

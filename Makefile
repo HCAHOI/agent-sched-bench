@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results
+.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results
 
 help:
 	@printf "Targets:\n"
@@ -31,6 +31,8 @@ pull:
 sync:
 	test -x .venv/bin/python || $(UV) venv .venv
 	$(UV) pip install --python .venv/bin/python -e ".[dev]"
+
+build: sync
 
 verify-bootstrap:
 	$(PYTHON) -m pytest tests/test_bootstrap.py

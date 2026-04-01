@@ -15,6 +15,11 @@ def load_trace_jsonl(path: Path) -> pd.DataFrame:
 
 def summarize_trace_frame(frame: pd.DataFrame) -> dict[str, Any]:
     """Compute the basic system-level analysis metrics from a trace frame."""
+    if "type" not in frame.columns:
+        raise ValueError(
+            "Trace DataFrame missing 'type' column. "
+            "Was it produced by TraceLogger? (AgentBase.get_trace() does not include 'type')"
+        )
     step_rows = frame[frame["type"] == "step"].copy()
     summary_rows = frame[frame["type"] == "summary"].copy()
     throughput_steps_per_min = 0.0

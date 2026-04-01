@@ -7,6 +7,9 @@ matrix:
     - vllm-baseline
     - continuum
     - thunderagent
+    # vLLM variants: same binary, different launch configs
+    - vllm-preserve
+    - vllm-low-preempt
   workloads:
     - code_agent
     - data_agent

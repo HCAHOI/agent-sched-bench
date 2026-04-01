@@ -1,0 +1,5 @@
+[
+  {"task_id": "smoke_research_001", "question": "What is the capital of France?"},
+  {"task_id": "smoke_research_002", "question": "Explain the difference between TCP and UDP protocols."},
+  {"task_id": "smoke_research_003", "question": "What are the main causes of climate change?"}
+]

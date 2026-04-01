@@ -45,7 +45,7 @@ class TraceReplayer:
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": max(completion_tokens, 1),
                 "temperature": 0.0,
-                "program_id": program_id,
+                "extra_body": {"program_id": program_id},
             },
         )
         response.raise_for_status()
@@ -68,7 +68,7 @@ class TraceReplayer:
 
         async def replay_group(group: pd.DataFrame) -> None:
             first_offset_s = float(group.iloc[0]["ts_start"]) - global_start
-            delay_s = first_offset_s
+            delay_s = first_offset_s - (time.monotonic() - replay_zero)
             if delay_s > 0:
                 await asyncio.sleep(delay_s)
             async with semaphore:

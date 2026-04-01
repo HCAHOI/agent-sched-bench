@@ -51,6 +51,27 @@ def plot_prefix_cache_hit_vs_concurrency(frame: pd.DataFrame, output_path: Path)
     plt.close()
 
 
+def plot_throughput_comparison(frames: dict[str, pd.DataFrame], output_path: Path) -> None:
+    """Overlay throughput-vs-concurrency curves for multiple systems."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    markers = ["o", "s", "^", "D", "v", "P", "X"]
+    plt.figure(figsize=(8, 5))
+    for i, (system_name, frame) in enumerate(frames.items()):
+        plt.plot(
+            frame["concurrency"],
+            frame["throughput_steps_per_min"],
+            marker=markers[i % len(markers)],
+            label=system_name,
+        )
+    plt.xlabel("Concurrency")
+    plt.ylabel("Throughput (steps/min)")
+    plt.title("Throughput vs Concurrency: System Comparison")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+
+
 def identify_cliff_point(frame: pd.DataFrame, *, throughput_drop_threshold: float = 0.1) -> int | None:
     """Identify the first concurrency point where throughput drops materially."""
     ordered = frame.sort_values("concurrency").reset_index(drop=True)
@@ -69,13 +90,32 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render simple analysis plots.")
     parser.add_argument("csv_file")
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--plot-type",
+        choices=["throughput", "latency", "cache_hit", "comparison"],
+        default="throughput",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    frame = pd.read_csv(args.csv_file)
-    plot_throughput_vs_concurrency(frame, Path(args.output))
+    output_path = Path(args.output)
+    if args.plot_type == "comparison":
+        # csv_file is a comma-separated list of "name:path" pairs
+        frames: dict[str, pd.DataFrame] = {}
+        for entry in args.csv_file.split(","):
+            name, path = entry.split(":", 1)
+            frames[name] = pd.read_csv(path)
+        plot_throughput_comparison(frames, output_path)
+    else:
+        frame = pd.read_csv(args.csv_file)
+        if args.plot_type == "throughput":
+            plot_throughput_vs_concurrency(frame, output_path)
+        elif args.plot_type == "latency":
+            plot_latency_breakdown(frame, output_path)
+        elif args.plot_type == "cache_hit":
+            plot_prefix_cache_hit_vs_concurrency(frame, output_path)
 
 
 if __name__ == "__main__":

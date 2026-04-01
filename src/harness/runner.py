@@ -14,6 +14,7 @@ from agents.base import AgentBase
 from agents.code_agent import CodeAgent
 from agents.data_agent import DataAgent
 from agents.research_agent import ResearchAgent
+from harness.trace_logger import TraceLogger
 
 
 AgentFactory = Callable[[str, str, str], AgentBase]
@@ -85,6 +86,7 @@ class BenchmarkRunner:
         task_timeout_s: float | None = None,
         arrival_rate_per_s: float | None = None,
         arrival_seed: int | None = None,
+        trace_logger: TraceLogger | None = None,
     ) -> None:
         if concurrency <= 0:
             raise ValueError("concurrency must be positive")
@@ -97,6 +99,7 @@ class BenchmarkRunner:
         self.task_timeout_s = task_timeout_s
         self.arrival_rate_per_s = arrival_rate_per_s
         self.arrival_seed = arrival_seed
+        self.trace_logger = trace_logger
         self._stop_requested = False
 
     def request_stop(self) -> None:
@@ -114,20 +117,22 @@ class BenchmarkRunner:
             agent.task_success = success
             summary = agent.summary()
             summary["timed_out"] = False
-            return RunnerTaskResult(summary=summary, trace=agent.get_trace())
         except (TimeoutError, asyncio.TimeoutError):
             agent.task_success = False
             summary = agent.summary()
             summary["timed_out"] = True
             summary["error"] = "timeout"
-            return RunnerTaskResult(summary=summary, trace=agent.get_trace())
         except Exception as exc:  # pragma: no cover - defensive harness path
             agent.task_success = False
             summary = agent.summary()
             summary["timed_out"] = False
             summary["error"] = str(exc)
             summary["exception_type"] = type(exc).__name__
-            return RunnerTaskResult(summary=summary, trace=agent.get_trace())
+        if self.trace_logger is not None:
+            for record in agent.trace:
+                self.trace_logger.log_step(agent.agent_id, record)
+            self.trace_logger.log_summary(agent.agent_id, summary)
+        return RunnerTaskResult(summary=summary, trace=agent.get_trace())
 
     async def run(self) -> list[RunnerTaskResult]:
         """Execute all queued tasks with closed-loop concurrency control."""

@@ -11,8 +11,9 @@ from typing import Any
 
 import yaml
 
+from harness.metrics import VLLMMetricsCollector
 from harness.runner import BenchmarkRunner, build_agent_factory
-from harness.trace_logger import build_run_id
+from harness.trace_logger import TraceLogger, build_run_id
 
 
 @dataclass(slots=True)
@@ -168,21 +169,44 @@ async def execute_sweep(
         api_base = system_config["api_base"]
         workload_key = run.workload.replace("_agent", "")
         workload_config = load_config(configs_root / "workloads" / f"{run.workload}.yaml")
+        task_timeout_s = workload_config.get("task_timeout_s")
         tasks = load_tasks(Path(run.tasks_file))
-        runner = BenchmarkRunner(
-            agent_factory=build_agent_factory(
-                workload_key,
-                agent_kwargs=extract_agent_kwargs(run.workload, workload_config),
-            ),
-            api_base=api_base,
-            model=model,
-            concurrency=run.concurrency,
-            tasks=tasks,
-            arrival_mode=arrival_mode,
-            arrival_rate_per_s=arrival_rate_per_s,
-            arrival_seed=arrival_seed,
-        )
-        results = await runner.run()
+        output_path = Path(run.output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        run_id = build_run_id(run.system, run.workload, run.concurrency)
+        metrics_url = system_config.get("metrics_url", "")
+        trace_logger = TraceLogger(output_path.parent, run_id)
+        try:
+            runner = BenchmarkRunner(
+                agent_factory=build_agent_factory(
+                    workload_key,
+                    agent_kwargs=extract_agent_kwargs(run.workload, workload_config),
+                ),
+                api_base=api_base,
+                model=model,
+                concurrency=run.concurrency,
+                tasks=tasks,
+                arrival_mode=arrival_mode,
+                arrival_rate_per_s=arrival_rate_per_s,
+                arrival_seed=arrival_seed,
+                task_timeout_s=task_timeout_s,
+                trace_logger=trace_logger,
+            )
+            metrics_task = None
+            collector = None
+            if metrics_url:
+                collector = VLLMMetricsCollector(metrics_url=metrics_url)
+                metrics_task = asyncio.create_task(collector.poll(interval_s=1.0))
+            try:
+                results = await runner.run()
+            finally:
+                if metrics_task is not None:
+                    metrics_task.cancel()
+                    await asyncio.gather(metrics_task, return_exceptions=True)
+                if collector is not None:
+                    collector.dump_json(output_path.with_suffix(".metrics.json"))
+        finally:
+            trace_logger.close()
         payload = {
             "system": run.system,
             "workload": run.workload,
@@ -191,8 +215,6 @@ async def execute_sweep(
             "execution_config": asdict(execution_config),
             "results": [{"summary": result.summary, "trace": result.trace} for result in results],
         }
-        output_path = Path(run.output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         completed_runs.append(
             {

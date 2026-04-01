@@ -1,0 +1,5 @@
+[
+  {"instance_id": "smoke__test-001", "problem_statement": "Fix the off-by-one error in counter.py that causes the loop to skip the last element.", "repo_path": "NOT_AVAILABLE", "test_cmd": "python -m pytest tests/"},
+  {"instance_id": "smoke__test-002", "problem_statement": "Add input validation to the parse_config function to handle missing keys gracefully.", "repo_path": "NOT_AVAILABLE", "test_cmd": "python -m pytest tests/"},
+  {"instance_id": "smoke__test-003", "problem_statement": "Fix the TypeError in data_loader.py when processing empty CSV files.", "repo_path": "NOT_AVAILABLE", "test_cmd": "python -m pytest tests/"}
+]
