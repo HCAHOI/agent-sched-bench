@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agents.base import AgentBase
+from agents.base import AgentBase, ToolLatencySimulator
 from agents.tool_calling import strip_code_fences
 
 
@@ -74,6 +74,7 @@ class CodeAgent(AgentBase):
         command_timeout_s: float = 30.0,
         task_timeout_s: float = 300.0,
         max_tool_output_chars: int = 8000,
+        tool_latency_profile: str = "realistic",
     ) -> None:
         super().__init__(agent_id=agent_id, api_base=api_base, model=model)
         self.max_steps = max_steps
@@ -81,6 +82,7 @@ class CodeAgent(AgentBase):
         self.task_timeout_s = task_timeout_s
         self.max_tool_output_chars = max_tool_output_chars
         self._workspace_path: Path | None = None
+        self._latency_sim = ToolLatencySimulator(tool_latency_profile)
 
     def _format_issue(self, task: dict[str, Any]) -> str:
         return textwrap.dedent(
@@ -226,7 +228,8 @@ class CodeAgent(AgentBase):
                 if tc.name == "submit":
                     patch_text = args.get("patch", tc.arguments)
                     success, tool_output = await self._apply_and_test(patch_text, task)
-                    record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
+                    raw_ms = (time.monotonic() - tool_started) * 1000
+                    record.tool_duration_ms = await self._latency_sim.wrap("pytest", raw_ms)
                     record.tool_result = tool_output
                     record.tool_success = success
                     self.task_success = success
@@ -236,7 +239,8 @@ class CodeAgent(AgentBase):
 
                 command = args.get("command", tc.arguments)
                 tool_output = await self._execute_bash(command)
-                record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
+                raw_ms = (time.monotonic() - tool_started) * 1000
+                record.tool_duration_ms = await self._latency_sim.wrap("bash", raw_ms, command=command)
                 record.tool_result = tool_output
                 record.tool_success = not tool_output.startswith("ERROR")
                 self.trace.append(record)

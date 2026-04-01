@@ -1,7 +1,8 @@
 name: code_agent
-max_steps: 40
+max_steps: 80
 command_timeout_s: 30
-task_timeout_s: 300
+task_timeout_s: 600
 sample_size: null
 sampling_strategy: full_dataset
+tool_latency_profile: realistic
 task_source: data/swebench_lite

@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from agents.base import AgentBase
+from agents.base import AgentBase, ToolLatencySimulator
 
 
 SYSTEM_PROMPT = """You are a research assistant. Given a question, search
@@ -97,6 +97,7 @@ class ResearchAgent(AgentBase):
         search_rate_limit_qps: float = 1.0,
         search_base_url: str = "https://html.duckduckgo.com/html/",
         max_tool_output_chars: int = 8000,
+        tool_latency_profile: str = "realistic",
     ) -> None:
         super().__init__(
             agent_id=agent_id,
@@ -110,6 +111,7 @@ class ResearchAgent(AgentBase):
         self.search_base_url = search_base_url
         self.max_tool_output_chars = max_tool_output_chars
         self._last_search_ts = 0.0
+        self._latency_sim = ToolLatencySimulator(tool_latency_profile)
 
     def _format_task(self, task: dict[str, Any]) -> str:
         return textwrap.dedent(
@@ -238,7 +240,8 @@ class ResearchAgent(AgentBase):
             else:
                 tool_output = f"ERROR: unknown tool {tc.name}"
 
-            record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
+            raw_ms = (time.monotonic() - tool_started) * 1000
+            record.tool_duration_ms = await self._latency_sim.wrap(tc.name, raw_ms)
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
             self.trace.append(record)

@@ -72,6 +72,60 @@ def plot_throughput_comparison(frames: dict[str, pd.DataFrame], output_path: Pat
     plt.close()
 
 
+def plot_gantt(trace_path: Path, output_path: Path) -> None:
+    """Render a Gantt chart showing LLM reasoning vs tool execution per agent.
+
+    Reads a JSONL trace file and plots one horizontal bar per agent, with
+    blue segments for LLM calls and orange segments for tool execution.
+    """
+    import json
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for line in trace_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            entries.append(json.loads(line))
+
+    steps = [e for e in entries if e.get("type") == "step"]
+    if not steps:
+        return
+
+    t0 = min(s["ts_start"] for s in steps)
+    agents = sorted({s["agent_id"] for s in steps})
+    agent_idx = {a: i for i, a in enumerate(agents)}
+
+    fig, ax = plt.subplots(figsize=(14, max(3, len(agents) * 0.4)))
+
+    for s in steps:
+        y = agent_idx[s["agent_id"]]
+        start = s["ts_start"] - t0
+        llm_dur = s["llm_latency_ms"] / 1000.0
+        tool_dur = (s.get("tool_duration_ms") or 0) / 1000.0
+
+        # LLM reasoning segment
+        ax.barh(y, llm_dur, left=start, height=0.6, color="#4285F4", edgecolor="none")
+        # Tool execution segment (immediately after LLM)
+        if tool_dur > 0:
+            ax.barh(y, tool_dur, left=start + llm_dur, height=0.6, color="#EA4335", edgecolor="none")
+
+    ax.set_yticks(range(len(agents)))
+    ax.set_yticklabels(agents, fontsize=7)
+    ax.set_xlabel("Time (seconds)")
+    ax.set_title(f"Agent Timeline — {trace_path.stem}")
+    ax.invert_yaxis()
+
+    # Legend
+    from matplotlib.patches import Patch
+    ax.legend(
+        handles=[Patch(color="#4285F4", label="LLM"), Patch(color="#EA4335", label="Tool")],
+        loc="upper right",
+        fontsize=8,
+    )
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
 def identify_cliff_point(frame: pd.DataFrame, *, throughput_drop_threshold: float = 0.1) -> int | None:
     """Identify the first concurrency point where throughput drops materially."""
     ordered = frame.sort_values("concurrency").reset_index(drop=True)

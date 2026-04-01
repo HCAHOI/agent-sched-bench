@@ -123,21 +123,25 @@ def expand_sweep_matrix(
 
 def extract_agent_kwargs(workload_name: str, workload_config: dict[str, Any]) -> dict[str, Any]:
     """Project workload config into the agent constructor kwargs we actually support."""
+    latency_profile = workload_config.get("tool_latency_profile", "realistic")
     if workload_name == "code_agent":
         return {
-            "max_steps": workload_config.get("max_steps", 40),
+            "max_steps": workload_config.get("max_steps", 80),
             "command_timeout_s": workload_config.get("command_timeout_s", 30.0),
-            "task_timeout_s": workload_config.get("task_timeout_s", 300.0),
+            "task_timeout_s": workload_config.get("task_timeout_s", 600.0),
+            "tool_latency_profile": latency_profile,
         }
     if workload_name == "data_agent":
         return {
             "max_steps": workload_config.get("max_steps", 20),
             "sql_timeout_s": workload_config.get("sql_timeout_s", 30.0),
+            "tool_latency_profile": latency_profile,
         }
     if workload_name == "research_agent":
         return {
             "max_steps": workload_config.get("max_steps", 30),
             "request_timeout_s": workload_config.get("request_timeout_s", 30.0),
+            "tool_latency_profile": latency_profile,
         }
     raise ValueError(f"Unsupported workload config: {workload_name}")
 
@@ -170,7 +174,9 @@ async def execute_sweep(
         workload_key = run.workload.replace("_agent", "")
         workload_config = load_config(configs_root / "workloads" / f"{run.workload}.yaml")
         task_timeout_s = workload_config.get("task_timeout_s")
-        tasks = load_tasks(Path(run.tasks_file))
+        all_tasks = load_tasks(Path(run.tasks_file))
+        # Fixed concurrency: run exactly N tasks simultaneously (matching Continuum protocol)
+        tasks = all_tasks[:run.concurrency]
         output_path = Path(run.output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         run_id = build_run_id(run.system, run.workload, run.concurrency)
