@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
@@ -9,55 +7,6 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-
-class ToolLatencySimulator:
-    """Simulate realistic tool-call latency to keep KV cache occupied."""
-
-    PROFILES: dict[str, Any] = {
-        "local": (0, 0),
-        "realistic": {
-            "grep": (0.05, 0.1),
-            "cat": (0.05, 0.1),
-            "find": (0.05, 0.2),
-            "sed": (0.05, 0.2),
-            "bash": (0.1, 2.0),
-            "pytest": (2.0, 15.0),
-            "python": (0.5, 5.0),
-            "git": (0.1, 1.0),
-            "schema_inspect": (0.05, 0.1),
-            "sql_execute": (0.2, 5.0),
-            "web_search": (0.5, 3.0),
-            "read_page": (1.0, 5.0),
-            "default": (0.1, 3.0),
-        },
-        "heavy": (1.0, 10.0),
-    }
-
-    def __init__(self, profile: str = "realistic") -> None:
-        if profile not in self.PROFILES:
-            raise ValueError(f"Unknown latency profile: {profile}")
-        self.profile = profile
-
-    def _classify_bash_command(self, command: str) -> str:
-        """Extract the base command name for latency lookup."""
-        token = command.strip().split()[0] if command.strip() else "bash"
-        return token.split("/")[-1]
-
-    async def wrap(self, tool_name: str, real_duration_ms: float, command: str = "") -> float:
-        """Sleep simulated delay and return total duration in ms."""
-        if self.profile == "local":
-            return real_duration_ms
-        profile_data = self.PROFILES[self.profile]
-        if isinstance(profile_data, dict):
-            key = tool_name
-            if tool_name == "bash" and command:
-                key = self._classify_bash_command(command)
-            lo, hi = profile_data.get(key, profile_data["default"])
-        else:
-            lo, hi = profile_data
-        simulated_s = random.uniform(lo, hi)
-        await asyncio.sleep(simulated_s)
-        return real_duration_ms + simulated_s * 1000
 
 
 def _message_content_to_text(content: Any) -> str:

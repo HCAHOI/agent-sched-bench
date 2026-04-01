@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agents.base import AgentBase, ToolLatencySimulator
+from agents.base import AgentBase
 from agents.tool_calling import extract_sql_block
 
 
@@ -70,13 +70,11 @@ class DataAgent(AgentBase):
         max_steps: int = 20,
         sql_timeout_s: float = 30.0,
         max_tool_output_chars: int = 8000,
-        tool_latency_profile: str = "realistic",
     ) -> None:
         super().__init__(agent_id=agent_id, api_base=api_base, model=model)
         self.max_steps = max_steps
         self.sql_timeout_s = sql_timeout_s
         self.max_tool_output_chars = max_tool_output_chars
-        self._latency_sim = ToolLatencySimulator(tool_latency_profile)
 
     def _format_task(self, task: dict[str, Any]) -> str:
         evidence = task.get("evidence", "")
@@ -228,7 +226,7 @@ class DataAgent(AgentBase):
                 tool_output = f"ERROR: unknown tool {tc.name}"
 
             raw_ms = (time.monotonic() - tool_started) * 1000
-            record.tool_duration_ms = await self._latency_sim.wrap(tc.name, raw_ms)
+            record.tool_duration_ms = raw_ms
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
             self.trace.append(record)

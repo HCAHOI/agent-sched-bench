@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import shutil
-import subprocess
 import tempfile
 import textwrap
 import time
@@ -68,9 +65,6 @@ class CodeAgent(AgentBase):
     Each task runs in an isolated Podman container with the target repo
     cloned at the correct base_commit.  The agent can install dependencies
     (``pip install``) and run real tests inside the container.
-
-    Falls back to a lightweight temp-dir sandbox when ``container_image``
-    is not provided (legacy mode for local testing).
     """
 
     def __init__(
@@ -83,7 +77,7 @@ class CodeAgent(AgentBase):
         command_timeout_s: float = 120.0,
         task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
-        container_image: str | None = None,
+        container_image: str = "swebench-base:latest",
         repos_root: str | None = None,
     ) -> None:
         super().__init__(agent_id=agent_id, api_base=api_base, model=model)
@@ -91,23 +85,15 @@ class CodeAgent(AgentBase):
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
         self.max_tool_output_chars = max_tool_output_chars
-
-        # Container mode (production) vs temp-dir mode (legacy/testing)
-        self._container_image = container_image
-        self._container_mgr: ContainerManager | None = None
+        self._container_mgr = ContainerManager(
+            base_image=container_image,
+            repos_root=Path(repos_root) if repos_root else None,
+        )
         self._container_id: str | None = None
-        if container_image:
-            self._container_mgr = ContainerManager(
-                base_image=container_image,
-                repos_root=Path(repos_root) if repos_root else None,
-            )
-
-        # Legacy temp-dir mode
-        self._workspace_path: Path | None = None
         self._prepared = False
 
     def _format_issue(self, task: dict[str, Any]) -> str:
-        repo = task.get("repo", task.get("repo_path", "unknown"))
+        repo = task.get("repo", "unknown")
         return textwrap.dedent(
             f"""
             Instance ID: {task['instance_id']}
@@ -120,34 +106,17 @@ class CodeAgent(AgentBase):
         ).strip()
 
     async def prepare(self, task: dict[str, Any]) -> None:
-        """Prepare the sandbox environment (container or temp-dir).
+        """Create the Podman container before the agent loop starts.
 
         When called before ``run()``, the expensive setup (container
         creation, repo clone, pip install) happens in a separate phase
         so that all agents can start their LLM loops simultaneously.
         """
-        if self._container_mgr:
-            await self._setup_container(task)
-        else:
-            self._prepare_workspace(task)
+        self._container_id = await self._container_mgr.create_container(task)
         self._prepared = True
 
-    # ── Container mode ───────────────────────────────────────────
-
-    async def _setup_container(self, task: dict[str, Any]) -> None:
-        """Create a Podman container with the repo at the correct commit."""
-        assert self._container_mgr is not None
-        self._container_id = await self._container_mgr.create_container(task)
-
-    async def _teardown_container(self) -> None:
-        """Destroy the task container."""
-        if self._container_mgr and self._container_id:
-            await self._container_mgr.destroy_container(self._container_id)
-            self._container_id = None
-
-    async def _exec_container(self, command: str) -> str:
+    async def _execute_bash(self, command: str) -> str:
         """Execute a bash command inside the container."""
-        assert self._container_mgr is not None
         assert self._container_id is not None
         returncode, output = await self._container_mgr.exec_in_container(
             self._container_id,
@@ -158,11 +127,10 @@ class CodeAgent(AgentBase):
             return f"ERROR: command exited with {returncode}\n{output}".strip()
         return output.strip() or "(no output)"
 
-    async def _apply_and_test_container(
+    async def _apply_and_test(
         self, patch_text: str, task: dict[str, Any],
     ) -> tuple[bool, str]:
         """Apply patch and run tests inside the container."""
-        assert self._container_mgr is not None
         assert self._container_id is not None
         cleaned_patch = strip_code_fences(patch_text)
 
@@ -199,107 +167,6 @@ class CodeAgent(AgentBase):
         )
         return returncode == 0, output.strip() or "(no output)"
 
-    # ── Legacy temp-dir mode ─────────────────────────────────────
-
-    def _prepare_workspace(self, task: dict[str, Any]) -> Path:
-        source_repo = Path(task["repo_path"]).resolve()
-        if not source_repo.exists():
-            raise FileNotFoundError(f"Repository path does not exist: {source_repo}")
-        temp_root = Path(tempfile.mkdtemp(prefix=f"{task['instance_id']}-"))
-        workspace = temp_root / source_repo.name
-        shutil.copytree(source_repo, workspace)
-        self._workspace_path = workspace
-        return workspace
-
-    def _cleanup_workspace(self) -> None:
-        if self._workspace_path is None:
-            return
-        temp_root = self._workspace_path.parent
-        shutil.rmtree(temp_root, ignore_errors=True)
-        self._workspace_path = None
-
-    async def _run_subprocess(
-        self, command: str, cwd: Path, timeout_s: float,
-    ) -> subprocess.CompletedProcess[str]:
-        return await asyncio.to_thread(
-            subprocess.run,
-            command,
-            shell=True,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-
-    async def _execute_bash_legacy(self, command: str) -> str:
-        if self._workspace_path is None:
-            raise RuntimeError("Workspace is not prepared")
-        try:
-            completed = await self._run_subprocess(
-                command,
-                cwd=self._workspace_path,
-                timeout_s=self.command_timeout_s,
-            )
-        except subprocess.TimeoutExpired:
-            return "ERROR: command timed out"
-        output = ""
-        if completed.stdout:
-            output += completed.stdout
-        if completed.stderr:
-            output += ("\n" if output else "") + completed.stderr
-        if completed.returncode != 0:
-            return f"ERROR: command exited with {completed.returncode}\n{output}".strip()
-        return output.strip() or "(no output)"
-
-    async def _apply_and_test_legacy(
-        self, patch_text: str, task: dict[str, Any],
-    ) -> tuple[bool, str]:
-        if self._workspace_path is None:
-            raise RuntimeError("Workspace is not prepared")
-        cleaned_patch = strip_code_fences(patch_text)
-        patch_path = self._workspace_path / ".agent_patch.diff"
-        patch_path.write_text(cleaned_patch + "\n", encoding="utf-8")
-        try:
-            apply_result = await self._run_subprocess(
-                f"git apply --whitespace=nowarn {patch_path.name}",
-                cwd=self._workspace_path,
-                timeout_s=self.command_timeout_s,
-            )
-        except subprocess.TimeoutExpired:
-            return False, "ERROR: patch apply timed out"
-        if apply_result.returncode != 0:
-            return False, (
-                apply_result.stderr or apply_result.stdout or "git apply failed"
-            ).strip()
-        try:
-            test_result = await self._run_subprocess(
-                task["test_cmd"],
-                cwd=self._workspace_path,
-                timeout_s=self.command_timeout_s,
-            )
-        except subprocess.TimeoutExpired:
-            return False, "ERROR: test command timed out"
-        output = ""
-        if test_result.stdout:
-            output += test_result.stdout
-        if test_result.stderr:
-            output += ("\n" if output else "") + test_result.stderr
-        return test_result.returncode == 0, output.strip() or "(no output)"
-
-    # ── Unified dispatch ─────────────────────────────────────────
-
-    async def _execute_bash(self, command: str) -> str:
-        if self._container_id:
-            return await self._exec_container(command)
-        return await self._execute_bash_legacy(command)
-
-    async def _apply_and_test(
-        self, patch_text: str, task: dict[str, Any],
-    ) -> tuple[bool, str]:
-        if self._container_id:
-            return await self._apply_and_test_container(patch_text, task)
-        return await self._apply_and_test_legacy(patch_text, task)
-
     def _truncate(self, text: str) -> str:
         if len(text) <= self.max_tool_output_chars:
             return text
@@ -317,10 +184,7 @@ class CodeAgent(AgentBase):
 
         # Setup: skip if prepare() was already called (two-phase mode)
         if not self._prepared:
-            if self._container_mgr:
-                await self._setup_container(task)
-            else:
-                self._prepare_workspace(task)
+            await self.prepare(task)
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -405,7 +269,6 @@ class CodeAgent(AgentBase):
                 })
             return bool(self.task_success)
         finally:
-            if self._container_mgr:
-                await self._teardown_container()
-            else:
-                self._cleanup_workspace()
+            await self._container_mgr.destroy_container(self._container_id)
+            self._container_id = None
+            self._prepared = False
