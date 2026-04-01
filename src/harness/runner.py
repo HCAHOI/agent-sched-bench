@@ -135,7 +135,69 @@ class BenchmarkRunner:
         return RunnerTaskResult(summary=summary, trace=agent.get_trace())
 
     async def run(self) -> list[RunnerTaskResult]:
-        """Execute all queued tasks with closed-loop concurrency control."""
+        """Execute all queued tasks with concurrency control.
+
+        In ``closed_loop`` mode a two-phase strategy is used:
+
+        1. **Prepare phase** – all agents set up their environments
+           (containers, workspaces) in parallel.  This is CPU/IO work
+           that does not touch the GPU.
+        2. **Execute phase** – all agents start their LLM loops
+           simultaneously so that they compete for the GPU from t=0.
+
+        In ``poisson`` mode the original staggered-arrival queue is used.
+        """
+        if self.arrival_mode == "closed_loop":
+            return await self._run_closed_loop()
+        return await self._run_poisson()
+
+    async def _run_closed_loop(self) -> list[RunnerTaskResult]:
+        """Two-phase execution: prepare all, then run all simultaneously."""
+        # Phase 1: Create agents and prepare environments in parallel
+        agents: list[tuple[AgentBase, dict[str, Any], int]] = []
+        for idx, task in enumerate(self.tasks):
+            agent = self.agent_factory(f"agent-{idx:04d}", self.api_base, self.model)
+            agents.append((agent, task, idx))
+
+        await asyncio.gather(
+            *[agent.prepare(task) for agent, task, _ in agents]
+        )
+
+        # Phase 2: Run all agent loops simultaneously
+        async def _execute(agent: AgentBase, task: dict[str, Any], idx: int) -> RunnerTaskResult:
+            try:
+                run_coro = agent.run(task)
+                if self.task_timeout_s is not None:
+                    success = await asyncio.wait_for(run_coro, timeout=self.task_timeout_s)
+                else:
+                    success = await run_coro
+                agent.task_success = success
+                summary = agent.summary()
+                summary["timed_out"] = False
+            except (TimeoutError, asyncio.TimeoutError):
+                agent.task_success = False
+                summary = agent.summary()
+                summary["timed_out"] = True
+                summary["error"] = "timeout"
+            except Exception as exc:
+                agent.task_success = False
+                summary = agent.summary()
+                summary["timed_out"] = False
+                summary["error"] = str(exc)
+                summary["exception_type"] = type(exc).__name__
+            if self.trace_logger is not None:
+                for record in agent.trace:
+                    self.trace_logger.log_step(agent.agent_id, record)
+                self.trace_logger.log_summary(agent.agent_id, summary)
+            return RunnerTaskResult(summary=summary, trace=agent.get_trace())
+
+        result_list = await asyncio.gather(
+            *[_execute(agent, task, idx) for agent, task, idx in agents]
+        )
+        return list(result_list)
+
+    async def _run_poisson(self) -> list[RunnerTaskResult]:
+        """Staggered-arrival execution with producer-consumer queue."""
         offsets = build_arrival_offsets(
             len(self.tasks),
             arrival_mode=self.arrival_mode,

@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agents.base import AgentBase, ToolLatencySimulator
+from agents.base import AgentBase
+from agents.container_manager import ContainerManager
 from agents.tool_calling import strip_code_fences
 
 
@@ -62,7 +63,15 @@ TOOLS = [
 
 
 class CodeAgent(AgentBase):
-    """SWE-bench-style coding agent with a lightweight temp-dir sandbox."""
+    """SWE-bench coding agent with Podman container sandbox.
+
+    Each task runs in an isolated Podman container with the target repo
+    cloned at the correct base_commit.  The agent can install dependencies
+    (``pip install``) and run real tests inside the container.
+
+    Falls back to a lightweight temp-dir sandbox when ``container_image``
+    is not provided (legacy mode for local testing).
+    """
 
     def __init__(
         self,
@@ -71,30 +80,126 @@ class CodeAgent(AgentBase):
         model: str,
         *,
         max_steps: int = 40,
-        command_timeout_s: float = 30.0,
-        task_timeout_s: float = 300.0,
+        command_timeout_s: float = 120.0,
+        task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
-        tool_latency_profile: str = "realistic",
+        container_image: str | None = None,
+        repos_root: str | None = None,
     ) -> None:
         super().__init__(agent_id=agent_id, api_base=api_base, model=model)
         self.max_steps = max_steps
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
         self.max_tool_output_chars = max_tool_output_chars
+
+        # Container mode (production) vs temp-dir mode (legacy/testing)
+        self._container_image = container_image
+        self._container_mgr: ContainerManager | None = None
+        self._container_id: str | None = None
+        if container_image:
+            self._container_mgr = ContainerManager(
+                base_image=container_image,
+                repos_root=Path(repos_root) if repos_root else None,
+            )
+
+        # Legacy temp-dir mode
         self._workspace_path: Path | None = None
-        self._latency_sim = ToolLatencySimulator(tool_latency_profile)
+        self._prepared = False
 
     def _format_issue(self, task: dict[str, Any]) -> str:
+        repo = task.get("repo", task.get("repo_path", "unknown"))
         return textwrap.dedent(
             f"""
             Instance ID: {task['instance_id']}
-            Repository: {task['repo_path']}
+            Repository: {repo}
             Test command: {task['test_cmd']}
 
             Problem statement:
             {task['problem_statement']}
             """
         ).strip()
+
+    async def prepare(self, task: dict[str, Any]) -> None:
+        """Prepare the sandbox environment (container or temp-dir).
+
+        When called before ``run()``, the expensive setup (container
+        creation, repo clone, pip install) happens in a separate phase
+        so that all agents can start their LLM loops simultaneously.
+        """
+        if self._container_mgr:
+            await self._setup_container(task)
+        else:
+            self._prepare_workspace(task)
+        self._prepared = True
+
+    # ── Container mode ───────────────────────────────────────────
+
+    async def _setup_container(self, task: dict[str, Any]) -> None:
+        """Create a Podman container with the repo at the correct commit."""
+        assert self._container_mgr is not None
+        self._container_id = await self._container_mgr.create_container(task)
+
+    async def _teardown_container(self) -> None:
+        """Destroy the task container."""
+        if self._container_mgr and self._container_id:
+            await self._container_mgr.destroy_container(self._container_id)
+            self._container_id = None
+
+    async def _exec_container(self, command: str) -> str:
+        """Execute a bash command inside the container."""
+        assert self._container_mgr is not None
+        assert self._container_id is not None
+        returncode, output = await self._container_mgr.exec_in_container(
+            self._container_id,
+            f"cd /workspace/repo && {command}",
+            timeout_s=self.command_timeout_s,
+        )
+        if returncode != 0:
+            return f"ERROR: command exited with {returncode}\n{output}".strip()
+        return output.strip() or "(no output)"
+
+    async def _apply_and_test_container(
+        self, patch_text: str, task: dict[str, Any],
+    ) -> tuple[bool, str]:
+        """Apply patch and run tests inside the container."""
+        assert self._container_mgr is not None
+        assert self._container_id is not None
+        cleaned_patch = strip_code_fences(patch_text)
+
+        # Write patch to a temp file and copy into container
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".diff", delete=False,
+        ) as f:
+            f.write(cleaned_patch + "\n")
+            patch_path = f.name
+
+        try:
+            await self._container_mgr.copy_to_container(
+                self._container_id,
+                patch_path,
+                "/workspace/repo/.agent_patch.diff",
+            )
+        finally:
+            Path(patch_path).unlink(missing_ok=True)
+
+        # Apply patch
+        returncode, output = await self._container_mgr.exec_in_container(
+            self._container_id,
+            "cd /workspace/repo && git apply --whitespace=nowarn .agent_patch.diff",
+            timeout_s=self.command_timeout_s,
+        )
+        if returncode != 0:
+            return False, (output or "git apply failed").strip()
+
+        # Run tests
+        returncode, output = await self._container_mgr.exec_in_container(
+            self._container_id,
+            f"cd /workspace/repo && {task['test_cmd']}",
+            timeout_s=self.command_timeout_s,
+        )
+        return returncode == 0, output.strip() or "(no output)"
+
+    # ── Legacy temp-dir mode ─────────────────────────────────────
 
     def _prepare_workspace(self, task: dict[str, Any]) -> Path:
         source_repo = Path(task["repo_path"]).resolve()
@@ -113,7 +218,9 @@ class CodeAgent(AgentBase):
         shutil.rmtree(temp_root, ignore_errors=True)
         self._workspace_path = None
 
-    async def _run_subprocess(self, command: str, cwd: Path, timeout_s: float) -> subprocess.CompletedProcess[str]:
+    async def _run_subprocess(
+        self, command: str, cwd: Path, timeout_s: float,
+    ) -> subprocess.CompletedProcess[str]:
         return await asyncio.to_thread(
             subprocess.run,
             command,
@@ -124,7 +231,7 @@ class CodeAgent(AgentBase):
             timeout=timeout_s,
         )
 
-    async def _execute_bash(self, command: str) -> str:
+    async def _execute_bash_legacy(self, command: str) -> str:
         if self._workspace_path is None:
             raise RuntimeError("Workspace is not prepared")
         try:
@@ -135,7 +242,6 @@ class CodeAgent(AgentBase):
             )
         except subprocess.TimeoutExpired:
             return "ERROR: command timed out"
-
         output = ""
         if completed.stdout:
             output += completed.stdout
@@ -145,13 +251,14 @@ class CodeAgent(AgentBase):
             return f"ERROR: command exited with {completed.returncode}\n{output}".strip()
         return output.strip() or "(no output)"
 
-    async def _apply_and_test(self, patch_text: str, task: dict[str, Any]) -> tuple[bool, str]:
+    async def _apply_and_test_legacy(
+        self, patch_text: str, task: dict[str, Any],
+    ) -> tuple[bool, str]:
         if self._workspace_path is None:
             raise RuntimeError("Workspace is not prepared")
         cleaned_patch = strip_code_fences(patch_text)
         patch_path = self._workspace_path / ".agent_patch.diff"
         patch_path.write_text(cleaned_patch + "\n", encoding="utf-8")
-
         try:
             apply_result = await self._run_subprocess(
                 f"git apply --whitespace=nowarn {patch_path.name}",
@@ -161,8 +268,9 @@ class CodeAgent(AgentBase):
         except subprocess.TimeoutExpired:
             return False, "ERROR: patch apply timed out"
         if apply_result.returncode != 0:
-            return False, (apply_result.stderr or apply_result.stdout or "git apply failed").strip()
-
+            return False, (
+                apply_result.stderr or apply_result.stdout or "git apply failed"
+            ).strip()
         try:
             test_result = await self._run_subprocess(
                 task["test_cmd"],
@@ -171,7 +279,6 @@ class CodeAgent(AgentBase):
             )
         except subprocess.TimeoutExpired:
             return False, "ERROR: test command timed out"
-
         output = ""
         if test_result.stdout:
             output += test_result.stdout
@@ -179,17 +286,42 @@ class CodeAgent(AgentBase):
             output += ("\n" if output else "") + test_result.stderr
         return test_result.returncode == 0, output.strip() or "(no output)"
 
+    # ── Unified dispatch ─────────────────────────────────────────
+
+    async def _execute_bash(self, command: str) -> str:
+        if self._container_id:
+            return await self._exec_container(command)
+        return await self._execute_bash_legacy(command)
+
+    async def _apply_and_test(
+        self, patch_text: str, task: dict[str, Any],
+    ) -> tuple[bool, str]:
+        if self._container_id:
+            return await self._apply_and_test_container(patch_text, task)
+        return await self._apply_and_test_legacy(patch_text, task)
+
     def _truncate(self, text: str) -> str:
         if len(text) <= self.max_tool_output_chars:
             return text
         half = self.max_tool_output_chars // 2
-        return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
+        return (
+            text[:half]
+            + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n"
+            + text[-half:]
+        )
 
     async def run(self, task: dict[str, Any]) -> bool:
         self.task_id = task["instance_id"]
         self.task_success = False
         self.trace = []
-        self._prepare_workspace(task)
+
+        # Setup: skip if prepare() was already called (two-phase mode)
+        if not self._prepared:
+            if self._container_mgr:
+                await self._setup_container(task)
+            else:
+                self._prepare_workspace(task)
+
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": self._format_issue(task)},
@@ -218,7 +350,11 @@ class CodeAgent(AgentBase):
                 try:
                     args = json.loads(tc.arguments)
                 except json.JSONDecodeError:
-                    args = {"command": tc.arguments} if tc.name == "bash" else {"patch": tc.arguments}
+                    args = (
+                        {"command": tc.arguments}
+                        if tc.name == "bash"
+                        else {"patch": tc.arguments}
+                    )
 
                 record.phase = "acting"
                 record.tool_name = tc.name
@@ -227,31 +363,38 @@ class CodeAgent(AgentBase):
 
                 if tc.name == "submit":
                     patch_text = args.get("patch", tc.arguments)
-                    success, tool_output = await self._apply_and_test(patch_text, task)
+                    success, tool_output = await self._apply_and_test(
+                        patch_text, task,
+                    )
                     raw_ms = (time.monotonic() - tool_started) * 1000
-                    record.tool_duration_ms = await self._latency_sim.wrap("pytest", raw_ms)
+                    record.tool_duration_ms = raw_ms
                     record.tool_result = tool_output
                     record.tool_success = success
                     self.task_success = success
                     self.trace.append(record)
-                    # Append assistant + tool result for trace completeness
                     break
 
                 command = args.get("command", tc.arguments)
                 tool_output = await self._execute_bash(command)
                 raw_ms = (time.monotonic() - tool_started) * 1000
-                record.tool_duration_ms = await self._latency_sim.wrap("bash", raw_ms, command=command)
+                record.tool_duration_ms = raw_ms
                 record.tool_result = tool_output
                 record.tool_success = not tool_output.startswith("ERROR")
                 self.trace.append(record)
 
                 # Build assistant message with tool_calls for multi-turn
-                assistant_msg: dict[str, Any] = {"role": "assistant", "content": llm_result.content or ""}
+                assistant_msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": llm_result.content or "",
+                }
                 assistant_msg["tool_calls"] = [
                     {
                         "id": tc.id,
                         "type": "function",
-                        "function": {"name": tc.name, "arguments": tc.arguments},
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        },
                     }
                 ]
                 messages.append(assistant_msg)
@@ -262,4 +405,7 @@ class CodeAgent(AgentBase):
                 })
             return bool(self.task_success)
         finally:
-            self._cleanup_workspace()
+            if self._container_mgr:
+                await self._teardown_container()
+            else:
+                self._cleanup_workspace()

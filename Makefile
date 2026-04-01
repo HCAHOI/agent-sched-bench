@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results
+.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified
 
 help:
 	@printf "Targets:\n"
@@ -24,6 +24,9 @@ help:
 	@printf "  smoke-research    Reserved for AGENT-4 smoke test\n"
 	@printf "  run-sweep         Run the harness sweep when HARNESS-1 is available\n"
 	@printf "  collect-results   Pull result artifacts back via rsync\n"
+	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
+	@printf "  setup-swebench-repos        Clone repos referenced by selected tasks\n"
+	@printf "  build-swebench-images       Build Podman container images\n"
 
 pull:
 	./scripts/pull_repo.sh
@@ -84,3 +87,12 @@ run-sweep:
 
 collect-results:
 	./scripts/collect_results.sh
+
+setup-swebench-repos:
+	./scripts/setup_swebench_repos.sh data/swebench_verified/tasks.json
+
+build-swebench-images:
+	./scripts/build_swebench_images.sh
+
+download-swebench-verified:
+	$(PYTHON) -m agents.swebench_data

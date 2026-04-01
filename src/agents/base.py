@@ -218,6 +218,17 @@ class AgentBase(ABC):
             extra=extra or {},
         )
 
+    async def prepare(self, task: dict[str, Any]) -> None:
+        """Prepare the agent's environment before the main loop.
+
+        Called during the setup phase so that expensive operations
+        (container creation, dependency installation) complete before
+        all agents start competing for the GPU simultaneously.
+
+        The default implementation is a no-op.  Subclasses that need
+        heavyweight setup (e.g. Podman containers) should override this.
+        """
+
     @abstractmethod
     async def run(self, task: dict[str, Any]) -> bool:
         """Run the agent on one task and return success/failure."""

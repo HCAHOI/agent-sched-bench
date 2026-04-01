@@ -11,6 +11,8 @@ uv.lock
 .trae/
 
 data/swebench_lite/repos/
+data/swebench_repos/
+data/swebench_verified/tasks.json
 results/raw/
 results/processed/
 results/figures/

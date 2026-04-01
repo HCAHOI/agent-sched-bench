@@ -92,7 +92,7 @@ def test_primary_workload_configs_default_to_full_dataset() -> None:
 
 def test_primary_workload_configs_use_expected_step_budgets() -> None:
     expected = {
-        "code_agent": 40,
+        "code_agent": 80,
         "data_agent": 20,
         "research_agent": 30,
     }

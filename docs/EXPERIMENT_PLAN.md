@@ -1,8 +1,8 @@
 # Experiment Plan
 
-**Updated**: 2026-04-01  
+**Updated**: 2026-04-02  
 **Hardware**: 1x A100-PCIE-40GB, CUDA 12.8, 503 GiB RAM  
-**Model**: Llama-3.1-8B-Instruct (fp16, 16.1 GB)  
+**Model**: Qwen3-32B-AWQ  
 **Engine**: vLLM 0.10.2  
 
 ---
@@ -21,6 +21,48 @@
 | AGENT-1~4 | Code complete, not live-tested |
 | HARNESS-1~3 | Code complete, not live-tested |
 | ANALYSIS-1, REPLAY-1 | Code complete |
+| **SWE-bench Verified** | **32 tasks selected, Podman sandbox ready** |
+
+---
+
+## Pre-Phase: SWE-bench Verified Setup
+
+**Goal**: Replace simulated tool latency with real execution in Podman containers.
+
+### Step 0.1: Download & Select Tasks
+
+```bash
+make download-swebench-verified
+```
+
+**Output**: `data/swebench_verified/tasks.json` — 32 tool-intensive tasks from SWE-bench Verified, stratified by repo (django, sympy, scikit-learn, matplotlib, etc.).
+
+### Step 0.2: Clone Repos
+
+```bash
+make setup-swebench-repos
+```
+
+**Output**: `data/swebench_repos/` — full clones of repos referenced by selected tasks (~10 GB).
+
+### Step 0.3: Build Container Images
+
+```bash
+make build-swebench-images
+```
+
+**Output**: `swebench-base:latest` Podman image with Python 3.11, pytest, and common build tools.
+
+### Step 0.4: Verify Container Lifecycle
+
+```bash
+podman run --rm swebench-base:latest python --version
+python3 -m pytest tests/test_container_manager.py -v
+```
+
+**Acceptance**:
+- [ ] Container starts and returns Python 3.11.x
+- [ ] Unit tests pass; integration tests pass if podman available
 
 ---
 

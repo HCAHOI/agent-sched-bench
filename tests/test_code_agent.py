@@ -26,27 +26,19 @@ def create_git_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_code_agent_parses_tool_calls() -> None:
-    agent = CodeAgent(agent_id="code-1", api_base="http://localhost:8000/v1", model="mock")
-    tool = agent._parse_tool_call("bash(pytest -q)")
-    assert tool is not None
-    assert tool.name == "bash"
-    assert tool.args == "pytest -q"
-
-
-def test_code_agent_executes_real_bash_tool(tmp_path: Path) -> None:
+def test_code_agent_legacy_bash_executes(tmp_path: Path) -> None:
+    """Legacy mode: bash commands run in host temp-dir workspace."""
     repo = create_git_repo(tmp_path)
-    agent = CodeAgent(agent_id="code-2", api_base="http://localhost:8000/v1", model="mock")
+    agent = CodeAgent(agent_id="code-1", api_base="http://localhost:8000/v1", model="mock")
     agent._workspace_path = repo
-    tool = agent._parse_tool_call("bash(pwd)")
-    assert tool is not None
-    output = asyncio.run(agent._execute_tool(tool, {"test_cmd": "pytest"}))
+    output = asyncio.run(agent._execute_bash("pwd"))
     assert str(repo) in output
 
 
 def test_code_agent_applies_patch_and_runs_tests(tmp_path: Path) -> None:
+    """Legacy mode: patch apply + test execution works correctly."""
     repo = create_git_repo(tmp_path)
-    agent = CodeAgent(agent_id="code-3", api_base="http://localhost:8000/v1", model="mock")
+    agent = CodeAgent(agent_id="code-2", api_base="http://localhost:8000/v1", model="mock")
     agent._workspace_path = repo
     patch = """diff --git a/app.py b/app.py
 index 4f2d7d6..43dd47e 100644
@@ -73,7 +65,7 @@ index 4f2d7d6..43dd47e 100644
 
 def test_code_agent_workspace_copy_is_isolated_and_cleanup_removes_temp_root(tmp_path: Path) -> None:
     source_repo = create_git_repo(tmp_path)
-    agent = CodeAgent(agent_id="code-4", api_base="http://localhost:8000/v1", model="mock")
+    agent = CodeAgent(agent_id="code-3", api_base="http://localhost:8000/v1", model="mock")
     workspace = agent._prepare_workspace(
         {
             "instance_id": "demo-copy",
@@ -87,6 +79,36 @@ def test_code_agent_workspace_copy_is_isolated_and_cleanup_removes_temp_root(tmp
     temp_root = workspace.parent
     agent._cleanup_workspace()
     assert not temp_root.exists()
+
+
+def test_code_agent_constructor_container_mode() -> None:
+    """Container mode: constructor initializes ContainerManager."""
+    agent = CodeAgent(
+        agent_id="code-4",
+        api_base="http://localhost:8000/v1",
+        model="mock",
+        container_image="swebench-base:latest",
+        repos_root="data/swebench_repos",
+    )
+    assert agent._container_mgr is not None
+    assert agent._container_image == "swebench-base:latest"
+
+
+def test_code_agent_constructor_legacy_mode() -> None:
+    """Legacy mode: no container_image means no ContainerManager."""
+    agent = CodeAgent(
+        agent_id="code-5",
+        api_base="http://localhost:8000/v1",
+        model="mock",
+    )
+    assert agent._container_mgr is None
+    assert agent._container_image is None
+
+
+def test_code_agent_no_latency_simulator() -> None:
+    """ToolLatencySimulator is no longer used in CodeAgent."""
+    agent = CodeAgent(agent_id="code-6", api_base="http://localhost:8000/v1", model="mock")
+    assert not hasattr(agent, "_latency_sim")
 
 
 class StaticLLMHandler(BaseHTTPRequestHandler):
@@ -128,7 +150,7 @@ class StaticLLMHandler(BaseHTTPRequestHandler):
         program_id = payload.get("program_id")
         if program_id is None:
             program_id = (payload.get("extra_body") or {}).get("program_id")
-        assert program_id == "code-5"
+        assert program_id == "code-run"
         response = self.responses[self.__class__.call_count]
         self.__class__.call_count += 1
         body = json.dumps(response).encode("utf-8")
@@ -144,11 +166,12 @@ class StaticLLMHandler(BaseHTTPRequestHandler):
 
 def test_code_agent_run_clears_trace_between_tasks(tmp_path: Path) -> None:
     source_repo = create_git_repo(tmp_path)
+    StaticLLMHandler.call_count = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), StaticLLMHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     api_base = f"http://127.0.0.1:{server.server_address[1]}/v1"
-    agent = CodeAgent(agent_id="code-5", api_base=api_base, model="mock")
+    agent = CodeAgent(agent_id="code-run", api_base=api_base, model="mock")
     task = {
         "instance_id": "task-1",
         "problem_statement": "noop",
