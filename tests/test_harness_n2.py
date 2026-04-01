@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from agents.base import AgentBase, LLMCallResult
-from harness.runner import BenchmarkRunner, RunnerTaskResult
+from harness.runner import BenchmarkRunner, RunnerTaskResult, build_arrival_offsets
 
 
 class SlowAgent(AgentBase):
@@ -87,3 +87,19 @@ def test_benchmark_runner_converts_task_exception_into_failed_result() -> None:
     assert len(results) == 1
     assert results[0].summary["success"] is False
     assert results[0].summary["exception_type"] == "RuntimeError"
+
+
+def test_poisson_arrival_offsets_are_deterministic() -> None:
+    offsets = build_arrival_offsets(
+        3,
+        arrival_mode="poisson",
+        arrival_rate_per_s=2.0,
+        arrival_seed=7,
+    )
+    assert offsets == build_arrival_offsets(
+        3,
+        arrival_mode="poisson",
+        arrival_rate_per_s=2.0,
+        arrival_seed=7,
+    )
+    assert offsets[1] >= offsets[0]

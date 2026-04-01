@@ -40,10 +40,14 @@ def test_vllm_metrics_collector_polls_and_dumps(tmp_path: Path) -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        collector = VLLMMetricsCollector(metrics_url=f"http://127.0.0.1:{server.server_address[1]}/metrics")
+        collector = VLLMMetricsCollector(
+            metrics_url=f"http://127.0.0.1:{server.server_address[1]}/metrics",
+            gpu_sample_provider=lambda: [{"utilization_gpu": 10.0, "memory_used_mib": 2000.0}],
+        )
         snapshots = asyncio.run(collector.poll(interval_s=0.01, max_samples=2))
         assert len(snapshots) == 2
         assert snapshots[0]["vllm:num_requests_running"] == 2.0
+        assert snapshots[0]["gpu_samples"][0]["memory_used_mib"] == 2000.0
         output = tmp_path / "metrics.json"
         collector.dump_json(output)
         payload = json.loads(output.read_text(encoding="utf-8"))

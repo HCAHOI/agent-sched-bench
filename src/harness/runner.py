@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import random
 import signal
 import time
 from dataclasses import dataclass
@@ -18,6 +19,30 @@ from agents.research_agent import ResearchAgent
 AgentFactory = Callable[[str, str, str], AgentBase]
 
 
+def build_arrival_offsets(
+    num_tasks: int,
+    *,
+    arrival_mode: str,
+    arrival_rate_per_s: float | None = None,
+    arrival_seed: int | None = None,
+) -> list[float]:
+    """Build per-task arrival offsets for the selected runner mode."""
+    if arrival_mode == "closed_loop":
+        return [0.0] * num_tasks
+    if arrival_mode != "poisson":
+        raise ValueError(f"Unsupported arrival_mode: {arrival_mode}")
+    if arrival_rate_per_s is None or arrival_rate_per_s <= 0:
+        raise ValueError("arrival_rate_per_s must be positive for poisson mode")
+
+    rng = random.Random(arrival_seed)
+    offsets: list[float] = []
+    elapsed = 0.0
+    for _ in range(num_tasks):
+        offsets.append(elapsed)
+        elapsed += rng.expovariate(arrival_rate_per_s)
+    return offsets
+
+
 @dataclass(slots=True)
 class RunnerTaskResult:
     """Result bundle for one task execution under the harness."""
@@ -26,7 +51,7 @@ class RunnerTaskResult:
     trace: list[dict[str, Any]]
 
 
-def build_agent_factory(agent_name: str) -> AgentFactory:
+def build_agent_factory(agent_name: str, agent_kwargs: dict[str, Any] | None = None) -> AgentFactory:
     """Resolve a configured agent type into a constructor."""
     mapping: dict[str, type[AgentBase]] = {
         "code": CodeAgent,
@@ -37,9 +62,10 @@ def build_agent_factory(agent_name: str) -> AgentFactory:
         raise ValueError(f"Unsupported agent name: {agent_name}")
 
     agent_cls = mapping[agent_name]
+    agent_kwargs = agent_kwargs or {}
 
     def factory(agent_id: str, api_base: str, model: str) -> AgentBase:
-        return agent_cls(agent_id=agent_id, api_base=api_base, model=model)
+        return agent_cls(agent_id=agent_id, api_base=api_base, model=model, **agent_kwargs)
 
     return factory
 
@@ -57,6 +83,8 @@ class BenchmarkRunner:
         *,
         arrival_mode: str = "closed_loop",
         task_timeout_s: float | None = None,
+        arrival_rate_per_s: float | None = None,
+        arrival_seed: int | None = None,
     ) -> None:
         if concurrency <= 0:
             raise ValueError("concurrency must be positive")
@@ -67,6 +95,8 @@ class BenchmarkRunner:
         self.tasks = tasks
         self.arrival_mode = arrival_mode
         self.task_timeout_s = task_timeout_s
+        self.arrival_rate_per_s = arrival_rate_per_s
+        self.arrival_seed = arrival_seed
         self._stop_requested = False
 
     def request_stop(self) -> None:
@@ -101,24 +131,43 @@ class BenchmarkRunner:
 
     async def run(self) -> list[RunnerTaskResult]:
         """Execute all queued tasks with closed-loop concurrency control."""
-        if self.arrival_mode != "closed_loop":
-            raise ValueError(f"Unsupported arrival_mode: {self.arrival_mode}")
+        offsets = build_arrival_offsets(
+            len(self.tasks),
+            arrival_mode=self.arrival_mode,
+            arrival_rate_per_s=self.arrival_rate_per_s,
+            arrival_seed=self.arrival_seed,
+        )
 
-        queue: asyncio.Queue[tuple[int, dict[str, Any]]] = asyncio.Queue()
-        for index, task in enumerate(self.tasks):
-            queue.put_nowait((index, task))
+        queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
 
         results: list[RunnerTaskResult | None] = [None] * len(self.tasks)
 
+        async def producer() -> None:
+            replay_zero = time.monotonic()
+            for (index, task), offset in zip(enumerate(self.tasks), offsets):
+                if self._stop_requested:
+                    break
+                delay_s = offset - (time.monotonic() - replay_zero)
+                if delay_s > 0:
+                    await asyncio.sleep(delay_s)
+                await queue.put((index, task))
+            for _ in range(self.concurrency):
+                await queue.put(None)
+
         async def worker() -> None:
-            while not queue.empty() and not self._stop_requested:
-                idx, task = await queue.get()
+            while True:
+                item = await queue.get()
                 try:
+                    if item is None:
+                        break
+                    idx, task = item
                     results[idx] = await self._run_single_task(task, idx)
                 finally:
                     queue.task_done()
 
+        producer_task = asyncio.create_task(producer())
         workers = [asyncio.create_task(worker()) for _ in range(self.concurrency)]
+        await producer_task
         await queue.join()
         self._stop_requested = True
         for worker_task in workers:
@@ -148,6 +197,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--concurrency", type=int, required=True)
     parser.add_argument("--tasks-file", required=True)
+    parser.add_argument("--arrival-mode", default="closed_loop", choices=["closed_loop", "poisson"])
+    parser.add_argument("--arrival-rate-per-s", type=float)
+    parser.add_argument("--arrival-seed", type=int)
     parser.add_argument("--task-timeout-s", type=float)
     parser.add_argument("--output")
     return parser.parse_args()
@@ -161,7 +213,10 @@ async def _run_cli(args: argparse.Namespace) -> list[RunnerTaskResult]:
         model=args.model,
         concurrency=args.concurrency,
         tasks=tasks,
+        arrival_mode=args.arrival_mode,
         task_timeout_s=args.task_timeout_s,
+        arrival_rate_per_s=args.arrival_rate_per_s,
+        arrival_seed=args.arrival_seed,
     )
     install_signal_handlers(runner)
     return await runner.run()

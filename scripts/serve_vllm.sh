@@ -17,6 +17,7 @@ VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 VLLM_ENABLE_CHUNKED_PREFILL="${VLLM_ENABLE_CHUNKED_PREFILL:-1}"
 VLLM_PREEMPTION_MODE="${VLLM_PREEMPTION_MODE:-recompute}"
 VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-256}"
+VLLM_SCHEDULER_HOOK="${VLLM_SCHEDULER_HOOK:-1}"
 VLLM_HEALTH_TIMEOUT_S="${VLLM_HEALTH_TIMEOUT_S:-180}"
 VLLM_POLL_INTERVAL_S="${VLLM_POLL_INTERVAL_S:-2.0}"
 VLLM_SMOKE_MODEL="${VLLM_SMOKE_MODEL:-auto}"
@@ -24,6 +25,7 @@ VLLM_SMOKE_PROMPT="${VLLM_SMOKE_PROMPT:-Reply with the word READY.}"
 VLLM_LOG_PATH="${VLLM_LOG_PATH:-${REPO_ROOT}/results/processed/vllm_server.log}"
 VLLM_REPORT_PATH="${VLLM_REPORT_PATH:-${REPO_ROOT}/results/processed/vllm_server_report.json}"
 VLLM_PREEMPTION_REPORT_PATH="${VLLM_PREEMPTION_REPORT_PATH:-${REPO_ROOT}/results/processed/vllm_preemption_report.json}"
+VLLM_SCHEDULER_HOOK_REPORT_PATH="${VLLM_SCHEDULER_HOOK_REPORT_PATH:-${REPO_ROOT}/results/processed/vllm_scheduler_hook_report.json}"
 
 log() {
   printf '[ENV-3a] %s\n' "$*"
@@ -54,6 +56,10 @@ start_server() {
   mkdir -p "$(dirname "${VLLM_LOG_PATH}")"
   : > "${VLLM_LOG_PATH}"
   log "Starting raw vLLM server; logs -> ${VLLM_LOG_PATH}"
+  local hook_args=()
+  if [[ "${VLLM_SCHEDULER_HOOK}" == "1" ]]; then
+    hook_args=(--enable-scheduler-hook --scheduler-hook-report-path "${VLLM_SCHEDULER_HOOK_REPORT_PATH}")
+  fi
   PYTHONPATH="${REPO_ROOT}/src" "${SERVER_PYTHON}" -m serving.engine_launcher \
     --model-path "${MODEL_PATH}" \
     --host "${VLLM_HOST}" \
@@ -63,6 +69,7 @@ start_server() {
     --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION}" \
     --preemption-mode "${VLLM_PREEMPTION_MODE}" \
     --max-num-seqs "${VLLM_MAX_NUM_SEQS}" \
+    "${hook_args[@]}" \
     $( [[ "${VLLM_ENABLE_CHUNKED_PREFILL}" == "1" ]] && printf '%s ' '--enable-chunked-prefill' ) \
     >>"${VLLM_LOG_PATH}" 2>&1 &
   SERVER_PID=$!

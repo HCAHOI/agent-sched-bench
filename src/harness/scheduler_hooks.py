@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.metadata
 import json
 import re
+import runpy
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +33,17 @@ class EvictionEvent:
     tokens: int
     reason: str
     gpu_usage: float
+
+
+@dataclass(slots=True)
+class SchedulerHookStatus:
+    """Runtime status for automatic scheduler-hook activation."""
+
+    runtime_hook_enabled: bool
+    compatibility_ok: bool
+    vllm_version: str | None
+    target: str
+    reason: str | None = None
 
 
 EVICTION_PATTERN = re.compile(
@@ -79,6 +94,65 @@ def scheduler_log_snippet() -> str:
     )
 
 
+def _safe_vllm_version() -> str | None:
+    try:
+        return importlib.metadata.version("vllm")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def apply_scheduler_hook() -> SchedulerHookStatus:
+    """Apply a version-checked monkeypatch to Scheduler.schedule()."""
+    version = _safe_vllm_version()
+    target = "vllm.v1.core.sched.scheduler.Scheduler.schedule"
+    if version is None:
+        raise RuntimeError("vllm is not installed")
+    if not version.startswith("0.8."):
+        raise RuntimeError(f"Unsupported vllm version for scheduler hook: {version}")
+
+    scheduler_module = importlib.import_module("vllm.v1.core.sched.scheduler")
+    scheduler_cls = getattr(scheduler_module, "Scheduler", None)
+    if scheduler_cls is None or not hasattr(scheduler_cls, "schedule"):
+        raise RuntimeError(f"Scheduler target not found: {target}")
+    if getattr(scheduler_cls.schedule, "_agent_benchmark_hooked", False):
+        return SchedulerHookStatus(
+            runtime_hook_enabled=True,
+            compatibility_ok=True,
+            vllm_version=version,
+            target=target,
+        )
+
+    original_schedule = scheduler_cls.schedule
+    logger = getattr(scheduler_module, "logger")
+
+    def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        before_preempted = {
+            req_id
+            for req_id, req in getattr(self, "requests", {}).items()
+            if getattr(getattr(req, "status", None), "name", "") == "PREEMPTED"
+        }
+        result = original_schedule(self, *args, **kwargs)
+        for req_id, req in getattr(self, "requests", {}).items():
+            status_name = getattr(getattr(req, "status", None), "name", "")
+            if status_name == "PREEMPTED" and req_id not in before_preempted:
+                logger.info(
+                    "EVICT seq_id=%s tokens=%s reason=preempted gpu_usage=%s",
+                    req_id,
+                    int(getattr(req, "num_tokens_with_spec", 0) or 0),
+                    float(getattr(getattr(self, "kv_cache_manager", None), "usage", 0.0) or 0.0),
+                )
+        return result
+
+    wrapped._agent_benchmark_hooked = True  # type: ignore[attr-defined]
+    scheduler_cls.schedule = wrapped  # type: ignore[assignment]
+    return SchedulerHookStatus(
+        runtime_hook_enabled=True,
+        compatibility_ok=True,
+        vllm_version=version,
+        target=target,
+    )
+
+
 def build_report(metrics_payload: str, log_text: str) -> dict[str, Any]:
     """Build a JSON-serializable ENV-5 report from metrics and scheduler logs."""
     snapshot = parse_prometheus_metrics(metrics_payload)
@@ -90,6 +164,7 @@ def build_report(metrics_payload: str, log_text: str) -> dict[str, Any]:
         "scheduler_log_provided": bool(log_text),
         "scheduler_hook_runtime_confirmed": bool(events),
         "evidence_scope": "current_run_log" if log_text else "cumulative_metrics_only",
+        "scheduler_hook_status": None,
         "preemption_snapshot": asdict(snapshot),
         "eviction_events": [asdict(event) for event in events],
         "instrumentation_snippet": scheduler_log_snippet(),
@@ -104,11 +179,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-file")
     parser.add_argument("--baseline-preemptions-total", type=float)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--write-hook-status")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.write_hook_status:
+        status = apply_scheduler_hook()
+        Path(args.write_hook_status).write_text(
+            json.dumps(asdict(status), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return
     response = httpx.get(args.metrics_url, timeout=10.0)
     response.raise_for_status()
     metrics_payload = response.text

@@ -37,7 +37,7 @@ def test_run_sweep_fails_closed_without_harness_runner() -> None:
         text=True,
     )
     assert result.returncode != 0
-    assert "--agent" in result.stderr
+    assert "--output-root" in result.stderr
 
 
 def test_collect_results_requires_results_source() -> None:

@@ -4,9 +4,10 @@ import argparse
 import asyncio
 import csv
 import json
+import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -24,9 +25,15 @@ class VLLMMetricsCollector:
         "vllm:avg_generation_throughput_toks_per_s",
     ]
 
-    def __init__(self, metrics_url: str = "http://localhost:8000/metrics") -> None:
+    def __init__(
+        self,
+        metrics_url: str = "http://localhost:8000/metrics",
+        *,
+        gpu_sample_provider: Callable[[], list[dict[str, Any]]] | None = None,
+    ) -> None:
         self.url = metrics_url
         self.snapshots: list[dict[str, Any]] = []
+        self.gpu_sample_provider = gpu_sample_provider or sample_nvidia_smi
 
     def _parse_prometheus(self, metrics_payload: str) -> dict[str, Any]:
         snapshot: dict[str, Any] = {}
@@ -53,6 +60,7 @@ class VLLMMetricsCollector:
                 snapshot = self._parse_prometheus(response.text)
                 self._validate_snapshot(snapshot)
                 snapshot["timestamp"] = time.time()
+                snapshot["gpu_samples"] = self.gpu_sample_provider()
                 self.snapshots.append(snapshot)
                 await asyncio.sleep(interval_s)
         return self.snapshots
@@ -81,6 +89,19 @@ def parse_nvidia_smi_csv(csv_text: str) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def sample_nvidia_smi() -> list[dict[str, Any]]:
+    """Collect one GPU sample via nvidia-smi."""
+    output = subprocess.check_output(
+        [
+            "nvidia-smi",
+            "--query-gpu=utilization.gpu,memory.used",
+            "--format=csv",
+        ],
+        text=True,
+    )
+    return parse_nvidia_smi_csv(output)
 
 
 def dump_nvidia_samples(samples: list[dict[str, Any]], output_path: Path) -> None:
