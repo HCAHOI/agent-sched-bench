@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VENV_DIR="${VENV_DIR:-.venv-server}"
 SERVER_PYTHON="${REPO_ROOT}/${VENV_DIR}/bin/python"
 
-MODEL_PATH="${MODEL_PATH:-/workspace/agent-sched-bench/models/Qwen3-14B}"
+MODEL_PATH="${MODEL_PATH:-/workspace/agent-sched-bench/models/Qwen3-32B-AWQ}"
 VLLM_SPEC="${VLLM_SPEC:-vllm==0.10.2}"
 VLLM_HOST="${VLLM_HOST:-0.0.0.0}"
 VLLM_PORT="${VLLM_PORT:-8000}"
