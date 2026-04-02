@@ -96,3 +96,6 @@ build-swebench-images:
 
 download-swebench-verified:
 	./scripts/setup/swebench_data.sh
+
+collect-traces:
+	PYTHONPATH=src $(PYTHON) -m trace_collect.cli $(ARGS)

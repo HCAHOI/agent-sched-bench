@@ -73,13 +73,14 @@ class CodeAgent(AgentBase):
         api_base: str,
         model: str,
         *,
+        api_key: str = "EMPTY",
         max_steps: int = 40,
         command_timeout_s: float = 120.0,
         task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
         repos_root: str | None = None,
     ) -> None:
-        super().__init__(agent_id=agent_id, api_base=api_base, model=model)
+        super().__init__(agent_id=agent_id, api_base=api_base, model=model, api_key=api_key)
         self.max_steps = max_steps
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
