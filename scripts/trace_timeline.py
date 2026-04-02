@@ -68,11 +68,16 @@ def _print_agent_timeline(agent: str, recs: list[dict]) -> None:
             tool_start_ts[idx] = ts
             try:
                 args = json.loads(r.get("tool_args") or "{}")
-                cmd = args.get("command") or str(args.get("commands", [""])[0])
+                if "commands" in args:
+                    cmds = args["commands"]
+                else:
+                    cmds = [args.get("command", "")]
             except Exception:
-                cmd = r.get("tool_args", "")
-            cmd_short = cmd[:52].replace("\n", "↵")
-            print(f"  +{rel:7.1f}s  ⚙  bash         step={idx}  $ {cmd_short}")
+                cmds = [r.get("tool_args", "")]
+            first = cmds[0][:52].replace("\n", "↵")
+            print(f"  +{rel:7.1f}s  ⚙  bash         step={idx}  $ {first}")
+            for extra_cmd in cmds[1:]:
+                print(f"  {'':10}             {'':9}  $ {extra_cmd[:52].replace(chr(10), '↵')}")
 
         elif rtype == "tool_end":
             idx = r.get("step_idx", "?")
