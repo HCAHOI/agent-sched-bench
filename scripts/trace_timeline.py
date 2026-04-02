@@ -37,6 +37,8 @@ def timeline(path: Path, filter_agent: str | None = None) -> None:
 
 def _print_agent_timeline(agent: str, recs: list[dict]) -> None:
     t0: float | None = None
+    # Track tool_start absolute ts per step to compute real wall-clock dur.
+    tool_start_ts: dict[int | str, float] = {}
 
     print(f"Timeline: {agent}")
     print("─" * 72)
@@ -63,6 +65,7 @@ def _print_agent_timeline(agent: str, recs: list[dict]) -> None:
 
         elif rtype == "tool_start":
             idx = r.get("step_idx", "?")
+            tool_start_ts[idx] = ts
             try:
                 args = json.loads(r.get("tool_args") or "{}")
                 cmd = args.get("command") or str(args.get("commands", [""])[0])
@@ -73,7 +76,10 @@ def _print_agent_timeline(agent: str, recs: list[dict]) -> None:
 
         elif rtype == "tool_end":
             idx = r.get("step_idx", "?")
-            dur = (r.get("duration_ms") or 0) / 1000
+            # Compute duration from timestamps for accuracy; duration_ms in the
+            # event is None when mini-swe-agent doesn't record tool_ts_end.
+            start_ts = tool_start_ts.get(idx)
+            dur = (ts - start_ts) if start_ts is not None else 0.0
             ok = "✓" if r.get("success") else "✗"
             print(f"  +{rel:7.1f}s  {ok}  bash done    step={idx}  dur={dur:.1f}s")
 
