@@ -162,15 +162,13 @@ done
 
 | Workload | Tasks | N 值 | 预期特征 |
 |:---|:---|:---|:---|
-| code_agent (SWE-bench) | 20-30 | 1,2,4,6,8 | 长 context, 多 tool call, ~70K tokens/program |
-| data_agent (NL2SQL/BIRD) | 50-100 | 1,2,4,6,8 | 短 context, retry pattern, 变化大的 tool latency |
-| research_agent (web search) | 20-30 | 1,2,4,6,8 | 最快 context 增长, 外部 API 延迟不可预测 |
+| code_agent (SWE-bench Verified) | 20-30 | 1,2,4,6,8 | 长 context, 多 tool call, ~70K tokens/program |
 
 ```bash
 # 用 sweep 跑完整矩阵（仅 vllm-baseline）
 .venv/bin/python -m harness.sweep \
     --systems vllm-baseline \
-    --workloads code_agent,data_agent,research_agent \
+    --workloads code_agent \
     --concurrency 1,2,4,6,8 \
     --output-root results/raw/
 ```
@@ -250,7 +248,7 @@ THUNDERAGENT_REF=<pinned-commit> scripts/serve_thunderagent.sh
 ```bash
 .venv/bin/python -m harness.sweep \
     --systems thunderagent \
-    --workloads code_agent,data_agent,research_agent \
+    --workloads code_agent \
     --concurrency 1,2,4,6,8 \
     --output-root results/raw/
 ```
@@ -350,25 +348,23 @@ CONTINUUM_REF=<pinned-commit> scripts/serve_continuum.sh
 
 ### Full Matrix (sweep.yaml)
 
-| | code_agent | data_agent | research_agent |
-|:---|:---:|:---:|:---:|
-| **vllm-baseline** | N=1,2,4,6,8,12,16 | N=1,2,4,6,8,12,16 | N=1,2,4,6,8,12,16 |
-| **vllm-preserve** | N=1,2,4,6,8 | N=1,2,4,6,8 | N=1,2,4,6,8 |
-| **vllm-low-preempt** | N=1,2,4,6,8 | N=1,2,4,6,8 | N=1,2,4,6,8 |
-| **thunderagent** | N=1,2,4,6,8,12,16 | N=1,2,4,6,8,12,16 | N=1,2,4,6,8,12,16 |
-| **continuum** | N=1,2,4,6,8 (if deployed) | — | — |
+| | code_agent |
+|:---|:---:|
+| **vllm-baseline** | N=1,2,4,6,8,12,16 |
+| **vllm-preserve** | N=1,2,4,6,8 |
+| **vllm-low-preempt** | N=1,2,4,6,8 |
+| **thunderagent** | N=1,2,4,6,8,12,16 |
+| **continuum** | N=1,2,4,6,8 (if deployed) |
 
-Total cells: ~105 (full matrix) or ~63 (without Continuum high-N)
+Total cells: ~33 (full matrix) or ~25 (without Continuum high-N)
 
 ### Priority Order
 
 1. **P0**: vllm-baseline x code_agent x N=[1,2,4,6,8] — 最重要的 baseline
-2. **P1**: vllm-baseline x {data_agent, research_agent} x N=[1,2,4,6,8] — 完整 workload coverage
-3. **P2**: vllm-baseline x code_agent x N=[12,16] — 找 cliff/thrashing
-4. **P3**: thunderagent x code_agent x N=[1,2,4,6,8] — system comparison
-5. **P4**: vllm variants (preserve, low-preempt) — confound control
-6. **P5**: thunderagent x other workloads — completeness
-7. **P6**: continuum (if available) — bonus comparison
+2. **P1**: vllm-baseline x code_agent x N=[12,16] — 找 cliff/thrashing
+3. **P2**: thunderagent x code_agent x N=[1,2,4,6,8] — system comparison
+4. **P3**: vllm variants (preserve, low-preempt) — confound control
+5. **P4**: continuum (if available) — bonus comparison
 
 ---
 
@@ -404,5 +400,4 @@ results/raw/{system}_{workload}_{N}_{timestamp}_metrics.json  # metrics
 | ThunderAgent build fail | pip install fails | 只跑 vLLM baseline + variants |
 | Continuum版本冲突 | > 4h 无法 build | 用论文数据 + trace replay |
 | SWE-bench sandbox crash | subprocess leak | temp dir cleanup + per-command timeout (30s) |
-| DuckDuckGo rate limit | research_agent 被限流 | 降低 DUCKDUCKGO_RATE_LIMIT_QPS, 增大间隔 |
 | Disk space (79 GB) | traces > 50 GB | 及时 rsync 到远程 + 清理 old results |
