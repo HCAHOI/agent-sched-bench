@@ -277,6 +277,7 @@ class MiniSWECodeAgent(AgentBase):
 
         step_idx = 0
         prev_msg_len = 0  # for delta messages_in
+        _prev_ts_end = run_ts_start  # fallback ts_start when predecessor lacks timestamp
         i = 0
 
         while i < len(messages):
@@ -293,10 +294,14 @@ class MiniSWECodeAgent(AgentBase):
             # --- LLM call metadata ---
             extra = msg.get("extra", {})
             ts_end = extra.get("timestamp", run_ts_end)
+            # Use the previous message's timestamp when available; fall back
+            # to the previous step's ts_end rather than run_ts_start to avoid
+            # inflating LLM latency for steps whose predecessor lacks a timestamp
+            # (e.g. the submission step following a tool result without extra.ts).
             ts_start = (
-                messages[i - 1].get("extra", {}).get("timestamp", run_ts_start)
+                messages[i - 1].get("extra", {}).get("timestamp") or _prev_ts_end
                 if i > 0
-                else run_ts_start
+                else _prev_ts_end
             )
             usage = (extra.get("response") or {}).get("usage") or {}
             prompt_tokens: int = usage.get("prompt_tokens", 0) or 0
@@ -418,4 +423,5 @@ class MiniSWECodeAgent(AgentBase):
             self._emit_step(record)
             step_idx += 1
             prev_msg_len = j
+            _prev_ts_end = ts_end
             i = j
