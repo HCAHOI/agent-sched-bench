@@ -355,14 +355,17 @@ class MiniSWECodeAgent(AgentBase):
 
             # Submission path: mini-swe-agent raises Submitted before
             # format_toolcall_observation_messages is called, so the final
-            # bash output (with returncode) lives in the exit message instead.
+            # bash output lives in the exit message instead. The exit message
+            # has no extra.timestamp, so we track the case with a flag.
             _exit_ts: float | None = None
+            _from_exit_msg = False
             if not tool_outputs and j < len(messages) and messages[j].get("role") == "exit":
                 exit_msg = messages[j]
                 exit_content = exit_msg.get("content", "")
                 if exit_content:
                     tool_outputs.append(exit_content)
                     _exit_ts = exit_msg.get("extra", {}).get("timestamp")
+                    _from_exit_msg = True
 
             # Preserve per-call attribution when multiple tool calls are present.
             if len(tool_outputs) <= 1:
@@ -381,10 +384,10 @@ class MiniSWECodeAgent(AgentBase):
                     else json.dumps({"commands": commands})
                 )
                 m = _RETURNCODE_RE.search(tool_output)
-                # Default to 0 for the submission step (content from exit
-                # message has no returncode wrapper); -1 for all other cases
-                # where the regex doesn't match to avoid false successes.
-                returncode = int(m.group(1)) if m else (0 if _exit_ts is not None else -1)
+                # Default to 0 for the submission step (exit message has no
+                # returncode wrapper); -1 for all other cases to avoid false
+                # successes.
+                returncode = int(m.group(1)) if m else (0 if _from_exit_msg else -1)
                 tool_ts_start = ts_end
                 tool_ts_end = (
                     _exit_ts

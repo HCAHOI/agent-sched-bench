@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=40,
+        default=80,
         help="Maximum agent steps per task.",
     )
     parser.add_argument(
