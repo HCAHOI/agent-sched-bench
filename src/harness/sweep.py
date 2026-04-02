@@ -130,16 +130,6 @@ def extract_agent_kwargs(workload_name: str, workload_config: dict[str, Any]) ->
             "task_timeout_s": workload_config.get("task_timeout_s", 1200.0),
             "repos_root": workload_config.get("repos_root"),
         }
-    if workload_name == "data_agent":
-        return {
-            "max_steps": workload_config.get("max_steps", 20),
-            "sql_timeout_s": workload_config.get("sql_timeout_s", 30.0),
-        }
-    if workload_name == "research_agent":
-        return {
-            "max_steps": workload_config.get("max_steps", 30),
-            "request_timeout_s": workload_config.get("request_timeout_s", 30.0),
-        }
     raise ValueError(f"Unsupported workload config: {workload_name}")
 
 

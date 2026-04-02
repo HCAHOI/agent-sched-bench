@@ -12,8 +12,6 @@ matrix:
     - vllm-low-preempt
   workloads:
     - code_agent
-    - data_agent
-    - research_agent
   concurrency:
     - 1
     - 2

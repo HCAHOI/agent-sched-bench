@@ -1,6 +1,0 @@
-name: data_agent
-max_steps: 20
-sql_timeout_s: 30
-sample_size: null
-sampling_strategy: full_dataset
-task_source: data/bird_sql

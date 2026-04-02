@@ -82,7 +82,7 @@ def test_placeholder_scripts_fail_closed() -> None:
 
 
 def test_primary_workload_configs_default_to_full_dataset() -> None:
-    for config_name in ["code_agent", "data_agent", "research_agent"]:
+    for config_name in ["code_agent"]:
         path = REPO_ROOT / "configs" / "workloads" / f"{config_name}.yaml"
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
@@ -93,8 +93,6 @@ def test_primary_workload_configs_default_to_full_dataset() -> None:
 def test_primary_workload_configs_use_expected_step_budgets() -> None:
     expected = {
         "code_agent": 80,
-        "data_agent": 20,
-        "research_agent": 30,
     }
     for config_name, max_steps in expected.items():
         path = REPO_ROOT / "configs" / "workloads" / f"{config_name}.yaml"
