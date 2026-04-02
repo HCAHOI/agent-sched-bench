@@ -231,8 +231,6 @@ class MiniSWECodeAgent(AgentBase):
         )
 
         wall_start = time.time()
-        mono_start = time.monotonic()
-        self._emit_event("llm_start", {"step_idx": 0, "ts": wall_start})
 
         result: dict[str, Any] = {"exit_status": "error", "submission": ""}
         try:
@@ -244,13 +242,8 @@ class MiniSWECodeAgent(AgentBase):
             result = {"exit_status": "timeout", "submission": ""}
         except Exception as exc:
             result = {"exit_status": "error", "submission": "", "error": str(exc)}
-        finally:
-            wall_end = time.time()
-            self._emit_event("llm_end", {
-                "step_idx": 0,
-                "ts": wall_end,
-                "latency_ms": (time.monotonic() - mono_start) * 1000,
-            })
+
+        wall_end = time.time()
 
         success = (
             result.get("exit_status") == "Submitted"
@@ -313,6 +306,15 @@ class MiniSWECodeAgent(AgentBase):
             completion_tokens: int = usage.get("completion_tokens", 0) or 0
             latency_ms = (ts_end - ts_start) * 1000
 
+            self._emit_event("llm_start", {"step_idx": step_idx, "ts": ts_start})
+            self._emit_event("llm_end", {
+                "step_idx": step_idx,
+                "ts": ts_end,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "latency_ms": latency_ms,
+            })
+
             llm_result = LLMCallResult(
                 content=msg.get("content") or "",
                 prompt_tokens=prompt_tokens,
@@ -356,18 +358,35 @@ class MiniSWECodeAgent(AgentBase):
                 # Default to -1 (failure) when regex doesn't match to avoid
                 # silently marking failed tool calls as successful.
                 returncode = int(m.group(1)) if m else -1
+                tool_ts_start = ts_end
+                tool_ts_end = (
+                    messages[j - 1].get("extra", {}).get("timestamp") if j > i + 1 else None
+                )
+                tool_duration_ms = (
+                    (tool_ts_end - tool_ts_start) * 1000 if tool_ts_end is not None else None
+                )
                 record.tool_name = "bash"
                 record.tool_args = json.dumps({"command": command})
                 record.tool_result = self._truncate(tool_output)
                 record.tool_success = returncode == 0
                 record.tool_timeout = False
-                record.tool_ts_start = ts_end
-                record.tool_ts_end = messages[j - 1].get("extra", {}).get("timestamp") if j > i + 1 else None
-                record.tool_duration_ms = (
-                    (record.tool_ts_end - ts_end) * 1000
-                    if record.tool_ts_end is not None
-                    else None
-                )
+                record.tool_ts_start = tool_ts_start
+                record.tool_ts_end = tool_ts_end
+                record.tool_duration_ms = tool_duration_ms
+                self._emit_event("tool_start", {
+                    "step_idx": step_idx,
+                    "ts": tool_ts_start,
+                    "tool_name": "bash",
+                    "tool_args": record.tool_args,
+                })
+                self._emit_event("tool_end", {
+                    "step_idx": step_idx,
+                    "ts": tool_ts_end or tool_ts_start,
+                    "tool_name": "bash",
+                    "duration_ms": tool_duration_ms,
+                    "success": record.tool_success,
+                    "timeout": False,
+                })
 
             self._emit_step(record)
             step_idx += 1
