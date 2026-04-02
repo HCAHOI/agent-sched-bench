@@ -71,8 +71,12 @@ class SQLLLMHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "schema_inspect(employees)"},
-                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "schema_inspect", "arguments": '{"table": "employees"}'}}],
+                    },
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
@@ -85,8 +89,12 @@ class SQLLLMHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "sql_execute(SELECT COUNT(*) FROM missing_table)"},
-                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": "call_2", "type": "function", "function": {"name": "sql_execute", "arguments": '{"query": "SELECT COUNT(*) FROM missing_table"}'}}],
+                    },
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},
@@ -101,9 +109,10 @@ class SQLLLMHandler(BaseHTTPRequestHandler):
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": "sql_execute(SELECT COUNT(*) AS n FROM employees WHERE team = 'ml')",
+                        "content": None,
+                        "tool_calls": [{"id": "call_3", "type": "function", "function": {"name": "sql_execute", "arguments": "{\"query\": \"SELECT COUNT(*) AS n FROM employees WHERE team = 'ml'\"}"}}],
                     },
-                    "finish_reason": "stop",
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},

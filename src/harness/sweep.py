@@ -123,26 +123,23 @@ def expand_sweep_matrix(
 
 def extract_agent_kwargs(workload_name: str, workload_config: dict[str, Any]) -> dict[str, Any]:
     """Project workload config into the agent constructor kwargs we actually support."""
-    latency_profile = workload_config.get("tool_latency_profile", "local")
     if workload_name == "code_agent":
         return {
             "max_steps": workload_config.get("max_steps", 80),
             "command_timeout_s": workload_config.get("command_timeout_s", 120.0),
             "task_timeout_s": workload_config.get("task_timeout_s", 1200.0),
-            "container_image": workload_config.get("container_image"),
+            "container_image": workload_config.get("container_image", "swebench-base:latest"),
             "repos_root": workload_config.get("repos_root"),
         }
     if workload_name == "data_agent":
         return {
             "max_steps": workload_config.get("max_steps", 20),
             "sql_timeout_s": workload_config.get("sql_timeout_s", 30.0),
-            "tool_latency_profile": latency_profile,
         }
     if workload_name == "research_agent":
         return {
             "max_steps": workload_config.get("max_steps", 30),
             "request_timeout_s": workload_config.get("request_timeout_s", 30.0),
-            "tool_latency_profile": latency_profile,
         }
     raise ValueError(f"Unsupported workload config: {workload_name}")
 

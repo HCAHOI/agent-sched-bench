@@ -17,7 +17,9 @@ VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 VLLM_ENABLE_CHUNKED_PREFILL="${VLLM_ENABLE_CHUNKED_PREFILL:-1}"
 VLLM_PREEMPTION_MODE="${VLLM_PREEMPTION_MODE:-recompute}"
 VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-256}"
-VLLM_SCHEDULER_HOOK="${VLLM_SCHEDULER_HOOK:-1}"
+VLLM_ENABLE_AUTO_TOOL_CHOICE="${VLLM_ENABLE_AUTO_TOOL_CHOICE:-1}"
+VLLM_TOOL_CALL_PARSER="${VLLM_TOOL_CALL_PARSER:-hermes}"
+VLLM_SCHEDULER_HOOK="${VLLM_SCHEDULER_HOOK:-0}"
 VLLM_HEALTH_TIMEOUT_S="${VLLM_HEALTH_TIMEOUT_S:-180}"
 VLLM_POLL_INTERVAL_S="${VLLM_POLL_INTERVAL_S:-2.0}"
 VLLM_SMOKE_MODEL="${VLLM_SMOKE_MODEL:-auto}"
@@ -66,6 +68,10 @@ start_server() {
   if [[ "${VLLM_SCHEDULER_HOOK}" == "1" ]]; then
     hook_args=(--enable-scheduler-hook --scheduler-hook-report-path "${VLLM_SCHEDULER_HOOK_REPORT_PATH}")
   fi
+  local tool_args=()
+  if [[ "${VLLM_ENABLE_AUTO_TOOL_CHOICE}" == "1" ]]; then
+    tool_args=(--enable-auto-tool-choice --tool-call-parser "${VLLM_TOOL_CALL_PARSER}")
+  fi
   PYTHONPATH="${REPO_ROOT}/src" "${SERVER_PYTHON}" -m serving.engine_launcher \
     --model-path "${MODEL_PATH}" \
     --host "${VLLM_HOST}" \
@@ -76,6 +82,7 @@ start_server() {
     --preemption-mode "${VLLM_PREEMPTION_MODE}" \
     --max-num-seqs "${VLLM_MAX_NUM_SEQS}" \
     "${hook_args[@]}" \
+    "${tool_args[@]}" \
     $( [[ "${VLLM_ENABLE_CHUNKED_PREFILL}" == "1" ]] && printf '%s ' '--enable-chunked-prefill' ) \
     >>"${VLLM_LOG_PATH}" 2>&1 &
   SERVER_PID=$!

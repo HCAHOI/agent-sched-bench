@@ -20,6 +20,8 @@ class VLLMServerConfig:
     enable_chunked_prefill: bool = True
     preemption_mode: str = "recompute"
     max_num_seqs: int = 256
+    enable_auto_tool_choice: bool = False
+    tool_call_parser: str | None = None
     enable_scheduler_hook: bool = False
     scheduler_hook_report_path: str | None = None
 
@@ -46,6 +48,10 @@ def build_vllm_command(config: VLLMServerConfig) -> list[str]:
     ]
     if config.enable_chunked_prefill:
         server_args.append("--enable-chunked-prefill")
+    if config.enable_auto_tool_choice:
+        server_args.append("--enable-auto-tool-choice")
+    if config.tool_call_parser:
+        server_args.extend(["--tool-call-parser", config.tool_call_parser])
     if config.enable_scheduler_hook:
         if not config.scheduler_hook_report_path:
             raise ValueError("scheduler_hook_report_path is required when scheduler hook is enabled")
@@ -74,6 +80,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-chunked-prefill", action="store_true")
     parser.add_argument("--preemption-mode", default="recompute")
     parser.add_argument("--max-num-seqs", type=int, default=256)
+    parser.add_argument("--enable-auto-tool-choice", action="store_true")
+    parser.add_argument("--tool-call-parser", default=None)
     parser.add_argument("--enable-scheduler-hook", action="store_true")
     parser.add_argument("--scheduler-hook-report-path")
     parser.add_argument(
@@ -96,6 +104,8 @@ def main() -> None:
         enable_chunked_prefill=args.enable_chunked_prefill,
         preemption_mode=args.preemption_mode,
         max_num_seqs=args.max_num_seqs,
+        enable_auto_tool_choice=args.enable_auto_tool_choice,
+        tool_call_parser=args.tool_call_parser,
         enable_scheduler_hook=args.enable_scheduler_hook,
         scheduler_hook_report_path=args.scheduler_hook_report_path,
     )
