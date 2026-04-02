@@ -93,4 +93,3 @@ download-swebench-verified:
 
 collect-traces:
 	PYTHONPATH=src $(PYTHON) -m trace_collect.cli $(ARGS)
-$(ARGS)
