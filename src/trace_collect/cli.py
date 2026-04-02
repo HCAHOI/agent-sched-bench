@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         help="Only run the first N tasks (for testing).",
     )
     parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Resume an interrupted run by providing its existing run ID.",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging.",
@@ -105,6 +110,7 @@ def main() -> None:
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,
             sample=args.sample,
+            run_id=args.run_id,
         )
     )
     print(f"Traces written to: {trace_file}")

@@ -25,9 +25,9 @@ class TraceLogger:
     def __init__(self, output_dir: str | Path, run_id: str) -> None:
         self.path = Path(output_dir) / f"{run_id}.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            raise FileExistsError(f"Trace file already exists: {self.path}")
-        self._handle = self.path.open("x", encoding="utf-8")
+        # Append mode supports resume: existing records are preserved and
+        # collector.py deduplicates via load_completed_ids().
+        self._handle = self.path.open("a", encoding="utf-8")
 
     def log_step(self, agent_id: str, record: StepRecord) -> None:
         entry = {"type": "step", "agent_id": agent_id, **asdict(record)}

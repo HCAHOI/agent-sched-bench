@@ -11,6 +11,7 @@ run()     wraps DefaultAgent.run() via asyncio.to_thread, then converts
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import re
 import shutil
@@ -252,8 +253,9 @@ class MiniSWECodeAgent(AgentBase):
         self.task_success = success
         # Snapshot messages before conversion: the background thread may still
         # be running after a TimeoutError (threads cannot be cancelled), so
-        # we take an immutable copy to avoid data races during iteration.
-        msg_snapshot = list(mini_agent.messages)
+        # deep-copy to avoid data races where the thread mutates existing
+        # message dicts (e.g. litellm adding usage to extra).
+        msg_snapshot = copy.deepcopy(mini_agent.messages)
         self._convert_trajectory(msg_snapshot, wall_start, wall_end)
         return success
 
@@ -351,22 +353,48 @@ class MiniSWECodeAgent(AgentBase):
                     tool_outputs.append(content)
                 j += 1
 
-            tool_output = "\n".join(tool_outputs)
+            # Submission path: mini-swe-agent raises Submitted before
+            # format_toolcall_observation_messages is called, so the final
+            # bash output (with returncode) lives in the exit message instead.
+            _exit_ts: float | None = None
+            if not tool_outputs and j < len(messages) and messages[j].get("role") == "exit":
+                exit_msg = messages[j]
+                exit_content = exit_msg.get("content", "")
+                if exit_content:
+                    tool_outputs.append(exit_content)
+                    _exit_ts = exit_msg.get("extra", {}).get("timestamp")
+
+            # Preserve per-call attribution when multiple tool calls are present.
+            if len(tool_outputs) <= 1:
+                tool_output = tool_outputs[0] if tool_outputs else ""
+            else:
+                tool_output = "\n".join(
+                    f"[call {k}]\n{out}" for k, out in enumerate(tool_outputs)
+                )
+
             if actions:
-                command = actions[0].get("command", "") if isinstance(actions[0], dict) else ""
+                # Record all commands; multiple parallel calls are serialized
+                # as a JSON array so no command is silently dropped.
+                commands = [a.get("command", "") for a in actions if isinstance(a, dict)]
+                tool_args = (
+                    json.dumps({"command": commands[0]}) if len(commands) == 1
+                    else json.dumps({"commands": commands})
+                )
                 m = _RETURNCODE_RE.search(tool_output)
                 # Default to -1 (failure) when regex doesn't match to avoid
                 # silently marking failed tool calls as successful.
                 returncode = int(m.group(1)) if m else -1
                 tool_ts_start = ts_end
                 tool_ts_end = (
-                    messages[j - 1].get("extra", {}).get("timestamp") if j > i + 1 else None
+                    _exit_ts
+                    if _exit_ts is not None
+                    else (messages[j - 1].get("extra", {}).get("timestamp") if j > i + 1 else None)
                 )
                 tool_duration_ms = (
                     (tool_ts_end - tool_ts_start) * 1000 if tool_ts_end is not None else None
                 )
                 record.tool_name = "bash"
-                record.tool_args = json.dumps({"command": command})
+                record.tool_args = tool_args
                 record.tool_result = self._truncate(tool_output)
                 record.tool_success = returncode == 0
                 record.tool_timeout = False

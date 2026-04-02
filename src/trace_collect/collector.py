@@ -59,6 +59,7 @@ async def collect_traces(
     command_timeout_s: float = 120.0,
     task_timeout_s: float = 1200.0,
     sample: int | None = None,
+    run_id: str | None = None,
 ) -> Path:
     """Collect SWE-Bench traces using an external LLM API.
 
@@ -77,6 +78,8 @@ async def collect_traces(
         command_timeout_s: Timeout per bash command.
         task_timeout_s: Timeout per task overall.
         sample: If set, only run the first N tasks.
+        run_id: Explicit run ID for resuming an interrupted run. If None,
+            a new timestamped ID is generated.
 
     Returns:
         Path to the output JSONL file.
@@ -88,7 +91,8 @@ async def collect_traces(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    run_id = build_run_id(model)
+    if run_id is None:
+        run_id = build_run_id(model)
     trace_file = output_path / f"{run_id}.jsonl"
 
     completed = load_completed_ids(trace_file)
