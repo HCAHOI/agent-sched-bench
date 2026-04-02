@@ -1,7 +1,0 @@
-name: research_agent
-max_steps: 30
-search_backend: duckduckgo
-request_timeout_s: 30
-sample_size: null
-sampling_strategy: full_dataset
-task_source: data/research_queries

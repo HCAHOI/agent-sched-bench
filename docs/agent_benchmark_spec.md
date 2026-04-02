@@ -22,17 +22,13 @@ agent-sched-bench/
 │   │   ├── continuum.yaml         # Continuum-specific config
 │   │   └── thunderagent.yaml      # ThunderAgent proxy config
 │   ├── workloads/
-│   │   ├── code_agent.yaml        # SWE-bench 参数
-│   │   ├── data_agent.yaml        # NL2SQL 参数
-│   │   └── research_agent.yaml    # Deep research 参数
+│   │   └── code_agent.yaml        # SWE-bench Verified 参数
 │   └── sweep.yaml                 # 实验矩阵定义 (N × workload × system)
 │
 ├── src/
 │   ├── agents/                    # Agent 实现
 │   │   ├── base.py                # AgentBase ABC: step(), get_trace()
-│   │   ├── code_agent.py          # mini-SWEAgent (SWE-bench Lite)
-│   │   ├── data_agent.py          # NL2SQL on BIRD
-│   │   └── research_agent.py      # Multi-step search + synthesis
+│   │   └── mini_swe_code_agent.py  # SWE-bench Verified code agent
 │   │
 │   ├── harness/                   # Benchmark 基础设施
 │   │   ├── runner.py              # 核心: 并发调度 N 个 agent，发请求到 serving engine
@@ -545,99 +541,6 @@ class CodeAgent(AgentBase):
 | Task 选择 | 随机 30 个 | 按 tool-call 轮数分层采样 | **按轮数分层**: 确保覆盖 short/medium/long workflows |
 
 ---
-
-### Checkpoint AGENT-3: Data Agent (NL2SQL)
-
-```python
-# src/agents/data_agent.py (核心逻辑骨架)
-
-SYSTEM_PROMPT = """You are a data analyst. Given a natural language question 
-and a database schema, write SQL to answer the question.
-
-Available tools:
-- sql_execute(query): Execute SQL on the database and return results
-- schema_inspect(table): Show column names and types for a table
-
-If your SQL has errors, read the error message and try again."""
-
-class DataAgent(AgentBase):
-    """NL2SQL agent on BIRD dataset"""
-    MAX_STEPS = 20
-    
-    async def run(self, task: dict) -> bool:
-        """
-        task = {
-            "question": "How many employees ...",
-            "db_path": "/data/bird_sql/databases/employee.sqlite",
-            "gold_sql": "SELECT COUNT(*) FROM ...",
-            "evidence": "..."
-        }
-        """
-        # ReAct loop: schema_inspect → sql_execute → (retry if error) → done
-        ...
-```
-
-**调度特征** (为什么选这个 workload):
-- Tool duration 有较大方差: `schema_inspect` 是 < 1ms, `sql_execute` 从 1ms 到数秒 (复杂 JOIN)
-- 天然有 retry pattern: SQL 语法错误 → LLM 读错误信息 → 改写 SQL → 再执行
-- 8B 模型的 SQL 质量不高，预期大量 retry → 覆盖更多 FSM 状态
-
-**TODO**:
-- [ ] 下载 BIRD dataset (https://bird-bench.github.io/)
-- [ ] 设置 SQLite 数据库文件
-- [ ] 实现 `sql_execute` tool: `sqlite3.connect()` + timeout
-- [ ] 实现 `schema_inspect` tool: `PRAGMA table_info()`
-- [ ] 选择 50-100 个 questions (按 difficulty 分层: simple/moderate/challenging)
-- [ ] 测试: 单个 agent 能跑完一个 question (包含 retry)
-
-**验收标准**: `DataAgent` 能完成一轮 question，trace 包含至少一次 `sql_execute`
-
----
-
-### Checkpoint AGENT-4: Deep Research Agent
-
-```python
-# src/agents/research_agent.py
-
-SYSTEM_PROMPT = """You are a research assistant. Given a question, search 
-the web for information and synthesize a comprehensive answer.
-
-Available tools:
-- web_search(query): Search the web, returns top-5 snippets
-- page_read(url): Read full content of a web page
-
-Use multiple searches to gather diverse perspectives. Synthesize 
-information from multiple sources into a coherent answer."""
-
-class ResearchAgent(AgentBase):
-    """Multi-step search + synthesis agent"""
-    MAX_STEPS = 30
-    
-    async def run(self, task: dict) -> bool:
-        """
-        task = {
-            "question": "What are the latest developments in ...",
-            "reference_answer": "..."  # optional, for evaluation
-        }
-        """
-        # ReAct loop: web_search → page_read → ... → synthesize
-        ...
-```
-
-**调度特征**:
-- Tool duration 最大且最不可预测: web_search API 从 100ms 到 10s+
-- 可能出现 fork-like pattern: "搜 A 方面" + "搜 B 方面" 的 context 会 share prefix
-- Context 增长最快: 每次 `page_read` 可能往 context 加几千 tokens
-
-**TODO**:
-- [ ] 选择 search API: DuckDuckGo (无需 key，但有 rate limit) 或 SerpAPI (需要 key)
-- [ ] 实现 `web_search` tool: HTTP call + parse results
-- [ ] 实现 `page_read` tool: `httpx.get()` + HTML → text extraction (trafilatura/readability)
-- [ ] 手写 20-30 个 research questions (覆盖不同领域避免 API cache 命中)
-- [ ] 设置 rate limit handler (DuckDuckGo 大概 1 req/s)
-- [ ] 测试: 单个 agent 能完成一轮 research
-
-**验收标准**: `ResearchAgent` 运行 5+ 步，trace 中有 `web_search` 和 `page_read` 调用
 
 ---
 

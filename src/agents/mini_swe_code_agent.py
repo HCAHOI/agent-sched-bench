@@ -98,11 +98,16 @@ class MiniSWECodeAgent(AgentBase):
         max_tool_output_chars: int = 8000,
         repos_root: str | None = None,
     ) -> None:
-        super().__init__(agent_id=agent_id, api_base=api_base, model=model, api_key=api_key)
+        super().__init__(
+            agent_id=agent_id,
+            api_base=api_base,
+            model=model,
+            api_key=api_key,
+            max_tool_output_chars=max_tool_output_chars,
+        )
         self.max_steps = max_steps
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
-        self.max_tool_output_chars = max_tool_output_chars
         self.repos_root = Path(repos_root) if repos_root else None
         self._workdir: Path | None = None
         self._prepared = False
@@ -114,16 +119,6 @@ class MiniSWECodeAgent(AgentBase):
     def _repo_dir_name(self, task: dict[str, Any]) -> str:
         owner, name = task["repo"].split("/")
         return f"{owner}__{name}"
-
-    def _truncate(self, text: str) -> str:
-        if len(text) <= self.max_tool_output_chars:
-            return text
-        half = self.max_tool_output_chars // 2
-        return (
-            text[:half]
-            + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n"
-            + text[-half:]
-        )
 
     # ------------------------------------------------------------------
     # Two-phase lifecycle

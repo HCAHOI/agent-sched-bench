@@ -18,7 +18,7 @@ def test_expand_sweep_matrix_and_manifest_paths(tmp_path: Path) -> None:
         """
 matrix:
   systems: [vllm-baseline]
-  workloads: [code_agent, data_agent]
+  workloads: [code_agent]
   concurrency: [1, 2]
 """.strip(),
     )
@@ -26,20 +26,15 @@ matrix:
         tmp_path / "configs/workloads/code_agent.yaml",
         "task_source: " + str(tmp_path / "tasks/code.json"),
     )
-    write_yaml(
-        tmp_path / "configs/workloads/data_agent.yaml",
-        "task_source: " + str(tmp_path / "tasks/data.json"),
-    )
     (tmp_path / "tasks").mkdir()
     (tmp_path / "tasks/code.json").write_text("[]\n", encoding="utf-8")
-    (tmp_path / "tasks/data.json").write_text("[]\n", encoding="utf-8")
 
     runs = expand_sweep_matrix(
         sweep_config_path=tmp_path / "configs/sweep.yaml",
         configs_root=tmp_path / "configs",
         output_root=tmp_path / "runs",
     )
-    assert len(runs) == 4
+    assert len(runs) == 2
     assert runs[0].tasks_file.endswith("code.json")
     assert runs[-1].output_file.endswith(".json")
 

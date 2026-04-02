@@ -87,11 +87,13 @@ class AgentBase(ABC):
         *,
         api_key: str = "EMPTY",
         request_timeout_s: float = 180.0,
+        max_tool_output_chars: int = 8000,
     ) -> None:
         self.agent_id = agent_id
         self.api_base = api_base
         self.api_key = api_key
         self.model = model
+        self.max_tool_output_chars = max_tool_output_chars
         self.trace: list[StepRecord] = []
         self.task_id: str = ""
         self.task_success: bool | None = None
@@ -101,6 +103,17 @@ class AgentBase(ABC):
             base_url=api_base,
             api_key=api_key,
             timeout=request_timeout_s,
+        )
+
+    def _truncate(self, text: str) -> str:
+        """Truncate long tool outputs to stay within token limits."""
+        if len(text) <= self.max_tool_output_chars:
+            return text
+        half = self.max_tool_output_chars // 2
+        return (
+            text[:half]
+            + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n"
+            + text[-half:]
         )
 
     async def _call_llm(

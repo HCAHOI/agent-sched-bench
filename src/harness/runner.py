@@ -12,8 +12,6 @@ from typing import Any, Callable
 
 from agents.base import AgentBase
 from agents.mini_swe_code_agent import MiniSWECodeAgent as CodeAgent
-from agents.data_agent import DataAgent
-from agents.research_agent import ResearchAgent
 from harness.trace_logger import TraceLogger
 
 
@@ -56,8 +54,6 @@ def build_agent_factory(agent_name: str, agent_kwargs: dict[str, Any] | None = N
     """Resolve a configured agent type into a constructor."""
     mapping: dict[str, type[AgentBase]] = {
         "code": CodeAgent,
-        "data": DataAgent,
-        "research": ResearchAgent,
     }
     if agent_name not in mapping:
         raise ValueError(f"Unsupported agent name: {agent_name}")
@@ -259,7 +255,7 @@ def install_signal_handlers(runner: BenchmarkRunner) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Concurrent benchmark runner.")
-    parser.add_argument("--agent", required=True, choices=["code", "data", "research"])
+    parser.add_argument("--agent", required=True, choices=["code"])
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--concurrency", type=int, required=True)

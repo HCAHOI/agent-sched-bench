@@ -76,12 +76,6 @@ run-smoke:
 smoke-code:
 	$(PYTHON) -m pytest tests/test_code_agent.py
 
-smoke-data:
-	$(PYTHON) -m pytest tests/test_data_agent.py
-
-smoke-research:
-	$(PYTHON) -m pytest tests/integration_research_agent_live.py
-
 run-sweep:
 	./scripts/run_sweep.sh
 
