@@ -381,9 +381,10 @@ class MiniSWECodeAgent(AgentBase):
                     else json.dumps({"commands": commands})
                 )
                 m = _RETURNCODE_RE.search(tool_output)
-                # Default to -1 (failure) when regex doesn't match to avoid
-                # silently marking failed tool calls as successful.
-                returncode = int(m.group(1)) if m else -1
+                # Default to 0 for the submission step (content from exit
+                # message has no returncode wrapper); -1 for all other cases
+                # where the regex doesn't match to avoid false successes.
+                returncode = int(m.group(1)) if m else (0 if _exit_ts is not None else -1)
                 tool_ts_start = ts_end
                 tool_ts_end = (
                     _exit_ts
