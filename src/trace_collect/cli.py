@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="qwen-plus-latest",
+        default="qwen3.5-plus",
         help="Model name to use for inference.",
     )
     parser.add_argument(
@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Only run the first N tasks (for testing).",
+    )
+    parser.add_argument(
+        "--max-context-tokens",
+        type=int,
+        default=256_000,
+        help="Sliding window token budget for context management.",
     )
     parser.add_argument(
         "--run-id",
@@ -111,6 +117,7 @@ def main() -> None:
             task_timeout_s=args.task_timeout,
             sample=args.sample,
             run_id=args.run_id,
+            max_context_tokens=args.max_context_tokens,
         )
     )
     print(f"Traces written to: {trace_file}")

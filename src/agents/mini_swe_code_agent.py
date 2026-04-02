@@ -97,6 +97,7 @@ class MiniSWECodeAgent(AgentBase):
         task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
         repos_root: str | None = None,
+        max_context_tokens: int = 256_000,
     ) -> None:
         super().__init__(
             agent_id=agent_id,
@@ -109,6 +110,7 @@ class MiniSWECodeAgent(AgentBase):
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
         self.repos_root = Path(repos_root) if repos_root else None
+        self.max_context_tokens = max_context_tokens
         self._workdir: Path | None = None
         self._prepared = False
 
@@ -197,9 +199,39 @@ class MiniSWECodeAgent(AgentBase):
     # ------------------------------------------------------------------
 
     async def _run_mini_agent(self, task: dict[str, Any], repo_dir: Path) -> bool:
-        from minisweagent.agents.default import DefaultAgent
+        from minisweagent.agents.default import DefaultAgent  # noqa: F811
         from minisweagent.environments.local import LocalEnvironment
         from minisweagent.models.litellm_model import LitellmModel
+
+        class ContextManagedAgent(DefaultAgent):
+            """DefaultAgent with sliding window context management.
+
+            Always preserves system message [0] + task message [1].
+            Trims oldest messages from the middle to fit within budget.
+            """
+
+            def __init__(self, *args: Any, max_context_tokens: int = 256_000, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._max_context_tokens = max_context_tokens
+
+            @staticmethod
+            def _estimate_tokens(messages: list[dict]) -> int:
+                return sum(len(json.dumps(m, ensure_ascii=False)) for m in messages) // 4
+
+            def query(self) -> dict:
+                self._trim_context()
+                return super().query()
+
+            def _trim_context(self) -> None:
+                if len(self.messages) <= 2:
+                    return
+                if self._estimate_tokens(self.messages) <= self._max_context_tokens:
+                    return
+                prefix = self.messages[:2]
+                suffix = self.messages[2:]
+                while suffix and self._estimate_tokens(prefix + suffix) > self._max_context_tokens:
+                    suffix.pop(0)
+                self.messages = prefix + suffix
 
         lm = LitellmModel(
             model_name=f"openai/{self.model}",
@@ -216,7 +248,7 @@ class MiniSWECodeAgent(AgentBase):
             timeout=int(self.command_timeout_s),
             env={"PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"},
         )
-        mini_agent = DefaultAgent(
+        mini_agent = ContextManagedAgent(
             lm,
             env,
             system_template=_SYSTEM_TEMPLATE,
@@ -224,6 +256,7 @@ class MiniSWECodeAgent(AgentBase):
             step_limit=self.max_steps,
             cost_limit=0.0,
             output_path=str(self._workdir / "trajectory.json"),
+            max_context_tokens=self.max_context_tokens,
         )
 
         wall_start = time.time()

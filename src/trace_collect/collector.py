@@ -60,6 +60,7 @@ async def collect_traces(
     task_timeout_s: float = 1200.0,
     sample: int | None = None,
     run_id: str | None = None,
+    max_context_tokens: int = 256_000,
 ) -> Path:
     """Collect SWE-Bench traces using an external LLM API.
 
@@ -124,6 +125,7 @@ async def collect_traces(
                 command_timeout_s=command_timeout_s,
                 task_timeout_s=task_timeout_s,
                 repos_root=str(repos_root),
+                max_context_tokens=max_context_tokens,
             )
             agent._trace_logger = trace_logger
             agent.run_metadata = {"model": model, "api_provider": "dashscope"}
