@@ -199,7 +199,7 @@ class MiniSWECodeAgent(AgentBase):
     # ------------------------------------------------------------------
 
     async def _run_mini_agent(self, task: dict[str, Any], repo_dir: Path) -> bool:
-        from minisweagent.agents.default import DefaultAgent  # noqa: F811
+        from minisweagent.agents.default import DefaultAgent
         from minisweagent.environments.local import LocalEnvironment
         from minisweagent.models.litellm_model import LitellmModel
 
@@ -207,20 +207,41 @@ class MiniSWECodeAgent(AgentBase):
             """DefaultAgent with sliding window context management.
 
             Always preserves system message [0] + task message [1].
-            Trims oldest messages from the middle to fit within budget.
+            Trims oldest assistant-tool groups from the middle to fit
+            within budget. Maintains a separate _full_messages list
+            that is never trimmed, for post-hoc trajectory conversion.
             """
 
             def __init__(self, *args: Any, max_context_tokens: int = 256_000, **kwargs: Any) -> None:
                 super().__init__(*args, **kwargs)
                 self._max_context_tokens = max_context_tokens
+                self._full_messages: list[dict] = []
 
             @staticmethod
             def _estimate_tokens(messages: list[dict]) -> int:
-                return sum(len(json.dumps(m, ensure_ascii=False)) for m in messages) // 4
+                # Strip 'extra' metadata (not sent to the model) to avoid
+                # ~7x overestimation from response objects and timestamps.
+                return sum(
+                    len(json.dumps(
+                        {k: v for k, v in m.items() if k != "extra"},
+                        ensure_ascii=False,
+                    ))
+                    for m in messages
+                ) // 4
 
             def query(self) -> dict:
                 self._trim_context()
-                return super().query()
+                result = super().query()
+                # Append newly added messages to the full (untrimmed) record.
+                # super().query() calls add_messages() which appends to
+                # self.messages; the new message is always the last one.
+                if self.messages:
+                    self._full_messages.append(self.messages[-1])
+                return result
+
+            def add_messages(self, *messages: dict) -> None:
+                super().add_messages(*messages)
+                self._full_messages.extend(messages)
 
             def _trim_context(self) -> None:
                 if len(self.messages) <= 2:
@@ -231,7 +252,19 @@ class MiniSWECodeAgent(AgentBase):
                 suffix = self.messages[2:]
                 while suffix and self._estimate_tokens(prefix + suffix) > self._max_context_tokens:
                     suffix.pop(0)
+                # Don't leave an orphaned tool result at the start of suffix;
+                # trim until we hit an assistant message to keep pairs intact.
+                while suffix and suffix[0].get("role") != "assistant":
+                    suffix.pop(0)
                 self.messages = prefix + suffix
+                if self._estimate_tokens(self.messages) > self._max_context_tokens:
+                    import logging
+                    logging.getLogger("agent").warning(
+                        "Context (%d est. tokens) exceeds budget (%d) after "
+                        "trimming; prefix alone is too large",
+                        self._estimate_tokens(self.messages),
+                        self._max_context_tokens,
+                    )
 
         lm = LitellmModel(
             model_name=f"openai/{self.model}",
@@ -279,11 +312,11 @@ class MiniSWECodeAgent(AgentBase):
             and bool(result.get("submission", "").strip())
         )
         self.task_success = success
-        # Snapshot messages before conversion: the background thread may still
-        # be running after a TimeoutError (threads cannot be cancelled), so
-        # deep-copy to avoid data races where the thread mutates existing
-        # message dicts (e.g. litellm adding usage to extra).
-        msg_snapshot = copy.deepcopy(mini_agent.messages)
+        # Use _full_messages (never trimmed) for trajectory conversion so
+        # that all steps are recorded even when context was trimmed.
+        # Deep-copy to avoid data races: the background thread may still
+        # be running after TimeoutError and could mutate message dicts.
+        msg_snapshot = copy.deepcopy(mini_agent._full_messages)
         self._convert_trajectory(msg_snapshot, wall_start, wall_end)
         return success
 
