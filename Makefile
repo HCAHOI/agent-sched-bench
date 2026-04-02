@@ -89,10 +89,10 @@ collect-results:
 	./scripts/collect_results.sh
 
 setup-swebench-repos:
-	./scripts/setup_swebench_repos.sh data/swebench_verified/tasks.json
+	./scripts/setup/clone_repos.sh data/swebench_verified/tasks.json
 
 build-swebench-images:
-	./scripts/build_swebench_images.sh
+	./scripts/setup/build_images.sh
 
 download-swebench-verified:
-	$(PYTHON) -m agents.swebench_data
+	./scripts/setup/swebench_data.sh

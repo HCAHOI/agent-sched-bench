@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agents.base import AgentBase
-from agents.container_manager import ContainerManager
+from agents.local_sandbox import LocalSandbox
 from agents.tool_calling import strip_code_fences
 
 
@@ -60,11 +60,11 @@ TOOLS = [
 
 
 class CodeAgent(AgentBase):
-    """SWE-bench coding agent with Podman container sandbox.
+    """SWE-bench coding agent with local proot sandbox.
 
-    Each task runs in an isolated Podman container with the target repo
+    Each task runs in an isolated temp directory with the target repo
     cloned at the correct base_commit.  The agent can install dependencies
-    (``pip install``) and run real tests inside the container.
+    (``pip install``) and run real tests inside the sandbox.
     """
 
     def __init__(
@@ -77,7 +77,6 @@ class CodeAgent(AgentBase):
         command_timeout_s: float = 120.0,
         task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
-        container_image: str = "swebench-base:latest",
         repos_root: str | None = None,
     ) -> None:
         super().__init__(agent_id=agent_id, api_base=api_base, model=model)
@@ -85,8 +84,7 @@ class CodeAgent(AgentBase):
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
         self.max_tool_output_chars = max_tool_output_chars
-        self._container_mgr = ContainerManager(
-            base_image=container_image,
+        self._container_mgr = LocalSandbox(
             repos_root=Path(repos_root) if repos_root else None,
         )
         self._container_id: str | None = None
@@ -106,9 +104,9 @@ class CodeAgent(AgentBase):
         ).strip()
 
     async def prepare(self, task: dict[str, Any]) -> None:
-        """Create the Podman container before the agent loop starts.
+        """Create the sandbox before the agent loop starts.
 
-        When called before ``run()``, the expensive setup (container
+        When called before ``run()``, the expensive setup (sandbox
         creation, repo clone, pip install) happens in a separate phase
         so that all agents can start their LLM loops simultaneously.
         """

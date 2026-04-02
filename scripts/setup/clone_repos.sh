@@ -2,29 +2,33 @@
 # Clone SWE-bench repos locally for fast container-internal cloning.
 #
 # Usage:
-#   ./scripts/setup_swebench_repos.sh [tasks.json]
+#   ./scripts/setup/clone_repos.sh [tasks.json]
 #
 # If tasks.json is provided, only repos referenced in it are cloned.
 # Otherwise, clones all repos commonly used in SWE-bench Verified.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPOS_ROOT="$PROJECT_ROOT/data/swebench_repos"
+TASKS_FILE="${1:-${PROJECT_ROOT}/data/swebench_verified/tasks.json}"
+
+if [[ -d "$REPOS_ROOT" ]] && [[ -n "$(ls -A "$REPOS_ROOT" 2>/dev/null)" ]]; then
+    echo "[setup] SKIP clone_repos: $REPOS_ROOT is non-empty"
+    exit 0
+fi
 
 mkdir -p "$REPOS_ROOT"
 
-# Extract unique repos from tasks.json if provided
-if [[ -n "${1:-}" ]] && [[ -f "$1" ]]; then
+if [[ -f "$TASKS_FILE" ]]; then
     REPOS=$(python3 -c "
 import json, sys
 tasks = json.load(open(sys.argv[1]))
 repos = sorted(set(t['repo'] for t in tasks))
 for r in repos:
     print(r)
-" "$1")
+" "$TASKS_FILE")
 else
-    # Default repos for SWE-bench Verified
     REPOS="django/django
 sympy/sympy
 scikit-learn/scikit-learn
@@ -39,7 +43,7 @@ pylint-dev/pylint
 mwaskom/seaborn"
 fi
 
-echo "=== Cloning SWE-bench repos to $REPOS_ROOT ==="
+echo "[setup] Cloning SWE-bench repos to $REPOS_ROOT"
 
 while IFS= read -r repo; do
     owner="${repo%%/*}"
@@ -48,14 +52,14 @@ while IFS= read -r repo; do
     target="$REPOS_ROOT/$dir_name"
 
     if [[ -d "$target" ]]; then
-        echo "SKIP: $dir_name (already exists)"
+        echo "[setup] SKIP: $dir_name (already exists)"
         continue
     fi
 
-    echo "CLONE: $repo → $dir_name"
+    echo "[setup] CLONE: $repo → $dir_name"
     git clone --quiet "https://github.com/${repo}.git" "$target"
-    echo "  done ($(du -sh "$target" | cut -f1))"
+    echo "[setup]   done ($(du -sh "$target" | cut -f1))"
 done <<< "$REPOS"
 
-echo "=== All repos cloned ==="
+echo "[setup] clone_repos done"
 du -sh "$REPOS_ROOT"

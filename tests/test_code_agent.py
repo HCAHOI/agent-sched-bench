@@ -4,12 +4,11 @@ from agents.code_agent import CodeAgent
 
 
 def test_code_agent_constructor() -> None:
-    """Container mode is the only mode; ContainerManager is always created."""
+    """LocalSandbox is always created; no container image needed."""
     agent = CodeAgent(
         agent_id="code-1",
         api_base="http://localhost:8000/v1",
         model="mock",
-        container_image="swebench-base:latest",
         repos_root="data/swebench_repos",
     )
     assert agent._container_mgr is not None

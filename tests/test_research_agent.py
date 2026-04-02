@@ -19,8 +19,12 @@ class ResearchHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "web_search(test topic)"},
-                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "web_search", "arguments": '{"query": "test topic"}'}}],
+                    },
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
@@ -33,8 +37,12 @@ class ResearchHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "read_page(http://127.0.0.1:0/page)"},
-                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": "call_2", "type": "function", "function": {"name": "read_page", "arguments": '{"url": "http://127.0.0.1:0/page"}'}}],
+                    },
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12},

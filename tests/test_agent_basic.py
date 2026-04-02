@@ -99,6 +99,7 @@ class FakeUsage:
 
 class FakeMessage:
     content = "synthetic reply"
+    tool_calls = None
 
 
 class FakeChoice:
