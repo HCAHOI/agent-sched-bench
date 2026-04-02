@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=40,
+        default=80,
         help="Maximum agent steps per task.",
     )
     parser.add_argument(
@@ -64,15 +64,15 @@ def parse_args() -> argparse.Namespace:
         help="Output directory for trace files.",
     )
     parser.add_argument(
-        "--base-image",
-        default="python:3.11-slim",
-        help="Docker base image for sandboxes.",
-    )
-    parser.add_argument(
         "--sample",
         type=int,
         default=None,
         help="Only run the first N tasks (for testing).",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Resume an interrupted run by providing its existing run ID.",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -106,11 +106,11 @@ def main() -> None:
             task_source=args.task_source,
             repos_root=args.repos_root,
             output_dir=args.output_dir,
-            base_image=args.base_image,
             max_steps=args.max_steps,
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,
             sample=args.sample,
+            run_id=args.run_id,
         )
     )
     print(f"Traces written to: {trace_file}")

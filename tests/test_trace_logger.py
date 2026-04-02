@@ -54,15 +54,22 @@ def test_trace_logger_writes_jsonl_entries(tmp_path: Path) -> None:
     assert parsed[1]["success"] is True
 
 
-def test_trace_logger_rejects_duplicate_run_file(tmp_path: Path) -> None:
-    run_id = "duplicate"
-    logger = TraceLogger(tmp_path, run_id)
-    logger.close()
-    try:
-        TraceLogger(tmp_path, run_id)
-    except FileExistsError:
-        return
-    raise AssertionError("expected duplicate trace logger creation to fail")
+def test_trace_logger_appends_on_resume(tmp_path: Path) -> None:
+    # Append mode supports resume: opening the same run_id twice should
+    # append records without raising or overwriting.
+    run_id = "resume"
+    logger1 = TraceLogger(tmp_path, run_id)
+    logger1.log_event("agent-1", "llm_start", {"step_idx": 0, "ts": 1.0})
+    logger1.close()
+
+    logger2 = TraceLogger(tmp_path, run_id)
+    logger2.log_event("agent-1", "llm_end", {"step_idx": 0, "ts": 2.0})
+    logger2.close()
+
+    lines = (tmp_path / f"{run_id}.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["type"] == "llm_start"
+    assert json.loads(lines[1])["type"] == "llm_end"
 
 
 def test_trace_logger_log_event_writes_correct_record(tmp_path: Path) -> None:

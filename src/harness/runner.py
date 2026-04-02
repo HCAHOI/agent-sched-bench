@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agents.base import AgentBase
-from agents.code_agent import CodeAgent
+from agents.mini_swe_code_agent import MiniSWECodeAgent as CodeAgent
 from agents.data_agent import DataAgent
 from agents.research_agent import ResearchAgent
 from harness.trace_logger import TraceLogger

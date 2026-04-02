@@ -90,6 +90,7 @@ class AgentBase(ABC):
     ) -> None:
         self.agent_id = agent_id
         self.api_base = api_base
+        self.api_key = api_key
         self.model = model
         self.trace: list[StepRecord] = []
         self.task_id: str = ""
