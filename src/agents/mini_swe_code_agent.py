@@ -343,6 +343,12 @@ class MiniSWECodeAgent(AgentBase):
             j = i + 1
             tool_outputs: list[str] = []
 
+            # NOTE: consumes all non-assistant/exit messages, not just role="tool".
+            # For mini-swe-agent this is safe (only tool results appear here), but
+            # other frameworks may interleave system/user messages (e.g. FormatError
+            # notifications) that would be silently absorbed into tool_outputs and
+            # then discarded when actions=[]. Tighten to role=="tool" if reusing
+            # this converter for other agent frameworks.
             while j < len(messages) and messages[j].get("role") not in ("assistant", "exit"):
                 content = messages[j].get("content", "")
                 if isinstance(content, list):
