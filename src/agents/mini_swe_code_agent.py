@@ -234,6 +234,7 @@ class MiniSWECodeAgent(AgentBase):
         mono_start = time.monotonic()
         self._emit_event("llm_start", {"step_idx": 0, "ts": wall_start})
 
+        result: dict[str, Any] = {"exit_status": "error", "submission": ""}
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(mini_agent.run, task["problem_statement"]),
@@ -241,20 +242,26 @@ class MiniSWECodeAgent(AgentBase):
             )
         except TimeoutError:
             result = {"exit_status": "timeout", "submission": ""}
-
-        wall_end = time.time()
-        self._emit_event("llm_end", {
-            "step_idx": 0,
-            "ts": wall_end,
-            "latency_ms": (time.monotonic() - mono_start) * 1000,
-        })
+        except Exception as exc:
+            result = {"exit_status": "error", "submission": "", "error": str(exc)}
+        finally:
+            wall_end = time.time()
+            self._emit_event("llm_end", {
+                "step_idx": 0,
+                "ts": wall_end,
+                "latency_ms": (time.monotonic() - mono_start) * 1000,
+            })
 
         success = (
             result.get("exit_status") == "Submitted"
             and bool(result.get("submission", "").strip())
         )
         self.task_success = success
-        self._convert_trajectory(mini_agent, wall_start, wall_end)
+        # Snapshot messages before conversion: the background thread may still
+        # be running after a TimeoutError (threads cannot be cancelled), so
+        # we take an immutable copy to avoid data races during iteration.
+        msg_snapshot = list(mini_agent.messages)
+        self._convert_trajectory(msg_snapshot, wall_start, wall_end)
         return success
 
     # ------------------------------------------------------------------
@@ -263,12 +270,11 @@ class MiniSWECodeAgent(AgentBase):
 
     def _convert_trajectory(
         self,
-        mini_agent: Any,
+        messages: list[dict[str, Any]],
         run_ts_start: float,
         run_ts_end: float,
     ) -> None:
-        """Convert mini-swe-agent's message list into StepRecords."""
-        messages = mini_agent.messages
+        """Convert a snapshot of mini-swe-agent's message list into StepRecords."""
 
         # Messages layout:
         #   [0] system
@@ -347,7 +353,9 @@ class MiniSWECodeAgent(AgentBase):
             if actions:
                 command = actions[0].get("command", "") if isinstance(actions[0], dict) else ""
                 m = _RETURNCODE_RE.search(tool_output)
-                returncode = int(m.group(1)) if m else 0
+                # Default to -1 (failure) when regex doesn't match to avoid
+                # silently marking failed tool calls as successful.
+                returncode = int(m.group(1)) if m else -1
                 record.tool_name = "bash"
                 record.tool_args = json.dumps({"command": command})
                 record.tool_result = self._truncate(tool_output)
