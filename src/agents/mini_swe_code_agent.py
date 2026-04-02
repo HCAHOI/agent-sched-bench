@@ -231,15 +231,13 @@ class MiniSWECodeAgent(AgentBase):
 
             def query(self) -> dict:
                 self._trim_context()
-                result = super().query()
-                # Append newly added messages to the full (untrimmed) record.
-                # super().query() calls add_messages() which appends to
-                # self.messages; the new message is always the last one.
-                if self.messages:
-                    self._full_messages.append(self.messages[-1])
-                return result
+                return super().query()
 
             def add_messages(self, *messages: dict) -> None:
+                # Keep an untrimmed copy of all messages for trajectory
+                # conversion. add_messages is the sole entry point for new
+                # messages (called by query() and run()), so this is the
+                # single place to maintain the full record.
                 super().add_messages(*messages)
                 self._full_messages.extend(messages)
 
