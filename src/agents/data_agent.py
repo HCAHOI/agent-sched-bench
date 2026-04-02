@@ -71,10 +71,14 @@ class DataAgent(AgentBase):
         sql_timeout_s: float = 30.0,
         max_tool_output_chars: int = 8000,
     ) -> None:
-        super().__init__(agent_id=agent_id, api_base=api_base, model=model)
+        super().__init__(
+            agent_id=agent_id,
+            api_base=api_base,
+            model=model,
+            max_tool_output_chars=max_tool_output_chars,
+        )
         self.max_steps = max_steps
         self.sql_timeout_s = sql_timeout_s
-        self.max_tool_output_chars = max_tool_output_chars
 
     def _format_task(self, task: dict[str, Any]) -> str:
         evidence = task.get("evidence", "")
@@ -159,14 +163,7 @@ class DataAgent(AgentBase):
             )
         return candidate_rows == gold_rows, candidate_result
 
-    def _truncate(self, text: str) -> str:
-        if len(text) <= self.max_tool_output_chars:
-            return text
-        half = self.max_tool_output_chars // 2
-        return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
-
     async def run(self, task: dict[str, Any]) -> bool:
-        # TODO: add llm_start/llm_end/tool_start/tool_end events (see code_agent.py)
         self.task_id = str(task.get("task_id", task.get("question", "")))
         self.task_success = False
         self.trace = []
@@ -178,8 +175,16 @@ class DataAgent(AgentBase):
 
         for step_idx in range(self.max_steps):
             ts_start = time.time()
+            self._emit_event("llm_start", {"step_idx": step_idx, "ts": ts_start})
             llm_result = await self._call_llm(messages, tools=TOOLS)
             ts_end = time.time()
+            self._emit_event("llm_end", {
+                "step_idx": step_idx,
+                "ts": ts_end,
+                "prompt_tokens": llm_result.prompt_tokens,
+                "completion_tokens": llm_result.completion_tokens,
+                "latency_ms": llm_result.llm_latency_ms,
+            })
             record = self.build_step_record(
                 step_idx=step_idx,
                 phase="reasoning",
@@ -195,6 +200,12 @@ class DataAgent(AgentBase):
                     self._emit_step(record)
                     break
                 tool_started = time.monotonic()
+                self._emit_event("tool_start", {
+                    "step_idx": step_idx,
+                    "ts": tool_started,
+                    "tool_name": "final_sql",
+                    "tool_args": final_sql,
+                })
                 success, output = await self._evaluate_final_sql(final_sql, task)
                 record.phase = "acting"
                 record.tool_name = "final_sql"
@@ -204,6 +215,14 @@ class DataAgent(AgentBase):
                 record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
                 record.extra["evaluation_mode"] = "denotation"
                 self.task_success = success
+                self._emit_event("tool_end", {
+                    "step_idx": step_idx,
+                    "ts": time.monotonic(),
+                    "tool_name": "final_sql",
+                    "duration_ms": record.tool_duration_ms,
+                    "success": success,
+                    "timeout": False,
+                })
                 self._emit_step(record)
                 break
 
@@ -217,6 +236,12 @@ class DataAgent(AgentBase):
             record.tool_name = tc.name
             record.tool_args = json.dumps(args)
             tool_started = time.monotonic()
+            self._emit_event("tool_start", {
+                "step_idx": step_idx,
+                "ts": tool_started,
+                "tool_name": tc.name,
+                "tool_args": record.tool_args,
+            })
 
             if tc.name == "schema_inspect":
                 tool_output = await self._schema_inspect(db_path, args.get("table", "*"))
@@ -230,6 +255,14 @@ class DataAgent(AgentBase):
             record.tool_duration_ms = raw_ms
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
+            self._emit_event("tool_end", {
+                "step_idx": step_idx,
+                "ts": time.monotonic(),
+                "tool_name": tc.name,
+                "duration_ms": raw_ms,
+                "success": record.tool_success,
+                "timeout": False,
+            })
             self._emit_step(record)
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": llm_result.content or ""}

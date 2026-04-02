@@ -103,12 +103,12 @@ class ResearchAgent(AgentBase):
             api_base=api_base,
             model=model,
             request_timeout_s=request_timeout_s,
+            max_tool_output_chars=max_tool_output_chars,
         )
         self.max_steps = max_steps
         self.request_timeout_s = request_timeout_s
         self.search_rate_limit_qps = search_rate_limit_qps
         self.search_base_url = search_base_url
-        self.max_tool_output_chars = max_tool_output_chars
         self._last_search_ts = 0.0
 
     def _format_task(self, task: dict[str, Any]) -> str:
@@ -179,14 +179,7 @@ class ResearchAgent(AgentBase):
         extracted = self._extract_page_text(response.text)
         return extracted or "ERROR: failed to extract page text"
 
-    def _truncate(self, text: str) -> str:
-        if len(text) <= self.max_tool_output_chars:
-            return text
-        half = self.max_tool_output_chars // 2
-        return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
-
     async def run(self, task: dict[str, Any]) -> bool:
-        # TODO: add llm_start/llm_end/tool_start/tool_end events (see code_agent.py)
         self.task_id = str(task.get("task_id", task.get("question", "")))
         self.task_success = False
         self.trace = []
@@ -197,8 +190,16 @@ class ResearchAgent(AgentBase):
 
         for step_idx in range(self.max_steps):
             ts_start = time.time()
+            self._emit_event("llm_start", {"step_idx": step_idx, "ts": ts_start})
             llm_result = await self._call_llm(messages, tools=TOOLS)
             ts_end = time.time()
+            self._emit_event("llm_end", {
+                "step_idx": step_idx,
+                "ts": ts_end,
+                "prompt_tokens": llm_result.prompt_tokens,
+                "completion_tokens": llm_result.completion_tokens,
+                "latency_ms": llm_result.llm_latency_ms,
+            })
             record = self.build_step_record(
                 step_idx=step_idx,
                 phase="reasoning",
@@ -223,6 +224,12 @@ class ResearchAgent(AgentBase):
             record.tool_name = tc.name
             record.tool_args = json.dumps(args)
             tool_started = time.monotonic()
+            self._emit_event("tool_start", {
+                "step_idx": step_idx,
+                "ts": tool_started,
+                "tool_name": tc.name,
+                "tool_args": record.tool_args,
+            })
 
             if tc.name == "web_search":
                 try:
@@ -243,6 +250,14 @@ class ResearchAgent(AgentBase):
             record.tool_duration_ms = raw_ms
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
+            self._emit_event("tool_end", {
+                "step_idx": step_idx,
+                "ts": time.monotonic(),
+                "tool_name": tc.name,
+                "duration_ms": raw_ms,
+                "success": record.tool_success,
+                "timeout": False,
+            })
             self._emit_step(record)
 
             if tc.name == "synthesize":
