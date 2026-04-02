@@ -186,6 +186,7 @@ class ResearchAgent(AgentBase):
         return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
 
     async def run(self, task: dict[str, Any]) -> bool:
+        # TODO: add llm_start/llm_end/tool_start/tool_end events (see code_agent.py)
         self.task_id = str(task.get("task_id", task.get("question", "")))
         self.task_success = False
         self.trace = []
@@ -209,7 +210,7 @@ class ResearchAgent(AgentBase):
             if not llm_result.tool_calls:
                 record.tool_success = bool(llm_result.content.strip())
                 self.task_success = bool(llm_result.content.strip())
-                self.trace.append(record)
+                self._emit_step(record)
                 break
 
             tc = llm_result.tool_calls[0]
@@ -242,7 +243,7 @@ class ResearchAgent(AgentBase):
             record.tool_duration_ms = raw_ms
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
-            self.trace.append(record)
+            self._emit_step(record)
 
             if tc.name == "synthesize":
                 self.task_success = bool(tool_output.strip())

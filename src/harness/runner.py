@@ -108,6 +108,8 @@ class BenchmarkRunner:
 
     async def _run_single_task(self, task: dict[str, Any], idx: int) -> RunnerTaskResult:
         agent = self.agent_factory(f"agent-{idx:04d}", self.api_base, self.model)
+        if self.trace_logger is not None:
+            agent._trace_logger = self.trace_logger
         try:
             run_coro = agent.run(task)
             if self.task_timeout_s is not None:
@@ -129,8 +131,6 @@ class BenchmarkRunner:
             summary["error"] = str(exc)
             summary["exception_type"] = type(exc).__name__
         if self.trace_logger is not None:
-            for record in agent.trace:
-                self.trace_logger.log_step(agent.agent_id, record)
             self.trace_logger.log_summary(agent.agent_id, summary)
         return RunnerTaskResult(summary=summary, trace=agent.get_trace())
 
@@ -157,6 +157,8 @@ class BenchmarkRunner:
         agents: list[tuple[AgentBase, dict[str, Any], int]] = []
         for idx, task in enumerate(self.tasks):
             agent = self.agent_factory(f"agent-{idx:04d}", self.api_base, self.model)
+            if self.trace_logger is not None:
+                agent._trace_logger = self.trace_logger
             agents.append((agent, task, idx))
 
         await asyncio.gather(
@@ -186,8 +188,6 @@ class BenchmarkRunner:
                 summary["error"] = str(exc)
                 summary["exception_type"] = type(exc).__name__
             if self.trace_logger is not None:
-                for record in agent.trace:
-                    self.trace_logger.log_step(agent.agent_id, record)
                 self.trace_logger.log_summary(agent.agent_id, summary)
             return RunnerTaskResult(summary=summary, trace=agent.get_trace())
 

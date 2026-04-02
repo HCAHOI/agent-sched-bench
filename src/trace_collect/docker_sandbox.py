@@ -113,7 +113,8 @@ class DockerSandbox:
         # Install git (base python:3.11-slim may not have it)
         await self.exec_in_container(
             container_name,
-            "apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1",
+            # safe.directory='*' is fine in ephemeral containers (no host git repos are mounted rw)
+            "apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1 && git config --global --add safe.directory '*'",
             timeout_s=120.0,
         )
 

@@ -190,23 +190,33 @@ class CodeAgent(AgentBase):
             {"role": "user", "content": self._format_issue(task)},
         ]
         started = time.monotonic()
+        _prev_msg_len = 0
         try:
             for step_idx in range(self.max_steps):
                 if (time.monotonic() - started) > self.task_timeout_s:
                     break
                 ts_start = time.time()
+                self._emit_event("llm_start", {"step_idx": step_idx, "ts": ts_start})
                 llm_result = await self._call_llm(messages, tools=TOOLS)
                 ts_end = time.time()
+                self._emit_event("llm_end", {
+                    "step_idx": step_idx,
+                    "ts": ts_end,
+                    "prompt_tokens": llm_result.prompt_tokens,
+                    "completion_tokens": llm_result.completion_tokens,
+                    "latency_ms": llm_result.llm_latency_ms,
+                })
                 record = self.build_step_record(
                     step_idx=step_idx,
                     phase="reasoning",
                     llm_result=llm_result,
                     ts_start=ts_start,
                     ts_end=ts_end,
+                    messages_in=list(messages[_prev_msg_len:]),
                 )
 
                 if not llm_result.tool_calls:
-                    self.trace.append(record)
+                    self._emit_step(record)
                     break
 
                 tc = llm_result.tool_calls[0]
@@ -222,28 +232,68 @@ class CodeAgent(AgentBase):
                 record.phase = "acting"
                 record.tool_name = tc.name
                 record.tool_args = json.dumps(args)
-                tool_started = time.monotonic()
+                tool_started_mono = time.monotonic()
+                tool_ts_start = time.time()
+                self._emit_event("tool_start", {
+                    "step_idx": step_idx,
+                    "ts": tool_ts_start,
+                    "tool_name": tc.name,
+                    "tool_args": record.tool_args,
+                })
 
                 if tc.name == "submit":
                     patch_text = args.get("patch", tc.arguments)
-                    success, tool_output = await self._apply_and_test(
-                        patch_text, task,
-                    )
-                    raw_ms = (time.monotonic() - tool_started) * 1000
+                    try:
+                        success, tool_output = await self._apply_and_test(
+                            patch_text, task,
+                        )
+                        timed_out = False
+                    except TimeoutError:
+                        success = False
+                        tool_output = f"ERROR: submit timed out after {self.command_timeout_s}s"
+                        timed_out = True
+                    raw_ms = (time.monotonic() - tool_started_mono) * 1000
+                    record.tool_ts_start = tool_ts_start
+                    record.tool_ts_end = time.time()
                     record.tool_duration_ms = raw_ms
                     record.tool_result = tool_output
                     record.tool_success = success
+                    record.tool_timeout = timed_out
                     self.task_success = success
-                    self.trace.append(record)
+                    self._emit_event("tool_end", {
+                        "step_idx": step_idx,
+                        "ts": record.tool_ts_end,
+                        "tool_name": tc.name,
+                        "duration_ms": record.tool_duration_ms,
+                        "success": record.tool_success,
+                        "timeout": record.tool_timeout,
+                    })
+                    self._emit_step(record)
                     break
 
                 command = args.get("command", tc.arguments)
-                tool_output = await self._execute_bash(command)
-                raw_ms = (time.monotonic() - tool_started) * 1000
+                try:
+                    tool_output = await self._execute_bash(command)
+                    timed_out = False
+                except TimeoutError:
+                    tool_output = f"ERROR: command timed out after {self.command_timeout_s}s"
+                    timed_out = True
+                raw_ms = (time.monotonic() - tool_started_mono) * 1000
+                record.tool_ts_start = tool_ts_start
+                record.tool_ts_end = time.time()
                 record.tool_duration_ms = raw_ms
                 record.tool_result = tool_output
-                record.tool_success = not tool_output.startswith("ERROR")
-                self.trace.append(record)
+                record.tool_timeout = timed_out
+                record.tool_success = not timed_out and not tool_output.startswith("ERROR")
+                self._emit_event("tool_end", {
+                    "step_idx": step_idx,
+                    "ts": record.tool_ts_end,
+                    "tool_name": tc.name,
+                    "duration_ms": record.tool_duration_ms,
+                    "success": record.tool_success,
+                    "timeout": record.tool_timeout,
+                })
+                self._emit_step(record)
 
                 # Build assistant message with tool_calls for multi-turn
                 assistant_msg: dict[str, Any] = {
@@ -266,6 +316,7 @@ class CodeAgent(AgentBase):
                     "tool_call_id": tc.id,
                     "content": self._truncate(tool_output),
                 })
+                _prev_msg_len = len(messages)
             return bool(self.task_success)
         finally:
             await self._container_mgr.destroy_container(self._container_id)

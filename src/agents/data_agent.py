@@ -166,6 +166,7 @@ class DataAgent(AgentBase):
         return text[:half] + f"\n[... truncated {len(text) - self.max_tool_output_chars} chars ...]\n" + text[-half:]
 
     async def run(self, task: dict[str, Any]) -> bool:
+        # TODO: add llm_start/llm_end/tool_start/tool_end events (see code_agent.py)
         self.task_id = str(task.get("task_id", task.get("question", "")))
         self.task_success = False
         self.trace = []
@@ -191,7 +192,7 @@ class DataAgent(AgentBase):
                 # No tool call — check for final SQL in text content (fallback)
                 final_sql = extract_sql_block(llm_result.content) if llm_result.content else None
                 if final_sql is None:
-                    self.trace.append(record)
+                    self._emit_step(record)
                     break
                 tool_started = time.monotonic()
                 success, output = await self._evaluate_final_sql(final_sql, task)
@@ -203,7 +204,7 @@ class DataAgent(AgentBase):
                 record.tool_duration_ms = (time.monotonic() - tool_started) * 1000
                 record.extra["evaluation_mode"] = "denotation"
                 self.task_success = success
-                self.trace.append(record)
+                self._emit_step(record)
                 break
 
             tc = llm_result.tool_calls[0]
@@ -229,7 +230,7 @@ class DataAgent(AgentBase):
             record.tool_duration_ms = raw_ms
             record.tool_result = tool_output
             record.tool_success = not tool_output.startswith("ERROR:")
-            self.trace.append(record)
+            self._emit_step(record)
 
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": llm_result.content or ""}
             assistant_msg["tool_calls"] = [

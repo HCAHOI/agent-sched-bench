@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -131,26 +130,32 @@ async def collect_traces(
             )
             # Inject DockerSandbox instead of the default LocalSandbox
             agent._container_mgr = sandbox
+            agent._trace_logger = trace_logger
+            agent.run_metadata = {"model": model, "api_provider": "dashscope"}
 
+            prepare_ms = 0.0
+            prepare_t0 = time.monotonic()
             try:
-                prepare_t0 = time.monotonic()
                 await agent.prepare(task)
                 prepare_ms = (time.monotonic() - prepare_t0) * 1000
+                agent.run_metadata["prepare_ms"] = prepare_ms
 
                 success = await agent.run(task)
-            except Exception:
+            except Exception as exc:
                 logger.exception("FAILED %s", instance_id)
                 failed += 1
+                elapsed = time.monotonic() - t0
+                if prepare_ms == 0.0:  # prepare() itself failed
+                    prepare_ms = (time.monotonic() - prepare_t0) * 1000
+                error_summary = agent.summary()
+                error_summary["elapsed_s"] = elapsed
+                error_summary["prepare_ms"] = prepare_ms
+                error_summary["error"] = str(exc)
+                error_summary["error_type"] = type(exc).__name__
+                trace_logger.log_summary(agent.agent_id, error_summary)
                 continue
 
             elapsed = time.monotonic() - t0
-
-            # Log trace with extra metadata
-            for record in agent.trace:
-                record.extra["model"] = model
-                record.extra["api_provider"] = "dashscope"
-                record.extra["prepare_ms"] = prepare_ms
-                trace_logger.log_step(agent.agent_id, record)
 
             summary = agent.summary()
             summary["elapsed_s"] = elapsed

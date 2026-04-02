@@ -39,6 +39,12 @@ class TraceLogger:
         self._handle.write(json.dumps(entry) + "\n")
         self._handle.flush()
 
+    def log_event(self, agent_id: str, event_type: str, data: dict[str, Any]) -> None:
+        """Write a fine-grained event record immediately."""
+        entry = {"type": event_type, "agent_id": agent_id, **data}
+        self._handle.write(json.dumps(entry) + "\n")
+        self._handle.flush()
+
     def close(self) -> None:
         if not self._handle.closed:
             self._handle.close()

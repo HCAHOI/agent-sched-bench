@@ -234,8 +234,10 @@ class LocalSandbox:
                 timeout=timeout_s,
                 cwd=tmpdir,
             )
-        except subprocess.TimeoutExpired:
-            return 124, f"Command timed out after {timeout_s}s"
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"Command timed out after {timeout_s}s: {' '.join(str(a) for a in args)}"
+            ) from exc
 
         output = ""
         if result.stdout:

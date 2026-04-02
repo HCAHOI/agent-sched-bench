@@ -3,7 +3,10 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from harness.trace_logger import TraceLogger
 
 from openai import AsyncOpenAI
 
@@ -46,12 +49,16 @@ class StepRecord:
     completion_tokens: int
     llm_latency_ms: float
     llm_output: str = ""
+    messages_in: list[dict[str, Any]] | None = None
     raw_response: dict[str, Any] = field(default_factory=dict)
     tool_name: str | None = None
     tool_args: str | None = None
     tool_result: str | None = None
     tool_duration_ms: float | None = None
     tool_success: bool | None = None
+    tool_timeout: bool | None = None
+    tool_ts_start: float | None = None
+    tool_ts_end: float | None = None
     ts_start: float = 0.0
     ts_end: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
@@ -87,6 +94,8 @@ class AgentBase(ABC):
         self.trace: list[StepRecord] = []
         self.task_id: str = ""
         self.task_success: bool | None = None
+        self._trace_logger: TraceLogger | None = None
+        self.run_metadata: dict[str, Any] = {}
         self._client = AsyncOpenAI(
             base_url=api_base,
             api_key=api_key,
@@ -150,6 +159,7 @@ class AgentBase(ABC):
         llm_result: LLMCallResult,
         ts_start: float,
         ts_end: float,
+        messages_in: list[dict[str, Any]] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> StepRecord:
         """Construct a typed step record from an LLM call result."""
@@ -161,6 +171,7 @@ class AgentBase(ABC):
             completion_tokens=llm_result.completion_tokens,
             llm_latency_ms=llm_result.llm_latency_ms,
             llm_output=llm_result.content,
+            messages_in=messages_in,
             raw_response=llm_result.raw_response,
             ts_start=ts_start,
             ts_end=ts_end,
@@ -178,6 +189,18 @@ class AgentBase(ABC):
         heavyweight setup (e.g. Podman containers) should override this.
         """
 
+    def _emit_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Emit a fine-grained event if a logger is injected. No-op otherwise."""
+        if self._trace_logger is not None:
+            self._trace_logger.log_event(self.agent_id, event_type, data)
+
+    def _emit_step(self, record: StepRecord) -> None:
+        """Append record to self.trace and write to logger immediately (if injected)."""
+        record.extra.update(self.run_metadata)
+        self.trace.append(record)
+        if self._trace_logger is not None:
+            self._trace_logger.log_step(self.agent_id, record)
+
     @abstractmethod
     async def run(self, task: dict[str, Any]) -> bool:
         """Run the agent on one task and return success/failure."""
@@ -193,6 +216,19 @@ class AgentBase(ABC):
         total_tokens = sum(
             record.prompt_tokens + record.completion_tokens for record in self.trace
         )
+        tool_ms_by_name: dict[str, float] = {}
+        tool_timeouts: dict[str, int] = {}
+        for record in self.trace:
+            if record.tool_name is None:
+                continue
+            tool_ms_by_name[record.tool_name] = (
+                tool_ms_by_name.get(record.tool_name, 0.0)
+                + (record.tool_duration_ms or 0.0)
+            )
+            if record.tool_timeout:
+                tool_timeouts[record.tool_name] = (
+                    tool_timeouts.get(record.tool_name, 0) + 1
+                )
         return {
             "agent_id": self.agent_id,
             "program_id": self.agent_id,
@@ -201,5 +237,7 @@ class AgentBase(ABC):
             "total_llm_ms": total_llm_ms,
             "total_tool_ms": total_tool_ms,
             "total_tokens": total_tokens,
+            "tool_ms_by_name": tool_ms_by_name,
+            "tool_timeouts": tool_timeouts,
             "success": self.task_success,
         }
