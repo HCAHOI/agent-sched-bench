@@ -64,11 +64,6 @@ def parse_args() -> argparse.Namespace:
         help="Output directory for trace files.",
     )
     parser.add_argument(
-        "--base-image",
-        default="python:3.11-slim",
-        help="Docker base image for sandboxes.",
-    )
-    parser.add_argument(
         "--sample",
         type=int,
         default=None,
@@ -106,7 +101,6 @@ def main() -> None:
             task_source=args.task_source,
             repos_root=args.repos_root,
             output_dir=args.output_dir,
-            base_image=args.base_image,
             max_steps=args.max_steps,
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,

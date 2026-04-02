@@ -9,9 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agents.code_agent import CodeAgent
+from agents.mini_swe_code_agent import MiniSWECodeAgent
 from harness.trace_logger import TraceLogger
-from trace_collect.docker_sandbox import DockerSandbox
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,6 @@ async def collect_traces(
     task_source: str | Path,
     repos_root: str | Path,
     output_dir: str | Path,
-    base_image: str = "python:3.11-slim",
     max_steps: int = 40,
     command_timeout_s: float = 120.0,
     task_timeout_s: float = 1200.0,
@@ -75,7 +73,6 @@ async def collect_traces(
         task_source: Path to tasks JSON file.
         repos_root: Path to pre-cloned repos directory.
         output_dir: Directory for output trace files.
-        base_image: Docker base image for sandboxes.
         max_steps: Maximum agent steps per task.
         command_timeout_s: Timeout per bash command.
         task_timeout_s: Timeout per task overall.
@@ -98,10 +95,6 @@ async def collect_traces(
     if completed:
         logger.info("Resuming: %d tasks already completed", len(completed))
 
-    sandbox = DockerSandbox(
-        base_image=base_image,
-        repos_root=Path(repos_root).resolve() if repos_root else None,
-    )
     trace_logger = TraceLogger(output_path, run_id)
 
     total = len(tasks)
@@ -118,7 +111,7 @@ async def collect_traces(
             logger.info("[%d/%d] START %s", i + 1, total, instance_id)
             t0 = time.monotonic()
 
-            agent = CodeAgent(
+            agent = MiniSWECodeAgent(
                 agent_id=instance_id,
                 api_base=api_base,
                 model=model,
@@ -128,8 +121,6 @@ async def collect_traces(
                 task_timeout_s=task_timeout_s,
                 repos_root=str(repos_root),
             )
-            # Inject DockerSandbox instead of the default LocalSandbox
-            agent._container_mgr = sandbox
             agent._trace_logger = trace_logger
             agent.run_metadata = {"model": model, "api_provider": "dashscope"}
 
