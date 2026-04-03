@@ -15,7 +15,18 @@ from pathlib import Path
 
 
 def timeline(path: Path, filter_agent: str | None = None) -> None:
-    records = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    # Check for replay metadata and print header
+    for r in records:
+        if r.get("type") == "replay_metadata":
+            print(
+                f"[REPLAY] from_step={r.get('from_step')} "
+                f"model={r.get('model')} max_steps={r.get('max_steps')} "
+                f"original={r.get('original_trace')}"
+            )
+            print()
+            break
 
     agents: list[str] = []
     seen: set[str] = set()
@@ -39,17 +50,35 @@ def _print_agent_timeline(agent: str, recs: list[dict]) -> None:
     t0: float | None = None
     # Track tool_start absolute ts per step to compute real wall-clock dur.
     tool_start_ts: dict[int | str, float] = {}
+    # Detect replay boundary: reset t0 when from_replay transitions to True.
+    _in_replay = False
+    _replay_steps: set[int] = set()
+    for r in recs:
+        if r.get("from_replay") is True and r.get("type") == "step":
+            _replay_steps.add(r.get("step_idx", -1))
 
     print(f"Timeline: {agent}")
     print("─" * 72)
 
     for r in recs:
         rtype = r.get("type", "")
+        if rtype in ("replay_metadata", "summary"):
+            continue
         ts = r.get("ts") or r.get("ts_start")
         if ts is None:
             continue
+        # For replay traces: reset t0 at the replay boundary so each
+        # section (prefix vs replay) starts at +0.0s.
+        step_idx = r.get("step_idx")
+        if not _in_replay and step_idx in _replay_steps:
+            _in_replay = True
+            t0 = ts
+            print("─" * 72)
+            print("  *** REPLAY STARTS ***")
+            print("─" * 72)
         if t0 is None:
             t0 = ts
+
         rel = ts - t0
 
         if rtype == "llm_start":
