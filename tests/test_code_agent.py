@@ -34,4 +34,4 @@ def test_default_timeouts() -> None:
     )
     assert agent.command_timeout_s == 120.0
     assert agent.task_timeout_s == 1200.0
-    assert agent.max_steps == 40
+    assert agent.max_steps == 50

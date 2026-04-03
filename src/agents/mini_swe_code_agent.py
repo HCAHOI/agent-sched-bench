@@ -22,6 +22,76 @@ from pathlib import Path
 from typing import Any
 
 from agents.base import AgentBase, LLMCallResult
+from minisweagent.agents.default import DefaultAgent
+
+
+# ---------------------------------------------------------------------------
+# ContextManagedAgent — sliding window context management
+# ---------------------------------------------------------------------------
+# Module-level so replayer.py can import it.
+
+
+class ContextManagedAgent(DefaultAgent):
+    """DefaultAgent with sliding window context management.
+
+    Always preserves system message [0] + task message [1].
+    Trims oldest assistant-tool groups from the middle to fit
+    within budget. Maintains a separate _full_messages list
+    that is never trimmed, for post-hoc trajectory conversion.
+    """
+
+    def __init__(self, *args: Any, max_context_tokens: int = 256_000, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._max_context_tokens = max_context_tokens
+        self._full_messages: list[dict] = []
+
+    @staticmethod
+    def _estimate_tokens(messages: list[dict]) -> int:
+        # Strip 'extra' metadata (not sent to the model) to avoid
+        # ~7x overestimation from response objects and timestamps.
+        return sum(
+            len(json.dumps(
+                {k: v for k, v in m.items() if k != "extra"},
+                ensure_ascii=False,
+            ))
+            for m in messages
+        ) // 4
+
+    def query(self) -> dict:
+        self._trim_context()
+        return super().query()
+
+    def add_messages(self, *messages: dict) -> None:
+        # Keep an untrimmed copy of all messages for trajectory
+        # conversion. add_messages is the sole entry point for new
+        # messages (called by query() and run()), so this is the
+        # single place to maintain the full record.
+        super().add_messages(*messages)
+        self._full_messages.extend(messages)
+
+    def _trim_context(self) -> None:
+        if len(self.messages) <= 2:
+            return
+        if self._estimate_tokens(self.messages) <= self._max_context_tokens:
+            return
+        prefix = self.messages[:2]
+        suffix = self.messages[2:]
+        while suffix and self._estimate_tokens(prefix + suffix) > self._max_context_tokens:
+            suffix.pop(0)
+        # Don't leave an orphaned tool result at the start of suffix;
+        # trim until we hit an assistant message to keep pairs intact.
+        while suffix and suffix[0].get("role") != "assistant":
+            suffix.pop(0)
+        self.messages = prefix + suffix
+        if self._estimate_tokens(self.messages) > self._max_context_tokens:
+            import logging
+            logging.getLogger("agent").warning(
+                "Context (%d est. tokens) exceeds budget (%d) after "
+                "trimming; prefix alone is too large",
+                self._estimate_tokens(self.messages),
+                self._max_context_tokens,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Templates (adapted from mini-swe-agent swebench.yaml)
@@ -199,70 +269,8 @@ class MiniSWECodeAgent(AgentBase):
     # ------------------------------------------------------------------
 
     async def _run_mini_agent(self, task: dict[str, Any], repo_dir: Path) -> bool:
-        from minisweagent.agents.default import DefaultAgent
         from minisweagent.environments.local import LocalEnvironment
         from minisweagent.models.litellm_model import LitellmModel
-
-        class ContextManagedAgent(DefaultAgent):
-            """DefaultAgent with sliding window context management.
-
-            Always preserves system message [0] + task message [1].
-            Trims oldest assistant-tool groups from the middle to fit
-            within budget. Maintains a separate _full_messages list
-            that is never trimmed, for post-hoc trajectory conversion.
-            """
-
-            def __init__(self, *args: Any, max_context_tokens: int = 256_000, **kwargs: Any) -> None:
-                super().__init__(*args, **kwargs)
-                self._max_context_tokens = max_context_tokens
-                self._full_messages: list[dict] = []
-
-            @staticmethod
-            def _estimate_tokens(messages: list[dict]) -> int:
-                # Strip 'extra' metadata (not sent to the model) to avoid
-                # ~7x overestimation from response objects and timestamps.
-                return sum(
-                    len(json.dumps(
-                        {k: v for k, v in m.items() if k != "extra"},
-                        ensure_ascii=False,
-                    ))
-                    for m in messages
-                ) // 4
-
-            def query(self) -> dict:
-                self._trim_context()
-                return super().query()
-
-            def add_messages(self, *messages: dict) -> None:
-                # Keep an untrimmed copy of all messages for trajectory
-                # conversion. add_messages is the sole entry point for new
-                # messages (called by query() and run()), so this is the
-                # single place to maintain the full record.
-                super().add_messages(*messages)
-                self._full_messages.extend(messages)
-
-            def _trim_context(self) -> None:
-                if len(self.messages) <= 2:
-                    return
-                if self._estimate_tokens(self.messages) <= self._max_context_tokens:
-                    return
-                prefix = self.messages[:2]
-                suffix = self.messages[2:]
-                while suffix and self._estimate_tokens(prefix + suffix) > self._max_context_tokens:
-                    suffix.pop(0)
-                # Don't leave an orphaned tool result at the start of suffix;
-                # trim until we hit an assistant message to keep pairs intact.
-                while suffix and suffix[0].get("role") != "assistant":
-                    suffix.pop(0)
-                self.messages = prefix + suffix
-                if self._estimate_tokens(self.messages) > self._max_context_tokens:
-                    import logging
-                    logging.getLogger("agent").warning(
-                        "Context (%d est. tokens) exceeds budget (%d) after "
-                        "trimming; prefix alone is too large",
-                        self._estimate_tokens(self.messages),
-                        self._max_context_tokens,
-                    )
 
         lm = LitellmModel(
             model_name=f"openai/{self.model}",
