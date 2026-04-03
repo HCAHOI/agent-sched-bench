@@ -119,7 +119,7 @@ def parse_replay_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=80,
+        default=60,
         help="New maximum steps (total, not additional).",
     )
     parser.add_argument(

@@ -1,6 +1,6 @@
 api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
 model: qwen-plus-latest
-max_steps: 40
+max_steps: 60
 command_timeout_s: 120
 task_timeout_s: 1200
 task_source: data/swebench_verified/tasks.json

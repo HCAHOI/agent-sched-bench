@@ -353,7 +353,7 @@ async def replay(
     task_source: Path,
     repos_root: Path,
     output_dir: Path,
-    max_steps: int = 80,
+    max_steps: int = 60,
     api_base: str,
     api_key: str,
     model: str | None = None,

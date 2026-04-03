@@ -91,7 +91,7 @@ def expand_sweep_matrix(
     workloads_filter: set[str] | None = None,
     task_source_overrides: dict[str, str] | None = None,
 ) -> list[SweepRun]:
-    """Expand configs/sweep.yaml into concrete run cells."""
+    """Expand configs/sweeps/default.yaml into concrete run cells."""
     sweep_config = load_config(sweep_config_path)
     matrix = sweep_config["matrix"]
     task_source_overrides = task_source_overrides or {}
@@ -125,7 +125,7 @@ def extract_agent_kwargs(workload_name: str, workload_config: dict[str, Any]) ->
     """Project workload config into the agent constructor kwargs we actually support."""
     if workload_name == "code_agent":
         return {
-            "max_steps": workload_config.get("max_steps", 80),
+            "max_steps": workload_config.get("max_steps", 60),
             "command_timeout_s": workload_config.get("command_timeout_s", 120.0),
             "task_timeout_s": workload_config.get("task_timeout_s", 1200.0),
             "repos_root": workload_config.get("repos_root"),
@@ -222,7 +222,7 @@ async def execute_sweep(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Expand and execute the benchmark sweep matrix.")
-    parser.add_argument("--sweep-config", default="configs/sweep.yaml")
+    parser.add_argument("--sweep-config", default="configs/sweeps/default.yaml")
     parser.add_argument("--configs-root", default="configs")
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--model", required=True)
