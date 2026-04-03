@@ -386,6 +386,8 @@ async def replay(
     # 1. Load trace + task
     logger.info("Loading trace for %s from %s", agent_id, trace_path)
     steps, summary = load_trace_steps(trace_path, agent_id)
+    if from_step < 0:
+        raise ValueError(f"from_step must be non-negative, got {from_step}")
     if from_step > len(steps):
         raise ValueError(f"from_step={from_step} exceeds available steps ({len(steps)})")
     task = _find_task(task_source, agent_id)
@@ -523,11 +525,17 @@ async def replay(
                     break
         agent._convert_trajectory(msg_snapshot, wall_start, wall_end)
 
-        # Log summary (total steps = prefix + new)
+        # Log summary: merge prefix metrics from original steps so totals
+        # reflect the complete run, not just the replayed portion.
         agent_summary = agent.summary()
         agent_summary["elapsed_s"] = wall_end - wall_start
         agent_summary["replay_from_step"] = from_step
         agent_summary["n_steps"] = from_step + len(agent.trace)
+        # Aggregate prefix metrics from source trace steps
+        for ps in steps[:from_step]:
+            agent_summary["total_llm_ms"] = agent_summary.get("total_llm_ms", 0) + (ps.get("llm_latency_ms") or 0)
+            agent_summary["total_tokens"] = agent_summary.get("total_tokens", 0) + (ps.get("prompt_tokens") or 0) + (ps.get("completion_tokens") or 0)
+            agent_summary["total_tool_ms"] = agent_summary.get("total_tool_ms", 0) + (ps.get("tool_duration_ms") or 0)
         trace_logger.log_summary(agent_id, agent_summary)
 
         trace_file = output_path / f"{run_id}.jsonl"
