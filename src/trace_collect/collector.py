@@ -55,7 +55,7 @@ async def collect_traces(
     task_source: str | Path,
     repos_root: str | Path,
     output_dir: str | Path,
-    max_steps: int = 50,
+    max_steps: int = 60,
     command_timeout_s: float = 120.0,
     task_timeout_s: float = 1200.0,
     sample: int | None = None,

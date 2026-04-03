@@ -162,7 +162,7 @@ class MiniSWECodeAgent(AgentBase):
         model: str,
         *,
         api_key: str = "EMPTY",
-        max_steps: int = 50,
+        max_steps: int = 60,
         command_timeout_s: float = 120.0,
         task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
