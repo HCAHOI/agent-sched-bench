@@ -12,7 +12,7 @@ def load_swebench_verified() -> list[dict[str, Any]]:
     """Load the SWE-bench Verified dataset from HuggingFace.
 
     Returns a list of task dicts with official SWE-bench fields plus
-    derived fields (repo_path, test_cmd) for CodeAgent compatibility.
+    derived fields (test_cmd) for CodeAgent compatibility.
 
     Requires the ``datasets`` package::
 
@@ -24,9 +24,6 @@ def load_swebench_verified() -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
     for row in ds:
         task = dict(row)
-        # Derive repo_path for backward compat (unused with containers)
-        owner, name = task["repo"].split("/")
-        task["repo_path"] = f"data/swebench_repos/{owner}__{name}"
         # Derive test_cmd from FAIL_TO_PASS
         task["test_cmd"] = derive_test_cmd(task)
         tasks.append(task)

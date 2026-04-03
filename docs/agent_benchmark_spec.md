@@ -23,7 +23,7 @@ agent-sched-bench/
 │   │   └── thunderagent.yaml      # ThunderAgent proxy config
 │   ├── workloads/
 │   │   └── code_agent.yaml        # SWE-bench Verified 参数
-│   └── sweep.yaml                 # 实验矩阵定义 (N × workload × system)
+│   └── sweeps/default.yaml        # 实验矩阵定义 (N × workload × system)
 │
 ├── src/
 │   ├── agents/                    # Agent 实现
@@ -52,9 +52,8 @@ agent-sched-bench/
 │   └── collect_results.sh         # 汇总所有结果到 results/
 │
 ├── data/
-│   ├── swebench_lite/             # SWE-bench Lite tasks (git submodule or download)
-│   ├── bird_sql/                  # BIRD NL2SQL 数据集
-│   └── research_queries/          # Deep research query set (手写 20-30 个)
+│   ├── swebench_verified/         # SWE-bench Verified tasks
+│   └── swebench_repos/            # cloned repositories for SWE-bench tasks
 │
 ├── results/                       # 实验输出 (gitignore, 只 sync summary)
 │   ├── raw/                       # 原始 trace JSON lines

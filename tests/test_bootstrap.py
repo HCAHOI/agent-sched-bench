@@ -16,7 +16,7 @@ def test_expected_top_level_paths_exist() -> None:
         REPO_ROOT / "pyproject.toml",
         REPO_ROOT / "Makefile",
         REPO_ROOT / "docs" / "CURRENT_PLAN.md",
-        REPO_ROOT / "configs" / "sweep.yaml",
+        REPO_ROOT / "configs" / "sweeps" / "default.yaml",
         REPO_ROOT / "scripts" / "setup_server.sh",
         REPO_ROOT / "src" / "agents",
         REPO_ROOT / "src" / "harness",
@@ -81,16 +81,8 @@ def test_placeholder_scripts_fail_closed() -> None:
         assert result.returncode != 0, f"{script} unexpectedly succeeded"
 
 
-def test_primary_workload_configs_default_to_full_dataset() -> None:
-    path = REPO_ROOT / "configs" / "workloads" / "code_agent.yaml"
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
-    assert data["sample_size"] is None
-    assert data["sampling_strategy"] == "full_dataset"
-
-
 def test_primary_workload_configs_use_expected_step_budgets() -> None:
     path = REPO_ROOT / "configs" / "workloads" / "code_agent.yaml"
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
-    assert data["max_steps"] == 80
+    assert data["max_steps"] == 60

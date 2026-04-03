@@ -2,8 +2,7 @@
 
 Populate these directories during the environment checkpoints:
 
-- `swebench_lite/`: SWE-bench Lite tasks and task metadata
-- `bird_sql/`: BIRD SQLite databases and question files
-- `research_queries/`: curated research query set
+- `swebench_verified/`: SWE-bench Verified tasks and task metadata
+- `swebench_repos/`: cloned repositories for SWE-bench tasks
 
 Do not commit large downloaded artifacts or cloned benchmark repositories.

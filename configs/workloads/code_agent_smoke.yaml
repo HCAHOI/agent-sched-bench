@@ -1,7 +1,4 @@
 name: code_agent_smoke
-base: code_agent
 max_steps: 5
-sample_size: 1
-sampling_strategy: smoke
 task_source: data/swebench_verified
 repos_root: data/swebench_repos

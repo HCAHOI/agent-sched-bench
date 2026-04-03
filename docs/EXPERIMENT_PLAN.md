@@ -346,7 +346,7 @@ CONTINUUM_REF=<pinned-commit> scripts/serve_continuum.sh
 
 ## Experiment Matrix Summary
 
-### Full Matrix (sweep.yaml)
+### Full Matrix (configs/sweeps/default.yaml)
 
 | | code_agent |
 |:---|:---:|

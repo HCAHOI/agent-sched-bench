@@ -14,7 +14,7 @@ def write_yaml(path: Path, content: str) -> None:
 
 def test_expand_sweep_matrix_and_manifest_paths(tmp_path: Path) -> None:
     write_yaml(
-        tmp_path / "configs/sweep.yaml",
+        tmp_path / "configs/sweeps/default.yaml",
         """
 matrix:
   systems: [vllm-baseline]
@@ -30,7 +30,7 @@ matrix:
     (tmp_path / "tasks/code.json").write_text("[]\n", encoding="utf-8")
 
     runs = expand_sweep_matrix(
-        sweep_config_path=tmp_path / "configs/sweep.yaml",
+        sweep_config_path=tmp_path / "configs/sweeps/default.yaml",
         configs_root=tmp_path / "configs",
         output_root=tmp_path / "runs",
     )
@@ -41,7 +41,7 @@ matrix:
 
 def test_execute_sweep_writes_result_and_manifest_shape(tmp_path: Path) -> None:
     write_yaml(
-        tmp_path / "configs/sweep.yaml",
+        tmp_path / "configs/sweeps/default.yaml",
         """
 matrix:
   systems: [vllm-baseline]
@@ -66,7 +66,7 @@ task_source: """
     (tmp_path / "tasks/code.json").write_text("[]\n", encoding="utf-8")
 
     runs = expand_sweep_matrix(
-        sweep_config_path=tmp_path / "configs/sweep.yaml",
+        sweep_config_path=tmp_path / "configs/sweeps/default.yaml",
         configs_root=tmp_path / "configs",
         output_root=tmp_path / "runs",
     )
@@ -79,7 +79,7 @@ task_source: """
             arrival_rate_per_s=None,
             arrival_seed=None,
             task_source_overrides={},
-            sweep_config_path=str(tmp_path / "configs/sweep.yaml"),
+            sweep_config_path=str(tmp_path / "configs/sweeps/default.yaml"),
         )
     )
     assert len(completed) == 1
@@ -87,4 +87,4 @@ task_source: """
     assert result_path.exists()
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["execution_config"]["model"] == "mock"
-    assert completed[0]["execution_config"]["sweep_config_path"].endswith("sweep.yaml")
+    assert completed[0]["execution_config"]["sweep_config_path"].endswith("default.yaml")

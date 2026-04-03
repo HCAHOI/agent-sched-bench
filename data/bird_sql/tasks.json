@@ -1,5 +1,0 @@
-[
-  {"task_id": "smoke_sql_001", "question": "How many employees work in the Engineering department?", "db_path": "data/bird_sql/smoke.db", "gold_sql": "SELECT COUNT(*) FROM employees WHERE department = 'Engineering'", "evidence": ""},
-  {"task_id": "smoke_sql_002", "question": "What is the average salary across all departments?", "db_path": "data/bird_sql/smoke.db", "gold_sql": "SELECT AVG(salary) FROM employees", "evidence": ""},
-  {"task_id": "smoke_sql_003", "question": "Who has the highest salary?", "db_path": "data/bird_sql/smoke.db", "gold_sql": "SELECT name FROM employees ORDER BY salary DESC LIMIT 1", "evidence": ""}
-]
