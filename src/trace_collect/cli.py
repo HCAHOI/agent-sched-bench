@@ -197,7 +197,7 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     from trace_collect.collector import collect_traces
 
-    trace_file = asyncio.run(
+    run_dir = asyncio.run(
         collect_traces(
             api_base=args.api_base,
             api_key=api_key,
@@ -213,7 +213,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             max_context_tokens=args.max_context_tokens,
         )
     )
-    print(f"Traces written to: {trace_file}")
+    print(f"Traces written to: {run_dir}/")
 
 
 def _run_replay(args: argparse.Namespace) -> None:
