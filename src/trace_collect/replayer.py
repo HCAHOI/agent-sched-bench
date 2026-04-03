@@ -568,7 +568,7 @@ async def replay(
             if record.get("agent_id") != agent_id:
                 continue
             rtype = record.get("type", "")
-            if rtype in ("step", "llm_start", "llm_end", "tool_start", "tool_end"):
+            if rtype in ("action", "step", "llm_start", "llm_end", "tool_start", "tool_end"):
                 if record.get("step_idx", 999) < from_step:
                     record["from_replay"] = False
                     prefix_lines.append(json.dumps(record, ensure_ascii=False))

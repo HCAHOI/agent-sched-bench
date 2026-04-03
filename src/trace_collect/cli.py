@@ -1,4 +1,4 @@
-"""CLI entry point for trace collection and replay.
+"""CLI entry point for trace collection, replay, and simulation.
 
 Usage (collect):
     DASHSCOPE_API_KEY=sk-xxx python -m trace_collect.cli \\
@@ -12,6 +12,12 @@ Usage (replay):
         --agent-id django__django-11734 \\
         --from-step 45 \\
         --max-steps 80
+
+Usage (simulate):
+    python -m trace_collect.cli simulate \\
+        --source-trace traces/swebench/qwen-plus/.../task.jsonl \\
+        --api-base http://localhost:8000/v1 \\
+        --model Qwen/Qwen2.5-Coder-7B-Instruct
 """
 
 from __future__ import annotations
@@ -173,12 +179,68 @@ def parse_replay_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Simulate a trace with local model timing (TTFT/TPOT).",
+    )
+    parser.add_argument(
+        "--source-trace",
+        required=True,
+        help="Path to the source API trace JSONL file.",
+    )
+    parser.add_argument(
+        "--api-base",
+        default="http://localhost:8000/v1",
+        help="Local model OpenAI-compatible API base URL.",
+    )
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Local model name (e.g. Qwen/Qwen2.5-Coder-7B-Instruct).",
+    )
+    parser.add_argument(
+        "--task-source",
+        default="data/swebench_verified/tasks.json",
+        help="Path to tasks JSON file.",
+    )
+    parser.add_argument(
+        "--repos-root",
+        default="data/swebench_repos",
+        help="Path to pre-cloned repos directory.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="traces/simulate",
+        help="Output directory for the simulate trace.",
+    )
+    parser.add_argument(
+        "--command-timeout",
+        type=float,
+        default=120.0,
+        help="Timeout in seconds per bash command.",
+    )
+    parser.add_argument(
+        "--task-timeout",
+        type=float,
+        default=1200.0,
+        help="Timeout for the entire simulation.",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose logging.",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
-    # Keyword detection: "replay" as first arg routes to replay parser.
-    # All other invocations use the existing collect parser (100% backward compat).
+    # Keyword detection: subcommand as first arg routes to the right parser.
     if len(sys.argv) > 1 and sys.argv[1] == "replay":
         args = parse_replay_args(sys.argv[2:])
         _run_replay(args)
+    elif len(sys.argv) > 1 and sys.argv[1] == "simulate":
+        args = parse_simulate_args(sys.argv[2:])
+        _run_simulate(args)
     else:
         args = parse_collect_args()
         _run_collect(args)
@@ -247,6 +309,32 @@ def _run_replay(args: argparse.Namespace) -> None:
         )
     )
     print(f"Replay trace written to: {trace_file}")
+
+
+def _run_simulate(args: argparse.Namespace) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VLLM_API_KEY", "EMPTY")
+
+    from trace_collect.simulator import simulate
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=Path(args.source_trace),
+            task_source=Path(args.task_source),
+            repos_root=Path(args.repos_root),
+            output_dir=Path(args.output_dir),
+            api_base=args.api_base,
+            api_key=api_key,
+            model=args.model,
+            command_timeout_s=args.command_timeout,
+            task_timeout_s=args.task_timeout,
+        )
+    )
+    print(f"Simulate trace written to: {trace_file}")
 
 
 if __name__ == "__main__":

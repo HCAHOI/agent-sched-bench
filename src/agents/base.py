@@ -61,6 +61,24 @@ class StepRecord:
     tool_ts_end: float | None = None
     ts_start: float = 0.0
     ts_end: float = 0.0
+    ttft_ms: float | None = None
+    tpot_ms: float | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ActionRecord:
+    """Lightweight record emitted when the LLM decides an action (before tool execution)."""
+
+    step_idx: int
+    program_id: str
+    tool_name: str | None
+    tool_args: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    llm_latency_ms: float
+    ttft_ms: float | None = None
+    ts: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -209,10 +227,22 @@ class AgentBase(ABC):
             self._trace_logger.log_event(self.agent_id, event_type, data)
 
     def _emit_step(self, record: StepRecord) -> None:
-        """Append record to self.trace and write to logger immediately (if injected)."""
+        """Append record to self.trace and write action + step to logger."""
         record.extra.update(self.run_metadata)
         self.trace.append(record)
         if self._trace_logger is not None:
+            action = ActionRecord(
+                step_idx=record.step_idx,
+                program_id=record.program_id,
+                tool_name=record.tool_name,
+                tool_args=record.tool_args,
+                prompt_tokens=record.prompt_tokens,
+                completion_tokens=record.completion_tokens,
+                llm_latency_ms=record.llm_latency_ms,
+                ttft_ms=record.ttft_ms,
+                ts=record.ts_start + record.llm_latency_ms / 1000,
+            )
+            self._trace_logger.log_action(self.agent_id, action)
             self._trace_logger.log_step(self.agent_id, record)
 
     @abstractmethod
