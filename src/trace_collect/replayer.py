@@ -337,11 +337,12 @@ def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
     raise TraceLoadError(f"Task {agent_id!r} not found in {task_source}")
 
 
-def _build_replay_run_id(model: str, max_steps: int) -> str:
+def _build_replay_run_id(model: str, max_steps: int, task_source: str | Path = "") -> str:
     """Standard run ID — replay traces are named like collect traces."""
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
     safe_model = model.replace("/", "-").replace(":", "-")
-    return f"{safe_model}_max{max_steps}_{ts}"
+    task_name = Path(task_source).parent.name if task_source else "unknown"
+    return f"{task_name}_{safe_model}_max{max_steps}_{ts}"
 
 
 async def replay(
@@ -458,7 +459,7 @@ async def replay(
     # 6. Set up trace logger
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    run_id = _build_replay_run_id(model, max_steps)
+    run_id = _build_replay_run_id(model, max_steps, task_source)
     trace_logger = TraceLogger(output_path, run_id)
 
     # Write replay metadata header

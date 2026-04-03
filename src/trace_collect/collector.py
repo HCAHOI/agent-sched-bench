@@ -40,11 +40,12 @@ def load_completed_ids(output_path: Path) -> set[str]:
     return completed
 
 
-def build_run_id(model: str) -> str:
-    """Build a run ID from model name and current timestamp."""
+def build_run_id(model: str, task_source: str | Path = "") -> str:
+    """Build a run ID from task source, model name and timestamp."""
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
     safe_model = model.replace("/", "-").replace(":", "-")
-    return f"{safe_model}_{ts}"
+    task_name = Path(task_source).parent.name if task_source else "unknown"
+    return f"{task_name}_{safe_model}_{ts}"
 
 
 async def collect_traces(
@@ -93,7 +94,7 @@ async def collect_traces(
     output_path.mkdir(parents=True, exist_ok=True)
 
     if run_id is None:
-        run_id = build_run_id(model)
+        run_id = build_run_id(model, task_source)
     trace_file = output_path / f"{run_id}.jsonl"
 
     completed = load_completed_ids(trace_file)
