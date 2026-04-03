@@ -47,12 +47,12 @@ def load_completed_ids(run_dir: Path) -> set[str]:
     return completed
 
 
-def build_run_id(model: str, task_source: str | Path = "") -> str:
-    """Build a run ID from task source, model name and timestamp."""
+def build_run_dir(output_dir: str | Path, model: str, task_source: str | Path = "") -> Path:
+    """Build run directory: {output_dir}/{benchmark}/{model}/{timestamp}/."""
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
     safe_model = model.replace("/", "-").replace(":", "-")
-    task_name = Path(task_source).parent.name if task_source else "unknown"
-    return f"{task_name}_{safe_model}_{ts}"
+    benchmark = Path(task_source).parent.name if task_source else "unknown"
+    return Path(output_dir) / benchmark / safe_model / ts
 
 
 async def collect_traces(
@@ -98,10 +98,11 @@ async def collect_traces(
     if sample is not None:
         tasks = tasks[:sample]
 
-    output_path = Path(output_dir)
-    if run_id is None:
-        run_id = build_run_id(model, task_source)
-    run_dir = output_path / run_id
+    if run_id is not None:
+        # Resume: run_id is the full path to an existing run directory
+        run_dir = Path(run_id)
+    else:
+        run_dir = build_run_dir(output_dir, model, task_source)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     completed = load_completed_ids(run_dir)

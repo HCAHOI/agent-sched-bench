@@ -68,8 +68,8 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="traces/swebench",
-        help="Output directory for trace files.",
+        default="traces",
+        help="Root output directory (traces/{benchmark}/{model}/{ts}/).",
     )
     parser.add_argument(
         "--sample",
