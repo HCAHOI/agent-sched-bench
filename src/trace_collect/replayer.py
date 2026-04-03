@@ -337,10 +337,11 @@ def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
     raise TraceLoadError(f"Task {agent_id!r} not found in {task_source}")
 
 
-def _build_replay_run_id(agent_id: str, from_step: int) -> str:
+def _build_replay_run_id(model: str, max_steps: int) -> str:
+    """Standard run ID — replay traces are named like collect traces."""
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
-    safe_id = agent_id.replace("/", "-").replace(":", "-")
-    return f"{safe_id}_replay_from{from_step}_{ts}"
+    safe_model = model.replace("/", "-").replace(":", "-")
+    return f"{safe_model}_max{max_steps}_{ts}"
 
 
 async def replay(
@@ -455,7 +456,7 @@ async def replay(
     # 6. Set up trace logger
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    run_id = _build_replay_run_id(agent_id, from_step)
+    run_id = _build_replay_run_id(model, max_steps)
     trace_logger = TraceLogger(output_path, run_id)
 
     # Write replay metadata header
@@ -470,7 +471,10 @@ async def replay(
     })
 
     agent._trace_logger = trace_logger
-    agent.run_metadata = {"model": model, "api_provider": "dashscope", "replay_from": from_step}
+    agent.run_metadata = {
+        "model": model, "api_provider": "dashscope",
+        "replay_from": from_step, "from_replay": True,
+    }
 
     # 7. Run step loop (mirrors DefaultAgent.run but without init)
     wall_start = time.time()
@@ -519,23 +523,74 @@ async def replay(
                     break
         agent._convert_trajectory(msg_snapshot, wall_start, wall_end)
 
-        # Log summary
+        # Log summary (total steps = prefix + new)
         agent_summary = agent.summary()
         agent_summary["elapsed_s"] = wall_end - wall_start
         agent_summary["replay_from_step"] = from_step
+        agent_summary["n_steps"] = from_step + len(agent.trace)
         trace_logger.log_summary(agent_id, agent_summary)
 
+        trace_file = output_path / f"{run_id}.jsonl"
+        new_steps = len(agent.trace)
         logger.info(
-            "Replay complete: %s success=%s new_steps=%d elapsed=%.1fs",
-            agent_id, success, len(agent.trace), wall_end - wall_start,
+            "Replay complete: %s success=%s new_steps=%d total_steps=%d elapsed=%.1fs",
+            agent_id, success, new_steps, from_step + new_steps, wall_end - wall_start,
         )
-        return output_path / f"{run_id}.jsonl"
 
     finally:
         trace_logger.close()
-        if agent._workdir:
-            import shutil
-            shutil.rmtree(agent._workdir, ignore_errors=True)
+        # Don't clean up workdir yet — need trace_file path first
+
+    # 8. Merge: prepend original prefix records to make a complete trace.
+    #    Read back the replay-only records we just wrote, then load
+    #    prefix records from the source trace, and rewrite the file.
+    replay_lines = trace_file.read_text(encoding="utf-8").splitlines()
+
+    prefix_lines: list[str] = []
+    with open(trace_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("agent_id") != agent_id:
+                continue
+            rtype = record.get("type", "")
+            if rtype in ("step", "llm_start", "llm_end", "tool_start", "tool_end"):
+                if record.get("step_idx", 999) < from_step:
+                    record["from_replay"] = False
+                    prefix_lines.append(json.dumps(record, ensure_ascii=False))
+
+    # Add from_replay=True to all new replay records (except metadata)
+    tagged_replay: list[str] = []
+    for line in replay_lines:
+        record = json.loads(line)
+        if record.get("type") == "replay_metadata":
+            tagged_replay.append(line)  # metadata unchanged
+        else:
+            record["from_replay"] = True
+            tagged_replay.append(json.dumps(record, ensure_ascii=False))
+
+    # Rewrite: metadata + prefix + new steps + summary
+    with open(trace_file, "w", encoding="utf-8") as f:
+        f.write(tagged_replay[0] + "\n")      # replay_metadata
+        for line in prefix_lines:               # original steps 0..N-1
+            f.write(line + "\n")
+        for line in tagged_replay[1:]:          # new steps + summary
+            f.write(line + "\n")
+
+    logger.info("Merged %d prefix + %d replay records into %s",
+                len(prefix_lines), len(tagged_replay) - 1, trace_file)
+
+    # Cleanup workdir
+    if agent._workdir:
+        import shutil
+        shutil.rmtree(agent._workdir, ignore_errors=True)
+
+    return trace_file
 
 
 def _run_step_loop(mini_agent: ContextManagedAgent, problem_statement: str) -> dict[str, Any] | None:

@@ -15,7 +15,18 @@ from pathlib import Path
 
 
 def timeline(path: Path, filter_agent: str | None = None) -> None:
-    records = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    # Check for replay metadata and print header
+    for r in records:
+        if r.get("type") == "replay_metadata":
+            print(
+                f"[REPLAY] from_step={r.get('from_step')} "
+                f"model={r.get('model')} max_steps={r.get('max_steps')} "
+                f"original={r.get('original_trace')}"
+            )
+            print()
+            break
 
     agents: list[str] = []
     seen: set[str] = set()
