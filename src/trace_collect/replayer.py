@@ -271,7 +271,12 @@ async def replay_bash_commands(
                 all_output.append("[timeout]")
                 last_returncode = 124
 
-        combined = "\n".join(all_output) if len(commands) > 1 else (all_output[0] if all_output else "")
+        # Add [call N] markers for multi-command steps so _build_tool_messages
+        # can split per-call output (matches _convert_trajectory's format).
+        if len(commands) > 1:
+            combined = "\n".join(f"[call {k}]\n{out}" for k, out in enumerate(all_output))
+        else:
+            combined = all_output[0] if all_output else ""
         observation = _OBSERVATION_TEMPLATE.format(returncode=last_returncode, output=combined)
         outputs[step["step_idx"]] = observation
 
@@ -491,8 +496,27 @@ async def replay(
         )
         agent.task_success = success
 
-        # Convert trajectory (only steps >= from_step will be emitted)
+        # Convert trajectory (only steps >= from_step will be emitted).
+        # Normalize the last prefix message's timestamp to wall_start so
+        # the first resumed step doesn't compute ts_start from an old
+        # timestamp (which would inflate llm_latency_ms massively).
         msg_snapshot = copy.deepcopy(mini_agent._full_messages)
+        # Find the boundary: count assistant messages to locate prefix end
+        asst_count = 0
+        for idx, m in enumerate(msg_snapshot):
+            if m.get("role") == "assistant":
+                asst_count += 1
+                if asst_count == from_step:
+                    # The message just before the next assistant is the last
+                    # prefix message; patch its timestamp to wall_start.
+                    # Scan forward to find the tool result(s) after this assistant.
+                    boundary = idx + 1
+                    while boundary < len(msg_snapshot) and msg_snapshot[boundary].get("role") not in ("assistant", "exit"):
+                        boundary += 1
+                    # Patch the message right before the first new assistant
+                    if boundary > 0 and boundary < len(msg_snapshot):
+                        msg_snapshot[boundary - 1].setdefault("extra", {})["timestamp"] = wall_start
+                    break
         agent._convert_trajectory(msg_snapshot, wall_start, wall_end)
 
         # Log summary
