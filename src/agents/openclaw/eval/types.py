@@ -99,8 +99,14 @@ class EvalResult:
             return patch
         return self._extract_patch_from_content()
 
+    # Paths created by nanobot runtime — must be excluded from patches
+    _EXCLUDE_PATTERNS = [
+        ".nanobot", "memory", "sessions", "trace.jsonl",
+        "MEMORY.md", "HISTORY.md", ".omc",
+    ]
+
     def _extract_patch_from_workspace(self) -> str:
-        """Run git diff in the workspace to extract changes."""
+        """Run git diff in the workspace to extract source-only changes."""
         import subprocess
         if not self.workspace_dir or not (self.workspace_dir / ".git").exists():
             return ""
@@ -110,11 +116,13 @@ class EvalResult:
                 ["git", "add", "-A"],
                 cwd=self.workspace_dir, capture_output=True, timeout=30,
             )
-            # Diff against base commit (handles staged, unstaged, and committed changes)
+            # Diff against base commit, excluding nanobot runtime artifacts
             diff_target = self.base_commit or "HEAD"
+            cmd = ["git", "diff", diff_target, "--", "."]
+            for pat in self._EXCLUDE_PATTERNS:
+                cmd.append(f":(exclude){pat}")
             result = subprocess.run(
-                ["git", "diff", diff_target],
-                cwd=self.workspace_dir, capture_output=True, text=True, timeout=30,
+                cmd, cwd=self.workspace_dir, capture_output=True, text=True, timeout=30,
             )
             return result.stdout.strip() if result.returncode == 0 else ""
         except Exception:
