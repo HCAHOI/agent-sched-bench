@@ -260,6 +260,7 @@ async def collect_traces(
     task_timeout_s: float = 1200.0,
     sample: int | None = None,
     instance_ids: list[str] | None = None,
+    scaffold: str = "mini-swe-agent",
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
     evaluate: bool = False,
@@ -303,6 +304,30 @@ async def collect_traces(
             raise ValueError(f"No tasks matched instance_ids: {instance_ids}")
     if sample is not None:
         tasks = tasks[:sample]
+
+    if scaffold == "openclaw":
+        return await _collect_openclaw(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            tasks=tasks,
+            task_source=task_source,
+            repos_root=Path(repos_root),
+            output_dir=Path(output_dir),
+            max_steps=max_steps,
+            run_id=run_id,
+            max_context_tokens=max_context_tokens,
+            evaluate=evaluate,
+            harness_dataset=harness_dataset,
+            harness_split=harness_split,
+            harness_max_workers=harness_max_workers,
+            harness_timeout=harness_timeout,
+            harness_run_id=harness_run_id,
+            harness_report_dir=harness_report_dir,
+            harness_namespace=harness_namespace,
+        )
+
+    from agents.mini_swe_code_agent import MiniSWECodeAgent
 
     if run_id is not None:
         # Resume: run_id is the full path to an existing run directory
@@ -485,3 +510,181 @@ async def collect_traces(
     _write_results(ordered_results, results_path)
     logger.info("Results written to %s", results_path)
     return run_dir
+
+
+async def _collect_openclaw(
+    *,
+    api_base: str,
+    api_key: str,
+    model: str,
+    tasks: list[dict[str, Any]],
+    task_source: str | Path,
+    repos_root: Path,
+    output_dir: Path,
+    max_steps: int = 80,
+    run_id: str | None = None,
+    max_context_tokens: int = 256_000,
+    evaluate: bool = False,
+    harness_dataset: str = "princeton-nlp/SWE-bench_Verified",
+    harness_split: str = "test",
+    harness_max_workers: int = 1,
+    harness_timeout: int = 1800,
+    harness_run_id: str | None = None,
+    harness_report_dir: str | Path | None = None,
+    harness_namespace: str | None = "swebench",
+) -> Path:
+    """Collect traces using the OpenClaw (nanobot) scaffold via SWEBenchRunner."""
+    from agents.openclaw.unified_provider import UnifiedProvider
+    from agents.openclaw.eval.runner import SWEBenchRunner
+    from agents.openclaw.eval.types import EvalTask
+
+    if run_id is not None:
+        run_dir = Path(run_id)
+    else:
+        run_dir = build_run_dir(output_dir, model, task_source)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    results_path = run_dir / "results.jsonl"
+    completed = load_completed_ids(run_dir)
+    if completed:
+        logger.info("Resuming: %d tasks already completed", len(completed))
+
+    provider = UnifiedProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+    )
+    runner = SWEBenchRunner(
+        provider=provider,
+        workspace_base=run_dir / "_workspaces",
+        max_iterations=max_steps,
+        context_window_tokens=max_context_tokens,
+        model=model,
+        repos_root=repos_root,
+    )
+
+    total = len(tasks)
+    results: list[CollectedTaskResult] = []
+
+    for i, task in enumerate(tasks):
+        instance_id = task["instance_id"]
+        if instance_id in completed:
+            logger.info("[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id)
+            continue
+
+        logger.info("[%d/%d] START %s (openclaw)", i + 1, total, instance_id)
+        workspace = run_dir / "_workspaces" / instance_id
+
+        eval_task = EvalTask.from_swebench_instance(task, run_dir / "_workspaces")
+        eval_result = await runner.run_task(eval_task)
+
+        # Read summary from trace file to get aggregate metrics
+        trace_summary: dict[str, Any] = {}
+        if eval_result.trace_file:
+            trace_path = Path(eval_result.trace_file)
+            if trace_path.exists():
+                for line in trace_path.read_text(encoding="utf-8").splitlines():
+                    rec = json.loads(line)
+                    if rec.get("type") == "summary":
+                        trace_summary = rec
+                        break
+
+        # Map EvalResult -> CollectedTaskResult
+        model_patch = eval_result.model_patch or ""
+        task_result = CollectedTaskResult(
+            instance_id=instance_id,
+            trace_file=str(run_dir / f"{instance_id}.jsonl"),
+            success=bool(model_patch),
+            success_basis="patch_generated",
+            patch_generated=bool(model_patch),
+            model_patch=model_patch,
+            exit_status=eval_result.stop_reason,
+            error=eval_result.error,
+            elapsed_s=eval_result.run_ms / 1000 if eval_result.run_ms else 0.0,
+            n_steps=trace_summary.get("n_steps", 0),
+            total_llm_ms=trace_summary.get("total_llm_ms", 0.0),
+            total_tool_ms=trace_summary.get("total_tool_ms", 0.0),
+            total_tokens=trace_summary.get("total_tokens", 0),
+            prepare_ms=eval_result.prepare_ms or 0.0,
+        )
+
+        # Normalize trace: copy to benchmark run-dir layout + inject metadata
+        if eval_result.trace_file and Path(eval_result.trace_file).exists():
+            _normalize_openclaw_trace(
+                src=Path(eval_result.trace_file),
+                dst=run_dir / f"{instance_id}.jsonl",
+                model=model,
+                api_base=api_base,
+                max_steps=max_steps,
+                instance_id=instance_id,
+            )
+
+        results.append(task_result)
+        logger.info(
+            "[%d/%d] DONE %s  steps=%d patch=%s",
+            i + 1, total, instance_id,
+            task_result.n_steps, task_result.patch_generated,
+        )
+
+    # Write results + predictions
+    _write_results(results, results_path)
+    _write_predictions(results, run_dir / "preds.json")
+    logger.info("Results written to %s", results_path)
+
+    # Harness evaluation
+    if evaluate and is_swebench_available():
+        preds_path = run_dir / "preds.json"
+        if preds_path.exists():
+            evaluation = run_official_evaluation(
+                predictions_path=preds_path,
+                dataset=harness_dataset,
+                split=harness_split,
+                max_workers=harness_max_workers,
+                timeout=harness_timeout,
+                run_id=harness_run_id or build_eval_run_id(run_dir),
+                report_dir=str(harness_report_dir) if harness_report_dir else None,
+                namespace=harness_namespace,
+            )
+            if evaluation and evaluation.resolved_ids is not None:
+                for result in results:
+                    result.official_resolved = result.instance_id in evaluation.resolved_ids
+                    result.success = bool(result.official_resolved)
+                    result.success_basis = "official_resolved"
+                _write_results(results, results_path)
+
+    return run_dir
+
+
+def _normalize_openclaw_trace(
+    src: Path,
+    dst: Path,
+    model: str,
+    api_base: str,
+    max_steps: int,
+    instance_id: str,
+) -> None:
+    """Copy an OpenClaw trace to benchmark run-dir layout with metadata injection."""
+    lines = src.read_text(encoding="utf-8").splitlines()
+    with open(dst, "w", encoding="utf-8") as f:
+        # Inject trace_metadata header
+        metadata = {
+            "type": "trace_metadata",
+            "scaffold": "openclaw",
+            "model": model,
+            "api_base": api_base,
+            "max_steps": max_steps,
+            "instance_id": instance_id,
+            "mode": "collect",
+        }
+        f.write(json.dumps(metadata, ensure_ascii=False) + "\n")
+        for line in lines:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            # Skip any existing trace_metadata from nanobot
+            if rec.get("type") == "trace_metadata":
+                continue
+            # Normalize step tool_args: ensure it's a string
+            if rec.get("type") == "step" and isinstance(rec.get("tool_args"), dict):
+                rec["tool_args"] = json.dumps(rec["tool_args"], ensure_ascii=False)
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")

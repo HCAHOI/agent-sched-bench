@@ -94,6 +94,12 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated list of instance IDs to run (e.g., 'django__django-12345,sympy__sympy-67890').",
     )
     parser.add_argument(
+        "--scaffold",
+        choices=["mini-swe-agent", "openclaw"],
+        default="mini-swe-agent",
+        help="Agent scaffold to use: mini-swe-agent (bash-only) or openclaw (structured tools).",
+    )
+    parser.add_argument(
         "--max-context-tokens",
         type=int,
         default=256_000,
@@ -362,6 +368,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             task_timeout_s=args.task_timeout,
             sample=args.sample,
             instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
+            scaffold=args.scaffold,
             run_id=args.run_id,
             max_context_tokens=args.max_context_tokens,
             evaluate=args.evaluate,
