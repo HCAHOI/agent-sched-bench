@@ -148,7 +148,13 @@ class AgentBase(ABC):
         *,
         tools: list[dict[str, Any]] | None = None,
     ) -> LLMCallResult:
-        """Call the OpenAI-compatible endpoint with retry on transient errors."""
+        """Call the OpenAI-compatible endpoint with retry on transient errors.
+
+        Note: MiniSWECodeAgent uses mini-swe-agent's DefaultAgent which has its
+        own LLM client and does NOT call this method. OpenClaw uses nanobot's
+        LLMProvider._run_with_retry() for retry. This retry logic covers any
+        future AgentBase subclass that calls _call_llm() directly.
+        """
         import asyncio as _asyncio
         from openai import APIStatusError, APIConnectionError, APITimeoutError
 

@@ -579,9 +579,18 @@ async def _collect_openclaw(
             eval_result = await runner.run_task(eval_task)
         except Exception as exc:
             logger.exception("FAILED %s (openclaw)", instance_id)
+            # Persist any partial trace that was written before the crash
+            ws_trace = run_dir / "_workspaces" / instance_id / "trace.jsonl"
+            dest_trace = run_dir / f"{instance_id}.jsonl"
+            if ws_trace.exists() and not dest_trace.exists():
+                _normalize_openclaw_trace(
+                    src=ws_trace, dst=dest_trace,
+                    model=model, api_base=api_base,
+                    max_steps=max_steps, instance_id=instance_id,
+                )
             results.append(CollectedTaskResult(
                 instance_id=instance_id,
-                trace_file=str(run_dir / f"{instance_id}.jsonl"),
+                trace_file=str(dest_trace),
                 success=False,
                 success_basis="patch_generated",
                 patch_generated=False,
