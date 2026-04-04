@@ -101,6 +101,7 @@ def compute_task_metrics(result: dict[str, Any], steps: list[dict[str, Any]]) ->
     return {
         "instance_id": result["instance_id"],
         "success": result.get("success", False),
+        "official_resolved": result.get("official_resolved"),
         "patch_generated": result.get("patch_generated", False),
         "n_steps": n_steps,
         "elapsed_s": elapsed_s,
@@ -138,9 +139,19 @@ def compute_aggregate(task_metrics: list[dict[str, Any]]) -> dict[str, Any]:
     for m in task_metrics:
         combined_tools.update(m.get("tool_counts", {}))
 
+    # Weighted average of completion tokens (weighted by step count, not by task)
+    total_completion_tokens = sum(
+        m.get("avg_completion_tokens", 0) * m.get("n_steps", 0) for m in task_metrics
+    )
+    total_steps = sum(m.get("n_steps", 0) for m in task_metrics)
+    weighted_avg_completion = total_completion_tokens / total_steps if total_steps > 0 else 0.0
+
+    # solve_rate = official_resolved (harness result), distinct from patch_rate
+    solved = sum(1 for m in task_metrics if m.get("official_resolved"))
+
     return {
         "n_tasks": n,
-        "solve_rate": sum(1 for m in task_metrics if m["success"]) / n,
+        "solve_rate": solved / n,
         "patch_rate": sum(1 for m in task_metrics if m["patch_generated"]) / n,
         "avg_steps": avg("n_steps"),
         "avg_elapsed_s": avg("elapsed_s"),
@@ -149,7 +160,7 @@ def compute_aggregate(task_metrics: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_tokens": avg("total_tokens"),
         "avg_llm_ratio": avg("llm_ratio"),
         "avg_tool_diversity": avg("tool_diversity"),
-        "avg_completion_tokens": avg("avg_completion_tokens"),
+        "avg_completion_tokens": weighted_avg_completion,
         "total_tool_distribution": dict(combined_tools.most_common()),
     }
 

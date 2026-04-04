@@ -2,7 +2,7 @@
   "agents": {
     "mini-swe-agent": {
       "n_tasks": 3,
-      "solve_rate": 0.3333333333333333,
+      "solve_rate": 0.0,
       "patch_rate": 0.3333333333333333,
       "avg_steps": 34.333333333333336,
       "avg_elapsed_s": 629.2349143053094,
@@ -11,7 +11,7 @@
       "avg_tokens": 552296.3333333334,
       "avg_llm_ratio": 0.9731104823858296,
       "avg_tool_diversity": 1.0,
-      "avg_completion_tokens": 877.2506233062331,
+      "avg_completion_tokens": 439.4854368932039,
       "total_tool_distribution": {
         "bash": 103
       }
@@ -27,7 +27,7 @@
       "avg_tokens": 1567718.6666666667,
       "avg_llm_ratio": 0.9858199830849114,
       "avg_tool_diversity": 5.0,
-      "avg_completion_tokens": 380.0813384267119,
+      "avg_completion_tokens": 411.69127516778525,
       "total_tool_distribution": {
         "exec": 76,
         "read_file": 54,

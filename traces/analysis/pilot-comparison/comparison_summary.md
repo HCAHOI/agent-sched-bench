@@ -5,7 +5,7 @@
 | Metric | mini-swe-agent | openclaw |
 |--------|----------------|----------|
 | Tasks | 3 | 3 |
-| Solve rate | 33.3% | 0.0% |
+| Solve rate | 0.0% | 0.0% |
 | Patch rate | 33.3% | 0.0% |
 | Avg steps | 34.3 | 49.7 |
 | Avg elapsed (s) | 629.2 | 510.6 |
@@ -14,7 +14,7 @@
 | Avg tokens | 552296 | 1567719 |
 | Avg LLM/total ratio | 0.97 | 0.99 |
 | Avg tool diversity | 1.0 | 5.0 |
-| Avg completion tokens/step | 877 | 380 |
+| Avg completion tokens/step | 439 | 412 |
 
 ## Tool Distribution
 
