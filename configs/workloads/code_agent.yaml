@@ -1,5 +1,5 @@
 name: code_agent
-max_steps: 60
+max_steps: 50
 command_timeout_s: 120
 task_timeout_s: 1200
 task_source: data/swebench_verified

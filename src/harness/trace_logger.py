@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agents.base import StepRecord
+from agents.base import ActionRecord, StepRecord
 
 
 def build_run_id(system: str, workload: str, concurrency: int, started_at: datetime | None = None) -> str:
@@ -28,6 +28,21 @@ class TraceLogger:
         # Append mode supports resume: existing records are preserved and
         # collector.py deduplicates via load_completed_ids().
         self._handle = self.path.open("a", encoding="utf-8")
+
+    def log_metadata(self, scaffold: str, **kwargs: Any) -> None:
+        """Write a trace_metadata header record declaring the scaffold and run context.
+
+        This must be the first record in the trace so downstream tools
+        (timeline, analysis) can dispatch to the correct parser.
+        """
+        entry = {"type": "trace_metadata", "scaffold": scaffold, **kwargs}
+        self._handle.write(json.dumps(entry) + "\n")
+        self._handle.flush()
+
+    def log_action(self, agent_id: str, record: ActionRecord) -> None:
+        entry = {"type": "action", "agent_id": agent_id, **asdict(record)}
+        self._handle.write(json.dumps(entry) + "\n")
+        self._handle.flush()
 
     def log_step(self, agent_id: str, record: StepRecord) -> None:
         entry = {"type": "step", "agent_id": agent_id, **asdict(record)}

@@ -1,6 +1,6 @@
-api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
-model: qwen-plus-latest
-max_steps: 60
+api_base: https://openrouter.ai/api/v1
+model: qwen/qwen3.6-plus:free
+max_steps: 50
 command_timeout_s: 120
 task_timeout_s: 1200
 task_source: data/swebench_verified/tasks.json
