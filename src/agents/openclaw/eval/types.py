@@ -79,6 +79,8 @@ class EvalResult:
     trace_file: Path | None = None
     prepare_ms: float | None = None
     run_ms: float | None = None
+    workspace_dir: Path | None = None
+    base_commit: str | None = None
     official_resolved: bool | None = None
     evaluation_run_id: str | None = None
     evaluation_report_path: str | None = None
@@ -86,28 +88,52 @@ class EvalResult:
 
     @property
     def model_patch(self) -> str:
-        """Extract the git patch from agent output content.
+        """Extract the git patch from the workspace or agent output.
 
-        Looks for content between git diff markers or the entire
-        content if it looks like a patch (starts with 'diff --git').
-        Returns empty string if no patch is found.
+        Primary: run ``git add -A && git diff {base_commit}`` in the
+        workspace to capture all file changes the agent made.
+        Fallback: regex extraction from agent output content.
         """
+        patch = self._extract_patch_from_workspace()
+        if patch:
+            return patch
+        return self._extract_patch_from_content()
+
+    def _extract_patch_from_workspace(self) -> str:
+        """Run git diff in the workspace to extract changes."""
+        import subprocess
+        if not self.workspace_dir or not (self.workspace_dir / ".git").exists():
+            return ""
+        try:
+            # Stage everything (including new untracked files)
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=self.workspace_dir, capture_output=True, timeout=30,
+            )
+            # Diff against base commit (handles staged, unstaged, and committed changes)
+            diff_target = self.base_commit or "HEAD"
+            result = subprocess.run(
+                ["git", "diff", diff_target],
+                cwd=self.workspace_dir, capture_output=True, text=True, timeout=30,
+            )
+            return result.stdout.strip() if result.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    def _extract_patch_from_content(self) -> str:
+        """Regex fallback: extract diff from agent output content."""
         if not self.content:
             return ""
+        import re
         text = self.content.strip()
-        # Direct patch
         if text.startswith("diff --git"):
             return text
-        # Extract from ```diff ... ``` block
-        import re
         match = re.search(r"```diff\s*\n(.*?)\n```", text, re.DOTALL)
         if match:
             return match.group(1).strip()
-        # Extract from ``` ... ``` block containing diff
         match = re.search(r"```\s*\n(diff --git.*?)\n```", text, re.DOTALL)
         if match:
             return match.group(1).strip()
-        # Fallback: try to find any diff header
         lines = text.split("\n")
         for i, line in enumerate(lines):
             if line.startswith("diff --git"):

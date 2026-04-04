@@ -427,6 +427,8 @@ class SWEBenchRunner:
                     error=str(e),
                     prepare_ms=prepare_ms,
                     trace_file=trace_file,
+                    workspace_dir=ws,
+                    base_commit=task.base_commit,
                 )
         else:
             logger.info(
@@ -543,6 +545,8 @@ class SWEBenchRunner:
             trace_file=trace_file,
             prepare_ms=prepare_ms,
             run_ms=run_ms,
+            workspace_dir=ws,
+            base_commit=task.base_commit,
         )
 
     @staticmethod

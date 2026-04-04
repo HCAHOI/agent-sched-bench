@@ -628,7 +628,7 @@ async def _collect_openclaw(
 
     # Write results + predictions
     _write_results(results, results_path)
-    _write_predictions(results, run_dir / "preds.json")
+    _write_predictions(results, model_name=model, predictions_path=run_dir / "preds.json")
     logger.info("Results written to %s", results_path)
 
     # Harness evaluation
