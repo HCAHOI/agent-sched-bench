@@ -259,6 +259,7 @@ async def collect_traces(
     command_timeout_s: float = 120.0,
     task_timeout_s: float = 1200.0,
     sample: int | None = None,
+    instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
     evaluate: bool = False,
@@ -295,6 +296,11 @@ async def collect_traces(
         Path to the run directory containing per-task JSONL files.
     """
     tasks = load_tasks(task_source)
+    if instance_ids is not None:
+        id_set = set(instance_ids)
+        tasks = [t for t in tasks if t["instance_id"] in id_set]
+        if not tasks:
+            raise ValueError(f"No tasks matched instance_ids: {instance_ids}")
     if sample is not None:
         tasks = tasks[:sample]
 

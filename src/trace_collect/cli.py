@@ -89,6 +89,11 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Only run the first N tasks (for testing).",
     )
     parser.add_argument(
+        "--instance-ids",
+        default=None,
+        help="Comma-separated list of instance IDs to run (e.g., 'django__django-12345,sympy__sympy-67890').",
+    )
+    parser.add_argument(
         "--max-context-tokens",
         type=int,
         default=256_000,
@@ -356,6 +361,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,
             sample=args.sample,
+            instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
             run_id=args.run_id,
             max_context_tokens=args.max_context_tokens,
             evaluate=args.evaluate,
