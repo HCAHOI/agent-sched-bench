@@ -11,8 +11,6 @@ import asyncio
 import copy
 import json
 import logging
-import os
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +23,7 @@ from agents.mini_swe_code_agent import (
     _SYSTEM_TEMPLATE,
 )
 from harness.trace_logger import TraceLogger
+from trace_collect.openclaw_tools import execute_trace_tool
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +100,40 @@ def load_trace_steps(
 
 def _extract_actions(step: dict[str, Any]) -> list[dict[str, str]]:
     """Extract action dicts from a step record's tool_args + raw_response."""
-    tool_args = json.loads(step.get("tool_args") or "{}")
     raw_msg = (step.get("raw_response") or {}).get("choices", [{}])[0].get("message", {})
     tool_calls = raw_msg.get("tool_calls") or []
+    try:
+        tool_args = json.loads(step.get("tool_args") or "{}")
+    except json.JSONDecodeError:
+        if tool_calls:
+            function = (tool_calls[0] or {}).get("function") or {}
+            try:
+                tool_args = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                tool_args = {}
+        else:
+            tool_args = {}
 
     if "command" in tool_args:
         commands = [tool_args["command"]]
     elif "commands" in tool_args:
         commands = tool_args["commands"]
+    elif tool_calls:
+        function = (tool_calls[0] or {}).get("function") or {}
+        nested_name = function.get("name")
+        if nested_name == "exec":
+            try:
+                nested_args = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                return []
+            if "command" in nested_args:
+                commands = [nested_args["command"]]
+            elif "commands" in nested_args:
+                commands = nested_args["commands"]
+            else:
+                return []
+        else:
+            return []
     else:
         return []
 
@@ -231,65 +256,42 @@ async def replay_bash_commands(
     *,
     command_timeout_s: float = 120.0,
 ) -> dict[int, str]:
-    """Execute bash commands from steps 0..up_to_step-1, return full outputs.
+    """Execute prefix tool calls from steps 0..up_to_step-1, return outputs.
 
     Returns:
-        Mapping of step_idx -> formatted observation string (with returncode).
+        Mapping of step_idx -> replay observation/tool output.
     """
     outputs: dict[int, str] = {}
-    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
 
     for step in steps[:up_to_step]:
         if not step.get("tool_name"):
             continue
 
-        tool_args = json.loads(step.get("tool_args") or "{}")
-        if "command" in tool_args:
-            commands = [tool_args["command"]]
-        elif "commands" in tool_args:
-            commands = tool_args["commands"]
-        else:
-            continue
-
-        all_output = []
-        last_returncode = 0
-        for cmd in commands:
-            try:
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    cmd,
-                    shell=True,
-                    cwd=str(repo_dir),
-                    capture_output=True,
-                    text=True,
-                    timeout=command_timeout_s,
-                    env=env,
-                )
-                all_output.append(result.stdout + result.stderr)
-                last_returncode = result.returncode
-            except subprocess.TimeoutExpired:
-                all_output.append("[timeout]")
-                last_returncode = 124
-
-        # Add [call N] markers for multi-command steps so _build_tool_messages
-        # can split per-call output (matches _convert_trajectory's format).
-        if len(commands) > 1:
-            combined = "\n".join(f"[call {k}]\n{out}" for k, out in enumerate(all_output))
-        else:
-            combined = all_output[0] if all_output else ""
-        observation = _OBSERVATION_TEMPLATE.format(returncode=last_returncode, output=combined)
+        observation, actual_success = await execute_trace_tool(
+            agent_id=step.get("agent_id") or step.get("program_id") or "",
+            tool_name=step.get("tool_name"),
+            tool_args_json=step.get("tool_args") or "{}",
+            repo_dir=repo_dir,
+            command_timeout_s=command_timeout_s,
+            command_output_style="replay_observation",
+            raw_response=step.get("raw_response"),
+        )
         outputs[step["step_idx"]] = observation
 
         # Warn on returncode mismatch
         expected_success = step.get("tool_success", True)
-        actual_success = last_returncode == 0
         if actual_success != expected_success:
             logger.warning(
-                "Step %d: returncode %d (success=%s) != expected success=%s",
-                step["step_idx"], last_returncode, actual_success, expected_success,
+                "Step %d: replayed success=%s != expected success=%s",
+                step["step_idx"], actual_success, expected_success,
             )
 
-        logger.debug("Replayed step %d/%d: %s", step["step_idx"] + 1, up_to_step, cmd[:60])
+        logger.debug(
+            "Replayed step %d/%d via tool=%s",
+            step["step_idx"] + 1,
+            up_to_step,
+            step.get("tool_name"),
+        )
 
     return outputs
 
@@ -462,16 +464,18 @@ async def replay(
     run_id = _build_replay_run_id(model, max_steps, task_source)
     trace_logger = TraceLogger(output_path, run_id)
 
-    # Write replay metadata header
-    trace_logger.log_event(agent_id, "replay_metadata", {
-        "original_trace": str(trace_path),
-        "from_step": from_step,
-        "original_steps": len(steps),
-        "model": model,
-        "max_steps": max_steps,
-        "max_context_tokens": max_context_tokens,
-        "ts": time.time(),
-    })
+    # Write trace metadata header
+    from trace_collect.simulator import _detect_scaffold
+    trace_logger.log_metadata(
+        scaffold=_detect_scaffold(trace_path),
+        mode="replay",
+        original_trace=str(trace_path),
+        from_step=from_step,
+        original_steps=len(steps),
+        model=model,
+        max_steps=max_steps,
+        max_context_tokens=max_context_tokens,
+    )
 
     agent._trace_logger = trace_logger
     agent.run_metadata = {
@@ -577,7 +581,7 @@ async def replay(
     tagged_replay: list[str] = []
     for line in replay_lines:
         record = json.loads(line)
-        if record.get("type") == "replay_metadata":
+        if record.get("type") == "trace_metadata":
             tagged_replay.append(line)  # metadata unchanged
         else:
             record["from_replay"] = True
@@ -585,7 +589,7 @@ async def replay(
 
     # Rewrite: metadata + prefix + new steps + summary
     with open(trace_file, "w", encoding="utf-8") as f:
-        f.write(tagged_replay[0] + "\n")      # replay_metadata
+        f.write(tagged_replay[0] + "\n")      # trace_metadata
         for line in prefix_lines:               # original steps 0..N-1
             f.write(line + "\n")
         for line in tagged_replay[1:]:          # new steps + summary

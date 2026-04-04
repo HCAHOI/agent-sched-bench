@@ -17,8 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +26,7 @@ from openai import AsyncOpenAI
 
 from agents.base import ActionRecord, StepRecord
 from harness.trace_logger import TraceLogger
+from trace_collect.openclaw_tools import execute_trace_tool
 
 logger = logging.getLogger(__name__)
 
@@ -85,54 +84,30 @@ async def _call_local_model_streaming(
 
 
 async def _exec_tool(
+    agent_id: str,
     repo_dir: Path,
+    tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
+    raw_response: dict[str, Any] | None = None,
 ) -> tuple[str, float, bool]:
-    """Execute a bash command from the source trace in *repo_dir*.
+    """Execute one source-trace tool call in *repo_dir*.
 
     Returns:
         (tool_result, tool_duration_ms, tool_success)
     """
-    tool_args = json.loads(tool_args_json or "{}")
-    if "command" in tool_args:
-        commands = [tool_args["command"]]
-    elif "commands" in tool_args:
-        commands = tool_args["commands"]
-    else:
-        return "", 0.0, True
-
-    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
     t0 = time.monotonic()
-    all_output: list[str] = []
-    last_returncode = 0
-
-    for cmd in commands:
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                cmd,
-                shell=True,
-                cwd=str(repo_dir),
-                capture_output=True,
-                text=True,
-                timeout=command_timeout_s,
-                env=env,
-            )
-            all_output.append(result.stdout + result.stderr)
-            last_returncode = result.returncode
-        except subprocess.TimeoutExpired:
-            all_output.append("[timeout]")
-            last_returncode = 124
-
+    tool_result, tool_success = await execute_trace_tool(
+        agent_id=agent_id,
+        tool_name=tool_name,
+        tool_args_json=tool_args_json,
+        repo_dir=repo_dir,
+        command_timeout_s=command_timeout_s,
+        command_output_style="raw",
+        raw_response=raw_response,
+    )
     duration_ms = (time.monotonic() - t0) * 1000
-
-    if len(commands) > 1:
-        combined = "\n".join(f"[call {k}]\n{out}" for k, out in enumerate(all_output))
-    else:
-        combined = all_output[0] if all_output else ""
-
-    return combined, duration_ms, last_returncode == 0
+    return tool_result, duration_ms, tool_success
 
 
 # ---------------------------------------------------------------------------
@@ -220,15 +195,16 @@ async def simulate(
     output_path.mkdir(parents=True, exist_ok=True)
     trace_logger = TraceLogger(output_path, run_id)
 
-    # Write simulate metadata header
-    trace_logger.log_event(agent_id, "simulate_metadata", {
-        "source_trace": str(source_trace),
-        "source_model": source_model,
-        "local_model": model,
-        "local_api_base": api_base,
-        "n_source_steps": len(steps),
-        "ts": time.time(),
-    })
+    # Write trace metadata header (scaffold from source trace)
+    trace_logger.log_metadata(
+        scaffold=_detect_scaffold(source_trace),
+        mode="simulate",
+        source_trace=str(source_trace),
+        source_model=source_model,
+        local_model=model,
+        local_api_base=api_base,
+        n_source_steps=len(steps),
+    )
 
     # 5. Create streaming client
     client = AsyncOpenAI(
@@ -293,7 +269,12 @@ async def simulate(
             if tool_name:
                 tool_ts_start = time.time()
                 tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                    repo_dir, tool_args, command_timeout_s,
+                    agent_id,
+                    repo_dir,
+                    tool_name,
+                    tool_args,
+                    command_timeout_s,
+                    step.get("raw_response"),
                 )
                 tool_ts_end = time.time()
 
@@ -367,6 +348,25 @@ async def simulate(
         agent_id, succeeded_steps, total_steps, wall_end - wall_start, trace_file,
     )
     return trace_file
+
+
+def _detect_scaffold(trace_path: Path) -> str:
+    """Detect the scaffold from a trace's trace_metadata record."""
+    with open(trace_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("type") == "trace_metadata":
+                return record.get("scaffold", "unknown")
+            # Only check the first few records
+            if record.get("type") in ("step", "summary"):
+                break
+    return "unknown"
 
 
 def _detect_agent_id(trace_path: Path) -> str:

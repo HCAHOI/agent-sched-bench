@@ -162,7 +162,7 @@ class MiniSWECodeAgent(AgentBase):
         model: str,
         *,
         api_key: str = "EMPTY",
-        max_steps: int = 60,
+        max_steps: int = 50,
         command_timeout_s: float = 120.0,
         task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
@@ -249,6 +249,9 @@ class MiniSWECodeAgent(AgentBase):
     async def run(self, task: dict[str, Any]) -> bool:
         self.task_id = task["instance_id"]
         self.task_success = False
+        self.task_submission = ""
+        self.task_exit_status = None
+        self.task_error = None
         self.trace = []
 
         if not self._prepared:
@@ -313,6 +316,9 @@ class MiniSWECodeAgent(AgentBase):
 
         wall_end = time.time()
 
+        self.task_exit_status = result.get("exit_status")
+        self.task_submission = result.get("submission", "") or ""
+        self.task_error = result.get("error")
         success = (
             result.get("exit_status") == "Submitted"
             and bool(result.get("submission", "").strip())

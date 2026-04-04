@@ -115,6 +115,9 @@ class AgentBase(ABC):
         self.trace: list[StepRecord] = []
         self.task_id: str = ""
         self.task_success: bool | None = None
+        self.task_submission: str = ""
+        self.task_exit_status: str | None = None
+        self.task_error: str | None = None
         self._trace_logger: TraceLogger | None = None
         self.run_metadata: dict[str, Any] = {}
         self._client = AsyncOpenAI(
