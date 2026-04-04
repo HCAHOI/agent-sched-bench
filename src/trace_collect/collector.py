@@ -573,10 +573,23 @@ async def _collect_openclaw(
             continue
 
         logger.info("[%d/%d] START %s (openclaw)", i + 1, total, instance_id)
-        workspace = run_dir / "_workspaces" / instance_id
 
-        eval_task = EvalTask.from_swebench_instance(task, run_dir / "_workspaces")
-        eval_result = await runner.run_task(eval_task)
+        try:
+            eval_task = EvalTask.from_swebench_instance(task, run_dir / "_workspaces")
+            eval_result = await runner.run_task(eval_task)
+        except Exception as exc:
+            logger.exception("FAILED %s (openclaw)", instance_id)
+            results.append(CollectedTaskResult(
+                instance_id=instance_id,
+                trace_file=str(run_dir / f"{instance_id}.jsonl"),
+                success=False,
+                success_basis="patch_generated",
+                patch_generated=False,
+                model_patch="",
+                exit_status="error",
+                error=f"{type(exc).__name__}: {exc}",
+            ))
+            continue
 
         # Read summary from trace file to get aggregate metrics
         trace_summary: dict[str, Any] = {}

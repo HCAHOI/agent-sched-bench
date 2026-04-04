@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
@@ -10,6 +11,7 @@ if TYPE_CHECKING:
 
 from openai import AsyncOpenAI
 
+logger = logging.getLogger(__name__)
 
 
 def _message_content_to_text(content: Any) -> str:
@@ -137,18 +139,23 @@ class AgentBase(ABC):
             + text[-half:]
         )
 
+    _RETRY_DELAYS = (2, 4, 8)
+    _TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+
     async def _call_llm(
         self,
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]] | None = None,
     ) -> LLMCallResult:
-        """Call the OpenAI-compatible endpoint with optional tool definitions."""
+        """Call the OpenAI-compatible endpoint with retry on transient errors."""
+        import asyncio as _asyncio
+        from openai import APIStatusError, APIConnectionError, APITimeoutError
+
         extra_body: dict[str, Any] = {
             "program_id": self.agent_id,
             "chat_template_kwargs": {"enable_thinking": False},
         }
-        started = time.monotonic()
         kwargs: dict[str, Any] = dict(
             model=self.model,
             messages=messages,
@@ -157,10 +164,36 @@ class AgentBase(ABC):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        response = await self._client.chat.completions.create(**kwargs)
-        elapsed_ms = (time.monotonic() - started) * 1000
-        if not response.choices:
-            raise RuntimeError(f"LLM returned empty choices: {response.model_dump()}")
+
+        last_exc: BaseException | None = None
+        for attempt, delay in enumerate((*self._RETRY_DELAYS, None)):
+            try:
+                started = time.monotonic()
+                response = await self._client.chat.completions.create(**kwargs)
+                elapsed_ms = (time.monotonic() - started) * 1000
+                if not response.choices:
+                    raise RuntimeError(f"LLM returned empty choices: {response.model_dump()}")
+                break
+            except (APIConnectionError, APITimeoutError) as exc:
+                last_exc = exc
+                if delay is None:
+                    raise
+                logger.warning(
+                    "LLM transient error (attempt %d/%d), retrying in %ds: %s",
+                    attempt + 1, len(self._RETRY_DELAYS), delay, exc,
+                )
+                await _asyncio.sleep(delay)
+            except APIStatusError as exc:
+                last_exc = exc
+                if exc.status_code not in self._TRANSIENT_STATUS_CODES or delay is None:
+                    raise
+                logger.warning(
+                    "LLM %d error (attempt %d/%d), retrying in %ds: %s",
+                    exc.status_code, attempt + 1, len(self._RETRY_DELAYS), delay, exc,
+                )
+                await _asyncio.sleep(delay)
+        else:
+            raise RuntimeError(f"LLM call failed after {len(self._RETRY_DELAYS)} retries") from last_exc
 
         message = response.choices[0].message
         usage = getattr(response, "usage", None)
