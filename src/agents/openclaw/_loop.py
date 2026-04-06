@@ -220,6 +220,7 @@ class AgentLoop:
         self._extra_hooks: list[AgentHook] = hooks or []
         self._event_callback = None
         self._mcp_event_callback = None  # B2: needed for _inject_event_callbacks
+        self._dispatch_iteration = 0  # monotonic counter for trace events
 
         self.context = ContextBuilder(workspace, timezone=timezone)
         self.sessions = session_manager or SessionManager(workspace)
@@ -418,6 +419,11 @@ class AgentLoop:
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
         return result.final_content, result.tools_used, result.messages
 
+    def _emit_event(self, category: str, event: str, data: dict | None = None) -> None:
+        """Emit a scheduling/lifecycle event via the injected callback."""
+        if self._event_callback:
+            self._event_callback(category, event, data or {})
+
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
@@ -451,9 +457,32 @@ class AgentLoop:
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message: per-session serial, cross-session concurrent."""
+        self._emit_event(
+            "SCHEDULING",
+            "message_dispatch",
+            {
+                "session_key": msg.session_key,
+                "channel": msg.channel,
+                "sender_id": msg.sender_id,
+            },
+        )
         lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
         gate = self._concurrency_gate or nullcontext()
+        self._emit_event(
+            "SCHEDULING",
+            "session_lock_acquire",
+            {
+                "session_key": msg.session_key,
+            },
+        )
         async with lock, gate:
+            self._emit_event(
+                "SCHEDULING",
+                "concurrency_gate_acquire",
+                {
+                    "session_key": msg.session_key,
+                },
+            )
             try:
                 on_stream = on_stream_end = None
                 if msg.metadata.get("_wants_stream"):
@@ -509,6 +538,14 @@ class AgentLoop:
                             metadata=msg.metadata or {},
                         )
                     )
+                self._emit_event(
+                    "SCHEDULING",
+                    "task_complete",
+                    {
+                        "session_key": msg.session_key,
+                        "has_response": response is not None,
+                    },
+                )
             except asyncio.CancelledError:
                 logger.info("Task cancelled for session {}", msg.session_key)
                 raise
@@ -565,6 +602,13 @@ class AgentLoop:
             )
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
+            self._emit_event(
+                "SESSION",
+                "session_load",
+                {
+                    "session_key": key,
+                },
+            )
             session = self.sessions.get_or_create(key)
             if self._restore_runtime_checkpoint(session):
                 self.sessions.save(session)
@@ -572,6 +616,14 @@ class AgentLoop:
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
+            self._emit_event(
+                "CONTEXT",
+                "message_list_build",
+                {
+                    "session_key": key,
+                    "history_messages": len(history),
+                },
+            )
             messages = self.context.build_messages(
                 history=history,
                 current_message=msg.content,
@@ -589,6 +641,14 @@ class AgentLoop:
             self._save_turn(session, all_msgs, 1 + len(history))
             self._clear_runtime_checkpoint(session)
             self.sessions.save(session)
+            self._emit_event(
+                "SESSION",
+                "session_turn_save",
+                {
+                    "session_key": key,
+                    "total_messages": len(session.messages),
+                },
+            )
             self._schedule_background(
                 self.memory_consolidator.maybe_consolidate_by_tokens(session)
             )
@@ -604,6 +664,13 @@ class AgentLoop:
         )
 
         key = session_key or msg.session_key
+        self._emit_event(
+            "SESSION",
+            "session_load",
+            {
+                "session_key": key,
+            },
+        )
         session = self.sessions.get_or_create(key)
         if self._restore_runtime_checkpoint(session):
             self.sessions.save(session)
@@ -616,6 +683,14 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
+        self._emit_event(
+            "CONTEXT",
+            "message_list_build",
+            {
+                "session_key": key,
+                "history_messages": len(history),
+            },
+        )
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -654,6 +729,14 @@ class AgentLoop:
         self._save_turn(session, all_msgs, 1 + len(history))
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
+        self._emit_event(
+            "SESSION",
+            "session_turn_save",
+            {
+                "session_key": key,
+                "total_messages": len(session.messages),
+            },
+        )
         self._schedule_background(
             self.memory_consolidator.maybe_consolidate_by_tokens(session)
         )

@@ -122,8 +122,8 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
     total_prompt = sum(s.get("prompt_tokens", 0) for s in data.steps)
     total_completion = sum(s.get("completion_tokens", 0) for s in data.steps)
     total_tokens = total_prompt + total_completion
-    total_llm_ms = sum(s.get("llm_latency_ms", 0.0) for s in data.steps)
-    total_tool_ms = sum(s.get("tool_duration_ms", 0.0) for s in data.steps)
+    total_llm_ms = sum(s.get("llm_latency_ms") or 0.0 for s in data.steps)
+    total_tool_ms = sum(s.get("tool_duration_ms") or 0.0 for s in data.steps)
 
     # Aggregate elapsed from summaries if available
     elapsed_s: float | None = None
