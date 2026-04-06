@@ -474,7 +474,7 @@ class AgentLoop:
             lock_wait_ms = (time.monotonic() - lock_t0) * 1000
             self._emit_event(
                 "SCHEDULING",
-                "session_lock_acquired",
+                "session_lock_acquire",
                 {
                     "session_key": msg.session_key,
                     "wait_ms": round(lock_wait_ms, 1),

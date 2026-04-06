@@ -460,14 +460,23 @@ examples:
     truncate = 0 if parsed.full else parsed.truncate
     data = TraceData.load(Path(parsed.trace), agent_filter=parsed.agent)
 
+    def _parse_step_idx(args: list[str]) -> int:
+        """Parse step index from CLI args, returning 0 as default."""
+        if not args:
+            return 0
+        try:
+            return int(args[0])
+        except ValueError:
+            parser.error(f"step index must be an integer, got: {args[0]!r}")
+
     cmd = parsed.command
     if cmd == "overview":
         cmd_overview(data, as_json=parsed.as_json)
     elif cmd == "step":
-        step_n = int(parsed.args[0]) if parsed.args else 0
+        step_n = _parse_step_idx(parsed.args)
         cmd_step(data, step_n, truncate=truncate, as_json=parsed.as_json)
     elif cmd == "messages":
-        step_n = int(parsed.args[0]) if parsed.args else 0
+        step_n = _parse_step_idx(parsed.args)
         cmd_messages(
             data,
             step_n,
@@ -476,7 +485,7 @@ examples:
             as_json=parsed.as_json,
         )
     elif cmd == "response":
-        step_n = int(parsed.args[0]) if parsed.args else 0
+        step_n = _parse_step_idx(parsed.args)
         cmd_response(data, step_n, truncate=truncate, as_json=parsed.as_json)
     elif cmd == "events":
         cmd_events(

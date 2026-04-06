@@ -336,7 +336,10 @@ def cmd_response(
 
     raw = step.get("raw_response")
     if raw is None:
-        print(f"Step {step_idx} has no raw_response field.")
+        if as_json:
+            print(json.dumps({"error": f"Step {step_idx} has no raw_response field."}))
+        else:
+            print(f"Step {step_idx} has no raw_response field.")
         return
 
     text = json.dumps(raw, indent=2, ensure_ascii=False)
