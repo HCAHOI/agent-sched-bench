@@ -1,0 +1,551 @@
+"""General-purpose agent session runner — full bus-based dispatch.
+
+Wires MessageBus + AgentLoop.run() + ResultCollector into a single
+``run()`` call.  Both the SWE-bench eval runner and the standalone CLI
+use this module, ensuring identical scheduling behavior (session locks,
+concurrency gates, dispatch routing) and trace output.
+
+This module owns:
+- TraceCollectorHook  (JSONL step/event/summary recording)
+- inject_event_callbacks  (subsystem trace wiring)
+- SessionRunner  (bus-based dispatch orchestrator)
+- SessionRunResult  (lightweight return type)
+
+SWE-bench specific logic (prepare_workspace, EvalResult, model_patch)
+stays in eval/runner.py.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from contextlib import AsyncExitStack
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from agents.openclaw._hook import AgentHook, AgentHookContext
+from agents.openclaw._loop import AgentLoop
+from agents.openclaw.bus.events import InboundMessage
+from agents.openclaw.bus.queue import MessageBus
+from agents.openclaw.eval.collector import ResultCollector
+from agents.openclaw.eval.types import (
+    LLM,
+    MCP,
+    SUBAGENT,
+    TOOL,
+    EvalTraceEvent,
+    EvalTraceSummary,
+    EvalTraceStep,
+)
+from agents.openclaw.providers.base import LLMProvider
+from agents.openclaw.session.manager import SessionManager
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TraceCollectorHook — JSONL trace recording (moved from eval/runner.py)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TraceCollectorHook(AgentHook):
+    """Collects per-iteration checkpoints and fine-grained events as JSONL.
+
+    Emits three record types:
+    - ``step``: per-iteration checkpoint (LLM call + tool results)
+    - ``event``: fine-grained event from any subsystem
+    - ``summary``: aggregate stats at end of run
+    """
+
+    def __init__(
+        self,
+        trace_file: Path,
+        instance_id: str,
+        *,
+        agent_id: str | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        self.trace_file = trace_file
+        self.instance_id = instance_id
+        self.agent_id = agent_id or instance_id
+        self.program_id = self.agent_id
+        self.task_id = task_id or instance_id
+        self.trace_file.parent.mkdir(parents=True, exist_ok=True)
+        self._wall_start = time.monotonic()
+        self._total_tokens = 0
+        self._n_steps = 0
+        self._tool_times: dict[str, float] = {}
+        self._tool_timeouts: dict[str, int] = {}
+        self._tool_start_ts: dict[str, float] = {}
+        self._iter_start_ts: float = 0.0
+        self._iter_start_wall: float = 0.0
+        self._before_exec_ts: float = 0.0
+        self._steps: list[dict[str, Any]] = []
+        self._fh = open(trace_file, "a", encoding="utf-8")  # noqa: SIM115
+
+    def close(self) -> None:
+        if not self._fh.closed:
+            self._fh.close()
+
+    def emit_event(
+        self,
+        category: str,
+        event: str,
+        data: dict[str, Any],
+        *,
+        iteration: int = 0,
+    ) -> None:
+        """Emit a fine-grained event to the trace file."""
+        entry = EvalTraceEvent(
+            agent_id=self.agent_id,
+            program_id=self.program_id,
+            instance_id=self.instance_id,
+            event=event,
+            category=category,
+            data=data,
+            ts=time.time(),
+            iteration=iteration,
+        )
+        self._fh.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
+        self._fh.flush()
+
+    async def before_iteration(self, context: AgentHookContext) -> None:
+        self._iter_start_ts = time.monotonic()
+        self._iter_start_wall = time.time()
+
+    async def before_execute_tools(self, context: AgentHookContext) -> None:
+        self._before_exec_ts = time.monotonic()
+        if context.tool_calls:
+            for tc in context.tool_calls:
+                self._tool_start_ts[tc.name] = time.monotonic()
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        ts_now = time.time()
+        self._n_steps += 1
+
+        usage = context.usage or {}
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        self._total_tokens += prompt_tokens + completion_tokens
+
+        llm_latency_ms = 0.0
+        if self._before_exec_ts > self._iter_start_ts:
+            llm_latency_ms = (self._before_exec_ts - self._iter_start_ts) * 1000
+        elif not context.tool_calls and self._iter_start_ts > 0:
+            llm_latency_ms = (time.monotonic() - self._iter_start_ts) * 1000
+
+        resp = context.response
+        resp_dict = self._build_raw_response(
+            context=context,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+        step = EvalTraceStep(
+            agent_id=self.agent_id,
+            program_id=self.program_id,
+            instance_id=self.instance_id,
+            step_idx=context.iteration,
+            phase="acting",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            llm_latency_ms=llm_latency_ms,
+            llm_output=resp.content if resp else "",
+            messages_in=self._clone_messages(context.messages),
+            raw_response=resp_dict,
+            extra={},
+            ts_start=self._iter_start_wall or ts_now,
+            ts_end=ts_now,
+        )
+
+        if context.tool_calls:
+            tool_names = [tc.name for tc in context.tool_calls]
+            step.tool_name = ", ".join(tool_names)
+            step.tool_args = json.dumps(
+                {tc.name: tc.arguments for tc in context.tool_calls},
+                ensure_ascii=False,
+            )[:2000]
+
+            for tc in context.tool_calls:
+                is_mcp = tc.name.startswith("mcp_")
+                category = MCP if is_mcp else TOOL
+                event_name = "mcp_tool_call" if is_mcp else "tool_execute"
+                mcp_data: dict[str, Any] = {}
+                if is_mcp:
+                    parts = tc.name.split("_", 2)
+                    if len(parts) >= 3:
+                        mcp_data["server_name"] = parts[1]
+                        mcp_data["tool_name"] = parts[2]
+                    else:
+                        mcp_data["tool_name"] = tc.name
+                else:
+                    mcp_data["tool_name"] = tc.name
+                mcp_data["args_preview"] = json.dumps(tc.arguments, ensure_ascii=False)[
+                    :200
+                ]
+                self.emit_event(
+                    category, event_name, mcp_data, iteration=context.iteration
+                )
+
+        tool_results_from_messages = self._extract_tool_results(context.messages)
+        per_tool_results: list[dict[str, Any]] = []
+        if tool_results_from_messages:
+            for tool_name, tool_content, tool_ok in tool_results_from_messages:
+                tool_start = self._tool_start_ts.pop(tool_name, None)
+                duration_ms = (
+                    (time.monotonic() - tool_start) * 1000 if tool_start else 0.0
+                )
+                per_tool_results.append(
+                    {
+                        "tool_name": tool_name,
+                        "success": tool_ok,
+                        "duration_ms": round(duration_ms, 1),
+                        "result": tool_content[:4000],
+                    }
+                )
+                self._tool_times[tool_name] = (
+                    self._tool_times.get(tool_name, 0.0) + duration_ms
+                )
+                if not tool_ok:
+                    self._tool_timeouts[tool_name] = (
+                        self._tool_timeouts.get(tool_name, 0) + 1
+                    )
+                is_mcp = tool_name.startswith("mcp_")
+                category = MCP if is_mcp else TOOL
+                event_name = "tool_complete" if tool_ok else "tool_error"
+                self.emit_event(
+                    category,
+                    event_name,
+                    {
+                        "tool_name": tool_name,
+                        "success": tool_ok,
+                        "duration_ms": round(duration_ms, 1),
+                        "result_preview": tool_content[:200],
+                    },
+                    iteration=context.iteration,
+                )
+                if tool_name == "spawn":
+                    self.emit_event(
+                        SUBAGENT,
+                        "subagent_complete",
+                        {"task_preview": tool_content[:200]},
+                        iteration=context.iteration,
+                    )
+
+        if per_tool_results:
+            if len(per_tool_results) == 1:
+                tr = per_tool_results[0]
+                step.tool_result = tr["result"]
+                step.tool_success = tr["success"]
+                step.tool_duration_ms = tr["duration_ms"]
+            else:
+                step.tool_result = json.dumps(per_tool_results, ensure_ascii=False)
+                last = per_tool_results[-1]
+                step.tool_success = last["success"]
+                step.tool_duration_ms = last["duration_ms"]
+
+        if context.response:
+            finish_reason = context.response.finish_reason
+            if finish_reason == "error":
+                self.emit_event(
+                    LLM,
+                    "llm_error",
+                    {
+                        "error_message": context.response.content[:500]
+                        if context.response.content
+                        else "",
+                        "finish_reason": finish_reason,
+                    },
+                    iteration=context.iteration,
+                )
+            elif finish_reason == "max_iterations":
+                self.emit_event(
+                    LLM,
+                    "max_iterations",
+                    {"total_tokens": self._total_tokens},
+                    iteration=context.iteration,
+                )
+
+        self._write_step(step)
+
+    @staticmethod
+    def _extract_tool_results(messages: list[dict]) -> list[tuple[str, str, bool]]:
+        results: list[tuple[str, str, bool]] = []
+        i = len(messages) - 1
+        while i >= 0 and messages[i].get("role") == "tool":
+            m = messages[i]
+            name = m.get("name", "unknown")
+            content = str(m.get("content", ""))
+            ok = not content.startswith("Error")
+            results.append((name, content, ok))
+            i -= 1
+        results.reverse()
+        return results
+
+    def _write_step(self, step: EvalTraceStep) -> None:
+        d = step.to_dict()
+        self._steps.append(d)
+        self._fh.write(json.dumps(d, ensure_ascii=False) + "\n")
+        self._fh.flush()
+
+    @staticmethod
+    def _clone_messages(messages: list[dict] | None) -> list[dict[str, Any]] | None:
+        if not messages:
+            return None
+        return json.loads(json.dumps(messages, ensure_ascii=False, default=str))
+
+    def _build_raw_response(
+        self,
+        *,
+        context: AgentHookContext,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> dict[str, Any]:
+        resp = context.response
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": resp.content if resp else "",
+        }
+        if resp and resp.reasoning_content:
+            message["reasoning_content"] = resp.reasoning_content
+        if context.tool_calls:
+            tool_calls = []
+            for idx, tc in enumerate(context.tool_calls):
+                arguments = tc.arguments
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments, ensure_ascii=False)
+                tool_calls.append(
+                    {
+                        "id": f"call_{context.iteration}_{idx}",
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": arguments,
+                        },
+                    }
+                )
+            message["tool_calls"] = tool_calls
+        return {
+            "choices": [
+                {
+                    "message": message,
+                    "finish_reason": resp.finish_reason if resp else None,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            },
+        }
+
+    def write_summary(
+        self,
+        *,
+        success: bool | None = None,
+        elapsed_s: float = 0.0,
+        prepare_ms: float | None = None,
+    ) -> None:
+        summary = EvalTraceSummary(
+            agent_id=self.agent_id,
+            program_id=self.program_id,
+            task_id=self.task_id,
+            instance_id=self.instance_id,
+            n_steps=self._n_steps,
+            total_llm_ms=sum(s.get("llm_latency_ms", 0) for s in self._steps),
+            total_tool_ms=sum(self._tool_times.values()),
+            total_tokens=self._total_tokens,
+            tool_ms_by_name=self._tool_times,
+            tool_timeouts=self._tool_timeouts,
+            success=success,
+            elapsed_s=elapsed_s,
+            prepare_ms=prepare_ms,
+        )
+        self._fh.write(json.dumps(summary.to_dict(), ensure_ascii=False) + "\n")
+        self._fh.flush()
+        self.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# inject_event_callbacks — subsystem trace wiring
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
+    """Wire subsystem event callbacks into the trace hook.
+
+    Injects ``hook.emit_event`` into memory consolidation, skill loading,
+    MCP connection, session management, and the top-level AgentLoop.
+    """
+
+    def emit(category: str, event: str, data: dict, iteration: int = 0) -> None:
+        hook.emit_event(category, event, data, iteration=iteration)
+
+    if hasattr(agent, "memory_consolidator") and hasattr(
+        agent.memory_consolidator, "_event_callback"
+    ):
+        agent.memory_consolidator._event_callback = lambda cat, evt, d, it=0: emit(
+            cat, evt, d, it
+        )
+
+    if (
+        hasattr(agent, "context")
+        and hasattr(agent.context, "skills")
+        and hasattr(agent.context.skills, "_event_callback")
+    ):
+        agent.context.skills._event_callback = lambda cat, evt, d, it=0: emit(
+            cat, evt, d, it
+        )
+
+    if hasattr(agent, "_mcp_event_callback"):
+        agent._mcp_event_callback = lambda cat, evt, d: emit(cat, evt, d)
+
+    if hasattr(agent, "sessions") and hasattr(agent.sessions, "_event_callback"):
+        agent.sessions._event_callback = lambda cat, evt, d: emit(cat, evt, d)
+
+    if hasattr(agent, "_event_callback"):
+        agent._event_callback = lambda cat, evt, d: emit(cat, evt, d)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SessionRunner — the shared scheduling core
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class SessionRunResult:
+    """Outcome of a single session run through the full bus dispatch path."""
+
+    content: str | None
+    elapsed_s: float
+    trace_file: Path | None = None
+    session_key: str = ""
+    session_manager: SessionManager | None = None
+
+
+class SessionRunner:
+    """Runs a prompt through OpenClaw's full bus-based dispatch.
+
+    Lifecycle (identical for SWE-bench eval and standalone CLI):
+      1. Create MessageBus + ResultCollector + SessionManager
+      2. Create AgentLoop with hooks (TraceCollectorHook + extra_hooks)
+      3. Inject event callbacks into subsystems
+      4. Start AgentLoop.run() as background task (bus consumer)
+      5. Publish InboundMessage to bus
+      6. Wait for ResultCollector to receive the outbound response
+      7. Write trace summary, clean up
+
+    The agent goes through ``_dispatch()`` with ``session_lock`` and
+    ``concurrency_gate`` — the same path as SWE-bench evaluation.
+    """
+
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        model: str | None = None,
+        max_iterations: int | None = None,
+        context_window_tokens: int | None = None,
+        max_tool_result_chars: int | None = None,
+        mcp_servers: dict | None = None,
+        extra_hooks: list[AgentHook] | None = None,
+    ) -> None:
+        self.provider = provider
+        self.model = model or provider.get_default_model()
+        self.max_iterations = max_iterations
+        self.context_window_tokens = context_window_tokens or 65536
+        self.max_tool_result_chars = max_tool_result_chars
+        self.mcp_servers = mcp_servers or {}
+        self.extra_hooks = extra_hooks or []
+
+    async def run(
+        self,
+        prompt: str,
+        workspace: Path,
+        *,
+        session_key: str,
+        trace_file: Path,
+        instance_id: str | None = None,
+        channel: str = "cli",
+        prepare_ms: float | None = None,
+    ) -> SessionRunResult:
+        """Run a single prompt through the full bus dispatch path.
+
+        Args:
+            prompt: The task/message content to send to the agent.
+            workspace: Working directory for the agent.
+            session_key: Session key for persistence.
+            trace_file: Path to write the JSONL trace.
+            instance_id: Identifier for trace records (defaults to session_key).
+            channel: Message channel (default "cli").
+
+        Returns:
+            SessionRunResult with content, timing, and session reference.
+        """
+        workspace.mkdir(parents=True, exist_ok=True)
+        iid = instance_id or session_key
+
+        trace_hook = TraceCollectorHook(trace_file, iid, agent_id=iid, task_id=iid)
+
+        bus = MessageBus()
+        collector = ResultCollector(bus)
+        session_manager = SessionManager(workspace)
+
+        all_hooks: list[AgentHook] = [trace_hook, *self.extra_hooks]
+        agent = AgentLoop(
+            bus=bus,
+            provider=self.provider,
+            workspace=workspace,
+            model=self.model,
+            max_iterations=self.max_iterations,
+            context_window_tokens=self.context_window_tokens,
+            max_tool_result_chars=self.max_tool_result_chars,
+            mcp_servers=self.mcp_servers,
+            session_manager=session_manager,
+            hooks=all_hooks,
+        )
+
+        inject_event_callbacks(agent, trace_hook)
+
+        wall_start = time.monotonic()
+
+        chat_id = session_key.split(":", 1)[-1] if ":" in session_key else session_key
+        result_key = f"{channel}:{chat_id}"
+
+        async with AsyncExitStack() as stack:
+            await collector.start()
+            stack.callback(collector.stop)
+
+            agent_task = asyncio.create_task(agent.run())
+            stack.callback(agent.stop)
+
+            msg = InboundMessage(
+                channel="system",
+                sender_id="user",
+                chat_id=f"{channel}:{chat_id}",
+                content=prompt,
+                session_key_override=session_key,
+            )
+            await bus.publish_inbound(msg)
+
+            content = await collector.wait_for_result(result_key)
+
+        elapsed_s = time.monotonic() - wall_start
+
+        try:
+            await asyncio.wait_for(agent_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+
+        trace_hook.write_summary(
+            success=bool(content and content.strip()),
+            elapsed_s=elapsed_s,
+            prepare_ms=prepare_ms,
+        )
+
+        return SessionRunResult(
+            content=content,
+            elapsed_s=elapsed_s,
+            trace_file=trace_file,
+            session_key=session_key,
+            session_manager=session_manager,
+        )
