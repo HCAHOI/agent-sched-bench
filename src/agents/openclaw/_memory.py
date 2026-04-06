@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from agents.openclaw.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
+from agents.openclaw.utils.helpers import (
+    ensure_dir,
+    estimate_message_tokens,
+    estimate_prompt_tokens_chain,
+)
 
 if TYPE_CHECKING:
     from agents.openclaw.providers.base import LLMProvider
@@ -57,6 +61,7 @@ def _normalize_save_memory_args(args: Any) -> dict[str, Any] | None:
     if isinstance(args, list):
         return args[0] if args and isinstance(args[0], dict) else None
     return args if isinstance(args, dict) else None
+
 
 _TOOL_CHOICE_ERROR_MARKERS = (
     "tool_choice",
@@ -105,7 +110,11 @@ class MemoryStore:
         for message in messages:
             if not message.get("content"):
                 continue
-            tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
+            tools = (
+                f" [tools: {', '.join(message['tools_used'])}]"
+                if message.get("tools_used")
+                else ""
+            )
             lines.append(
                 f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
             )
@@ -131,7 +140,10 @@ class MemoryStore:
 {self._format_messages(messages)}"""
 
         chat_messages = [
-            {"role": "system", "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."},
+            {
+                "role": "system",
+                "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation.",
+            },
             {"role": "user", "content": prompt},
         ]
 
@@ -171,19 +183,25 @@ class MemoryStore:
                 return self._fail_or_raw_archive(messages)
 
             if "history_entry" not in args or "memory_update" not in args:
-                logger.warning("Memory consolidation: save_memory payload missing required fields")
+                logger.warning(
+                    "Memory consolidation: save_memory payload missing required fields"
+                )
                 return self._fail_or_raw_archive(messages)
 
             entry = args["history_entry"]
             update = args["memory_update"]
 
             if entry is None or update is None:
-                logger.warning("Memory consolidation: save_memory payload contains null required fields")
+                logger.warning(
+                    "Memory consolidation: save_memory payload contains null required fields"
+                )
                 return self._fail_or_raw_archive(messages)
 
             entry = _ensure_text(entry).strip()
             if not entry:
-                logger.warning("Memory consolidation: history_entry is empty after normalization")
+                logger.warning(
+                    "Memory consolidation: history_entry is empty after normalization"
+                )
                 return self._fail_or_raw_archive(messages)
 
             self.append_history(entry)
@@ -211,8 +229,7 @@ class MemoryStore:
         """Fallback: dump raw messages to HISTORY.md without LLM summarization."""
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
         self.append_history(
-            f"[{ts}] [RAW] {len(messages)} messages\n"
-            f"{self._format_messages(messages)}"
+            f"[{ts}] [RAW] {len(messages)} messages\n{self._format_messages(messages)}"
         )
         logger.warning(
             "Memory consolidation degraded: raw-archived {} messages", len(messages)
@@ -245,7 +262,9 @@ class MemoryConsolidator:
         self.max_completion_tokens = max_completion_tokens
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         self._event_callback = None  # B2: needed for _inject_event_callbacks
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
@@ -281,7 +300,9 @@ class MemoryConsolidator:
     def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
         history = session.get_history(max_messages=0)
-        channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
+        channel, chat_id = (
+            session.key.split(":", 1) if ":" in session.key else (None, None)
+        )
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -315,7 +336,11 @@ class MemoryConsolidator:
 
         lock = self.get_lock(session.key)
         async with lock:
-            budget = self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
+            budget = (
+                self.context_window_tokens
+                - self.max_completion_tokens
+                - self._SAFETY_BUFFER
+            )
             target = budget // 2
             estimated, source = self.estimate_session_prompt_tokens(session)
             if estimated <= 0:
@@ -334,7 +359,9 @@ class MemoryConsolidator:
                 if estimated <= target:
                     return
 
-                boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
+                boundary = self.pick_consolidation_boundary(
+                    session, max(1, estimated - target)
+                )
                 if boundary is None:
                     logger.debug(
                         "Token consolidation: no safe boundary for {} (round {})",
@@ -344,7 +371,7 @@ class MemoryConsolidator:
                     return
 
                 end_idx = boundary[0]
-                chunk = session.messages[session.last_consolidated:end_idx]
+                chunk = session.messages[session.last_consolidated : end_idx]
                 if not chunk:
                     return
 

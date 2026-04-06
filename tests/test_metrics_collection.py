@@ -7,7 +7,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from harness.metrics import VLLMMetricsCollector, dump_nvidia_samples, parse_nvidia_smi_csv
+from harness.metrics import (
+    VLLMMetricsCollector,
+    dump_nvidia_samples,
+    parse_nvidia_smi_csv,
+)
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -43,7 +47,9 @@ def test_vllm_metrics_collector_polls_and_dumps(tmp_path: Path) -> None:
     try:
         collector = VLLMMetricsCollector(
             metrics_url=f"http://127.0.0.1:{server.server_address[1]}/metrics",
-            gpu_sample_provider=lambda: [{"utilization_gpu": 10.0, "memory_used_mib": 2000.0}],
+            gpu_sample_provider=lambda: [
+                {"utilization_gpu": 10.0, "memory_used_mib": 2000.0}
+            ],
         )
         snapshots = asyncio.run(collector.poll(interval_s=0.01, max_samples=2))
         assert len(snapshots) == 2
@@ -58,7 +64,9 @@ def test_vllm_metrics_collector_polls_and_dumps(tmp_path: Path) -> None:
         thread.join(timeout=2)
 
 
-def test_vllm_metrics_collector_warns_on_incomplete_payload(caplog: logging.Handler) -> None:
+def test_vllm_metrics_collector_warns_on_incomplete_payload(
+    caplog: logging.Handler,
+) -> None:
     collector = VLLMMetricsCollector(metrics_url="http://localhost:8000/metrics")
     # Should NOT raise — now logs a warning instead
     with caplog.at_level(logging.WARNING):

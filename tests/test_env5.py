@@ -106,7 +106,7 @@ def test_parse_prometheus_metrics_extracts_preemption_fields() -> None:
 
 def test_parse_eviction_events_extracts_structured_records() -> None:
     events = parse_eviction_events(
-        'INFO EVICT seq_id=req-1 tokens=128 reason=pressure gpu_usage=0.92\n'
+        "INFO EVICT seq_id=req-1 tokens=128 reason=pressure gpu_usage=0.92\n"
     )
     assert len(events) == 1
     assert events[0].seq_id == "req-1"

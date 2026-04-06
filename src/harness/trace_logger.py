@@ -9,13 +9,17 @@ from typing import Any
 from agents.base import ActionRecord, StepRecord
 
 
-def build_run_id(system: str, workload: str, concurrency: int, started_at: datetime | None = None) -> str:
+def build_run_id(
+    system: str, workload: str, concurrency: int, started_at: datetime | None = None
+) -> str:
     """Construct the canonical run id: {system}_{workload}_{N}_{timestamp}."""
     ts = started_at or datetime.now(timezone.utc)
     if ts.tzinfo is None:
         raise ValueError("started_at must be timezone-aware")
     utc_ts = ts.astimezone(timezone.utc)
-    timestamp = utc_ts.strftime("%Y%m%dT%H%M%S") + f"{int(utc_ts.microsecond / 1000):03d}Z"
+    timestamp = (
+        utc_ts.strftime("%Y%m%dT%H%M%S") + f"{int(utc_ts.microsecond / 1000):03d}Z"
+    )
     return f"{system}_{workload}_{concurrency}_{timestamp}"
 
 

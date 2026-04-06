@@ -25,9 +25,15 @@ from agents.openclaw.providers.base import (
     ToolCallRequest,
 )
 
-_ALLOWED_MSG_KEYS = frozenset({
-    "role", "content", "tool_calls", "tool_call_id", "name",
-})
+_ALLOWED_MSG_KEYS = frozenset(
+    {
+        "role",
+        "content",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+    }
+)
 _ALNUM = string.ascii_letters + string.digits
 
 _STANDARD_TC_KEYS = frozenset({"id", "type", "index", "function"})
@@ -65,7 +71,9 @@ def _coerce_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def _extract_tc_extras(tc: Any) -> tuple[
+def _extract_tc_extras(
+    tc: Any,
+) -> tuple[
     dict[str, Any] | None,
     dict[str, Any] | None,
     dict[str, Any] | None,
@@ -77,14 +85,20 @@ def _extract_tc_extras(tc: Any) -> tuple[
     prov = None
     fn_prov = None
     if tc_dict is not None:
-        leftover = {k: v for k, v in tc_dict.items()
-                    if k not in _STANDARD_TC_KEYS and k != "extra_content" and v is not None}
+        leftover = {
+            k: v
+            for k, v in tc_dict.items()
+            if k not in _STANDARD_TC_KEYS and k != "extra_content" and v is not None
+        }
         if leftover:
             prov = leftover
         fn = _coerce_dict(tc_dict.get("function"))
         if fn is not None:
-            fn_leftover = {k: v for k, v in fn.items()
-                          if k not in _STANDARD_FN_KEYS and v is not None}
+            fn_leftover = {
+                k: v
+                for k, v in fn.items()
+                if k not in _STANDARD_FN_KEYS and v is not None
+            }
             if fn_leftover:
                 fn_prov = fn_leftover
     else:
@@ -121,7 +135,9 @@ class UnifiedProvider(LLMProvider):
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
-        self.generation = GenerationSettings(temperature=temperature, max_tokens=max_tokens)
+        self.generation = GenerationSettings(
+            temperature=temperature, max_tokens=max_tokens
+        )
 
         default_headers: dict[str, str] = {"x-session-affinity": uuid.uuid4().hex}
         if _uses_openrouter(api_base):
@@ -146,7 +162,9 @@ class UnifiedProvider(LLMProvider):
             return tool_call_id
         return hashlib.sha1(tool_call_id.encode()).hexdigest()[:9]
 
-    def _sanitize_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _sanitize_messages(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Strip non-standard keys, normalize tool_call IDs."""
         sanitized = LLMProvider._sanitize_request_messages(messages, _ALLOWED_MSG_KEYS)
         id_map: dict[str, str] = {}
@@ -303,7 +321,9 @@ class UnifiedProvider(LLMProvider):
                         finish_reason=str(response_map.get("finish_reason") or "stop"),
                         usage=self._extract_usage(response_map),
                     )
-                return LLMResponse(content="Error: API returned empty choices.", finish_reason="error")
+                return LLMResponse(
+                    content="Error: API returned empty choices.", finish_reason="error"
+                )
 
             choice0 = self._maybe_mapping(choices[0]) or {}
             msg0 = self._maybe_mapping(choice0.get("message")) or {}
@@ -333,25 +353,31 @@ class UnifiedProvider(LLMProvider):
                 if isinstance(args, str):
                     args = json_repair.loads(args)
                 ec, prov, fn_prov = _extract_tc_extras(tc)
-                parsed_tool_calls.append(ToolCallRequest(
-                    id=_short_tool_id(),
-                    name=str(fn.get("name") or ""),
-                    arguments=args if isinstance(args, dict) else {},
-                    extra_content=ec,
-                    provider_specific_fields=prov,
-                    function_provider_specific_fields=fn_prov,
-                ))
+                parsed_tool_calls.append(
+                    ToolCallRequest(
+                        id=_short_tool_id(),
+                        name=str(fn.get("name") or ""),
+                        arguments=args if isinstance(args, dict) else {},
+                        extra_content=ec,
+                        provider_specific_fields=prov,
+                        function_provider_specific_fields=fn_prov,
+                    )
+                )
 
             return LLMResponse(
                 content=content,
                 tool_calls=parsed_tool_calls,
                 finish_reason=finish_reason,
                 usage=self._extract_usage(response_map),
-                reasoning_content=reasoning_content if isinstance(reasoning_content, str) else None,
+                reasoning_content=reasoning_content
+                if isinstance(reasoning_content, str)
+                else None,
             )
 
         if not response.choices:
-            return LLMResponse(content="Error: API returned empty choices.", finish_reason="error")
+            return LLMResponse(
+                content="Error: API returned empty choices.", finish_reason="error"
+            )
 
         choice = response.choices[0]
         msg = choice.message
@@ -374,14 +400,16 @@ class UnifiedProvider(LLMProvider):
             if isinstance(args, str):
                 args = json_repair.loads(args)
             ec, prov, fn_prov = _extract_tc_extras(tc)
-            tool_calls.append(ToolCallRequest(
-                id=_short_tool_id(),
-                name=tc.function.name,
-                arguments=args,
-                extra_content=ec,
-                provider_specific_fields=prov,
-                function_provider_specific_fields=fn_prov,
-            ))
+            tool_calls.append(
+                ToolCallRequest(
+                    id=_short_tool_id(),
+                    name=tc.function.name,
+                    arguments=args,
+                    extra_content=ec,
+                    provider_specific_fields=prov,
+                    function_provider_specific_fields=fn_prov,
+                )
+            )
 
         return LLMResponse(
             content=content,
@@ -399,11 +427,20 @@ class UnifiedProvider(LLMProvider):
         usage: dict[str, int] = {}
 
         def _accum_tc(tc: Any, idx_hint: int) -> None:
-            tc_index: int = _get(tc, "index") if _get(tc, "index") is not None else idx_hint
-            buf = tc_bufs.setdefault(tc_index, {
-                "id": "", "name": "", "arguments": "",
-                "extra_content": None, "prov": None, "fn_prov": None,
-            })
+            tc_index: int = (
+                _get(tc, "index") if _get(tc, "index") is not None else idx_hint
+            )
+            buf = tc_bufs.setdefault(
+                tc_index,
+                {
+                    "id": "",
+                    "name": "",
+                    "arguments": "",
+                    "extra_content": None,
+                    "prov": None,
+                    "fn_prov": None,
+                },
+            )
             tc_id = _get(tc, "id")
             if tc_id:
                 buf["id"] = str(tc_id)
@@ -469,7 +506,9 @@ class UnifiedProvider(LLMProvider):
                 ToolCallRequest(
                     id=b["id"] or _short_tool_id(),
                     name=b["name"],
-                    arguments=json_repair.loads(b["arguments"]) if b["arguments"] else {},
+                    arguments=json_repair.loads(b["arguments"])
+                    if b["arguments"]
+                    else {},
                     extra_content=b.get("extra_content"),
                     provider_specific_fields=b.get("prov"),
                     function_provider_specific_fields=b.get("fn_prov"),
@@ -482,8 +521,14 @@ class UnifiedProvider(LLMProvider):
 
     @staticmethod
     def _handle_error(e: Exception) -> LLMResponse:
-        body = getattr(e, "doc", None) or getattr(getattr(e, "response", None), "text", None)
-        msg = f"Error: {body.strip()[:500]}" if body and body.strip() else f"Error calling LLM: {e}"
+        body = getattr(e, "doc", None) or getattr(
+            getattr(e, "response", None), "text", None
+        )
+        msg = (
+            f"Error: {body.strip()[:500]}"
+            if body and body.strip()
+            else f"Error calling LLM: {e}"
+        )
         return LLMResponse(content=msg, finish_reason="error")
 
     # ------------------------------------------------------------------
@@ -501,8 +546,13 @@ class UnifiedProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         kwargs = self._build_kwargs(
-            messages, tools, model, max_tokens, temperature,
-            reasoning_effort, tool_choice,
+            messages,
+            tools,
+            model,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            tool_choice,
         )
         try:
             return self._parse(await self._client.chat.completions.create(**kwargs))
@@ -521,8 +571,13 @@ class UnifiedProvider(LLMProvider):
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         kwargs = self._build_kwargs(
-            messages, tools, model, max_tokens, temperature,
-            reasoning_effort, tool_choice,
+            messages,
+            tools,
+            model,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            tool_choice,
         )
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}

@@ -16,6 +16,7 @@ from agents.openclaw.utils.helpers import image_placeholder_text
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""
+
     id: str
     name: str
     arguments: dict[str, Any]
@@ -38,20 +39,23 @@ class ToolCallRequest:
         if self.provider_specific_fields:
             tool_call["provider_specific_fields"] = self.provider_specific_fields
         if self.function_provider_specific_fields:
-            tool_call["function"]["provider_specific_fields"] = self.function_provider_specific_fields
+            tool_call["function"]["provider_specific_fields"] = (
+                self.function_provider_specific_fields
+            )
         return tool_call
 
 
 @dataclass
 class LLMResponse:
     """Response from an LLM provider."""
+
     content: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
     finish_reason: str = "stop"
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
     thinking_blocks: list[dict] | None = None  # Anthropic extended thinking
-    
+
     @property
     def has_tool_calls(self) -> bool:
         """Check if response contains tool calls."""
@@ -105,7 +109,11 @@ class LLMProvider(ABC):
 
             if isinstance(content, str) and not content:
                 clean = dict(msg)
-                clean["content"] = None if (msg.get("role") == "assistant" and msg.get("tool_calls")) else "(empty)"
+                clean["content"] = (
+                    None
+                    if (msg.get("role") == "assistant" and msg.get("tool_calls"))
+                    else "(empty)"
+                )
                 result.append(clean)
                 continue
 
@@ -121,7 +129,9 @@ class LLMProvider(ABC):
                         changed = True
                         continue
                     if isinstance(item, dict) and "_meta" in item:
-                        new_items.append({k: v for k, v in item.items() if k != "_meta"})
+                        new_items.append(
+                            {k: v for k, v in item.items() if k != "_meta"}
+                        )
                         changed = True
                     else:
                         new_items.append(item)
@@ -172,7 +182,7 @@ class LLMProvider(ABC):
     ) -> LLMResponse:
         """
         Send a chat completion request.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'.
             tools: Optional list of tool definitions.
@@ -180,7 +190,7 @@ class LLMProvider(ABC):
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
             tool_choice: Tool selection strategy ("auto", "required", or specific tool dict).
-        
+
         Returns:
             LLMResponse with content and/or tool calls.
         """
@@ -192,7 +202,9 @@ class LLMProvider(ABC):
         return any(marker in err for marker in cls._TRANSIENT_ERROR_MARKERS)
 
     @staticmethod
-    def _strip_image_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    def _strip_image_content(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
         """Replace image_url blocks with text placeholder. Returns None if no images found."""
         found = False
         result = []
@@ -203,7 +215,9 @@ class LLMProvider(ABC):
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "image_url":
                         path = (b.get("_meta") or {}).get("path", "")
-                        placeholder = image_placeholder_text(path, empty="[image omitted]")
+                        placeholder = image_placeholder_text(
+                            path, empty="[image omitted]"
+                        )
                         new_content.append({"type": "text", "text": placeholder})
                         found = True
                     else:
@@ -220,7 +234,9 @@ class LLMProvider(ABC):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
+            return LLMResponse(
+                content=f"Error calling LLM: {exc}", finish_reason="error"
+            )
 
     async def chat_stream(
         self,
@@ -241,9 +257,13 @@ class LLMProvider(ABC):
         streaming should override this method.
         """
         response = await self.chat(
-            messages=messages, tools=tools, model=model,
-            max_tokens=max_tokens, temperature=temperature,
-            reasoning_effort=reasoning_effort, tool_choice=tool_choice,
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            tool_choice=tool_choice,
         )
         if on_content_delta and response.content:
             await on_content_delta(response.content)
@@ -256,7 +276,9 @@ class LLMProvider(ABC):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
+            return LLMResponse(
+                content=f"Error calling LLM: {exc}", finish_reason="error"
+            )
 
     async def chat_stream_with_retry(
         self,
@@ -280,9 +302,13 @@ class LLMProvider(ABC):
             reasoning_effort = self.generation.reasoning_effort
 
         kw: dict[str, Any] = dict(
-            messages=messages, tools=tools, model=model,
-            max_tokens=max_tokens, temperature=temperature,
-            reasoning_effort=reasoning_effort, tool_choice=tool_choice,
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            tool_choice=tool_choice,
             on_content_delta=on_content_delta,
         )
         return await self._run_with_retry(
@@ -319,9 +345,13 @@ class LLMProvider(ABC):
             reasoning_effort = self.generation.reasoning_effort
 
         kw: dict[str, Any] = dict(
-            messages=messages, tools=tools, model=model,
-            max_tokens=max_tokens, temperature=temperature,
-            reasoning_effort=reasoning_effort, tool_choice=tool_choice,
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            tool_choice=tool_choice,
         )
         return await self._run_with_retry(
             self._safe_chat,
@@ -334,7 +364,10 @@ class LLMProvider(ABC):
     @classmethod
     def _extract_retry_after(cls, content: str | None) -> float | None:
         text = (content or "").lower()
-        match = re.search(r"retry after\s+(\d+(?:\.\d+)?)\s*(ms|milliseconds|s|sec|secs|seconds|m|min|minutes)?", text)
+        match = re.search(
+            r"retry after\s+(\d+(?:\.\d+)?)\s*(ms|milliseconds|s|sec|secs|seconds|m|min|minutes)?",
+            text,
+        )
         if not match:
             return None
         value = float(match.group(1))
@@ -386,7 +419,7 @@ class LLMProvider(ABC):
             if response.finish_reason != "error":
                 return response
             last_response = response
-            error_key = ((response.content or "").strip().lower() or None)
+            error_key = (response.content or "").strip().lower() or None
             if error_key and error_key == last_error_key:
                 identical_error_count += 1
             else:
@@ -404,7 +437,10 @@ class LLMProvider(ABC):
                     return await call(**retry_kw)
                 return response
 
-            if persistent and identical_error_count >= self._PERSISTENT_IDENTICAL_ERROR_LIMIT:
+            if (
+                persistent
+                and identical_error_count >= self._PERSISTENT_IDENTICAL_ERROR_LIMIT
+            ):
                 logger.warning(
                     "Stopping persistent retry after {} identical transient errors: {}",
                     identical_error_count,

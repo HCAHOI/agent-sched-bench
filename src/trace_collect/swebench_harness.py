@@ -27,7 +27,9 @@ def build_eval_run_id(prefix: str = "trace-collect") -> str:
 def _load_predictions(predictions_path: Path) -> dict[str, dict[str, Any]]:
     payload = json.loads(predictions_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError(f"Predictions file must contain a JSON object: {predictions_path}")
+        raise ValueError(
+            f"Predictions file must contain a JSON object: {predictions_path}"
+        )
     return payload
 
 
@@ -116,7 +118,9 @@ def run_official_evaluation(
         if not report_path.exists():
             continue
         instance_report_paths[instance_id] = report_path
-        instance_reports[instance_id] = json.loads(report_path.read_text(encoding="utf-8"))
+        instance_reports[instance_id] = json.loads(
+            report_path.read_text(encoding="utf-8")
+        )
 
     return HarnessEvaluationResult(
         run_id=run_id,

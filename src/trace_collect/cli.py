@@ -1,17 +1,10 @@
-"""CLI entry point for trace collection, replay, and simulation.
+"""CLI entry point for trace collection and simulation.
 
 Usage (collect):
     OPENROUTER_API_KEY=sk-xxx python -m trace_collect.cli \\
         --model qwen/qwen3.6-plus:free \\
         --max-steps 50 \\
         --sample 5
-
-Usage (replay):
-    OPENROUTER_API_KEY=sk-xxx python -m trace_collect.cli replay \\
-        --trace traces/swebench/run.jsonl \\
-        --agent-id django__django-11734 \\
-        --from-step 45 \\
-        --max-steps 80
 
 Usage (simulate):
     python -m trace_collect.cli simulate \\
@@ -23,6 +16,11 @@ Usage (import OpenClaw):
     python -m trace_collect.cli import-openclaw \\
         --results /path/to/nanobot/results.jsonl \\
         --model-name Qwen3.6-Plus
+
+Usage (inspect):
+    python -m trace_collect.cli inspect <trace.jsonl> overview
+    python -m trace_collect.cli inspect <trace.jsonl> step 5 [--json]
+    python -m trace_collect.cli inspect <trace.jsonl> search "pattern"
 """
 
 from __future__ import annotations
@@ -154,84 +152,8 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Docker namespace passed to the official harness.",
     )
     parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable verbose logging.",
-    )
-    return parser.parse_args(argv)
-
-
-def parse_replay_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Replay a trace from a specific step with new LLM parameters.",
-    )
-    parser.add_argument(
-        "--trace",
-        required=True,
-        help="Path to the original JSONL trace file.",
-    )
-    parser.add_argument(
-        "--agent-id",
-        required=True,
-        help="Agent/instance ID to replay.",
-    )
-    parser.add_argument(
-        "--from-step",
-        type=int,
-        required=True,
-        help="Step index to resume from (0-indexed).",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=50,
-        help="New maximum steps (total, not additional).",
-    )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help="Model for new steps (default: same as original trace).",
-    )
-    parser.add_argument(
-        "--api-base",
-        default="https://openrouter.ai/api/v1",
-        help="OpenAI-compatible API base URL.",
-    )
-    parser.add_argument(
-        "--task-source",
-        default="data/swebench_verified/tasks.json",
-        help="Path to tasks JSON file.",
-    )
-    parser.add_argument(
-        "--repos-root",
-        default="data/swebench_repos",
-        help="Path to pre-cloned repos directory.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="traces/swebench",
-        help="Output directory for the replay trace.",
-    )
-    parser.add_argument(
-        "--command-timeout",
-        type=float,
-        default=120.0,
-        help="Timeout in seconds per bash command.",
-    )
-    parser.add_argument(
-        "--task-timeout",
-        type=float,
-        default=1200.0,
-        help="Timeout for the entire resumed run.",
-    )
-    parser.add_argument(
-        "--max-context-tokens",
-        type=int,
-        default=256_000,
-        help="Sliding window token budget for context management.",
-    )
-    parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose logging.",
     )
@@ -285,7 +207,8 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Timeout for the entire simulation.",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose logging.",
     )
@@ -321,15 +244,14 @@ def parse_import_openclaw_args(argv: list[str]) -> argparse.Namespace:
 
 def main() -> None:
     # Keyword detection: subcommand as first arg routes to the right parser.
-    if len(sys.argv) > 1 and sys.argv[1] == "replay":
-        args = parse_replay_args(sys.argv[2:])
-        _run_replay(args)
-    elif len(sys.argv) > 1 and sys.argv[1] == "simulate":
+    if len(sys.argv) > 1 and sys.argv[1] == "simulate":
         args = parse_simulate_args(sys.argv[2:])
         _run_simulate(args)
     elif len(sys.argv) > 1 and sys.argv[1] == "import-openclaw":
         args = parse_import_openclaw_args(sys.argv[2:])
         _run_import_openclaw(args)
+    elif len(sys.argv) > 1 and sys.argv[1] == "inspect":
+        _run_inspect(sys.argv[2:])
     else:
         args = parse_collect_args()
         _run_collect(args)
@@ -390,53 +312,15 @@ def _run_collect(args: argparse.Namespace) -> None:
         print(f"Predictions written to: {predictions_path}")
 
 
-def _run_replay(args: argparse.Namespace) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-
-    api_key = (
-        os.environ.get("OPENROUTER_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("DASHSCOPE_API_KEY")
-    )
-    if not api_key:
-        print(
-            "ERROR: Set OPENROUTER_API_KEY, OPENAI_API_KEY, or DASHSCOPE_API_KEY.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    from trace_collect.replayer import replay
-
-    trace_file = asyncio.run(
-        replay(
-            trace_path=Path(args.trace),
-            agent_id=args.agent_id,
-            from_step=args.from_step,
-            task_source=Path(args.task_source),
-            repos_root=Path(args.repos_root),
-            output_dir=Path(args.output_dir),
-            max_steps=args.max_steps,
-            api_base=args.api_base,
-            api_key=api_key,
-            model=args.model,
-            command_timeout_s=args.command_timeout,
-            task_timeout_s=args.task_timeout,
-            max_context_tokens=args.max_context_tokens,
-        )
-    )
-    print(f"Replay trace written to: {trace_file}")
-
-
 def _run_simulate(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VLLM_API_KEY", "EMPTY")
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
+        "VLLM_API_KEY", "EMPTY"
+    )
 
     from trace_collect.simulator import simulate
 
@@ -468,6 +352,88 @@ def _run_import_openclaw(args: argparse.Namespace) -> None:
     print(f"Imported OpenClaw traces to: {run_dir}/")
     print(f"Results written to: {run_dir / 'results.jsonl'}")
     print(f"Predictions written to: {run_dir / 'preds.json'}")
+
+
+def _run_inspect(argv: list[str]) -> None:
+    import argparse as _argparse
+    from trace_collect.trace_inspector import (
+        TraceData,
+        cmd_overview,
+        cmd_step,
+        cmd_messages,
+        cmd_response,
+        cmd_events,
+        cmd_tools,
+        cmd_search,
+    )
+
+    parser = _argparse.ArgumentParser(description="Inspect a trace JSONL file.")
+    parser.add_argument("trace", help="Path to the JSONL trace file.")
+    parser.add_argument(
+        "command",
+        choices=[
+            "overview",
+            "step",
+            "messages",
+            "response",
+            "events",
+            "tools",
+            "search",
+        ],
+    )
+    parser.add_argument("args", nargs="*", help="Command-specific arguments.")
+    parser.add_argument(
+        "--json", action="store_true", dest="as_json", help="Output as JSON."
+    )
+    parser.add_argument(
+        "--truncate",
+        type=int,
+        default=2000,
+        help="Truncate long fields (0=no truncation).",
+    )
+    parser.add_argument("--full", action="store_true", help="Disable truncation.")
+    parser.add_argument("--agent", default=None, help="Filter by agent ID substring.")
+    parser.add_argument("--role", default=None, help="Filter messages by role.")
+    parser.add_argument("--category", default=None, help="Filter events by category.")
+    parser.add_argument(
+        "--iteration", type=int, default=None, help="Filter events by iteration."
+    )
+    parser.add_argument("--step", type=int, default=None, help="Filter tools by step.")
+    parsed = parser.parse_args(argv)
+
+    truncate = 0 if parsed.full else parsed.truncate
+    data = TraceData.load(Path(parsed.trace), agent_filter=parsed.agent)
+
+    cmd = parsed.command
+    if cmd == "overview":
+        cmd_overview(data, as_json=parsed.as_json)
+    elif cmd == "step":
+        step_n = int(parsed.args[0]) if parsed.args else 0
+        cmd_step(data, step_n, truncate=truncate, as_json=parsed.as_json)
+    elif cmd == "messages":
+        step_n = int(parsed.args[0]) if parsed.args else 0
+        cmd_messages(
+            data,
+            step_n,
+            role_filter=parsed.role,
+            truncate=truncate,
+            as_json=parsed.as_json,
+        )
+    elif cmd == "response":
+        step_n = int(parsed.args[0]) if parsed.args else 0
+        cmd_response(data, step_n, truncate=truncate, as_json=parsed.as_json)
+    elif cmd == "events":
+        cmd_events(
+            data,
+            category=parsed.category,
+            iteration=parsed.iteration,
+            as_json=parsed.as_json,
+        )
+    elif cmd == "tools":
+        cmd_tools(data, step_idx=parsed.step, as_json=parsed.as_json)
+    elif cmd == "search":
+        pattern = parsed.args[0] if parsed.args else ""
+        cmd_search(data, pattern, truncate=truncate, as_json=parsed.as_json)
 
 
 if __name__ == "__main__":

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-def _build_import_run_dir(output_dir: str | Path, model_name: str, run_id: str | None) -> Path:
+def _build_import_run_dir(
+    output_dir: str | Path, model_name: str, run_id: str | None
+) -> Path:
     safe_model = model_name.replace("/", "-").replace(":", "-")
     if run_id is None:
         run_id = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -64,9 +65,13 @@ def _build_imported_result(
     trace_path: Path,
 ) -> dict[str, Any]:
     official_resolved = payload.get("official_resolved")
-    success_basis = "official_resolved" if official_resolved is not None else "patch_generated"
-    success = bool(official_resolved) if official_resolved is not None else bool(
-        payload.get("patch_generated")
+    success_basis = (
+        "official_resolved" if official_resolved is not None else "patch_generated"
+    )
+    success = (
+        bool(official_resolved)
+        if official_resolved is not None
+        else bool(payload.get("patch_generated"))
     )
     return {
         "instance_id": payload["instance_id"],
@@ -104,9 +109,10 @@ def _copy_trace_for_import(
     """Copy a trace while aligning summary success semantics to benchmark results."""
     target_trace.parent.mkdir(parents=True, exist_ok=True)
     benchmark_success = bool(imported_result.get("success"))
-    with open(source_trace, encoding="utf-8") as src, open(
-        target_trace, "w", encoding="utf-8"
-    ) as dst:
+    with (
+        open(source_trace, encoding="utf-8") as src,
+        open(target_trace, "w", encoding="utf-8") as dst,
+    ):
         # Inject trace_metadata as the first record
         metadata = {
             "type": "trace_metadata",
@@ -166,7 +172,9 @@ def _normalize_step_tool_args(record: dict[str, Any]) -> None:
     record["tool_args"] = json.dumps({tool_name: parsed_args}, ensure_ascii=False)
 
 
-def _write_predictions(results: list[dict[str, Any]], *, model_name: str, path: Path) -> int:
+def _write_predictions(
+    results: list[dict[str, Any]], *, model_name: str, path: Path
+) -> int:
     predictions = {}
     for result in results:
         model_patch = result.get("model_patch", "")
@@ -200,10 +208,14 @@ def import_openclaw_run(
         instance_id = payload["instance_id"]
         source_trace = Path(payload["trace_file"]).expanduser().resolve()
         if not source_trace.exists():
-            raise FileNotFoundError(f"Trace file not found for {instance_id}: {source_trace}")
+            raise FileNotFoundError(
+                f"Trace file not found for {instance_id}: {source_trace}"
+            )
         _validate_trace(source_trace, instance_id=instance_id)
         target_trace = run_dir / f"{instance_id}.jsonl"
-        imported_result = _build_imported_result(payload=payload, trace_path=target_trace)
+        imported_result = _build_imported_result(
+            payload=payload, trace_path=target_trace
+        )
         _copy_trace_for_import(
             source_trace=source_trace,
             target_trace=target_trace,

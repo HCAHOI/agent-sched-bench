@@ -22,13 +22,17 @@ class MessageTool(Tool):
         self._default_message_id = default_message_id
         self._sent_in_turn: bool = False
 
-    def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def set_context(
+        self, channel: str, chat_id: str, message_id: str | None = None
+    ) -> None:
         """Set the current message context."""
         self._default_channel = channel
         self._default_chat_id = chat_id
         self._default_message_id = message_id
 
-    def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
+    def set_send_callback(
+        self, callback: Callable[[OutboundMessage], Awaitable[None]]
+    ) -> None:
         """Set the callback for sending messages."""
         self._send_callback = callback
 
@@ -56,23 +60,23 @@ class MessageTool(Tool):
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The message content to send"
+                    "description": "The message content to send",
                 },
                 "channel": {
                     "type": "string",
-                    "description": "Optional: target channel (telegram, discord, etc.)"
+                    "description": "Optional: target channel (telegram, discord, etc.)",
                 },
                 "chat_id": {
                     "type": "string",
-                    "description": "Optional: target chat/user ID"
+                    "description": "Optional: target chat/user ID",
                 },
                 "media": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional: list of file paths to attach (images, audio, documents)"
-                }
+                    "description": "Optional: list of file paths to attach (images, audio, documents)",
+                },
             },
-            "required": ["content"]
+            "required": ["content"],
         }
 
     async def execute(
@@ -82,7 +86,7 @@ class MessageTool(Tool):
         chat_id: str | None = None,
         message_id: str | None = None,
         media: list[str] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> str:
         channel = channel or self._default_channel
         chat_id = chat_id or self._default_chat_id
@@ -109,7 +113,9 @@ class MessageTool(Tool):
             media=media or [],
             metadata={
                 "message_id": message_id,
-            } if message_id else {},
+            }
+            if message_id
+            else {},
         )
 
         try:

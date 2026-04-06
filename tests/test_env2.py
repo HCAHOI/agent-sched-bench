@@ -71,7 +71,9 @@ def test_report_model_artifact_rejects_config_mode_for_acceptance() -> None:
 
 
 def test_download_model_writes_env_after_verification_call() -> None:
-    script_text = (REPO_ROOT / "scripts" / "setup" / "download_model.sh").read_text(encoding="utf-8")
+    script_text = (REPO_ROOT / "scripts" / "setup" / "download_model.sh").read_text(
+        encoding="utf-8"
+    )
     verify_pos = script_text.index("  verify_model_artifact")
     write_env_pos = script_text.index("  write_model_path_env")
     assert verify_pos < write_env_pos

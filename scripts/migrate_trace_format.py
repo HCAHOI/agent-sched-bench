@@ -50,9 +50,7 @@ def migrate_file(path: Path, *, dry_run: bool = False) -> bool:
 
     # Check idempotency: if any action record exists, skip
     has_action = any(
-        _safe_parse(line).get("type") == "action"
-        for line in lines
-        if line.strip()
+        _safe_parse(line).get("type") == "action" for line in lines if line.strip()
     )
     if has_action:
         return False
@@ -102,9 +100,13 @@ def _safe_parse(line: str) -> dict | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Migrate trace JSONL to action/event format.")
+    parser = argparse.ArgumentParser(
+        description="Migrate trace JSONL to action/event format."
+    )
     parser.add_argument("path", help="JSONL file or directory to migrate.")
-    parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview changes without writing."
+    )
     args = parser.parse_args()
 
     target = Path(args.path)

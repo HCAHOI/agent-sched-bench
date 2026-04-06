@@ -15,7 +15,9 @@ class DummyAgent(AgentBase):
 
 
 def test_step_record_export_preserves_program_id_and_llm_fields() -> None:
-    agent = DummyAgent(agent_id="agent-0001", api_base="http://localhost:8000/v1", model="mock")
+    agent = DummyAgent(
+        agent_id="agent-0001", api_base="http://localhost:8000/v1", model="mock"
+    )
     record = StepRecord(
         step_idx=1,
         phase="reasoning",
@@ -36,7 +38,9 @@ def test_step_record_export_preserves_program_id_and_llm_fields() -> None:
 
 
 def test_agent_summary_aggregates_trace_fields() -> None:
-    agent = DummyAgent(agent_id="agent-0002", api_base="http://localhost:8000/v1", model="mock")
+    agent = DummyAgent(
+        agent_id="agent-0002", api_base="http://localhost:8000/v1", model="mock"
+    )
     agent.task_id = "task-1"
     agent.task_success = True
     agent.trace = [
@@ -68,7 +72,9 @@ def test_agent_summary_aggregates_trace_fields() -> None:
 
 
 def test_build_step_record_uses_llm_result_fields() -> None:
-    agent = DummyAgent(agent_id="agent-0003", api_base="http://localhost:8000/v1", model="mock")
+    agent = DummyAgent(
+        agent_id="agent-0003", api_base="http://localhost:8000/v1", model="mock"
+    )
     llm_result = LLMCallResult(
         content="ok",
         prompt_tokens=7,
@@ -134,12 +140,17 @@ class RecordingClient:
 
 
 def test_call_llm_attaches_program_id_and_returns_normalized_fields() -> None:
-    agent = DummyAgent(agent_id="agent-0004", api_base="http://localhost:8000/v1", model="mock")
+    agent = DummyAgent(
+        agent_id="agent-0004", api_base="http://localhost:8000/v1", model="mock"
+    )
     recording_client = RecordingClient()
     agent._client = recording_client  # type: ignore[assignment]
     result = asyncio.run(agent._call_llm([{"role": "user", "content": "hi"}]))
     assert recording_client.chat.completions.kwargs is not None
-    assert recording_client.chat.completions.kwargs["extra_body"]["program_id"] == "agent-0004"
+    assert (
+        recording_client.chat.completions.kwargs["extra_body"]["program_id"]
+        == "agent-0004"
+    )
     assert result.content == "synthetic reply"
     assert result.prompt_tokens == 11
     assert result.raw_response["id"] == "resp-2"

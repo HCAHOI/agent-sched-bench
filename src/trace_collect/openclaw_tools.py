@@ -29,7 +29,9 @@ _IGNORE_DIRS = {
     ".coverage",
     "htmlcov",
 }
-_OBSERVATION_TEMPLATE = "<returncode>{returncode}</returncode>\n<output>\n{output}\n</output>"
+_OBSERVATION_TEMPLATE = (
+    "<returncode>{returncode}</returncode>\n<output>\n{output}\n</output>"
+)
 _PATH_TOKEN_RE = re.compile(r"/[^\s\"'<>|;&]+")
 
 
@@ -190,7 +192,9 @@ def _read_file(path: Path, *, offset: int = 1, limit: int | None = None) -> str:
 
     start = offset - 1
     end = min(start + (limit or _DEFAULT_READ_LIMIT), total)
-    numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])]
+    numbered = [
+        f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])
+    ]
     result = "\n".join(numbered)
 
     if len(result) > _MAX_READ_CHARS:
@@ -272,7 +276,9 @@ def _not_found_msg(old_text: str, content: str, path: str) -> str:
 
     best_ratio, best_start = 0.0, 0
     for idx in range(max(1, len(lines) - window + 1)):
-        ratio = difflib.SequenceMatcher(None, old_lines, lines[idx : idx + window]).ratio()
+        ratio = difflib.SequenceMatcher(
+            None, old_lines, lines[idx : idx + window]
+        ).ratio()
         if ratio > best_ratio:
             best_ratio = ratio
             best_start = idx
@@ -294,7 +300,9 @@ def _not_found_msg(old_text: str, content: str, path: str) -> str:
     return f"Error: old_text not found in {path}. No similar text found. Verify the file content."
 
 
-def _list_dir(path: Path, *, recursive: bool = False, max_entries: int | None = None) -> str:
+def _list_dir(
+    path: Path, *, recursive: bool = False, max_entries: int | None = None
+) -> str:
     if not path.exists():
         return f"Error: Directory not found: {path}"
     if not path.is_dir():
@@ -388,7 +396,9 @@ async def execute_trace_tool(
 
     if resolved_name == "read_file":
         path = _map_workspace_path(params["path"], repo_dir, agent_id)
-        return _read_file(path, offset=params.get("offset", 1), limit=params.get("limit")), True
+        return _read_file(
+            path, offset=params.get("offset", 1), limit=params.get("limit")
+        ), True
 
     if resolved_name == "write_file":
         path = _map_workspace_path(params["path"], repo_dir, agent_id)

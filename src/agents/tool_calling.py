@@ -15,7 +15,9 @@ class ToolCall:
 def strip_code_fences(text: str) -> str:
     """Remove surrounding fenced code blocks when present."""
     stripped = text.strip()
-    match = re.fullmatch(r"```[a-zA-Z0-9_-]*\n(?P<body>.*)\n```", stripped, flags=re.DOTALL)
+    match = re.fullmatch(
+        r"```[a-zA-Z0-9_-]*\n(?P<body>.*)\n```", stripped, flags=re.DOTALL
+    )
     if match:
         return match.group("body").strip()
     return stripped
@@ -23,7 +25,9 @@ def strip_code_fences(text: str) -> str:
 
 def extract_sql_block(text: str) -> str | None:
     """Extract a fenced SQL block from model output."""
-    match = re.search(r"```sql\n(?P<body>.*?)\n```", text, flags=re.DOTALL | re.IGNORECASE)
+    match = re.search(
+        r"```sql\n(?P<body>.*?)\n```", text, flags=re.DOTALL | re.IGNORECASE
+    )
     if not match:
         return None
     return match.group("body").strip()
@@ -58,7 +62,7 @@ def parse_tool_call(text: str, allowed_tools: set[str]) -> ToolCall | None:
                 elif char == ")":
                     depth -= 1
                     if depth == 0:
-                        args = text[start + len(marker):cursor]
+                        args = text[start + len(marker) : cursor]
                         candidate = ToolCall(name=tool_name, args=args.strip())
                         if best_match is None or start < best_match[0]:
                             best_match = (start, candidate)

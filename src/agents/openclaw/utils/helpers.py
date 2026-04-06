@@ -34,7 +34,9 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
-def build_image_content_blocks(raw: bytes, mime: str, path: str, label: str) -> list[dict[str, Any]]:
+def build_image_content_blocks(
+    raw: bytes, mime: str, path: str, label: str
+) -> list[dict[str, Any]]:
     """Build native image blocks plus a short text label."""
     b64 = base64.b64encode(raw).decode()
     return [
@@ -79,6 +81,7 @@ _TOOL_RESULT_PREVIEW_CHARS = 1200
 _TOOL_RESULTS_DIR = ".nanobot/tool-results"
 _TOOL_RESULT_RETENTION_SECS = 7 * 24 * 60 * 60
 _TOOL_RESULT_MAX_BUCKETS = 32
+
 
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
@@ -160,7 +163,9 @@ def _bucket_mtime(path: Path) -> float:
 
 
 def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
-    siblings = [path for path in root.iterdir() if path.is_dir() and path != current_bucket]
+    siblings = [
+        path for path in root.iterdir() if path.is_dir() and path != current_bucket
+    ]
     cutoff = time.time() - _TOOL_RESULT_RETENTION_SECS
     for path in siblings:
         if _bucket_mtime(path) < cutoff:
@@ -255,9 +260,9 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
             break
         cut = content[:max_len]
         # Try to break at newline first, then space, then hard break
-        pos = cut.rfind('\n')
+        pos = cut.rfind("\n")
         if pos <= 0:
-            pos = cut.rfind(' ')
+            pos = cut.rfind(" ")
         if pos <= 0:
             pos = max_len
         chunks.append(content[:pos])
@@ -276,7 +281,9 @@ def build_assistant_message(
     if tool_calls:
         msg["tool_calls"] = tool_calls
     if reasoning_content is not None or thinking_blocks:
-        msg["reasoning_content"] = reasoning_content if reasoning_content is not None else ""
+        msg["reasoning_content"] = (
+            reasoning_content if reasoning_content is not None else ""
+        )
     if thinking_blocks:
         msg["thinking_blocks"] = thinking_blocks
     return msg
@@ -409,24 +416,31 @@ def build_status_content(
     cached = last_usage.get("cached_tokens", 0)
     ctx_total = max(context_window_tokens, 0)
     ctx_pct = int((context_tokens_estimate / ctx_total) * 100) if ctx_total > 0 else 0
-    ctx_used_str = f"{context_tokens_estimate // 1000}k" if context_tokens_estimate >= 1000 else str(context_tokens_estimate)
+    ctx_used_str = (
+        f"{context_tokens_estimate // 1000}k"
+        if context_tokens_estimate >= 1000
+        else str(context_tokens_estimate)
+    )
     ctx_total_str = f"{ctx_total // 1024}k" if ctx_total > 0 else "n/a"
     token_line = f"\U0001f4ca Tokens: {last_in} in / {last_out} out"
     if cached and last_in:
         token_line += f" ({cached * 100 // last_in}% cached)"
-    return "\n".join([
-        f"\U0001f408 nanobot v{version}",
-        f"\U0001f9e0 Model: {model}",
-        token_line,
-        f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}%)",
-        f"\U0001f4ac Session: {session_msg_count} messages",
-        f"\u23f1 Uptime: {uptime}",
-    ])
+    return "\n".join(
+        [
+            f"\U0001f408 nanobot v{version}",
+            f"\U0001f9e0 Model: {model}",
+            token_line,
+            f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}%)",
+            f"\U0001f4ac Session: {session_msg_count} messages",
+            f"\u23f1 Uptime: {uptime}",
+        ]
+    )
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
     """Sync bundled templates to workspace. Only creates missing files."""
     from importlib.resources import files as pkg_files
+
     try:
         tpl = pkg_files("nanobot") / "templates"
     except Exception:
@@ -440,7 +454,9 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         if dest.exists():
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
+        dest.write_text(
+            src.read_text(encoding="utf-8") if src else "", encoding="utf-8"
+        )
         added.append(str(dest.relative_to(workspace)))
 
     for item in tpl.iterdir():
@@ -452,6 +468,7 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
 
     if added and not silent:
         from rich.console import Console
+
         for name in added:
             Console().print(f"  [dim]Created {name}[/dim]")
     return added

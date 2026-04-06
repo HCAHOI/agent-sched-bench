@@ -86,6 +86,8 @@ def test_continuum_validate_report_requires_prefix_cache_hit_when_requested() ->
 
 
 def test_serve_continuum_requires_pinned_ref_and_prefix_cache_hit() -> None:
-    script_text = (REPO_ROOT / "scripts" / "serve_continuum.sh").read_text(encoding="utf-8")
+    script_text = (REPO_ROOT / "scripts" / "serve_continuum.sh").read_text(
+        encoding="utf-8"
+    )
     assert "require_pinned_ref" in script_text
     assert "--require-prefix-cache-hit" in script_text

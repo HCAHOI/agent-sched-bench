@@ -19,8 +19,8 @@ class EvalTask:
     workspace_dir: Path
 
     # SWE-bench instance fields (required for prepare phase)
-    repo: str | None = None           # e.g. "django/django"
-    base_commit: str | None = None    # e.g. "abc1234def"
+    repo: str | None = None  # e.g. "django/django"
+    base_commit: str | None = None  # e.g. "abc1234def"
 
     # Optional SWE-bench fields (for downstream harness evaluation)
     test_patch: str | None = None
@@ -29,11 +29,14 @@ class EvalTask:
     image_name: str | None = None
 
     @classmethod
-    def from_swebench_instance(cls, row: dict[str, Any], workspace_base: Path) -> "EvalTask":
+    def from_swebench_instance(
+        cls, row: dict[str, Any], workspace_base: Path
+    ) -> "EvalTask":
         """Construct from a raw SWE-bench HuggingFace dataset row."""
         fail_to_pass = row.get("FAIL_TO_PASS", [])
         if isinstance(fail_to_pass, str):
             import json
+
             try:
                 fail_to_pass = json.loads(fail_to_pass)
             except json.JSONDecodeError:
@@ -42,6 +45,7 @@ class EvalTask:
         pass_to_pass = row.get("PASS_TO_PASS", [])
         if isinstance(pass_to_pass, str):
             import json
+
             try:
                 pass_to_pass = json.loads(pass_to_pass)
             except json.JSONDecodeError:
@@ -101,20 +105,28 @@ class EvalResult:
 
     # Paths created by nanobot runtime — must be excluded from patches
     _EXCLUDE_PATTERNS = [
-        ".nanobot", "memory", "sessions", "trace.jsonl",
-        "MEMORY.md", "HISTORY.md", ".omc",
+        ".nanobot",
+        "memory",
+        "sessions",
+        "trace.jsonl",
+        "MEMORY.md",
+        "HISTORY.md",
+        ".omc",
     ]
 
     def _extract_patch_from_workspace(self) -> str:
         """Run git diff in the workspace to extract source-only changes."""
         import subprocess
+
         if not self.workspace_dir or not (self.workspace_dir / ".git").exists():
             return ""
         try:
             # Stage everything (including new untracked files)
             subprocess.run(
                 ["git", "add", "-A"],
-                cwd=self.workspace_dir, capture_output=True, timeout=30,
+                cwd=self.workspace_dir,
+                capture_output=True,
+                timeout=30,
             )
             # Diff against base commit, excluding nanobot runtime artifacts
             diff_target = self.base_commit or "HEAD"
@@ -122,7 +134,11 @@ class EvalResult:
             for pat in self._EXCLUDE_PATTERNS:
                 cmd.append(f":(exclude){pat}")
             result = subprocess.run(
-                cmd, cwd=self.workspace_dir, capture_output=True, text=True, timeout=30,
+                cmd,
+                cwd=self.workspace_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             return result.stdout.strip() if result.returncode == 0 else ""
         except Exception:
@@ -133,6 +149,7 @@ class EvalResult:
         if not self.content:
             return ""
         import re
+
         text = self.content.strip()
         if text.startswith("diff --git"):
             return text
@@ -200,7 +217,7 @@ class EvalTraceStep:
     type: str = "step"
     agent_id: str = ""
     program_id: str = ""
-    phase: str = "acting"          # "acting" | "reasoning"
+    phase: str = "acting"  # "acting" | "reasoning"
     instance_id: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -300,9 +317,18 @@ MCP = "MCP"
 MEMORY = "MEMORY"
 SUBAGENT = "SUBAGENT"
 
-ALL_CATEGORIES = frozenset([
-    SCHEDULING, SESSION, CONTEXT, LLM, TOOL, MCP, MEMORY, SUBAGENT,
-])
+ALL_CATEGORIES = frozenset(
+    [
+        SCHEDULING,
+        SESSION,
+        CONTEXT,
+        LLM,
+        TOOL,
+        MCP,
+        MEMORY,
+        SUBAGENT,
+    ]
+)
 
 
 @dataclass
@@ -316,10 +342,10 @@ class EvalTraceEvent:
     agent_id: str
     program_id: str
     instance_id: str
-    event: str            # e.g. "skill_load", "mcp_tool_call"
-    category: str         # one of ALL_CATEGORIES
+    event: str  # e.g. "skill_load", "mcp_tool_call"
+    category: str  # one of ALL_CATEGORIES
     data: dict[str, Any] = field(default_factory=dict)
-    ts: float = 0.0       # wall-clock timestamp
+    ts: float = 0.0  # wall-clock timestamp
     iteration: int = 0
     type: str = "event"
 

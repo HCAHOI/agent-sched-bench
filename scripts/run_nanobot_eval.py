@@ -19,17 +19,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run nanobot eval directly")
     parser.add_argument("--instances", required=True, help="Path to instances JSONL")
-    parser.add_argument("--output", default="/tmp/nanobot-eval/results.jsonl", help="Output results JSONL")
-    parser.add_argument("--workspace", default="/tmp/nanobot-eval", help="Workspace base directory")
-    parser.add_argument("--model", default="openrouter/qwen/qwen3.6-plus:free", help="Model name")
-    parser.add_argument("--max-steps", type=int, default=80, help="Max agent loop iterations")
+    parser.add_argument(
+        "--output",
+        default="/tmp/nanobot-eval/results.jsonl",
+        help="Output results JSONL",
+    )
+    parser.add_argument(
+        "--workspace", default="/tmp/nanobot-eval", help="Workspace base directory"
+    )
+    parser.add_argument(
+        "--model", default="openrouter/qwen/qwen3.6-plus:free", help="Model name"
+    )
+    parser.add_argument(
+        "--max-steps", type=int, default=80, help="Max agent loop iterations"
+    )
     parser.add_argument("--repos-root", default=None, help="Local git repos mirror")
     parser.add_argument("--parallel", type=int, default=1, help="Max concurrent tasks")
     parser.add_argument("--config", default=None, help="Path to nanobot config file")
@@ -43,6 +52,7 @@ def main() -> None:
     # the openrouter/ prefix being sent to the API
     import os
     from nanobot.providers.openai_compat_provider import OpenAICompatProvider
+
     provider = OpenAICompatProvider(
         api_key=os.environ.get("OPENROUTER_API_KEY", ""),
         api_base="https://openrouter.ai/api/v1",
@@ -70,7 +80,9 @@ def main() -> None:
 
     # Create runner — pass model_for_routing so nanobot's agent loop uses
     # the correct model string for API calls
-    repos_root = Path(args.repos_root).expanduser().resolve() if args.repos_root else None
+    repos_root = (
+        Path(args.repos_root).expanduser().resolve() if args.repos_root else None
+    )
     runner = SWEBenchRunner(
         provider=provider,
         workspace_base=ws_base,

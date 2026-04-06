@@ -95,7 +95,9 @@ def collect_nvidia_report() -> dict[str, Any]:
         for line in query["stdout"].splitlines():
             if not line.strip():
                 continue
-            name, driver_version, memory_total = [part.strip() for part in line.split(",")]
+            name, driver_version, memory_total = [
+                part.strip() for part in line.split(",")
+            ]
             gpus.append(
                 {
                     "name": name,
@@ -261,7 +263,10 @@ def validate_report(report: dict[str, Any], require_torch_cuda: bool) -> list[st
             errors.append(
                 f"no GPU matched expected substring {config['expected_gpu_substring']!r}"
             )
-        if max(gpu["memory_total_mib"] for gpu in gpus) < config["min_gpu_memory_gib"] * 1024:
+        if (
+            max(gpu["memory_total_mib"] for gpu in gpus)
+            < config["min_gpu_memory_gib"] * 1024
+        ):
             errors.append(
                 f"maximum GPU memory was below {config['min_gpu_memory_gib']} GiB"
             )
@@ -283,7 +288,11 @@ def validate_report(report: dict[str, Any], require_torch_cuda: bool) -> list[st
             errors.append("torch is not installed in the repo-local venv")
         elif not metadata["torch_cuda_available"]:
             errors.append("torch.cuda.is_available() returned False")
-        elif metadata["torch_device_name"] is None or report["config"]["expected_gpu_substring"] not in metadata["torch_device_name"]:
+        elif (
+            metadata["torch_device_name"] is None
+            or report["config"]["expected_gpu_substring"]
+            not in metadata["torch_device_name"]
+        ):
             errors.append("torch runtime did not report the expected GPU model")
 
     return errors

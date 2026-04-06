@@ -74,10 +74,7 @@ def test_select_tool_intensive_tasks_returns_n() -> None:
     tasks = [
         _make_task(f"django__django-{i:05d}", "django/django", ["t1", "t2"])
         for i in range(20)
-    ] + [
-        _make_task(f"sympy__sympy-{i:05d}", "sympy/sympy", ["t1"])
-        for i in range(15)
-    ]
+    ] + [_make_task(f"sympy__sympy-{i:05d}", "sympy/sympy", ["t1"]) for i in range(15)]
     selected = select_tool_intensive_tasks(tasks, n=10, seed=42)
     assert len(selected) == 10
 
@@ -93,7 +90,9 @@ def test_select_excludes_trivial_tasks() -> None:
         fail_to_pass=[],  # No tests to run
     )
     selected = select_tool_intensive_tasks(
-        [good, trivial_short, trivial_empty], n=10, seed=42,
+        [good, trivial_short, trivial_empty],
+        n=10,
+        seed=42,
     )
     ids = {t["instance_id"] for t in selected}
     assert "django__django-00001" in ids
@@ -103,7 +102,9 @@ def test_select_excludes_trivial_tasks() -> None:
 
 def test_select_is_deterministic() -> None:
     tasks = [
-        _make_task(f"django__django-{i:05d}", "django/django", [f"t{j}" for j in range(i % 5)])
+        _make_task(
+            f"django__django-{i:05d}", "django/django", [f"t{j}" for j in range(i % 5)]
+        )
         for i in range(1, 50)
     ]
     a = select_tool_intensive_tasks(tasks, n=10, seed=123)

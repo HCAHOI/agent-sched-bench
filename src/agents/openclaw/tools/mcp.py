@@ -57,9 +57,7 @@ def _normalize_schema_for_openai(schema: Any) -> dict[str, Any]:
 
     if "properties" in normalized and isinstance(normalized["properties"], dict):
         normalized["properties"] = {
-            name: _normalize_schema_for_openai(prop)
-            if isinstance(prop, dict)
-            else prop
+            name: _normalize_schema_for_openai(prop) if isinstance(prop, dict) else prop
             for name, prop in normalized["properties"].items()
         }
 
@@ -107,7 +105,9 @@ class MCPToolWrapper(Tool):
                 timeout=self._tool_timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning("MCP tool '{}' timed out after {}s", self._name, self._tool_timeout)
+            logger.warning(
+                "MCP tool '{}' timed out after {}s", self._name, self._tool_timeout
+            )
             return f"(MCP tool call timed out after {self._tool_timeout}s)"
         except asyncio.CancelledError:
             # MCP SDK's anyio cancel scopes can leak CancelledError on timeout/failure.
@@ -153,10 +153,14 @@ async def connect_mcp_servers(
                 elif cfg.url:
                     # Convention: URLs ending with /sse use SSE transport; others use streamableHttp
                     transport_type = (
-                        "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
+                        "sse"
+                        if cfg.url.rstrip("/").endswith("/sse")
+                        else "streamableHttp"
                     )
                 else:
-                    logger.warning("MCP server '{}': no command or url configured, skipping", name)
+                    logger.warning(
+                        "MCP server '{}': no command or url configured, skipping", name
+                    )
                     continue
 
             if transport_type == "stdio":
@@ -165,6 +169,7 @@ async def connect_mcp_servers(
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
             elif transport_type == "sse":
+
                 def httpx_client_factory(
                     headers: dict[str, str] | None = None,
                     timeout: httpx.Timeout | None = None,
@@ -199,7 +204,9 @@ async def connect_mcp_servers(
                     streamable_http_client(cfg.url, http_client=http_client)
                 )
             else:
-                logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
+                logger.warning(
+                    "MCP server '{}': unknown transport type '{}'", name, transport_type
+                )
                 continue
 
             session = await stack.enter_async_context(ClientSession(read, write))
@@ -211,7 +218,9 @@ async def connect_mcp_servers(
             registered_count = 0
             matched_enabled_tools: set[str] = set()
             available_raw_names = [tool_def.name for tool_def in tools.tools]
-            available_wrapped_names = [f"mcp_{name}_{tool_def.name}" for tool_def in tools.tools]
+            available_wrapped_names = [
+                f"mcp_{name}_{tool_def.name}" for tool_def in tools.tools
+            ]
             for tool_def in tools.tools:
                 wrapped_name = f"mcp_{name}_{tool_def.name}"
                 if (
@@ -225,9 +234,13 @@ async def connect_mcp_servers(
                         name,
                     )
                     continue
-                wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
+                wrapper = MCPToolWrapper(
+                    session, name, tool_def, tool_timeout=cfg.tool_timeout
+                )
                 registry.register(wrapper)
-                logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
+                logger.debug(
+                    "MCP: registered tool '{}' from server '{}'", wrapper.name, name
+                )
                 registered_count += 1
                 if enabled_tools:
                     if tool_def.name in enabled_tools:
@@ -247,6 +260,10 @@ async def connect_mcp_servers(
                         ", ".join(available_wrapped_names) or "(none)",
                     )
 
-            logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
+            logger.info(
+                "MCP server '{}': connected, {} tools registered",
+                name,
+                registered_count,
+            )
         except Exception as e:
             logger.error("MCP server '{}': failed to connect: {}", name, e)

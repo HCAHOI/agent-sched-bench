@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from agents.mini_swe_code_agent import MiniSWECodeAgent
+import pytest
+
+minisweagent = pytest.importorskip("minisweagent", reason="requires mini-swe-agent")
+
+from agents.miniswe import MiniSWECodeAgent  # noqa: E402
 
 
 def test_constructor_defaults() -> None:
@@ -17,6 +21,7 @@ def test_constructor_defaults() -> None:
 
 def test_constructor_with_repos_root() -> None:
     from pathlib import Path
+
     agent = MiniSWECodeAgent(
         agent_id="code-2",
         api_base="http://localhost:8000/v1",

@@ -54,7 +54,9 @@ def write_demo_trace(path: Path) -> None:
             "success": False,
         },
     ]
-    path.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
+    path.write_text(
+        "\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8"
+    )
 
 
 def test_parse_traces_and_detect_inefficiency(tmp_path: Path) -> None:
@@ -81,7 +83,10 @@ def test_parse_traces_and_detect_inefficiency(tmp_path: Path) -> None:
     ineff = detect_inefficiencies(
         frame,
         metrics_frame=metrics_frame,
-        preemption_report={"eviction_events": [{"seq_id": "req-1"}], "preemption_counter_delta": 1},
+        preemption_report={
+            "eviction_events": [{"seq_id": "req-1"}],
+            "preemption_counter_delta": 1,
+        },
     )
     assert summary["n_steps"] == 2
     assert summary["avg_jct_s"] == 3.0

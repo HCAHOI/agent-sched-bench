@@ -5,8 +5,6 @@ import importlib
 import importlib.metadata
 import json
 import re
-import runpy
-import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -139,7 +137,10 @@ def apply_scheduler_hook() -> SchedulerHookStatus:
                     "EVICT seq_id=%s tokens=%s reason=preempted gpu_usage=%s",
                     req_id,
                     int(getattr(req, "num_tokens_with_spec", 0) or 0),
-                    float(getattr(getattr(self, "kv_cache_manager", None), "usage", 0.0) or 0.0),
+                    float(
+                        getattr(getattr(self, "kv_cache_manager", None), "usage", 0.0)
+                        or 0.0
+                    ),
                 )
         return result
 
@@ -200,7 +201,9 @@ def main() -> None:
     report["baseline_provided"] = args.baseline_preemptions_total is not None
     current_total = report["preemption_snapshot"]["num_preemptions_total"]
     if args.baseline_preemptions_total is not None and current_total is not None:
-        report["preemption_counter_delta"] = current_total - args.baseline_preemptions_total
+        report["preemption_counter_delta"] = (
+            current_total - args.baseline_preemptions_total
+        )
         report["evidence_scope"] = "baseline_delta"
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

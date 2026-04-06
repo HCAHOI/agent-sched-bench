@@ -52,7 +52,9 @@ def test_benchmark_runner_n2_processes_all_tasks() -> None:
     results = asyncio.run(runner.run())
     assert len(results) == 4
     assert all(isinstance(result, RunnerTaskResult) for result in results)
-    assert {result.summary["task_id"] for result in results} == {task["task_id"] for task in tasks}
+    assert {result.summary["task_id"] for result in results} == {
+        task["task_id"] for task in tasks
+    }
 
 
 def test_benchmark_runner_timeout_marks_task_as_failed() -> None:

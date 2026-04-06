@@ -26,12 +26,8 @@ from agents.openclaw.bus.queue import MessageBus
 from agents.openclaw.eval.collector import ResultCollector
 from agents.openclaw.eval.prepare import prepare_workspace
 from agents.openclaw.eval.types import (
-    CONTEXT,
     LLM,
     MCP,
-    MEMORY,
-    SCHEDULING,
-    SESSION,
     SUBAGENT,
     TOOL,
     EvalResult,
@@ -73,17 +69,19 @@ class TraceCollectorHook(AgentHook):
         self._tool_times: dict[str, float] = {}
         self._tool_timeouts: dict[str, int] = {}
         self._tool_start_ts: dict[str, float] = {}  # wall-clock start per tool
-        self._iter_start_ts: float = 0.0            # iteration start (for LLM latency)
-        self._iter_start_wall: float = 0.0          # wall-clock iteration start
-        self._before_exec_ts: float = 0.0           # before tools execute (LLM done)
-        self._steps: list[dict[str, Any]] = []      # accumulated step dicts for summary
+        self._iter_start_ts: float = 0.0  # iteration start (for LLM latency)
+        self._iter_start_wall: float = 0.0  # wall-clock iteration start
+        self._before_exec_ts: float = 0.0  # before tools execute (LLM done)
+        self._steps: list[dict[str, Any]] = []  # accumulated step dicts for summary
         self._fh = open(trace_file, "a", encoding="utf-8")  # noqa: SIM115
 
     def close(self) -> None:
         if not self._fh.closed:
             self._fh.close()
 
-    def emit_event(self, category: str, event: str, data: dict[str, Any], *, iteration: int = 0) -> None:
+    def emit_event(
+        self, category: str, event: str, data: dict[str, Any], *, iteration: int = 0
+    ) -> None:
         """Emit a fine-grained event to the trace file."""
         entry = EvalTraceEvent(
             agent_id=self.agent_id,
@@ -180,8 +178,12 @@ class TraceCollectorHook(AgentHook):
                 else:
                     mcp_data["tool_name"] = tc.name
 
-                mcp_data["args_preview"] = json.dumps(tc.arguments, ensure_ascii=False)[:200]
-                self.emit_event(category, event_name, mcp_data, iteration=context.iteration)
+                mcp_data["args_preview"] = json.dumps(tc.arguments, ensure_ascii=False)[
+                    :200
+                ]
+                self.emit_event(
+                    category, event_name, mcp_data, iteration=context.iteration
+                )
 
         # Extract tool results from context.messages (last tool-role messages)
         tool_results_from_messages = self._extract_tool_results(context.messages)
@@ -189,17 +191,23 @@ class TraceCollectorHook(AgentHook):
         if tool_results_from_messages:
             for tool_name, tool_content, tool_ok in tool_results_from_messages:
                 tool_start = self._tool_start_ts.pop(tool_name, None)
-                duration_ms = (time.monotonic() - tool_start) * 1000 if tool_start else 0.0
+                duration_ms = (
+                    (time.monotonic() - tool_start) * 1000 if tool_start else 0.0
+                )
 
                 # Store per-tool result
-                per_tool_results.append({
-                    "tool_name": tool_name,
-                    "success": tool_ok,
-                    "duration_ms": round(duration_ms, 1),
-                    "result": tool_content[:4000],
-                })
+                per_tool_results.append(
+                    {
+                        "tool_name": tool_name,
+                        "success": tool_ok,
+                        "duration_ms": round(duration_ms, 1),
+                        "result": tool_content[:4000],
+                    }
+                )
 
-                self._tool_times[tool_name] = self._tool_times.get(tool_name, 0.0) + duration_ms
+                self._tool_times[tool_name] = (
+                    self._tool_times.get(tool_name, 0.0) + duration_ms
+                )
                 if not tool_ok:
                     self._tool_timeouts[tool_name] = (
                         self._tool_timeouts.get(tool_name, 0) + 1
@@ -209,18 +217,28 @@ class TraceCollectorHook(AgentHook):
                 is_mcp = tool_name.startswith("mcp_")
                 category = MCP if is_mcp else TOOL
                 event_name = "tool_complete" if tool_ok else "tool_error"
-                self.emit_event(category, event_name, {
-                    "tool_name": tool_name,
-                    "success": tool_ok,
-                    "duration_ms": round(duration_ms, 1),
-                    "result_preview": tool_content[:200],
-                }, iteration=context.iteration)
+                self.emit_event(
+                    category,
+                    event_name,
+                    {
+                        "tool_name": tool_name,
+                        "success": tool_ok,
+                        "duration_ms": round(duration_ms, 1),
+                        "result_preview": tool_content[:200],
+                    },
+                    iteration=context.iteration,
+                )
 
                 # Subagent completion detection
                 if tool_name == "spawn":
-                    self.emit_event(SUBAGENT, "subagent_complete", {
-                        "task_preview": tool_content[:200],
-                    }, iteration=context.iteration)
+                    self.emit_event(
+                        SUBAGENT,
+                        "subagent_complete",
+                        {
+                            "task_preview": tool_content[:200],
+                        },
+                        iteration=context.iteration,
+                    )
 
         # Set step-level tool result fields
         if per_tool_results:
@@ -242,14 +260,26 @@ class TraceCollectorHook(AgentHook):
         if context.response:
             finish_reason = context.response.finish_reason
             if finish_reason == "error":
-                self.emit_event(LLM, "llm_error", {
-                    "error_message": context.response.content[:500] if context.response.content else "",
-                    "finish_reason": finish_reason,
-                }, iteration=context.iteration)
+                self.emit_event(
+                    LLM,
+                    "llm_error",
+                    {
+                        "error_message": context.response.content[:500]
+                        if context.response.content
+                        else "",
+                        "finish_reason": finish_reason,
+                    },
+                    iteration=context.iteration,
+                )
             elif finish_reason == "max_iterations":
-                self.emit_event(LLM, "max_iterations", {
-                    "total_tokens": self._total_tokens,
-                }, iteration=context.iteration)
+                self.emit_event(
+                    LLM,
+                    "max_iterations",
+                    {
+                        "total_tokens": self._total_tokens,
+                    },
+                    iteration=context.iteration,
+                )
 
         self._write_step(step)
 
@@ -417,9 +447,7 @@ class SWEBenchRunner:
                     repos_root=self.repos_root,
                 )
             except Exception as e:
-                logger.error(
-                    "Prepare failed for {id}: {e}", id=task.instance_id, e=e
-                )
+                logger.error("Prepare failed for {id}: {e}", id=task.instance_id, e=e)
                 return EvalResult(
                     instance_id=task.instance_id,
                     content=None,
@@ -519,11 +547,15 @@ class SWEBenchRunner:
                 for tc in m["tool_calls"]:
                     tools_used.append(tc.get("name", ""))
             if m.get("role") == "tool":
-                tool_events.append({
-                    "name": m.get("name", ""),
-                    "status": "ok" if not str(m.get("content", "")).startswith("Error") else "error",
-                    "detail": str(m.get("content", ""))[:200],
-                })
+                tool_events.append(
+                    {
+                        "name": m.get("name", ""),
+                        "status": "ok"
+                        if not str(m.get("content", "")).startswith("Error")
+                        else "error",
+                        "detail": str(m.get("content", ""))[:200],
+                    }
+                )
 
         stop_reason = "completed"
         error = None
@@ -557,12 +589,22 @@ class SWEBenchRunner:
             hook.emit_event(category, event, data, iteration=iteration)
 
         # Memory consolidation callbacks
-        if hasattr(agent, "memory_consolidator") and hasattr(agent.memory_consolidator, "_event_callback"):
-            agent.memory_consolidator._event_callback = lambda cat, evt, d, it=0: emit(cat, evt, d, it)
+        if hasattr(agent, "memory_consolidator") and hasattr(
+            agent.memory_consolidator, "_event_callback"
+        ):
+            agent.memory_consolidator._event_callback = lambda cat, evt, d, it=0: emit(
+                cat, evt, d, it
+            )
 
         # Skill loading callbacks
-        if hasattr(agent, "context") and hasattr(agent.context, "skills") and hasattr(agent.context.skills, "_event_callback"):
-            agent.context.skills._event_callback = lambda cat, evt, d, it=0: emit(cat, evt, d, it)
+        if (
+            hasattr(agent, "context")
+            and hasattr(agent.context, "skills")
+            and hasattr(agent.context.skills, "_event_callback")
+        ):
+            agent.context.skills._event_callback = lambda cat, evt, d, it=0: emit(
+                cat, evt, d, it
+            )
 
         # MCP connection callbacks
         if hasattr(agent, "_mcp_event_callback"):

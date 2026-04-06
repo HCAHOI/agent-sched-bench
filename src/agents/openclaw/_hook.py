@@ -47,7 +47,9 @@ class AgentHook:
     async def after_iteration(self, context: AgentHookContext) -> None:
         pass
 
-    def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
+    def finalize_content(
+        self, context: AgentHookContext, content: str | None
+    ) -> str | None:
         return content
 
 
@@ -72,7 +74,9 @@ class CompositeHook(AgentHook):
             try:
                 await h.before_iteration(context)
             except Exception:
-                logger.exception("AgentHook.before_iteration error in {}", type(h).__name__)
+                logger.exception(
+                    "AgentHook.before_iteration error in {}", type(h).__name__
+                )
 
     async def on_stream(self, context: AgentHookContext, delta: str) -> None:
         for h in self._hooks:
@@ -86,23 +90,31 @@ class CompositeHook(AgentHook):
             try:
                 await h.on_stream_end(context, resuming=resuming)
             except Exception:
-                logger.exception("AgentHook.on_stream_end error in {}", type(h).__name__)
+                logger.exception(
+                    "AgentHook.on_stream_end error in {}", type(h).__name__
+                )
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         for h in self._hooks:
             try:
                 await h.before_execute_tools(context)
             except Exception:
-                logger.exception("AgentHook.before_execute_tools error in {}", type(h).__name__)
+                logger.exception(
+                    "AgentHook.before_execute_tools error in {}", type(h).__name__
+                )
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         for h in self._hooks:
             try:
                 await h.after_iteration(context)
             except Exception:
-                logger.exception("AgentHook.after_iteration error in {}", type(h).__name__)
+                logger.exception(
+                    "AgentHook.after_iteration error in {}", type(h).__name__
+                )
 
-    def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
+    def finalize_content(
+        self, context: AgentHookContext, content: str | None
+    ) -> str | None:
         for h in self._hooks:
             content = h.finalize_content(context, content)
         return content

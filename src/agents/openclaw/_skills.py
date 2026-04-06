@@ -42,19 +42,37 @@ class SkillsLoader:
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+                        skills.append(
+                            {
+                                "name": skill_dir.name,
+                                "path": str(skill_file),
+                                "source": "workspace",
+                            }
+                        )
 
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
             for skill_dir in self.builtin_skills.iterdir():
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "builtin"})
+                    if skill_file.exists() and not any(
+                        s["name"] == skill_dir.name for s in skills
+                    ):
+                        skills.append(
+                            {
+                                "name": skill_dir.name,
+                                "path": str(skill_file),
+                                "source": "builtin",
+                            }
+                        )
 
         # Filter by requirements
         if filter_unavailable:
-            return [s for s in skills if self._check_requirements(self._get_skill_meta(s["name"]))]
+            return [
+                s
+                for s in skills
+                if self._check_requirements(self._get_skill_meta(s["name"]))
+            ]
         return skills
 
     def load_skill(self, name: str) -> str | None:
@@ -124,7 +142,7 @@ class SkillsLoader:
             skill_meta = self._get_skill_meta(s["name"])
             available = self._check_requirements(skill_meta)
 
-            lines.append(f"  <skill available=\"{str(available).lower()}\">")
+            lines.append(f'  <skill available="{str(available).lower()}">')
             lines.append(f"    <name>{name}</name>")
             lines.append(f"    <description>{desc}</description>")
             lines.append(f"    <location>{path}</location>")
@@ -164,14 +182,18 @@ class SkillsLoader:
         if content.startswith("---"):
             match = re.match(r"^---\n.*?\n---\n", content, re.DOTALL)
             if match:
-                return content[match.end():].strip()
+                return content[match.end() :].strip()
         return content
 
     def _parse_nanobot_metadata(self, raw: str) -> dict:
         """Parse skill metadata JSON from frontmatter (supports nanobot and openclaw keys)."""
         try:
             data = json.loads(raw)
-            return data.get("nanobot", data.get("openclaw", {})) if isinstance(data, dict) else {}
+            return (
+                data.get("nanobot", data.get("openclaw", {}))
+                if isinstance(data, dict)
+                else {}
+            )
         except (json.JSONDecodeError, TypeError):
             return {}
 
@@ -223,7 +245,7 @@ class SkillsLoader:
                 for line in match.group(1).split("\n"):
                     if ":" in line:
                         key, value = line.split(":", 1)
-                        metadata[key.strip()] = value.strip().strip('"\'')
+                        metadata[key.strip()] = value.strip().strip("\"'")
                 return metadata
 
         return None

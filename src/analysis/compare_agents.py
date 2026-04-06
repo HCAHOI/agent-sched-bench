@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -21,6 +20,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
+
 
 def load_results(path: Path) -> list[dict[str, Any]]:
     """Load results.jsonl into a list of dicts."""
@@ -54,7 +54,10 @@ def find_trace_file(results_path: Path, instance_id: str) -> Path | None:
 # Per-task metrics
 # ---------------------------------------------------------------------------
 
-def compute_task_metrics(result: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any]:
+
+def compute_task_metrics(
+    result: dict[str, Any], steps: list[dict[str, Any]]
+) -> dict[str, Any]:
     """Compute metrics for one task from its result + step records."""
     n_steps = result.get("n_steps") or len(steps)
     elapsed_s = result.get("elapsed_s", 0.0)
@@ -124,6 +127,7 @@ def compute_task_metrics(result: dict[str, Any], steps: list[dict[str, Any]]) ->
 # Aggregate comparison
 # ---------------------------------------------------------------------------
 
+
 def compute_aggregate(task_metrics: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate per-task metrics into scaffold-level summary."""
     n = len(task_metrics)
@@ -144,7 +148,9 @@ def compute_aggregate(task_metrics: list[dict[str, Any]]) -> dict[str, Any]:
         m.get("avg_completion_tokens", 0) * m.get("n_steps", 0) for m in task_metrics
     )
     total_steps = sum(m.get("n_steps", 0) for m in task_metrics)
-    weighted_avg_completion = total_completion_tokens / total_steps if total_steps > 0 else 0.0
+    weighted_avg_completion = (
+        total_completion_tokens / total_steps if total_steps > 0 else 0.0
+    )
 
     # solve_rate = official_resolved (harness result), distinct from patch_rate
     solved = sum(1 for m in task_metrics if m.get("official_resolved"))
@@ -183,25 +189,27 @@ def build_comparison(
     paired = []
     for iid in common_ids:
         ma, mb = ids_a[iid], ids_b[iid]
-        paired.append({
-            "instance_id": iid,
-            label_a: {
-                "n_steps": ma["n_steps"],
-                "elapsed_s": ma["elapsed_s"],
-                "total_tokens": ma["total_tokens"],
-                "tool_diversity": ma["tool_diversity"],
-                "llm_ratio": ma["llm_ratio"],
-                "patch_generated": ma["patch_generated"],
-            },
-            label_b: {
-                "n_steps": mb["n_steps"],
-                "elapsed_s": mb["elapsed_s"],
-                "total_tokens": mb["total_tokens"],
-                "tool_diversity": mb["tool_diversity"],
-                "llm_ratio": mb["llm_ratio"],
-                "patch_generated": mb["patch_generated"],
-            },
-        })
+        paired.append(
+            {
+                "instance_id": iid,
+                label_a: {
+                    "n_steps": ma["n_steps"],
+                    "elapsed_s": ma["elapsed_s"],
+                    "total_tokens": ma["total_tokens"],
+                    "tool_diversity": ma["tool_diversity"],
+                    "llm_ratio": ma["llm_ratio"],
+                    "patch_generated": ma["patch_generated"],
+                },
+                label_b: {
+                    "n_steps": mb["n_steps"],
+                    "elapsed_s": mb["elapsed_s"],
+                    "total_tokens": mb["total_tokens"],
+                    "tool_diversity": mb["tool_diversity"],
+                    "llm_ratio": mb["llm_ratio"],
+                    "patch_generated": mb["patch_generated"],
+                },
+            }
+        )
 
     return {
         "agents": {label_a: agg_a, label_b: agg_b},
@@ -213,6 +221,7 @@ def build_comparison(
 # ---------------------------------------------------------------------------
 # Markdown report
 # ---------------------------------------------------------------------------
+
 
 def render_markdown(
     comparison: dict[str, Any],
@@ -228,7 +237,9 @@ def render_markdown(
 
     lines.append("## Summary\n")
     lines.append(f"| Metric | {label_a} | {label_b} |")
-    lines.append("|--------|" + "-" * (len(label_a) + 2) + "|" + "-" * (len(label_b) + 2) + "|")
+    lines.append(
+        "|--------|" + "-" * (len(label_a) + 2) + "|" + "-" * (len(label_b) + 2) + "|"
+    )
 
     metrics_display = [
         ("Tasks", "n_tasks", "d"),
@@ -251,16 +262,22 @@ def render_markdown(
 
     lines.append("\n## Tool Distribution\n")
     lines.append(f"### {label_a}")
-    for tool, count in sorted(agg_a.get("total_tool_distribution", {}).items(), key=lambda x: -x[1]):
+    for tool, count in sorted(
+        agg_a.get("total_tool_distribution", {}).items(), key=lambda x: -x[1]
+    ):
         lines.append(f"- {tool}: {count}")
     lines.append(f"\n### {label_b}")
-    for tool, count in sorted(agg_b.get("total_tool_distribution", {}).items(), key=lambda x: -x[1]):
+    for tool, count in sorted(
+        agg_b.get("total_tool_distribution", {}).items(), key=lambda x: -x[1]
+    ):
         lines.append(f"- {tool}: {count}")
 
     lines.append("\n## Per-Task Comparison\n")
     paired = comparison.get("paired_tasks", [])
     if paired:
-        lines.append(f"| Task | {label_a} steps | {label_b} steps | {label_a} tokens | {label_b} tokens | {label_a} patch | {label_b} patch |")
+        lines.append(
+            f"| Task | {label_a} steps | {label_b} steps | {label_a} tokens | {label_b} tokens | {label_a} patch | {label_b} patch |"
+        )
         lines.append("|------|" + "---|" * 6)
         for p in paired:
             a = p[label_a]
@@ -278,6 +295,7 @@ def render_markdown(
 # Plots (optional, requires matplotlib)
 # ---------------------------------------------------------------------------
 
+
 def generate_plots(
     metrics_a: list[dict[str, Any]],
     metrics_b: list[dict[str, Any]],
@@ -288,6 +306,7 @@ def generate_plots(
     """Generate comparison plots. Returns list of saved file paths."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
@@ -306,8 +325,18 @@ def generate_plots(
     fig, ax = plt.subplots(figsize=(10, 5))
     x = range(len(common))
     width = 0.35
-    ax.bar([i - width / 2 for i in x], [ids_a[iid]["n_steps"] for iid in common], width, label=label_a)
-    ax.bar([i + width / 2 for i in x], [ids_b[iid]["n_steps"] for iid in common], width, label=label_b)
+    ax.bar(
+        [i - width / 2 for i in x],
+        [ids_a[iid]["n_steps"] for iid in common],
+        width,
+        label=label_a,
+    )
+    ax.bar(
+        [i + width / 2 for i in x],
+        [ids_b[iid]["n_steps"] for iid in common],
+        width,
+        label=label_b,
+    )
     ax.set_xlabel("Task")
     ax.set_ylabel("Steps")
     ax.set_title("Steps per Task")
@@ -343,8 +372,18 @@ def generate_plots(
     # 3. LLM/Tool time ratio
     if common:
         fig, ax = plt.subplots(figsize=(10, 5))
-        ax.bar([i - width / 2 for i in x], [ids_a[iid]["llm_ratio"] for iid in common], width, label=label_a)
-        ax.bar([i + width / 2 for i in x], [ids_b[iid]["llm_ratio"] for iid in common], width, label=label_b)
+        ax.bar(
+            [i - width / 2 for i in x],
+            [ids_a[iid]["llm_ratio"] for iid in common],
+            width,
+            label=label_a,
+        )
+        ax.bar(
+            [i + width / 2 for i in x],
+            [ids_b[iid]["llm_ratio"] for iid in common],
+            width,
+            label=label_b,
+        )
         ax.set_xlabel("Task")
         ax.set_ylabel("LLM / (LLM + Tool) time ratio")
         ax.set_title("LLM vs Tool Time Ratio")
@@ -360,8 +399,18 @@ def generate_plots(
     # 4. Tool diversity comparison
     if common:
         fig, ax = plt.subplots(figsize=(10, 5))
-        ax.bar([i - width / 2 for i in x], [ids_a[iid]["tool_diversity"] for iid in common], width, label=label_a)
-        ax.bar([i + width / 2 for i in x], [ids_b[iid]["tool_diversity"] for iid in common], width, label=label_b)
+        ax.bar(
+            [i - width / 2 for i in x],
+            [ids_a[iid]["tool_diversity"] for iid in common],
+            width,
+            label=label_a,
+        )
+        ax.bar(
+            [i + width / 2 for i in x],
+            [ids_b[iid]["tool_diversity"] for iid in common],
+            width,
+            label=label_b,
+        )
         ax.set_xlabel("Task")
         ax.set_ylabel("Unique Tools Used")
         ax.set_title("Tool Diversity")
@@ -381,15 +430,26 @@ def generate_plots(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare two agent scaffolds on the same SWE-bench tasks.",
     )
-    parser.add_argument("--agent-a", required=True, help="Path to agent A results.jsonl")
-    parser.add_argument("--agent-b", required=True, help="Path to agent B results.jsonl")
-    parser.add_argument("--label-a", default="mini-swe-agent", help="Display label for agent A")
-    parser.add_argument("--label-b", default="openclaw", help="Display label for agent B")
-    parser.add_argument("--output", default="traces/analysis/comparison", help="Output directory")
+    parser.add_argument(
+        "--agent-a", required=True, help="Path to agent A results.jsonl"
+    )
+    parser.add_argument(
+        "--agent-b", required=True, help="Path to agent B results.jsonl"
+    )
+    parser.add_argument(
+        "--label-a", default="mini-swe-agent", help="Display label for agent A"
+    )
+    parser.add_argument(
+        "--label-b", default="openclaw", help="Display label for agent B"
+    )
+    parser.add_argument(
+        "--output", default="traces/analysis/comparison", help="Output directory"
+    )
     parser.add_argument("--no-plots", action="store_true", help="Skip plot generation")
     return parser.parse_args(argv)
 
@@ -404,7 +464,9 @@ def main(argv: list[str] | None = None) -> None:
     # Load results
     results_a = load_results(path_a)
     results_b = load_results(path_b)
-    print(f"Loaded {len(results_a)} results from {args.label_a}, {len(results_b)} from {args.label_b}")
+    print(
+        f"Loaded {len(results_a)} results from {args.label_a}, {len(results_b)} from {args.label_b}"
+    )
 
     # Compute per-task metrics
     metrics_a = []
@@ -424,17 +486,23 @@ def main(argv: list[str] | None = None) -> None:
 
     # Write JSON
     json_path = output_dir / "comparison_summary.json"
-    json_path.write_text(json.dumps(comparison, indent=2, ensure_ascii=False), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(comparison, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     print(f"JSON summary: {json_path}")
 
     # Write Markdown
     md_path = output_dir / "comparison_summary.md"
-    md_path.write_text(render_markdown(comparison, args.label_a, args.label_b), encoding="utf-8")
+    md_path.write_text(
+        render_markdown(comparison, args.label_a, args.label_b), encoding="utf-8"
+    )
     print(f"Markdown report: {md_path}")
 
     # Generate plots
     if not args.no_plots:
-        plots = generate_plots(metrics_a, metrics_b, args.label_a, args.label_b, output_dir)
+        plots = generate_plots(
+            metrics_a, metrics_b, args.label_a, args.label_b, output_dir
+        )
         if plots:
             print(f"Plots: {len(plots)} files in {output_dir / 'plots'}/")
         else:

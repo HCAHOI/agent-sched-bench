@@ -14,7 +14,6 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -63,11 +62,7 @@ async def _call_local_model_streaming(
         extra_body={"min_tokens": n_tokens},  # vLLM: force exactly n_tokens
     )
     async for chunk in stream:
-        if (
-            first_token_ts is None
-            and chunk.choices
-            and chunk.choices[0].delta.content
-        ):
+        if first_token_ts is None and chunk.choices and chunk.choices[0].delta.content:
             first_token_ts = time.monotonic()
 
     t_end = time.monotonic()
@@ -121,6 +116,62 @@ def _build_simulate_run_id(model: str) -> str:
     return f"simulate_{safe_model}_{ts}"
 
 
+def load_trace_steps(
+    trace_path: Path,
+    agent_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Load step records and optional summary for one agent from a JSONL trace.
+
+    Returns:
+        (steps sorted by step_idx, summary or None)
+
+    Raises:
+        SimulateError: if agent_id not found or no step records exist.
+    """
+    steps: list[dict[str, Any]] = []
+    summary: dict[str, Any] | None = None
+
+    with open(trace_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("agent_id") != agent_id:
+                continue
+            if record.get("type") == "step":
+                steps.append(record)
+            elif record.get("type") == "summary":
+                summary = record
+
+    if not steps:
+        raise SimulateError(f"No step records found for agent_id={agent_id!r}")
+
+    steps.sort(key=lambda s: s["step_idx"])
+
+    # Validate no gaps
+    indices = [s["step_idx"] for s in steps]
+    expected = list(range(len(indices)))
+    if indices != expected:
+        raise SimulateError(
+            f"Step index gaps for {agent_id}: got {indices[:5]}... expected 0..{len(indices) - 1}"
+        )
+
+    return steps, summary
+
+
+def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
+    """Look up a task by instance_id from the tasks JSON file."""
+    tasks = json.loads(task_source.read_text(encoding="utf-8"))
+    for task in tasks:
+        if task["instance_id"] == agent_id:
+            return task
+    raise SimulateError(f"Task {agent_id!r} not found in {task_source}")
+
+
 async def simulate(
     *,
     source_trace: Path,
@@ -158,8 +209,7 @@ async def simulate(
     Returns:
         Path to the simulate trace JSONL file.
     """
-    from agents.mini_swe_code_agent import MiniSWECodeAgent
-    from trace_collect.replayer import _find_task, load_trace_steps
+    from agents.miniswe import MiniSWECodeAgent
 
     # 1. Load source trace
     # Detect agent_id: use the first step record's agent_id
@@ -172,7 +222,10 @@ async def simulate(
     source_model = (summary or {}).get("model", "unknown")
     logger.info(
         "Simulating %s: %d steps from %s, local model=%s",
-        agent_id, len(steps), source_model, model,
+        agent_id,
+        len(steps),
+        source_model,
+        model,
     )
 
     # 3. Prepare environment (clone repo)
@@ -236,7 +289,10 @@ async def simulate(
             # 6a. Streaming call to local model (measure timing, discard output)
             try:
                 ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
-                    client, model, messages_in, n_tokens,
+                    client,
+                    model,
+                    messages_in,
+                    n_tokens,
                 )
             except Exception as exc:
                 logger.error("Step %d: LLM call failed: %s", step_idx, exc)
@@ -314,8 +370,13 @@ async def simulate(
 
             logger.info(
                 "[%d/%d] step %d: ttft=%.1fms tpot=%.2fms llm=%.0fms tool=%.0fms",
-                i + 1, total_steps, step_idx,
-                ttft_ms, tpot_ms, llm_latency_ms, tool_duration_ms,
+                i + 1,
+                total_steps,
+                step_idx,
+                ttft_ms,
+                tpot_ms,
+                llm_latency_ms,
+                tool_duration_ms,
             )
 
     finally:
@@ -340,12 +401,17 @@ async def simulate(
         # Cleanup workdir
         if agent._workdir:
             import shutil
+
             shutil.rmtree(agent._workdir, ignore_errors=True)
 
     trace_file = output_path / f"{run_id}.jsonl"
     logger.info(
         "Simulate complete: %s steps=%d/%d elapsed=%.1fs -> %s",
-        agent_id, succeeded_steps, total_steps, wall_end - wall_start, trace_file,
+        agent_id,
+        succeeded_steps,
+        total_steps,
+        wall_end - wall_start,
+        trace_file,
     )
     return trace_file
 

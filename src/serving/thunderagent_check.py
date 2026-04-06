@@ -48,9 +48,10 @@ async def verify_proxy(args: argparse.Namespace) -> dict[str, Any]:
             chat_responses.append(response)
             if index == 0:
                 assistant_message = (
-                    (((response.get("choices") or [{}])[0].get("message") or {}).get("content"))
-                    or ""
-                )
+                    ((response.get("choices") or [{}])[0].get("message") or {}).get(
+                        "content"
+                    )
+                ) or ""
                 messages = [
                     *messages,
                     {"role": "assistant", "content": assistant_message},
@@ -58,7 +59,9 @@ async def verify_proxy(args: argparse.Namespace) -> dict[str, Any]:
                 ]
 
         programs_payload = await fetch_json(client, f"{args.base_url}/programs")
-        profile_payload = await fetch_json(client, f"{args.base_url}/profiles/{args.program_id}")
+        profile_payload = await fetch_json(
+            client, f"{args.base_url}/profiles/{args.program_id}"
+        )
         metrics_payload = await fetch_json(client, f"{args.base_url}/metrics")
 
     return {
@@ -85,11 +88,17 @@ def validate_report(report: dict[str, Any]) -> list[str]:
         errors.append("program_id was not tracked in /programs")
     if not report["profile_response"]:
         errors.append("profile endpoint returned an empty payload")
-    pre_program = (report.get("pre_programs_response") or {}).get(report["program_id"], {})
+    pre_program = (report.get("pre_programs_response") or {}).get(
+        report["program_id"], {}
+    )
     post_program = report["programs_response"].get(report["program_id"], {})
-    step_delta = int(post_program.get("step_count", 0)) - int(pre_program.get("step_count", 0))
+    step_delta = int(post_program.get("step_count", 0)) - int(
+        pre_program.get("step_count", 0)
+    )
     if step_delta < 2:
-        errors.append("program step_count did not increase by at least 2 during this run")
+        errors.append(
+            "program step_count did not increase by at least 2 during this run"
+        )
     metrics_response = report["metrics_response"]
     if not metrics_response.get("metrics_enabled"):
         errors.append("ThunderAgent /metrics reported metrics disabled")

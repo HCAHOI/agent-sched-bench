@@ -106,7 +106,9 @@ async def prepare_workspace(
     elapsed_ms = (time.monotonic() - wall_start) * 1000
     logger.info(
         "Workspace prepared for {repo}@{commit} in {ms:.0f}ms",
-        repo=repo, commit=base_commit[:8], ms=elapsed_ms,
+        repo=repo,
+        commit=base_commit[:8],
+        ms=elapsed_ms,
     )
     return elapsed_ms
 

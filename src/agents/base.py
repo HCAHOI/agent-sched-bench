@@ -178,7 +178,9 @@ class AgentBase(ABC):
                 response = await self._client.chat.completions.create(**kwargs)
                 elapsed_ms = (time.monotonic() - started) * 1000
                 if not response.choices:
-                    raise RuntimeError(f"LLM returned empty choices: {response.model_dump()}")
+                    raise RuntimeError(
+                        f"LLM returned empty choices: {response.model_dump()}"
+                    )
                 break
             except (APIConnectionError, APITimeoutError) as exc:
                 last_exc = exc
@@ -186,7 +188,10 @@ class AgentBase(ABC):
                     raise
                 logger.warning(
                     "LLM transient error (attempt %d/%d), retrying in %ds: %s",
-                    attempt + 1, len(self._RETRY_DELAYS), delay, exc,
+                    attempt + 1,
+                    len(self._RETRY_DELAYS),
+                    delay,
+                    exc,
                 )
                 await _asyncio.sleep(delay)
             except APIStatusError as exc:
@@ -195,11 +200,17 @@ class AgentBase(ABC):
                     raise
                 logger.warning(
                     "LLM %d error (attempt %d/%d), retrying in %ds: %s",
-                    exc.status_code, attempt + 1, len(self._RETRY_DELAYS), delay, exc,
+                    exc.status_code,
+                    attempt + 1,
+                    len(self._RETRY_DELAYS),
+                    delay,
+                    exc,
                 )
                 await _asyncio.sleep(delay)
         else:
-            raise RuntimeError(f"LLM call failed after {len(self._RETRY_DELAYS)} retries") from last_exc
+            raise RuntimeError(
+                f"LLM call failed after {len(self._RETRY_DELAYS)} retries"
+            ) from last_exc
 
         message = response.choices[0].message
         usage = getattr(response, "usage", None)
@@ -307,10 +318,9 @@ class AgentBase(ABC):
         for record in self.trace:
             if record.tool_name is None:
                 continue
-            tool_ms_by_name[record.tool_name] = (
-                tool_ms_by_name.get(record.tool_name, 0.0)
-                + (record.tool_duration_ms or 0.0)
-            )
+            tool_ms_by_name[record.tool_name] = tool_ms_by_name.get(
+                record.tool_name, 0.0
+            ) + (record.tool_duration_ms or 0.0)
             if record.tool_timeout:
                 tool_timeouts[record.tool_name] = (
                     tool_timeouts.get(record.tool_name, 0) + 1

@@ -17,8 +17,14 @@ def safe_version(package: str) -> str | None:
 
 def collect_file_inventory(model_path: Path) -> dict[str, Any]:
     """Collect a shallow inventory of files within the downloaded model directory."""
-    files = sorted(path.relative_to(model_path).as_posix() for path in model_path.rglob("*") if path.is_file())
-    total_size_bytes = sum(path.stat().st_size for path in model_path.rglob("*") if path.is_file())
+    files = sorted(
+        path.relative_to(model_path).as_posix()
+        for path in model_path.rglob("*")
+        if path.is_file()
+    )
+    total_size_bytes = sum(
+        path.stat().st_size for path in model_path.rglob("*") if path.is_file()
+    )
     return {
         "file_count": len(files),
         "total_size_bytes": total_size_bytes,
@@ -26,7 +32,9 @@ def collect_file_inventory(model_path: Path) -> dict[str, Any]:
     }
 
 
-def load_transformers_metadata(model_path: Path, verify_load_mode: str) -> dict[str, Any]:
+def load_transformers_metadata(
+    model_path: Path, verify_load_mode: str
+) -> dict[str, Any]:
     """Load model configuration and optionally the full model weights."""
     from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -82,7 +90,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "torch": safe_version("torch"),
         },
         "inventory": collect_file_inventory(model_path),
-        "transformers_metadata": load_transformers_metadata(model_path, args.verify_load_mode),
+        "transformers_metadata": load_transformers_metadata(
+            model_path, args.verify_load_mode
+        ),
     }
     return report
 

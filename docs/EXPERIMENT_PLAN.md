@@ -262,21 +262,6 @@ CONTINUUM_REF=<pinned-commit> scripts/serve_continuum.sh
 **风险**: Continuum 基于 vLLM 0.10.x fork，可能与当前 vLLM 0.10.2 冲突。  
 **时间上限**: 如果 4 小时内无法 build，放弃本地部署。
 
-### Step 3.4: Fallback — Trace Replay
-
-如果 Continuum 部署失败，使用 trace replay 模式：
-
-```bash
-# 用 Phase 2 收集的真实 trace 来 replay
-.venv/bin/python -m harness.trace_replayer \
-    --trace-file results/raw/<run_id>.jsonl \
-    --api-base http://localhost:8000/v1 \
-    --concurrency 4,8,12
-```
-
-- 引用 Continuum 论文 Table 8B/A100 的数据作为 reference
-- Replay 模式下可以精确控制 arrival pattern
-
 **Phase 3 Milestone**: 至少有 vLLM baseline + ThunderAgent 的对比数据；Continuum 有数据或有 justified fallback。
 
 ---

@@ -79,7 +79,12 @@ class TestDetectAgentId:
         trace = tmp_path / "test.jsonl"
         records = [
             {"type": "action", "agent_id": "task-001", "step_idx": 0},
-            {"type": "step", "agent_id": "task-001", "step_idx": 0, "tool_name": "bash"},
+            {
+                "type": "step",
+                "agent_id": "task-001",
+                "step_idx": 0,
+                "tool_name": "bash",
+            },
         ]
         trace.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
         assert _detect_agent_id(trace) == "task-001"
@@ -103,7 +108,12 @@ class TestTraceLoggerAction:
         tl.log_action("test-001", action)
         tl.close()
 
-        lines = (tmp_path / "test_run.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        lines = (
+            (tmp_path / "test_run.jsonl")
+            .read_text(encoding="utf-8")
+            .strip()
+            .splitlines()
+        )
         assert len(lines) == 1
         record = json.loads(lines[0])
         assert record["type"] == "action"
@@ -150,7 +160,12 @@ class TestEmitStepEmitsAction:
         agent._emit_step(record)
         tl.close()
 
-        lines = (tmp_path / "test_run.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        lines = (
+            (tmp_path / "test_run.jsonl")
+            .read_text(encoding="utf-8")
+            .strip()
+            .splitlines()
+        )
         assert len(lines) == 2
         action = json.loads(lines[0])
         step = json.loads(lines[1])

@@ -54,7 +54,9 @@ def build_vllm_command(config: VLLMServerConfig) -> list[str]:
         server_args.extend(["--tool-call-parser", config.tool_call_parser])
     if config.enable_scheduler_hook:
         if not config.scheduler_hook_report_path:
-            raise ValueError("scheduler_hook_report_path is required when scheduler hook is enabled")
+            raise ValueError(
+                "scheduler_hook_report_path is required when scheduler hook is enabled"
+            )
         return [
             sys.executable,
             "-m",

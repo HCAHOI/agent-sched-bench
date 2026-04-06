@@ -18,7 +18,7 @@ from trace_collect.swebench_harness import (
 )
 
 if TYPE_CHECKING:
-    from agents.mini_swe_code_agent import MiniSWECodeAgent
+    from agents.miniswe import MiniSWECodeAgent
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,9 @@ def load_completed_ids(run_dir: Path) -> set[str]:
     return completed
 
 
-def build_run_dir(output_dir: str | Path, model: str, task_source: str | Path = "") -> Path:
+def build_run_dir(
+    output_dir: str | Path, model: str, task_source: str | Path = ""
+) -> Path:
     """Build run directory: {output_dir}/{benchmark}/{model}/{timestamp}/."""
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
     safe_model = model.replace("/", "-").replace(":", "-")
@@ -222,7 +224,10 @@ def _rewrite_trace_summary(trace_file: Path, result: CollectedTaskResult) -> Non
             except json.JSONDecodeError:
                 rewritten.append(raw_line.rstrip("\n"))
                 continue
-            if record.get("type") == "summary" and record.get("agent_id") == result.instance_id:
+            if (
+                record.get("type") == "summary"
+                and record.get("agent_id") == result.instance_id
+            ):
                 record["success"] = result.success
                 record["success_basis"] = result.success_basis
                 record["patch_generated"] = result.patch_generated
@@ -241,7 +246,9 @@ def _ordered_results(
     task_ids: list[str],
     results_by_id: dict[str, CollectedTaskResult],
 ) -> list[CollectedTaskResult]:
-    ordered = [results_by_id[task_id] for task_id in task_ids if task_id in results_by_id]
+    ordered = [
+        results_by_id[task_id] for task_id in task_ids if task_id in results_by_id
+    ]
     extra_ids = sorted(set(results_by_id) - set(task_ids))
     ordered.extend(results_by_id[task_id] for task_id in extra_ids)
     return ordered
@@ -327,7 +334,7 @@ async def collect_traces(
             harness_namespace=harness_namespace,
         )
 
-    from agents.mini_swe_code_agent import MiniSWECodeAgent
+    from agents.miniswe import MiniSWECodeAgent
 
     if run_id is not None:
         # Resume: run_id is the full path to an existing run directory
@@ -350,7 +357,9 @@ async def collect_traces(
     for i, task in enumerate(tasks):
         instance_id = task["instance_id"]
         if instance_id in completed:
-            logger.info("[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id)
+            logger.info(
+                "[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id
+            )
             continue
 
         logger.info("[%d/%d] START %s", i + 1, total, instance_id)
@@ -364,6 +373,12 @@ async def collect_traces(
             api_base=api_base,
             max_steps=max_steps,
             instance_id=instance_id,
+            scaffold_capabilities={
+                "tools": ["bash"],
+                "memory": False,
+                "skills": False,
+                "file_ops": "bash_only",
+            },
         )
 
         agent = MiniSWECodeAgent(
@@ -433,12 +448,20 @@ async def collect_traces(
         steps = len(agent.trace)
         logger.info(
             "[%d/%d] DONE %s success=%s steps=%d elapsed=%.1fs",
-            i + 1, total, instance_id, success, steps, elapsed,
+            i + 1,
+            total,
+            instance_id,
+            success,
+            steps,
+            elapsed,
         )
 
     logger.info(
         "Collection complete: %d/%d succeeded, %d failed, traces -> %s",
-        succeeded, total, failed, run_dir,
+        succeeded,
+        total,
+        failed,
+        run_dir,
     )
     task_ids = [task["instance_id"] for task in tasks]
     ordered_results = _ordered_results(task_ids=task_ids, results_by_id=results_by_id)
@@ -448,7 +471,9 @@ async def collect_traces(
         model_name=model,
         predictions_path=predictions_path,
     )
-    logger.info("Predictions written to %s (%d patches)", predictions_path, prediction_count)
+    logger.info(
+        "Predictions written to %s (%d patches)", predictions_path, prediction_count
+    )
 
     if evaluate:
         if not is_swebench_available():
@@ -501,11 +526,15 @@ async def collect_traces(
                 result.success = bool(result.official_resolved)
                 result.evaluation_run_id = evaluation.run_id
                 report_path = evaluation.instance_report_paths.get(result.instance_id)
-                result.evaluation_report_path = str(report_path) if report_path else None
+                result.evaluation_report_path = (
+                    str(report_path) if report_path else None
+                )
                 result.evaluation_report = report
                 _rewrite_trace_summary(result.trace_file, result)
             if evaluation.report_path is not None:
-                logger.info("Official SWE-bench report written to %s", evaluation.report_path)
+                logger.info(
+                    "Official SWE-bench report written to %s", evaluation.report_path
+                )
 
     _write_results(ordered_results, results_path)
     logger.info("Results written to %s", results_path)
@@ -569,7 +598,9 @@ async def _collect_openclaw(
     for i, task in enumerate(tasks):
         instance_id = task["instance_id"]
         if instance_id in completed:
-            logger.info("[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id)
+            logger.info(
+                "[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id
+            )
             continue
 
         logger.info("[%d/%d] START %s (openclaw)", i + 1, total, instance_id)
@@ -584,20 +615,25 @@ async def _collect_openclaw(
             dest_trace = run_dir / f"{instance_id}.jsonl"
             if ws_trace.exists() and not dest_trace.exists():
                 _normalize_openclaw_trace(
-                    src=ws_trace, dst=dest_trace,
-                    model=model, api_base=api_base,
-                    max_steps=max_steps, instance_id=instance_id,
+                    src=ws_trace,
+                    dst=dest_trace,
+                    model=model,
+                    api_base=api_base,
+                    max_steps=max_steps,
+                    instance_id=instance_id,
                 )
-            results.append(CollectedTaskResult(
-                instance_id=instance_id,
-                trace_file=str(dest_trace),
-                success=False,
-                success_basis="patch_generated",
-                patch_generated=False,
-                model_patch="",
-                exit_status="error",
-                error=f"{type(exc).__name__}: {exc}",
-            ))
+            results.append(
+                CollectedTaskResult(
+                    instance_id=instance_id,
+                    trace_file=str(dest_trace),
+                    success=False,
+                    success_basis="patch_generated",
+                    patch_generated=False,
+                    model_patch="",
+                    exit_status="error",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
             continue
 
         # Read summary from trace file to get aggregate metrics
@@ -606,7 +642,10 @@ async def _collect_openclaw(
             trace_path = Path(eval_result.trace_file)
             if trace_path.exists():
                 for line in trace_path.read_text(encoding="utf-8").splitlines():
-                    rec = json.loads(line)
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
                     if rec.get("type") == "summary":
                         trace_summary = rec
                         break
@@ -615,7 +654,7 @@ async def _collect_openclaw(
         model_patch = eval_result.model_patch or ""
         task_result = CollectedTaskResult(
             instance_id=instance_id,
-            trace_file=str(run_dir / f"{instance_id}.jsonl"),
+            trace_file=run_dir / f"{instance_id}.jsonl",
             success=bool(model_patch),
             success_basis="patch_generated",
             patch_generated=bool(model_patch),
@@ -644,13 +683,18 @@ async def _collect_openclaw(
         results.append(task_result)
         logger.info(
             "[%d/%d] DONE %s  steps=%d patch=%s",
-            i + 1, total, instance_id,
-            task_result.n_steps, task_result.patch_generated,
+            i + 1,
+            total,
+            instance_id,
+            task_result.n_steps,
+            task_result.patch_generated,
         )
 
     # Write results + predictions
     _write_results(results, results_path)
-    _write_predictions(results, model_name=model, predictions_path=run_dir / "preds.json")
+    _write_predictions(
+        results, model_name=model, predictions_path=run_dir / "preds.json"
+    )
     logger.info("Results written to %s", results_path)
 
     # Harness evaluation
@@ -659,19 +703,42 @@ async def _collect_openclaw(
         if preds_path.exists():
             evaluation = run_official_evaluation(
                 predictions_path=preds_path,
-                dataset=harness_dataset,
+                dataset_name=harness_dataset,
                 split=harness_split,
                 max_workers=harness_max_workers,
                 timeout=harness_timeout,
                 run_id=harness_run_id or build_eval_run_id(run_dir),
-                report_dir=str(harness_report_dir) if harness_report_dir else None,
+                report_dir=Path(harness_report_dir) if harness_report_dir else None,
                 namespace=harness_namespace,
             )
-            if evaluation and evaluation.resolved_ids is not None:
+            if evaluation.returncode != 0:
+                logger.error(
+                    "Official SWE-bench harness failed (exit %d): %s",
+                    evaluation.returncode,
+                    (evaluation.stderr or evaluation.stdout)[-4000:],
+                )
+            else:
                 for result in results:
-                    result.official_resolved = result.instance_id in evaluation.resolved_ids
-                    result.success = bool(result.official_resolved)
+                    report = evaluation.instance_reports.get(result.instance_id)
+                    report_payload = (
+                        report.get(result.instance_id)
+                        if isinstance(report, dict) and result.instance_id in report
+                        else report
+                    )
                     result.success_basis = "official_resolved"
+                    result.official_resolved = bool(
+                        isinstance(report_payload, dict)
+                        and report_payload.get("resolved")
+                    )
+                    result.success = bool(result.official_resolved)
+                    result.evaluation_run_id = evaluation.run_id
+                    report_path = evaluation.instance_report_paths.get(
+                        result.instance_id
+                    )
+                    result.evaluation_report_path = (
+                        str(report_path) if report_path else None
+                    )
+                    result.evaluation_report = report
                 _write_results(results, results_path)
 
     return run_dir
@@ -697,6 +764,21 @@ def _normalize_openclaw_trace(
             "max_steps": max_steps,
             "instance_id": instance_id,
             "mode": "collect",
+            "scaffold_capabilities": {
+                "tools": [
+                    "bash",
+                    "file_read",
+                    "file_write",
+                    "file_edit",
+                    "list_dir",
+                    "web_search",
+                    "web_fetch",
+                    "send_message",
+                ],
+                "memory": True,
+                "skills": True,
+                "file_ops": "structured",
+            },
         }
         f.write(json.dumps(metadata, ensure_ascii=False) + "\n")
         for line in lines:

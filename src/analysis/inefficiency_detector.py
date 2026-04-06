@@ -42,7 +42,8 @@ def detect_inefficiencies(
             ):
                 bubble_count += 1
             if (
-                float(row.get("vllm:gpu_cache_usage_perc", 0.0)) >= idle_cache_threshold_perc
+                float(row.get("vllm:gpu_cache_usage_perc", 0.0))
+                >= idle_cache_threshold_perc
                 and float(row.get("vllm:num_requests_running", 0.0)) == 0.0
             ):
                 idle_memory_seconds += interval_s

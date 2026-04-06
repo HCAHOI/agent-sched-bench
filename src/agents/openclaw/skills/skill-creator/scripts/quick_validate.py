@@ -52,7 +52,9 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
             if current_key is None:
                 return None
             current_value = parsed[current_key]
-            parsed[current_key] = f"{current_value}\n{stripped}" if current_value else stripped
+            parsed[current_key] = (
+                f"{current_value}\n{stripped}" if current_value else stripped
+            )
             continue
 
         if ":" not in stripped:
@@ -95,7 +97,10 @@ def _load_frontmatter(frontmatter_text: str) -> tuple[Optional[dict], Optional[s
 
     frontmatter = _parse_simple_frontmatter(frontmatter_text)
     if frontmatter is None:
-        return None, "Invalid YAML in frontmatter: unsupported syntax without PyYAML installed"
+        return (
+            None,
+            "Invalid YAML in frontmatter: unsupported syntax without PyYAML installed",
+        )
     return frontmatter, None
 
 

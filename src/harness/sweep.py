@@ -39,7 +39,7 @@ class SweepExecutionConfig:
     sweep_config_path: str
 
 
-OC_ENV_PATTERN = re.compile(r'^\$\{oc\.env:(?P<key>[^,}]+),(?P<default>.+)\}$')
+OC_ENV_PATTERN = re.compile(r"^\$\{oc\.env:(?P<key>[^,}]+),(?P<default>.+)\}$")
 
 
 def _resolve_value(value: Any) -> Any:
@@ -72,13 +72,19 @@ def resolve_task_source(task_source: str) -> Path:
         candidate_path = path / candidate
         if candidate_path.is_file():
             return candidate_path
-    raise FileNotFoundError(f"Could not resolve tasks file from task_source: {task_source}")
+    raise FileNotFoundError(
+        f"Could not resolve tasks file from task_source: {task_source}"
+    )
 
 
 def load_tasks(tasks_path: Path) -> list[dict[str, Any]]:
     """Load task payloads from JSON or JSONL."""
     if tasks_path.suffix == ".jsonl":
-        return [json.loads(line) for line in tasks_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [
+            json.loads(line)
+            for line in tasks_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
     return json.loads(tasks_path.read_text(encoding="utf-8"))
 
 
@@ -104,10 +110,14 @@ def expand_sweep_matrix(
                 continue
             workload_path = configs_root / "workloads" / f"{workload}.yaml"
             workload_config = load_config(workload_path)
-            task_source = task_source_overrides.get(workload, workload_config["task_source"])
+            task_source = task_source_overrides.get(
+                workload, workload_config["task_source"]
+            )
             tasks_file = resolve_task_source(task_source)
             for concurrency in matrix["concurrency"]:
-                run_id = f"{build_run_id(system, workload, concurrency)}_{len(runs):03d}"
+                run_id = (
+                    f"{build_run_id(system, workload, concurrency)}_{len(runs):03d}"
+                )
                 output_file = output_root / f"{run_id}.json"
                 runs.append(
                     SweepRun(
@@ -121,7 +131,9 @@ def expand_sweep_matrix(
     return runs
 
 
-def extract_agent_kwargs(workload_name: str, workload_config: dict[str, Any]) -> dict[str, Any]:
+def extract_agent_kwargs(
+    workload_name: str, workload_config: dict[str, Any]
+) -> dict[str, Any]:
     """Project workload config into the agent constructor kwargs we actually support."""
     if workload_name == "code_agent":
         return {
@@ -159,11 +171,13 @@ async def execute_sweep(
         system_config = load_config(system_path)
         api_base = system_config["api_base"]
         workload_key = run.workload.replace("_agent", "")
-        workload_config = load_config(configs_root / "workloads" / f"{run.workload}.yaml")
+        workload_config = load_config(
+            configs_root / "workloads" / f"{run.workload}.yaml"
+        )
         task_timeout_s = workload_config.get("task_timeout_s")
         all_tasks = load_tasks(Path(run.tasks_file))
         # Fixed concurrency: run exactly N tasks simultaneously (matching Continuum protocol)
-        tasks = all_tasks[:run.concurrency]
+        tasks = all_tasks[: run.concurrency]
         output_path = Path(run.output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         run_id = build_run_id(run.system, run.workload, run.concurrency)
@@ -206,7 +220,9 @@ async def execute_sweep(
             "concurrency": run.concurrency,
             "workload_config": workload_config,
             "execution_config": asdict(execution_config),
-            "results": [{"summary": result.summary, "trace": result.trace} for result in results],
+            "results": [
+                {"summary": result.summary, "trace": result.trace} for result in results
+            ],
         }
         output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         completed_runs.append(
@@ -221,7 +237,9 @@ async def execute_sweep(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Expand and execute the benchmark sweep matrix.")
+    parser = argparse.ArgumentParser(
+        description="Expand and execute the benchmark sweep matrix."
+    )
     parser.add_argument("--sweep-config", default="configs/sweeps/default.yaml")
     parser.add_argument("--configs-root", default="configs")
     parser.add_argument("--output-root", required=True)
@@ -229,7 +247,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--systems")
     parser.add_argument("--workloads")
     parser.add_argument("--task-source-override", action="append", default=[])
-    parser.add_argument("--arrival-mode", default="closed_loop", choices=["closed_loop", "poisson"])
+    parser.add_argument(
+        "--arrival-mode", default="closed_loop", choices=["closed_loop", "poisson"]
+    )
     parser.add_argument("--arrival-rate-per-s", type=float)
     parser.add_argument("--arrival-seed", type=int)
     parser.add_argument("--manifest-path")
@@ -258,7 +278,11 @@ def main() -> None:
         workloads_filter=workloads_filter,
         task_source_overrides=parse_overrides(args.task_source_override),
     )
-    manifest_path = Path(args.manifest_path) if args.manifest_path else Path(args.output_root) / "manifest.json"
+    manifest_path = (
+        Path(args.manifest_path)
+        if args.manifest_path
+        else Path(args.output_root) / "manifest.json"
+    )
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     if args.dry_run:
         manifest_payload = {
@@ -274,7 +298,9 @@ def main() -> None:
             ),
             "runs": [asdict(run) for run in runs],
         }
-        manifest_path.write_text(json.dumps(manifest_payload, indent=2) + "\n", encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest_payload, indent=2) + "\n", encoding="utf-8"
+        )
         return
     completed_runs = asyncio.run(
         execute_sweep(
@@ -288,7 +314,9 @@ def main() -> None:
             sweep_config_path=str(Path(args.sweep_config)),
         )
     )
-    manifest_path.write_text(json.dumps(completed_runs, indent=2) + "\n", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(completed_runs, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 if __name__ == "__main__":

@@ -43,15 +43,21 @@ class ToolRegistry:
         """Resolve, cast, and validate one tool call."""
         tool = self._tools.get(name)
         if not tool:
-            return None, params, (
-                f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+            return (
+                None,
+                params,
+                (
+                    f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+                ),
             )
 
         cast_params = tool.cast_params(params)
         errors = tool.validate_params(cast_params)
         if errors:
-            return tool, cast_params, (
-                f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
+            return (
+                tool,
+                cast_params,
+                (f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)),
             )
         return tool, cast_params, None
 

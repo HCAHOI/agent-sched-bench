@@ -18,7 +18,9 @@ def normalize_forwarded_args(args: list[str]) -> list[str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Launch vLLM with automatic scheduler hooks.")
+    parser = argparse.ArgumentParser(
+        description="Launch vLLM with automatic scheduler hooks."
+    )
     parser.add_argument("--hook-report-path", required=True)
     parser.add_argument("remainder", nargs=argparse.REMAINDER)
     return parser.parse_args()
@@ -29,8 +31,13 @@ def main() -> None:
     status = apply_scheduler_hook()
     report_path = Path(args.hook_report_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(asdict(status), indent=2) + "\n", encoding="utf-8")
-    sys.argv = ["vllm.entrypoints.openai.api_server", *normalize_forwarded_args(args.remainder)]
+    report_path.write_text(
+        json.dumps(asdict(status), indent=2) + "\n", encoding="utf-8"
+    )
+    sys.argv = [
+        "vllm.entrypoints.openai.api_server",
+        *normalize_forwarded_args(args.remainder),
+    ]
     runpy.run_module("vllm.entrypoints.openai.api_server", run_name="__main__")
 
 

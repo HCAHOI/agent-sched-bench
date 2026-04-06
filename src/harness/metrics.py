@@ -61,12 +61,16 @@ class VLLMMetricsCollector:
         return snapshot
 
     def _validate_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
-        missing = [metric for metric in self.METRICS_OF_INTEREST if metric not in snapshot]
+        missing = [
+            metric for metric in self.METRICS_OF_INTEREST if metric not in snapshot
+        ]
         if missing:
             logging.warning(f"Incomplete metrics snapshot, missing: {missing}")
         return snapshot
 
-    async def poll(self, interval_s: float = 1.0, max_samples: int | None = None) -> list[dict[str, Any]]:
+    async def poll(
+        self, interval_s: float = 1.0, max_samples: int | None = None
+    ) -> list[dict[str, Any]]:
         """Poll the metrics endpoint until cancelled or max_samples reached."""
         self.snapshots = []
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -84,7 +88,9 @@ class VLLMMetricsCollector:
     def dump_json(self, output_path: Path) -> None:
         """Write collected snapshots to JSON."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(self.snapshots, indent=2) + "\n", encoding="utf-8")
+        output_path.write_text(
+            json.dumps(self.snapshots, indent=2) + "\n", encoding="utf-8"
+        )
 
 
 def parse_nvidia_smi_csv(csv_text: str) -> list[dict[str, Any]]:
@@ -137,7 +143,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     collector = VLLMMetricsCollector(metrics_url=args.metrics_url)
-    asyncio.run(collector.poll(interval_s=args.interval_s, max_samples=args.max_samples))
+    asyncio.run(
+        collector.poll(interval_s=args.interval_s, max_samples=args.max_samples)
+    )
     collector.dump_json(Path(args.output))
 
 

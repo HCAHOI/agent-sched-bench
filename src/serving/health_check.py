@@ -99,7 +99,9 @@ async def verify_server(args: argparse.Namespace) -> dict[str, Any]:
             resolved_model = models[0]["id"]
         pre_metrics_payload = await require_metrics_endpoint(client, args.metrics_url)
         chat_payloads = []
-        request_messages: list[dict[str, str]] = [{"role": "user", "content": args.prompt}]
+        request_messages: list[dict[str, str]] = [
+            {"role": "user", "content": args.prompt}
+        ]
         for index in range(args.repeat):
             chat_payloads.append(
                 await run_chat_smoke(
@@ -112,9 +114,11 @@ async def verify_server(args: argparse.Namespace) -> dict[str, Any]:
             )
             if index < args.repeat - 1:
                 assistant_message = (
-                    (((chat_payloads[-1].get("choices") or [{}])[0].get("message") or {}).get("content"))
-                    or ""
-                )
+                    (
+                        (chat_payloads[-1].get("choices") or [{}])[0].get("message")
+                        or {}
+                    ).get("content")
+                ) or ""
                 request_messages = [
                     *request_messages,
                     {"role": "assistant", "content": assistant_message},

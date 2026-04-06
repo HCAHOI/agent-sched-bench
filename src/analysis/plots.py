@@ -28,7 +28,12 @@ def plot_latency_breakdown(frame: pd.DataFrame, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(6, 4))
     plt.bar(frame["concurrency"], frame["avg_llm_ms"], label="LLM")
-    plt.bar(frame["concurrency"], frame["avg_tool_ms"], bottom=frame["avg_llm_ms"], label="Tool")
+    plt.bar(
+        frame["concurrency"],
+        frame["avg_tool_ms"],
+        bottom=frame["avg_llm_ms"],
+        label="Tool",
+    )
     plt.xlabel("Concurrency")
     plt.ylabel("Average latency (ms)")
     plt.title("Latency Breakdown")
@@ -38,7 +43,9 @@ def plot_latency_breakdown(frame: pd.DataFrame, output_path: Path) -> None:
     plt.close()
 
 
-def plot_prefix_cache_hit_vs_concurrency(frame: pd.DataFrame, output_path: Path) -> None:
+def plot_prefix_cache_hit_vs_concurrency(
+    frame: pd.DataFrame, output_path: Path
+) -> None:
     """Plot prefix cache hit rate against concurrency."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(6, 4))
@@ -51,7 +58,9 @@ def plot_prefix_cache_hit_vs_concurrency(frame: pd.DataFrame, output_path: Path)
     plt.close()
 
 
-def plot_throughput_comparison(frames: dict[str, pd.DataFrame], output_path: Path) -> None:
+def plot_throughput_comparison(
+    frames: dict[str, pd.DataFrame], output_path: Path
+) -> None:
     """Overlay throughput-vs-concurrency curves for multiple systems."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     markers = ["o", "s", "^", "D", "v", "P", "X"]
@@ -106,7 +115,14 @@ def plot_gantt(trace_path: Path, output_path: Path) -> None:
         ax.barh(y, llm_dur, left=start, height=0.6, color="#4285F4", edgecolor="none")
         # Tool execution segment (immediately after LLM)
         if tool_dur > 0:
-            ax.barh(y, tool_dur, left=start + llm_dur, height=0.6, color="#EA4335", edgecolor="none")
+            ax.barh(
+                y,
+                tool_dur,
+                left=start + llm_dur,
+                height=0.6,
+                color="#EA4335",
+                edgecolor="none",
+            )
 
     ax.set_yticks(range(len(agents)))
     ax.set_yticklabels(agents, fontsize=7)
@@ -116,8 +132,12 @@ def plot_gantt(trace_path: Path, output_path: Path) -> None:
 
     # Legend
     from matplotlib.patches import Patch
+
     ax.legend(
-        handles=[Patch(color="#4285F4", label="LLM"), Patch(color="#EA4335", label="Tool")],
+        handles=[
+            Patch(color="#4285F4", label="LLM"),
+            Patch(color="#EA4335", label="Tool"),
+        ],
         loc="upper right",
         fontsize=8,
     )
@@ -126,7 +146,9 @@ def plot_gantt(trace_path: Path, output_path: Path) -> None:
     plt.close()
 
 
-def identify_cliff_point(frame: pd.DataFrame, *, throughput_drop_threshold: float = 0.1) -> int | None:
+def identify_cliff_point(
+    frame: pd.DataFrame, *, throughput_drop_threshold: float = 0.1
+) -> int | None:
     """Identify the first concurrency point where throughput drops materially."""
     ordered = frame.sort_values("concurrency").reset_index(drop=True)
     best_throughput = None
@@ -135,7 +157,9 @@ def identify_cliff_point(frame: pd.DataFrame, *, throughput_drop_threshold: floa
         if best_throughput is None or throughput > best_throughput:
             best_throughput = throughput
             continue
-        if best_throughput > 0 and throughput <= best_throughput * (1.0 - throughput_drop_threshold):
+        if best_throughput > 0 and throughput <= best_throughput * (
+            1.0 - throughput_drop_threshold
+        ):
             return int(row.concurrency)
     return None
 

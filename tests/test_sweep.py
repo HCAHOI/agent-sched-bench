@@ -4,7 +4,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from harness.sweep import SweepExecutionConfig, execute_sweep, expand_sweep_matrix
+import pytest
+
+from harness.sweep import execute_sweep, expand_sweep_matrix
+
+minisweagent = pytest.importorskip("minisweagent", reason="requires mini-swe-agent")
 
 
 def write_yaml(path: Path, content: str) -> None:
@@ -87,4 +91,6 @@ task_source: """
     assert result_path.exists()
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["execution_config"]["model"] == "mock"
-    assert completed[0]["execution_config"]["sweep_config_path"].endswith("default.yaml")
+    assert completed[0]["execution_config"]["sweep_config_path"].endswith(
+        "default.yaml"
+    )

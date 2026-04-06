@@ -28,7 +28,9 @@ def summarize_trace_frame(frame: pd.DataFrame) -> dict[str, Any]:
         if duration_s > 0:
             throughput_steps_per_min = len(step_rows) / duration_s * 60.0
 
-    if not step_rows.empty and {"agent_id", "ts_start", "ts_end"}.issubset(step_rows.columns):
+    if not step_rows.empty and {"agent_id", "ts_start", "ts_end"}.issubset(
+        step_rows.columns
+    ):
         jct_series = (
             step_rows.groupby("agent_id")
             .apply(lambda group: group["ts_end"].max() - group["ts_start"].min())
@@ -48,7 +50,9 @@ def summarize_trace_frame(frame: pd.DataFrame) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Parse JSONL traces into a summary JSON file.")
+    parser = argparse.ArgumentParser(
+        description="Parse JSONL traces into a summary JSON file."
+    )
     parser.add_argument("trace_file")
     parser.add_argument("--output")
     return parser.parse_args()

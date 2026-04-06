@@ -115,9 +115,9 @@ def select_tool_intensive_tasks(
 
     # Filter out trivial tasks
     candidates = [
-        t for t in tasks
-        if _count_fail_to_pass(t) > 0
-        and len(t.get("problem_statement", "")) > 100
+        t
+        for t in tasks
+        if _count_fail_to_pass(t) > 0 and len(t.get("problem_statement", "")) > 100
     ]
 
     # Group by repo

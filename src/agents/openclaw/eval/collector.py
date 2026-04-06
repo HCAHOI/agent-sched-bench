@@ -9,11 +9,9 @@ per session key.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from loguru import logger
 
-from agents.openclaw.bus.events import OutboundMessage
 from agents.openclaw.bus.queue import MessageBus
 
 

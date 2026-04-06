@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agents.base import AgentBase
-from agents.mini_swe_code_agent import MiniSWECodeAgent as CodeAgent
 from harness.trace_logger import TraceLogger
 
 
@@ -50,8 +49,12 @@ class RunnerTaskResult:
     trace: list[dict[str, Any]]
 
 
-def build_agent_factory(agent_name: str, agent_kwargs: dict[str, Any] | None = None) -> AgentFactory:
+def build_agent_factory(
+    agent_name: str, agent_kwargs: dict[str, Any] | None = None
+) -> AgentFactory:
     """Resolve a configured agent type into a constructor."""
+    from agents.miniswe import MiniSWECodeAgent as CodeAgent
+
     mapping: dict[str, type[AgentBase]] = {
         "code": CodeAgent,
     }
@@ -62,7 +65,9 @@ def build_agent_factory(agent_name: str, agent_kwargs: dict[str, Any] | None = N
     agent_kwargs = agent_kwargs or {}
 
     def factory(agent_id: str, api_base: str, model: str) -> AgentBase:
-        return agent_cls(agent_id=agent_id, api_base=api_base, model=model, **agent_kwargs)
+        return agent_cls(
+            agent_id=agent_id, api_base=api_base, model=model, **agent_kwargs
+        )
 
     return factory
 
@@ -102,7 +107,9 @@ class BenchmarkRunner:
         """Signal that no new tasks should start."""
         self._stop_requested = True
 
-    async def _run_single_task(self, task: dict[str, Any], idx: int) -> RunnerTaskResult:
+    async def _run_single_task(
+        self, task: dict[str, Any], idx: int
+    ) -> RunnerTaskResult:
         agent = self.agent_factory(f"agent-{idx:04d}", self.api_base, self.model)
         if self.trace_logger is not None:
             agent._trace_logger = self.trace_logger
@@ -157,16 +164,18 @@ class BenchmarkRunner:
                 agent._trace_logger = self.trace_logger
             agents.append((agent, task, idx))
 
-        await asyncio.gather(
-            *[agent.prepare(task) for agent, task, _ in agents]
-        )
+        await asyncio.gather(*[agent.prepare(task) for agent, task, _ in agents])
 
         # Phase 2: Run all agent loops simultaneously
-        async def _execute(agent: AgentBase, task: dict[str, Any], idx: int) -> RunnerTaskResult:
+        async def _execute(
+            agent: AgentBase, task: dict[str, Any], idx: int
+        ) -> RunnerTaskResult:
             try:
                 run_coro = agent.run(task)
                 if self.task_timeout_s is not None:
-                    success = await asyncio.wait_for(run_coro, timeout=self.task_timeout_s)
+                    success = await asyncio.wait_for(
+                        run_coro, timeout=self.task_timeout_s
+                    )
                 else:
                     success = await run_coro
                 agent.task_success = success
@@ -260,7 +269,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--concurrency", type=int, required=True)
     parser.add_argument("--tasks-file", required=True)
-    parser.add_argument("--arrival-mode", default="closed_loop", choices=["closed_loop", "poisson"])
+    parser.add_argument(
+        "--arrival-mode", default="closed_loop", choices=["closed_loop", "poisson"]
+    )
     parser.add_argument("--arrival-rate-per-s", type=float)
     parser.add_argument("--arrival-seed", type=int)
     parser.add_argument("--task-timeout-s", type=float)
@@ -293,8 +304,7 @@ def main() -> None:
         "started_at": started,
         "finished_at": time.time(),
         "results": [
-            {"summary": result.summary, "trace": result.trace}
-            for result in results
+            {"summary": result.summary, "trace": result.trace} for result in results
         ],
     }
     if args.output:

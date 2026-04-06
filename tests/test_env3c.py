@@ -82,6 +82,8 @@ def test_make_help_mentions_verify_env3c() -> None:
 
 
 def test_serve_thunderagent_requires_immutable_ref() -> None:
-    script_text = (REPO_ROOT / "scripts" / "serve_thunderagent.sh").read_text(encoding="utf-8")
+    script_text = (REPO_ROOT / "scripts" / "serve_thunderagent.sh").read_text(
+        encoding="utf-8"
+    )
     assert "refs/tags/" in script_text
     assert "^[0-9a-f]{40}$" in script_text
