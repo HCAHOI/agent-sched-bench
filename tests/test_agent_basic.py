@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any
 
-from agents.base import AgentBase, LLMCallResult, StepRecord
+from agents.base import AgentBase, LLMCallResult, TraceAction
 
 
 class DummyAgent(AgentBase):
@@ -14,88 +14,58 @@ class DummyAgent(AgentBase):
         return True
 
 
-def test_step_record_export_preserves_program_id_and_llm_fields() -> None:
+def test_action_export_preserves_fields() -> None:
     agent = DummyAgent(
         agent_id="agent-0001", api_base="http://localhost:8000/v1", model="mock"
     )
-    record = StepRecord(
-        step_idx=1,
-        phase="reasoning",
+    action = TraceAction(
+        action_type="llm_call",
+        action_id="llm_0",
+        agent_id="agent-0001",
         program_id="agent-0001",
-        prompt_tokens=10,
-        completion_tokens=5,
-        llm_latency_ms=12.5,
-        llm_output="analysis text",
-        raw_response={"id": "resp-1"},
-        extra={"reasoning_depth": "medium"},
+        iteration=1,
+        ts_start=1.0,
+        ts_end=2.0,
+        data={
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "llm_latency_ms": 12.5,
+            "raw_response": {"id": "resp-1"},
+        },
     )
-    agent.trace.append(record)
+    agent.actions.append(action)
     exported = agent.get_trace()
-    assert exported[0]["program_id"] == "agent-0001"
-    assert exported[0]["llm_output"] == "analysis text"
-    assert exported[0]["raw_response"]["id"] == "resp-1"
+    assert exported[0]["action_type"] == "llm_call"
+    assert exported[0]["data"]["prompt_tokens"] == 10
+    assert exported[0]["data"]["raw_response"]["id"] == "resp-1"
     json.dumps(exported)
 
 
-def test_agent_summary_aggregates_trace_fields() -> None:
+def test_agent_summary_aggregates_action_fields() -> None:
     agent = DummyAgent(
         agent_id="agent-0002", api_base="http://localhost:8000/v1", model="mock"
     )
     agent.task_id = "task-1"
     agent.task_success = True
-    agent.trace = [
-        StepRecord(
-            step_idx=0,
-            phase="reasoning",
-            program_id="agent-0002",
-            prompt_tokens=12,
-            completion_tokens=3,
-            llm_latency_ms=10.0,
+    agent.actions = [
+        TraceAction(
+            action_type="llm_call",
+            action_id="llm_0",
+            iteration=0,
+            data={"prompt_tokens": 12, "completion_tokens": 3, "llm_latency_ms": 10.0},
         ),
-        StepRecord(
-            step_idx=1,
-            phase="acting",
-            program_id="agent-0002",
-            prompt_tokens=0,
-            completion_tokens=0,
-            llm_latency_ms=0.0,
-            tool_name="bash",
-            tool_duration_ms=25.0,
-            tool_success=True,
+        TraceAction(
+            action_type="tool_exec",
+            action_id="tool_1_bash",
+            iteration=1,
+            data={"tool_name": "bash", "duration_ms": 25.0},
         ),
     ]
     summary = agent.summary()
     assert summary["program_id"] == "agent-0002"
-    assert summary["n_steps"] == 2
+    assert summary["n_steps"] == 2  # 2 distinct iterations
     assert summary["total_tokens"] == 15
     assert summary["total_tool_ms"] == 25.0
-
-
-def test_build_step_record_uses_llm_result_fields() -> None:
-    agent = DummyAgent(
-        agent_id="agent-0003", api_base="http://localhost:8000/v1", model="mock"
-    )
-    llm_result = LLMCallResult(
-        content="ok",
-        prompt_tokens=7,
-        completion_tokens=2,
-        llm_latency_ms=9.5,
-        raw_response={"id": "resp-1"},
-    )
-    record = agent.build_step_record(
-        step_idx=0,
-        phase="reasoning",
-        llm_result=llm_result,
-        ts_start=1.0,
-        ts_end=2.0,
-        extra={"raw_id": "resp-1"},
-    )
-    assert record.program_id == "agent-0003"
-    assert record.prompt_tokens == 7
-    assert record.completion_tokens == 2
-    assert record.llm_output == "ok"
-    assert record.raw_response["id"] == "resp-1"
-    assert record.extra["raw_id"] == "resp-1"
 
 
 class FakeUsage:

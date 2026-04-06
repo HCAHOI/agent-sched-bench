@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from agents.base import AgentBase, StepRecord
+from agents.base import AgentBase, TraceAction
 from harness.trace_logger import TraceLogger, build_run_id
 
 
@@ -27,36 +27,33 @@ def test_build_run_id_normalizes_non_utc_datetime() -> None:
     assert run_id == "vllm_code_4_20260331T120000000Z"
 
 
-def test_trace_logger_writes_jsonl_entries(tmp_path: Path) -> None:
+def test_trace_logger_writes_action_entries(tmp_path: Path) -> None:
     run_id = "demo_run"
     logger = TraceLogger(tmp_path, run_id)
-    record = StepRecord(
-        step_idx=0,
-        phase="reasoning",
+    action = TraceAction(
+        action_type="llm_call",
+        action_id="llm_0",
+        agent_id="agent-0001",
         program_id="agent-0001",
-        prompt_tokens=10,
-        completion_tokens=3,
-        llm_latency_ms=11.0,
-        llm_output="hello",
-        raw_response={"id": "resp-1"},
+        iteration=0,
         ts_start=1.0,
         ts_end=2.0,
+        data={"prompt_tokens": 10, "completion_tokens": 3, "llm_latency_ms": 11.0},
     )
-    logger.log_step("agent-0001", record)
+    logger.log_trace_action("agent-0001", action)
     logger.log_summary("agent-0001", {"task_id": "t-1", "success": True})
     logger.close()
 
     lines = (tmp_path / f"{run_id}.jsonl").read_text(encoding="utf-8").splitlines()
     parsed = [json.loads(line) for line in lines]
-    assert parsed[0]["type"] == "step"
-    assert parsed[0]["program_id"] == "agent-0001"
+    assert parsed[0]["type"] == "action"
+    assert parsed[0]["action_type"] == "llm_call"
+    assert parsed[0]["agent_id"] == "agent-0001"
     assert parsed[1]["type"] == "summary"
     assert parsed[1]["success"] is True
 
 
 def test_trace_logger_appends_on_resume(tmp_path: Path) -> None:
-    # Append mode supports resume: opening the same run_id twice should
-    # append records without raising or overwriting.
     run_id = "resume"
     logger1 = TraceLogger(tmp_path, run_id)
     logger1.log_event("agent-1", "llm_start", {"step_idx": 0, "ts": 1.0})
@@ -85,91 +82,79 @@ def test_trace_logger_log_event_writes_correct_record(tmp_path: Path) -> None:
     assert entry["ts"] == 1.0
 
 
-def _make_record(step_idx: int = 0) -> StepRecord:
-    return StepRecord(
-        step_idx=step_idx,
-        phase="acting",
+def _make_action(iteration: int = 0, action_type: str = "tool_exec",
+                 tool_name: str = "bash") -> TraceAction:
+    return TraceAction(
+        action_type=action_type,
+        action_id=f"{action_type}_{iteration}_{tool_name}",
+        agent_id="agent-1",
         program_id="agent-1",
-        prompt_tokens=5,
-        completion_tokens=2,
-        llm_latency_ms=100.0,
+        iteration=iteration,
         ts_start=1.0,
         ts_end=2.0,
-        tool_name="bash",
-        tool_duration_ms=300.0,
-        tool_timeout=False,
+        data={
+            "tool_name": tool_name,
+            "duration_ms": 300.0,
+            "timeout": False,
+            "prompt_tokens": 5,
+            "completion_tokens": 2,
+            "llm_latency_ms": 100.0,
+        },
     )
 
 
 def _make_concrete_agent(api_base: str = "http://localhost") -> AgentBase:
-    """Return a minimal concrete AgentBase subclass for testing."""
-
     class _ConcreteAgent(AgentBase):
         async def run(self, task):  # type: ignore[override]
             return False
-
     return _ConcreteAgent(agent_id="agent-1", api_base=api_base, model="test-model")
 
 
 def test_emit_event_noop_when_no_logger() -> None:
     agent = _make_concrete_agent()
-    # Must not raise even without a logger injected
     agent._emit_event("llm_start", {"step_idx": 0, "ts": 1.0})
-    assert len(agent.trace) == 0
+    assert len(agent.actions) == 0
 
 
-def test_emit_step_appends_and_merges_metadata(tmp_path: Path) -> None:
-    logger = TraceLogger(tmp_path, "step_run")
+def test_emit_action_appends_and_merges_metadata(tmp_path: Path) -> None:
+    logger = TraceLogger(tmp_path, "action_run")
     agent = _make_concrete_agent()
     agent._trace_logger = logger
     agent.run_metadata = {"model": "qwen-plus", "prepare_ms": 500.0}
 
-    record = _make_record(step_idx=0)
-    agent._emit_step(record)
+    action = _make_action(iteration=0)
+    agent._emit_action(action)
     logger.close()
 
-    # Record is appended to trace
-    assert len(agent.trace) == 1
-    assert agent.trace[0].step_idx == 0
+    assert len(agent.actions) == 1
+    assert agent.actions[0].iteration == 0
+    assert agent.actions[0].data["model"] == "qwen-plus"
 
-    # run_metadata merged into extra
-    assert agent.trace[0].extra["model"] == "qwen-plus"
-    assert agent.trace[0].extra["prepare_ms"] == 500.0
-
-    # Written to JSONL
-    lines = (tmp_path / "step_run.jsonl").read_text(encoding="utf-8").splitlines()
+    lines = (tmp_path / "action_run.jsonl").read_text(encoding="utf-8").splitlines()
     entry = json.loads(lines[0])
-    assert entry["type"] == "step"
-    assert entry["extra"]["model"] == "qwen-plus"
+    assert entry["type"] == "action"
+    assert entry["data"]["model"] == "qwen-plus"
 
 
-def test_emit_step_noop_on_logger_when_none() -> None:
+def test_emit_action_noop_on_logger_when_none() -> None:
     agent = _make_concrete_agent()
-    record = _make_record()
-    agent._emit_step(record)
-    # trace still gets the record; no logger means no file writes
-    assert len(agent.trace) == 1
+    action = _make_action()
+    agent._emit_action(action)
+    assert len(agent.actions) == 1
 
 
 def test_summary_tool_stats() -> None:
     agent = _make_concrete_agent()
-    r1 = _make_record(step_idx=0)
-    r1.tool_name = "bash"
-    r1.tool_duration_ms = 200.0
-    r1.tool_timeout = False
 
-    r2 = _make_record(step_idx=1)
-    r2.tool_name = "bash"
-    r2.tool_duration_ms = 100.0
-    r2.tool_timeout = True
+    a1 = TraceAction(action_type="tool_exec", action_id="t0_bash",
+                     iteration=0, data={"tool_name": "bash", "duration_ms": 200.0})
+    a2 = TraceAction(action_type="tool_exec", action_id="t1_bash",
+                     iteration=1, data={"tool_name": "bash", "duration_ms": 100.0, "timeout": True})
+    a3 = TraceAction(action_type="tool_exec", action_id="t2_submit",
+                     iteration=2, data={"tool_name": "submit", "duration_ms": 50.0})
 
-    r3 = _make_record(step_idx=2)
-    r3.tool_name = "submit"
-    r3.tool_duration_ms = 50.0
-    r3.tool_timeout = False
-
-    for r in (r1, r2, r3):
-        agent.trace.append(r)
+    for a in (a1, a2, a3):
+        agent.actions.append(a)
 
     s = agent.summary()
     assert s["tool_ms_by_name"]["bash"] == 300.0

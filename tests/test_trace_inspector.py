@@ -166,15 +166,15 @@ def sample_trace(tmp_path: Path) -> Path:
 
 def test_load_trace(sample_trace: Path) -> None:
     data = TraceData.load(sample_trace)
-    assert len(data.steps) == 2
+    assert len(data.actions) == 2
     # 2x llm_call_start + 2x llm_call_end + 2x tool_start + 2x tool_end = 8
     assert len(data.events) == 6
     assert len(data.summaries) == 1
     assert data.metadata["scaffold"] == "mini-swe-agent"
     assert data.metadata["model"] == "test-model"
     # Steps sorted by step_idx
-    assert data.steps[0]["step_idx"] == 0
-    assert data.steps[1]["step_idx"] == 1
+    assert data.actions[0]["step_idx"] == 0
+    assert data.actions[1]["step_idx"] == 1
     # Events sorted by ts
     assert data.events[0]["ts"] <= data.events[1]["ts"]
 
@@ -182,13 +182,13 @@ def test_load_trace(sample_trace: Path) -> None:
 def test_load_with_agent_filter(sample_trace: Path) -> None:
     # Filter by partial agent_id
     data = TraceData.load(sample_trace, agent_filter="django__django")
-    assert len(data.steps) == 2
+    assert len(data.actions) == 2
     assert len(data.agents) == 1
     assert "django__django-11734" in data.agents
 
     # Filter that matches nothing
     data_empty = TraceData.load(sample_trace, agent_filter="nonexistent_agent")
-    assert len(data_empty.steps) == 0
+    assert len(data_empty.actions) == 0
     assert len(data_empty.events) == 0
 
 
@@ -200,7 +200,7 @@ def test_load_skips_malformed_lines(tmp_path: Path) -> None:
         '{"type": "step", "agent_id": "a1", "step_idx": 0}\n'
     )
     data = TraceData.load(trace_file)
-    assert len(data.steps) == 1
+    assert len(data.actions) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +613,7 @@ def test_v3_step_enrichment(tmp_path: Path) -> None:
             f.write(json.dumps(r) + "\n")
 
     data = TraceData.load(trace_file)
-    step = data.steps[0]
+    step = data.actions[0]
     # Step should be enriched from events
     assert step["messages_in"] == [{"role": "user", "content": "hello"}]
     assert step["raw_response"]["choices"][0]["message"]["content"] == "hi"

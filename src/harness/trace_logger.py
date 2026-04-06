@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agents.base import ActionRecord, StepRecord
+from agents.base import TraceAction
 
 
 def build_run_id(
@@ -42,21 +41,18 @@ class TraceLogger:
         entry = {
             "type": "trace_metadata",
             "scaffold": scaffold,
-            "trace_format_version": 2,
+            "trace_format_version": 4,
             **kwargs,
         }
         self._handle.write(json.dumps(entry) + "\n")
         self._handle.flush()
 
-    def log_action(self, agent_id: str, record: ActionRecord) -> None:
-        entry = {"type": "action", "agent_id": agent_id, **asdict(record)}
-        self._handle.write(json.dumps(entry) + "\n")
+    def log_trace_action(self, agent_id: str, action: TraceAction) -> None:
+        """Write a v4 TraceAction record."""
+        entry = action.to_dict()
+        self._handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._handle.flush()
 
-    def log_step(self, agent_id: str, record: StepRecord) -> None:
-        entry = {"type": "step", "agent_id": agent_id, **asdict(record)}
-        self._handle.write(json.dumps(entry) + "\n")
-        self._handle.flush()
 
     def log_summary(self, agent_id: str, summary: dict[str, Any]) -> None:
         entry = {"type": "summary", "agent_id": agent_id, **summary}

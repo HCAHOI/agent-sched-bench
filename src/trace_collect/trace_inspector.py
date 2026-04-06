@@ -92,7 +92,7 @@ def _normalize_legacy_event(record: dict[str, Any]) -> dict[str, Any]:
 class TraceData:
     path: Path
     metadata: dict[str, Any]
-    steps: list[dict[str, Any]]  # sorted by step_idx
+    actions: list[dict[str, Any]]  # sorted by iteration, then ts_start
     events: list[dict[str, Any]]  # sorted by ts
     summaries: list[dict[str, Any]]
     agents: list[str]  # unique agent_ids in order seen
@@ -108,7 +108,7 @@ class TraceData:
                           are always kept.
         """
         metadata: dict[str, Any] = {}
-        steps: list[dict[str, Any]] = []
+        actions: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         summaries: list[dict[str, Any]] = []
         seen_agents: dict[str, None] = {}  # ordered-set via insertion-order dict
@@ -121,13 +121,11 @@ class TraceData:
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
-                    # Skip malformed lines silently
                     continue
 
                 rec_type = record.get("type", "")
                 agent_id = record.get("agent_id")
 
-                # Apply agent filter (metadata records have no agent_id, keep them)
                 if agent_filter is not None and agent_id is not None:
                     if agent_filter not in agent_id:
                         continue
@@ -137,27 +135,30 @@ class TraceData:
 
                 if rec_type == "trace_metadata":
                     metadata.update(record)
+                elif rec_type == "action" and "action_type" in record:
+                    # v4 TraceAction records (have action_type field)
+                    actions.append(record)
                 elif rec_type == "step":
-                    steps.append(record)
+                    # Legacy v3 step records — treat as actions for compat
+                    actions.append(record)
                 elif rec_type == "event":
-                    # Compat: older openclaw traces use "iteration" instead
-                    # of "step_idx". Normalize to step_idx on read.
                     if "step_idx" not in record and "iteration" in record:
                         record["step_idx"] = record["iteration"]
                     events.append(record)
                 elif rec_type in _LEGACY_EVENT_MAP:
-                    # Normalize mini-swe flat events into unified envelope
-                    # so downstream code has one format to handle.
                     events.append(_normalize_legacy_event(record))
                 elif rec_type == "summary":
                     summaries.append(record)
 
-        steps.sort(key=lambda r: r.get("step_idx", 0))
+        # Sort actions: v4 by (iteration, ts_start), legacy steps by step_idx
+        actions.sort(key=lambda r: (
+            r.get("iteration", r.get("step_idx", 0)),
+            r.get("ts_start", 0),
+        ))
         events.sort(key=lambda r: r.get("ts", 0.0))
 
-        # v3 traces store messages_in / raw_response in events, not steps.
-        # Enrich steps from llm_call_start / llm_call_end events so
-        # downstream commands (cmd_messages, cmd_response) work uniformly.
+        # Enrich actions with data from events (for v3 slim steps and
+        # for v4 actions that may need messages_in/raw_response from events)
         llm_starts: dict[int, dict[str, Any]] = {}
         llm_ends: dict[int, dict[str, Any]] = {}
         for ev in events:
@@ -167,23 +168,36 @@ class TraceData:
                 llm_starts[idx] = ev.get("data", {})
             elif ename == "llm_call_end":
                 llm_ends[idx] = ev.get("data", {})
-        for step in steps:
-            idx = step.get("step_idx", 0)
-            if "messages_in" not in step and idx in llm_starts:
-                step["messages_in"] = llm_starts[idx].get("messages_in")
-            if "raw_response" not in step and idx in llm_ends:
-                step["raw_response"] = llm_ends[idx].get("raw_response")
-            # Derive llm_output from raw_response for search/display
-            if "llm_output" not in step and step.get("raw_response"):
-                choices = step["raw_response"].get("choices") or []
-                if choices:
-                    msg = choices[0].get("message") or {}
-                    step["llm_output"] = msg.get("content", "")
+        for act in actions:
+            idx = act.get("iteration", act.get("step_idx", 0))
+            data = act.get("data", {})
+            # For v4 actions, messages_in/raw_response are in data
+            # For legacy steps, they may be missing (v3 slim) — enrich from events
+            msgs = data.get("messages_in") or act.get("messages_in")
+            raw = data.get("raw_response") or act.get("raw_response")
+            if not msgs and idx in llm_starts:
+                msgs = llm_starts[idx].get("messages_in")
+            if not raw and idx in llm_ends:
+                raw = llm_ends[idx].get("raw_response")
+            if msgs:
+                act["messages_in"] = msgs
+            if raw:
+                act["raw_response"] = raw
+            # Derive llm_output for search/display
+            if "llm_output" not in act:
+                llm_content = data.get("llm_content")
+                if llm_content:
+                    act["llm_output"] = llm_content
+                elif raw:
+                    choices = raw.get("choices") or []
+                    if choices:
+                        msg = choices[0].get("message") or {}
+                        act["llm_output"] = msg.get("content", "")
 
         return cls(
             path=path,
             metadata=metadata,
-            steps=steps,
+            actions=actions,
             events=events,
             summaries=summaries,
             agents=list(seen_agents.keys()),
@@ -197,11 +211,18 @@ class TraceData:
 
 def cmd_overview(data: TraceData, as_json: bool = False) -> None:
     """Print a high-level summary of the trace."""
-    total_prompt = sum(s.get("prompt_tokens", 0) for s in data.steps)
-    total_completion = sum(s.get("completion_tokens", 0) for s in data.steps)
+    def _aget(act: dict, key: str, default: Any = 0) -> Any:
+        """Get a field from action — check data dict first, then top-level."""
+        val = (act.get("data") or {}).get(key)
+        if val is not None:
+            return val
+        return act.get(key, default)
+
+    total_prompt = sum(_aget(s, "prompt_tokens", 0) for s in data.actions)
+    total_completion = sum(_aget(s, "completion_tokens", 0) for s in data.actions)
     total_tokens = total_prompt + total_completion
-    total_llm_ms = sum(s.get("llm_latency_ms") or 0.0 for s in data.steps)
-    total_tool_ms = sum(s.get("tool_duration_ms") or 0.0 for s in data.steps)
+    total_llm_ms = sum(_aget(s, "llm_latency_ms", 0) for s in data.actions)
+    total_tool_ms = sum(_aget(s, "tool_duration_ms", 0) or _aget(s, "duration_ms", 0) for s in data.actions)
 
     # Aggregate elapsed from summaries if available
     elapsed_s: float | None = None
@@ -214,8 +235,8 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
 
     # Tool usage counts
     tool_counts: dict[str, int] = {}
-    for step in data.steps:
-        tool = step.get("tool_name")
+    for act in data.actions:
+        tool = _aget(act, "tool_name", None)
         if tool:
             tool_counts[tool] = tool_counts.get(tool, 0) + 1
 
@@ -225,7 +246,7 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         "scaffold": data.metadata.get("scaffold"),
         "mode": data.metadata.get("mode"),
         "model": data.metadata.get("model"),
-        "n_steps": len(data.steps),
+        "n_steps": len(data.actions),
         "n_events": len(data.events),
         "tool_counts": tool_counts,
         "total_tokens": total_tokens,
@@ -272,9 +293,9 @@ def cmd_step(
     as_json: bool = False,
 ) -> None:
     """Print all fields of a single step record."""
-    step = next((s for s in data.steps if s.get("step_idx") == step_idx), None)
+    step = next((s for s in data.actions if s.get("iteration", s.get("step_idx")) == step_idx), None)
     if step is None:
-        avail = [s.get("step_idx") for s in data.steps]
+        avail = [s.get("step_idx") for s in data.actions]
         msg = f"step {step_idx} not found (available: {avail})"
         if as_json:
             print(json.dumps({"error": msg}))
@@ -325,7 +346,7 @@ def cmd_messages(
     as_json: bool = False,
 ) -> None:
     """Print messages_in from a step record, optionally filtered by role."""
-    step = next((s for s in data.steps if s.get("step_idx") == step_idx), None)
+    step = next((s for s in data.actions if s.get("iteration", s.get("step_idx")) == step_idx), None)
     if step is None:
         if as_json:
             print(json.dumps({"error": f"step {step_idx} not found"}))
@@ -367,7 +388,7 @@ def cmd_response(
     as_json: bool = False,
 ) -> None:
     """Print raw_response from a step record."""
-    step = next((s for s in data.steps if s.get("step_idx") == step_idx), None)
+    step = next((s for s in data.actions if s.get("iteration", s.get("step_idx")) == step_idx), None)
     if step is None:
         if as_json:
             print(json.dumps({"error": f"step {step_idx} not found"}))
@@ -455,9 +476,9 @@ def cmd_tools(
     as_json: bool = False,
 ) -> None:
     """Aggregate tool usage statistics, sorted by count descending."""
-    steps = data.steps
+    steps = data.actions
     if step_idx is not None:
-        steps = [s for s in steps if s.get("step_idx") == step_idx]
+        steps = [s for s in steps if s.get("iteration", s.get("step_idx")) == step_idx]
 
     # name -> {count, total_ms, successes}
     agg: dict[str, dict[str, Any]] = {}
@@ -534,7 +555,7 @@ def cmd_search(
         return
 
     results = []
-    for step in data.steps:
+    for step in data.actions:
         llm_output = step.get("llm_output", "") or ""
         if not isinstance(llm_output, str):
             llm_output = json.dumps(llm_output)
@@ -798,7 +819,7 @@ def cmd_timeline(data: TraceData) -> None:
             scaffold = "openclaw"
 
     for agent_id in data.agents:
-        agent_steps = [s for s in data.steps if s.get("agent_id") == agent_id]
+        agent_steps = [s for s in data.actions if s.get("agent_id") == agent_id]
         agent_events = [e for e in data.events if e.get("agent_id") == agent_id]
         agent_summaries = [s for s in data.summaries if s.get("agent_id") == agent_id]
 

@@ -206,60 +206,6 @@ class EvalResult:
 
 
 @dataclass
-class EvalTraceStep:
-    """A single step record, aligned with agent-sched-bench StepRecord.
-
-    Emitted as one JSONL line per agent iteration checkpoint.
-    Each step corresponds to one LLM call + optional tool execution.
-    """
-
-    step_idx: int
-    type: str = "step"
-    agent_id: str = ""
-    program_id: str = ""
-    phase: str = "acting"  # "acting" | "reasoning"
-    instance_id: str = ""
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    llm_latency_ms: float = 0.0
-    tool_name: str | None = None
-    tool_args: str | None = None
-    tool_result: str | None = None
-    tool_duration_ms: float | None = None
-    tool_success: bool | None = None
-    tool_timeout: bool | None = None
-    tool_ts_start: float | None = None
-    tool_ts_end: float | None = None
-    ts_start: float = 0.0
-    ts_end: float = 0.0
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "type": self.type,
-            "agent_id": self.agent_id,
-            "program_id": self.program_id,
-            "instance_id": self.instance_id,
-            "step_idx": self.step_idx,
-            "phase": self.phase,
-            "prompt_tokens": self.prompt_tokens,
-            "completion_tokens": self.completion_tokens,
-            "llm_latency_ms": self.llm_latency_ms,
-            "tool_name": self.tool_name,
-            "tool_args": self.tool_args,
-            "tool_result": self.tool_result,
-            "tool_duration_ms": self.tool_duration_ms,
-            "tool_success": self.tool_success,
-            "tool_timeout": self.tool_timeout,
-            "tool_ts_start": self.tool_ts_start,
-            "tool_ts_end": self.tool_ts_end,
-            "ts_start": self.ts_start,
-            "ts_end": self.ts_end,
-            "extra": self.extra,
-        }
-
-
-@dataclass
 class EvalTraceSummary:
     """Summary record emitted at the end of a task run.
 
@@ -329,7 +275,7 @@ ALL_CATEGORIES = frozenset(
 class EvalTraceEvent:
     """A fine-grained event from any subsystem in the agent lifecycle.
 
-    Emitted as one JSONL line alongside EvalTraceStep records.
+    Emitted as one JSONL line alongside TraceAction records.
     See docs/eval-events.md for the complete catalog.
     """
 

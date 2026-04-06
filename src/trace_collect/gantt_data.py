@@ -1,10 +1,10 @@
 """Build Gantt chart JSON payloads from TraceData.
 
-Pairs start/end events into spans, converts unpaired events to markers,
-and produces a lightweight JSON structure for the Canvas renderer.
+v4 traces: actions (llm_call, tool_exec) ARE the spans directly.
+Scheduling overhead is computed from time gaps between consecutive actions.
+Events become point markers for observability detail.
 
-Events are the primary data source (precise real-time timestamps).
-Step records are fallback when events are missing for a given iteration.
+Legacy (v3) traces: event pairs are used to build spans as fallback.
 """
 
 from __future__ import annotations
@@ -16,30 +16,14 @@ from trace_collect.trace_inspector import TraceData
 # Categories that produce point markers (not spans).
 _MARKER_CATEGORIES = frozenset({"SCHEDULING", "SESSION", "CONTEXT"})
 
-# Events that form span pairs: (start_event, end_event) -> span_type.
-_SPAN_PAIRS: dict[str, tuple[str, str]] = {
-    "llm": ("llm_call_start", "llm_call_end"),
-    "tool": ("tool_exec_start", "tool_exec_end"),
+# Map action_type to span type for Gantt rendering.
+_ACTION_TYPE_MAP: dict[str, str] = {
+    "llm_call": "llm",
+    "tool_exec": "tool",
 }
 
-# Reverse lookup: event_name -> (span_type, "start"|"end").
-_EVENT_ROLE: dict[str, tuple[str, str]] = {}
-for _stype, (_s, _e) in _SPAN_PAIRS.items():
-    _EVENT_ROLE[_s] = (_stype, "start")
-    _EVENT_ROLE[_e] = (_stype, "end")
-
-
-def _pair_key(event: dict[str, Any], span_type: str) -> tuple:
-    """Build the pairing key for an event.
-
-    LLM events pair by step_idx alone (one LLM call per step).
-    Tool events pair by (step_idx, tool_name) to handle multi-tool steps.
-    """
-    step_idx = event.get("step_idx", 0)
-    if span_type == "tool":
-        tool_name = (event.get("data") or {}).get("tool_name", "")
-        return (step_idx, tool_name)
-    return (step_idx,)
+# Minimum gap (seconds) between actions to render as a scheduling span.
+_MIN_SCHEDULING_GAP_S = 0.01  # 10ms
 
 
 def _extract_detail(event: dict[str, Any]) -> dict[str, Any]:
@@ -111,9 +95,9 @@ def build_gantt_payload(
     lanes: list[dict[str, Any]] = []
     for agent_id in agents:
         agent_events = [e for e in data.events if e.get("agent_id") == agent_id]
-        agent_steps = [s for s in data.steps if s.get("agent_id") == agent_id]
+        agent_actions = [a for a in data.actions if a.get("agent_id") == agent_id]
 
-        spans, markers = _build_spans_and_markers(agent_events, agent_steps, t0)
+        spans, markers = _build_spans_and_markers(agent_actions, agent_events, t0)
 
         lanes.append({
             "agent_id": agent_id,
@@ -129,7 +113,7 @@ def build_gantt_payload(
             "instance_id": instance_id,
             "mode": meta.get("mode"),
             "max_steps": meta.get("max_steps") or meta.get("max_iterations"),
-            "n_steps": len(data.steps),
+            "n_steps": len(data.actions),
             "n_events": len(data.events),
             "elapsed_s": _get_elapsed(data),
         },
@@ -163,7 +147,7 @@ def _compute_t0(data: TraceData) -> float:
         ts = ev.get("ts", 0)
         if ts and ts < t0:
             t0 = ts
-    for step in data.steps:
+    for step in data.actions:
         ts = step.get("ts_start", 0)
         if ts and ts < t0:
             t0 = ts
@@ -179,115 +163,177 @@ def _get_elapsed(data: TraceData) -> float | None:
 
 
 def _build_spans_and_markers(
+    actions: list[dict[str, Any]],
     events: list[dict[str, Any]],
-    steps: list[dict[str, Any]],
     t0: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Pair events into spans, convert remainder to markers.
+    """Build Gantt spans from actions and markers from events.
 
-    Falls back to step records for iterations without matching events.
+    v4 actions (with ``action_type``) become spans directly.
+    Legacy step records are converted to spans via ts_start/ts_end.
+    Scheduling overhead is computed from time gaps between consecutive actions.
+    Events with SCHEDULING/SESSION/CONTEXT categories become point markers.
     """
     spans: list[dict[str, Any]] = []
     markers: list[dict[str, Any]] = []
 
-    # Collect start events by (span_type, pair_key)
-    starts: dict[tuple, dict[str, Any]] = {}
-    matched_indices: set[int] = set()
-    # Track already-paired keys to deduplicate (e.g., mini-swe v3 has both
-    # llm_start->normalized and llm_call_start flat, producing duplicate pairs)
-    paired_keys: set[tuple] = set()
+    # Detect format: v4 actions have action_type, v3 steps don't
+    has_v4_actions = any(a.get("action_type") for a in actions)
 
-    # Index events
-    for i, ev in enumerate(events):
-        event_name = ev.get("event", "")
-        category = ev.get("category", "")
+    if has_v4_actions:
+        # ── v4: actions ARE spans directly ──
+        for act in actions:
+            action_type = act.get("action_type")
+            if action_type and action_type in _ACTION_TYPE_MAP:
+                span_type = _ACTION_TYPE_MAP[action_type]
+                detail = _extract_detail_from_action(act)
+                spans.append({
+                    "type": span_type,
+                    "start": act.get("ts_start", 0) - t0,
+                    "end": act.get("ts_end", 0) - t0,
+                    "start_abs": act.get("ts_start", 0),
+                    "end_abs": act.get("ts_end", 0),
+                    "iteration": act.get("iteration", 0),
+                    "detail": detail,
+                })
+    else:
+        # ── v3 legacy: pair events into spans, steps as fallback ──
+        _SPAN_PAIRS = {
+            "llm": ("llm_call_start", "llm_call_end"),
+            "tool": ("tool_exec_start", "tool_exec_end"),
+        }
+        event_role: dict[str, tuple[str, str]] = {}
+        for stype, (s, e) in _SPAN_PAIRS.items():
+            event_role[s] = (stype, "start")
+            event_role[e] = (stype, "end")
 
-        if event_name in _EVENT_ROLE:
-            span_type, role = _EVENT_ROLE[event_name]
-            key = (span_type, *_pair_key(ev, span_type))
+        starts: dict[tuple, dict[str, Any]] = {}
+        paired_keys: set[tuple] = set()
+
+        for ev in events:
+            ename = ev.get("event", "")
+            if ename not in event_role:
+                continue
+            span_type, role = event_role[ename]
+            idx = ev.get("step_idx", 0)
+            tool_name = (ev.get("data") or {}).get("tool_name", "")
+            key = (span_type, idx, tool_name) if span_type == "tool" else (span_type, idx)
 
             if role == "start":
                 if key not in paired_keys:
                     starts[key] = ev
-                    starts[key]["_idx"] = i
-                else:
-                    # Duplicate start for already-paired key — skip
-                    matched_indices.add(i)
             elif role == "end":
                 start_ev = starts.pop(key, None)
                 if start_ev is not None:
-                    # Matched pair → span
                     paired_keys.add(key)
-                    matched_indices.add(start_ev["_idx"])
-                    matched_indices.add(i)
-                    detail = _extract_detail(start_ev)
-                    detail.update(_extract_detail(ev))
+                    detail = _extract_detail_from_event(start_ev)
+                    detail.update(_extract_detail_from_event(ev))
                     spans.append({
                         "type": span_type,
                         "start": start_ev.get("ts", 0) - t0,
                         "end": ev.get("ts", 0) - t0,
                         "start_abs": start_ev.get("ts", 0),
                         "end_abs": ev.get("ts", 0),
-                        "step_idx": ev.get("step_idx", 0),
+                        "iteration": ev.get("step_idx", 0),
                         "detail": detail,
                     })
-                else:
-                    if key in paired_keys:
-                        # Duplicate end for already-paired key — skip silently
-                        matched_indices.add(i)
-                        # But enrich the existing span with any richer data
-                        _enrich_span_from_duplicate(spans, ev, span_type)
-                    else:
-                        # Truly unmatched end → marker
-                        matched_indices.add(i)
-                        markers.append(_make_marker(ev, t0))
 
-        elif category in _MARKER_CATEGORIES:
-            matched_indices.add(i)
-            markers.append(_make_marker(ev, t0))
+        # Fallback: steps without matched event pairs
+        iters_with_spans = {s["iteration"] for s in spans}
+        for act in actions:
+            idx = act.get("step_idx", 0)
+            if idx not in iters_with_spans:
+                ts_s = act.get("ts_start", 0)
+                ts_e = act.get("ts_end", 0)
+                if ts_s and ts_e and ts_e > ts_s:
+                    spans.append({
+                        "type": "llm",
+                        "start": ts_s - t0,
+                        "end": ts_e - t0,
+                        "start_abs": ts_s,
+                        "end_abs": ts_e,
+                        "iteration": idx,
+                        "detail": {
+                            "tool_name": act.get("tool_name"),
+                            "prompt_tokens": act.get("prompt_tokens"),
+                        },
+                    })
 
-    # Unmatched start events → markers
-    for key, start_ev in starts.items():
-        markers.append(_make_marker(start_ev, t0))
-
-    # Fallback: steps without any matching events get a coarse span
-    step_indices_with_spans = {s["step_idx"] for s in spans}
-    for step in steps:
-        idx = step.get("step_idx", 0)
-        if idx not in step_indices_with_spans:
-            ts_start = step.get("ts_start", 0)
-            ts_end = step.get("ts_end", 0)
-            if ts_start and ts_end and ts_end > ts_start:
+    # ── Compute scheduling spans from inter-action gaps ──
+    if spans:
+        sorted_spans = sorted(spans, key=lambda s: s["start_abs"])
+        for i in range(len(sorted_spans) - 1):
+            gap_start = sorted_spans[i]["end_abs"]
+            gap_end = sorted_spans[i + 1]["start_abs"]
+            gap = gap_end - gap_start
+            if gap > _MIN_SCHEDULING_GAP_S:
                 spans.append({
-                    "type": "llm",
-                    "start": ts_start - t0,
-                    "end": ts_end - t0,
-                    "start_abs": ts_start,
-                    "end_abs": ts_end,
-                    "step_idx": idx,
-                    "detail": {
-                        "fallback": True,
-                        "tool_name": step.get("tool_name"),
-                        "prompt_tokens": step.get("prompt_tokens"),
-                        "completion_tokens": step.get("completion_tokens"),
-                        "llm_latency_ms": step.get("llm_latency_ms"),
-                    },
+                    "type": "scheduling",
+                    "start": gap_start - t0,
+                    "end": gap_end - t0,
+                    "start_abs": gap_start,
+                    "end_abs": gap_end,
+                    "iteration": sorted_spans[i + 1].get("iteration", 0),
+                    "detail": {"gap_ms": round(gap * 1000, 1)},
                 })
 
-    # Sort spans by start time
+    # ── Build markers from events ──
+    for ev in events:
+        category = ev.get("category", "")
+        if category in _MARKER_CATEGORIES:
+            markers.append({
+                "type": category.lower(),
+                "event": ev.get("event", "unknown"),
+                "t": ev.get("ts", 0) - t0,
+                "t_abs": ev.get("ts", 0),
+                "iteration": ev.get("step_idx", 0),
+                "detail": _extract_detail_from_event(ev),
+            })
+
     spans.sort(key=lambda s: s["start"])
     markers.sort(key=lambda m: m["t"])
-
     return spans, markers
 
 
-def _make_marker(ev: dict[str, Any], t0: float) -> dict[str, Any]:
-    """Convert a single event into a point marker."""
-    return {
-        "type": ev.get("category", "SCHEDULING").lower(),
-        "event": ev.get("event", "unknown"),
-        "t": ev.get("ts", 0) - t0,
-        "t_abs": ev.get("ts", 0),
-        "step_idx": ev.get("step_idx", 0),
-        "detail": _extract_detail(ev),
-    }
+def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
+    """Extract tooltip detail from a v4 TraceAction record."""
+    data = dict(act.get("data") or {})
+
+    # Extract LLM content preview from raw_response before dropping
+    raw_resp = data.pop("raw_response", None)
+    if raw_resp and isinstance(raw_resp, dict):
+        choices = raw_resp.get("choices") or []
+        if choices:
+            msg = choices[0].get("message") or {}
+            content = msg.get("content") or ""
+            if content:
+                data["llm_content"] = content[:200] + ("..." if len(content) > 200 else "")
+
+    # Drop heavy fields
+    data.pop("messages_in", None)
+    for key in ("tool_result", "tool_args", "args_preview", "result_preview"):
+        if key in data and isinstance(data[key], str) and len(data[key]) > 100:
+            data[key] = data[key][:100] + "..."
+
+    return data
+
+
+def _extract_detail_from_event(ev: dict[str, Any]) -> dict[str, Any]:
+    """Extract tooltip detail from an event record."""
+    data = dict(ev.get("data") or {})
+    data.pop("messages_in", None)
+
+    # Extract LLM content preview before dropping raw_response
+    raw_resp = data.pop("raw_response", None)
+    if raw_resp and isinstance(raw_resp, dict):
+        choices = raw_resp.get("choices") or []
+        if choices:
+            msg = choices[0].get("message") or {}
+            content = msg.get("content") or ""
+            if content:
+                data["llm_content"] = content[:200] + ("..." if len(content) > 200 else "")
+
+    for key in ("args_preview", "result_preview", "tool_args", "tool_result"):
+        if key in data and isinstance(data[key], str) and len(data[key]) > 100:
+            data[key] = data[key][:100] + "..."
+    return data

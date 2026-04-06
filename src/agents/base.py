@@ -41,47 +41,41 @@ class ToolCallResult:
 
 
 @dataclass(slots=True)
-class StepRecord:
-    """Full record for one reasoning or acting step in an agent run."""
+class TraceAction:
+    """A single replayable action in an agent trace (v4 format).
 
-    step_idx: int
-    phase: str
-    program_id: str
-    prompt_tokens: int
-    completion_tokens: int
-    llm_latency_ms: float
-    llm_output: str = ""
-    messages_in: list[dict[str, Any]] | None = None
-    raw_response: dict[str, Any] = field(default_factory=dict)
-    tool_name: str | None = None
-    tool_args: str | None = None
-    tool_result: str | None = None
-    tool_duration_ms: float | None = None
-    tool_success: bool | None = None
-    tool_timeout: bool | None = None
-    tool_ts_start: float | None = None
-    tool_ts_end: float | None = None
+    Replaces StepRecord. Each action is one executable operation:
+    - ``llm_call``: an LLM inference (input: messages_in; output: raw_response)
+    - ``tool_exec``: a tool execution (input: tool_name+args; output: result)
+
+    Multiple actions can share the same ``iteration`` value (e.g., one LLM call
+    followed by parallel tool executions).
+    """
+
+    action_type: str  # "llm_call" | "tool_exec"
+    action_id: str  # unique within trace, e.g. "llm_0", "tool_0_bash"
+    agent_id: str = ""
+    program_id: str = ""
+    instance_id: str = ""
+    iteration: int = 0
     ts_start: float = 0.0
     ts_end: float = 0.0
-    ttft_ms: float | None = None
-    tpot_ms: float | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
+    type: str = "action"
 
-
-@dataclass(slots=True)
-class ActionRecord:
-    """Lightweight record emitted when the LLM decides an action (before tool execution)."""
-
-    step_idx: int
-    program_id: str
-    tool_name: str | None
-    tool_args: str | None
-    prompt_tokens: int
-    completion_tokens: int
-    llm_latency_ms: float
-    ttft_ms: float | None = None
-    ts: float = 0.0
-    extra: dict[str, Any] = field(default_factory=dict)
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "action_type": self.action_type,
+            "action_id": self.action_id,
+            "agent_id": self.agent_id,
+            "program_id": self.program_id,
+            "instance_id": self.instance_id,
+            "iteration": self.iteration,
+            "ts_start": self.ts_start,
+            "ts_end": self.ts_end,
+            "data": self.data,
+        }
 
 
 @dataclass(slots=True)
@@ -114,7 +108,7 @@ class AgentBase(ABC):
         self.api_key = api_key
         self.model = model
         self.max_tool_output_chars = max_tool_output_chars
-        self.trace: list[StepRecord] = []
+        self.actions: list[TraceAction] = []
         self.task_id: str = ""
         self.task_success: bool | None = None
         self.task_submission: str = ""
@@ -236,33 +230,6 @@ class AgentBase(ABC):
             tool_calls=parsed_tool_calls,
         )
 
-    def build_step_record(
-        self,
-        *,
-        step_idx: int,
-        phase: str,
-        llm_result: LLMCallResult,
-        ts_start: float,
-        ts_end: float,
-        messages_in: list[dict[str, Any]] | None = None,
-        extra: dict[str, Any] | None = None,
-    ) -> StepRecord:
-        """Construct a typed step record from an LLM call result."""
-        return StepRecord(
-            step_idx=step_idx,
-            phase=phase,
-            program_id=self.agent_id,
-            prompt_tokens=llm_result.prompt_tokens,
-            completion_tokens=llm_result.completion_tokens,
-            llm_latency_ms=llm_result.llm_latency_ms,
-            llm_output=llm_result.content,
-            messages_in=messages_in,
-            raw_response=llm_result.raw_response,
-            ts_start=ts_start,
-            ts_end=ts_end,
-            extra=extra or {},
-        )
-
     async def prepare(self, task: dict[str, Any]) -> None:
         """Prepare the agent's environment before the main loop.
 
@@ -279,24 +246,13 @@ class AgentBase(ABC):
         if self._trace_logger is not None:
             self._trace_logger.log_event(self.agent_id, event_type, data)
 
-    def _emit_step(self, record: StepRecord) -> None:
-        """Append record to self.trace and write action + step to logger."""
-        record.extra.update(self.run_metadata)
-        self.trace.append(record)
+    def _emit_action(self, action: TraceAction) -> None:
+        """Append action to self.actions and write to logger."""
+        if self.run_metadata:
+            action.data.update(self.run_metadata)
+        self.actions.append(action)
         if self._trace_logger is not None:
-            action = ActionRecord(
-                step_idx=record.step_idx,
-                program_id=record.program_id,
-                tool_name=record.tool_name,
-                tool_args=record.tool_args,
-                prompt_tokens=record.prompt_tokens,
-                completion_tokens=record.completion_tokens,
-                llm_latency_ms=record.llm_latency_ms,
-                ttft_ms=record.ttft_ms,
-                ts=record.ts_start + record.llm_latency_ms / 1000,
-            )
-            self._trace_logger.log_action(self.agent_id, action)
-            self._trace_logger.log_step(self.agent_id, record)
+            self._trace_logger.log_trace_action(self.agent_id, action)
 
     @abstractmethod
     async def run(self, task: dict[str, Any]) -> bool:
@@ -304,32 +260,43 @@ class AgentBase(ABC):
 
     def get_trace(self) -> list[dict[str, Any]]:
         """Export the trace as JSON-serializable dictionaries."""
-        return [asdict(record) for record in self.trace]
+        return [a.to_dict() for a in self.actions]
 
     def summary(self) -> dict[str, Any]:
         """Aggregate per-agent trace statistics for downstream analysis."""
-        total_llm_ms = sum(record.llm_latency_ms for record in self.trace)
-        total_tool_ms = sum(record.tool_duration_ms or 0.0 for record in self.trace)
+        total_llm_ms = sum(
+            a.data.get("llm_latency_ms", 0) for a in self.actions
+            if a.action_type == "llm_call"
+        )
+        total_tool_ms = sum(
+            a.data.get("duration_ms", 0) for a in self.actions
+            if a.action_type == "tool_exec"
+        )
         total_tokens = sum(
-            record.prompt_tokens + record.completion_tokens for record in self.trace
+            a.data.get("prompt_tokens", 0) + a.data.get("completion_tokens", 0)
+            for a in self.actions if a.action_type == "llm_call"
         )
         tool_ms_by_name: dict[str, float] = {}
         tool_timeouts: dict[str, int] = {}
-        for record in self.trace:
-            if record.tool_name is None:
+        for a in self.actions:
+            if a.action_type != "tool_exec":
                 continue
-            tool_ms_by_name[record.tool_name] = tool_ms_by_name.get(
-                record.tool_name, 0.0
-            ) + (record.tool_duration_ms or 0.0)
-            if record.tool_timeout:
-                tool_timeouts[record.tool_name] = (
-                    tool_timeouts.get(record.tool_name, 0) + 1
+            tool_name = a.data.get("tool_name")
+            if tool_name is None:
+                continue
+            tool_ms_by_name[tool_name] = tool_ms_by_name.get(
+                tool_name, 0.0
+            ) + (a.data.get("duration_ms") or 0.0)
+            if a.data.get("timeout"):
+                tool_timeouts[tool_name] = (
+                    tool_timeouts.get(tool_name, 0) + 1
                 )
+        n_iterations = len({a.iteration for a in self.actions})
         return {
             "agent_id": self.agent_id,
             "program_id": self.agent_id,
             "task_id": self.task_id,
-            "n_steps": len(self.trace),
+            "n_steps": n_iterations,
             "total_llm_ms": total_llm_ms,
             "total_tool_ms": total_tool_ms,
             "total_tokens": total_tokens,

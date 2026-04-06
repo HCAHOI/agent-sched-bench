@@ -457,10 +457,10 @@ function render() {
       ctx.stroke();
 
       // ── Draw spans ──
-      // Group by step_idx, stack LLM and tool within lane
+      // Group by iteration, stack LLM and tool within lane
       const spansByStep = {};
       for (const s of lane.spans) {
-        const key = s.step_idx;
+        const key = s.iteration;
         if (!spansByStep[key]) spansByStep[key] = [];
         spansByStep[key].push(s);
       }
@@ -488,7 +488,7 @@ function render() {
             ctx.fillStyle = '#000';
             ctx.font = '9px JetBrains Mono, monospace';
             ctx.textAlign = 'left';
-            ctx.fillText(`${s.step_idx}`, x0 + 3, yOff + 12);
+            ctx.fillText(`${s.iteration}`, x0 + 3, yOff + 12);
           }
 
           hitBoxes.push({ x: x0, y: yOff, w: w, h: SPAN_H, item: s, kind: 'span' });
@@ -559,7 +559,7 @@ function onMouseMove(e) {
     const s = hit.item;
     const reg = SPAN_REGISTRY[s.type] || {};
     const dur = ((s.end_abs - s.start_abs) * 1000).toFixed(1);
-    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${reg.label||s.type} &mdash; Step ${s.step_idx}</div>`;
+    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${reg.label||s.type} &mdash; Iter ${s.iteration}</div>`;
     html += ttRow('Duration', dur + ' ms');
     html += ttRow('Start', formatAbsTime(s.start_abs));
     html += ttRow('Relative', '+' + s.start.toFixed(3) + 's');
@@ -570,7 +570,7 @@ function onMouseMove(e) {
   } else {
     const m = hit.item;
     const reg = MARKER_REGISTRY[m.event] || MARKER_REGISTRY._default;
-    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${m.event} &mdash; Step ${m.step_idx}</div>`;
+    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${m.event} &mdash; Iter ${m.iteration}</div>`;
     html += ttRow('Time', formatAbsTime(m.t_abs));
     html += ttRow('Relative', '+' + m.t.toFixed(3) + 's');
     for (const [k, v] of Object.entries(m.detail || {})) {

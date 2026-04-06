@@ -5,7 +5,7 @@ underlying LLM loop, preserving the AgentBase interface for trace collection.
 
 prepare() clones the repo at base_commit into a temp directory.
 run()     wraps DefaultAgent.run() via asyncio.to_thread, then converts
-          the trajectory into StepRecords for our trace logger.
+          the trajectory into TraceAction records for our trace logger.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agents.base import AgentBase, LLMCallResult
+from agents.base import AgentBase, TraceAction
 from minisweagent.agents.default import DefaultAgent
 
 
@@ -341,7 +341,7 @@ class MiniSWECodeAgent(AgentBase):
         return success
 
     # ------------------------------------------------------------------
-    # Trajectory → StepRecord conversion
+    # Trajectory → TraceAction conversion
     # ------------------------------------------------------------------
 
     def _convert_trajectory(
@@ -350,7 +350,7 @@ class MiniSWECodeAgent(AgentBase):
         run_ts_start: float,
         run_ts_end: float,
     ) -> None:
-        """Convert a snapshot of mini-swe-agent's message list into StepRecords."""
+        """Convert a snapshot of mini-swe-agent's message list into TraceActions."""
 
         # Messages layout:
         #   [0] system
@@ -408,38 +408,36 @@ class MiniSWECodeAgent(AgentBase):
                 },
             )
 
-            llm_result = LLMCallResult(
-                content=msg.get("content") or "",
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                llm_latency_ms=latency_ms,
-                raw_response=extra.get("response") or {},
-                tool_calls=[],
-            )
+            raw_response = extra.get("response") or {}
 
             # delta messages_in: only messages added since last step
             messages_in = list(messages[prev_msg_len:i])
 
-            record = self.build_step_record(
-                step_idx=step_idx,
-                phase="acting",
-                llm_result=llm_result,
+            # Emit llm_call TraceAction
+            llm_action = TraceAction(
+                action_type="llm_call",
+                action_id=f"llm_{step_idx}",
+                agent_id=self.agent_id,
+                program_id=self.agent_id,
+                iteration=step_idx,
                 ts_start=ts_start,
                 ts_end=ts_end,
-                messages_in=messages_in,
+                data={
+                    "messages_in": messages_in,
+                    "raw_response": raw_response,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "llm_latency_ms": latency_ms,
+                    "llm_content": (msg.get("content") or "")[:4000],
+                },
             )
+            self._emit_action(llm_action)
 
             # --- Tool call info ---
             actions = extra.get("actions", [])
             j = i + 1
             tool_outputs: list[str] = []
 
-            # NOTE: consumes all non-assistant/exit messages, not just role="tool".
-            # For mini-swe-agent this is safe (only tool results appear here), but
-            # other frameworks may interleave system/user messages (e.g. FormatError
-            # notifications) that would be silently absorbed into tool_outputs and
-            # then discarded when actions=[]. Tighten to role=="tool" if reusing
-            # this converter for other agent frameworks.
             while j < len(messages) and messages[j].get("role") not in (
                 "assistant",
                 "exit",
@@ -455,10 +453,7 @@ class MiniSWECodeAgent(AgentBase):
                     tool_outputs.append(content)
                 j += 1
 
-            # Submission path: mini-swe-agent raises Submitted before
-            # format_toolcall_observation_messages is called, so the final
-            # bash output lives in the exit message instead. The exit message
-            # has no extra.timestamp, so we track the case with a flag.
+            # Submission path: exit message may carry final tool output
             _exit_ts: float | None = None
             _from_exit_msg = False
             if (
@@ -473,7 +468,6 @@ class MiniSWECodeAgent(AgentBase):
                     _exit_ts = exit_msg.get("extra", {}).get("timestamp")
                     _from_exit_msg = True
 
-            # Preserve per-call attribution when multiple tool calls are present.
             if len(tool_outputs) <= 1:
                 tool_output = tool_outputs[0] if tool_outputs else ""
             else:
@@ -482,8 +476,6 @@ class MiniSWECodeAgent(AgentBase):
                 )
 
             if actions:
-                # Record all commands; multiple parallel calls are serialized
-                # as a JSON array so no command is silently dropped.
                 commands = [
                     a.get("command", "") for a in actions if isinstance(a, dict)
                 ]
@@ -493,9 +485,6 @@ class MiniSWECodeAgent(AgentBase):
                     else json.dumps({"commands": commands})
                 )
                 m = _RETURNCODE_RE.search(tool_output)
-                # Default to 0 for the submission step (exit message has no
-                # returncode wrapper); -1 for all other cases to avoid false
-                # successes.
                 returncode = int(m.group(1)) if m else (0 if _from_exit_msg else -1)
                 tool_ts_start = ts_end
                 tool_ts_end = (
@@ -512,21 +501,15 @@ class MiniSWECodeAgent(AgentBase):
                     if tool_ts_end is not None
                     else None
                 )
-                record.tool_name = "bash"
-                record.tool_args = tool_args
-                record.tool_result = self._truncate(tool_output)
-                record.tool_success = returncode == 0
-                record.tool_timeout = False
-                record.tool_ts_start = tool_ts_start
-                record.tool_ts_end = tool_ts_end
-                record.tool_duration_ms = tool_duration_ms
+
+                # Emit tool_exec_start/end observability events
                 self._emit_event(
                     "tool_start",
                     {
                         "step_idx": step_idx,
                         "ts": tool_ts_start,
                         "tool_name": "bash",
-                        "tool_args": record.tool_args,
+                        "tool_args": tool_args,
                     },
                 )
                 self._emit_event(
@@ -536,12 +519,31 @@ class MiniSWECodeAgent(AgentBase):
                         "ts": tool_ts_end or tool_ts_start,
                         "tool_name": "bash",
                         "duration_ms": tool_duration_ms,
-                        "success": record.tool_success,
+                        "success": returncode == 0,
                         "timeout": False,
                     },
                 )
 
-            self._emit_step(record)
+                # Emit tool_exec TraceAction
+                tool_action = TraceAction(
+                    action_type="tool_exec",
+                    action_id=f"tool_{step_idx}_bash",
+                    agent_id=self.agent_id,
+                    program_id=self.agent_id,
+                    iteration=step_idx,
+                    ts_start=tool_ts_start,
+                    ts_end=tool_ts_end or tool_ts_start,
+                    data={
+                        "tool_name": "bash",
+                        "tool_args": tool_args,
+                        "tool_result": self._truncate(tool_output),
+                        "duration_ms": tool_duration_ms,
+                        "success": returncode == 0,
+                        "timeout": False,
+                    },
+                )
+                self._emit_action(tool_action)
+
             step_idx += 1
             prev_msg_len = j
             _prev_ts_end = ts_end

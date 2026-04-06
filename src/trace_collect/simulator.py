@@ -23,7 +23,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from agents.base import ActionRecord, StepRecord
+from agents.base import TraceAction
 from harness.trace_logger import TraceLogger
 from trace_collect.openclaw_tools import execute_trace_tool
 
@@ -116,26 +116,27 @@ def _build_simulate_run_id(model: str) -> str:
     return f"simulate_{safe_model}_{ts}"
 
 
-def load_trace_steps(
+def load_trace_actions(
     trace_path: Path,
     agent_id: str,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """Load step records enriched with event data, plus optional summary.
+) -> tuple[dict[int, dict[str, Any]], dict[str, Any] | None]:
+    """Load trace actions grouped by iteration, plus optional summary.
 
-    v3 traces store ``messages_in`` and ``raw_response`` in separate
-    ``llm_call_start`` / ``llm_call_end`` events rather than in the step
-    record itself.  This function reassembles them so callers see a
-    uniform dict per step regardless of trace format version.
+    Handles both v4 (TraceAction records) and legacy (step records + events).
+    Returns actions grouped by iteration so the simulator can replay each
+    iteration as: LLM call → tool executions.
 
     Returns:
-        (steps sorted by step_idx, summary or None)
+        (iterations dict {iteration_num: {"llm": action_dict, "tools": [action_dict, ...]}},
+         summary or None)
 
     Raises:
-        SimulateError: if agent_id not found or no step records exist.
+        SimulateError: if agent_id not found or no action records exist.
     """
-    steps: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
+    legacy_steps: list[dict[str, Any]] = []
     summary: dict[str, Any] | None = None
-    # Collect llm events keyed by step_idx
+    # Collect events for enrichment (legacy traces)
     llm_starts: dict[int, dict[str, Any]] = {}
     llm_ends: dict[int, dict[str, Any]] = {}
 
@@ -151,45 +152,75 @@ def load_trace_steps(
             if record.get("agent_id") != agent_id:
                 continue
             rtype = record.get("type")
-            if rtype == "step":
-                steps.append(record)
+            if rtype == "action" and "action_type" in record:
+                actions.append(record)
+            elif rtype == "step":
+                legacy_steps.append(record)
             elif rtype == "summary":
                 summary = record
             elif rtype == "event":
                 event_name = record.get("event")
-                step_idx = record.get("step_idx", 0)
+                idx = record.get("step_idx", 0)
                 if event_name == "llm_call_start":
-                    llm_starts[step_idx] = record.get("data", {})
+                    llm_starts[idx] = record.get("data", {})
                 elif event_name == "llm_call_end":
-                    llm_ends[step_idx] = record.get("data", {})
-            # mini-swe flat event format
-            elif rtype == "llm_call_start":
-                llm_starts[record.get("step_idx", 0)] = record
-            elif rtype == "llm_call_end":
-                llm_ends[record.get("step_idx", 0)] = record
+                    llm_ends[idx] = record.get("data", {})
+            elif rtype in ("llm_call_start", "llm_call_end"):
+                idx = record.get("step_idx", record.get("iteration", 0))
+                if rtype == "llm_call_start":
+                    llm_starts[idx] = record
+                else:
+                    llm_ends[idx] = record
 
-    if not steps:
-        raise SimulateError(f"No step records found for agent_id={agent_id!r}")
+    # If we have v4 actions, group by iteration
+    if actions:
+        iterations: dict[int, dict[str, Any]] = {}
+        for a in actions:
+            it = a.get("iteration", 0)
+            if it not in iterations:
+                iterations[it] = {"llm": None, "tools": []}
+            if a.get("action_type") == "llm_call":
+                iterations[it]["llm"] = a
+            elif a.get("action_type") == "tool_exec":
+                iterations[it]["tools"].append(a)
+        if not iterations:
+            raise SimulateError(f"No action records found for agent_id={agent_id!r}")
+        return iterations, summary
 
-    steps.sort(key=lambda s: s["step_idx"])
+    # Fallback: convert legacy steps to iteration groups
+    if not legacy_steps:
+        raise SimulateError(f"No action/step records found for agent_id={agent_id!r}")
 
-    # Validate no gaps
-    indices = [s["step_idx"] for s in steps]
-    expected = list(range(len(indices)))
-    if indices != expected:
-        raise SimulateError(
-            f"Step index gaps for {agent_id}: got {indices[:5]}... expected 0..{len(indices) - 1}"
-        )
-
-    # Enrich steps with event data (v3 format)
-    for step in steps:
-        idx = step["step_idx"]
+    legacy_steps.sort(key=lambda s: s.get("step_idx", 0))
+    # Enrich from events
+    for step in legacy_steps:
+        idx = step.get("step_idx", 0)
         if "messages_in" not in step and idx in llm_starts:
             step["messages_in"] = llm_starts[idx].get("messages_in")
         if "raw_response" not in step and idx in llm_ends:
             step["raw_response"] = llm_ends[idx].get("raw_response")
 
-    return steps, summary
+    iterations = {}
+    for step in legacy_steps:
+        idx = step.get("step_idx", 0)
+        llm_data = {
+            "messages_in": step.get("messages_in"),
+            "raw_response": step.get("raw_response"),
+            "prompt_tokens": step.get("prompt_tokens", 0),
+            "completion_tokens": step.get("completion_tokens", 0),
+            "llm_latency_ms": step.get("llm_latency_ms", 0),
+        }
+        tool_data = None
+        if step.get("tool_name"):
+            tool_data = {
+                "tool_name": step["tool_name"],
+                "tool_args": step.get("tool_args", "{}"),
+            }
+        iterations[idx] = {
+            "llm": {"type": "action", "action_type": "llm_call", "iteration": idx, "data": llm_data},
+            "tools": [{"type": "action", "action_type": "tool_exec", "iteration": idx, "data": tool_data}] if tool_data else [],
+        }
+    return iterations, summary
 
 
 def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
@@ -216,12 +247,12 @@ async def simulate(
 ) -> Path:
     """Simulate an agent run using a source API trace with local model timing.
 
-    For each step in the source trace:
+    For each iteration in the source trace:
     1. Feed the original messages_in to the local model (streaming).
     2. Force the model to generate completion_tokens tokens, measure TTFT/TPOT.
     3. Discard the local model's output.
-    4. Execute the source trace's tool call for real.
-    5. Record a StepRecord with API-trace decisions + local-model timing.
+    4. Execute the source trace's tool call(s) for real.
+    5. Record TraceAction records with API-trace decisions + local-model timing.
 
     Args:
         source_trace: Path to the source API trace JSONL.
@@ -241,18 +272,17 @@ async def simulate(
     from agents.miniswe import MiniSWECodeAgent
 
     # 1. Load source trace
-    # Detect agent_id: use the first step record's agent_id
     first_agent_id = _detect_agent_id(source_trace)
-    steps, summary = load_trace_steps(source_trace, first_agent_id)
+    iterations, summary = load_trace_actions(source_trace, first_agent_id)
     agent_id = first_agent_id
 
     # 2. Find task
     task = _find_task(task_source, agent_id)
     source_model = (summary or {}).get("model", "unknown")
     logger.info(
-        "Simulating %s: %d steps from %s, local model=%s",
+        "Simulating %s: %d iterations from %s, local model=%s",
         agent_id,
-        len(steps),
+        len(iterations),
         source_model,
         model,
     )
@@ -285,7 +315,7 @@ async def simulate(
         source_model=source_model,
         local_model=model,
         local_api_base=api_base,
-        n_source_steps=len(steps),
+        n_source_iterations=len(iterations),
     )
 
     # 5. Create streaming client
@@ -295,22 +325,25 @@ async def simulate(
         timeout=180.0,
     )
 
-    # 6. Step loop
+    # 6. Iteration loop (action-based replay)
     wall_start = time.time()
-    total_steps = len(steps)
-    succeeded_steps = 0
-    failed_steps = 0
+    total_iters = len(iterations)
+    succeeded_iters = 0
+    failed_iters = 0
+    sorted_iters = sorted(iterations.keys())
 
     try:
-        for i, step in enumerate(steps):
-            step_idx = step["step_idx"]
-            messages_in = step.get("messages_in")
-            n_tokens = step.get("completion_tokens", 1) or 1
-            tool_name = step.get("tool_name")
-            tool_args = step.get("tool_args", "{}")
+        for i, it_num in enumerate(sorted_iters):
+            it_group = iterations[it_num]
+            llm_action = it_group.get("llm") or {}
+            llm_data = llm_action.get("data", {})
+            tool_actions = it_group.get("tools", [])
+
+            messages_in = llm_data.get("messages_in")
+            n_tokens = llm_data.get("completion_tokens", 1) or 1
 
             if not messages_in:
-                logger.warning("Step %d: no messages_in, skipping LLM call", step_idx)
+                logger.warning("Iteration %d: no messages_in, skipping", it_num)
                 continue
 
             ts_start = time.time()
@@ -318,94 +351,79 @@ async def simulate(
             # 6a. Streaming call to local model (measure timing, discard output)
             try:
                 ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
-                    client,
-                    model,
-                    messages_in,
-                    n_tokens,
+                    client, model, messages_in, n_tokens,
                 )
             except Exception as exc:
-                logger.error("Step %d: LLM call failed: %s", step_idx, exc)
+                logger.error("Iteration %d: LLM call failed: %s", it_num, exc)
                 ttft_ms, tpot_ms, llm_latency_ms = 0.0, 0.0, 0.0
-                failed_steps += 1
+                failed_iters += 1
 
             ts_after_llm = time.time()
 
-            # 6b. Emit action record (LLM decided, before tool execution)
-            action = ActionRecord(
-                step_idx=step_idx,
+            # 6b. Emit llm_call TraceAction
+            llm_record = TraceAction(
+                action_type="llm_call",
+                action_id=f"llm_{it_num}",
+                agent_id=agent_id,
                 program_id=agent_id,
-                tool_name=tool_name,
-                tool_args=tool_args,
-                prompt_tokens=step.get("prompt_tokens", 0),
-                completion_tokens=step.get("completion_tokens", 0),
-                llm_latency_ms=llm_latency_ms,
-                ttft_ms=ttft_ms,
-                ts=ts_after_llm,
-            )
-            trace_logger.log_action(agent_id, action)
-
-            # 6c. Execute tool call from source trace
-            tool_result = ""
-            tool_duration_ms = 0.0
-            tool_success = True
-            tool_ts_start: float | None = None
-            tool_ts_end: float | None = None
-
-            if tool_name:
-                tool_ts_start = time.time()
-                tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                    agent_id,
-                    repo_dir,
-                    tool_name,
-                    tool_args,
-                    command_timeout_s,
-                    step.get("raw_response"),
-                )
-                tool_ts_end = time.time()
-
-            ts_end = time.time()
-
-            # 6d. Build and emit StepRecord
-            record = StepRecord(
-                step_idx=step_idx,
-                phase=step.get("phase", "acting"),
-                program_id=agent_id,
-                prompt_tokens=step.get("prompt_tokens", 0),
-                completion_tokens=step.get("completion_tokens", 0),
-                llm_latency_ms=llm_latency_ms,
-                llm_output=step.get("llm_output", ""),
-                messages_in=messages_in,
-                raw_response=step.get("raw_response", {}),
-                tool_name=tool_name,
-                tool_args=tool_args,
-                tool_result=tool_result,
-                tool_duration_ms=tool_duration_ms,
-                tool_success=tool_success,
-                tool_timeout=False,
-                tool_ts_start=tool_ts_start,
-                tool_ts_end=tool_ts_end,
+                iteration=it_num,
                 ts_start=ts_start,
-                ts_end=ts_end,
-                ttft_ms=ttft_ms,
-                tpot_ms=tpot_ms,
-                extra={
+                ts_end=ts_after_llm,
+                data={
+                    "messages_in": messages_in,
+                    "raw_response": llm_data.get("raw_response", {}),
+                    "prompt_tokens": llm_data.get("prompt_tokens", 0),
+                    "completion_tokens": llm_data.get("completion_tokens", 0),
+                    "llm_latency_ms": llm_latency_ms,
+                    "ttft_ms": ttft_ms,
+                    "tpot_ms": tpot_ms,
                     "simulate_source": str(source_trace),
-                    "simulate_step_idx": step_idx,
-                    "source_llm_latency_ms": step.get("llm_latency_ms"),
+                    "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
                 },
             )
-            trace_logger.log_step(agent_id, record)
-            succeeded_steps += 1
+            trace_logger.log_trace_action(agent_id, llm_record)
+
+            # 6c. Execute tool calls from source trace
+            total_tool_ms = 0.0
+            for tool_act in tool_actions:
+                td = tool_act.get("data", {})
+                tool_name = td.get("tool_name")
+                tool_args = td.get("tool_args", "{}")
+                if not tool_name:
+                    continue
+
+                tool_ts_start = time.time()
+                tool_result, tool_duration_ms, tool_success = await _exec_tool(
+                    agent_id, repo_dir, tool_name, tool_args,
+                    command_timeout_s, llm_data.get("raw_response"),
+                )
+                tool_ts_end = time.time()
+                total_tool_ms += tool_duration_ms
+
+                tool_record = TraceAction(
+                    action_type="tool_exec",
+                    action_id=f"tool_{it_num}_{tool_name}",
+                    agent_id=agent_id,
+                    program_id=agent_id,
+                    iteration=it_num,
+                    ts_start=tool_ts_start,
+                    ts_end=tool_ts_end,
+                    data={
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "tool_result": tool_result,
+                        "duration_ms": tool_duration_ms,
+                        "success": tool_success,
+                    },
+                )
+                trace_logger.log_trace_action(agent_id, tool_record)
+
+            succeeded_iters += 1
 
             logger.info(
-                "[%d/%d] step %d: ttft=%.1fms tpot=%.2fms llm=%.0fms tool=%.0fms",
-                i + 1,
-                total_steps,
-                step_idx,
-                ttft_ms,
-                tpot_ms,
-                llm_latency_ms,
-                tool_duration_ms,
+                "[%d/%d] iter %d: ttft=%.1fms tpot=%.2fms llm=%.0fms tool=%.0fms",
+                i + 1, total_iters, it_num,
+                ttft_ms, tpot_ms, llm_latency_ms, total_tool_ms,
             )
 
     finally:
@@ -415,14 +433,14 @@ async def simulate(
         simulate_summary: dict[str, Any] = {
             "agent_id": agent_id,
             "task_id": agent_id,
-            "n_steps": succeeded_steps,
+            "n_steps": succeeded_iters,
             "elapsed_s": wall_end - wall_start,
             "source_trace": str(source_trace),
             "source_model": source_model,
             "local_model": model,
             "local_api_base": api_base,
-            "succeeded_steps": succeeded_steps,
-            "failed_steps": failed_steps,
+            "succeeded_iterations": succeeded_iters,
+            "failed_iterations": failed_iters,
         }
         trace_logger.log_summary(agent_id, simulate_summary)
         trace_logger.close()
@@ -435,10 +453,10 @@ async def simulate(
 
     trace_file = output_path / f"{run_id}.jsonl"
     logger.info(
-        "Simulate complete: %s steps=%d/%d elapsed=%.1fs -> %s",
+        "Simulate complete: %s iterations=%d/%d elapsed=%.1fs -> %s",
         agent_id,
-        succeeded_steps,
-        total_steps,
+        succeeded_iters,
+        total_iters,
         wall_end - wall_start,
         trace_file,
     )
@@ -465,7 +483,7 @@ def _detect_scaffold(trace_path: Path) -> str:
 
 
 def _detect_agent_id(trace_path: Path) -> str:
-    """Read the first step record to detect the agent_id."""
+    """Read the first action/step record to detect the agent_id."""
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -475,6 +493,7 @@ def _detect_agent_id(trace_path: Path) -> str:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if record.get("type") == "step" and record.get("agent_id"):
+            rtype = record.get("type", "")
+            if rtype in ("action", "step") and record.get("agent_id"):
                 return record["agent_id"]
-    raise SimulateError(f"No step records with agent_id found in {trace_path}")
+    raise SimulateError(f"No action/step records with agent_id found in {trace_path}")
