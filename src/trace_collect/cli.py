@@ -285,6 +285,8 @@ def main() -> None:
         _run_import_openclaw(args)
     elif len(sys.argv) > 1 and sys.argv[1] == "inspect":
         _run_inspect(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == "gantt":
+        _run_gantt(sys.argv[2:])
     else:
         args = parse_collect_args()
         _run_collect(args)
@@ -541,6 +543,60 @@ examples:
             print(json.dumps({"error": "timeline does not support --json output"}))
             return
         cmd_timeline(data)
+
+
+def _run_gantt(argv: list[str]) -> None:
+    """Top-level gantt subcommand: generate interactive Gantt HTML from traces."""
+    import argparse as _ap
+
+    parser = _ap.ArgumentParser(
+        prog="python -m trace_collect.cli gantt",
+        description="Generate interactive Gantt chart from JSONL traces.",
+    )
+    parser.add_argument(
+        "traces",
+        nargs="+",
+        help="One or more JSONL trace files to visualize.",
+    )
+    parser.add_argument(
+        "--output", "-o",
+        type=str,
+        default=None,
+        help="Write HTML to this file instead of opening browser.",
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Start a local HTTP server (Ctrl+C to stop).",
+    )
+    parsed = parser.parse_args(argv)
+
+    from pathlib import Path
+
+    from trace_collect.gantt_serve import generate_gantt_html, open_gantt, serve_gantt, write_gantt
+    from trace_collect.trace_inspector import TraceData
+
+    traces = []
+    for tp in parsed.traces:
+        p = Path(tp)
+        if not p.exists():
+            print(f"ERROR: trace file not found: {tp}", file=sys.stderr)
+            sys.exit(1)
+        data = TraceData.load(p)
+        label = p.stem
+        traces.append((label, data))
+
+    html = generate_gantt_html(traces)
+
+    if parsed.output:
+        out = Path(parsed.output)
+        write_gantt(html, out)
+        print(f"Gantt HTML written to: {out}")
+    elif parsed.serve:
+        serve_gantt(html)
+    else:
+        tmp = open_gantt(html)
+        print(f"Opened in browser: {tmp}")
 
 
 if __name__ == "__main__":

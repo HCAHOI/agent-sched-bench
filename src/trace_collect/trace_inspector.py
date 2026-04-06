@@ -51,6 +51,8 @@ _LEGACY_EVENT_MAP: dict[str, tuple[str, str]] = {
     # v3 flat events (mini-swe uses these as top-level record types)
     "llm_call_start": ("LLM", "llm_call_start"),
     "llm_call_end": ("LLM", "llm_call_end"),
+    "tool_exec_start": ("TOOL", "tool_exec_start"),
+    "tool_exec_end": ("TOOL", "tool_exec_end"),
 }
 
 # Keys that are structural (not event-specific payload).

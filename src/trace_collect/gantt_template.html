@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trace Gantt &mdash; agent-sched-bench</title>
+<style>
+  /* JetBrains Mono: loaded async to avoid blocking; falls back to system monospace */
+
+  :root {
+    --bg: #0a0e14;
+    --bg-header: #0d1117;
+    --bg-panel: #111820;
+    --border: #1e2633;
+    --grid: #141a24;
+    --text: #c5c8d4;
+    --text-dim: #6b7280;
+    --text-bright: #e8eaf0;
+    --cyan: #00E5FF;
+    --amber: #FF6D00;
+    --green: #76FF03;
+    --red: #FF1744;
+    --sidebar-w: 200px;
+    --header-h: 48px;
+    --legend-h: 32px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 12px;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  #header {
+    height: var(--header-h);
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 24px;
+  }
+
+  #header .title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    letter-spacing: 0.5px;
+  }
+
+  #header .meta {
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  #header .toggle-group {
+    display: flex;
+    gap: 2px;
+    background: var(--bg);
+    border-radius: 4px;
+    padding: 2px;
+  }
+
+  #header .toggle-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 4px 12px;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.15s;
+  }
+
+  #header .toggle-btn.active {
+    background: var(--border);
+    color: var(--text-bright);
+  }
+
+  #legend {
+    height: var(--legend-h);
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 20px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+  }
+
+  .legend-swatch {
+    width: 14px;
+    height: 8px;
+    border-radius: 1px;
+  }
+
+  .legend-marker {
+    width: 8px;
+    height: 8px;
+    transform: rotate(45deg);
+  }
+
+  #main {
+    display: flex;
+    height: calc(100vh - var(--header-h) - var(--legend-h));
+  }
+
+  #sidebar {
+    width: var(--sidebar-w);
+    background: var(--bg-header);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+
+  .lane-label {
+    height: 60px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--grid);
+  }
+
+  .lane-label .trace-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-bright);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .lane-label .agent-name {
+    font-size: 10px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #canvas-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #gantt-canvas {
+    display: block;
+    cursor: crosshair;
+  }
+
+  #tooltip {
+    display: none;
+    position: fixed;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 14px;
+    max-width: 400px;
+    z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  }
+
+  #tooltip .tt-header {
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 6px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+  }
+
+  #tooltip .tt-row {
+    display: flex;
+    gap: 8px;
+    line-height: 1.6;
+    font-size: 11px;
+  }
+
+  #tooltip .tt-key {
+    color: var(--text-dim);
+    flex-shrink: 0;
+    min-width: 90px;
+  }
+
+  #tooltip .tt-val {
+    color: var(--text);
+    word-break: break-all;
+  }
+
+  #source-ref {
+    position: fixed;
+    bottom: 8px;
+    right: 12px;
+    font-size: 10px;
+    color: var(--text-dim);
+    opacity: 0.5;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <span class="title">TRACE GANTT</span>
+  <span class="meta" id="header-meta"></span>
+  <div class="toggle-group">
+    <button class="toggle-btn active" id="btn-sync" onclick="setTimeMode('sync')">SYNC</button>
+    <button class="toggle-btn" id="btn-abs" onclick="setTimeMode('abs')">ABS</button>
+  </div>
+</div>
+
+<div id="legend" role="presentation"></div>
+
+<div id="main">
+  <div id="sidebar"></div>
+  <div id="canvas-wrap">
+    <canvas id="gantt-canvas"></canvas>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+<div id="source-ref"></div>
+
+<script>var __TRACE_DATA__ = __TRACE_JSON__;</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" crossorigin>
+<script>
+'use strict';
+
+// ─── Registries ────────────────────────────────────────────────────
+const SPAN_REGISTRY = {
+  llm:        { color: '#00E5FF', label: 'LLM Call',    order: 0 },
+  tool:       { color: '#FF6D00', label: 'Tool Exec',   order: 1 },
+  scheduling: { color: '#76FF03', label: 'Scheduling',  order: 2 },
+};
+
+const MARKER_REGISTRY = {
+  message_dispatch:    { symbol: 'diamond', color: '#76FF03' },
+  session_lock_acquire:{ symbol: 'diamond', color: '#76FF03' },
+  session_load:        { symbol: 'dot',     color: '#76FF03' },
+  message_list_build:  { symbol: 'dot',     color: '#4FC3F7' },
+  session_turn_save:   { symbol: 'dot',     color: '#76FF03' },
+  task_complete:       { symbol: 'flag',    color: '#FF6D00' },
+  llm_error:           { symbol: 'cross',   color: '#FF1744' },
+  max_iterations:      { symbol: 'cross',   color: '#FF1744' },
+  _default:            { symbol: 'dot',     color: '#6b7280' },
+};
+
+// ─── State ─────────────────────────────────────────────────────────
+let DATA = null;
+let timeMode = 'sync';   // 'sync' | 'abs'
+const LANE_H = 60;
+const SPAN_H = 18;
+const MARKER_H = 6;
+const TIME_AXIS_H = 28;
+const SPAN_PAD = 4;
+
+let hitBoxes = [];  // [{x, y, w, h, item}]
+
+// ─── Init ──────────────────────────────────────────────────────────
+function init() {
+  try {
+    if (typeof __TRACE_DATA__ === 'undefined' || !__TRACE_DATA__) {
+      document.body.innerHTML = '<div style="padding:40px;color:#c5c8d4;font-family:monospace">No trace data embedded. Use: python -m trace_collect.cli gantt &lt;trace.jsonl&gt;</div>';
+      return;
+    }
+    DATA = __TRACE_DATA__;
+    buildLegend();
+    buildSidebar();
+    updateHeaderMeta();
+    setupCanvas();
+  } catch (err) {
+    document.body.innerHTML = `<pre style="padding:40px;color:#FF1744;font-family:monospace">${esc(err.stack || err.message)}</pre>`;
+  }
+}
+
+// ─── Legend ─────────────────────────────────────────────────────────
+function buildLegend() {
+  const el = document.getElementById('legend');
+  let html = '';
+  for (const [type, reg] of Object.entries(SPAN_REGISTRY)) {
+    html += `<div class="legend-item"><div class="legend-swatch" style="background:${reg.color}"></div>${reg.label}</div>`;
+  }
+  html += `<div class="legend-item"><div class="legend-marker" style="background:#76FF03"></div>Event Marker</div>`;
+  el.innerHTML = html;
+}
+
+// ─── Sidebar ───────────────────────────────────────────────────────
+function buildSidebar() {
+  const el = document.getElementById('sidebar');
+  let html = '';
+  // Time axis row
+  html += `<div class="lane-label" style="height:${TIME_AXIS_H}px"><span class="trace-name" style="font-size:10px;color:var(--text-dim)">TIME</span></div>`;
+  for (const trace of DATA.traces) {
+    const m = trace.metadata;
+    const hoverParts = [
+      `scaffold: ${m.scaffold}`,
+      `model: ${m.model||'?'}`,
+      `instance: ${m.instance_id||'?'}`,
+      `max_steps: ${m.max_steps||'?'}`,
+      `steps: ${m.n_steps}`,
+      `events: ${m.n_events}`,
+      `elapsed: ${(m.elapsed_s||0).toFixed(1)}s`,
+    ];
+    const hoverText = hoverParts.join('\n');
+    const displayName = `${m.scaffold} (${m.model||'?'})`;
+    for (const lane of trace.lanes) {
+      html += `<div class="lane-label" title="${esc(hoverText)}"><span class="trace-name">${esc(displayName)}</span><span class="agent-name">${esc(lane.agent_id)}</span></div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+// ─── Header meta ───────────────────────────────────────────────────
+function updateHeaderMeta() {
+  const parts = [];
+  for (const t of DATA.traces) {
+    const m = t.metadata;
+    parts.push(`${m.scaffold} ${m.model||''} (${m.n_steps} steps, ${(m.elapsed_s||0).toFixed(1)}s)`);
+  }
+  document.getElementById('header-meta').textContent = parts.join(' vs ');
+}
+
+// ─── Canvas setup ──────────────────────────────────────────────────
+function setupCanvas() {
+  const canvas = document.getElementById('gantt-canvas');
+  const wrap = document.getElementById('canvas-wrap');
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = wrap.clientWidth * dpr;
+    canvas.height = wrap.clientHeight * dpr;
+    canvas.style.width = wrap.clientWidth + 'px';
+    canvas.style.height = wrap.clientHeight + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    render();
+  }
+
+  new ResizeObserver(resize).observe(wrap);
+  resize();
+
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mouseleave', () => {
+    document.getElementById('tooltip').style.display = 'none';
+  });
+}
+
+// ─── Time mode toggle ──────────────────────────────────────────────
+function setTimeMode(mode) {
+  timeMode = mode;
+  document.getElementById('btn-sync').classList.toggle('active', mode === 'sync');
+  document.getElementById('btn-abs').classList.toggle('active', mode === 'abs');
+  render();
+}
+
+// ─── Render ────────────────────────────────────────────────────────
+function render() {
+  if (!DATA) return;
+  const canvas = document.getElementById('gantt-canvas');
+  const wrap = document.getElementById('canvas-wrap');
+  const W = wrap.clientWidth;
+  const H = wrap.clientHeight;
+  const ctx = canvas.getContext('2d');
+
+  ctx.clearRect(0, 0, W, H);
+  hitBoxes = [];
+
+  // Compute time range
+  let tMin = Infinity, tMax = -Infinity;
+  for (const trace of DATA.traces) {
+    for (const lane of trace.lanes) {
+      for (const s of lane.spans) {
+        const s0 = timeMode === 'sync' ? s.start : s.start_abs;
+        const s1 = timeMode === 'sync' ? s.end : s.end_abs;
+        if (s0 < tMin) tMin = s0;
+        if (s1 > tMax) tMax = s1;
+      }
+      for (const m of lane.markers) {
+        const mt = timeMode === 'sync' ? m.t : m.t_abs;
+        if (mt < tMin) tMin = mt;
+        if (mt > tMax) tMax = mt;
+      }
+    }
+  }
+
+  if (!isFinite(tMin)) { tMin = 0; tMax = 1; }
+  const tRange = tMax - tMin || 1;
+  const margin = tRange * 0.02;
+  tMin -= margin;
+  tMax += margin;
+  const totalRange = tMax - tMin;
+
+  const tToX = (t) => ((t - tMin) / totalRange) * W;
+
+  // Count total lanes
+  let totalLanes = 0;
+  for (const trace of DATA.traces) totalLanes += trace.lanes.length;
+
+  // ── Draw grid ──
+  ctx.strokeStyle = '#141a24';
+  ctx.lineWidth = 1;
+  const gridStep = niceStep(totalRange, W / 80);
+  let gridT = Math.ceil(tMin / gridStep) * gridStep;
+  while (gridT <= tMax) {
+    const x = tToX(gridT);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+    gridT += gridStep;
+  }
+
+  // ── Draw time axis ──
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '10px JetBrains Mono, monospace';
+  ctx.textAlign = 'center';
+  gridT = Math.ceil(tMin / gridStep) * gridStep;
+  while (gridT <= tMax) {
+    const x = tToX(gridT);
+    const label = timeMode === 'sync'
+      ? formatSyncTime(gridT)
+      : formatAbsTime(gridT);
+    ctx.fillText(label, x, TIME_AXIS_H - 6);
+    gridT += gridStep;
+  }
+
+  // ── Draw lanes ──
+  let laneY = TIME_AXIS_H;
+
+  for (const trace of DATA.traces) {
+    for (const lane of trace.lanes) {
+      // Lane background
+      ctx.fillStyle = '#0c1018';
+      ctx.fillRect(0, laneY, W, LANE_H);
+
+      // Lane separator
+      ctx.strokeStyle = '#1a1f2e';
+      ctx.beginPath();
+      ctx.moveTo(0, laneY + LANE_H);
+      ctx.lineTo(W, laneY + LANE_H);
+      ctx.stroke();
+
+      // ── Draw spans ──
+      // Group by step_idx, stack LLM and tool within lane
+      const spansByStep = {};
+      for (const s of lane.spans) {
+        const key = s.step_idx;
+        if (!spansByStep[key]) spansByStep[key] = [];
+        spansByStep[key].push(s);
+      }
+
+      for (const spans of Object.values(spansByStep)) {
+        spans.sort((a, b) => (SPAN_REGISTRY[a.type]?.order ?? 99) - (SPAN_REGISTRY[b.type]?.order ?? 99));
+        for (let i = 0; i < spans.length; i++) {
+          const s = spans[i];
+          const reg = SPAN_REGISTRY[s.type] || SPAN_REGISTRY.scheduling;
+          const st = timeMode === 'sync' ? s.start : s.start_abs;
+          const et = timeMode === 'sync' ? s.end : s.end_abs;
+          const x0 = tToX(st);
+          const x1 = tToX(et);
+          const w = Math.max(x1 - x0, 3); // minimum visible width
+          const yOff = laneY + SPAN_PAD + i * (SPAN_H + 2);
+
+          // Span bar
+          ctx.fillStyle = reg.color;
+          ctx.globalAlpha = 0.85;
+          ctx.fillRect(x0, yOff, w, SPAN_H);
+          ctx.globalAlpha = 1;
+
+          // Step label
+          if (w > 20) {
+            ctx.fillStyle = '#000';
+            ctx.font = '9px JetBrains Mono, monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(`${s.step_idx}`, x0 + 3, yOff + 12);
+          }
+
+          hitBoxes.push({ x: x0, y: yOff, w: w, h: SPAN_H, item: s, kind: 'span' });
+        }
+      }
+
+      // ── Draw markers ──
+      for (const m of lane.markers) {
+        const mt = timeMode === 'sync' ? m.t : m.t_abs;
+        const x = tToX(mt);
+        const reg = MARKER_REGISTRY[m.event] || MARKER_REGISTRY._default;
+        const cy = laneY + LANE_H - MARKER_H - 2;
+
+        ctx.fillStyle = reg.color;
+        ctx.globalAlpha = 0.7;
+
+        if (reg.symbol === 'diamond') {
+          ctx.save();
+          ctx.translate(x, cy);
+          ctx.rotate(Math.PI / 4);
+          ctx.fillRect(-3, -3, 6, 6);
+          ctx.restore();
+        } else if (reg.symbol === 'flag') {
+          ctx.fillRect(x - 1, cy - 6, 2, 10);
+          ctx.fillRect(x + 1, cy - 6, 6, 4);
+        } else if (reg.symbol === 'cross') {
+          ctx.fillRect(x - 4, cy - 1, 8, 2);
+          ctx.fillRect(x - 1, cy - 4, 2, 8);
+        } else {
+          ctx.beginPath();
+          ctx.arc(x, cy, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+        hitBoxes.push({ x: x - 6, y: cy - 6, w: 12, h: 12, item: m, kind: 'marker' });
+      }
+
+      laneY += LANE_H;
+    }
+  }
+}
+
+// ─── Mouse / Tooltip ───────────────────────────────────────────────
+function onMouseMove(e) {
+  const canvas = document.getElementById('gantt-canvas');
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  let hit = null;
+  for (let i = hitBoxes.length - 1; i >= 0; i--) {
+    const b = hitBoxes[i];
+    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+      hit = b;
+      break;
+    }
+  }
+
+  const tooltip = document.getElementById('tooltip');
+  if (!hit) {
+    tooltip.style.display = 'none';
+    return;
+  }
+
+  let html = '';
+  if (hit.kind === 'span') {
+    const s = hit.item;
+    const reg = SPAN_REGISTRY[s.type] || {};
+    const dur = ((s.end_abs - s.start_abs) * 1000).toFixed(1);
+    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${reg.label||s.type} &mdash; Step ${s.step_idx}</div>`;
+    html += ttRow('Duration', dur + ' ms');
+    html += ttRow('Start', formatAbsTime(s.start_abs));
+    html += ttRow('Relative', '+' + s.start.toFixed(3) + 's');
+    for (const [k, v] of Object.entries(s.detail || {})) {
+      if (v === null || v === undefined || v === '') continue;
+      html += ttRow(k, String(v));
+    }
+  } else {
+    const m = hit.item;
+    const reg = MARKER_REGISTRY[m.event] || MARKER_REGISTRY._default;
+    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${m.event} &mdash; Step ${m.step_idx}</div>`;
+    html += ttRow('Time', formatAbsTime(m.t_abs));
+    html += ttRow('Relative', '+' + m.t.toFixed(3) + 's');
+    for (const [k, v] of Object.entries(m.detail || {})) {
+      if (v === null || v === undefined || v === '') continue;
+      html += ttRow(k, String(v).substring(0, 120));
+    }
+  }
+
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+
+  // Position near cursor
+  const tx = e.clientX + 16;
+  const ty = e.clientY + 16;
+  const tw = tooltip.offsetWidth;
+  const th = tooltip.offsetHeight;
+  tooltip.style.left = (tx + tw > window.innerWidth ? e.clientX - tw - 8 : tx) + 'px';
+  tooltip.style.top = (ty + th > window.innerHeight ? e.clientY - th - 8 : ty) + 'px';
+}
+
+function ttRow(key, val) {
+  return `<div class="tt-row"><span class="tt-key">${esc(key)}</span><span class="tt-val">${esc(val)}</span></div>`;
+}
+
+// ─── Time formatting ───────────────────────────────────────────────
+function formatSyncTime(t) {
+  if (t < 0) return t.toFixed(1) + 's';
+  if (t < 60) return '+' + t.toFixed(1) + 's';
+  const m = Math.floor(t / 60);
+  const s = (t % 60).toFixed(0);
+  return `+${m}m${s.padStart(2, '0')}s`;
+}
+
+function formatAbsTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toTimeString().substring(0, 8);
+}
+
+function niceStep(range, minPx) {
+  const raw = range / Math.max(1, Math.floor(minPx));
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  let nice;
+  if (norm <= 1) nice = 1;
+  else if (norm <= 2) nice = 2;
+  else if (norm <= 5) nice = 5;
+  else nice = 10;
+  return nice * mag;
+}
+
+function esc(s) {
+  if (typeof s !== 'string') s = String(s);
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ─── Boot ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
