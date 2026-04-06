@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -365,6 +366,7 @@ def _run_inspect(argv: list[str]) -> None:
         cmd_events,
         cmd_tools,
         cmd_search,
+        cmd_timeline,
     )
 
     parser = _argparse.ArgumentParser(
@@ -378,6 +380,7 @@ def _run_inspect(argv: list[str]) -> None:
   events     List fine-grained events (SCHEDULING, SESSION, TOOL, LLM, ...)
   tools      Tool usage breakdown: name, count, total duration, success rate
   search P   Regex search through llm_output fields across all steps
+  timeline   Concise per-step timeline with icons, relative timestamps, durations
 
 examples:
   %(prog)s trace.jsonl overview
@@ -389,7 +392,9 @@ examples:
   %(prog)s trace.jsonl tools
   %(prog)s trace.jsonl search "def main"
   %(prog)s trace.jsonl overview --json
-  %(prog)s trace.jsonl step 0 --agent django""",
+  %(prog)s trace.jsonl step 0 --agent django
+  %(prog)s trace.jsonl timeline
+  %(prog)s trace.jsonl timeline --agent django""",
         formatter_class=_argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("trace", help="Path to the JSONL trace file.")
@@ -403,6 +408,7 @@ examples:
             "events",
             "tools",
             "search",
+            "timeline",
         ],
         help="Inspection command (see above).",
     )
@@ -499,6 +505,11 @@ examples:
     elif cmd == "search":
         pattern = parsed.args[0] if parsed.args else ""
         cmd_search(data, pattern, truncate=truncate, as_json=parsed.as_json)
+    elif cmd == "timeline":
+        if parsed.as_json:
+            print(json.dumps({"error": "timeline does not support --json output"}))
+            return
+        cmd_timeline(data)
 
 
 if __name__ == "__main__":

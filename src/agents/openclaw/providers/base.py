@@ -55,6 +55,7 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
     thinking_blocks: list[dict] | None = None  # Anthropic extended thinking
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_tool_calls(self) -> bool:
@@ -237,7 +238,9 @@ class LLMProvider(ABC):
             raise
         except Exception as exc:
             return LLMResponse(
-                content=f"Error calling LLM: {exc}", finish_reason="error"
+                content=f"Error calling LLM: {exc}",
+                finish_reason="error",
+                extra={"error_type": type(exc).__name__},
             )
 
     async def chat_stream(
@@ -279,7 +282,9 @@ class LLMProvider(ABC):
             raise
         except Exception as exc:
             return LLMResponse(
-                content=f"Error calling LLM: {exc}", finish_reason="error"
+                content=f"Error calling LLM: {exc}",
+                finish_reason="error",
+                extra={"error_type": type(exc).__name__},
             )
 
     async def chat_stream_with_retry(

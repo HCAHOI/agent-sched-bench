@@ -247,15 +247,18 @@ class TraceCollectorHook(AgentHook):
         if context.response:
             finish_reason = context.response.finish_reason
             if finish_reason == "error":
+                error_data: dict[str, Any] = {
+                    "error_message": context.response.content[:500]
+                    if context.response.content
+                    else "",
+                    "finish_reason": finish_reason,
+                }
+                if context.response.extra:
+                    error_data.update(context.response.extra)
                 self.emit_event(
                     LLM,
                     "llm_error",
-                    {
-                        "error_message": context.response.content[:500]
-                        if context.response.content
-                        else "",
-                        "finish_reason": finish_reason,
-                    },
+                    error_data,
                     step_idx=context.iteration,
                 )
             elif finish_reason == "max_iterations":

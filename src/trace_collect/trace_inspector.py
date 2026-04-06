@@ -242,9 +242,12 @@ def cmd_step(
     """Print all fields of a single step record."""
     step = next((s for s in data.steps if s.get("step_idx") == step_idx), None)
     if step is None:
-        print(
-            f"ERROR: step {step_idx} not found (available: {[s.get('step_idx') for s in data.steps]})"
-        )
+        avail = [s.get("step_idx") for s in data.steps]
+        msg = f"step {step_idx} not found (available: {avail})"
+        if as_json:
+            print(json.dumps({"error": msg}))
+        else:
+            print(f"ERROR: {msg}")
         return
 
     if as_json:
@@ -292,7 +295,10 @@ def cmd_messages(
     """Print messages_in from a step record, optionally filtered by role."""
     step = next((s for s in data.steps if s.get("step_idx") == step_idx), None)
     if step is None:
-        print(f"ERROR: step {step_idx} not found")
+        if as_json:
+            print(json.dumps({"error": f"step {step_idx} not found"}))
+        else:
+            print(f"ERROR: step {step_idx} not found")
         return
 
     messages: list[dict[str, Any]] = step.get("messages_in", [])
@@ -331,7 +337,10 @@ def cmd_response(
     """Print raw_response from a step record."""
     step = next((s for s in data.steps if s.get("step_idx") == step_idx), None)
     if step is None:
-        print(f"ERROR: step {step_idx} not found")
+        if as_json:
+            print(json.dumps({"error": f"step {step_idx} not found"}))
+        else:
+            print(f"ERROR: step {step_idx} not found")
         return
 
     raw = step.get("raw_response")
@@ -477,13 +486,19 @@ def cmd_search(
 ) -> None:
     """Search llm_output fields of all steps using a regex pattern."""
     if not pattern:
-        print("ERROR: search pattern is required.")
+        if as_json:
+            print(json.dumps({"error": "search pattern is required."}))
+        else:
+            print("ERROR: search pattern is required.")
         return
 
     try:
         regex = re.compile(pattern, re.IGNORECASE)
     except re.error as exc:
-        print(f"ERROR: invalid regex pattern: {exc}")
+        if as_json:
+            print(json.dumps({"error": f"invalid regex pattern: {exc}"}))
+        else:
+            print(f"ERROR: invalid regex pattern: {exc}")
         return
 
     results = []
@@ -517,3 +532,312 @@ def cmd_search(
     print(f"--- Search results for {pattern!r} ({len(results)} match(es)) ---")
     for r in results:
         print(f"  step {r['step_idx']}: ...{r['context']}...")
+
+
+# ---------------------------------------------------------------------------
+# Timeline rendering (ported from scripts/trace_timeline.py)
+# ---------------------------------------------------------------------------
+
+_TIMELINE_ICONS: dict[str, str] = {
+    # CONTEXT
+    "skill_load": "📦", "skill_load_failed": "❌📦",
+    "skills_summary_build": "📋", "memory_context_load": "🧠",
+    "system_prompt_build": "📐", "message_list_build": "📬",
+    # MEMORY
+    "consolidation_trigger": "🧹", "consolidation_llm_call": "🧠⚡",
+    "memory_write": "💾", "history_append": "📝",
+    "consolidation_failure": "⚠️🧠", "raw_archive": "📦⚠️",
+    "consolidation_complete": "✅🧠",
+    "background_consolidation_scheduled": "🔄🧠",
+    # MCP
+    "mcp_connect_start": "🔌", "mcp_server_connect": "🔗",
+    "mcp_server_connected": "✅🔌", "mcp_server_failed": "❌🔌",
+    "mcp_tool_register": "📝🔧", "mcp_tool_call": "⚡🔧",
+    "mcp_tool_timeout": "⏰🔧", "mcp_disconnect": "🔌❌",
+    # SESSION
+    "session_create": "🆕", "session_load": "📂",
+    "session_save": "💾", "session_turn_save": "💾↩️",
+    "checkpoint_set": "📍", "checkpoint_restore": "🔄📍",
+    "checkpoint_clear": "🗑️📍",
+    # LLM
+    "llm_request": "▶️🤖", "llm_response": "◀️🤖",
+    "llm_retry": "🔄🤖", "llm_error": "❌🤖",
+    "finalization_retry": "🔄📝", "max_iterations": "⏹️",
+    # Normalized mini-swe events
+    "llm_call_start": "▶️🤖", "llm_call_end": "◀️🤖",
+    "llm_action": "▶️🤖",
+    "tool_exec_start": "⚙️", "tool_exec_end": "✅",
+    # TOOL
+    "tool_prepare": "🔧", "tool_prepare_error": "❌🔧",
+    "tool_execute": "⚙️", "tool_complete": "✅",
+    "tool_error": "❌", "tool_timeout": "⏰", "tool_cancelled": "🚫",
+    "external_lookup_blocked": "🚫🔍",
+    # Tool-specific
+    "file_read": "📖", "file_write": "📝", "file_edit": "✏️",
+    "dir_list": "📁", "exec_command": "⚙️💻", "exec_safety_block": "🛡️",
+    "web_search": "🔍", "web_fetch": "🌐", "send_message": "📨",
+    # SUBAGENT
+    "subagent_spawn": "🌱", "subagent_start": "🏃🌱",
+    "subagent_tool_execute": "⚙️🌱", "subagent_complete": "✅🌱",
+    "subagent_error": "❌🌱", "subagent_cancel": "🚫🌱",
+    "subagent_announcement": "📢🌱",
+    # SCHEDULING
+    "message_dispatch": "📤", "session_lock_acquire": "🔒",
+    "session_lock_release": "🔓", "concurrency_gate_acquire": "🚦",
+    "task_complete": "🏁", "priority_command_bypass": "⚡",
+}
+
+_CATEGORY_SHORT: dict[str, str] = {
+    "SCHEDULING": "sched", "SESSION": "session", "CONTEXT": "context",
+    "LLM": "llm", "TOOL": "tool", "MCP": "mcp",
+    "MEMORY": "memory", "SUBAGENT": "subagent",
+}
+
+
+def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
+    """Format a single event record for timeline display."""
+    event_name = rec.get("event", "unknown")
+    category = rec.get("category", "")
+    data = rec.get("data", {})
+    step = rec.get("step_idx", "?")
+    ts = rec.get("ts", 0.0)
+    rel = ts - t0 if t0 > 0 and ts > 0 else 0.0
+
+    icon = _TIMELINE_ICONS.get(event_name, "  ")
+    cat = _CATEGORY_SHORT.get(category, category.lower()[:6])
+
+    parts: list[str] = []
+    for key in (
+        "skill_name", "source", "server_name", "tool_name", "transport",
+        "tools_registered", "session_key", "task_id", "label",
+        "command_preview", "path", "query",
+        "error_message", "error_type", "request_id",
+    ):
+        if key in data:
+            parts.append(f"{key}={data[key]}")
+    for key in (
+        "http_status", "wait_ms", "dispatch_duration_ms",
+        "history_messages", "total_messages", "memory_size_chars",
+        "messages_count", "duration_ms", "consecutive_failures",
+        "result_count",
+    ):
+        if key in data:
+            parts.append(f"{key}={data[key]}")
+    if "success" in data:
+        parts.append("ok" if data["success"] else "FAIL")
+
+    detail = "  ".join(parts)
+    return f"  +{rel:7.1f}s {icon} [{cat:>7}] {event_name:<30} step={step:<3} {detail}"
+
+
+def _fmt_tl_miniswe_event(
+    rec: dict[str, Any], t0: float, tool_start_ts: dict[int | str, float]
+) -> str | None:
+    """Format a normalized mini-swe event for timeline. Returns None to skip."""
+    event_name = rec.get("event", "")
+    ts = rec.get("ts", 0.0)
+    if ts <= 0:
+        return None
+    rel = ts - t0
+    data = rec.get("data", {})
+    step = rec.get("step_idx", "?")
+
+    if event_name == "llm_call_start":
+        return f"  +{rel:7.1f}s  ▶ LLM           step={step}"
+    elif event_name == "llm_call_end":
+        lat = (data.get("latency_ms") or 0) / 1000
+        pt = data.get("prompt_tokens", 0)
+        ct = data.get("completion_tokens", 0)
+        return f"  +{rel:7.1f}s  ◀ LLM done      step={step}  lat={lat:.1f}s  {pt}+{ct}tok"
+    elif event_name == "tool_exec_start":
+        tool_start_ts[step] = ts
+        tool_args = data.get("tool_args", "")
+        try:
+            args = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
+            cmds = args.get("commands", [args.get("command", "")]) if isinstance(args, dict) else [str(tool_args)]
+        except Exception:
+            cmds = [str(tool_args)]
+        first = cmds[0][:52].replace("\n", "↵") if cmds else ""
+        return f"  +{rel:7.1f}s  ⚙  bash         step={step}  $ {first}"
+    elif event_name == "tool_exec_end":
+        start = tool_start_ts.get(step)
+        dur = (ts - start) if start is not None else 0.0
+        ok = "✓" if data.get("success") else "✗"
+        return f"  +{rel:7.1f}s  {ok}  bash done    step={step}  dur={dur:.1f}s"
+    return None
+
+
+def _fmt_tl_step(rec: dict[str, Any], t0: float = 0.0) -> list[str]:
+    """Format a step record for timeline. Returns lines to print."""
+    lines: list[str] = []
+    step_idx = rec.get("step_idx", "?")
+    pt = rec.get("prompt_tokens", 0)
+    ct = rec.get("completion_tokens", 0)
+    llm_lat = rec.get("llm_latency_ms", 0) / 1000
+    rel = rec.get("ts_start", 0) - t0 if t0 > 0 and rec.get("ts_start", 0) > 0 else 0.0
+
+    if pt or ct:
+        ttft = rec.get("ttft_ms")
+        tpot = rec.get("tpot_ms")
+        timing_extra = ""
+        if ttft is not None and ttft > 0:
+            timing_extra = f"  ttft={ttft:.0f}ms"
+            if tpot is not None and tpot > 0:
+                timing_extra += f" tpot={tpot:.1f}ms"
+        lines.append(
+            f"  +{rel:7.1f}s step={step_idx:<3}  ◀ LLM  {pt}+{ct}tok  "
+            f"lat={llm_lat:.1f}s{timing_extra}"
+        )
+
+    tool_name = rec.get("tool_name")
+    if tool_name:
+        tool_dur = rec.get("tool_duration_ms")
+        dur_str = f"  dur={tool_dur / 1000:.1f}s" if tool_dur else ""
+        ok = "✓" if rec.get("tool_success") else "✗"
+        result_preview = (rec.get("tool_result") or "")[:80].replace("\n", "↵")
+        if result_preview:
+            result_preview = f"  {result_preview}"
+        tool_ts = rec.get("tool_ts_start") or 0
+        tool_rel = tool_ts - t0 if t0 > 0 and tool_ts > 0 else rel
+        lines.append(
+            f"  +{tool_rel:7.1f}s step={step_idx:<3}  {ok}  {tool_name}{dur_str}{result_preview}"
+        )
+    return lines
+
+
+def _print_tl_summary(summary: dict[str, Any]) -> None:
+    """Print timeline summary footer."""
+    llm_s = summary.get("total_llm_ms", 0) / 1000
+    tool_s = summary.get("total_tool_ms", 0) / 1000
+    elapsed = summary.get("elapsed_s", 0)
+    n = summary.get("n_steps", 0)
+    tokens = summary.get("total_tokens", 0)
+    ok = "✓ success" if summary.get("success") else "✗ failed"
+    prepare_ms = summary.get("prepare_ms")
+    prepare_str = f"  prepare={prepare_ms:.0f}ms" if prepare_ms else ""
+
+    print("─" * 80)
+    print(
+        f"  {ok}  {n} steps  "
+        f"elapsed={elapsed:.0f}s  LLM={llm_s:.1f}s  tool={tool_s:.1f}s  "
+        f"tokens={tokens}{prepare_str}"
+    )
+    tool_ms = summary.get("tool_ms_by_name", {})
+    if tool_ms:
+        print("  Tool time breakdown:")
+        for name, ms in sorted(tool_ms.items(), key=lambda x: -x[1]):
+            if ms > 0:
+                print(f"    {name:20s}: {ms / 1000:.1f}s")
+    timeouts = summary.get("tool_timeouts", {})
+    if timeouts:
+        print("  Tool timeouts:")
+        for name, count in sorted(timeouts.items()):
+            print(f"    {name:20s}: {count}")
+
+
+def cmd_timeline(data: TraceData) -> None:
+    """Print a concise per-step timeline with icons and relative timestamps."""
+
+    scaffold = data.metadata.get("scaffold", "")
+    mode = data.metadata.get("mode", "collect")
+    model = data.metadata.get("model") or data.metadata.get("local_model", "")
+
+    # Header
+    print(f"Trace: {data.path.name}")
+    print(f"  Scaffold: {scaffold}  Mode: {mode}")
+    if model:
+        print(f"  Model: {model}")
+    if mode == "simulate":
+        src = data.metadata.get("source_model", "?")
+        local = data.metadata.get("local_model", "?")
+        print(f"  Simulate: {src} → {local}")
+
+    # Detect scaffold from events if metadata is missing.
+    # Check mini-swe first (specific normalized names), then openclaw
+    # (has openclaw-specific events like tool_execute, session_load).
+    _OPENCLAW_ONLY_EVENTS = frozenset({
+        "tool_execute", "tool_complete", "tool_error", "session_load",
+        "message_dispatch", "session_lock_acquire", "skill_load",
+    })
+    if not scaffold:
+        if any(e.get("event") in ("llm_call_start", "tool_exec_start") for e in data.events):
+            scaffold = "mini-swe-agent"
+        elif any(e.get("event") in _OPENCLAW_ONLY_EVENTS for e in data.events):
+            scaffold = "openclaw"
+
+    for agent_id in data.agents:
+        agent_steps = [s for s in data.steps if s.get("agent_id") == agent_id]
+        agent_events = [e for e in data.events if e.get("agent_id") == agent_id]
+        agent_summaries = [s for s in data.summaries if s.get("agent_id") == agent_id]
+
+        print(f"\nTimeline: {agent_id}")
+        print("─" * 80)
+
+        if scaffold == "openclaw":
+            _tl_render_openclaw(agent_steps, agent_events)
+        elif scaffold == "mini-swe-agent":
+            _tl_render_miniswe(agent_steps, agent_events)
+        else:
+            _tl_render_steps_only(agent_steps, scaffold)
+
+        summary = agent_summaries[0] if agent_summaries else None
+        if summary:
+            _print_tl_summary(summary)
+
+
+def _tl_render_openclaw(
+    steps: list[dict[str, Any]], events: list[dict[str, Any]]
+) -> None:
+    """Render openclaw timeline: interleave steps and events sorted by (step_idx, ts)."""
+    entries: list[tuple[int, float, str, dict[str, Any]]] = []
+    for s in steps:
+        entries.append((s.get("step_idx", 0), s.get("ts_start", 0), "step", s))
+    for e in events:
+        entries.append((e.get("step_idx", -1), e.get("ts", 0), "event", e))
+    entries.sort(key=lambda x: (x[0], x[1]))
+
+    t0 = min((ts for _, ts, _, _ in entries if ts > 0), default=0.0)
+
+    for _, _, entry_type, rec in entries:
+        if entry_type == "step":
+            for line in _fmt_tl_step(rec, t0):
+                print(line)
+        else:
+            print(_fmt_tl_event(rec, t0))
+
+
+def _tl_render_miniswe(
+    steps: list[dict[str, Any]], events: list[dict[str, Any]]
+) -> None:
+    """Render mini-swe timeline using normalized events."""
+    all_recs = steps + events
+    all_recs.sort(key=lambda r: r.get("ts") or r.get("ts_start") or 0)
+
+    t0: float | None = None
+    tool_start_ts: dict[int | str, float] = {}
+
+    for r in all_recs:
+        ts = r.get("ts") or r.get("ts_start")
+        if ts is None or ts <= 0:
+            continue
+        if t0 is None:
+            t0 = ts
+
+        rec_type = r.get("type", "")
+        if rec_type == "event":
+            line = _fmt_tl_miniswe_event(r, t0, tool_start_ts)
+            if line:
+                print(line)
+        elif rec_type == "step":
+            # Step records don't duplicate with events in mini-swe
+            pass
+
+
+def _tl_render_steps_only(
+    steps: list[dict[str, Any]], scaffold: str
+) -> None:
+    """Fallback: render only step records."""
+    steps_sorted = sorted(steps, key=lambda r: r.get("step_idx", 0))
+    for step in steps_sorted:
+        for line in _fmt_tl_step(step, 0.0):
+            print(line)

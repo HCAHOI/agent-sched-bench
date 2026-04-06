@@ -322,7 +322,9 @@ class UnifiedProvider(LLMProvider):
                         usage=self._extract_usage(response_map),
                     )
                 return LLMResponse(
-                    content="Error: API returned empty choices.", finish_reason="error"
+                    content="Error: API returned empty choices.",
+                    finish_reason="error",
+                    extra={"error_type": "empty_choices"},
                 )
 
             choice0 = self._maybe_mapping(choices[0]) or {}
@@ -376,7 +378,9 @@ class UnifiedProvider(LLMProvider):
 
         if not response.choices:
             return LLMResponse(
-                content="Error: API returned empty choices.", finish_reason="error"
+                content="Error: API returned empty choices.",
+                finish_reason="error",
+                extra={"error_type": "empty_choices"},
             )
 
         choice = response.choices[0]
@@ -529,7 +533,18 @@ class UnifiedProvider(LLMProvider):
             if body and body.strip()
             else f"Error calling LLM: {e}"
         )
-        return LLMResponse(content=msg, finish_reason="error")
+        extra: dict[str, Any] = {"error_type": type(e).__name__}
+        status_code = getattr(e, "status_code", None)
+        if status_code is not None:
+            extra["http_status"] = status_code
+        request_id = getattr(e, "request_id", None)
+        if request_id:
+            extra["request_id"] = request_id
+        raw_body = getattr(e, "body", None)
+        if raw_body is not None:
+            raw_str = str(raw_body) if not isinstance(raw_body, str) else raw_body
+            extra["raw_body"] = raw_str[:1000]
+        return LLMResponse(content=msg, finish_reason="error", extra=extra)
 
     # ------------------------------------------------------------------
     # Public API
@@ -607,6 +622,7 @@ class UnifiedProvider(LLMProvider):
                     f"{idle_timeout_s} seconds"
                 ),
                 finish_reason="error",
+                extra={"error_type": "stream_timeout", "timeout_s": idle_timeout_s},
             )
         except Exception as e:
             return self._handle_error(e)
