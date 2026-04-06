@@ -141,12 +141,14 @@ _CATEGORY_SHORT: dict[str, str] = {
 }
 
 
-def _format_openclaw_event(rec: dict[str, Any]) -> str:
+def _format_openclaw_event(rec: dict[str, Any], t0: float = 0.0) -> str:
     """Format an OpenClaw event record as a single line."""
     event_name = rec.get("event", "unknown")
     category = rec.get("category", "")
     data = rec.get("data", {})
     iteration = rec.get("step_idx", rec.get("iteration", "?"))
+    ts = rec.get("ts", 0.0)
+    rel = ts - t0 if t0 > 0 and ts > 0 else 0.0
 
     icon = _OPENCLAW_ICONS.get(event_name, "  ")
     cat = _CATEGORY_SHORT.get(category, category.lower()[:6])
@@ -169,6 +171,10 @@ def _format_openclaw_event(rec: dict[str, Any]) -> str:
         if key in data:
             parts.append(f"{key}={data[key]}")
     for key in (
+        "wait_ms",
+        "dispatch_duration_ms",
+        "history_messages",
+        "total_messages",
         "memory_size_chars",
         "messages_count",
         "duration_ms",
@@ -181,7 +187,7 @@ def _format_openclaw_event(rec: dict[str, Any]) -> str:
         parts.append("ok" if data["success"] else "FAIL")
 
     detail = "  ".join(parts)
-    return f"  {icon} [{cat:>7}] {event_name:<30} iter={iteration:<3} {detail}"
+    return f"  +{rel:7.1f}s {icon} [{cat:>7}] {event_name:<30} step={iteration:<3} {detail}"
 
 
 # ── Mini-swe-agent event rendering ───────────────────────────────────
@@ -230,13 +236,14 @@ def _format_miniswe_event(
 # ── Step rendering (shared) ──────────────────────────────────────────
 
 
-def _format_step(rec: dict[str, Any], scaffold: str) -> list[str]:
+def _format_step(rec: dict[str, Any], scaffold: str, t0: float = 0.0) -> list[str]:
     """Format a step record. Returns lines to print."""
     lines: list[str] = []
     step_idx = rec.get("step_idx", "?")
     pt = rec.get("prompt_tokens", 0)
     ct = rec.get("completion_tokens", 0)
     llm_lat = rec.get("llm_latency_ms", 0) / 1000
+    rel = rec.get("ts_start", 0) - t0 if t0 > 0 and rec.get("ts_start", 0) > 0 else 0.0
 
     # LLM info
     if pt or ct:
@@ -248,7 +255,7 @@ def _format_step(rec: dict[str, Any], scaffold: str) -> list[str]:
             if tpot is not None and tpot > 0:
                 timing_extra += f" tpot={tpot:.1f}ms"
         lines.append(
-            f"  step={step_idx:<3}  ◀ LLM  {pt}+{ct}tok  "
+            f"  +{rel:7.1f}s step={step_idx:<3}  ◀ LLM  {pt}+{ct}tok  "
             f"lat={llm_lat:.1f}s{timing_extra}"
         )
 
@@ -261,8 +268,10 @@ def _format_step(rec: dict[str, Any], scaffold: str) -> list[str]:
         result_preview = (rec.get("tool_result") or "")[:80].replace("\n", "↵")
         if result_preview:
             result_preview = f"  {result_preview}"
+        tool_ts = rec.get("tool_ts_start") or 0
+        tool_rel = tool_ts - t0 if t0 > 0 and tool_ts > 0 else rel
         lines.append(
-            f"  step={step_idx:<3}  {ok}  {tool_name}{dur_str}{result_preview}"
+            f"  +{tool_rel:7.1f}s step={step_idx:<3}  {ok}  {tool_name}{dur_str}{result_preview}"
         )
 
     return lines
@@ -396,12 +405,16 @@ def _render_openclaw_timeline(recs: list[dict[str, Any]]) -> None:
             entries.append((r.get("step_idx", r.get("iteration", -1)), r.get("ts", 0), "event", r))
     entries.sort(key=lambda x: (x[0], x[1]))
 
-    for _, _, entry_type, rec in entries:
+    # Compute t0 from the earliest timestamp across all entries.
+    t0 = min((ts for _, ts, _, _ in entries if ts > 0), default=0.0)
+
+    for _, ts, entry_type, rec in entries:
         if entry_type == "step":
-            for line in _format_step(rec, "openclaw"):
+            rel = rec.get("ts_start", 0) - t0 if t0 > 0 else 0.0
+            for line in _format_step(rec, "openclaw", t0=t0):
                 print(line)
         else:
-            print(_format_openclaw_event(rec))
+            print(_format_openclaw_event(rec, t0=t0))
 
 
 def _render_miniswe_timeline(recs: list[dict[str, Any]], mode: str) -> None:
