@@ -1,252 +1,364 @@
-# Plan: OpenClaw Standalone CLI
+# Plan: Openclaw LLM/Tool Event Emission + Step Deduplication
 
-## RALPLAN-DR Summary
+## Context
 
-### Principles
-1. **Reuse over reinvent** — Build on `process_direct()`, `SessionManager`, `TraceCollectorHook`; no new frameworks
-2. **Thin CLI, thick library** — `__main__.py` is pure argument parsing + wiring; all logic stays in existing modules
-3. **Session-first design** — Every run gets a session ID; sync/async are just different ways to observe the same session
-4. **No new dependencies** — argparse, subprocess, os, sys only
-5. **Streaming by default** — Real-time feedback in sync mode; users see what the agent is doing
+Openclaw traces 缺少 LLM 调用事件。Mini-swe 实时发射 `llm_start`/`llm_end`/`tool_start`/`tool_end`
+(agent.py:399-535)，openclaw 只在 `after_iteration` 追溯发射 `tool_execute`/`tool_complete`，
+且 `step` 记录中 `messages_in` 和 `raw_response` 与事件数据高度重复（占 trace 文件 ~90% 体积）。
 
-### Decision Drivers
-1. **`process_direct()` exists** — AgentLoop already has a convenience method that accepts content + session_key + streaming callbacks, bypassing MessageBus/ResultCollector entirely
-2. **`SessionManager` persists per-workspace** — Sessions stored as JSONL under `{workspace}/sessions/` (not `.openclaw/sessions/`). Keyed by `channel:chat_id` (colons replaced by `_` via `safe_filename`). Already supports resume.
-3. **`TraceCollectorHook` is self-contained** — Writes JSONL traces with step/event/summary records. Can be passed as a hook to AgentLoop.
-
-### Viable Options
-
-**Option A: `process_direct()` path** (Recommended)
-- Wire `__main__.py` → UnifiedProvider → AgentLoop → `process_direct()`
-- Sync: attach a `CLIStreamHook` that prints events to stderr
-- Async: re-invoke self with `--_daemon` flag via `subprocess.Popen()`
-- Session resume: same AgentLoop + SessionManager, new `process_direct()` call
-- Pros: Simple (~200 lines `__main__.py` + ~80 lines hook), uses proven code path
-- Cons: `process_direct()` is less tested than the full bus path
-
-**Option B: Full bus path (SWEBenchRunner-style)**
-- Wire `__main__.py` → custom `StandaloneRunner` mimicking `SWEBenchRunner`
-- Uses MessageBus + ResultCollector + AgentLoop.run()
-- Pros: Battle-tested path, identical to eval mode
-- Cons: ~2x code, unnecessary complexity for single-task CLI, ResultCollector adds indirection
-
-**Invalidation of Option B**: The bus path is designed for multi-tenant scheduling (multiple concurrent sessions via message routing). A CLI runs one prompt at a time. `process_direct()` was specifically added as the single-task convenience path.
-
-### Recommended: Option A
+**目标：**
+1. 让 openclaw 发射与 mini-swe 对齐的实时 LLM/tool 事件
+2. 将 `messages_in`/`raw_response` 从 `step` 移入事件，消除重复
+3. 为 simulator 的 event 驱动架构和甘特图可视化提供统一的事件基础
 
 ---
 
-## Implementation Plan
+## Architecture: Current vs Target
 
-### Files to Create
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/agents/openclaw/__main__.py` | ~200 | CLI entry point: argparse, provider setup, agent loop, sync/async dispatch |
-| `src/agents/openclaw/cli_hook.py` | ~80 | `CLIStreamHook(AgentHook)` — prints real-time events to stderr |
-
-### Files to Modify
-
-| File | Change |
-|------|--------|
-| `src/agents/openclaw/_loop.py` | No changes needed — `process_direct()` already exists |
-| `src/agents/openclaw/eval/runner.py` | Extract `_inject_event_callbacks` to module-level function for reuse |
-| `pyproject.toml` | Add `[project.scripts]` entry: `openclaw = "agents.openclaw.__main__:main"` |
-
-### 1. CLI Argument Spec (`__main__.py`)
+### Current (openclaw trace emission in `_session_runner.py:TraceCollectorHook`)
 
 ```
-python -m agents.openclaw [OPTIONS]
-
-Required (one of):
-  --prompt TEXT          Task prompt for the agent
-  --session-id ID       Resume/append to existing session
-  --status              Show session status (requires --session-id)
-
-Workspace:
-  --workspace PATH      Working directory for the agent (default: cwd)
-
-Model:
-  --model NAME          Model identifier (default: env OPENCLAW_MODEL or "qwen/qwen3.6-plus:free")
-  --api-base URL        OpenAI-compatible API base (default: env OPENCLAW_API_BASE or "https://openrouter.ai/api/v1")
-  --api-key KEY         API key (default: env OPENROUTER_API_KEY / OPENAI_API_KEY / DASHSCOPE_API_KEY)
-
-Execution:
-  --async               Return session ID immediately, run in background
-  --max-iterations N    Max agent iterations (default: 200)
-  --max-tokens N        Max tokens per LLM call (default: 8192)
-  --temperature FLOAT   Sampling temperature (default: 0.1)
-
-Internal:
-  --_daemon SID         (Hidden) Run as daemon for session SID
+_runner.py:AgentRunner.run() iteration loop:
+  hook.before_iteration(ctx)          → records _iter_start_ts (NO event emitted)
+  response = _request_model(...)      → LLM call happens (NO event emitted)
+  ctx.response = response
+                                      → [NO hook point here]
+  if has_tool_calls:
+    hook.before_execute_tools(ctx)    → records _before_exec_ts (NO event emitted)
+    _execute_tools(...)               → tool execution (NO event emitted)
+  hook.after_iteration(ctx)           → POST-HOC emits:
+                                         tool_execute events (line 186)
+                                         tool_complete/tool_error events (line 216)
+                                         llm_error event (only on error, line 258)
+                                         step record with messages_in + raw_response (line 272)
 ```
 
-### 2. Sync Mode Event Stream Format
-
-Printed to stderr so stdout remains clean for piping:
+### Target
 
 ```
-[oc-a1b2c3] 10:32:01 START    prompt="Create a Python Tetris game with pygame"
-[oc-a1b2c3] 10:32:01 LLM      tokens=150+420 lat=2.3s
-[oc-a1b2c3] 10:32:04 TOOL     exec command="mkdir -p src && touch src/tetris.py"
-[oc-a1b2c3] 10:32:04 TOOL_OK  exec dur=0.1s
-[oc-a1b2c3] 10:32:04 LLM      tokens=570+890 lat=4.1s
-[oc-a1b2c3] 10:32:08 TOOL     write_file path="src/tetris.py" (2.3KB)
-[oc-a1b2c3] 10:32:08 TOOL_OK  write_file dur=0.0s
-...
-[oc-a1b2c3] 10:35:22 DONE     steps=12 elapsed=203s tokens=15420 tools=8/8ok
+_runner.py:AgentRunner.run() iteration loop:
+  hook.before_iteration(ctx)          → emit llm_call_start (LLM, carries messages_in)
+  response = _request_model(...)      → LLM call happens
+  ctx.response = response
+  hook.after_llm_response(ctx) [NEW]  → emit llm_call_end (LLM, carries raw_response + tokens)
+  if has_tool_calls:
+    hook.before_execute_tools(ctx)    → emit tool_exec_start per tool (TOOL, carries name + args)
+    _execute_tools(...)               → tool execution
+  hook.after_iteration(ctx)           → emit tool_exec_end per tool (TOOL, carries result + duration)
+                                         emit SLIM step record (no messages_in, no raw_response)
 ```
 
-Format: `[{session_short}] {HH:MM:SS} {EVENT_TYPE:<8} {details}`
+---
 
-### 3. `CLIStreamHook` Design (`cli_hook.py`)
+## Phase 1: Add `after_llm_response` hook point
 
+### `src/agents/openclaw/_hook.py`
+- Add method to `AgentHook`:
+  ```python
+  async def after_llm_response(self, context: AgentHookContext) -> None:
+      pass
+  ```
+- Add fan-out in `CompositeHook.after_llm_response()`
+
+### `src/agents/openclaw/_runner.py` (~line 109-117)
+Currently:
 ```python
-class CLIStreamHook(AgentHook):
-    """Prints real-time agent events to stderr for CLI observation."""
+response = await self._request_model(spec, messages_for_model, hook, context)
+raw_usage = self._usage_dict(response.usage)
+context.response = response
+context.usage = dict(raw_usage)
+context.tool_calls = list(response.tool_calls)
+self._accumulate_usage(usage, raw_usage)
 
-    def __init__(self, session_id: str, *, quiet: bool = False):
-        self.sid_short = session_id[:8]
-        self.quiet = quiet
-        self._iter_start = 0.0
-        self._n_steps = 0
-        self._total_tokens = 0
-        self._tool_ok = 0
-        self._tool_fail = 0
-        self._wall_start = time.monotonic()
-
-    async def before_iteration(self, ctx): ...  # record iter start
-    async def before_execute_tools(self, ctx): ...  # print LLM stats
-    async def after_iteration(self, ctx): ...  # print tool results
-    def print_summary(self): ...  # final DONE line
+if response.has_tool_calls:
 ```
 
-Hooks used: `before_iteration`, `before_execute_tools`, `after_iteration`
-Output target: `sys.stderr` (not stdout)
-
-### 4. Session Persistence Design
-
-- Session ID format: `oc-{8 hex chars}` (e.g., `oc-a1b2c3d4`)
-- Generated from `uuid.uuid4().hex[:8]` on first run
-- SessionManager key: `cli:{session_id}` (channel=cli, chat_id=session_id)
-- Session file: `{workspace}/sessions/cli_oc-{hex}.jsonl` (colons replaced by `_` via `safe_filename`)
-- Trace file: `{workspace}/.openclaw/traces/{session_id}.jsonl`
-- `--session-id oc-xxx --prompt "new prompt"` → same AgentLoop, same session_key, calls `process_direct()` again with new content
-
-### 5. Async Mode Design (`--async`)
-
-```
-User runs:
-  python -m agents.openclaw --prompt "Build tetris" --workspace ~/tetris --async
-
-CLI does:
-  1. Generate session_id = "oc-a1b2c3d4"
-  2. Print to stdout: "oc-a1b2c3d4"
-  3. Spawn: subprocess.Popen(
-       [sys.executable, "-m", "agents.openclaw",
-        "--_daemon", session_id,
-        "--prompt", prompt,
-        "--workspace", workspace,
-        "--model", model,
-        "--api-base", api_base,
-        "--api-key", api_key],
-       start_new_session=True,
-       stdout=open(workspace/.openclaw/logs/{sid}.log, "w"),
-       stderr=subprocess.STDOUT,
-     )
-  4. Write PID to workspace/.openclaw/pids/{session_id}.pid
-  5. Exit 0
-
---_daemon flag:
-  - Runs the same sync path but with quiet=True on CLIStreamHook
-  - On completion, removes PID file
-  - Logs go to .openclaw/logs/{sid}.log
-```
-
-`--status` with `--session-id`:
-- Check PID file exists → if yes, verify process alive via `os.kill(pid, 0)`
-- If PID alive → status=running; if PID stale → status=crashed (clean up PID file)
-- If no PID file → status=completed (check trace for summary record)
-- Read last line of trace JSONL for summary
-- Print: session_id, status, steps, elapsed, workspace
-
-### 6. `__main__.py` Flow
-
+Change to:
 ```python
-def main():
-    args = parse_args()
+response = await self._request_model(spec, messages_for_model, hook, context)
+raw_usage = self._usage_dict(response.usage)
+context.response = response
+context.usage = dict(raw_usage)
+context.tool_calls = list(response.tool_calls)
+self._accumulate_usage(usage, raw_usage)
 
-    if args.status:
-        return _show_status(args)
+await hook.after_llm_response(context)  # NEW — always called
 
-    session_id = args.session_id or f"oc-{uuid.uuid4().hex[:8]}"
-
-    if args.async_mode and not args._daemon:
-        return _spawn_daemon(args, session_id)
-
-    # Sync mode (or daemon mode)
-    workspace = Path(args.workspace).expanduser().resolve()
-    workspace.mkdir(parents=True, exist_ok=True)
-
-    provider = UnifiedProvider(
-        api_key=_resolve_api_key(args),
-        api_base=args.api_base,
-        default_model=args.model,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-    )
-
-    session_mgr = SessionManager(workspace)
-    trace_file = workspace / ".openclaw" / "traces" / f"{session_id}.jsonl"
-    trace_hook = TraceCollectorHook(trace_file, session_id)
-    cli_hook = CLIStreamHook(session_id, quiet=bool(args._daemon))
-
-    agent = AgentLoop(
-        bus=MessageBus(),
-        provider=provider,
-        workspace=workspace,
-        model=args.model,
-        max_iterations=args.max_iterations,
-        session_manager=session_mgr,
-        hooks=[trace_hook, cli_hook],
-    )
-
-    # Wire subsystem event callbacks for trace completeness
-    # (extracted from SWEBenchRunner._inject_event_callbacks)
-    from agents.openclaw.eval.runner import inject_event_callbacks
-    inject_event_callbacks(agent, trace_hook)
-
-    # Daemon mode: register signal handlers for clean shutdown
-    if args._daemon:
-        _install_daemon_signal_handlers(trace_hook, agent)
-
-    asyncio.run(_run_session(agent, args.prompt, session_id, trace_hook, cli_hook))
-
-
-def _install_daemon_signal_handlers(trace_hook, agent):
-    """Register SIGTERM/SIGINT handlers for clean daemon shutdown."""
-    import signal, atexit
-
-    def _cleanup(*_args):
-        trace_hook.write_summary(success=False, elapsed_s=0)
-        sys.exit(1)
-
-    signal.signal(signal.SIGTERM, _cleanup)
-    atexit.register(trace_hook.close)
+if response.has_tool_calls:
 ```
 
-### 7. Verification
+One line insertion. No other changes to `_runner.py`.
 
-- `python -m agents.openclaw --help` — prints usage
-- `python -m agents.openclaw --prompt "echo hello" --workspace /tmp/test` — sync run
-- `python -m agents.openclaw --prompt "echo hello" --workspace /tmp/test --async` — prints session ID
-- `python -m agents.openclaw --session-id oc-xxx --status` — shows status
-- `python -m agents.openclaw --session-id oc-xxx --prompt "do more"` — appends to session
+---
 
-### Implementation Order
+## Phase 2: Emit LLM events in TraceCollectorHook
 
-1. Create `cli_hook.py` (standalone, testable)
-2. Create `__main__.py` (depends on cli_hook)
-3. Update `pyproject.toml` script entry
-4. Manual smoke test with real API
-5. Code review gate
+### `src/agents/openclaw/_session_runner.py`
+
+**`before_iteration()` — emit `llm_call_start`:**
+```python
+async def before_iteration(self, context: AgentHookContext) -> None:
+    self._iter_start_ts = time.monotonic()
+    self._iter_start_wall = time.time()
+    self.emit_event(
+        LLM, "llm_call_start",
+        {"messages_in": self._clone_messages(context.messages)},
+        step_idx=context.iteration,
+    )
+```
+
+**New `after_llm_response()` — emit `llm_call_end`:**
+```python
+async def after_llm_response(self, context: AgentHookContext) -> None:
+    self._after_llm_ts = time.monotonic()
+    usage = context.usage or {}
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    llm_latency_ms = (self._after_llm_ts - self._iter_start_ts) * 1000
+
+    resp_dict = self._build_raw_response(
+        context=context,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+    self.emit_event(
+        LLM, "llm_call_end",
+        {
+            "raw_response": resp_dict,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "llm_latency_ms": round(llm_latency_ms, 2),
+            "finish_reason": context.response.finish_reason if context.response else None,
+        },
+        step_idx=context.iteration,
+    )
+```
+
+---
+
+## Phase 3: Real-time tool events
+
+### `src/agents/openclaw/_session_runner.py`
+
+**`before_execute_tools()` — emit `tool_exec_start`:**
+```python
+async def before_execute_tools(self, context: AgentHookContext) -> None:
+    self._before_exec_ts = time.monotonic()
+    if context.tool_calls:
+        for tc in context.tool_calls:
+            self._tool_start_ts[tc.name] = time.monotonic()
+            self.emit_event(
+                MCP if tc.name.startswith("mcp_") else TOOL,
+                "tool_exec_start",
+                {
+                    "tool_name": tc.name,
+                    "args_preview": json.dumps(tc.arguments, ensure_ascii=False)[:200],
+                },
+                step_idx=context.iteration,
+            )
+```
+
+**`after_iteration()` — emit `tool_exec_end` (replaces post-hoc `tool_execute` + `tool_complete`):**
+- **Remove** the post-hoc `tool_execute` emission block (current lines 161-188)
+- **Rename** `tool_complete`/`tool_error` to `tool_exec_end` with `success` field
+- Keep `llm_error` and `max_iterations` events as-is (error paths)
+
+---
+
+## Phase 4: Slim down `step` record
+
+### `src/agents/openclaw/eval/types.py` (EvalTraceStep)
+
+Remove three fields:
+- `messages_in` → now in `llm_call_start` event
+- `raw_response` → now in `llm_call_end` event
+- `llm_output` → derivable from `raw_response` in `llm_call_end` event
+
+**Keep** all other fields: `step_idx`, `phase`, `prompt_tokens`, `completion_tokens`,
+`llm_latency_ms`, `tool_name`, `tool_args`, `tool_result`, `tool_duration_ms`,
+`tool_success`, `tool_timeout`, `tool_ts_start`, `tool_ts_end`, `ts_start`, `ts_end`, `extra`.
+
+### `src/agents/openclaw/_session_runner.py` (after_iteration)
+
+Stop populating removed fields. Step becomes a lightweight iteration index.
+
+### `trace_metadata` header
+
+Bump `trace_format_version` to `3` in openclaw's metadata emission (in `SessionRunner.run()`).
+
+---
+
+## Phase 5: Update consumers
+
+### `src/trace_collect/simulator.py`
+
+Currently reads step fields:
+- `step["messages_in"]` → send to local model
+- `step["completion_tokens"]` → force token count
+- `step["tool_name"]`, `step["tool_args"]` → execute tool
+- `step["raw_response"]` → fallback for `_unwrap_tool_args`
+
+Change to event-based reading:
+```python
+def load_trace_events_and_steps(trace_path, agent_id):
+    """Load events and steps, pairing llm_call_start/end with step records."""
+    events_by_step: dict[int, dict] = {}  # step_idx → {llm_start, llm_end, ...}
+    steps = []
+    for record in read_jsonl(trace_path):
+        if record.get("agent_id") != agent_id:
+            continue
+        if record["type"] == "event":
+            idx = record.get("step_idx", 0)
+            events_by_step.setdefault(idx, {})[record["event"]] = record
+        elif record["type"] == "step":
+            steps.append(record)
+    return steps, events_by_step
+```
+
+For each step, get `messages_in` from `events_by_step[i]["llm_call_start"]["data"]["messages_in"]`,
+fall back to `step["messages_in"]` for v2 traces.
+
+### `src/trace_collect/trace_inspector.py`
+
+- Update `_normalize_legacy_event()`:
+  - Add mappings: `tool_execute` → `tool_exec_start`, `tool_complete` → `tool_exec_end`
+  - Mini-swe mappings: `llm_start` → `llm_call_start`, `llm_end` → `llm_call_end`,
+    `tool_start` → `tool_exec_start`, `tool_end` → `tool_exec_end`
+- Timeline rendering: use `llm_call_start`/`llm_call_end` pairs as Gantt spans
+- Any code reading `step.messages_in` or `step.raw_response` → check events first
+
+### `tests/test_trace_inspector.py`
+
+- Update existing normalization tests for renamed events
+- Add test: slim step records (no messages_in/raw_response)
+- Add test: v2 backward compat (old traces still work)
+
+---
+
+## Event Data Contracts
+
+### `llm_call_start` (category: LLM)
+```json
+{
+  "type": "event", "category": "LLM", "event": "llm_call_start",
+  "agent_id": "...", "step_idx": 0, "ts": 1775489215.85,
+  "data": {
+    "messages_in": [{"role": "system", "content": "..."}, ...]
+  }
+}
+```
+
+### `llm_call_end` (category: LLM)
+```json
+{
+  "type": "event", "category": "LLM", "event": "llm_call_end",
+  "agent_id": "...", "step_idx": 0, "ts": 1775489218.62,
+  "data": {
+    "raw_response": {"choices": [...], "usage": {...}},
+    "prompt_tokens": 8181,
+    "completion_tokens": 60,
+    "llm_latency_ms": 2774.0,
+    "finish_reason": "tool_calls"
+  }
+}
+```
+
+### `tool_exec_start` (category: TOOL|MCP)
+```json
+{
+  "type": "event", "category": "TOOL", "event": "tool_exec_start",
+  "agent_id": "...", "step_idx": 0, "ts": 1775489218.63,
+  "data": {
+    "tool_name": "list_dir",
+    "args_preview": "{\"path\": \".\"}"
+  }
+}
+```
+
+### `tool_exec_end` (category: TOOL|MCP)
+```json
+{
+  "type": "event", "category": "TOOL", "event": "tool_exec_end",
+  "agent_id": "...", "step_idx": 0, "ts": 1775489218.74,
+  "data": {
+    "tool_name": "list_dir",
+    "success": true,
+    "duration_ms": 2.0,
+    "result_preview": "..."
+  }
+}
+```
+
+### Slim `step` record (v3, no messages_in/raw_response/llm_output)
+```json
+{
+  "type": "step", "agent_id": "...", "step_idx": 0,
+  "phase": "acting",
+  "prompt_tokens": 8181, "completion_tokens": 60,
+  "llm_latency_ms": 2774.0,
+  "tool_name": "list_dir", "tool_args": "{...}",
+  "tool_result": "...", "tool_duration_ms": 2.0,
+  "tool_success": true, "tool_timeout": null,
+  "ts_start": 1775489215.97, "ts_end": 1775489218.74,
+  "tool_ts_start": 1775489218.63, "tool_ts_end": 1775489218.74,
+  "extra": {}
+}
+```
+
+---
+
+## Canonical Event Name Mapping
+
+| Semantic | mini-swe (write) | openclaw (write, new) | Consumer canonical |
+|----------|------------------|-----------------------|-------------------|
+| LLM call start | `llm_start` | `llm_call_start` | `llm_call_start` |
+| LLM call end | `llm_end` | `llm_call_end` | `llm_call_end` |
+| Tool exec start | `tool_start` | `tool_exec_start` | `tool_exec_start` |
+| Tool exec end | `tool_end` | `tool_exec_end` | `tool_exec_end` |
+
+Consumer-side normalization in `trace_inspector.py:_normalize_legacy_event()` maps
+mini-swe names → canonical. Old openclaw events (`tool_execute`, `tool_complete`) also mapped.
+
+---
+
+## Migration (No Backward Compat)
+
+- **不保留 v2 兼容**。删除旧 trace，保留两个示例 trace 并用临时脚本转换为 v3 格式。
+- 临时转换脚本用完即删。
+- Consumer 代码只需要处理 v3 格式。
+
+---
+
+## Verification Checklist
+
+- [ ] Openclaw smoke test produces `llm_call_start`/`llm_call_end`/`tool_exec_start`/`tool_exec_end` events
+- [ ] Events have correct real-time timestamps (not post-hoc)
+- [ ] `step` records no longer contain `messages_in`, `raw_response`, or `llm_output`
+- [ ] Trace file size significantly reduced (~60-80%)
+- [ ] `trace_inspector inspect <trace> events` shows new event types
+- [ ] `trace_inspector inspect <trace> timeline` renders LLM spans from event pairs
+- [ ] Simulator works with both v2 (old) and v3 (new) traces
+- [ ] `pytest tests/test_trace_inspector.py` passes
+- [ ] New tests for event emission, slim step, backward compat
+
+---
+
+## File Change Summary
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/agents/openclaw/_hook.py` | Add `after_llm_response()` to AgentHook + CompositeHook | ~10 |
+| `src/agents/openclaw/_runner.py` | Insert `await hook.after_llm_response(context)` after LLM call | ~1 |
+| `src/agents/openclaw/_session_runner.py` | Emit 4 real-time events, slim step, remove post-hoc tool_execute | ~60 |
+| `src/agents/openclaw/eval/types.py` | Remove `messages_in`, `raw_response`, `llm_output` from EvalTraceStep | ~15 |
+| `src/trace_collect/simulator.py` | Event-based data reading with v2 fallback | ~30 |
+| `src/trace_collect/trace_inspector.py` | Update normalization map + timeline event pairs | ~20 |
+| `tests/test_trace_inspector.py` | Update + add tests | ~30 |
+
+## Implementation Order
+
+1. Phase 1: Hook point (`_hook.py`, `_runner.py`) — foundation
+2. Phase 2: LLM events (`_session_runner.py`) — immediate value
+3. Phase 3: Tool events (`_session_runner.py`) — complete the picture
+4. Phase 4: Slim step (`eval/types.py`, `_session_runner.py`) — deduplication
+5. Phase 5: Consumers (`simulator.py`, `trace_inspector.py`, tests) — integration

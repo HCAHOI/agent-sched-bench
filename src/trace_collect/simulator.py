@@ -120,7 +120,12 @@ def load_trace_steps(
     trace_path: Path,
     agent_id: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """Load step records and optional summary for one agent from a JSONL trace.
+    """Load step records enriched with event data, plus optional summary.
+
+    v3 traces store ``messages_in`` and ``raw_response`` in separate
+    ``llm_call_start`` / ``llm_call_end`` events rather than in the step
+    record itself.  This function reassembles them so callers see a
+    uniform dict per step regardless of trace format version.
 
     Returns:
         (steps sorted by step_idx, summary or None)
@@ -130,6 +135,9 @@ def load_trace_steps(
     """
     steps: list[dict[str, Any]] = []
     summary: dict[str, Any] | None = None
+    # Collect llm events keyed by step_idx
+    llm_starts: dict[int, dict[str, Any]] = {}
+    llm_ends: dict[int, dict[str, Any]] = {}
 
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
@@ -142,10 +150,23 @@ def load_trace_steps(
                 continue
             if record.get("agent_id") != agent_id:
                 continue
-            if record.get("type") == "step":
+            rtype = record.get("type")
+            if rtype == "step":
                 steps.append(record)
-            elif record.get("type") == "summary":
+            elif rtype == "summary":
                 summary = record
+            elif rtype == "event":
+                event_name = record.get("event")
+                step_idx = record.get("step_idx", 0)
+                if event_name == "llm_call_start":
+                    llm_starts[step_idx] = record.get("data", {})
+                elif event_name == "llm_call_end":
+                    llm_ends[step_idx] = record.get("data", {})
+            # mini-swe flat event format
+            elif rtype == "llm_call_start":
+                llm_starts[record.get("step_idx", 0)] = record
+            elif rtype == "llm_call_end":
+                llm_ends[record.get("step_idx", 0)] = record
 
     if not steps:
         raise SimulateError(f"No step records found for agent_id={agent_id!r}")
@@ -159,6 +180,14 @@ def load_trace_steps(
         raise SimulateError(
             f"Step index gaps for {agent_id}: got {indices[:5]}... expected 0..{len(indices) - 1}"
         )
+
+    # Enrich steps with event data (v3 format)
+    for step in steps:
+        idx = step["step_idx"]
+        if "messages_in" not in step and idx in llm_starts:
+            step["messages_in"] = llm_starts[idx].get("messages_in")
+        if "raw_response" not in step and idx in llm_ends:
+            step["raw_response"] = llm_ends[idx].get("raw_response")
 
     return steps, summary
 

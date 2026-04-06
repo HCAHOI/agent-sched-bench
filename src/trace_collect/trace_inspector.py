@@ -39,13 +39,18 @@ def _to_str(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-# Map legacy mini-swe flat event types to (category, event_name).
+# Map flat event types to (category, event_name) for normalization.
+# Covers mini-swe v2 flat names and v3 flat names (llm_call_start etc.).
 _LEGACY_EVENT_MAP: dict[str, tuple[str, str]] = {
+    # mini-swe v2 flat events
     "llm_start": ("LLM", "llm_call_start"),
     "llm_end": ("LLM", "llm_call_end"),
     "tool_start": ("TOOL", "tool_exec_start"),
     "tool_end": ("TOOL", "tool_exec_end"),
     "action": ("LLM", "llm_action"),
+    # v3 flat events (mini-swe uses these as top-level record types)
+    "llm_call_start": ("LLM", "llm_call_start"),
+    "llm_call_end": ("LLM", "llm_call_end"),
 }
 
 # Keys that are structural (not event-specific payload).
@@ -147,6 +152,31 @@ class TraceData:
 
         steps.sort(key=lambda r: r.get("step_idx", 0))
         events.sort(key=lambda r: r.get("ts", 0.0))
+
+        # v3 traces store messages_in / raw_response in events, not steps.
+        # Enrich steps from llm_call_start / llm_call_end events so
+        # downstream commands (cmd_messages, cmd_response) work uniformly.
+        llm_starts: dict[int, dict[str, Any]] = {}
+        llm_ends: dict[int, dict[str, Any]] = {}
+        for ev in events:
+            ename = ev.get("event")
+            idx = ev.get("step_idx", 0)
+            if ename == "llm_call_start":
+                llm_starts[idx] = ev.get("data", {})
+            elif ename == "llm_call_end":
+                llm_ends[idx] = ev.get("data", {})
+        for step in steps:
+            idx = step.get("step_idx", 0)
+            if "messages_in" not in step and idx in llm_starts:
+                step["messages_in"] = llm_starts[idx].get("messages_in")
+            if "raw_response" not in step and idx in llm_ends:
+                step["raw_response"] = llm_ends[idx].get("raw_response")
+            # Derive llm_output from raw_response for search/display
+            if "llm_output" not in step and step.get("raw_response"):
+                choices = step["raw_response"].get("choices") or []
+                if choices:
+                    msg = choices[0].get("message") or {}
+                    step["llm_output"] = msg.get("content", "")
 
         return cls(
             path=path,

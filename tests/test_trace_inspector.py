@@ -20,15 +20,63 @@ from trace_collect.trace_inspector import (
 
 @pytest.fixture
 def sample_trace(tmp_path: Path) -> Path:
-    """Create a minimal but realistic JSONL trace for testing."""
+    """Create a minimal v3-format JSONL trace for testing.
+
+    v3 traces store messages_in/raw_response in llm_call_start/end events,
+    not in step records.
+    """
     trace_file = tmp_path / "test_trace.jsonl"
     records = [
         {
             "type": "trace_metadata",
             "scaffold": "mini-swe-agent",
+            "trace_format_version": 3,
             "mode": "collect",
             "model": "test-model",
         },
+        # Step 0: LLM events
+        {
+            "type": "llm_call_start",
+            "agent_id": "django__django-11734",
+            "step_idx": 0,
+            "ts": 1000.0,
+            "messages_in": [
+                {"role": "system", "content": "You are a helpful assistant"},
+                {"role": "user", "content": "Fix the bug"},
+            ],
+        },
+        {
+            "type": "llm_call_end",
+            "agent_id": "django__django-11734",
+            "step_idx": 0,
+            "ts": 1001.5,
+            "raw_response": {
+                "choices": [{"message": {"content": "Let me search", "tool_calls": []}}]
+            },
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "llm_latency_ms": 1500,
+        },
+        # Step 0: tool events
+        {
+            "type": "tool_start",
+            "agent_id": "django__django-11734",
+            "step_idx": 0,
+            "ts": 1001.5,
+            "tool_name": "bash",
+            "tool_args": '{"command": "find . -name models.py"}',
+        },
+        {
+            "type": "tool_end",
+            "agent_id": "django__django-11734",
+            "step_idx": 0,
+            "ts": 1001.6,
+            "tool_name": "bash",
+            "duration_ms": 50,
+            "success": True,
+            "timeout": False,
+        },
+        # Step 0: slim step record (no messages_in, raw_response, llm_output)
         {
             "type": "step",
             "agent_id": "django__django-11734",
@@ -47,16 +95,33 @@ def sample_trace(tmp_path: Path) -> Path:
             "ts_end": 1001.5,
             "tool_ts_start": 1001.5,
             "tool_ts_end": 1001.55,
-            "llm_output": "Let me search for the file",
+            "phase": "acting",
+        },
+        # Step 1: LLM events
+        {
+            "type": "llm_call_start",
+            "agent_id": "django__django-11734",
+            "step_idx": 1,
+            "ts": 1002.0,
             "messages_in": [
                 {"role": "system", "content": "You are a helpful assistant"},
                 {"role": "user", "content": "Fix the bug"},
+                {"role": "assistant", "content": "Let me search"},
             ],
-            "raw_response": {
-                "choices": [{"message": {"content": "Let me search", "tool_calls": []}}]
-            },
-            "phase": "acting",
         },
+        {
+            "type": "llm_call_end",
+            "agent_id": "django__django-11734",
+            "step_idx": 1,
+            "ts": 1004.0,
+            "raw_response": {
+                "choices": [{"message": {"content": "Reading file", "tool_calls": []}}]
+            },
+            "prompt_tokens": 200,
+            "completion_tokens": 80,
+            "llm_latency_ms": 2000,
+        },
+        # Step 1: slim step
         {
             "type": "step",
             "agent_id": "django__django-11734",
@@ -75,34 +140,7 @@ def sample_trace(tmp_path: Path) -> Path:
             "ts_end": 1004.0,
             "tool_ts_start": 1004.0,
             "tool_ts_end": 1004.03,
-            "llm_output": "Now reading the file contents",
-            "messages_in": [
-                {"role": "system", "content": "You are a helpful assistant"},
-                {"role": "user", "content": "Fix the bug"},
-                {"role": "assistant", "content": "Let me search"},
-            ],
-            "raw_response": {
-                "choices": [{"message": {"content": "Reading file", "tool_calls": []}}]
-            },
             "phase": "acting",
-        },
-        {
-            "type": "event",
-            "agent_id": "django__django-11734",
-            "event": "tool_execute",
-            "category": "TOOL",
-            "data": {"tool_name": "bash"},
-            "iteration": 0,
-            "ts": 1001.5,
-        },
-        {
-            "type": "event",
-            "agent_id": "django__django-11734",
-            "event": "llm_request",
-            "category": "LLM",
-            "data": {},
-            "iteration": 1,
-            "ts": 1002.0,
         },
         {
             "type": "summary",
@@ -129,7 +167,8 @@ def sample_trace(tmp_path: Path) -> Path:
 def test_load_trace(sample_trace: Path) -> None:
     data = TraceData.load(sample_trace)
     assert len(data.steps) == 2
-    assert len(data.events) == 2
+    # 2x llm_call_start + 2x llm_call_end + 2x tool_start + 2x tool_end = 8
+    assert len(data.events) == 6
     assert len(data.summaries) == 1
     assert data.metadata["scaffold"] == "mini-swe-agent"
     assert data.metadata["model"] == "test-model"
@@ -286,8 +325,8 @@ def test_cmd_events(sample_trace: Path, capsys: pytest.CaptureFixture) -> None:
     data = TraceData.load(sample_trace)
     cmd_events(data)
     out = capsys.readouterr().out
-    assert "tool_execute" in out
-    assert "llm_request" in out
+    assert "llm_call_start" in out
+    assert "tool_exec_start" in out
 
 
 def test_cmd_events_category_filter(
@@ -296,8 +335,8 @@ def test_cmd_events_category_filter(
     data = TraceData.load(sample_trace)
     cmd_events(data, category="TOOL")
     out = capsys.readouterr().out
-    assert "tool_execute" in out
-    assert "llm_request" not in out
+    assert "tool_exec_start" in out
+    assert "llm_call_start" not in out
 
 
 def test_cmd_events_iteration_filter(
@@ -306,8 +345,9 @@ def test_cmd_events_iteration_filter(
     data = TraceData.load(sample_trace)
     cmd_events(data, iteration=0)
     out = capsys.readouterr().out
-    assert "tool_execute" in out
-    assert "llm_request" not in out
+    assert "llm_call_start" in out
+    # Step 1 events should be excluded
+    assert out.count("llm_call_start") == 1
 
 
 def test_cmd_events_json(sample_trace: Path, capsys: pytest.CaptureFixture) -> None:
@@ -316,7 +356,7 @@ def test_cmd_events_json(sample_trace: Path, capsys: pytest.CaptureFixture) -> N
     out = capsys.readouterr().out
     parsed = json.loads(out)
     assert isinstance(parsed, list)
-    assert len(parsed) == 2
+    assert len(parsed) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +404,7 @@ def test_cmd_tools_step_filter(
 
 def test_cmd_search_match(sample_trace: Path, capsys: pytest.CaptureFixture) -> None:
     data = TraceData.load(sample_trace)
+    # "Let me search" is in step 0's raw_response -> enriched llm_output
     cmd_search(data, "search")
     out = capsys.readouterr().out
     assert "step 0" in out
@@ -379,7 +420,8 @@ def test_cmd_search_no_match(sample_trace: Path, capsys: pytest.CaptureFixture) 
 
 def test_cmd_search_json(sample_trace: Path, capsys: pytest.CaptureFixture) -> None:
     data = TraceData.load(sample_trace)
-    cmd_search(data, "reading", as_json=True)
+    # "Reading file" is in step 1's raw_response -> enriched llm_output
+    cmd_search(data, "Reading", as_json=True)
     out = capsys.readouterr().out
     parsed = json.loads(out)
     assert isinstance(parsed, list)
@@ -513,7 +555,7 @@ def test_openclaw_iteration_compat(tmp_path: Path) -> None:
         {
             "type": "event",
             "agent_id": "task-1",
-            "event": "tool_execute",
+            "event": "tool_exec_start",
             "category": "TOOL",
             "data": {"tool_name": "bash"},
             "iteration": 3,
@@ -527,3 +569,51 @@ def test_openclaw_iteration_compat(tmp_path: Path) -> None:
     data = TraceData.load(trace_file)
     assert len(data.events) == 1
     assert data.events[0]["step_idx"] == 3
+
+
+def test_v3_step_enrichment(tmp_path: Path) -> None:
+    """v3 slim steps are enriched with messages_in/raw_response from events."""
+    trace_file = tmp_path / "v3.jsonl"
+    records = [
+        {"type": "trace_metadata", "scaffold": "openclaw", "trace_format_version": 3},
+        {
+            "type": "event",
+            "agent_id": "t1",
+            "event": "llm_call_start",
+            "category": "LLM",
+            "data": {"messages_in": [{"role": "user", "content": "hello"}]},
+            "step_idx": 0,
+            "ts": 100.0,
+        },
+        {
+            "type": "event",
+            "agent_id": "t1",
+            "event": "llm_call_end",
+            "category": "LLM",
+            "data": {
+                "raw_response": {"choices": [{"message": {"content": "hi"}}]},
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+            },
+            "step_idx": 0,
+            "ts": 101.0,
+        },
+        {
+            "type": "step",
+            "agent_id": "t1",
+            "step_idx": 0,
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "ts_start": 100.0,
+            "ts_end": 101.0,
+        },
+    ]
+    with open(trace_file, "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+    data = TraceData.load(trace_file)
+    step = data.steps[0]
+    # Step should be enriched from events
+    assert step["messages_in"] == [{"role": "user", "content": "hello"}]
+    assert step["raw_response"]["choices"][0]["message"]["content"] == "hi"

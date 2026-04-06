@@ -115,6 +115,8 @@ class AgentRunner:
             context.tool_calls = list(response.tool_calls)
             self._accumulate_usage(usage, raw_usage)
 
+            await hook.after_llm_response(context)
+
             if response.has_tool_calls:
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=True)

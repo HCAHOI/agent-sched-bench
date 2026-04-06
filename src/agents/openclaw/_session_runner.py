@@ -79,6 +79,7 @@ class TraceCollectorHook(AgentHook):
         self._tool_start_ts: dict[str, float] = {}
         self._iter_start_ts: float = 0.0
         self._iter_start_wall: float = 0.0
+        self._after_llm_ts: float = 0.0
         self._before_exec_ts: float = 0.0
         self._steps: list[dict[str, Any]] = []
         self._fh = open(trace_file, "a", encoding="utf-8")  # noqa: SIM115
@@ -112,12 +113,51 @@ class TraceCollectorHook(AgentHook):
     async def before_iteration(self, context: AgentHookContext) -> None:
         self._iter_start_ts = time.monotonic()
         self._iter_start_wall = time.time()
+        self.emit_event(
+            LLM, "llm_call_start",
+            {"messages_in": self._clone_messages(context.messages)},
+            step_idx=context.iteration,
+        )
+
+    async def after_llm_response(self, context: AgentHookContext) -> None:
+        self._after_llm_ts = time.monotonic()
+        usage = context.usage or {}
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        llm_latency_ms = (self._after_llm_ts - self._iter_start_ts) * 1000
+        self.emit_event(
+            LLM, "llm_call_end",
+            {
+                "raw_response": self._build_raw_response(
+                    context=context,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                ),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "llm_latency_ms": round(llm_latency_ms, 2),
+                "finish_reason": context.response.finish_reason if context.response else None,
+            },
+            step_idx=context.iteration,
+        )
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         self._before_exec_ts = time.monotonic()
         if context.tool_calls:
             for tc in context.tool_calls:
                 self._tool_start_ts[tc.name] = time.monotonic()
+                is_mcp = tc.name.startswith("mcp_")
+                self.emit_event(
+                    MCP if is_mcp else TOOL,
+                    "tool_exec_start",
+                    {
+                        "tool_name": tc.name,
+                        "args_preview": json.dumps(
+                            tc.arguments, ensure_ascii=False
+                        )[:200],
+                    },
+                    step_idx=context.iteration,
+                )
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         ts_now = time.time()
@@ -129,17 +169,10 @@ class TraceCollectorHook(AgentHook):
         self._total_tokens += prompt_tokens + completion_tokens
 
         llm_latency_ms = 0.0
-        if self._before_exec_ts > self._iter_start_ts:
-            llm_latency_ms = (self._before_exec_ts - self._iter_start_ts) * 1000
+        if self._after_llm_ts > self._iter_start_ts:
+            llm_latency_ms = (self._after_llm_ts - self._iter_start_ts) * 1000
         elif not context.tool_calls and self._iter_start_ts > 0:
             llm_latency_ms = (time.monotonic() - self._iter_start_ts) * 1000
-
-        resp = context.response
-        resp_dict = self._build_raw_response(
-            context=context,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
 
         step = EvalTraceStep(
             agent_id=self.agent_id,
@@ -150,9 +183,6 @@ class TraceCollectorHook(AgentHook):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             llm_latency_ms=llm_latency_ms,
-            llm_output=resp.content if resp else "",
-            messages_in=self._clone_messages(context.messages),
-            raw_response=resp_dict,
             extra={},
             ts_start=self._iter_start_wall or ts_now,
             ts_end=ts_now,
@@ -165,27 +195,6 @@ class TraceCollectorHook(AgentHook):
                 {tc.name: tc.arguments for tc in context.tool_calls},
                 ensure_ascii=False,
             )[:2000]
-
-            for tc in context.tool_calls:
-                is_mcp = tc.name.startswith("mcp_")
-                category = MCP if is_mcp else TOOL
-                event_name = "mcp_tool_call" if is_mcp else "tool_execute"
-                mcp_data: dict[str, Any] = {}
-                if is_mcp:
-                    parts = tc.name.split("_", 2)
-                    if len(parts) >= 3:
-                        mcp_data["server_name"] = parts[1]
-                        mcp_data["tool_name"] = parts[2]
-                    else:
-                        mcp_data["tool_name"] = tc.name
-                else:
-                    mcp_data["tool_name"] = tc.name
-                mcp_data["args_preview"] = json.dumps(tc.arguments, ensure_ascii=False)[
-                    :200
-                ]
-                self.emit_event(
-                    category, event_name, mcp_data, step_idx=context.iteration
-                )
 
         tool_results_from_messages = self._extract_tool_results(context.messages)
         per_tool_results: list[dict[str, Any]] = []
@@ -211,11 +220,9 @@ class TraceCollectorHook(AgentHook):
                         self._tool_timeouts.get(tool_name, 0) + 1
                     )
                 is_mcp = tool_name.startswith("mcp_")
-                category = MCP if is_mcp else TOOL
-                event_name = "tool_complete" if tool_ok else "tool_error"
                 self.emit_event(
-                    category,
-                    event_name,
+                    MCP if is_mcp else TOOL,
+                    "tool_exec_end",
                     {
                         "tool_name": tool_name,
                         "success": tool_ok,
@@ -495,6 +502,7 @@ class SessionRunner:
         metadata = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
+            "trace_format_version": 3,
             "mode": "collect",
             "model": self.model,
             "instance_id": iid,

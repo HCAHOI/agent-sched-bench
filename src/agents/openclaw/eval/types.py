@@ -222,7 +222,6 @@ class EvalTraceStep:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     llm_latency_ms: float = 0.0
-    llm_output: str = ""
     tool_name: str | None = None
     tool_args: str | None = None
     tool_result: str | None = None
@@ -233,8 +232,6 @@ class EvalTraceStep:
     tool_ts_end: float | None = None
     ts_start: float = 0.0
     ts_end: float = 0.0
-    messages_in: list[dict[str, Any]] | None = None
-    raw_response: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -248,7 +245,6 @@ class EvalTraceStep:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "llm_latency_ms": self.llm_latency_ms,
-            "llm_output": self.llm_output,
             "tool_name": self.tool_name,
             "tool_args": self.tool_args,
             "tool_result": self.tool_result,
@@ -259,8 +255,6 @@ class EvalTraceStep:
             "tool_ts_end": self.tool_ts_end,
             "ts_start": self.ts_start,
             "ts_end": self.ts_end,
-            "messages_in": self.messages_in,
-            "raw_response": self.raw_response,
             "extra": self.extra,
         }
 
