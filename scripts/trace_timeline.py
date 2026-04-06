@@ -146,7 +146,7 @@ def _format_openclaw_event(rec: dict[str, Any]) -> str:
     event_name = rec.get("event", "unknown")
     category = rec.get("category", "")
     data = rec.get("data", {})
-    iteration = rec.get("iteration", "?")
+    iteration = rec.get("step_idx", rec.get("iteration", "?"))
 
     icon = _OPENCLAW_ICONS.get(event_name, "  ")
     cat = _CATEGORY_SHORT.get(category, category.lower()[:6])
@@ -393,7 +393,7 @@ def _render_openclaw_timeline(recs: list[dict[str, Any]]) -> None:
         if rtype == "step":
             entries.append((r.get("step_idx", 0), r.get("ts_start", 0), "step", r))
         elif rtype == "event":
-            entries.append((r.get("iteration", -1), r.get("ts", 0), "event", r))
+            entries.append((r.get("step_idx", r.get("iteration", -1)), r.get("ts", 0), "event", r))
     entries.sort(key=lambda x: (x[0], x[1]))
 
     for _, _, entry_type, rec in entries:
