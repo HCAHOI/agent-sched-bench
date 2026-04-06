@@ -71,6 +71,48 @@ class SWEBenchRunner:
             mcp_servers=self.mcp_servers,
         )
 
+    @staticmethod
+    def _build_swe_bench_prompt(problem_statement: str) -> str:
+        """Wrap problem_statement with SWE-bench task template.
+
+        Aligned with mini-swe-agent's _INSTANCE_TEMPLATE for fair comparison,
+        adapted for openclaw's structured tool set.
+        """
+        return f"""\
+<pr_description>
+Consider the following PR description:
+{problem_statement}
+</pr_description>
+
+<instructions>
+# Task Instructions
+
+## Overview
+
+You're a software engineer fixing a bug or implementing a feature.
+Your task is to make changes to non-test files in the current working
+directory to resolve the issue described in the PR description in a
+way that is general and consistent with the codebase.
+
+## Recommended Workflow
+
+1. Analyse the codebase by finding and reading relevant files.
+2. Create a script to reproduce the issue (use the exec tool).
+3. Edit the source code to resolve the issue.
+4. Verify your fix works by running your reproduction script again.
+5. Test edge cases to ensure your fix is robust.
+
+## Constraints
+
+- MODIFY: Regular source code files in the current working directory.
+- DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.).
+
+## When Done
+
+Stop after verifying your fix. The system will automatically extract
+your changes as a git patch from the workspace.
+</instructions>"""
+
     async def run_task(self, task: EvalTask) -> EvalResult:
         """Run a single evaluation task.
 
@@ -115,7 +157,7 @@ class SWEBenchRunner:
         # Phase 2: Run via SessionRunner (full bus dispatch)
         session_key = f"eval:{task.instance_id}"
         result = await self._session_runner.run(
-            prompt=task.problem_statement,
+            prompt=self._build_swe_bench_prompt(task.problem_statement),
             workspace=ws,
             session_key=session_key,
             trace_file=trace_file,
