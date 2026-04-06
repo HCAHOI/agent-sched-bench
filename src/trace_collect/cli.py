@@ -34,19 +34,51 @@ import sys
 from pathlib import Path
 
 
+# ── Provider presets ──────────────────────────────────────────────────
+
+_PROVIDERS: dict[str, dict[str, str]] = {
+    "openrouter": {
+        "api_base": "https://openrouter.ai/api/v1",
+        "env_key": "OPENROUTER_API_KEY",
+        "default_model": "qwen/qwen3.6-plus:free",
+    },
+    "dashscope": {
+        "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "env_key": "DASHSCOPE_API_KEY",
+        "default_model": "qwen-plus-latest",
+    },
+    "openai": {
+        "api_base": "https://api.openai.com/v1",
+        "env_key": "OPENAI_API_KEY",
+        "default_model": "gpt-4o",
+    },
+}
+
+
 def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Collect SWE-Bench agent traces using an external LLM API.",
     )
     parser.add_argument(
+        "--provider",
+        choices=list(_PROVIDERS.keys()),
+        default="openrouter",
+        help="LLM provider preset (default: openrouter). Sets api-base, api-key env var, and default model.",
+    )
+    parser.add_argument(
         "--api-base",
-        default="https://openrouter.ai/api/v1",
-        help="OpenAI-compatible API base URL (default: OpenRouter).",
+        default=None,
+        help="Override API base URL (default: from --provider).",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="Override API key (default: from provider's env var).",
     )
     parser.add_argument(
         "--model",
-        default="qwen/qwen3.6-plus:free",
-        help="Model name to use for inference.",
+        default=None,
+        help="Model name (default: from --provider).",
     )
     parser.add_argument(
         "--max-steps",
@@ -264,14 +296,13 @@ def _run_collect(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    api_key = (
-        os.environ.get("OPENROUTER_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("DASHSCOPE_API_KEY")
-    )
+    preset = _PROVIDERS[args.provider]
+    api_base = args.api_base or preset["api_base"]
+    api_key = args.api_key or os.environ.get(preset["env_key"])
+    model = args.model or preset["default_model"]
     if not api_key:
         print(
-            "ERROR: Set OPENROUTER_API_KEY, OPENAI_API_KEY, or DASHSCOPE_API_KEY.",
+            f"ERROR: Set {preset['env_key']} or pass --api-key.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -280,9 +311,9 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     run_dir = asyncio.run(
         collect_traces(
-            api_base=args.api_base,
+            api_base=api_base,
             api_key=api_key,
-            model=args.model,
+            model=model,
             task_source=args.task_source,
             repos_root=args.repos_root,
             output_dir=args.output_dir,
