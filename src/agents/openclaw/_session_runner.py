@@ -93,7 +93,7 @@ class TraceCollectorHook(AgentHook):
         event: str,
         data: dict[str, Any],
         *,
-        iteration: int = 0,
+        step_idx: int = 0,
     ) -> None:
         """Emit a fine-grained event to the trace file."""
         entry = EvalTraceEvent(
@@ -104,7 +104,7 @@ class TraceCollectorHook(AgentHook):
             category=category,
             data=data,
             ts=time.time(),
-            iteration=iteration,
+            step_idx=step_idx,
         )
         self._fh.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
         self._fh.flush()
@@ -184,7 +184,7 @@ class TraceCollectorHook(AgentHook):
                     :200
                 ]
                 self.emit_event(
-                    category, event_name, mcp_data, iteration=context.iteration
+                    category, event_name, mcp_data, step_idx=context.iteration
                 )
 
         tool_results_from_messages = self._extract_tool_results(context.messages)
@@ -222,14 +222,14 @@ class TraceCollectorHook(AgentHook):
                         "duration_ms": round(duration_ms, 1),
                         "result_preview": tool_content[:200],
                     },
-                    iteration=context.iteration,
+                    step_idx=context.iteration,
                 )
                 if tool_name == "spawn":
                     self.emit_event(
                         SUBAGENT,
                         "subagent_complete",
                         {"task_preview": tool_content[:200]},
-                        iteration=context.iteration,
+                        step_idx=context.iteration,
                     )
 
         if per_tool_results:
@@ -256,14 +256,14 @@ class TraceCollectorHook(AgentHook):
                         else "",
                         "finish_reason": finish_reason,
                     },
-                    iteration=context.iteration,
+                    step_idx=context.iteration,
                 )
             elif finish_reason == "max_iterations":
                 self.emit_event(
                     LLM,
                     "max_iterations",
                     {"total_tokens": self._total_tokens},
-                    iteration=context.iteration,
+                    step_idx=context.iteration,
                 )
 
         self._write_step(step)
@@ -377,14 +377,14 @@ def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
     MCP connection, session management, and the top-level AgentLoop.
     """
 
-    def emit(category: str, event: str, data: dict, iteration: int = 0) -> None:
-        hook.emit_event(category, event, data, iteration=iteration)
+    def emit(category: str, event: str, data: dict, step_idx: int = 0) -> None:
+        hook.emit_event(category, event, data, step_idx=step_idx)
 
     if hasattr(agent, "memory_consolidator") and hasattr(
         agent.memory_consolidator, "_event_callback"
     ):
-        agent.memory_consolidator._event_callback = lambda cat, evt, d, it=0: emit(
-            cat, evt, d, it
+        agent.memory_consolidator._event_callback = lambda cat, evt, d, si=0: emit(
+            cat, evt, d, si
         )
 
     if (
@@ -392,8 +392,8 @@ def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
         and hasattr(agent.context, "skills")
         and hasattr(agent.context.skills, "_event_callback")
     ):
-        agent.context.skills._event_callback = lambda cat, evt, d, it=0: emit(
-            cat, evt, d, it
+        agent.context.skills._event_callback = lambda cat, evt, d, si=0: emit(
+            cat, evt, d, si
         )
 
     if hasattr(agent, "_mcp_event_callback"):

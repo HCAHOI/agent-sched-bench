@@ -385,3 +385,145 @@ def test_cmd_search_json(sample_trace: Path, capsys: pytest.CaptureFixture) -> N
     assert isinstance(parsed, list)
     assert len(parsed) == 1
     assert parsed[0]["step_idx"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Legacy event normalization tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def miniswe_trace(tmp_path: Path) -> Path:
+    """Trace with legacy mini-swe flat events."""
+    trace_file = tmp_path / "miniswe.jsonl"
+    records = [
+        {"type": "trace_metadata", "scaffold": "mini-swe-agent", "model": "test"},
+        {
+            "type": "llm_start",
+            "agent_id": "task-1",
+            "step_idx": 0,
+            "ts": 1000.0,
+        },
+        {
+            "type": "llm_end",
+            "agent_id": "task-1",
+            "step_idx": 0,
+            "ts": 1001.5,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "latency_ms": 1500,
+        },
+        {
+            "type": "tool_start",
+            "agent_id": "task-1",
+            "step_idx": 0,
+            "ts": 1001.5,
+            "tool_name": "bash",
+            "tool_args": '{"command": "ls"}',
+        },
+        {
+            "type": "tool_end",
+            "agent_id": "task-1",
+            "step_idx": 0,
+            "ts": 1001.6,
+            "tool_name": "bash",
+            "duration_ms": 100,
+            "success": True,
+            "timeout": False,
+        },
+        {
+            "type": "action",
+            "agent_id": "task-1",
+            "step_idx": 0,
+            "ts": 1001.0,
+        },
+        {"type": "summary", "agent_id": "task-1", "n_steps": 1, "success": True},
+    ]
+    with open(trace_file, "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+    return trace_file
+
+
+def test_legacy_events_normalized(miniswe_trace: Path) -> None:
+    """Legacy mini-swe flat events are normalized into unified envelope."""
+    data = TraceData.load(miniswe_trace)
+    assert len(data.events) == 5  # llm_start, llm_end, tool_start, tool_end, action
+
+    # All events should have category and event fields
+    for ev in data.events:
+        assert "category" in ev, f"Missing category in {ev}"
+        assert "event" in ev, f"Missing event in {ev}"
+        assert ev["type"] == "event"
+
+    # Check specific mappings
+    by_event = {ev["event"]: ev for ev in data.events}
+    assert "llm_call_start" in by_event
+    assert "llm_call_end" in by_event
+    assert "tool_exec_start" in by_event
+    assert "tool_exec_end" in by_event
+    assert "llm_action" in by_event
+
+    assert by_event["llm_call_start"]["category"] == "LLM"
+    assert by_event["llm_call_end"]["category"] == "LLM"
+    assert by_event["tool_exec_start"]["category"] == "TOOL"
+    assert by_event["tool_exec_end"]["category"] == "TOOL"
+    assert by_event["llm_action"]["category"] == "LLM"
+
+
+def test_legacy_events_category_filter(
+    miniswe_trace: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Category filter works on normalized legacy events."""
+    data = TraceData.load(miniswe_trace)
+    cmd_events(data, category="LLM")
+    out = capsys.readouterr().out
+    assert "llm_call_start" in out
+    assert "llm_call_end" in out
+    assert "llm_action" in out
+    assert "tool_exec_start" not in out
+
+
+def test_legacy_events_step_idx_preserved(miniswe_trace: Path) -> None:
+    """step_idx is preserved through normalization."""
+    data = TraceData.load(miniswe_trace)
+    for ev in data.events:
+        assert ev["step_idx"] == 0
+
+
+def test_legacy_events_data_fields(miniswe_trace: Path) -> None:
+    """Event-specific payload fields are collected in data dict."""
+    data = TraceData.load(miniswe_trace)
+    by_event = {ev["event"]: ev for ev in data.events}
+
+    llm_end = by_event["llm_call_end"]
+    assert llm_end["data"]["prompt_tokens"] == 100
+    assert llm_end["data"]["completion_tokens"] == 50
+    assert llm_end["data"]["latency_ms"] == 1500
+
+    tool_start = by_event["tool_exec_start"]
+    assert tool_start["data"]["tool_name"] == "bash"
+
+
+def test_openclaw_iteration_compat(tmp_path: Path) -> None:
+    """Openclaw events with 'iteration' field are normalized to 'step_idx'."""
+    trace_file = tmp_path / "openclaw.jsonl"
+    records = [
+        {"type": "trace_metadata", "scaffold": "openclaw", "model": "test"},
+        {
+            "type": "event",
+            "agent_id": "task-1",
+            "event": "tool_execute",
+            "category": "TOOL",
+            "data": {"tool_name": "bash"},
+            "iteration": 3,
+            "ts": 1000.0,
+        },
+    ]
+    with open(trace_file, "w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+    data = TraceData.load(trace_file)
+    assert len(data.events) == 1
+    assert data.events[0]["step_idx"] == 3

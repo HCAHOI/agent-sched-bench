@@ -39,7 +39,12 @@ class TraceLogger:
         This must be the first record in the trace so downstream tools
         (timeline, analysis) can dispatch to the correct parser.
         """
-        entry = {"type": "trace_metadata", "scaffold": scaffold, **kwargs}
+        entry = {
+            "type": "trace_metadata",
+            "scaffold": scaffold,
+            "trace_format_version": 2,
+            **kwargs,
+        }
         self._handle.write(json.dumps(entry) + "\n")
         self._handle.flush()
 

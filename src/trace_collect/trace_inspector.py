@@ -3,10 +3,12 @@
 Supported record types:
     trace_metadata  – scaffold, mode, model info
     step            – one LLM+tool turn (step_idx, tokens, latency, tool info, messages_in)
-    event           – OpenClaw lifecycle events (event, category, data, iteration, ts)
+    event           – unified lifecycle events (event, category, data, step_idx, ts)
     summary         – end-of-run aggregates
-    llm_start/end   – low-level LLM timing markers
-    tool_start/end  – low-level tool timing markers
+
+Legacy mini-swe flat events (llm_start/end, tool_start/end, action) and
+openclaw events using 'iteration' are normalized to the unified envelope
+on load via _normalize_legacy_event().
 """
 
 from __future__ import annotations
@@ -35,6 +37,43 @@ def _to_str(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False)
+
+
+# Map legacy mini-swe flat event types to (category, event_name).
+_LEGACY_EVENT_MAP: dict[str, tuple[str, str]] = {
+    "llm_start": ("LLM", "llm_call_start"),
+    "llm_end": ("LLM", "llm_call_end"),
+    "tool_start": ("TOOL", "tool_exec_start"),
+    "tool_end": ("TOOL", "tool_exec_end"),
+    "action": ("LLM", "llm_action"),
+}
+
+# Keys that are structural (not event-specific payload).
+_STRUCTURAL_KEYS = frozenset({"type", "agent_id", "ts", "step_idx", "iteration"})
+
+
+def _normalize_legacy_event(record: dict[str, Any]) -> dict[str, Any]:
+    """Convert a legacy mini-swe flat event into the unified envelope.
+
+    Legacy format:  {"type": "llm_start", "agent_id": "...", "step_idx": 0, "ts": ..., ...}
+    Normalized:     {"type": "event", "category": "LLM", "event": "llm_call_start",
+                     "step_idx": 0, "ts": ..., "data": {...}, "agent_id": "..."}
+    """
+    rec_type = record.get("type", "")
+    category, event_name = _LEGACY_EVENT_MAP[rec_type]
+
+    # Collect payload fields (everything not structural).
+    data = {k: v for k, v in record.items() if k not in _STRUCTURAL_KEYS}
+
+    return {
+        "type": "event",
+        "agent_id": record.get("agent_id"),
+        "category": category,
+        "event": event_name,
+        "step_idx": record.get("step_idx", record.get("iteration", 0)),
+        "ts": record.get("ts", 0.0),
+        "data": data,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +133,17 @@ class TraceData:
                 elif rec_type == "step":
                     steps.append(record)
                 elif rec_type == "event":
+                    # Compat: older openclaw traces use "iteration" instead
+                    # of "step_idx". Normalize to step_idx on read.
+                    if "step_idx" not in record and "iteration" in record:
+                        record["step_idx"] = record["iteration"]
                     events.append(record)
+                elif rec_type in _LEGACY_EVENT_MAP:
+                    # Normalize mini-swe flat events into unified envelope
+                    # so downstream code has one format to handle.
+                    events.append(_normalize_legacy_event(record))
                 elif rec_type == "summary":
                     summaries.append(record)
-                # llm_start/end, tool_start/end — not stored separately
 
         steps.sort(key=lambda r: r.get("step_idx", 0))
         events.sort(key=lambda r: r.get("ts", 0.0))
@@ -320,10 +366,16 @@ def cmd_events(
 ) -> None:
     """List events, optionally filtered by category and/or iteration."""
     events = data.events
+
     if category is not None:
-        events = [e for e in events if e.get("category") == category]
+        cat_upper = category.upper()
+        events = [
+            e for e in events if e.get("category", "").upper() == cat_upper
+        ]
     if iteration is not None:
-        events = [e for e in events if e.get("iteration") == iteration]
+        events = [
+            e for e in events if e.get("step_idx") == iteration
+        ]
 
     if as_json:
         print(json.dumps(events, indent=2, ensure_ascii=False))
@@ -335,18 +387,21 @@ def cmd_events(
 
     print(f"--- Events ({len(events)} total) ---")
     for ev in events:
-        ts = ev.get("ts", "?")
+        ts = ev.get("ts") or ev.get("ts_start") or "?"
         name = ev.get("event", "?")
         cat = ev.get("category", "?")
-        itr = ev.get("iteration", "?")
+        itr = ev.get("step_idx", "?")
         data_fields = ev.get("data", {})
-        # Render key data fields compactly
+
         data_str = ""
         if isinstance(data_fields, dict) and data_fields:
-            data_str = " | " + ", ".join(
-                f"{k}={v}" for k, v in list(data_fields.items())[:5]
-            )
-        print(f"  ts={ts:<12} event={name:<20} cat={cat:<8} iter={itr}{data_str}")
+            items = []
+            for k, v in list(data_fields.items())[:5]:
+                if k == "tool_args":
+                    v = str(v)[:80]
+                items.append(f"{k}={v}")
+            data_str = " | " + ", ".join(items)
+        print(f"  ts={ts:<12} event={name:<20} cat={cat:<8} step={itr}{data_str}")
 
 
 def cmd_tools(

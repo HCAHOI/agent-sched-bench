@@ -346,7 +346,7 @@ class EvalTraceEvent:
     category: str  # one of ALL_CATEGORIES
     data: dict[str, Any] = field(default_factory=dict)
     ts: float = 0.0  # wall-clock timestamp
-    iteration: int = 0
+    step_idx: int = 0
     type: str = "event"
 
     def to_dict(self) -> dict[str, Any]:
@@ -359,5 +359,5 @@ class EvalTraceEvent:
             "category": self.category,
             "data": self.data,
             "ts": self.ts,
-            "iteration": self.iteration,
+            "step_idx": self.step_idx,
         }
