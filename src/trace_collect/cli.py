@@ -367,7 +367,31 @@ def _run_inspect(argv: list[str]) -> None:
         cmd_search,
     )
 
-    parser = _argparse.ArgumentParser(description="Inspect a trace JSONL file.")
+    parser = _argparse.ArgumentParser(
+        prog="python -m trace_collect.cli inspect",
+        description="Inspect an OpenClaw / mini-swe-agent JSONL trace file.",
+        epilog="""commands:
+  overview   Summary stats: steps, tokens, tool counts, elapsed time
+  step N     Full details of step N (0-indexed): LLM stats, tool call, result
+  messages N Show messages_in (prompt list) for step N
+  response N Show raw_response (LLM output) for step N
+  events     List fine-grained events (SCHEDULING, SESSION, TOOL, LLM, ...)
+  tools      Tool usage breakdown: name, count, total duration, success rate
+  search P   Regex search through llm_output fields across all steps
+
+examples:
+  %(prog)s trace.jsonl overview
+  %(prog)s trace.jsonl step 3 --full
+  %(prog)s trace.jsonl messages 0 --role user
+  %(prog)s trace.jsonl response 5 --truncate 500
+  %(prog)s trace.jsonl events --category SCHEDULING
+  %(prog)s trace.jsonl events --category TOOL --iteration 2
+  %(prog)s trace.jsonl tools
+  %(prog)s trace.jsonl search "def main"
+  %(prog)s trace.jsonl overview --json
+  %(prog)s trace.jsonl step 0 --agent django""",
+        formatter_class=_argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("trace", help="Path to the JSONL trace file.")
     parser.add_argument(
         "command",
@@ -380,25 +404,57 @@ def _run_inspect(argv: list[str]) -> None:
             "tools",
             "search",
         ],
+        help="Inspection command (see above).",
     )
-    parser.add_argument("args", nargs="*", help="Command-specific arguments.")
     parser.add_argument(
-        "--json", action="store_true", dest="as_json", help="Output as JSON."
+        "args",
+        nargs="*",
+        help="Command argument: step index (for step/messages/response) or regex pattern (for search).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Output as JSON for machine consumption.",
     )
     parser.add_argument(
         "--truncate",
         type=int,
         default=2000,
-        help="Truncate long fields (0=no truncation).",
+        help="Truncate long fields to N chars (default: 2000, 0=no truncation).",
     )
-    parser.add_argument("--full", action="store_true", help="Disable truncation.")
-    parser.add_argument("--agent", default=None, help="Filter by agent ID substring.")
-    parser.add_argument("--role", default=None, help="Filter messages by role.")
-    parser.add_argument("--category", default=None, help="Filter events by category.")
     parser.add_argument(
-        "--iteration", type=int, default=None, help="Filter events by iteration."
+        "--full",
+        action="store_true",
+        help="Disable truncation (show complete content).",
     )
-    parser.add_argument("--step", type=int, default=None, help="Filter tools by step.")
+    parser.add_argument(
+        "--agent",
+        default=None,
+        help="Filter records by agent_id substring.",
+    )
+    parser.add_argument(
+        "--role",
+        default=None,
+        help="Filter messages by role (system/user/assistant/tool). Used with 'messages' command.",
+    )
+    parser.add_argument(
+        "--category",
+        default=None,
+        help="Filter events by category (SCHEDULING/SESSION/CONTEXT/TOOL/LLM/MCP/MEMORY/SUBAGENT). Used with 'events' command.",
+    )
+    parser.add_argument(
+        "--iteration",
+        type=int,
+        default=None,
+        help="Filter events by iteration number. Used with 'events' command.",
+    )
+    parser.add_argument(
+        "--step",
+        type=int,
+        default=None,
+        help="Filter tool stats by step index. Used with 'tools' command.",
+    )
     parsed = parser.parse_args(argv)
 
     truncate = 0 if parsed.full else parsed.truncate
