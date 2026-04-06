@@ -486,6 +486,36 @@ class SessionRunner:
 
         trace_hook = TraceCollectorHook(trace_file, iid, agent_id=iid, task_id=iid)
 
+        # Write trace_metadata header — must be first record for downstream tools
+        import json as _json
+
+        metadata = {
+            "type": "trace_metadata",
+            "scaffold": "openclaw",
+            "mode": "collect",
+            "model": self.model,
+            "instance_id": iid,
+            "session_key": session_key,
+            "max_iterations": self.max_iterations,
+            "scaffold_capabilities": {
+                "tools": [
+                    "bash",
+                    "file_read",
+                    "file_write",
+                    "file_edit",
+                    "list_dir",
+                    "web_search",
+                    "web_fetch",
+                    "send_message",
+                ],
+                "memory": True,
+                "skills": True,
+                "file_ops": "structured",
+            },
+        }
+        trace_hook._fh.write(_json.dumps(metadata, ensure_ascii=False) + "\n")
+        trace_hook._fh.flush()
+
         bus = MessageBus()
         collector = ResultCollector(bus)
         session_manager = SessionManager(workspace)

@@ -457,6 +457,7 @@ class AgentLoop:
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message: per-session serial, cross-session concurrent."""
+        dispatch_t0 = time.monotonic()
         self._emit_event(
             "SCHEDULING",
             "message_dispatch",
@@ -468,19 +469,15 @@ class AgentLoop:
         )
         lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
         gate = self._concurrency_gate or nullcontext()
-        self._emit_event(
-            "SCHEDULING",
-            "session_lock_acquire",
-            {
-                "session_key": msg.session_key,
-            },
-        )
+        lock_t0 = time.monotonic()
         async with lock, gate:
+            lock_wait_ms = (time.monotonic() - lock_t0) * 1000
             self._emit_event(
                 "SCHEDULING",
-                "concurrency_gate_acquire",
+                "session_lock_acquired",
                 {
                     "session_key": msg.session_key,
+                    "wait_ms": round(lock_wait_ms, 1),
                 },
             )
             try:
@@ -538,12 +535,14 @@ class AgentLoop:
                             metadata=msg.metadata or {},
                         )
                     )
+                dispatch_ms = (time.monotonic() - dispatch_t0) * 1000
                 self._emit_event(
                     "SCHEDULING",
                     "task_complete",
                     {
                         "session_key": msg.session_key,
                         "has_response": response is not None,
+                        "dispatch_duration_ms": round(dispatch_ms, 1),
                     },
                 )
             except asyncio.CancelledError:
