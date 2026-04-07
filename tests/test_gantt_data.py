@@ -1,0 +1,397 @@
+"""Tests for trace_collect.gantt_data — v4 action/event payload contract.
+
+These tests use synthetic in-memory v4 traces (action records, no step
+records) to validate that the Gantt data builder:
+
+1. Maps llm_call / tool_exec actions to spans with the right type and color.
+2. Computes scheduling spans from inter-action gaps above the threshold.
+3. Suppresses scheduling spans when actions overlap or share an iteration
+   (parallel tools).
+4. Forwards observability events as point markers.
+5. Skips unknown action types instead of crashing (forward compat).
+6. Ships span / marker registries inside the payload root.
+7. Uses v4 vocabulary for metadata keys (n_actions / n_iterations /
+   max_iterations, NOT n_steps / max_steps).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from trace_collect.gantt_data import (
+    ACTION_TYPE_MAP,
+    DEFAULT_MARKER_REGISTRY,
+    DEFAULT_SPAN_REGISTRY,
+    build_gantt_payload,
+    build_gantt_payload_multi,
+)
+from trace_collect.trace_inspector import TraceData
+
+
+# ── Fixture builders ───────────────────────────────────────────────
+
+
+def _llm_action(
+    iteration: int,
+    ts_start: float,
+    ts_end: float,
+    *,
+    agent_id: str = "a1",
+) -> dict[str, Any]:
+    return {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": f"llm_{iteration}",
+        "agent_id": agent_id,
+        "iteration": iteration,
+        "ts_start": ts_start,
+        "ts_end": ts_end,
+        "data": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "llm_latency_ms": (ts_end - ts_start) * 1000,
+        },
+    }
+
+
+def _tool_action(
+    iteration: int,
+    ts_start: float,
+    ts_end: float,
+    tool_name: str = "bash",
+    *,
+    agent_id: str = "a1",
+) -> dict[str, Any]:
+    return {
+        "type": "action",
+        "action_type": "tool_exec",
+        "action_id": f"tool_{iteration}_{tool_name}",
+        "agent_id": agent_id,
+        "iteration": iteration,
+        "ts_start": ts_start,
+        "ts_end": ts_end,
+        "data": {
+            "tool_name": tool_name,
+            "duration_ms": (ts_end - ts_start) * 1000,
+            "success": True,
+        },
+    }
+
+
+def _event(
+    category: str,
+    event_name: str,
+    iteration: int,
+    ts: float,
+    *,
+    agent_id: str = "a1",
+) -> dict[str, Any]:
+    return {
+        "type": "event",
+        "agent_id": agent_id,
+        "category": category,
+        "event": event_name,
+        "iteration": iteration,
+        "ts": ts,
+        "data": {},
+    }
+
+
+def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
+    """Write a v4 trace JSONL file and return the path."""
+    trace = tmp_path / "trace.jsonl"
+    head = {
+        "type": "trace_metadata",
+        "scaffold": "synthetic",
+        "model": "test-model",
+        "trace_format_version": 4,
+        "max_iterations": 80,
+    }
+    with trace.open("w") as fh:
+        fh.write(json.dumps(head) + "\n")
+        for r in records:
+            fh.write(json.dumps(r) + "\n")
+    return trace
+
+
+def _build(tmp_path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Convenience: write trace, load, build single-trace payload."""
+    data = TraceData.load(_write_trace(tmp_path, records))
+    return build_gantt_payload(data, label="test")
+
+
+# ── Action -> span mapping ─────────────────────────────────────────
+
+
+def test_llm_action_becomes_span(tmp_path: Path) -> None:
+    payload = _build(tmp_path, [_llm_action(0, 1000.0, 1001.0)])
+    spans = payload["lanes"][0]["spans"]
+    llm_spans = [s for s in spans if s["type"] == "llm"]
+    assert len(llm_spans) == 1
+    assert llm_spans[0]["start"] == pytest.approx(0.0)
+    assert llm_spans[0]["end"] == pytest.approx(1.0)
+    assert llm_spans[0]["iteration"] == 0
+    # Color sourced from registry
+    assert DEFAULT_SPAN_REGISTRY["llm"]["color"] == "#00E5FF"
+
+
+def test_tool_action_becomes_span(tmp_path: Path) -> None:
+    payload = _build(tmp_path, [_tool_action(0, 1000.0, 1000.5, "bash")])
+    spans = payload["lanes"][0]["spans"]
+    tool_spans = [s for s in spans if s["type"] == "tool"]
+    assert len(tool_spans) == 1
+    assert tool_spans[0]["detail"]["tool_name"] == "bash"
+
+
+# ── Scheduling spans from inter-action gaps ────────────────────────
+
+
+def test_scheduling_span_requires_event_in_gap(tmp_path: Path) -> None:
+    """A gap between two actions IS rendered as a scheduling span when
+    a framework-level event falls inside it — regardless of gap width."""
+    records = [
+        _llm_action(0, 1000.0, 1001.0),
+        _event("SCHEDULING", "message_dispatch", 0, 1001.02),
+        _tool_action(0, 1001.05, 1001.10, "bash"),
+    ]
+    payload = _build(tmp_path, records)
+    sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
+    assert len(sched) == 1
+    # Hover detail must surface the underlying event for traceability.
+    assert sched[0]["detail"]["events"] == ["message_dispatch"]
+
+
+def test_scheduling_span_suppressed_without_event(tmp_path: Path) -> None:
+    """A gap with NO framework event inside → no scheduling span.
+
+    This is the "trusted evidence" invariant: every green bar in the
+    Gantt must be backed by a real SCHEDULING / SESSION / CONTEXT event.
+    Pure asyncio/HTTP wake-up noise has no visual representation —
+    otherwise the same wall-clock gap would show or hide the span
+    across different hardware, making the rendering platform-dependent.
+    """
+    records = [
+        _llm_action(0, 1000.0, 1001.0),
+        _tool_action(0, 1001.05, 1001.10, "bash"),  # 50ms gap, no event
+    ]
+    payload = _build(tmp_path, records)
+    sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
+    assert len(sched) == 0
+
+
+def test_scheduling_span_has_no_duration_threshold(tmp_path: Path) -> None:
+    """A tiny 2ms gap with an event STILL produces a span — the rendering
+    is gated purely on event presence, not on gap duration. This pins the
+    platform-independence guarantee: same trace → same spans everywhere."""
+    records = [
+        _llm_action(0, 1000.0, 1001.0),
+        _event("SCHEDULING", "session_lock_acquire", 0, 1001.001),
+        _tool_action(0, 1001.002, 1001.100, "bash"),  # 2ms gap
+    ]
+    payload = _build(tmp_path, records)
+    sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
+    assert len(sched) == 1
+    assert sched[0]["detail"]["events"] == ["session_lock_acquire"]
+    assert sched[0]["detail"]["gap_ms"] == pytest.approx(2.0, abs=0.1)
+
+
+def test_parallel_tools_share_iteration(tmp_path: Path) -> None:
+    """Three tool_exec actions all in iteration=5 → all rendered, no
+    scheduling span between them (they may overlap or be close)."""
+    records = [
+        _tool_action(5, 1000.0, 1000.05, "bash"),
+        _tool_action(5, 1000.0, 1000.06, "edit"),
+        _tool_action(5, 1000.0, 1000.04, "read"),
+    ]
+    payload = _build(tmp_path, records)
+    tool_spans = [s for s in payload["lanes"][0]["spans"] if s["type"] == "tool"]
+    assert len(tool_spans) == 3
+    # All share iteration
+    assert {s["iteration"] for s in tool_spans} == {5}
+    # No scheduling spans because gaps are negative or near-zero
+    sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
+    assert len(sched) == 0
+
+
+# ── Events as markers ───────────────────────────────────────────────
+
+
+def test_event_becomes_marker(tmp_path: Path) -> None:
+    records = [
+        _llm_action(0, 1000.0, 1001.0),
+        _event("SCHEDULING", "message_dispatch", 0, 1000.5),
+    ]
+    payload = _build(tmp_path, records)
+    markers = payload["lanes"][0]["markers"]
+    assert len(markers) == 1
+    assert markers[0]["event"] == "message_dispatch"
+    assert markers[0]["type"] == "scheduling"
+
+
+# ── Forward compat: unknown action_type ────────────────────────────
+
+
+def test_unknown_action_type_skipped(tmp_path: Path) -> None:
+    """An unknown action_type is silently skipped, not crashed on."""
+    bad = {
+        "type": "action",
+        "action_type": "future_thing",
+        "action_id": "x",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1000.0,
+        "ts_end": 1001.0,
+        "data": {},
+    }
+    payload = _build(tmp_path, [bad, _llm_action(1, 1002.0, 1003.0)])
+    # Only the llm_call survives
+    spans = [s for s in payload["lanes"][0]["spans"] if s["type"] != "scheduling"]
+    assert len(spans) == 1
+    assert spans[0]["type"] == "llm"
+
+
+# ── Payload registries ─────────────────────────────────────────────
+
+
+def test_payload_carries_registries(tmp_path: Path) -> None:
+    data = TraceData.load(_write_trace(tmp_path, [_llm_action(0, 1.0, 2.0)]))
+    payload = build_gantt_payload_multi([("a", data)])
+    assert "registries" in payload
+    assert "spans" in payload["registries"]
+    assert "markers" in payload["registries"]
+    assert payload["registries"]["spans"] == DEFAULT_SPAN_REGISTRY
+    assert payload["registries"]["markers"] == DEFAULT_MARKER_REGISTRY
+
+
+def test_payload_registries_can_be_overridden(tmp_path: Path) -> None:
+    """Caller-supplied registries replace the defaults."""
+    custom_spans = {"llm": {"color": "#FF0000", "label": "Custom", "order": 0}}
+    data = TraceData.load(_write_trace(tmp_path, [_llm_action(0, 1.0, 2.0)]))
+    payload = build_gantt_payload_multi(
+        [("a", data)], span_registry=custom_spans
+    )
+    assert payload["registries"]["spans"] == custom_spans
+    # Markers still default
+    assert payload["registries"]["markers"] == DEFAULT_MARKER_REGISTRY
+
+
+# ── Metadata keys use v4 vocabulary ────────────────────────────────
+
+
+def test_metadata_uses_v4_keys(tmp_path: Path) -> None:
+    records = [
+        _llm_action(0, 1000.0, 1001.0),
+        _tool_action(0, 1001.0, 1001.1),
+        _llm_action(1, 1002.0, 1003.0),
+    ]
+    payload = _build(tmp_path, records)
+    meta = payload["metadata"]
+    assert "n_actions" in meta
+    assert "n_iterations" in meta
+    assert "max_iterations" in meta
+    assert "n_steps" not in meta, "v3 'n_steps' key must be removed"
+    assert "max_steps" not in meta, "v3 'max_steps' key must be removed"
+    assert meta["n_actions"] == 3
+    assert meta["n_iterations"] == 2  # iterations 0 and 1
+    assert meta["max_iterations"] == 80  # from trace_metadata
+
+
+def test_llm_span_detail_surfaces_silent_tool_calls(tmp_path: Path) -> None:
+    """An llm_call action whose raw_response has ``content: null`` but
+    non-empty ``tool_calls`` must still produce a useful tooltip: the
+    requested tool calls become ``tool_calls_requested`` in the detail.
+    Otherwise iterations where the LLM calls a tool silently show empty
+    hover cards, which is exactly the ``oh why are some tooltips empty``
+    regression the reviewer caught.
+    """
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1000.0,
+        "ts_end": 1001.0,
+        "data": {
+            "prompt_tokens": 100,
+            "completion_tokens": 15,
+            "raw_response": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "write_file",
+                                        "arguments": '{"path":"src/main.ts"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        },
+    }
+    payload = _build(tmp_path, [act])
+    llm_spans = [s for s in payload["lanes"][0]["spans"] if s["type"] == "llm"]
+    assert len(llm_spans) == 1
+    detail = llm_spans[0]["detail"]
+    assert "llm_content" not in detail, "content was null, should not be set"
+    assert detail["tool_calls_requested"] == [
+        'write_file({"path":"src/main.ts"})'
+    ]
+
+
+def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) -> None:
+    """When the LLM produces narrative text AND tool calls, both are
+    reported so the user sees the reasoning alongside the action."""
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1000.0,
+        "ts_end": 1001.0,
+        "data": {
+            "raw_response": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Let me write the main entry point.",
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "write_file",
+                                        "arguments": '{"path":"main.ts"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        },
+    }
+    payload = _build(tmp_path, [act])
+    detail = payload["lanes"][0]["spans"][0]["detail"]
+    assert "Let me write" in detail["llm_content"]
+    assert detail["tool_calls_requested"] == ['write_file({"path":"main.ts"})']
+
+
+def test_action_type_map_module_constant() -> None:
+    """ACTION_TYPE_MAP is a public, mutable extension surface."""
+    assert ACTION_TYPE_MAP["llm_call"] == "llm"
+    assert ACTION_TYPE_MAP["tool_exec"] == "tool"

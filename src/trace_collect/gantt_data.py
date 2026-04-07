@@ -3,6 +3,11 @@
 Actions (llm_call, tool_exec) ARE the spans directly.
 Scheduling overhead is computed from time gaps between consecutive actions.
 Events become point markers for observability detail.
+
+The default span / marker / action-type registries live here as module-level
+constants. They are shipped *inside* every Gantt payload so the HTML template
+renders from data, not from hard-coded JS literals — letting downstream users
+register new action_types or event names without touching the template.
 """
 
 from __future__ import annotations
@@ -14,14 +19,35 @@ from trace_collect.trace_inspector import TraceData
 # Categories that produce point markers (not spans).
 _MARKER_CATEGORIES = frozenset({"SCHEDULING", "SESSION", "CONTEXT"})
 
-# Map action_type to span type for Gantt rendering.
-_ACTION_TYPE_MAP: dict[str, str] = {
+# Map v4 ``action_type`` -> Gantt span type. Public so downstream code can
+# extend it (e.g., adding ``mcp_call`` -> ``mcp``).
+ACTION_TYPE_MAP: dict[str, str] = {
     "llm_call": "llm",
     "tool_exec": "tool",
 }
 
-# Minimum gap (seconds) between actions to render as a scheduling span.
-_MIN_SCHEDULING_GAP_S = 0.01  # 10ms
+# Default span registry shipped inside the payload.
+# ``order`` controls vertical stacking when multiple span types share an iteration.
+DEFAULT_SPAN_REGISTRY: dict[str, dict[str, Any]] = {
+    "llm":        {"color": "#00E5FF", "label": "LLM Call",   "order": 0},
+    "tool":       {"color": "#FF6D00", "label": "Tool Exec",  "order": 1},
+    "scheduling": {"color": "#76FF03", "label": "Scheduling", "order": 2},
+}
+
+# Default marker registry — point-in-time event symbols.
+# ``_default`` is the fallback when an event name is not in the map.
+DEFAULT_MARKER_REGISTRY: dict[str, dict[str, str]] = {
+    "message_dispatch":     {"symbol": "diamond", "color": "#76FF03"},
+    "session_lock_acquire": {"symbol": "diamond", "color": "#76FF03"},
+    "session_load":         {"symbol": "dot",     "color": "#76FF03"},
+    "message_list_build":   {"symbol": "dot",     "color": "#4FC3F7"},
+    "session_turn_save":    {"symbol": "dot",     "color": "#76FF03"},
+    "task_complete":        {"symbol": "flag",    "color": "#FF6D00"},
+    "llm_error":            {"symbol": "cross",   "color": "#FF1744"},
+    "max_iterations":       {"symbol": "cross",   "color": "#FF1744"},
+    "_default":             {"symbol": "dot",     "color": "#6b7280"},
+}
+
 
 
 def _extract_detail(event: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +129,8 @@ def build_gantt_payload(
             "markers": markers,
         })
 
+    distinct_iters = {a.get("iteration", 0) for a in data.actions}
+
     return {
         "id": trace_id,
         "metadata": {
@@ -110,8 +138,11 @@ def build_gantt_payload(
             "model": meta.get("model"),
             "instance_id": instance_id,
             "mode": meta.get("mode"),
-            "max_steps": meta.get("max_steps") or meta.get("max_iterations"),
-            "n_steps": len(data.actions),
+            # v4 vocabulary: 'iterations' is the loop counter; 'actions' are
+            # the executable units (multiple actions can share an iteration).
+            "max_iterations": meta.get("max_iterations") or meta.get("max_steps"),
+            "n_actions": len(data.actions),
+            "n_iterations": len(distinct_iters),
             "n_events": len(data.events),
             "elapsed_s": _get_elapsed(data),
         },
@@ -122,16 +153,29 @@ def build_gantt_payload(
 
 def build_gantt_payload_multi(
     traces: list[tuple[str, TraceData]],
+    *,
+    span_registry: dict[str, dict[str, Any]] | None = None,
+    marker_registry: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Build a multi-trace Gantt payload.
 
+    The registries are shipped inside the payload so the HTML template can
+    render arbitrary span types and event names without code changes — pass
+    custom dicts here to register new visual encodings per call.
+
     Args:
         traces: List of (label, TraceData) pairs.
+        span_registry: Optional override for the default span registry.
+        marker_registry: Optional override for the default marker registry.
 
     Returns:
-        ``{"traces": [payload, ...]}``
+        ``{"registries": {...}, "traces": [payload, ...]}``
     """
     return {
+        "registries": {
+            "spans": span_registry or DEFAULT_SPAN_REGISTRY,
+            "markers": marker_registry or DEFAULT_MARKER_REGISTRY,
+        },
         "traces": [
             build_gantt_payload(td, label=lbl) for lbl, td in traces
         ],
@@ -176,9 +220,9 @@ def _build_spans_and_markers(
 
     for act in actions:
         action_type = act.get("action_type")
-        if action_type not in _ACTION_TYPE_MAP:
+        if action_type not in ACTION_TYPE_MAP:
             continue
-        span_type = _ACTION_TYPE_MAP[action_type]
+        span_type = ACTION_TYPE_MAP[action_type]
         spans.append({
             "type": span_type,
             "start": act.get("ts_start", 0) - t0,
@@ -190,22 +234,40 @@ def _build_spans_and_markers(
         })
 
     # ── Compute scheduling spans from inter-action gaps ──
-    if spans:
+    # A scheduling span is emitted ONLY when the gap window between two
+    # consecutive actions actually contains a framework-level event
+    # (category in _MARKER_CATEGORIES). The event is the sole trigger —
+    # there is intentionally no absolute duration threshold, because any
+    # such threshold is platform-dependent noise (asyncio wake-up, HTTP
+    # socket reuse, GC pauses). Requiring an event makes every green bar
+    # "trusted evidence": each one can be hover-linked to the underlying
+    # SCHEDULING / SESSION / CONTEXT event that explains it.
+    if spans and events:
         sorted_spans = sorted(spans, key=lambda s: s["start_abs"])
         for i in range(len(sorted_spans) - 1):
             gap_start = sorted_spans[i]["end_abs"]
             gap_end = sorted_spans[i + 1]["start_abs"]
-            gap = gap_end - gap_start
-            if gap > _MIN_SCHEDULING_GAP_S:
-                spans.append({
-                    "type": "scheduling",
-                    "start": gap_start - t0,
-                    "end": gap_end - t0,
-                    "start_abs": gap_start,
-                    "end_abs": gap_end,
-                    "iteration": sorted_spans[i + 1].get("iteration", 0),
-                    "detail": {"gap_ms": round(gap * 1000, 1)},
-                })
+            if gap_end <= gap_start:
+                continue  # overlapping / parallel actions → no gap
+            events_in_gap = [
+                e for e in events
+                if e.get("category") in _MARKER_CATEGORIES
+                and gap_start < (e.get("ts") or 0) < gap_end
+            ]
+            if not events_in_gap:
+                continue
+            spans.append({
+                "type": "scheduling",
+                "start": gap_start - t0,
+                "end": gap_end - t0,
+                "start_abs": gap_start,
+                "end_abs": gap_end,
+                "iteration": sorted_spans[i + 1].get("iteration", 0),
+                "detail": {
+                    "gap_ms": round((gap_end - gap_start) * 1000, 1),
+                    "events": [e.get("event", "?") for e in events_in_gap],
+                },
+            })
 
     # ── Build markers from events ──
     for ev in events:
@@ -226,10 +288,19 @@ def _build_spans_and_markers(
 
 
 def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
-    """Extract tooltip detail from a v4 TraceAction record."""
+    """Extract tooltip detail from a v4 TraceAction record.
+
+    For ``llm_call`` actions we always try to surface *something* about
+    the LLM's decision even when the assistant message has no textual
+    content: the OpenAI chat-completions protocol lets the model return
+    ``content: null`` + ``tool_calls: [...]`` when it calls a tool
+    silently. Reporting only ``llm_content`` in that case would make the
+    tooltip look empty, even though the model clearly DID something.
+    """
     data = dict(act.get("data") or {})
 
-    # Extract LLM content preview from raw_response before dropping
+    # Extract from raw_response (both content text AND tool_calls) before
+    # dropping the heavy field.
     raw_resp = data.pop("raw_response", None)
     if raw_resp and isinstance(raw_resp, dict):
         choices = raw_resp.get("choices") or []
@@ -237,7 +308,24 @@ def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
             msg = choices[0].get("message") or {}
             content = msg.get("content") or ""
             if content:
-                data["llm_content"] = content[:200] + ("..." if len(content) > 200 else "")
+                data["llm_content"] = (
+                    content[:200] + ("..." if len(content) > 200 else "")
+                )
+            tool_calls = msg.get("tool_calls") or []
+            if tool_calls:
+                summaries: list[str] = []
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function") or {}
+                    name = fn.get("name") or tc.get("name") or "?"
+                    args = fn.get("arguments") or tc.get("arguments") or ""
+                    if isinstance(args, (dict, list)):
+                        import json as _json
+                        args = _json.dumps(args, ensure_ascii=False)
+                    args_preview = str(args)[:80]
+                    summaries.append(f"{name}({args_preview})")
+                data["tool_calls_requested"] = summaries
 
     # Drop heavy fields
     data.pop("messages_in", None)

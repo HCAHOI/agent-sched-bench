@@ -243,13 +243,18 @@
 'use strict';
 
 // ─── Registries ────────────────────────────────────────────────────
-const SPAN_REGISTRY = {
+// Defaults — used as a fallback if the payload does not ship its own
+// registries (older payloads, or template opened directly without data).
+// The Python side (gantt_data.py) embeds DEFAULT_SPAN_REGISTRY /
+// DEFAULT_MARKER_REGISTRY in DATA.registries so new action_types and
+// event names can be added without editing this template.
+const DEFAULT_SPANS = {
   llm:        { color: '#00E5FF', label: 'LLM Call',    order: 0 },
   tool:       { color: '#FF6D00', label: 'Tool Exec',   order: 1 },
   scheduling: { color: '#76FF03', label: 'Scheduling',  order: 2 },
 };
 
-const MARKER_REGISTRY = {
+const DEFAULT_MARKERS = {
   message_dispatch:    { symbol: 'diamond', color: '#76FF03' },
   session_lock_acquire:{ symbol: 'diamond', color: '#76FF03' },
   session_load:        { symbol: 'dot',     color: '#76FF03' },
@@ -260,6 +265,15 @@ const MARKER_REGISTRY = {
   max_iterations:      { symbol: 'cross',   color: '#FF1744' },
   _default:            { symbol: 'dot',     color: '#6b7280' },
 };
+
+// Populated from DATA.registries during init() — kept as ``let`` so the
+// initialization code can replace them in place.
+let SPAN_REGISTRY = DEFAULT_SPANS;
+let MARKER_REGISTRY = DEFAULT_MARKERS;
+
+// Neutral grey for span types not present in the registry — guarantees
+// the renderer never crashes on a forward-compatible payload.
+const UNKNOWN_SPAN_STYLE = { color: '#6b7280', label: 'Unknown', order: 99 };
 
 // ─── State ─────────────────────────────────────────────────────────
 let DATA = null;
@@ -280,6 +294,11 @@ function init() {
       return;
     }
     DATA = __TRACE_DATA__;
+    // Adopt registries from payload if present, otherwise keep defaults.
+    if (DATA.registries) {
+      if (DATA.registries.spans)   SPAN_REGISTRY = DATA.registries.spans;
+      if (DATA.registries.markers) MARKER_REGISTRY = DATA.registries.markers;
+    }
     buildLegend();
     buildSidebar();
     updateHeaderMeta();
@@ -312,8 +331,9 @@ function buildSidebar() {
       `scaffold: ${m.scaffold}`,
       `model: ${m.model||'?'}`,
       `instance: ${m.instance_id||'?'}`,
-      `max_steps: ${m.max_steps||'?'}`,
-      `steps: ${m.n_steps}`,
+      `max_iterations: ${m.max_iterations||'?'}`,
+      `actions: ${m.n_actions}`,
+      `iterations: ${m.n_iterations}`,
       `events: ${m.n_events}`,
       `elapsed: ${(m.elapsed_s||0).toFixed(1)}s`,
     ];
@@ -331,7 +351,7 @@ function updateHeaderMeta() {
   const parts = [];
   for (const t of DATA.traces) {
     const m = t.metadata;
-    parts.push(`${m.scaffold} ${m.model||''} (${m.n_steps} steps, ${(m.elapsed_s||0).toFixed(1)}s)`);
+    parts.push(`${m.scaffold} ${m.model||''} (${m.n_actions} actions / ${m.n_iterations} iters, ${(m.elapsed_s||0).toFixed(1)}s)`);
   }
   document.getElementById('header-meta').textContent = parts.join(' vs ');
 }
@@ -469,7 +489,9 @@ function render() {
         spans.sort((a, b) => (SPAN_REGISTRY[a.type]?.order ?? 99) - (SPAN_REGISTRY[b.type]?.order ?? 99));
         for (let i = 0; i < spans.length; i++) {
           const s = spans[i];
-          const reg = SPAN_REGISTRY[s.type] || SPAN_REGISTRY.scheduling;
+          // Forward-compatible: unknown span types render in neutral grey
+          // (UNKNOWN_SPAN_STYLE) instead of crashing the renderer.
+          const reg = SPAN_REGISTRY[s.type] || UNKNOWN_SPAN_STYLE;
           const st = timeMode === 'sync' ? s.start : s.start_abs;
           const et = timeMode === 'sync' ? s.end : s.end_abs;
           const x0 = tToX(st);
