@@ -301,10 +301,16 @@ async def collect_traces(
     if task_source is None:
         task_source = benchmark.config.data_root / "tasks.json"
     repos_root = benchmark.config.repos_root
-    if repos_root is None:
+    if benchmark.task_shape == "swe_patch" and repos_root is None:
         raise ValueError(
-            f"Benchmark {benchmark.config.slug!r} has no repos_root configured; "
-            f"cannot run code-patching scaffolds without local repos."
+            f"Benchmark {benchmark.config.slug!r} has task_shape='swe_patch' but "
+            f"no repos_root configured; cannot run code-patching scaffolds without local repos."
+        )
+    if scaffold == "mini-swe-agent" and benchmark.task_shape != "swe_patch":
+        raise ValueError(
+            f"mini-swe-agent scaffold only supports task_shape='swe_patch'; "
+            f"benchmark {benchmark.config.slug!r} has task_shape={benchmark.task_shape!r}. "
+            f"Use scaffold='openclaw' for function_call benchmarks."
         )
 
     tasks = load_tasks(task_source)
@@ -558,9 +564,10 @@ async def _collect_openclaw(
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
 ) -> Path:
-    """Collect traces using the OpenClaw (nanobot) scaffold via SWEBenchRunner."""
+    """Collect traces via the OpenClaw scaffold, routing runner construction
+    through ``benchmark.build_runner`` so plugins own their own runner class.
+    """
     from agents.openclaw.unified_provider import UnifiedProvider
-    from agents.openclaw.eval.runner import SWEBenchRunner
     from agents.openclaw.eval.types import EvalTask
 
     if run_id is not None:
@@ -579,14 +586,13 @@ async def _collect_openclaw(
         api_base=api_base,
         default_model=model,
     )
-    runner = SWEBenchRunner(
+    runner = benchmark.build_runner(
+        scaffold="openclaw",
         provider=provider,
         workspace_base=run_dir / "_workspaces",
         max_iterations=max_steps,
         context_window_tokens=max_context_tokens,
         model=model,
-        repos_root=benchmark.config.repos_root,
-        benchmark=benchmark,
     )
 
     total = len(tasks)

@@ -31,6 +31,13 @@ class EvalTask:
     pass_to_pass: list[str] = field(default_factory=list)
     image_name: str | None = None
 
+    # Function-call benchmark fields (BFCL v4 and future function_call plugins).
+    # Populated by Benchmark.normalize_task; ignored by swe_patch scaffolds.
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    question: list[list[dict[str, Any]]] = field(default_factory=list)
+    ground_truth: list[dict[str, Any]] = field(default_factory=list)
+    category: str | None = None
+
     @classmethod
     def from_benchmark_instance(
         cls,
@@ -42,8 +49,8 @@ class EvalTask:
 
         If ``benchmark`` is provided, its ``normalize_task`` is applied first
         so benchmark-specific quirks (SWE-rebench's native-list FAIL_TO_PASS,
-        explicit docker_image pinning, etc.) are absorbed before the row hits
-        the generic extraction logic below.
+        explicit docker_image pinning, BFCL's tools/question shape, etc.) are
+        absorbed before the row hits the generic extraction logic below.
         """
         if benchmark is not None:
             row = benchmark.normalize_task(dict(row))
@@ -68,7 +75,7 @@ class EvalTask:
 
         return cls(
             instance_id=row["instance_id"],
-            problem_statement=row["problem_statement"],
+            problem_statement=row.get("problem_statement", ""),
             workspace_dir=workspace_base / row["instance_id"],
             repo=row.get("repo"),
             base_commit=row.get("base_commit"),
@@ -76,6 +83,10 @@ class EvalTask:
             fail_to_pass=fail_to_pass,
             pass_to_pass=pass_to_pass,
             image_name=row.get("image_name"),
+            tools=list(row.get("tools", [])),
+            question=list(row.get("question", [])),
+            ground_truth=list(row.get("ground_truth", [])),
+            category=row.get("category"),
         )
 
     @property

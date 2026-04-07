@@ -263,9 +263,11 @@ def test_build_runner_returns_swebench_runner() -> None:
         max_iterations=50,
         context_window_tokens=128000,
         model="test/model",
-        repos_root=Path("/tmp/repos"),
     )
     assert isinstance(runner, SWEBenchRunner)
+    # Plugin self-injects repos_root and benchmark from its own config.
+    assert runner.repos_root == plugin.config.repos_root
+    assert runner.benchmark is plugin
 
 
 # ── HF-online integration (opt-in via env var) ──────────────────────────

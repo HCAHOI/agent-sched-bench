@@ -94,9 +94,11 @@ def test_build_runner_returns_swebench_runner(plugin: SWEBenchVerified) -> None:
         max_iterations=5,
         context_window_tokens=8192,
         model="stub-model",
-        repos_root=Path("/tmp/repos"),
     )
     assert isinstance(runner, SWEBenchRunner)
+    # Plugin self-injects repos_root and benchmark from its own config.
+    assert runner.repos_root == plugin.config.repos_root
+    assert runner.benchmark is plugin
 
 
 # ---------------------------------------------------------------------------

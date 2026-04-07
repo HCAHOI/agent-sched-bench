@@ -128,20 +128,18 @@ class SWEBenchVerified(Benchmark):
         max_iterations: int,
         context_window_tokens: int,
         model: str,
-        repos_root: Path,
         **kwargs: Any,
     ) -> Any:
         """Return a :class:`~agents.openclaw.eval.runner.SWEBenchRunner`.
 
-        Args:
-            scaffold: Scaffold identifier (e.g. ``"openclaw"``).
-            provider: LLM provider instance.
-            workspace_base: Directory where agent workspaces are created.
-            max_iterations: Maximum LLM turns per task.
-            context_window_tokens: Token budget for the context window.
-            model: Model identifier string.
-            repos_root: Local mirror of upstream repos (speeds up git clone).
+        The plugin self-injects ``repos_root`` and ``benchmark`` from its own
+        config so the collector does not need to thread them through.
         """
+        if scaffold != "openclaw":
+            raise NotImplementedError(
+                f"SWE-bench Verified does not support scaffold={scaffold!r}; "
+                f"use scaffold='openclaw'."
+            )
         from agents.openclaw.eval.runner import SWEBenchRunner
 
         return SWEBenchRunner(
@@ -150,7 +148,8 @@ class SWEBenchVerified(Benchmark):
             max_iterations=max_iterations,
             context_window_tokens=context_window_tokens,
             model=model,
-            repos_root=repos_root,
+            repos_root=self.config.repos_root,
+            benchmark=self,
             **kwargs,
         )
 
