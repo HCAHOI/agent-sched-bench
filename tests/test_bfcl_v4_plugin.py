@@ -109,7 +109,7 @@ def test_load_tasks_filters_deferred_categories(
     rows = [
         {
             "id": "s0",
-            "category": "simple",
+            "category": "simple_python",
             "question": [[{"role": "user", "content": "x"}]],
             "function": [],
             "ground_truth": [],
@@ -123,7 +123,7 @@ def test_load_tasks_filters_deferred_categories(
         },
         {
             "id": "mem0",
-            "category": "memory_kv",
+            "category": "memory",
             "question": [[{"role": "user", "content": "z"}]],
             "function": [],
             "ground_truth": [],
@@ -140,7 +140,7 @@ def test_load_tasks_filters_deferred_categories(
     # Both deferred categories named in the warning summary.
     warnings = "\n".join(rec.message for rec in caplog.records)
     assert "multi_turn_base=1" in warnings
-    assert "memory_kv=1" in warnings
+    assert "memory=1" in warnings
 
 
 def test_load_tasks_missing_file_raises(plugin: BFCLv4Benchmark) -> None:

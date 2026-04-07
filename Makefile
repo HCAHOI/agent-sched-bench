@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw
+.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw download-bfcl-v4 setup-bfcl-v4 smoke-bfcl-v4-openclaw
 
 help:
 	@printf "Targets:\n"
@@ -32,6 +32,9 @@ help:
 	@printf "  setup-swe-rebench           Shortcut: download-swe-rebench + setup-swe-rebench-repos\n"
 	@printf "  smoke-swe-rebench-miniswe   Run $(SMOKE_N) SWE-rebench tasks through mini-swe-agent\n"
 	@printf "  smoke-swe-rebench-openclaw  Run $(SMOKE_N) SWE-rebench tasks through openclaw\n"
+	@printf "  download-bfcl-v4            Download BFCL v4 JSONL data to data/bfcl-v4/\n"
+	@printf "  setup-bfcl-v4               Alias for download-bfcl-v4 (BFCL has no git repos to clone)\n"
+	@printf "  smoke-bfcl-v4-openclaw      Run $(SMOKE_N) BFCL v4 tasks through openclaw (mini-swe-agent is unsupported for function_call shape)\n"
 
 pull:
 	./scripts/pull_repo.sh
@@ -126,6 +129,23 @@ smoke-swe-rebench-openclaw:
 	    --scaffold openclaw \
 	    --sample $(SMOKE_N) \
 	    --verbose
+
+# ── BFCL v4 (Berkeley Function-Calling Leaderboard v4) ─────────────────
+# BFCL v4 has task_shape='function_call' — no git repos, no docker.
+# Only the openclaw scaffold is supported (mini-swe-agent is bash-in-repo
+# and cannot emit structured function calls; BFCLv4Benchmark.build_runner
+# raises NotImplementedError for mini-swe-agent).
+download-bfcl-v4:
+	./scripts/setup/bfcl_v4_data.sh
+
+setup-bfcl-v4: download-bfcl-v4
+
+smoke-bfcl-v4-openclaw:
+	PYTHONPATH=src $(PYTHON) -m trace_collect.cli \
+	    --provider $(PROVIDER) \
+	    --benchmark bfcl-v4 \
+	    --scaffold openclaw \
+	    --sample $(SMOKE_N)
 
 collect-traces:
 	PYTHONPATH=src $(PYTHON) -m trace_collect.cli $(ARGS)

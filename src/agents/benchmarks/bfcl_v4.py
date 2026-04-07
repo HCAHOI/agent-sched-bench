@@ -37,40 +37,48 @@ class BFCLv4Benchmark(Benchmark):
     slug: ClassVar[str] = "bfcl-v4"
     task_shape: ClassVar[str] = "function_call"
 
-    #: Single-turn categories supported in v1. Each row is (task, tools,
+    #: Single-turn categories supported in v1. Names mirror the canonical
+    #: BFCL v4 file names in the Gorilla repo (e.g. ``BFCL_v4_simple_python.json``
+    #: becomes category ``simple_python``). Each row is (task, tools,
     #: ground_truth) and scoring is AST comparison.
     _SUPPORTED_CATEGORIES: ClassVar[frozenset[str]] = frozenset(
         {
-            "simple",
+            # Basic single-turn (non-live, one language each)
+            "simple_python",
+            "simple_java",
+            "simple_javascript",
+            # Non-live single-turn with multiple / parallel call requirements
             "multiple",
             "parallel",
             "parallel_multiple",
+            # Live API single-turn variants (real REST endpoints; may
+            # require network and/or auth to execute end-to-end, but the
+            # AST score still works offline against ground_truth)
             "live_simple",
             "live_multiple",
             "live_parallel",
             "live_parallel_multiple",
+            # Relevance / irrelevance probes (model must correctly
+            # abstain or invoke a tool)
             "irrelevance",
-            "java",
-            "javascript",
-            "rest",
+            "live_relevance",
+            "live_irrelevance",
         }
     )
 
     #: Categories deferred to v2. These require stateful simulators
     #: (filesystem/API mutation across turns, snapshot-and-reload, etc.)
-    #: that are out of scope for the first BFCL plugin pass. Filtered
-    #: loudly in :meth:`load_tasks` with a WARN log.
+    #: or instrumented prompt-format measurement that are out of scope
+    #: for the first BFCL plugin pass. Filtered loudly in :meth:`load_tasks`
+    #: with a WARN log.
     _DEFERRED_CATEGORIES: ClassVar[frozenset[str]] = frozenset(
         {
             "multi_turn_base",
             "multi_turn_miss_func",
             "multi_turn_miss_param",
             "multi_turn_long_context",
-            "web_search_base",
-            "web_search_no_snippet",
-            "memory_kv",
-            "memory_vector",
-            "memory_rec_sum",
+            "memory",
+            "web_search",
             "format_sensitivity",
         }
     )
