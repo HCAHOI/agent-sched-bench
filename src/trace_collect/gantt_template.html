@@ -243,17 +243,31 @@
     border-bottom: 1px solid var(--grid);
   }
 
-  .lane-label .trace-name {
+  /* Lane rows with a data-trace-label attribute are clickable —
+     clicking pins a tooltip with the full trace metadata. Cursor
+     + hover background signal the affordance. */
+  .lane-label[data-trace-label] { cursor: pointer; }
+  .lane-label[data-trace-label]:hover { background: #121b28; }
+
+  .lane-label .lane-trace-name {
     font-size: 11px;
     font-weight: 600;
+    color: var(--cyan);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .lane-label .lane-scaffold {
+    font-size: 10px;
     color: var(--text-bright);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .lane-label .agent-name {
-    font-size: 10px;
+  .lane-label .lane-agent {
+    font-size: 9px;
     color: var(--text-dim);
     white-space: nowrap;
     overflow: hidden;
@@ -535,11 +549,15 @@ function buildLegend() {
 function buildSidebar() {
   const el = document.getElementById('sidebar-lanes');
   let html = '';
-  // Time axis row
-  html += `<div class="lane-label" style="height:${TIME_AXIS_H}px"><span class="trace-name" style="font-size:10px;color:var(--text-dim)">TIME</span></div>`;
-  for (const trace of DATA.traces) {
-    const m = trace.metadata;
+  // Time axis row (non-clickable, no data-trace-label).
+  html += `<div class="lane-label" style="height:${TIME_AXIS_H}px"><span class="lane-trace-name" style="font-size:10px;color:var(--text-dim);font-weight:400">TIME</span></div>`;
+  // Iterate LoadedTraces so each lane can be tagged with the chip
+  // label — that's the only reliable handle to distinguish two
+  // otherwise-identical traces (e.g. a file and its copy).
+  for (const [traceLabel, {payload}] of LoadedTraces) {
+    const m = payload.metadata;
     const hoverParts = [
+      `trace: ${traceLabel}`,
       `scaffold: ${m.scaffold}`,
       `model: ${m.model||'?'}`,
       `instance: ${m.instance_id||'?'}`,
@@ -548,14 +566,37 @@ function buildSidebar() {
       `iterations: ${m.n_iterations}`,
       `events: ${m.n_events}`,
       `elapsed: ${(m.elapsed_s||0).toFixed(1)}s`,
+      '',
+      'Click to pin full metadata',
     ];
     const hoverText = hoverParts.join('\n');
-    const displayName = `${m.scaffold} (${m.model||'?'})`;
-    for (const lane of trace.lanes) {
-      html += `<div class="lane-label" title="${esc(hoverText)}"><span class="trace-name">${esc(displayName)}</span><span class="agent-name">${esc(lane.agent_id)}</span></div>`;
+    const scaffoldLine = `${m.scaffold} ${m.model ? '· ' + m.model : ''}`;
+    for (const lane of payload.lanes) {
+      html += (
+        `<div class="lane-label" data-trace-label="${esc(traceLabel)}" title="${esc(hoverText)}">` +
+          `<span class="lane-trace-name">${esc(traceLabel)}</span>` +
+          `<span class="lane-scaffold">${esc(scaffoldLine)}</span>` +
+          `<span class="lane-agent">${esc(lane.agent_id)}</span>` +
+        '</div>'
+      );
     }
   }
   el.innerHTML = html;
+}
+
+// Delegated click handler: clicking a lane label pins a tooltip with
+// the full trace metadata (same click-to-pin pattern as spans/markers).
+function onLaneLabelClick(e) {
+  const row = e.target.closest('.lane-label[data-trace-label]');
+  if (!row) return;
+  const label = row.getAttribute('data-trace-label');
+  const entry = LoadedTraces.get(label);
+  if (!entry) return;
+  pin(
+    { kind: 'lane', item: { traceLabel: label, payload: entry.payload } },
+    e.clientX,
+    e.clientY,
+  );
 }
 
 // ─── Trace list (add/remove UI) ─────────────────────────────────────
@@ -615,6 +656,15 @@ function rerender() {
 // hitBoxes — both resize() and rerender().
 function reanchorPinned() {
   if (!pinnedHit) return;
+  // Lane-kind pins aren't backed by a canvas hitBox — their position
+  // was captured at the sidebar click site, not computed from a span
+  // layout. On render/resize we leave them where the user put them
+  // and only unpin if the owning trace was removed.
+  if (pinnedHit.kind === 'lane') {
+    const label = pinnedHit.item.traceLabel;
+    if (!LoadedTraces.has(label)) unpin();
+    return;
+  }
   const fresh = hitBoxes.find(b => b.item === pinnedHit.item);
   if (!fresh) {
     unpin();
@@ -683,6 +733,12 @@ function setupTraceLoading() {
   // rebuild inside buildTraceList().
   const items = document.getElementById('trace-items');
   if (items) items.addEventListener('click', onTraceItemsClick);
+
+  // Delegated click handler for sidebar lane labels — click pins the
+  // trace metadata tooltip. Attached to the stable #sidebar-lanes
+  // container so it survives buildSidebar() innerHTML rebuilds.
+  const laneHost = document.getElementById('sidebar-lanes');
+  if (laneHost) laneHost.addEventListener('click', onLaneLabelClick);
 
   // Drag-drop targets: the horizontal trace strip AND the sidebar both
   // accept .jsonl drops. Highlighting the strip on dragover gives the
@@ -1017,6 +1073,24 @@ function showTooltipFor(hit) {
       if (v === null || v === undefined || v === '') continue;
       rows.push([k, formatDetailValue(v)]);
     }
+  } else if (hit.kind === 'lane') {
+    // Lane metadata pin — clicked from a sidebar lane label.
+    const { traceLabel, payload } = hit.item;
+    const m = payload.metadata;
+    titleColor = '#00E5FF';
+    titleText = `Trace — ${traceLabel}`;
+    rows.push(['scaffold', m.scaffold || '?']);
+    rows.push(['model', m.model || '?']);
+    rows.push(['instance_id', m.instance_id || '(none)']);
+    if (m.mode) rows.push(['mode', m.mode]);
+    rows.push(['max_iterations', String(m.max_iterations ?? '?')]);
+    rows.push(['n_actions', String(m.n_actions)]);
+    rows.push(['n_iterations', String(m.n_iterations)]);
+    rows.push(['n_events', String(m.n_events)]);
+    rows.push(['elapsed', `${(m.elapsed_s || 0).toFixed(2)} s`]);
+    rows.push(['lanes', String(payload.lanes.length)]);
+    const agents = payload.lanes.map(l => l.agent_id).join(', ');
+    if (agents) rows.push(['agents', agents]);
   } else {
     const m = hit.item;
     const reg = MARKER_REGISTRY[m.event] || MARKER_REGISTRY._default;
