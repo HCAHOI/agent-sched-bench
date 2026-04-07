@@ -15,17 +15,18 @@ Trace emission still conforms to the v5 contract
 ``summary`` record. This keeps Gantt / inspector parsers from treating
 BFCL traces differently from SWE-patch traces.
 
-v1 scope: single-turn categories only (simple, multiple, parallel,
-parallel_multiple, live_*, irrelevance, java, javascript, rest). Each of
-these asks the model for ONE set of function calls in response to a
+v1 scope: single-turn categories only (simple_python/java/javascript,
+multiple, parallel, parallel_multiple, live_simple/multiple/parallel/
+parallel_multiple, irrelevance, live_relevance, live_irrelevance). Each
+of these asks the model for ONE set of function calls in response to a
 single user message; we therefore make exactly one LLM call per task.
 Multi-turn / memory / web-search / format-sensitivity categories require
 a stateful tool simulator and are out of scope for this runner — the
 plugin's :meth:`~agents.benchmarks.bfcl_v4.BFCLv4Benchmark.load_tasks`
 filters them out at load time.
 
-AST match rules (mirrored from the BFCL blog posts and the
-``bfcl-eval`` package, reimplemented because ``bfcl-eval`` is not a
+AST match rules — **v1 subset** of the documented BFCL rules (see
+``bfcl-eval`` PyPI package for the full reference implementation; not a
 hard dependency of this repo):
 
 1. Function name must match exactly.
@@ -36,8 +37,27 @@ hard dependency of this repo):
 4. All-or-nothing per call — no partial credit.
 5. Categories with multiple expected calls ("parallel", "multiple",
    "parallel_multiple") compare as sets of calls.
-6. The ``irrelevance`` category is correct iff the predicted call list
-   is empty (the model must NOT invoke any tool).
+6. The ``irrelevance`` and ``live_irrelevance`` categories are correct
+   iff the predicted call list is empty (the model must NOT invoke any
+   tool).
+
+**Known limitations (v1)** that diverge from the full BFCL spec:
+
+- **No ``dont_care`` wildcard**. Some BFCL ground-truth rows use an
+  empty list ``[]`` or the sentinel string ``"[don't care]"`` to
+  signal "any value is acceptable". This runner treats those literally:
+  empty-list alternatives never match anything, and the sentinel string
+  matches only itself. This affects multi-language (simple_java,
+  simple_javascript) tasks where syntactic values can't be enumerated.
+- **No recursive nested-dict matching**. If a ground-truth argument is
+  a dict whose values are themselves lists of alternatives, this
+  runner compares the top-level dict by equality instead of recursing.
+  In practice this bites only nested-parameter tasks.
+
+When the ``bfcl-eval`` package is available on the Python path, prefer
+its ``ast_checker`` over this in-process implementation by setting
+``use_bfcl_eval=True`` on :class:`BFCLRunner` (future work). This is
+tracked in the Phase 4 follow-ups.
 """
 
 from __future__ import annotations
@@ -58,6 +78,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Categories where the model must correctly abstain — scored as
+#: "correct iff predicted call list is empty". Centralized as a module
+#: constant so the shortcut applies uniformly to every irrelevance
+#: variant listed in :attr:`agents.benchmarks.bfcl_v4.BFCLv4Benchmark._SUPPORTED_CATEGORIES`.
+_IRRELEVANCE_CATEGORIES: frozenset[str] = frozenset({"irrelevance", "live_irrelevance"})
+
+#: Default system prompt injected when the task's first turn has no
+#: system message. Extracted as a constant so the prompt isn't silently
+#: duplicated across code paths.
+_DEFAULT_BFCL_SYSTEM_PROMPT: str = (
+    "You are a function-calling assistant. Invoke the provided tools to "
+    "answer the user's request."
+)
+
 
 class BFCLRunner:
     """Runs a single BFCL v4 task through one LLM call + AST scoring."""
@@ -68,21 +102,20 @@ class BFCLRunner:
         workspace_base: Path,
         *,
         benchmark: "Benchmark | None" = None,
-        mcp_servers: dict | None = None,
         max_iterations: int | None = None,
         context_window_tokens: int | None = None,
-        max_tool_result_chars: int | None = None,
         model: str | None = None,
     ) -> None:
         self.provider = provider
         self.workspace_base = Path(workspace_base).resolve()
         self.benchmark = benchmark
-        # Unused by BFCL (single-turn, no tool dispatch loop) but accepted
-        # so the plugin can forward arbitrary kwargs from build_runner.
-        self.mcp_servers = mcp_servers or {}
+        # max_iterations + context_window_tokens are accepted for trace
+        # metadata stamping (so Gantt / inspector render BFCL traces
+        # consistently with SWE-patch traces) but are not enforced as
+        # hard limits: single-turn BFCL makes exactly one LLM call per
+        # task, so there is no loop to bound.
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
-        self.max_tool_result_chars = max_tool_result_chars
         self.model = model or (
             provider.get_default_model() if provider is not None else "unknown"
         )
@@ -155,13 +188,19 @@ class BFCLRunner:
                 single-call categories the list has length 1; for
                 parallel/multiple categories each list element is an
                 independent call that must be matched.
-            category: Task category, used for irrelevance handling.
+            category: Task category. Triggers the irrelevance shortcut
+                for :data:`_IRRELEVANCE_CATEGORIES`.
 
         Returns:
             True iff the prediction is correct under BFCL's rules.
         """
-        if category == "irrelevance":
-            return len(predicted) == 0
+        if category in _IRRELEVANCE_CATEGORIES:
+            # Irrelevance / live_irrelevance: the model must correctly
+            # abstain. Ground truth is empty for these categories per
+            # BFCL schema; we assert both to catch any upstream schema
+            # drift (e.g., a hypothetical "negative example" ground
+            # truth) loudly rather than silently miscategorizing.
+            return len(predicted) == 0 and len(ground_truth) == 0
 
         if len(predicted) != len(ground_truth):
             return False
@@ -192,17 +231,12 @@ class BFCLRunner:
 
         Single-turn categories have ``task.question = [[user_msg]]`` or
         ``[[system_msg, user_msg]]`` — we unwrap the outer list. If the
-        first turn contains no system message, prepend a minimal one
-        instructing the model to emit function calls.
+        first turn contains no system message, prepend the default
+        function-calling system prompt (see :data:`_DEFAULT_BFCL_SYSTEM_PROMPT`).
         """
         if not task.question:
             return [
-                {
-                    "role": "system",
-                    "content": "You are a function-calling assistant. "
-                    "Invoke the provided tools to answer the user's "
-                    "request.",
-                },
+                {"role": "system", "content": _DEFAULT_BFCL_SYSTEM_PROMPT},
                 {"role": "user", "content": task.problem_statement or ""},
             ]
 
@@ -211,12 +245,7 @@ class BFCLRunner:
         if not any(m.get("role") == "system" for m in messages):
             messages.insert(
                 0,
-                {
-                    "role": "system",
-                    "content": "You are a function-calling assistant. "
-                    "Invoke the provided tools to answer the user's "
-                    "request.",
-                },
+                {"role": "system", "content": _DEFAULT_BFCL_SYSTEM_PROMPT},
             )
         return messages
 
@@ -233,6 +262,13 @@ class BFCLRunner:
         wrapped: list[dict[str, Any]] = []
         for fn in bfcl_tools:
             if not isinstance(fn, dict):
+                # Loud warning rather than silent drop — CLAUDE.md §4
+                # research integrity "no silent failures".
+                logger.warning(
+                    "BFCLRunner: dropping non-dict tool entry (got %s): %r",
+                    type(fn).__name__,
+                    fn,
+                )
                 continue
             if "type" in fn and "function" in fn:
                 wrapped.append(fn)  # Already wrapped
@@ -261,15 +297,20 @@ class BFCLRunner:
         # output dir and "trace" as the run_id so the resulting path is
         # ``ws/trace.jsonl``.
         trace_logger = TraceLogger(ws, "trace")
+        # In production ``benchmark`` is always non-None (the plugin's
+        # ``build_runner`` passes ``benchmark=self``). The ``"unknown"``
+        # fallback exists solely for unit tests that stub the provider
+        # without attaching a benchmark — never silently invent a
+        # plausible-looking slug/split pair.
         benchmark_slug = (
             self.benchmark.config.slug
             if self.benchmark is not None
-            else "bfcl-v4"
+            else "unknown"
         )
         benchmark_split = (
             self.benchmark.config.harness_split
             if self.benchmark is not None
-            else "v4"
+            else "unknown"
         )
         trace_logger.log_metadata(
             scaffold="openclaw",
@@ -367,11 +408,16 @@ class BFCLRunner:
             category=task.category or "",
         )
 
+        # For single-turn BFCL, elapsed_s == llm_latency (one LLM call,
+        # no tool dispatch loop). n_steps=1 is the honest count: the
+        # runner performed exactly one llm_call action — reporting 0
+        # would lie to downstream steps-per-task aggregates.
         trace_logger.log_summary(
             task.instance_id,
             {
                 "instance_id": task.instance_id,
                 "category": task.category,
+                "n_steps": 1,
                 "elapsed_s": t_llm_end - t_llm_start,
                 "total_llm_ms": llm_latency_ms,
                 "total_tool_ms": 0,

@@ -321,15 +321,22 @@ tasks naturally skip the git-clone phase.
 | `mini-swe-agent` | supported | **refused** (bash-in-repo only) |
 | `openclaw` | supported | supported |
 
-The `mini-swe-agent` refusal is enforced in two places:
+The `mini-swe-agent` refusal is enforced in two places with explicit
+precedence:
 
-1. `src/trace_collect/collector.py:309` raises `ValueError` before dispatch.
-2. `BFCLv4Benchmark.build_runner(scaffold='mini-swe-agent')` raises
-   `NotImplementedError` with a descriptive message.
+1. **Collector dispatch gate** (`src/trace_collect/collector.py` —
+   the `scaffold == "mini-swe-agent" and task_shape != "swe_patch"`
+   branch in `collect_traces`) raises `ValueError` **first** for any
+   production run routed through the CLI. This is the primary guard.
+2. **Plugin-level `build_runner` refusal** (`BFCLv4Benchmark.build_runner`
+   at `src/agents/benchmarks/bfcl_v4.py`) raises `NotImplementedError`.
+   This is defense-in-depth for direct callers that bypass the
+   collector (unit tests, future third-party harnesses).
 
 Both fire loudly; there is no silent-fallback path. A new function-call
 benchmark that supports a different scaffold combination should override
-its own `build_runner` to refuse the unsupported scaffolds explicitly.
+its own `build_runner` to refuse the unsupported scaffolds explicitly
+and rely on the collector gate for the primary production guard.
 
 ### 10.3 BFCLRunner — skips SessionRunner, bypasses openclaw tool set
 

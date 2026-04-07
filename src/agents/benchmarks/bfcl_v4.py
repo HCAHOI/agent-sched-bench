@@ -111,7 +111,7 @@ class BFCLv4Benchmark(Benchmark):
 
         supported: list[dict[str, Any]] = []
         deferred_counts: dict[str, int] = {}
-        unknown_categories: set[str] = set()
+        unknown_counts: dict[str, int] = {}
 
         with tasks_path.open("r", encoding="utf-8") as f:
             for lineno, line in enumerate(f, start=1):
@@ -134,9 +134,15 @@ class BFCLv4Benchmark(Benchmark):
                     deferred_counts[category] = deferred_counts.get(category, 0) + 1
                     continue
                 if category not in self._SUPPORTED_CATEGORIES:
-                    unknown_categories.add(category)
-                    # Keep unknown rows so the plugin degrades gracefully
-                    # when BFCL adds a new single-turn category upstream.
+                    # Research-integrity: silently keeping unknown rows
+                    # biases results toward whatever happens to ship
+                    # upstream without the reader knowing which subset
+                    # was actually scored (CLAUDE.md §5 completeness).
+                    # Drop unknown rows and log them loudly so the
+                    # maintainer knows to classify any new category
+                    # before running real experiments.
+                    unknown_counts[category] = unknown_counts.get(category, 0) + 1
+                    continue
                 supported.append(self.normalize_task(row))
 
         if deferred_counts:
@@ -150,12 +156,19 @@ class BFCLv4Benchmark(Benchmark):
                 sum(deferred_counts.values()),
                 summary,
             )
-        if unknown_categories:
+        if unknown_counts:
+            unk_summary = ", ".join(
+                f"{cat}={count}" for cat, count in sorted(unknown_counts.items())
+            )
             logger.warning(
-                "BFCL v4: encountered unknown categories %s; kept them as-is. "
-                "If these are new single-turn categories, add them to "
-                "BFCLv4Benchmark._SUPPORTED_CATEGORIES.",
-                sorted(unknown_categories),
+                "BFCL v4: dropped %d rows from UNKNOWN categories (%s). "
+                "These categories appear in the dataset but are not "
+                "classified as either supported or deferred in "
+                "BFCLv4Benchmark. Classify them explicitly before "
+                "running real experiments — silently keeping unknown "
+                "rows is a research-integrity anti-pattern.",
+                sum(unknown_counts.values()),
+                unk_summary,
             )
         return supported
 
@@ -181,8 +194,15 @@ class BFCLv4Benchmark(Benchmark):
                     first_user_content = str(msg.get("content", ""))
                     break
 
+        # Prefer an already-normalized ``instance_id`` when present so
+        # this function is idempotent (collector.collect_traces hoists
+        # normalize_task before dispatch, and _collect_openclaw's
+        # EvalTask.from_benchmark_instance calls it a second time).
+        # When the raw row only has ``id`` (first-pass from setup
+        # script), fall back to that.
+        instance_id = raw.get("instance_id") or raw.get("id", "")
         return {
-            "instance_id": str(raw.get("id", raw.get("instance_id", ""))),
+            "instance_id": str(instance_id),
             "problem_statement": first_user_content,
             "category": raw.get("category"),
             "tools": list(raw.get("function", raw.get("tools", []))),
@@ -206,11 +226,14 @@ class BFCLv4Benchmark(Benchmark):
         categories. Deterministic order: sorted by ``(category, instance_id)``.
 
         The ``seed`` parameter is accepted for API compatibility with the
-        base class but is unused — selection is fully deterministic
-        because research integrity §1 forbids randomized benchmark
-        subsetting unless explicitly documented.
+        base class but is unused. Stratified proportional allocation with
+        a deterministic tie-breaker on ``(category, instance_id)`` is
+        already reproducible without randomness, so no RNG is needed.
+        This is NOT a policy against seeded sampling — the sister
+        SWE-bench plugin uses ``seed`` because its stratification has a
+        random leftover-assignment step.
         """
-        del seed  # unused — deterministic by design
+        del seed  # unused — deterministic by construction
         effective_n = n if n is not None else self.config.selection_n
         if effective_n >= len(tasks):
             return sorted(

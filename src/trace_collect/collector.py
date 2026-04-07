@@ -732,6 +732,10 @@ async def _collect_openclaw(
             total_tokens=trace_summary.get("total_tokens", 0),
             prepare_ms=eval_result.prepare_ms or 0.0,
             official_resolved=official_resolved,
+            # Preserve plugin-specific scoring breakdown (BFCL AST match
+            # details, per-category scores, etc.) so downstream analysis
+            # can read it from results.jsonl without re-walking traces.
+            evaluation_report=eval_result.evaluation_report,
         )
 
         # Normalize trace: copy to benchmark run-dir layout + inject metadata
@@ -855,27 +859,22 @@ def _normalize_openclaw_trace(
             body_start_idx = idx  # keep this record in the body
         break
 
-    # Default metadata — used when the source trace has no trace_metadata
-    # record (legacy nanobot path, or partial writes before a crash).
+    # Default metadata — used only when the source trace has NO
+    # trace_metadata record at all (legacy nanobot path, or a partial
+    # write before a crash). Must be conservative: if we didn't see the
+    # runner's own capabilities we cannot invent them without risking a
+    # data-integrity lie. Previously this hardcoded the openclaw full
+    # tool list, which silently corrupted BFCL crash-recovery traces
+    # (reviewer finding M2).
     default_metadata = {
         "type": "trace_metadata",
         "scaffold": "openclaw",
         "trace_format_version": 5,
         "mode": "collect",
         "scaffold_capabilities": {
-            "tools": [
-                "bash",
-                "file_read",
-                "file_write",
-                "file_edit",
-                "list_dir",
-                "web_search",
-                "web_fetch",
-                "send_message",
-            ],
-            "memory": True,
-            "skills": True,
-            "file_ops": "structured",
+            "unknown": True,
+            "reason": "source trace had no metadata record; runner crashed "
+                      "before writing it or was never hooked up",
         },
     }
 

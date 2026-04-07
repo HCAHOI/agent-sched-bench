@@ -79,6 +79,64 @@ def test_ast_match_irrelevance_requires_empty_predicted() -> None:
     )
 
 
+def test_ast_match_live_irrelevance_requires_empty_predicted() -> None:
+    """The live_irrelevance category must use the same abstention rule
+    as irrelevance — reviewer C2 caught a category-string mismatch where
+    only 'irrelevance' was handled and live_irrelevance silently fell
+    through to the generic length-match path."""
+    assert (
+        BFCLRunner._ast_match(
+            predicted=[], ground_truth=[], category="live_irrelevance"
+        )
+        is True
+    )
+    assert (
+        BFCLRunner._ast_match(
+            predicted=[{"name": "f", "arguments": {}}],
+            ground_truth=[],
+            category="live_irrelevance",
+        )
+        is False
+    )
+
+
+def test_ast_match_irrelevance_with_nonempty_ground_truth_fails_loudly() -> None:
+    """Schema-drift guard: if BFCL ever ships an 'irrelevance' task with
+    non-empty ground truth, treat it as a mismatch rather than silently
+    returning True. The runner asserts both predicted and ground_truth
+    are empty for the shortcut to fire."""
+    assert (
+        BFCLRunner._ast_match(
+            predicted=[],
+            ground_truth=[{"foo": {"x": [1]}}],
+            category="irrelevance",
+        )
+        is False
+    )
+
+
+def test_ast_match_empty_alternatives_is_a_known_limitation() -> None:
+    """BFCL's full spec includes a '[don't care]' wildcard / empty-list
+    alternative that accepts any predicted value. The v1 runner does NOT
+    implement this wildcard — this test pins the current (limited)
+    behavior so future upgrades notice the regression when they lift the
+    limitation. See bfcl_runner.py module docstring 'Known limitations'.
+    """
+    # With the v1 implementation, empty alternatives can never match.
+    assert (
+        BFCLRunner._ast_match(
+            predicted=[{"name": "f", "arguments": {"x": 42}}],
+            ground_truth=[{"f": {"x": []}}],
+            category="simple_python",
+        )
+        is False
+    ), (
+        "If this assertion starts failing, the dont_care wildcard "
+        "has been implemented — update the runner docstring and "
+        "delete this test in favor of the positive-match version."
+    )
+
+
 def test_ast_match_parallel_matches_as_set() -> None:
     """Parallel category: two calls in any order must both match."""
     predicted = [
@@ -108,6 +166,10 @@ class _StubProvider(LLMProvider):
     """Deterministic provider returning a canned LLMResponse."""
 
     def __init__(self, response: LLMResponse) -> None:
+        # Calling the real base __init__ wires up api_key, api_base,
+        # and self.generation — without this the test is a time bomb
+        # the moment any code path reads those attributes.
+        super().__init__(api_key="test", api_base="http://test")
         self._response = response
         self.calls: list[dict[str, Any]] = []
 
@@ -173,7 +235,7 @@ def test_run_task_populates_official_resolved_true(tmp_path: Path) -> None:
         )
     )
     task = _make_task(
-        tmp_path, category="simple", ground_truth=[{"add": {"a": [2], "b": [3]}}]
+        tmp_path, category="simple_python", ground_truth=[{"add": {"a": [2], "b": [3]}}]
     )
     runner = BFCLRunner(
         provider=provider,
@@ -185,7 +247,7 @@ def test_run_task_populates_official_resolved_true(tmp_path: Path) -> None:
     assert result.official_resolved is True
     assert result.evaluation_report is not None
     assert result.evaluation_report["score"] == 1.0
-    assert result.evaluation_report["category"] == "simple"
+    assert result.evaluation_report["category"] == "simple_python"
     assert result.tools_used == ["add"]
     assert result.usage == {"prompt_tokens": 50, "completion_tokens": 10}
     assert result.stop_reason == "completed"
@@ -204,7 +266,7 @@ def test_run_task_populates_official_resolved_false(tmp_path: Path) -> None:
         )
     )
     task = _make_task(
-        tmp_path, category="simple", ground_truth=[{"add": {"a": [2], "b": [3]}}]
+        tmp_path, category="simple_python", ground_truth=[{"add": {"a": [2], "b": [3]}}]
     )
     runner = BFCLRunner(provider=provider, workspace_base=tmp_path, model="stub-model")
     result = asyncio.run(runner.run_task(task))
@@ -212,6 +274,37 @@ def test_run_task_populates_official_resolved_false(tmp_path: Path) -> None:
     assert result.official_resolved is False
     assert result.evaluation_report is not None
     assert result.evaluation_report["score"] == 0.0
+
+
+def test_run_task_evaluation_report_round_trips(tmp_path: Path) -> None:
+    """The evaluation_report dict must carry category + per-task score
+    breakdown so downstream analysis can read it from results.jsonl
+    without re-walking traces. Reviewer C3: previously this dict was
+    dropped at the collector boundary."""
+    provider = _StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(id="c0", name="add", arguments={"a": 2, "b": 3})
+            ],
+            finish_reason="tool_calls",
+            usage={"prompt_tokens": 50, "completion_tokens": 10},
+        )
+    )
+    task = _make_task(
+        tmp_path,
+        category="simple_python",
+        ground_truth=[{"add": {"a": [2], "b": [3]}}],
+    )
+    runner = BFCLRunner(provider=provider, workspace_base=tmp_path, model="stub-model")
+    result = asyncio.run(runner.run_task(task))
+
+    report = result.evaluation_report
+    assert report is not None
+    assert report["category"] == "simple_python"
+    assert report["score"] == 1.0
+    assert report["predicted_calls"] == [{"name": "add", "arguments": {"a": 2, "b": 3}}]
+    assert report["ground_truth"] == [{"add": {"a": [2], "b": [3]}}]
 
 
 def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> None:
@@ -228,7 +321,7 @@ def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> No
         )
     )
     task = _make_task(
-        tmp_path, category="simple", ground_truth=[{"add": {"a": [2], "b": [3]}}]
+        tmp_path, category="simple_python", ground_truth=[{"add": {"a": [2], "b": [3]}}]
     )
     runner = BFCLRunner(provider=provider, workspace_base=tmp_path, model="stub-model")
     asyncio.run(runner.run_task(task))
@@ -247,8 +340,13 @@ def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> No
     assert meta["type"] == "trace_metadata"
     assert meta["trace_format_version"] == 5
     assert meta["scaffold"] == "openclaw"
-    assert meta["benchmark"] == "bfcl-v4"  # plugin default when self.benchmark is None
-    assert meta["category"] == "simple"
+    # self.benchmark is None in this test (bare BFCLRunner construction),
+    # so the slug/split fall back to the "unknown" sentinel per reviewer
+    # M1 — we never invent a plausible-looking "bfcl-v4" string without
+    # evidence.
+    assert meta["benchmark"] == "unknown"
+    assert meta["benchmark_split"] == "unknown"
+    assert meta["category"] == "simple_python"
 
     action = records[1]
     assert action["type"] == "action"
@@ -261,6 +359,7 @@ def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> No
     assert summary["type"] == "summary"
     assert summary["success"] is True
     assert summary["total_tokens"] == 49
+    assert summary["n_steps"] == 1  # Reviewer C3: honest count, not 0
 
 
 def test_run_task_irrelevance_with_empty_predicted(tmp_path: Path) -> None:
@@ -284,6 +383,9 @@ def test_run_task_llm_error_returns_structured_failure(tmp_path: Path) -> None:
     with stop_reason='llm_error' and a written trace summary."""
 
     class _BrokenProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test", api_base="http://test")
+
         def get_default_model(self) -> str:
             return "broken"
 

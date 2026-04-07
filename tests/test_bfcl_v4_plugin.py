@@ -153,15 +153,58 @@ def test_load_tasks_skips_malformed_lines(
 ) -> None:
     plugin.config.data_root.mkdir(parents=True, exist_ok=True)
     (plugin.config.data_root / "tasks.json").write_text(
-        '{"id": "s0", "category": "simple", "question": [], "function": []}\n'
+        '{"id": "s0", "category": "simple_python", "question": [], "function": []}\n'
         "NOT VALID JSON {\n"
-        '{"id": "s1", "category": "simple", "question": [], "function": []}\n',
+        '{"id": "s1", "category": "simple_python", "question": [], "function": []}\n',
         encoding="utf-8",
     )
     with caplog.at_level(logging.WARNING, logger="agents.benchmarks.bfcl_v4"):
         tasks = plugin.load_tasks()
     assert len(tasks) == 2
     assert any("malformed JSON" in rec.message for rec in caplog.records)
+
+
+def test_load_tasks_drops_unknown_categories_loudly(
+    plugin: BFCLv4Benchmark, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Per research integrity §5 (completeness), categories that are not
+    classified as either supported or deferred MUST be dropped with a
+    loud warning, not silently kept. Silently keeping unknown rows
+    biases results toward whatever happens to ship upstream."""
+    rows = [
+        {"id": "s0", "category": "simple_python",
+         "question": [[{"role": "user", "content": "x"}]], "function": []},
+        {"id": "u0", "category": "brand_new_category_upstream",
+         "question": [[{"role": "user", "content": "y"}]], "function": []},
+        {"id": "u1", "category": "brand_new_category_upstream",
+         "question": [[{"role": "user", "content": "z"}]], "function": []},
+    ]
+    _write_tasks(plugin.config.data_root, rows)
+    with caplog.at_level(logging.WARNING, logger="agents.benchmarks.bfcl_v4"):
+        tasks = plugin.load_tasks()
+    # Only the supported row survives.
+    assert len(tasks) == 1
+    assert tasks[0]["instance_id"] == "s0"
+    # The warning names the unknown category + count explicitly.
+    warnings = "\n".join(rec.message for rec in caplog.records)
+    assert "UNKNOWN categories" in warnings
+    assert "brand_new_category_upstream=2" in warnings
+
+
+def test_normalize_task_is_idempotent(plugin: BFCLv4Benchmark) -> None:
+    """collector.collect_traces hoists normalize_task before dispatch,
+    and EvalTask.from_benchmark_instance calls it a second time — the
+    second pass must be a no-op on already-normalized input."""
+    raw = {
+        "id": "simple_0",
+        "category": "simple_python",
+        "question": [[{"role": "user", "content": "What is 2+2?"}]],
+        "function": [{"name": "add", "description": "", "parameters": {}}],
+        "ground_truth": [{"add": {"a": [2], "b": [2]}}],
+    }
+    once = plugin.normalize_task(raw)
+    twice = plugin.normalize_task(once)
+    assert once == twice, "normalize_task is not idempotent"
 
 
 # ── select_subset ──────────────────────────────────────────────────────

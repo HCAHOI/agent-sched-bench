@@ -62,5 +62,88 @@ def test_normalize_openclaw_trace_writes_v5_with_benchmark(tmp_path: Path) -> No
     assert metadata["benchmark"] == "swe-bench-verified"
     assert metadata["benchmark_split"] == "test"
     assert metadata["instance_id"] == "test-1"
-    # The original metadata from the source was dropped; the action survives.
+    # The source metadata was merged (not dropped); the action survives.
     assert any(json.loads(line).get("type") == "action" for line in lines[1:])
+
+
+def test_normalize_openclaw_trace_preserves_runner_scaffold_capabilities(
+    tmp_path: Path,
+) -> None:
+    """Reviewer M2: _normalize_openclaw_trace must NOT overwrite the
+    runner's own scaffold_capabilities with collector defaults. A
+    BFCL-style runner writes tools='benchmark_provided' / file_ops='none';
+    merging with default-openclaw capabilities would silently corrupt
+    the trace."""
+    from trace_collect.collector import _normalize_openclaw_trace
+
+    src = tmp_path / "src.jsonl"
+    src.write_text(
+        json.dumps({
+            "type": "trace_metadata", "scaffold": "openclaw",
+            "trace_format_version": 5, "model": "test/model",
+            "scaffold_capabilities": {
+                "tools": "benchmark_provided",
+                "memory": False,
+                "skills": False,
+                "file_ops": "none",
+            },
+        }) + "\n"
+        + json.dumps({
+            "type": "action", "action_type": "llm_call",
+            "action_id": "llm_0", "agent_id": "test-1",
+            "iteration": 0, "ts_start": 1.0, "ts_end": 2.0, "data": {},
+        }) + "\n"
+    )
+
+    dst = tmp_path / "dst.jsonl"
+    plugin = get_benchmark_class("swe-bench-verified")(_make_config())
+    _normalize_openclaw_trace(
+        src=src, dst=dst, benchmark=plugin,
+        model="test/model", api_base="https://x.y",
+        max_steps=50, instance_id="test-1",
+    )
+
+    metadata = json.loads(dst.read_text(encoding="utf-8").splitlines()[0])
+    caps = metadata["scaffold_capabilities"]
+    # Runner's values survive (no overwrite by collector defaults).
+    assert caps["tools"] == "benchmark_provided"
+    assert caps["memory"] is False
+    assert caps["skills"] is False
+    assert caps["file_ops"] == "none"
+
+
+def test_normalize_openclaw_trace_conservative_default_when_no_source_metadata(
+    tmp_path: Path,
+) -> None:
+    """Reviewer M2: if the source trace has no trace_metadata record
+    (e.g., a partial write from a crashed run), the collector must NOT
+    invent a plausible openclaw bash+file+web tool list. It should stamp
+    a conservative 'unknown' marker so downstream analysis knows the
+    capability set was not recovered."""
+    from trace_collect.collector import _normalize_openclaw_trace
+
+    # Partial trace: one action but no metadata header.
+    src = tmp_path / "partial.jsonl"
+    src.write_text(
+        json.dumps({
+            "type": "action", "action_type": "llm_call",
+            "action_id": "llm_0", "agent_id": "test-1",
+            "iteration": 0, "ts_start": 1.0, "ts_end": 2.0, "data": {},
+        }) + "\n"
+    )
+
+    dst = tmp_path / "dst.jsonl"
+    plugin = get_benchmark_class("swe-bench-verified")(_make_config())
+    _normalize_openclaw_trace(
+        src=src, dst=dst, benchmark=plugin,
+        model="test/model", api_base="https://x.y",
+        max_steps=50, instance_id="test-1",
+    )
+
+    metadata = json.loads(dst.read_text(encoding="utf-8").splitlines()[0])
+    caps = metadata["scaffold_capabilities"]
+    # Conservative default — NOT the legacy openclaw bash+file+web list.
+    assert caps.get("unknown") is True
+    assert "reason" in caps
+    # And critically: no "bash" in the default tool list lie.
+    assert "bash" not in str(caps)
