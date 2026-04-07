@@ -1,10 +1,15 @@
 """Trace Inspector: parse and query JSONL trace files produced by trace_collect.
 
-Supported record types (v4):
-    trace_metadata  – scaffold, mode, model info
+Supported record types (v5):
+    trace_metadata  – scaffold, mode, model info, trace_format_version, benchmark
     action          – replayable LLM/tool action with ts_start, ts_end, data
     event           – point-in-time observability events
     summary         – end-of-run aggregates
+
+v4 support was dropped during the SWE-rebench plugin refactor (no
+backfill, no tolerance). Loading a pre-v5 trace raises ValueError so
+downstream code fails loudly instead of silently drifting across
+incompatible schemas.
 """
 
 from __future__ import annotations
@@ -91,6 +96,17 @@ class TraceData:
 
         actions.sort(key=lambda r: (r.get("iteration", 0), r.get("ts_start", 0)))
         events.sort(key=lambda r: r.get("ts", 0.0))
+
+        # Strict v5 version check — v4 support dropped in the SWE-rebench
+        # plugin refactor. No backfill, no tolerance.
+        version = metadata.get("trace_format_version")
+        if version != 5:
+            raise ValueError(
+                f"Unsupported trace_format_version {version!r} in {path}: "
+                f"expected 5. v4 support was dropped during the SWE-rebench "
+                f"plugin refactor; regenerate the trace via the current "
+                f"collector to produce a v5 trace."
+            )
 
         # Derive llm_output from raw_response for search/display
         for act in actions:

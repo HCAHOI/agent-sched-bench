@@ -110,7 +110,7 @@ def test_cli_disambiguates_duplicate_stems(tmp_path: Path) -> None:
     d2.mkdir()
     trace_head = json.dumps({
         "type": "trace_metadata", "scaffold": "synthetic",
-        "trace_format_version": 4, "instance_id": "task-1",
+        "trace_format_version": 5, "instance_id": "task-1",
     })
     action = json.dumps({
         "type": "action", "action_type": "llm_call", "action_id": "llm_0",

@@ -755,10 +755,15 @@ def _normalize_openclaw_trace(
     """Copy an OpenClaw trace to benchmark run-dir layout with metadata injection."""
     lines = src.read_text(encoding="utf-8").splitlines()
     with open(dst, "w", encoding="utf-8") as f:
-        # Inject trace_metadata header
+        # Inject trace_metadata header. trace_format_version: 5 is stamped
+        # at write time — every openclaw trace routed through the collector
+        # must carry the version field so downstream TraceData.load() can
+        # enforce its strict v5 check. v4 support was dropped during the
+        # SWE-rebench plugin refactor (no backfill, no tolerance).
         metadata = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
+            "trace_format_version": 5,
             "model": model,
             "api_base": api_base,
             "max_steps": max_steps,

@@ -531,7 +531,7 @@ class SessionRunner:
         metadata = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
-            "trace_format_version": 4,
+            "trace_format_version": 5,
             "mode": "collect",
             "model": self.model,
             "instance_id": iid,

@@ -41,7 +41,7 @@ class TraceLogger:
         entry = {
             "type": "trace_metadata",
             "scaffold": scaffold,
-            "trace_format_version": 4,
+            "trace_format_version": 5,
             **kwargs,
         }
         self._handle.write(json.dumps(entry) + "\n")
