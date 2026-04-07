@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified
+.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench
 
 help:
 	@printf "Targets:\n"
@@ -27,6 +27,9 @@ help:
 	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
 	@printf "  setup-swebench-repos        Clone repos referenced by selected tasks\n"
 	@printf "  build-swebench-images       Build Podman container images\n"
+	@printf "  download-swe-rebench        Download SWE-rebench (nebius/SWE-rebench) filtered split\n"
+	@printf "  setup-swe-rebench-repos     Clone repos referenced by SWE-rebench tasks\n"
+	@printf "  setup-swe-rebench           Shortcut: download-swe-rebench + setup-swe-rebench-repos\n"
 
 pull:
 	./scripts/pull_repo.sh
@@ -90,6 +93,14 @@ build-swebench-images:
 
 download-swebench-verified:
 	./scripts/setup/swebench_data.sh
+
+download-swe-rebench:
+	./scripts/setup/swe_rebench_data.sh
+
+setup-swe-rebench-repos:
+	./scripts/setup/clone_repos.sh data/swe-rebench/tasks.json data/swe-rebench/repos
+
+setup-swe-rebench: download-swe-rebench setup-swe-rebench-repos
 
 collect-traces:
 	PYTHONPATH=src $(PYTHON) -m trace_collect.cli $(ARGS)
