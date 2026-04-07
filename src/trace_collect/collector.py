@@ -625,7 +625,7 @@ async def _collect_openclaw(
             results.append(
                 CollectedTaskResult(
                     instance_id=instance_id,
-                    trace_file=str(dest_trace),
+                    trace_file=dest_trace,
                     success=False,
                     success_basis="patch_generated",
                     patch_generated=False,
@@ -792,11 +792,16 @@ def _normalize_openclaw_trace(
         for line in lines:
             if not line.strip():
                 continue
-            rec = json.loads(line)
-            # Skip any existing trace_metadata from nanobot
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                # Mirror the defensive-parse pattern used elsewhere in this
+                # module; a single malformed line (e.g. partial write before
+                # a crash) must not abort normalization of the rest of the
+                # trace. Skip and continue.
+                continue
+            # Skip any existing trace_metadata from nanobot (we write our own
+            # v5-compliant header above).
             if rec.get("type") == "trace_metadata":
                 continue
-            # Normalize step tool_args: ensure it's a string
-            if rec.get("type") == "step" and isinstance(rec.get("tool_args"), dict):
-                rec["tool_args"] = json.dumps(rec["tool_args"], ensure_ascii=False)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any
 
-from agents.base import AgentBase, LLMCallResult, TraceAction
+from agents.base import AgentBase, TraceAction
 
 
 class DummyAgent(AgentBase):

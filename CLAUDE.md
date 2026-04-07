@@ -252,6 +252,36 @@ When working with LLM agents or multi-step pipelines:
 
 ---
 
+## Benchmark Plugin Architecture
+
+All benchmarks MUST be added via the plugin layer in `src/agents/benchmarks/`
+and `configs/benchmarks/<slug>.yaml`. See `docs/benchmark_plugin_spec.md`.
+
+**FORBIDDEN:**
+- Hardcoding dataset names (`princeton-nlp/SWE-bench_Verified`,
+  `nebius/SWE-rebench`, etc.) in `src/trace_collect/collector.py`,
+  `src/trace_collect/cli.py`, or any scaffold module.
+- Adding `--harness-dataset` / `--harness-split` / `--harness-namespace`
+  or similar "per-benchmark" CLI flags — those belong in the YAML.
+- Adding a `from_<benchmark>_instance()` factory method on `EvalTask`.
+  The canonical entry point is `EvalTask.from_benchmark_instance(row,
+  workspace_base, benchmark=<plugin>)` which delegates to the plugin's
+  `normalize_task` for benchmark-specific quirks.
+- Writing traces with `trace_format_version` other than `5`. Readers
+  reject pre-v5 traces on load — no backfill, no tolerance.
+
+**REQUIRED for new benchmarks:**
+- Register the plugin class in `agents.benchmarks.REGISTRY`.
+- Ship a `configs/benchmarks/<slug>.yaml` with all BenchmarkConfig fields.
+- Override `build_runner` — base class raises `NotImplementedError`, so
+  a plugin that forgets will fail loudly at first use.
+- Document any benchmark-specific selection filters (e.g., the
+  `exclude_lite` knob for SWE-rebench) in the YAML's prose comment
+  block. Per the research integrity rules, undocumented selection
+  filters are not acceptable.
+
+---
+
 ## Mandatory Review Gate for Vibe Coding
 
 Before proceeding to any of the following milestones, you **MUST** spawn a separate sub-agent to conduct a rigorous code review:

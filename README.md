@@ -35,6 +35,45 @@ agent-sched-bench/
 └── tests/
 ```
 
+## Benchmarks
+
+Supported benchmarks are loaded via the plugin registry in
+`src/agents/benchmarks/`. Each benchmark ships a Python plugin class
+plus a YAML config in `configs/benchmarks/<slug>.yaml`.
+
+Currently registered:
+
+| Slug | Dataset | Split | Docker | Scaffolds |
+|---|---|---|---|---|
+| `swe-bench-verified` | `princeton-nlp/SWE-bench_Verified` | `test` | `swebench/sweb.eval.x86.*` (namespace-prefixed) | mini-swe-agent, openclaw |
+| `swe-rebench` | `nebius/SWE-rebench` | `filtered` | `swerebench/sweb.eval.x86_64.*` (fully qualified) | mini-swe-agent, openclaw |
+
+### Running a benchmark
+
+    conda activate ML
+    make download-swe-rebench          # (or download-swebench-verified)
+    make setup-swe-rebench-repos       # (or setup-swebench-repos)
+    PYTHONPATH=src python -m trace_collect.cli \
+        --provider dashscope \
+        --benchmark swe-rebench \
+        --scaffold openclaw \
+        --sample 2
+
+Flags the collect CLI accepts: `--benchmark <slug>` (default
+`swe-bench-verified`), `--scaffold mini-swe-agent|openclaw`,
+`--sample N` (optional task cap), `--instance-ids a,b,c` (optional
+explicit list), `--run-id <path>` (resume an interrupted run).
+
+### Adding a new benchmark
+
+See `docs/benchmark_plugin_spec.md` for the full plugin protocol. Short version:
+1. Create `src/agents/benchmarks/<slug>.py` with a Benchmark subclass.
+2. Create `configs/benchmarks/<slug>.yaml` with BenchmarkConfig fields.
+3. Register the class in `src/agents/benchmarks/__init__.py::REGISTRY`.
+4. Add `tests/test_<slug>_plugin.py` with unit tests for normalize_task
+   and any benchmark-specific quirks.
+5. Add `make download-<slug>` / `make setup-<slug>-repos` Makefile targets.
+
 ## Development Workflow
 
 ```bash

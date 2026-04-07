@@ -1121,7 +1121,7 @@ grep -c '>SWE-rebench (filtered)<' /tmp/rebench_gantt.html  # >= 1
 - `CLAUDE.md` — directive: "New benchmarks MUST be added as
   `src/agents/benchmarks/<slug>.py` plugins with a matching YAML in
   `configs/benchmarks/`. Never hardcode dataset names in collector/CLI."
-- `docs/agent_benchmark_spec.md` — Benchmark protocol + schema-quirk reference.
+- `docs/benchmark_plugin_spec.md` — Benchmark protocol + schema-quirk reference.
 
 **Actions (review gate spec, Critic item 9):**
 

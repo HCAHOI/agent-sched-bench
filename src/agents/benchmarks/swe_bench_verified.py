@@ -11,7 +11,7 @@ import random
 from pathlib import Path
 from typing import Any, ClassVar
 
-from agents.benchmarks.base import Benchmark, BenchmarkConfig
+from agents.benchmarks.base import Benchmark
 
 
 # ---------------------------------------------------------------------------
