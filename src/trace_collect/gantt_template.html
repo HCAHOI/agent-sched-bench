@@ -23,6 +23,7 @@
     --sidebar-w: 200px;
     --header-h: 48px;
     --legend-h: 32px;
+    --trace-list-h: 36px;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -117,7 +118,7 @@
 
   #main {
     display: flex;
-    height: calc(100vh - var(--header-h) - var(--legend-h));
+    height: calc(100vh - var(--header-h) - var(--legend-h) - var(--trace-list-h));
   }
 
   #sidebar {
@@ -126,34 +127,95 @@
     border-right: 1px solid var(--border);
     overflow-y: auto;
     flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
   }
 
-  /* Drag-over state: whole sidebar highlights as a drop zone. */
+  /* ── Trace list strip ────────────────────────────────────────
+     Horizontal chip bar sitting between #legend and #main. It is
+     DELIBERATELY outside #main so that the sidebar's TIME row
+     (now at the top of the sidebar) vertically aligns with the
+     canvas's TIME axis (at the top of #canvas-wrap). If the strip
+     were inside the sidebar it would push the sidebar's lane
+     labels down while leaving the canvas untouched, creating a
+     persistent off-by-N-px mis-alignment. */
+  #trace-list {
+    height: var(--trace-list-h);
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-shrink: 0;
+  }
+
+  /* Drag-over highlight: reuses the same cyan glow on the strip
+     AND the sidebar so both zones accept file drops clearly. */
+  #trace-list.drop-over,
   #sidebar.drop-over {
     background: #121b28;
     box-shadow: inset 0 0 0 2px var(--cyan);
   }
 
-  /* ── Trace list section ──────────────────────────────────────── */
-
-  #trace-list {
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-
-  .trace-list-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
+  #trace-list-label {
     font-size: 10px;
     color: var(--text-dim);
     text-transform: uppercase;
     letter-spacing: 0.8px;
-    background: var(--bg);
+    flex-shrink: 0;
   }
+
+  #trace-items {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  #trace-items:empty::before {
+    content: 'Drop .jsonl files here or click +';
+    font-size: 10px;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  .trace-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    font-size: 10px;
+    color: var(--text);
+    background: var(--bg);
+    max-width: 260px;
+    flex-shrink: 0;
+  }
+
+  .trace-chip .trace-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .trace-chip .trace-remove {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .trace-chip .trace-remove:hover { color: var(--red); }
 
   .trace-add-btn {
     background: none;
@@ -161,68 +223,16 @@
     color: var(--text-dim);
     font-family: inherit;
     font-size: 12px;
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     line-height: 1;
-    border-radius: 3px;
+    border-radius: 50%;
     cursor: pointer;
     padding: 0;
+    flex-shrink: 0;
+    margin-left: auto;
   }
   .trace-add-btn:hover { color: var(--cyan); border-color: var(--cyan); }
-
-  #trace-items:empty::before {
-    content: 'Drop .jsonl files or click +';
-    display: block;
-    padding: 8px 12px 12px;
-    font-size: 10px;
-    color: var(--text-dim);
-    font-style: italic;
-    text-align: center;
-  }
-
-  .trace-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    border-bottom: 1px solid var(--grid);
-    font-size: 10px;
-    color: var(--text);
-    overflow: hidden;
-  }
-
-  .trace-item .trace-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .trace-item .trace-label {
-    flex: 1;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .trace-item .trace-remove {
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    font-family: inherit;
-    font-size: 13px;
-    line-height: 1;
-    padding: 0 4px;
-    cursor: pointer;
-    border-radius: 2px;
-    flex-shrink: 0;
-  }
-  .trace-item .trace-remove:hover { color: var(--red); background: var(--border); }
-
-  #sidebar-lanes {
-    flex: 1;
-  }
 
   .lane-label {
     height: 60px;
@@ -384,15 +394,17 @@
 
 <div id="legend" role="presentation"></div>
 
+<!-- Horizontal trace strip — sits above #main so the sidebar's TIME
+     row and the canvas's TIME axis share the same y=0. Drag-drop
+     target for .jsonl files; the sidebar is also a drop target. -->
+<div id="trace-list">
+  <span id="trace-list-label">TRACES</span>
+  <div id="trace-items"></div>
+  <button class="trace-add-btn" type="button" onclick="openFilePicker()" title="Add .jsonl trace">+</button>
+</div>
+
 <div id="main">
   <div id="sidebar">
-    <div id="trace-list">
-      <div class="trace-list-header">
-        <span>TRACES</span>
-        <button class="trace-add-btn" type="button" onclick="openFilePicker()" title="Add .jsonl trace">+</button>
-      </div>
-      <div id="trace-items"></div>
-    </div>
     <div id="sidebar-lanes"></div>
   </div>
   <div id="canvas-wrap">
@@ -547,10 +559,6 @@ function buildSidebar() {
 }
 
 // ─── Trace list (add/remove UI) ─────────────────────────────────────
-// Small fixed palette for the per-trace dot. Cycles for traces beyond
-// its length; it's only a visual affordance so repetition is fine.
-const TRACE_DOT_COLORS = ['#00E5FF', '#FF6D00', '#76FF03', '#FF1744', '#4FC3F7', '#FFC107'];
-
 // Canonical store of loaded traces. Keys are labels (filename stems or
 // CLI-provided trace ids). Values are {payload} — the JS-built or CLI-
 // provided payload dict that DATA.traces points at after each rebuild.
@@ -560,20 +568,16 @@ function buildTraceList() {
   const el = document.getElementById('trace-items');
   if (!el) return;
   let html = '';
-  let idx = 0;
   // Use a data-label attribute + delegated click handler instead of an
   // inline onclick — interpolating JSON.stringify(label) into a double-
   // quoted onclick attribute terminates the attribute mid-value for any
   // plain-ASCII label (e.g. ``removeTrace("foo")`` breaks the HTML).
   for (const [label] of LoadedTraces) {
-    const color = TRACE_DOT_COLORS[idx % TRACE_DOT_COLORS.length];
-    idx += 1;
     html += (
-      '<div class="trace-item">' +
-        `<span class="trace-dot" style="background:${color}"></span>` +
+      '<span class="trace-chip">' +
         `<span class="trace-label" title="${esc(label)}">${esc(label)}</span>` +
         `<button class="trace-remove" type="button" title="Remove" data-label="${esc(label)}">&times;</button>` +
-      '</div>'
+      '</span>'
     );
   }
   el.innerHTML = html;
@@ -674,37 +678,42 @@ function setupTraceLoading() {
     input.value = '';  // allow re-picking the same file
   });
 
-  // Delegated click handler for trace-item remove buttons. Attached once
+  // Delegated click handler for trace-chip remove buttons. Attached once
   // to the stable #trace-items container so it survives the innerHTML
   // rebuild inside buildTraceList().
   const items = document.getElementById('trace-items');
   if (items) items.addEventListener('click', onTraceItemsClick);
 
-  const sidebar = document.getElementById('sidebar');
-  // Prevent the browser from navigating away on drop anywhere on the page.
-  ['dragenter', 'dragover'].forEach(ev => {
-    sidebar.addEventListener(ev, (e) => {
+  // Drag-drop targets: the horizontal trace strip AND the sidebar both
+  // accept .jsonl drops. Highlighting the strip on dragover gives the
+  // primary affordance; the sidebar is a backup zone that also lights up.
+  for (const id of ['trace-list', 'sidebar']) {
+    const zone = document.getElementById(id);
+    if (!zone) continue;
+    ['dragenter', 'dragover'].forEach(ev => {
+      zone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        zone.classList.add('drop-over');
+      });
+    });
+    ['dragleave', 'dragend'].forEach(ev => {
+      zone.addEventListener(ev, (e) => {
+        if (e.target === zone) zone.classList.remove('drop-over');
+      });
+    });
+    zone.addEventListener('drop', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      sidebar.classList.add('drop-over');
+      zone.classList.remove('drop-over');
+      const files = Array.from(e.dataTransfer?.files || [])
+        .filter(f => /\.jsonl$/i.test(f.name));
+      for (const f of files) { await addTraceFile(f); }
     });
-  });
-  ['dragleave', 'dragend'].forEach(ev => {
-    sidebar.addEventListener(ev, (e) => {
-      if (e.target === sidebar) sidebar.classList.remove('drop-over');
-    });
-  });
-  sidebar.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    sidebar.classList.remove('drop-over');
-    const files = Array.from(e.dataTransfer?.files || [])
-      .filter(f => /\.jsonl$/i.test(f.name));
-    for (const f of files) { await addTraceFile(f); }
-  });
+  }
 
   // Block default drag-drop on the whole document so files dropped outside
-  // the sidebar don't navigate the browser away from the page.
+  // the drop zones don't navigate the browser away from the page.
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => e.preventDefault());
 }
