@@ -1,0 +1,38 @@
+# BFCL v4 (Berkeley Function-Calling Leaderboard v4) benchmark plugin config.
+# Used by agents.benchmarks.get_benchmark_class("bfcl-v4").
+#
+# Source: https://gorilla.cs.berkeley.edu/leaderboard.html
+# Dataset: gorilla-llm/Berkeley-Function-Calling-Leaderboard (HuggingFace)
+#          or berkeley-function-call-leaderboard/bfcl_eval/data/ in the
+#          ShishirPatil/gorilla GitHub repo (canonical source).
+#
+# v1 SCOPE LIMITATION: Only single-turn categories are supported.
+#   Supported: simple, multiple, parallel, parallel_multiple,
+#              live_simple, live_multiple, live_parallel,
+#              live_parallel_multiple, irrelevance, java, javascript, rest
+#   Deferred:  multi_turn_*, web_search_*, memory_*, format_sensitivity
+#
+# Deferred categories are loaded-and-filtered with a WARN log listing the
+# drop count per category. Each requires a stateful tool simulator
+# (filesystem/API mutation across turns, snapshot-and-reload, etc.) that
+# is out of scope for the first BFCL plugin pass. See
+# docs/benchmark_plugin_spec.md §Function-call benchmarks for the
+# deferred-category rationale.
+#
+# Docker: NONE. BFCL v4 scoring is pure-Python AST comparison against
+# ground_truth performed in-process by BFCLRunner. No containers.
+slug: bfcl-v4
+display_name: "BFCL v4 (single-turn)"
+# Retained for trace metadata stamping; the plugin loads from local JSONL
+# via scripts/setup/bfcl_v4_data.sh rather than datasets.load_dataset.
+harness_dataset: gorilla-llm/Berkeley-Function-Calling-Leaderboard
+harness_split: v4
+data_root: data/bfcl-v4
+# No git repos — BFCL tasks carry JSON-Schema tool specs, not codebases.
+repos_root: null
+trace_root: traces/bfcl-v4
+default_max_steps: 20
+selection_n: 32
+selection_seed: 42
+# No docker — scoring is in-process.
+docker_namespace: null
