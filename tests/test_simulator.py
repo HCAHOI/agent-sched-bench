@@ -150,7 +150,7 @@ class TestLoadTraceActions:
 
         trace = tmp_path / "test.jsonl"
         records = [
-            {"type": "trace_metadata", "scaffold": "openclaw", "trace_format_version": 4},
+            {"type": "trace_metadata", "scaffold": "openclaw", "trace_format_version": 5},
             {"type": "action", "action_type": "llm_call", "action_id": "llm_0",
              "agent_id": "t1", "iteration": 0, "ts_start": 100, "ts_end": 102,
              "data": {"messages_in": [{"role": "user", "content": "hi"}],

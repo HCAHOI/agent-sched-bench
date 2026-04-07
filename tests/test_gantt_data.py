@@ -108,7 +108,7 @@ def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
         "type": "trace_metadata",
         "scaffold": "synthetic",
         "model": "test-model",
-        "trace_format_version": 4,
+        "trace_format_version": 5,
         "max_iterations": 80,
     }
     with trace.open("w") as fh:

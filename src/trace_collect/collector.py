@@ -18,6 +18,7 @@ from trace_collect.swebench_harness import (
 )
 
 if TYPE_CHECKING:
+    from agents.benchmarks.base import Benchmark
     from agents.miniswe import MiniSWECodeAgent
 
 logger = logging.getLogger(__name__)
@@ -111,14 +112,11 @@ def load_completed_ids(run_dir: Path) -> set[str]:
     return completed
 
 
-def build_run_dir(
-    output_dir: str | Path, model: str, task_source: str | Path = ""
-) -> Path:
-    """Build run directory: {output_dir}/{benchmark}/{model}/{timestamp}/."""
+def build_run_dir(benchmark: "Benchmark", model: str) -> Path:
+    """Build run directory from benchmark plugin config: trace_root/model/ts/."""
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
     safe_model = model.replace("/", "-").replace(":", "-")
-    benchmark = Path(task_source).parent.name if task_source else "unknown"
-    return Path(output_dir) / benchmark / safe_model / ts
+    return benchmark.config.trace_root / safe_model / ts
 
 
 def load_existing_results(results_path: Path) -> dict[str, CollectedTaskResult]:
@@ -259,9 +257,8 @@ async def collect_traces(
     api_base: str,
     api_key: str,
     model: str,
-    task_source: str | Path,
-    repos_root: str | Path,
-    output_dir: str | Path,
+    benchmark: "Benchmark",
+    task_source: str | Path | None = None,
     max_steps: int = 60,
     command_timeout_s: float = 120.0,
     task_timeout_s: float = 1200.0,
@@ -271,27 +268,24 @@ async def collect_traces(
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
     evaluate: bool = False,
-    harness_dataset: str = "princeton-nlp/SWE-bench_Verified",
-    harness_split: str = "test",
     harness_max_workers: int = 1,
     harness_timeout: int = 1800,
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
-    harness_namespace: str | None = "swebench",
 ) -> Path:
-    """Collect SWE-Bench traces using an external LLM API.
+    """Collect agent traces for a benchmark.
 
-    Each task produces its own JSONL trace file under {output_dir}/{run_id}/.
-    Already-completed tasks (from a prior interrupted run) are skipped
-    automatically (resume support).
+    The benchmark plugin is the single source of truth for dataset name,
+    split, namespace, repos_root, and trace_root. Runtime overrides
+    (max_steps, timeouts, sample size) stay on the signature.
 
     Args:
         api_base: OpenAI-compatible API base URL.
         api_key: API key for authentication.
         model: Model name (e.g. "qwen-plus-latest").
-        task_source: Path to tasks JSON file.
-        repos_root: Path to pre-cloned repos directory.
-        output_dir: Directory for output trace files.
+        benchmark: Benchmark plugin instance — drives dataset, paths, harness.
+        task_source: Optional override for the tasks JSON file. Defaults to
+            ``benchmark.config.data_root / "tasks.json"``.
         max_steps: Maximum agent steps per task.
         command_timeout_s: Timeout per bash command.
         task_timeout_s: Timeout per task overall.
@@ -303,6 +297,16 @@ async def collect_traces(
     Returns:
         Path to the run directory containing per-task JSONL files.
     """
+    # Resolve defaults from the benchmark
+    if task_source is None:
+        task_source = benchmark.config.data_root / "tasks.json"
+    repos_root = benchmark.config.repos_root
+    if repos_root is None:
+        raise ValueError(
+            f"Benchmark {benchmark.config.slug!r} has no repos_root configured; "
+            f"cannot run code-patching scaffolds without local repos."
+        )
+
     tasks = load_tasks(task_source)
     if instance_ids is not None:
         id_set = set(instance_ids)
@@ -318,20 +322,15 @@ async def collect_traces(
             api_key=api_key,
             model=model,
             tasks=tasks,
-            task_source=task_source,
-            repos_root=Path(repos_root),
-            output_dir=Path(output_dir),
+            benchmark=benchmark,
             max_steps=max_steps,
             run_id=run_id,
             max_context_tokens=max_context_tokens,
             evaluate=evaluate,
-            harness_dataset=harness_dataset,
-            harness_split=harness_split,
             harness_max_workers=harness_max_workers,
             harness_timeout=harness_timeout,
             harness_run_id=harness_run_id,
             harness_report_dir=harness_report_dir,
-            harness_namespace=harness_namespace,
         )
 
     from agents.miniswe import MiniSWECodeAgent
@@ -340,7 +339,7 @@ async def collect_traces(
         # Resume: run_id is the full path to an existing run directory
         run_dir = Path(run_id)
     else:
-        run_dir = build_run_dir(output_dir, model, task_source)
+        run_dir = build_run_dir(benchmark, model)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     results_path = run_dir / "results.jsonl"
@@ -369,6 +368,8 @@ async def collect_traces(
         trace_logger = TraceLogger(run_dir, instance_id)
         trace_logger.log_metadata(
             scaffold="mini-swe-agent",
+            benchmark=benchmark.config.slug,
+            benchmark_split=benchmark.config.harness_split,
             model=model,
             api_base=api_base,
             max_steps=max_steps,
@@ -496,16 +497,16 @@ async def collect_traces(
                 if harness_report_dir is not None
                 else (run_dir / "swebench_eval").resolve()
             )
-            evaluation = run_official_evaluation(
+            harness_args = benchmark.build_harness_args(
                 predictions_path=predictions_path,
-                dataset_name=harness_dataset,
-                split=harness_split,
                 run_id=evaluation_run_id,
                 max_workers=harness_max_workers,
                 timeout=harness_timeout,
-                instance_ids=task_ids,
-                namespace=harness_namespace,
                 report_dir=evaluation_report_path,
+            )
+            evaluation = run_official_evaluation(
+                instance_ids=task_ids,
+                **harness_args,
             )
             if evaluation.returncode != 0:
                 raise RuntimeError(
@@ -547,20 +548,15 @@ async def _collect_openclaw(
     api_key: str,
     model: str,
     tasks: list[dict[str, Any]],
-    task_source: str | Path,
-    repos_root: Path,
-    output_dir: Path,
+    benchmark: "Benchmark",
     max_steps: int = 80,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
     evaluate: bool = False,
-    harness_dataset: str = "princeton-nlp/SWE-bench_Verified",
-    harness_split: str = "test",
     harness_max_workers: int = 1,
     harness_timeout: int = 1800,
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
-    harness_namespace: str | None = "swebench",
 ) -> Path:
     """Collect traces using the OpenClaw (nanobot) scaffold via SWEBenchRunner."""
     from agents.openclaw.unified_provider import UnifiedProvider
@@ -570,7 +566,7 @@ async def _collect_openclaw(
     if run_id is not None:
         run_dir = Path(run_id)
     else:
-        run_dir = build_run_dir(output_dir, model, task_source)
+        run_dir = build_run_dir(benchmark, model)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     results_path = run_dir / "results.jsonl"
@@ -589,7 +585,8 @@ async def _collect_openclaw(
         max_iterations=max_steps,
         context_window_tokens=max_context_tokens,
         model=model,
-        repos_root=repos_root,
+        repos_root=benchmark.config.repos_root,
+        benchmark=benchmark,
     )
 
     total = len(tasks)
@@ -606,7 +603,9 @@ async def _collect_openclaw(
         logger.info("[%d/%d] START %s (openclaw)", i + 1, total, instance_id)
 
         try:
-            eval_task = EvalTask.from_swebench_instance(task, run_dir / "_workspaces")
+            eval_task = EvalTask.from_benchmark_instance(
+                task, run_dir / "_workspaces", benchmark=benchmark
+            )
             eval_result = await runner.run_task(eval_task)
         except Exception as exc:
             logger.exception("FAILED %s (openclaw)", instance_id)
@@ -617,6 +616,7 @@ async def _collect_openclaw(
                 _normalize_openclaw_trace(
                     src=ws_trace,
                     dst=dest_trace,
+                    benchmark=benchmark,
                     model=model,
                     api_base=api_base,
                     max_steps=max_steps,
@@ -625,7 +625,7 @@ async def _collect_openclaw(
             results.append(
                 CollectedTaskResult(
                     instance_id=instance_id,
-                    trace_file=str(dest_trace),
+                    trace_file=dest_trace,
                     success=False,
                     success_basis="patch_generated",
                     patch_generated=False,
@@ -674,6 +674,7 @@ async def _collect_openclaw(
             _normalize_openclaw_trace(
                 src=Path(eval_result.trace_file),
                 dst=run_dir / f"{instance_id}.jsonl",
+                benchmark=benchmark,
                 model=model,
                 api_base=api_base,
                 max_steps=max_steps,
@@ -701,16 +702,14 @@ async def _collect_openclaw(
     if evaluate and is_swebench_available():
         preds_path = run_dir / "preds.json"
         if preds_path.exists():
-            evaluation = run_official_evaluation(
+            harness_args = benchmark.build_harness_args(
                 predictions_path=preds_path,
-                dataset_name=harness_dataset,
-                split=harness_split,
+                run_id=harness_run_id or build_eval_run_id(run_dir.name),
                 max_workers=harness_max_workers,
                 timeout=harness_timeout,
-                run_id=harness_run_id or build_eval_run_id(run_dir),
                 report_dir=Path(harness_report_dir) if harness_report_dir else None,
-                namespace=harness_namespace,
             )
+            evaluation = run_official_evaluation(**harness_args)
             if evaluation.returncode != 0:
                 logger.error(
                     "Official SWE-bench harness failed (exit %d): %s",
@@ -747,6 +746,8 @@ async def _collect_openclaw(
 def _normalize_openclaw_trace(
     src: Path,
     dst: Path,
+    *,
+    benchmark: "Benchmark",
     model: str,
     api_base: str,
     max_steps: int,
@@ -755,10 +756,17 @@ def _normalize_openclaw_trace(
     """Copy an OpenClaw trace to benchmark run-dir layout with metadata injection."""
     lines = src.read_text(encoding="utf-8").splitlines()
     with open(dst, "w", encoding="utf-8") as f:
-        # Inject trace_metadata header
+        # Inject trace_metadata header. trace_format_version: 5 is stamped
+        # at write time — every openclaw trace routed through the collector
+        # must carry the version field so downstream TraceData.load() can
+        # enforce its strict v5 check. v4 support was dropped during the
+        # SWE-rebench plugin refactor (no backfill, no tolerance).
         metadata = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
+            "trace_format_version": 5,
+            "benchmark": benchmark.config.slug,
+            "benchmark_split": benchmark.config.harness_split,
             "model": model,
             "api_base": api_base,
             "max_steps": max_steps,
@@ -784,11 +792,16 @@ def _normalize_openclaw_trace(
         for line in lines:
             if not line.strip():
                 continue
-            rec = json.loads(line)
-            # Skip any existing trace_metadata from nanobot
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                # Mirror the defensive-parse pattern used elsewhere in this
+                # module; a single malformed line (e.g. partial write before
+                # a crash) must not abort normalization of the rest of the
+                # trace. Skip and continue.
+                continue
+            # Skip any existing trace_metadata from nanobot (we write our own
+            # v5-compliant header above).
             if rec.get("type") == "trace_metadata":
                 continue
-            # Normalize step tool_args: ensure it's a string
-            if rec.get("type") == "step" and isinstance(rec.get("tool_args"), dict):
-                rec["tool_args"] = json.dumps(rec["tool_args"], ensure_ascii=False)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

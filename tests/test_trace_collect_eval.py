@@ -3,43 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from trace_collect.cli import parse_collect_args
 from trace_collect.collector import (
     CollectedTaskResult,
     _rewrite_trace_summary,
     _write_predictions,
 )
-
-
-def test_parse_collect_args_exposes_harness_flags() -> None:
-    args = parse_collect_args(
-        [
-            "--evaluate",
-            "--harness-dataset",
-            "custom-dataset",
-            "--harness-split",
-            "dev",
-            "--harness-workers",
-            "2",
-            "--harness-timeout",
-            "900",
-            "--harness-run-id",
-            "demo-run",
-            "--harness-report-dir",
-            "reports/demo",
-            "--harness-namespace",
-            "demo-ns",
-        ]
-    )
-
-    assert args.evaluate is True
-    assert args.harness_dataset == "custom-dataset"
-    assert args.harness_split == "dev"
-    assert args.harness_workers == 2
-    assert args.harness_timeout == 900
-    assert args.harness_run_id == "demo-run"
-    assert args.harness_report_dir == "reports/demo"
-    assert args.harness_namespace == "demo-ns"
 
 
 def test_write_predictions_keeps_only_non_empty_patches(tmp_path: Path) -> None:

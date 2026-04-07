@@ -76,7 +76,7 @@ def sample_trace(tmp_path: Path) -> Path:
         {
             "type": "trace_metadata",
             "scaffold": "mini-swe-agent",
-            "trace_format_version": 4,
+            "trace_format_version": 5,
             "mode": "collect",
             "model": "test-model",
         },
@@ -141,7 +141,7 @@ def test_load_with_agent_filter(sample_trace: Path) -> None:
 def test_load_skips_malformed_lines(tmp_path: Path) -> None:
     trace_file = tmp_path / "malformed.jsonl"
     trace_file.write_text(
-        '{"type": "trace_metadata", "scaffold": "mini-swe-agent"}\n'
+        '{"type": "trace_metadata", "scaffold": "mini-swe-agent", "trace_format_version": 5}\n'
         "NOT VALID JSON {{{\n"
         '{"type": "action", "action_type": "llm_call", "action_id": "llm_0",'
         ' "agent_id": "a1", "iteration": 0, "data": {}}\n'
@@ -319,7 +319,7 @@ def trace_with_events(tmp_path: Path) -> Path:
     """v4 trace with envelope events for testing cmd_events."""
     trace_file = tmp_path / "trace_events.jsonl"
     records = [
-        {"type": "trace_metadata", "scaffold": "openclaw", "trace_format_version": 4},
+        {"type": "trace_metadata", "scaffold": "openclaw", "trace_format_version": 5},
         {
             "type": "event", "agent_id": "task-1", "category": "SCHEDULING",
             "event": "message_dispatch", "iteration": 0, "ts": 1000.0,

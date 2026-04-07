@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# Clone SWE-bench repos locally for fast container-internal cloning.
+# Clone benchmark repos locally for fast container-internal cloning.
 #
 # Usage:
-#   ./scripts/setup/clone_repos.sh [tasks.json]
+#   ./scripts/setup/clone_repos.sh [tasks.json] [repos_root]
 #
-# If tasks.json is provided, only repos referenced in it are cloned.
-# Otherwise, clones all repos commonly used in SWE-bench Verified.
+# Arguments:
+#   tasks.json  — path to a tasks JSON file; only repos referenced there
+#                 are cloned. Default: data/swebench_verified/tasks.json
+#                 (SWE-Bench Verified, preserved for backward compat).
+#   repos_root  — target directory for the cloned mirrors. Default:
+#                 data/swebench_repos (SWE-Bench Verified legacy path).
+#
+# For SWE-rebench:
+#   ./scripts/setup/clone_repos.sh data/swe-rebench/tasks.json data/swe-rebench/repos
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-REPOS_ROOT="$PROJECT_ROOT/data/swebench_repos"
 TASKS_FILE="${1:-${PROJECT_ROOT}/data/swebench_verified/tasks.json}"
+REPOS_ROOT="${2:-$PROJECT_ROOT/data/swebench_repos}"
 
 if [[ -d "$REPOS_ROOT" ]] && [[ -n "$(ls -A "$REPOS_ROOT" 2>/dev/null)" ]]; then
     echo "[setup] SKIP clone_repos: $REPOS_ROOT is non-empty"

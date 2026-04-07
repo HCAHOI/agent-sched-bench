@@ -116,6 +116,19 @@
     });
     events.sort((a, b) => (a.ts || 0) - (b.ts || 0));
 
+    // Strict v5 version check — v4 support dropped in the SWE-rebench
+    // plugin refactor. No backfill, no tolerance. Mirror of the Python
+    // check in trace_inspector.py::TraceData.load.
+    const version = metadata && metadata.trace_format_version;
+    if (version !== 5) {
+      throw new Error(
+        'Unsupported trace_format_version ' + JSON.stringify(version) +
+        ': expected 5. v4 support was dropped during the SWE-rebench ' +
+        'plugin refactor; regenerate the trace via the current collector ' +
+        'to produce a v5 trace.'
+      );
+    }
+
     return { metadata, actions, events, summaries, agents };
   }
 

@@ -102,7 +102,7 @@ def _v4_trace(path: Path, *, n_actions: int, n_iterations: int, elapsed_s: float
     lines = [
         json.dumps({
             "type": "trace_metadata", "scaffold": "openclaw",
-            "trace_format_version": 4, "model": "test",
+            "trace_format_version": 5, "model": "test",
         })
     ]
     for i in range(n_actions):
@@ -159,7 +159,7 @@ def test_get_session_status_handles_v4_trace_with_no_summary(tmp_path: Path) -> 
     trace.write_text(
         '\n'.join([
             json.dumps({"type": "trace_metadata", "scaffold": "openclaw",
-                        "trace_format_version": 4}),
+                        "trace_format_version": 5}),
             json.dumps({"type": "action", "action_type": "llm_call",
                         "action_id": "llm_0", "agent_id": "a", "iteration": 0,
                         "ts_start": 1.0, "ts_end": 2.0, "data": {}}),

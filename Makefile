@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified
+.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw
 
 help:
 	@printf "Targets:\n"
@@ -27,6 +27,11 @@ help:
 	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
 	@printf "  setup-swebench-repos        Clone repos referenced by selected tasks\n"
 	@printf "  build-swebench-images       Build Podman container images\n"
+	@printf "  download-swe-rebench        Download SWE-rebench (nebius/SWE-rebench) filtered split\n"
+	@printf "  setup-swe-rebench-repos     Clone repos referenced by SWE-rebench tasks\n"
+	@printf "  setup-swe-rebench           Shortcut: download-swe-rebench + setup-swe-rebench-repos\n"
+	@printf "  smoke-swe-rebench-miniswe   Run $(SMOKE_N) SWE-rebench tasks through mini-swe-agent\n"
+	@printf "  smoke-swe-rebench-openclaw  Run $(SMOKE_N) SWE-rebench tasks through openclaw\n"
 
 pull:
 	./scripts/pull_repo.sh
@@ -90,6 +95,37 @@ build-swebench-images:
 
 download-swebench-verified:
 	./scripts/setup/swebench_data.sh
+
+download-swe-rebench:
+	./scripts/setup/swe_rebench_data.sh
+
+setup-swe-rebench-repos:
+	./scripts/setup/clone_repos.sh data/swe-rebench/tasks.json data/swe-rebench/repos
+
+setup-swe-rebench: download-swe-rebench setup-swe-rebench-repos
+
+# ── SWE-rebench smoke runs ─────────────────────────────────────────────
+# Override the provider with PROVIDER=openrouter (default: dashscope per the
+# user's Phase 6 choice). Override the sample size with SMOKE_N=<n>
+# (default: 2 — minimum meaningful smoke coverage per the plan).
+PROVIDER ?= dashscope
+SMOKE_N ?= 2
+
+smoke-swe-rebench-miniswe:
+	PYTHONPATH=src $(PYTHON) -m trace_collect.cli \
+	    --provider $(PROVIDER) \
+	    --benchmark swe-rebench \
+	    --scaffold mini-swe-agent \
+	    --sample $(SMOKE_N) \
+	    --verbose
+
+smoke-swe-rebench-openclaw:
+	PYTHONPATH=src $(PYTHON) -m trace_collect.cli \
+	    --provider $(PROVIDER) \
+	    --benchmark swe-rebench \
+	    --scaffold openclaw \
+	    --sample $(SMOKE_N) \
+	    --verbose
 
 collect-traces:
 	PYTHONPATH=src $(PYTHON) -m trace_collect.cli $(ARGS)

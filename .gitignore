@@ -12,10 +12,13 @@ uv.lock
 
 data/swebench_repos/
 data/swebench_verified/tasks.json
+data/swe-rebench/
 results/raw/
 results/processed/
 results/figures/
 traces/swebench/*.jsonl
+traces/swebench_verified/
+traces/swe-rebench/
 traces/openclaw_cli/
 
 # Generated visualization artifacts

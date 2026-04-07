@@ -1,4 +1,18 @@
-"""SWE-bench Verified dataset loading and tool-intensive task selection."""
+"""Compatibility shim for SWE-bench data utilities.
+
+This module preserves the legacy public API so that all existing call sites
+continue to work without modification.  **New code should use the benchmark
+plugin directly:**
+
+    from agents.benchmarks import get_benchmark_class
+    cls = get_benchmark_class("swe-bench-verified")
+    plugin = cls(config)
+    tasks = plugin.load_tasks()
+
+All implementations live in :mod:`agents.benchmarks.swe_bench_verified`.
+This shim re-exports constants and provides thin wrappers around the
+plugin's methods using a module-level default :class:`BenchmarkConfig`.
+"""
 
 from __future__ import annotations
 
@@ -7,35 +21,54 @@ import random
 from pathlib import Path
 from typing import Any
 
+from agents.benchmarks.base import BenchmarkConfig
+from agents.benchmarks.swe_bench_verified import (
+    SWEBenchVerified,
+    CLASS_LEVEL_HEAVY_REPOS,
+    CLASS_LEVEL_REPO_QUOTAS,
+)
 
-def load_swebench_verified() -> list[dict[str, Any]]:
-    """Load the SWE-bench Verified dataset from HuggingFace.
+# ---------------------------------------------------------------------------
+# Re-export constants at module level for backward compatibility.
+# Tests and scripts import these directly from agents.swebench_data.
+# ---------------------------------------------------------------------------
 
-    Returns a list of task dicts with official SWE-bench fields plus
-    derived fields (test_cmd) for CodeAgent compatibility.
+#: Repos known to have heavy test suites — re-exported from the plugin class.
+HEAVY_REPOS: frozenset[str] = CLASS_LEVEL_HEAVY_REPOS
 
-    Requires the ``datasets`` package::
+#: Target allocation per repo for a 32-task selection — re-exported from the plugin class.
+REPO_QUOTAS: dict[str, int] = CLASS_LEVEL_REPO_QUOTAS
 
-        pip install datasets
-    """
-    from datasets import load_dataset
+# ---------------------------------------------------------------------------
+# Module-level default config used by the legacy wrapper functions below.
+# ---------------------------------------------------------------------------
 
-    ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
-    tasks: list[dict[str, Any]] = []
-    for row in ds:
-        task = dict(row)
-        # Derive test_cmd from FAIL_TO_PASS
-        task["test_cmd"] = derive_test_cmd(task)
-        tasks.append(task)
-    return tasks
+_DEFAULT_CONFIG = BenchmarkConfig(
+    slug="swe-bench-verified",
+    display_name="SWE-bench Verified",
+    harness_dataset="princeton-nlp/SWE-bench_Verified",
+    harness_split="test",
+    data_root=Path("data/swebench_verified"),
+    repos_root=None,
+    trace_root=Path("traces/swebench_verified"),
+    default_max_steps=80,
+    selection_n=32,
+    selection_seed=42,
+    docker_namespace="swebench",
+)
+
+
+# ---------------------------------------------------------------------------
+# Legacy public API — implementations kept inline for clarity and to avoid
+# circular imports.  The plugin's select_subset() delegates back to
+# select_tool_intensive_tasks(), so the body must live here.
+# ---------------------------------------------------------------------------
 
 
 def derive_test_cmd(task: dict[str, Any]) -> str:
     """Derive a pytest command from the FAIL_TO_PASS field.
 
-    FAIL_TO_PASS is a JSON-encoded list of test identifiers, e.g.::
-
-        '["tests/test_foo.py::TestClass::test_method"]'
+    FAIL_TO_PASS may be a JSON-encoded string or a native Python list.
 
     We construct a pytest invocation that runs exactly those tests.
     """
@@ -51,7 +84,6 @@ def derive_test_cmd(task: dict[str, Any]) -> str:
     if not test_ids:
         return "python -m pytest --no-header -q"
 
-    # Join all test ids as pytest arguments
     tests_str = " ".join(test_ids)
     return f"python -m pytest {tests_str} -x --no-header -q"
 
@@ -65,26 +97,6 @@ def _count_fail_to_pass(task: dict[str, Any]) -> int:
         except json.JSONDecodeError:
             return 1 if raw.strip() else 0
     return len(raw)
-
-
-# Repos known to have heavy test suites (large codebase, slow pytest).
-HEAVY_REPOS = {
-    "django/django",
-    "sympy/sympy",
-    "scikit-learn/scikit-learn",
-    "matplotlib/matplotlib",
-    "sphinx-doc/sphinx",
-    "pytest-dev/pytest",
-}
-
-# Target allocation per repo for a 32-task selection.
-REPO_QUOTAS: dict[str, int] = {
-    "django/django": 10,
-    "sympy/sympy": 6,
-    "scikit-learn/scikit-learn": 5,
-    "matplotlib/matplotlib": 4,
-    # Remaining 7 slots filled from other repos
-}
 
 
 def select_tool_intensive_tasks(
@@ -146,7 +158,6 @@ def select_tool_intensive_tasks(
         other_pool: list[dict[str, Any]] = []
         for repo in other_repos:
             other_pool.extend(by_repo[repo])
-        # Sort by test count, take top remaining
         other_pool.sort(key=_count_fail_to_pass, reverse=True)
         selected.extend(other_pool[:remaining])
 
@@ -158,6 +169,20 @@ def select_tool_intensive_tasks(
     return selected
 
 
+def load_swebench_verified() -> list[dict[str, Any]]:
+    """Load the SWE-bench Verified dataset from HuggingFace.
+
+    Returns a list of task dicts with official SWE-bench fields plus
+    derived fields (test_cmd) for CodeAgent compatibility.
+
+    Requires the ``datasets`` package::
+
+        pip install datasets
+    """
+    plugin = SWEBenchVerified(_DEFAULT_CONFIG)
+    return plugin.load_tasks()
+
+
 def download_and_save(
     output_dir: str = "data/swebench_verified",
     n: int = 32,
@@ -167,6 +192,8 @@ def download_and_save(
 
     Returns the path to the saved tasks file.
     """
+    import json as _json
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     tasks_file = output_path / "tasks.json"
@@ -175,7 +202,7 @@ def download_and_save(
     selected = select_tool_intensive_tasks(all_tasks, n=n, seed=seed)
 
     tasks_file.write_text(
-        json.dumps(selected, indent=2, ensure_ascii=False) + "\n",
+        _json.dumps(selected, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     return tasks_file

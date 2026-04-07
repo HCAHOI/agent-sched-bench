@@ -99,19 +99,20 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Timeout in seconds per task overall.",
     )
     parser.add_argument(
+        "--benchmark",
+        default="swe-bench-verified",
+        help=(
+            "Benchmark slug (e.g. 'swe-bench-verified', 'swe-rebench'). "
+            "Loads configs/benchmarks/<slug>.yaml and constructs the plugin."
+        ),
+    )
+    parser.add_argument(
         "--task-source",
-        default="data/swebench_verified/tasks.json",
-        help="Path to tasks JSON file.",
-    )
-    parser.add_argument(
-        "--repos-root",
-        default="data/swebench_repos",
-        help="Path to pre-cloned repos directory.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="traces",
-        help="Root output directory (traces/{benchmark}/{model}/{ts}/).",
+        default=None,
+        help=(
+            "Optional override for the tasks JSON file. Defaults to "
+            "<benchmark.data_root>/tasks.json from the benchmark YAML."
+        ),
     )
     parser.add_argument(
         "--sample",
@@ -148,16 +149,6 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Run the official SWE-bench harness on generated predictions.",
     )
     parser.add_argument(
-        "--harness-dataset",
-        default="princeton-nlp/SWE-bench_Verified",
-        help="Dataset name/path passed to the official SWE-bench harness.",
-    )
-    parser.add_argument(
-        "--harness-split",
-        default="test",
-        help="Dataset split for the official harness.",
-    )
-    parser.add_argument(
         "--harness-workers",
         type=int,
         default=1,
@@ -178,11 +169,6 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--harness-report-dir",
         default=None,
         help="Directory where official harness logs/reports should be written.",
-    )
-    parser.add_argument(
-        "--harness-namespace",
-        default="swebench",
-        help="Docker namespace passed to the official harness.",
     )
     parser.add_argument(
         "--verbose",
@@ -292,6 +278,9 @@ def main() -> None:
         _run_collect(args)
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -309,16 +298,25 @@ def _run_collect(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
+    from agents.benchmarks import get_benchmark_class
+    from agents.benchmarks.base import BenchmarkConfig
     from trace_collect.collector import collect_traces
+
+    benchmark_yaml = REPO_ROOT / "configs" / "benchmarks" / f"{args.benchmark}.yaml"
+    if not benchmark_yaml.exists():
+        print(f"ERROR: No benchmark config at {benchmark_yaml}", file=sys.stderr)
+        sys.exit(1)
+    config = BenchmarkConfig.from_yaml(benchmark_yaml)
+    plugin_cls = get_benchmark_class(config.slug)
+    benchmark = plugin_cls(config)
 
     run_dir = asyncio.run(
         collect_traces(
             api_base=api_base,
             api_key=api_key,
             model=model,
-            task_source=args.task_source,
-            repos_root=args.repos_root,
-            output_dir=args.output_dir,
+            benchmark=benchmark,
+            task_source=args.task_source if args.task_source else None,
             max_steps=args.max_steps,
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,
@@ -328,13 +326,10 @@ def _run_collect(args: argparse.Namespace) -> None:
             run_id=args.run_id,
             max_context_tokens=args.max_context_tokens,
             evaluate=args.evaluate,
-            harness_dataset=args.harness_dataset,
-            harness_split=args.harness_split,
             harness_max_workers=args.harness_workers,
             harness_timeout=args.harness_timeout,
             harness_run_id=args.harness_run_id,
             harness_report_dir=args.harness_report_dir,
-            harness_namespace=args.harness_namespace,
         )
     )
     print(f"Traces written to: {run_dir}/")

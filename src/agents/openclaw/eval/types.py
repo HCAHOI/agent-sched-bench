@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agents.benchmarks.base import Benchmark
 
 
 @dataclass
@@ -29,10 +32,22 @@ class EvalTask:
     image_name: str | None = None
 
     @classmethod
-    def from_swebench_instance(
-        cls, row: dict[str, Any], workspace_base: Path
+    def from_benchmark_instance(
+        cls,
+        row: dict[str, Any],
+        workspace_base: Path,
+        benchmark: "Benchmark | None" = None,
     ) -> "EvalTask":
-        """Construct from a raw SWE-bench HuggingFace dataset row."""
+        """Construct an EvalTask from a benchmark row.
+
+        If ``benchmark`` is provided, its ``normalize_task`` is applied first
+        so benchmark-specific quirks (SWE-rebench's native-list FAIL_TO_PASS,
+        explicit docker_image pinning, etc.) are absorbed before the row hits
+        the generic extraction logic below.
+        """
+        if benchmark is not None:
+            row = benchmark.normalize_task(dict(row))
+
         fail_to_pass = row.get("FAIL_TO_PASS", [])
         if isinstance(fail_to_pass, str):
             import json

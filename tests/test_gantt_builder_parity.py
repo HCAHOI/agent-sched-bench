@@ -74,7 +74,7 @@ def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
         "type": "trace_metadata",
         "scaffold": "synthetic",
         "model": "test-model",
-        "trace_format_version": 4,
+        "trace_format_version": 5,
         "max_iterations": 80,
     }
     with trace.open("w") as fh:
@@ -247,7 +247,7 @@ def test_parity_malformed_line_skipped(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
     trace_path.write_text(
         json.dumps({"type": "trace_metadata", "scaffold": "s",
-                    "trace_format_version": 4}) + "\n"
+                    "trace_format_version": 5}) + "\n"
         + "NOT VALID JSON {{\n"
         + json.dumps(_llm_action(0, 1.0, 2.0, content="hi")) + "\n"
         + json.dumps(_tool_action(0, 2.0, 2.1)) + "\n"

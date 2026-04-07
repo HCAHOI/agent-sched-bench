@@ -105,18 +105,34 @@ def _copy_trace_for_import(
     target_trace: Path,
     imported_result: dict[str, Any],
     model_name: str = "unknown",
+    benchmark: str = "swe-bench-verified",
+    benchmark_split: str = "test",
 ) -> None:
-    """Copy a trace while aligning summary success semantics to benchmark results."""
+    """Copy a trace while aligning summary success semantics to benchmark results.
+
+    The written trace_metadata record carries ``trace_format_version: 5`` plus
+    the ``benchmark`` / ``benchmark_split`` fields required by the strict
+    :func:`trace_collect.trace_inspector.TraceData.load` check. Without this,
+    any imported trace would fail to load through the v5 reader. Benchmark
+    defaults to ``swe-bench-verified`` / ``test`` — the historical use case
+    for this importer — and can be overridden when importing traces from a
+    different benchmark.
+    """
     target_trace.parent.mkdir(parents=True, exist_ok=True)
     benchmark_success = bool(imported_result.get("success"))
     with (
         open(source_trace, encoding="utf-8") as src,
         open(target_trace, "w", encoding="utf-8") as dst,
     ):
-        # Inject trace_metadata as the first record
+        # Inject trace_metadata as the first record. trace_format_version: 5
+        # is required by the strict v5 reader introduced during the
+        # SWE-rebench refactor (no backfill, no tolerance).
         metadata = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
+            "trace_format_version": 5,
+            "benchmark": benchmark,
+            "benchmark_split": benchmark_split,
             "mode": "import",
             "model": model_name,
             "source_trace": str(source_trace),
@@ -197,8 +213,19 @@ def import_openclaw_run(
     output_dir: str | Path,
     model_name: str = "Qwen3.6-Plus",
     run_id: str | None = None,
+    benchmark: str = "swe-bench-verified",
+    benchmark_split: str = "test",
 ) -> Path:
-    """Copy nanobot results/traces into the benchmark run layout."""
+    """Copy nanobot results/traces into the benchmark run layout.
+
+    Args:
+        benchmark: Benchmark slug stamped into each imported trace's
+            ``trace_metadata`` record. Defaults to the historical use case
+            (``swe-bench-verified``); pass ``swe-rebench`` (or any other
+            registered slug) when importing traces from a different benchmark.
+        benchmark_split: Dataset split for the stamped metadata. Defaults to
+            the Verified test split.
+    """
     records = _load_results(results_path)
     run_dir = _build_import_run_dir(output_dir, model_name, run_id).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -221,6 +248,8 @@ def import_openclaw_run(
             target_trace=target_trace,
             imported_result=imported_result,
             model_name=model_name,
+            benchmark=benchmark,
+            benchmark_split=benchmark_split,
         )
         imported_results.append(imported_result)
 
