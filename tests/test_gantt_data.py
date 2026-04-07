@@ -346,9 +346,8 @@ def test_llm_span_detail_surfaces_silent_tool_calls(tmp_path: Path) -> None:
     assert len(llm_spans) == 1
     detail = llm_spans[0]["detail"]
     assert "llm_content" not in detail, "content was null, should not be set"
-    assert detail["tool_calls_requested"] == [
-        'write_file({"path":"src/main.ts"})'
-    ]
+    # US-002 rendering: primary-field extraction prefers ``path``.
+    assert detail["tool_calls_requested"] == ['write_file(path="src/main.ts")']
 
 
 def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) -> None:
@@ -388,7 +387,144 @@ def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) ->
     payload = _build(tmp_path, [act])
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert "Let me write" in detail["llm_content"]
-    assert detail["tool_calls_requested"] == ['write_file({"path":"main.ts"})']
+    assert detail["tool_calls_requested"] == ['write_file(path="main.ts")']
+
+
+def test_tool_calls_primary_field_path(tmp_path: Path) -> None:
+    """A tool call with a JSON ``path`` argument renders as
+    ``tool_name(path=\"...\")`` so users immediately see what file the
+    model targeted, instead of the first 80 chars of a large ``content``
+    field."""
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1.0,
+        "ts_end": 2.0,
+        "data": {
+            "raw_response": {
+                "choices": [{"message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "function": {
+                            "name": "write_file",
+                            "arguments": '{"path": "src/main.ts", "content": "console.log(1)"}',
+                        }
+                    }],
+                }}]
+            }
+        },
+    }
+    payload = _build(tmp_path, [act])
+    detail = payload["lanes"][0]["spans"][0]["detail"]
+    assert detail["tool_calls_requested"] == ['write_file(path="src/main.ts")']
+
+
+def test_tool_calls_primary_field_command(tmp_path: Path) -> None:
+    """A shell-style tool call uses the ``command`` field as primary."""
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1.0,
+        "ts_end": 2.0,
+        "data": {
+            "raw_response": {
+                "choices": [{"message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command": "ls -la src/", "timeout": 30}',
+                        }
+                    }],
+                }}]
+            }
+        },
+    }
+    payload = _build(tmp_path, [act])
+    detail = payload["lanes"][0]["spans"][0]["detail"]
+    assert detail["tool_calls_requested"] == ['bash(command="ls -la src/")']
+
+
+def test_tool_calls_no_primary_field_falls_back(tmp_path: Path) -> None:
+    """When no known primary field is present, fall back to the
+    generic 200-char raw argument preview."""
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1.0,
+        "ts_end": 2.0,
+        "data": {
+            "raw_response": {
+                "choices": [{"message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "function": {
+                            "name": "mystery_tool",
+                            "arguments": '{"foo": "bar", "baz": 42}',
+                        }
+                    }],
+                }}]
+            }
+        },
+    }
+    payload = _build(tmp_path, [act])
+    detail = payload["lanes"][0]["spans"][0]["detail"]
+    assert len(detail["tool_calls_requested"]) == 1
+    summary = detail["tool_calls_requested"][0]
+    assert summary.startswith('mystery_tool(')
+    assert '"foo": "bar"' in summary
+
+
+def test_llm_content_truncation_at_1000_chars(tmp_path: Path) -> None:
+    """Long llm_content is truncated to 1000 chars + ellipsis (was 200)."""
+    long_text = "A" * 1500
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1.0,
+        "ts_end": 2.0,
+        "data": {
+            "raw_response": {
+                "choices": [{"message": {"content": long_text}}]
+            }
+        },
+    }
+    payload = _build(tmp_path, [act])
+    detail = payload["lanes"][0]["spans"][0]["detail"]
+    assert detail["llm_content"] == "A" * 1000 + "..."
+
+
+def test_llm_content_short_is_not_truncated(tmp_path: Path) -> None:
+    """Content shorter than the cap passes through unchanged (no ...)."""
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1.0,
+        "ts_end": 2.0,
+        "data": {
+            "raw_response": {
+                "choices": [{"message": {"content": "hello"}}]
+            }
+        },
+    }
+    payload = _build(tmp_path, [act])
+    assert payload["lanes"][0]["spans"][0]["detail"]["llm_content"] == "hello"
 
 
 def test_action_type_map_module_constant() -> None:

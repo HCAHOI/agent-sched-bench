@@ -12,12 +12,36 @@ register new action_types or event names without touching the template.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from trace_collect.trace_inspector import TraceData
 
 # Categories that produce point markers (not spans).
 _MARKER_CATEGORIES = frozenset({"SCHEDULING", "SESSION", "CONTEXT"})
+
+# Maximum preview length for LLM narrative content in a tooltip. Large
+# enough to show a full paragraph of reasoning in the click-to-pin
+# scrollable tooltip without making hover cards absurdly tall.
+_LLM_CONTENT_MAX = 1000
+
+# Maximum length for tool-call argument previews in a tooltip.
+_TOOL_ARGS_MAX = 200
+
+# When summarizing an LLM tool call, prefer these argument field names
+# for a terse ``tool_name(field="value")`` rendering. Order matters —
+# the first match wins. These cover the most common filesystem / shell
+# / search tool signatures used by openclaw and mini-swe.
+_TOOL_PRIMARY_FIELDS: tuple[str, ...] = (
+    "path",
+    "file_path",
+    "filepath",
+    "command",
+    "cmd",
+    "pattern",
+    "query",
+    "url",
+)
 
 # Map v4 ``action_type`` -> Gantt span type. Public so downstream code can
 # extend it (e.g., adding ``mcp_call`` -> ``mcp``).
@@ -287,6 +311,61 @@ def _build_spans_and_markers(
     return spans, markers
 
 
+def _summarize_tool_call(tc: dict[str, Any]) -> str | None:
+    """Turn a single raw tool_calls[i] dict into a short summary string
+    suitable for a tooltip row.
+
+    Preference order:
+      1. ``tool_name(primary_field="value")`` — when arguments decode as
+         a JSON dict and contain one of ``_TOOL_PRIMARY_FIELDS`` as a
+         top-level key. This highlights the "what did the model operate
+         on" bit, which is usually more useful than a 200-character
+         slice of the raw arguments JSON (which often starts with a
+         ``content`` field for ``write_file``).
+      2. ``tool_name(<first 200 chars of args>)`` — generic fallback
+         when no primary field matches or arguments don't decode.
+
+    Returns ``None`` if ``tc`` doesn't look like a tool-call dict.
+    """
+    if not isinstance(tc, dict):
+        return None
+    fn = tc.get("function") or {}
+    name = fn.get("name") or tc.get("name") or "?"
+
+    raw_args = fn.get("arguments") or tc.get("arguments") or ""
+    # Arguments can arrive as a dict (already parsed) or as a JSON string
+    # (OpenAI's default wire format). Normalize to a dict if possible so
+    # we can look up primary fields without touching the raw string.
+    parsed: dict[str, Any] | None = None
+    if isinstance(raw_args, dict):
+        parsed = raw_args
+    elif isinstance(raw_args, str):
+        try:
+            candidate = json.loads(raw_args)
+            if isinstance(candidate, dict):
+                parsed = candidate
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+    if parsed is not None:
+        for field in _TOOL_PRIMARY_FIELDS:
+            if field in parsed and parsed[field] is not None:
+                value = str(parsed[field])
+                if len(value) > _TOOL_ARGS_MAX:
+                    value = value[: _TOOL_ARGS_MAX] + "..."
+                return f'{name}({field}="{value}")'
+
+    # Fallback: raw-args preview.
+    if isinstance(raw_args, (dict, list)):
+        args_str = json.dumps(raw_args, ensure_ascii=False)
+    else:
+        args_str = str(raw_args)
+    preview = args_str[:_TOOL_ARGS_MAX]
+    if len(args_str) > _TOOL_ARGS_MAX:
+        preview += "..."
+    return f"{name}({preview})"
+
+
 def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
     """Extract tooltip detail from a v4 TraceAction record.
 
@@ -308,24 +387,18 @@ def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
             msg = choices[0].get("message") or {}
             content = msg.get("content") or ""
             if content:
-                data["llm_content"] = (
-                    content[:200] + ("..." if len(content) > 200 else "")
-                )
+                if len(content) > _LLM_CONTENT_MAX:
+                    data["llm_content"] = content[:_LLM_CONTENT_MAX] + "..."
+                else:
+                    data["llm_content"] = content
             tool_calls = msg.get("tool_calls") or []
             if tool_calls:
-                summaries: list[str] = []
-                for tc in tool_calls:
-                    if not isinstance(tc, dict):
-                        continue
-                    fn = tc.get("function") or {}
-                    name = fn.get("name") or tc.get("name") or "?"
-                    args = fn.get("arguments") or tc.get("arguments") or ""
-                    if isinstance(args, (dict, list)):
-                        import json as _json
-                        args = _json.dumps(args, ensure_ascii=False)
-                    args_preview = str(args)[:80]
-                    summaries.append(f"{name}({args_preview})")
-                data["tool_calls_requested"] = summaries
+                summaries = [
+                    s for s in (_summarize_tool_call(tc) for tc in tool_calls)
+                    if s is not None
+                ]
+                if summaries:
+                    data["tool_calls_requested"] = summaries
 
     # Drop heavy fields
     data.pop("messages_in", None)
