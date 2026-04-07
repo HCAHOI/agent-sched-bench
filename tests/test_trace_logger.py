@@ -56,30 +56,37 @@ def test_trace_logger_writes_action_entries(tmp_path: Path) -> None:
 def test_trace_logger_appends_on_resume(tmp_path: Path) -> None:
     run_id = "resume"
     logger1 = TraceLogger(tmp_path, run_id)
-    logger1.log_event("agent-1", "llm_start", {"step_idx": 0, "ts": 1.0})
+    logger1.log_event("agent-1", "LLM", "llm_call_start", {}, iteration=0, ts=1.0)
     logger1.close()
 
     logger2 = TraceLogger(tmp_path, run_id)
-    logger2.log_event("agent-1", "llm_end", {"step_idx": 0, "ts": 2.0})
+    logger2.log_event("agent-1", "LLM", "llm_call_end", {}, iteration=0, ts=2.0)
     logger2.close()
 
     lines = (tmp_path / f"{run_id}.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
-    assert json.loads(lines[0])["type"] == "llm_start"
-    assert json.loads(lines[1])["type"] == "llm_end"
+    e0 = json.loads(lines[0])
+    e1 = json.loads(lines[1])
+    assert e0["type"] == "event"
+    assert e0["event"] == "llm_call_start"
+    assert e1["event"] == "llm_call_end"
 
 
 def test_trace_logger_log_event_writes_correct_record(tmp_path: Path) -> None:
     logger = TraceLogger(tmp_path, "evt_run")
-    logger.log_event("agent-42", "llm_start", {"step_idx": 0, "ts": 1.0})
+    logger.log_event("agent-42", "LLM", "llm_call_start", {"prompt_tokens": 10},
+                     iteration=0, ts=1.0)
     logger.close()
 
     lines = (tmp_path / "evt_run.jsonl").read_text(encoding="utf-8").splitlines()
     entry = json.loads(lines[0])
-    assert entry["type"] == "llm_start"
+    assert entry["type"] == "event"
+    assert entry["event"] == "llm_call_start"
+    assert entry["category"] == "LLM"
     assert entry["agent_id"] == "agent-42"
-    assert entry["step_idx"] == 0
+    assert entry["iteration"] == 0
     assert entry["ts"] == 1.0
+    assert entry["data"]["prompt_tokens"] == 10
 
 
 def _make_action(iteration: int = 0, action_type: str = "tool_exec",
@@ -112,7 +119,7 @@ def _make_concrete_agent(api_base: str = "http://localhost") -> AgentBase:
 
 def test_emit_event_noop_when_no_logger() -> None:
     agent = _make_concrete_agent()
-    agent._emit_event("llm_start", {"step_idx": 0, "ts": 1.0})
+    agent._emit_event("LLM", "llm_call_start", {}, iteration=0, ts=1.0)
     assert len(agent.actions) == 0
 
 

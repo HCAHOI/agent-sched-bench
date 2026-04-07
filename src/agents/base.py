@@ -44,7 +44,7 @@ class ToolCallResult:
 class TraceAction:
     """A single replayable action in an agent trace (v4 format).
 
-    Replaces StepRecord. Each action is one executable operation:
+    Each action is one executable operation:
     - ``llm_call``: an LLM inference (input: messages_in; output: raw_response)
     - ``tool_exec``: a tool execution (input: tool_name+args; output: result)
 
@@ -241,10 +241,21 @@ class AgentBase(ABC):
         heavyweight setup (e.g. Podman containers) should override this.
         """
 
-    def _emit_event(self, event_type: str, data: dict[str, Any]) -> None:
-        """Emit a fine-grained event if a logger is injected. No-op otherwise."""
+    def _emit_event(
+        self,
+        category: str,
+        event: str,
+        data: dict[str, Any],
+        *,
+        iteration: int = 0,
+        ts: float | None = None,
+    ) -> None:
+        """Emit a v4 envelope event. No-op if no logger is injected."""
         if self._trace_logger is not None:
-            self._trace_logger.log_event(self.agent_id, event_type, data)
+            self._trace_logger.log_event(
+                self.agent_id, category, event, data,
+                iteration=iteration, ts=ts,
+            )
 
     def _emit_action(self, action: TraceAction) -> None:
         """Append action to self.actions and write to logger."""

@@ -59,10 +59,28 @@ class TraceLogger:
         self._handle.write(json.dumps(entry) + "\n")
         self._handle.flush()
 
-    def log_event(self, agent_id: str, event_type: str, data: dict[str, Any]) -> None:
-        """Write a fine-grained event record immediately."""
-        entry = {"type": event_type, "agent_id": agent_id, **data}
-        self._handle.write(json.dumps(entry) + "\n")
+    def log_event(
+        self,
+        agent_id: str,
+        category: str,
+        event: str,
+        data: dict[str, Any],
+        *,
+        iteration: int = 0,
+        ts: float | None = None,
+    ) -> None:
+        """Write a v4 envelope event record."""
+        import time
+        entry = {
+            "type": "event",
+            "agent_id": agent_id,
+            "category": category,
+            "event": event,
+            "iteration": iteration,
+            "ts": ts if ts is not None else time.time(),
+            "data": data,
+        }
+        self._handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._handle.flush()
 
     def close(self) -> None:

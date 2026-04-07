@@ -63,15 +63,6 @@ class TestDetectAgentId:
         trace.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
         assert _detect_agent_id(trace) == "task-001"
 
-    def test_finds_legacy_step_agent_id(self, tmp_path: Path) -> None:
-        from trace_collect.simulator import _detect_agent_id
-
-        trace = tmp_path / "test.jsonl"
-        records = [
-            {"type": "step", "agent_id": "task-002", "step_idx": 0},
-        ]
-        trace.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
-        assert _detect_agent_id(trace) == "task-002"
 
 
 class TestTraceLoggerAction:

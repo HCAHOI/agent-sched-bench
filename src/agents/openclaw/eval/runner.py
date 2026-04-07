@@ -26,7 +26,6 @@ from agents.openclaw.eval.prepare import prepare_workspace
 from agents.openclaw.eval.types import EvalResult, EvalTask
 from agents.openclaw.providers.base import LLMProvider
 
-# Re-export for backward compatibility — other modules import these from here
 __all__ = [
     "SWEBenchRunner",
     "TraceCollectorHook",

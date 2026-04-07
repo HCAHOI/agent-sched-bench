@@ -1,14 +1,10 @@
 """Trace Inspector: parse and query JSONL trace files produced by trace_collect.
 
-Supported record types:
+Supported record types (v4):
     trace_metadata  – scaffold, mode, model info
-    step            – one LLM+tool turn (step_idx, tokens, latency, tool info, messages_in)
-    event           – unified lifecycle events (event, category, data, step_idx, ts)
+    action          – replayable LLM/tool action with ts_start, ts_end, data
+    event           – point-in-time observability events
     summary         – end-of-run aggregates
-
-Legacy mini-swe flat events (llm_start/end, tool_start/end, action) and
-openclaw events using 'iteration' are normalized to the unified envelope
-on load via _normalize_legacy_event().
 """
 
 from __future__ import annotations
@@ -18,11 +14,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -37,50 +28,6 @@ def _to_str(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False)
-
-
-# Map flat event types to (category, event_name) for normalization.
-# Covers mini-swe v2 flat names and v3 flat names (llm_call_start etc.).
-_LEGACY_EVENT_MAP: dict[str, tuple[str, str]] = {
-    # mini-swe v2 flat events
-    "llm_start": ("LLM", "llm_call_start"),
-    "llm_end": ("LLM", "llm_call_end"),
-    "tool_start": ("TOOL", "tool_exec_start"),
-    "tool_end": ("TOOL", "tool_exec_end"),
-    "action": ("LLM", "llm_action"),
-    # v3 flat events (mini-swe uses these as top-level record types)
-    "llm_call_start": ("LLM", "llm_call_start"),
-    "llm_call_end": ("LLM", "llm_call_end"),
-    "tool_exec_start": ("TOOL", "tool_exec_start"),
-    "tool_exec_end": ("TOOL", "tool_exec_end"),
-}
-
-# Keys that are structural (not event-specific payload).
-_STRUCTURAL_KEYS = frozenset({"type", "agent_id", "ts", "step_idx", "iteration"})
-
-
-def _normalize_legacy_event(record: dict[str, Any]) -> dict[str, Any]:
-    """Convert a legacy mini-swe flat event into the unified envelope.
-
-    Legacy format:  {"type": "llm_start", "agent_id": "...", "step_idx": 0, "ts": ..., ...}
-    Normalized:     {"type": "event", "category": "LLM", "event": "llm_call_start",
-                     "step_idx": 0, "ts": ..., "data": {...}, "agent_id": "..."}
-    """
-    rec_type = record.get("type", "")
-    category, event_name = _LEGACY_EVENT_MAP[rec_type]
-
-    # Collect payload fields (everything not structural).
-    data = {k: v for k, v in record.items() if k not in _STRUCTURAL_KEYS}
-
-    return {
-        "type": "event",
-        "agent_id": record.get("agent_id"),
-        "category": category,
-        "event": event_name,
-        "step_idx": record.get("step_idx", record.get("iteration", 0)),
-        "ts": record.get("ts", 0.0),
-        "data": data,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -135,60 +82,25 @@ class TraceData:
 
                 if rec_type == "trace_metadata":
                     metadata.update(record)
-                elif rec_type == "action" and "action_type" in record:
-                    # v4 TraceAction records (have action_type field)
-                    actions.append(record)
-                elif rec_type == "step":
-                    # Legacy v3 step records — treat as actions for compat
+                elif rec_type == "action":
                     actions.append(record)
                 elif rec_type == "event":
-                    if "step_idx" not in record and "iteration" in record:
-                        record["step_idx"] = record["iteration"]
                     events.append(record)
-                elif rec_type in _LEGACY_EVENT_MAP:
-                    events.append(_normalize_legacy_event(record))
                 elif rec_type == "summary":
                     summaries.append(record)
 
-        # Sort actions: v4 by (iteration, ts_start), legacy steps by step_idx
-        actions.sort(key=lambda r: (
-            r.get("iteration", r.get("step_idx", 0)),
-            r.get("ts_start", 0),
-        ))
+        actions.sort(key=lambda r: (r.get("iteration", 0), r.get("ts_start", 0)))
         events.sort(key=lambda r: r.get("ts", 0.0))
 
-        # Enrich actions with data from events (for v3 slim steps and
-        # for v4 actions that may need messages_in/raw_response from events)
-        llm_starts: dict[int, dict[str, Any]] = {}
-        llm_ends: dict[int, dict[str, Any]] = {}
-        for ev in events:
-            ename = ev.get("event")
-            idx = ev.get("step_idx", 0)
-            if ename == "llm_call_start":
-                llm_starts[idx] = ev.get("data", {})
-            elif ename == "llm_call_end":
-                llm_ends[idx] = ev.get("data", {})
+        # Derive llm_output from raw_response for search/display
         for act in actions:
-            idx = act.get("iteration", act.get("step_idx", 0))
-            data = act.get("data", {})
-            # For v4 actions, messages_in/raw_response are in data
-            # For legacy steps, they may be missing (v3 slim) — enrich from events
-            msgs = data.get("messages_in") or act.get("messages_in")
-            raw = data.get("raw_response") or act.get("raw_response")
-            if not msgs and idx in llm_starts:
-                msgs = llm_starts[idx].get("messages_in")
-            if not raw and idx in llm_ends:
-                raw = llm_ends[idx].get("raw_response")
-            if msgs:
-                act["messages_in"] = msgs
-            if raw:
-                act["raw_response"] = raw
-            # Derive llm_output for search/display
+            data = act.get("data") or {}
             if "llm_output" not in act:
                 llm_content = data.get("llm_content")
                 if llm_content:
                     act["llm_output"] = llm_content
-                elif raw:
+                else:
+                    raw = data.get("raw_response") or {}
                     choices = raw.get("choices") or []
                     if choices:
                         msg = choices[0].get("message") or {}
@@ -293,9 +205,9 @@ def cmd_step(
     as_json: bool = False,
 ) -> None:
     """Print all fields of a single step record."""
-    step = next((s for s in data.actions if s.get("iteration", s.get("step_idx")) == step_idx), None)
+    step = next((s for s in data.actions if s.get("iteration") == step_idx), None)
     if step is None:
-        avail = [s.get("step_idx") for s in data.actions]
+        avail = sorted({s.get("iteration") for s in data.actions if s.get("iteration") is not None})
         msg = f"step {step_idx} not found (available: {avail})"
         if as_json:
             print(json.dumps({"error": msg}))
@@ -345,8 +257,12 @@ def cmd_messages(
     truncate: int = 2000,
     as_json: bool = False,
 ) -> None:
-    """Print messages_in from a step record, optionally filtered by role."""
-    step = next((s for s in data.actions if s.get("iteration", s.get("step_idx")) == step_idx), None)
+    """Print messages_in from the llm_call action of a given iteration."""
+    step = next(
+        (s for s in data.actions
+         if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"),
+        None,
+    )
     if step is None:
         if as_json:
             print(json.dumps({"error": f"step {step_idx} not found"}))
@@ -354,7 +270,7 @@ def cmd_messages(
             print(f"ERROR: step {step_idx} not found")
         return
 
-    messages: list[dict[str, Any]] = step.get("messages_in", [])
+    messages: list[dict[str, Any]] = (step.get("data") or {}).get("messages_in", []) or []
     if role_filter:
         messages = [m for m in messages if m.get("role") == role_filter]
 
@@ -387,8 +303,12 @@ def cmd_response(
     truncate: int = 2000,
     as_json: bool = False,
 ) -> None:
-    """Print raw_response from a step record."""
-    step = next((s for s in data.actions if s.get("iteration", s.get("step_idx")) == step_idx), None)
+    """Print raw_response from the llm_call action of a given iteration."""
+    step = next(
+        (s for s in data.actions
+         if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"),
+        None,
+    )
     if step is None:
         if as_json:
             print(json.dumps({"error": f"step {step_idx} not found"}))
@@ -396,7 +316,7 @@ def cmd_response(
             print(f"ERROR: step {step_idx} not found")
         return
 
-    raw = step.get("raw_response")
+    raw = (step.get("data") or {}).get("raw_response")
     if raw is None:
         if as_json:
             print(json.dumps({"error": f"Step {step_idx} has no raw_response field."}))
@@ -408,10 +328,9 @@ def cmd_response(
     text = _truncate(text, truncate)
 
     if as_json:
-        # Wrap in a container so output is always valid JSON
         print(
             json.dumps(
-                {"step_idx": step_idx, "raw_response": raw},
+                {"iteration": step_idx, "raw_response": raw},
                 indent=2,
                 ensure_ascii=False,
             )
@@ -439,7 +358,7 @@ def cmd_events(
         ]
     if iteration is not None:
         events = [
-            e for e in events if e.get("step_idx") == iteration
+            e for e in events if e.get("iteration") == iteration
         ]
 
     if as_json:
@@ -455,7 +374,7 @@ def cmd_events(
         ts = ev.get("ts") or ev.get("ts_start") or "?"
         name = ev.get("event", "?")
         cat = ev.get("category", "?")
-        itr = ev.get("step_idx", "?")
+        itr = ev.get("iteration", "?")
         data_fields = ev.get("data", {})
 
         data_str = ""
@@ -478,19 +397,22 @@ def cmd_tools(
     """Aggregate tool usage statistics, sorted by count descending."""
     steps = data.actions
     if step_idx is not None:
-        steps = [s for s in steps if s.get("iteration", s.get("step_idx")) == step_idx]
+        steps = [s for s in steps if s.get("iteration") == step_idx]
 
     # name -> {count, total_ms, successes}
     agg: dict[str, dict[str, Any]] = {}
     for step in steps:
-        tool = step.get("tool_name")
+        if step.get("action_type") != "tool_exec":
+            continue
+        d = step.get("data") or {}
+        tool = d.get("tool_name")
         if not tool:
             continue
         if tool not in agg:
             agg[tool] = {"count": 0, "total_duration_ms": 0.0, "successes": 0}
         agg[tool]["count"] += 1
-        agg[tool]["total_duration_ms"] += step.get("tool_duration_ms", 0.0) or 0.0
-        if step.get("tool_success"):
+        agg[tool]["total_duration_ms"] += d.get("duration_ms", 0.0) or 0.0
+        if d.get("success"):
             agg[tool]["successes"] += 1
 
     rows = []
@@ -568,7 +490,7 @@ def cmd_search(
                 context = _truncate(context, truncate)
             results.append(
                 {
-                    "step_idx": step.get("step_idx"),
+                    "iteration": step.get("iteration"),
                     "match_start": match.start(),
                     "context": context,
                 }
@@ -584,7 +506,7 @@ def cmd_search(
 
     print(f"--- Search results for {pattern!r} ({len(results)} match(es)) ---")
     for r in results:
-        print(f"  step {r['step_idx']}: ...{r['context']}...")
+        print(f"  iter {r['iteration']}: ...{r['context']}...")
 
 
 # ---------------------------------------------------------------------------
@@ -648,11 +570,11 @@ _CATEGORY_SHORT: dict[str, str] = {
 
 
 def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
-    """Format a single event record for timeline display."""
+    """Format a single v4 envelope event record for timeline display."""
     event_name = rec.get("event", "unknown")
     category = rec.get("category", "")
     data = rec.get("data", {})
-    step = rec.get("step_idx", "?")
+    itr = rec.get("iteration", "?")
     ts = rec.get("ts", 0.0)
     rel = ts - t0 if t0 > 0 and ts > 0 else 0.0
 
@@ -680,82 +602,37 @@ def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
         parts.append("ok" if data["success"] else "FAIL")
 
     detail = "  ".join(parts)
-    return f"  +{rel:7.1f}s {icon} [{cat:>7}] {event_name:<30} step={step:<3} {detail}"
+    return f"  +{rel:7.1f}s {icon} [{cat:>7}] {event_name:<30} iter={itr:<3} {detail}"
 
 
-def _fmt_tl_miniswe_event(
-    rec: dict[str, Any], t0: float, tool_start_ts: dict[int | str, float]
-) -> str | None:
-    """Format a normalized mini-swe event for timeline. Returns None to skip."""
-    event_name = rec.get("event", "")
-    ts = rec.get("ts", 0.0)
-    if ts <= 0:
-        return None
-    rel = ts - t0
-    data = rec.get("data", {})
-    step = rec.get("step_idx", "?")
+def _fmt_tl_action(rec: dict[str, Any], t0: float = 0.0) -> str:
+    """Format a v4 action record (llm_call or tool_exec) for timeline display."""
+    action_type = rec.get("action_type", "?")
+    iteration = rec.get("iteration", "?")
+    data = rec.get("data") or {}
+    ts_start = rec.get("ts_start", 0)
+    rel = ts_start - t0 if t0 > 0 and ts_start > 0 else 0.0
 
-    if event_name == "llm_call_start":
-        return f"  +{rel:7.1f}s  ▶ LLM           step={step}"
-    elif event_name == "llm_call_end":
-        lat = (data.get("latency_ms") or 0) / 1000
+    if action_type == "llm_call":
         pt = data.get("prompt_tokens", 0)
         ct = data.get("completion_tokens", 0)
-        return f"  +{rel:7.1f}s  ◀ LLM done      step={step}  lat={lat:.1f}s  {pt}+{ct}tok"
-    elif event_name == "tool_exec_start":
-        tool_start_ts[step] = ts
-        tool_args = data.get("tool_args", "")
-        try:
-            args = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
-            cmds = args.get("commands", [args.get("command", "")]) if isinstance(args, dict) else [str(tool_args)]
-        except Exception:
-            cmds = [str(tool_args)]
-        first = cmds[0][:52].replace("\n", "↵") if cmds else ""
-        return f"  +{rel:7.1f}s  ⚙  bash         step={step}  $ {first}"
-    elif event_name == "tool_exec_end":
-        start = tool_start_ts.get(step)
-        dur = (ts - start) if start is not None else 0.0
-        ok = "✓" if data.get("success") else "✗"
-        return f"  +{rel:7.1f}s  {ok}  bash done    step={step}  dur={dur:.1f}s"
-    return None
-
-
-def _fmt_tl_step(rec: dict[str, Any], t0: float = 0.0) -> list[str]:
-    """Format a step record for timeline. Returns lines to print."""
-    lines: list[str] = []
-    step_idx = rec.get("step_idx", "?")
-    pt = rec.get("prompt_tokens", 0)
-    ct = rec.get("completion_tokens", 0)
-    llm_lat = rec.get("llm_latency_ms", 0) / 1000
-    rel = rec.get("ts_start", 0) - t0 if t0 > 0 and rec.get("ts_start", 0) > 0 else 0.0
-
-    if pt or ct:
-        ttft = rec.get("ttft_ms")
-        tpot = rec.get("tpot_ms")
-        timing_extra = ""
-        if ttft is not None and ttft > 0:
-            timing_extra = f"  ttft={ttft:.0f}ms"
-            if tpot is not None and tpot > 0:
-                timing_extra += f" tpot={tpot:.1f}ms"
-        lines.append(
-            f"  +{rel:7.1f}s step={step_idx:<3}  ◀ LLM  {pt}+{ct}tok  "
-            f"lat={llm_lat:.1f}s{timing_extra}"
+        lat = (data.get("llm_latency_ms") or 0) / 1000
+        return (
+            f"  +{rel:7.1f}s iter={iteration:<3}  ◀ LLM  {pt}+{ct}tok  "
+            f"lat={lat:.1f}s"
         )
-
-    tool_name = rec.get("tool_name")
-    if tool_name:
-        tool_dur = rec.get("tool_duration_ms")
-        dur_str = f"  dur={tool_dur / 1000:.1f}s" if tool_dur else ""
-        ok = "✓" if rec.get("tool_success") else "✗"
-        result_preview = (rec.get("tool_result") or "")[:80].replace("\n", "↵")
+    elif action_type == "tool_exec":
+        tool_name = data.get("tool_name", "?")
+        dur = (data.get("duration_ms") or 0) / 1000
+        ok = "✓" if data.get("success") else "✗"
+        result_preview = (data.get("tool_result") or "")[:80].replace("\n", "↵")
         if result_preview:
             result_preview = f"  {result_preview}"
-        tool_ts = rec.get("tool_ts_start") or 0
-        tool_rel = tool_ts - t0 if t0 > 0 and tool_ts > 0 else rel
-        lines.append(
-            f"  +{tool_rel:7.1f}s step={step_idx:<3}  {ok}  {tool_name}{dur_str}{result_preview}"
+        return (
+            f"  +{rel:7.1f}s iter={iteration:<3}  {ok}  {tool_name}  "
+            f"dur={dur:.2f}s{result_preview}"
         )
-    return lines
+    return f"  +{rel:7.1f}s iter={iteration:<3}  {action_type}"
 
 
 def _print_tl_summary(summary: dict[str, Any]) -> None:
@@ -789,7 +666,7 @@ def _print_tl_summary(summary: dict[str, Any]) -> None:
 
 
 def cmd_timeline(data: TraceData) -> None:
-    """Print a concise per-step timeline with icons and relative timestamps."""
+    """Print a concise per-iteration timeline with icons and relative timestamps."""
 
     scaffold = data.metadata.get("scaffold", "")
     mode = data.metadata.get("mode", "collect")
@@ -805,92 +682,30 @@ def cmd_timeline(data: TraceData) -> None:
         local = data.metadata.get("local_model", "?")
         print(f"  Simulate: {src} → {local}")
 
-    # Detect scaffold from events if metadata is missing.
-    # Check mini-swe first (specific normalized names), then openclaw
-    # (has openclaw-specific events like tool_execute, session_load).
-    _OPENCLAW_ONLY_EVENTS = frozenset({
-        "tool_execute", "tool_complete", "tool_error", "session_load",
-        "message_dispatch", "session_lock_acquire", "skill_load",
-    })
-    if not scaffold:
-        if any(e.get("event") in ("llm_call_start", "tool_exec_start") for e in data.events):
-            scaffold = "mini-swe-agent"
-        elif any(e.get("event") in _OPENCLAW_ONLY_EVENTS for e in data.events):
-            scaffold = "openclaw"
-
     for agent_id in data.agents:
-        agent_steps = [s for s in data.actions if s.get("agent_id") == agent_id]
+        agent_actions = [s for s in data.actions if s.get("agent_id") == agent_id]
         agent_events = [e for e in data.events if e.get("agent_id") == agent_id]
         agent_summaries = [s for s in data.summaries if s.get("agent_id") == agent_id]
 
         print(f"\nTimeline: {agent_id}")
         print("─" * 80)
 
-        if scaffold == "openclaw":
-            _tl_render_openclaw(agent_steps, agent_events)
-        elif scaffold == "mini-swe-agent":
-            _tl_render_miniswe(agent_steps, agent_events)
-        else:
-            _tl_render_steps_only(agent_steps, scaffold)
+        # Interleave actions and events sorted by timestamp
+        entries: list[tuple[float, str, dict[str, Any]]] = []
+        for a in agent_actions:
+            entries.append((a.get("ts_start", 0), "action", a))
+        for e in agent_events:
+            entries.append((e.get("ts", 0), "event", e))
+        entries.sort(key=lambda x: x[0])
+
+        t0 = min((ts for ts, _, _ in entries if ts > 0), default=0.0)
+
+        for _, entry_type, rec in entries:
+            if entry_type == "action":
+                print(_fmt_tl_action(rec, t0))
+            else:
+                print(_fmt_tl_event(rec, t0))
 
         summary = agent_summaries[0] if agent_summaries else None
         if summary:
             _print_tl_summary(summary)
-
-
-def _tl_render_openclaw(
-    steps: list[dict[str, Any]], events: list[dict[str, Any]]
-) -> None:
-    """Render openclaw timeline: interleave steps and events sorted by (step_idx, ts)."""
-    entries: list[tuple[int, float, str, dict[str, Any]]] = []
-    for s in steps:
-        entries.append((s.get("step_idx", 0), s.get("ts_start", 0), "step", s))
-    for e in events:
-        entries.append((e.get("step_idx", -1), e.get("ts", 0), "event", e))
-    entries.sort(key=lambda x: (x[0], x[1]))
-
-    t0 = min((ts for _, ts, _, _ in entries if ts > 0), default=0.0)
-
-    for _, _, entry_type, rec in entries:
-        if entry_type == "step":
-            for line in _fmt_tl_step(rec, t0):
-                print(line)
-        else:
-            print(_fmt_tl_event(rec, t0))
-
-
-def _tl_render_miniswe(
-    steps: list[dict[str, Any]], events: list[dict[str, Any]]
-) -> None:
-    """Render mini-swe timeline using normalized events."""
-    all_recs = steps + events
-    all_recs.sort(key=lambda r: r.get("ts") or r.get("ts_start") or 0)
-
-    t0: float | None = None
-    tool_start_ts: dict[int | str, float] = {}
-
-    for r in all_recs:
-        ts = r.get("ts") or r.get("ts_start")
-        if ts is None or ts <= 0:
-            continue
-        if t0 is None:
-            t0 = ts
-
-        rec_type = r.get("type", "")
-        if rec_type == "event":
-            line = _fmt_tl_miniswe_event(r, t0, tool_start_ts)
-            if line:
-                print(line)
-        elif rec_type == "step":
-            # Step records don't duplicate with events in mini-swe
-            pass
-
-
-def _tl_render_steps_only(
-    steps: list[dict[str, Any]], scaffold: str
-) -> None:
-    """Fallback: render only step records."""
-    steps_sorted = sorted(steps, key=lambda r: r.get("step_idx", 0))
-    for step in steps_sorted:
-        for line in _fmt_tl_step(step, 0.0):
-            print(line)

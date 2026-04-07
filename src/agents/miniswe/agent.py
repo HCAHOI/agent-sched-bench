@@ -361,7 +361,7 @@ class MiniSWECodeAgent(AgentBase):
         #   ...
         #   [-1] exit
 
-        step_idx = 0
+        iteration = 0
         prev_msg_len = 0  # for delta messages_in
         _prev_ts_end = (
             run_ts_start  # fallback ts_start when predecessor lacks timestamp
@@ -396,16 +396,18 @@ class MiniSWECodeAgent(AgentBase):
             completion_tokens: int = usage.get("completion_tokens", 0) or 0
             latency_ms = (ts_end - ts_start) * 1000
 
-            self._emit_event("llm_start", {"step_idx": step_idx, "ts": ts_start})
             self._emit_event(
-                "llm_end",
+                "LLM", "llm_call_start", {},
+                iteration=iteration, ts=ts_start,
+            )
+            self._emit_event(
+                "LLM", "llm_call_end",
                 {
-                    "step_idx": step_idx,
-                    "ts": ts_end,
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                    "latency_ms": latency_ms,
+                    "llm_latency_ms": latency_ms,
                 },
+                iteration=iteration, ts=ts_end,
             )
 
             raw_response = extra.get("response") or {}
@@ -416,10 +418,10 @@ class MiniSWECodeAgent(AgentBase):
             # Emit llm_call TraceAction
             llm_action = TraceAction(
                 action_type="llm_call",
-                action_id=f"llm_{step_idx}",
+                action_id=f"llm_{iteration}",
                 agent_id=self.agent_id,
                 program_id=self.agent_id,
-                iteration=step_idx,
+                iteration=iteration,
                 ts_start=ts_start,
                 ts_end=ts_end,
                 data={
@@ -504,33 +506,28 @@ class MiniSWECodeAgent(AgentBase):
 
                 # Emit tool_exec_start/end observability events
                 self._emit_event(
-                    "tool_start",
-                    {
-                        "step_idx": step_idx,
-                        "ts": tool_ts_start,
-                        "tool_name": "bash",
-                        "tool_args": tool_args,
-                    },
+                    "TOOL", "tool_exec_start",
+                    {"tool_name": "bash", "tool_args": tool_args},
+                    iteration=iteration, ts=tool_ts_start,
                 )
                 self._emit_event(
-                    "tool_end",
+                    "TOOL", "tool_exec_end",
                     {
-                        "step_idx": step_idx,
-                        "ts": tool_ts_end or tool_ts_start,
                         "tool_name": "bash",
                         "duration_ms": tool_duration_ms,
                         "success": returncode == 0,
                         "timeout": False,
                     },
+                    iteration=iteration, ts=tool_ts_end or tool_ts_start,
                 )
 
                 # Emit tool_exec TraceAction
                 tool_action = TraceAction(
                     action_type="tool_exec",
-                    action_id=f"tool_{step_idx}_bash",
+                    action_id=f"tool_{iteration}_bash",
                     agent_id=self.agent_id,
                     program_id=self.agent_id,
-                    iteration=step_idx,
+                    iteration=iteration,
                     ts_start=tool_ts_start,
                     ts_end=tool_ts_end or tool_ts_start,
                     data={
@@ -544,7 +541,7 @@ class MiniSWECodeAgent(AgentBase):
                 )
                 self._emit_action(tool_action)
 
-            step_idx += 1
+            iteration += 1
             prev_msg_len = j
             _prev_ts_end = ts_end
             i = j

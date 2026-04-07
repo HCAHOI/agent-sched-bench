@@ -120,11 +120,7 @@ def load_trace_actions(
     trace_path: Path,
     agent_id: str,
 ) -> tuple[dict[int, dict[str, Any]], dict[str, Any] | None]:
-    """Load trace actions grouped by iteration, plus optional summary.
-
-    Handles both v4 (TraceAction records) and legacy (step records + events).
-    Returns actions grouped by iteration so the simulator can replay each
-    iteration as: LLM call → tool executions.
+    """Load v4 trace actions grouped by iteration, plus optional summary.
 
     Returns:
         (iterations dict {iteration_num: {"llm": action_dict, "tools": [action_dict, ...]}},
@@ -134,11 +130,7 @@ def load_trace_actions(
         SimulateError: if agent_id not found or no action records exist.
     """
     actions: list[dict[str, Any]] = []
-    legacy_steps: list[dict[str, Any]] = []
     summary: dict[str, Any] | None = None
-    # Collect events for enrichment (legacy traces)
-    llm_starts: dict[int, dict[str, Any]] = {}
-    llm_ends: dict[int, dict[str, Any]] = {}
 
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
@@ -152,74 +144,23 @@ def load_trace_actions(
             if record.get("agent_id") != agent_id:
                 continue
             rtype = record.get("type")
-            if rtype == "action" and "action_type" in record:
+            if rtype == "action":
                 actions.append(record)
-            elif rtype == "step":
-                legacy_steps.append(record)
             elif rtype == "summary":
                 summary = record
-            elif rtype == "event":
-                event_name = record.get("event")
-                idx = record.get("step_idx", 0)
-                if event_name == "llm_call_start":
-                    llm_starts[idx] = record.get("data", {})
-                elif event_name == "llm_call_end":
-                    llm_ends[idx] = record.get("data", {})
-            elif rtype in ("llm_call_start", "llm_call_end"):
-                idx = record.get("step_idx", record.get("iteration", 0))
-                if rtype == "llm_call_start":
-                    llm_starts[idx] = record
-                else:
-                    llm_ends[idx] = record
 
-    # If we have v4 actions, group by iteration
-    if actions:
-        iterations: dict[int, dict[str, Any]] = {}
-        for a in actions:
-            it = a.get("iteration", 0)
-            if it not in iterations:
-                iterations[it] = {"llm": None, "tools": []}
-            if a.get("action_type") == "llm_call":
-                iterations[it]["llm"] = a
-            elif a.get("action_type") == "tool_exec":
-                iterations[it]["tools"].append(a)
-        if not iterations:
-            raise SimulateError(f"No action records found for agent_id={agent_id!r}")
-        return iterations, summary
+    if not actions:
+        raise SimulateError(f"No action records found for agent_id={agent_id!r}")
 
-    # Fallback: convert legacy steps to iteration groups
-    if not legacy_steps:
-        raise SimulateError(f"No action/step records found for agent_id={agent_id!r}")
-
-    legacy_steps.sort(key=lambda s: s.get("step_idx", 0))
-    # Enrich from events
-    for step in legacy_steps:
-        idx = step.get("step_idx", 0)
-        if "messages_in" not in step and idx in llm_starts:
-            step["messages_in"] = llm_starts[idx].get("messages_in")
-        if "raw_response" not in step and idx in llm_ends:
-            step["raw_response"] = llm_ends[idx].get("raw_response")
-
-    iterations = {}
-    for step in legacy_steps:
-        idx = step.get("step_idx", 0)
-        llm_data = {
-            "messages_in": step.get("messages_in"),
-            "raw_response": step.get("raw_response"),
-            "prompt_tokens": step.get("prompt_tokens", 0),
-            "completion_tokens": step.get("completion_tokens", 0),
-            "llm_latency_ms": step.get("llm_latency_ms", 0),
-        }
-        tool_data = None
-        if step.get("tool_name"):
-            tool_data = {
-                "tool_name": step["tool_name"],
-                "tool_args": step.get("tool_args", "{}"),
-            }
-        iterations[idx] = {
-            "llm": {"type": "action", "action_type": "llm_call", "iteration": idx, "data": llm_data},
-            "tools": [{"type": "action", "action_type": "tool_exec", "iteration": idx, "data": tool_data}] if tool_data else [],
-        }
+    iterations: dict[int, dict[str, Any]] = {}
+    for a in actions:
+        it = a.get("iteration", 0)
+        if it not in iterations:
+            iterations[it] = {"llm": None, "tools": []}
+        if a.get("action_type") == "llm_call":
+            iterations[it]["llm"] = a
+        elif a.get("action_type") == "tool_exec":
+            iterations[it]["tools"].append(a)
     return iterations, summary
 
 
@@ -483,7 +424,7 @@ def _detect_scaffold(trace_path: Path) -> str:
 
 
 def _detect_agent_id(trace_path: Path) -> str:
-    """Read the first action/step record to detect the agent_id."""
+    """Read the first action record to detect the agent_id."""
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -493,7 +434,6 @@ def _detect_agent_id(trace_path: Path) -> str:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            rtype = record.get("type", "")
-            if rtype in ("action", "step") and record.get("agent_id"):
+            if record.get("type") == "action" and record.get("agent_id"):
                 return record["agent_id"]
-    raise SimulateError(f"No action/step records with agent_id found in {trace_path}")
+    raise SimulateError(f"No action records with agent_id found in {trace_path}")

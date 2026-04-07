@@ -1,10 +1,8 @@
 """Build Gantt chart JSON payloads from TraceData.
 
-v4 traces: actions (llm_call, tool_exec) ARE the spans directly.
+Actions (llm_call, tool_exec) ARE the spans directly.
 Scheduling overhead is computed from time gaps between consecutive actions.
 Events become point markers for observability detail.
-
-Legacy (v3) traces: event pairs are used to build spans as fallback.
 """
 
 from __future__ import annotations
@@ -167,97 +165,29 @@ def _build_spans_and_markers(
     events: list[dict[str, Any]],
     t0: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Build Gantt spans from actions and markers from events.
+    """Build Gantt spans from v4 actions and markers from events.
 
-    v4 actions (with ``action_type``) become spans directly.
-    Legacy step records are converted to spans via ts_start/ts_end.
+    Each action (llm_call, tool_exec) becomes a span directly.
     Scheduling overhead is computed from time gaps between consecutive actions.
     Events with SCHEDULING/SESSION/CONTEXT categories become point markers.
     """
     spans: list[dict[str, Any]] = []
     markers: list[dict[str, Any]] = []
 
-    # Detect format: v4 actions have action_type, v3 steps don't
-    has_v4_actions = any(a.get("action_type") for a in actions)
-
-    if has_v4_actions:
-        # ── v4: actions ARE spans directly ──
-        for act in actions:
-            action_type = act.get("action_type")
-            if action_type and action_type in _ACTION_TYPE_MAP:
-                span_type = _ACTION_TYPE_MAP[action_type]
-                detail = _extract_detail_from_action(act)
-                spans.append({
-                    "type": span_type,
-                    "start": act.get("ts_start", 0) - t0,
-                    "end": act.get("ts_end", 0) - t0,
-                    "start_abs": act.get("ts_start", 0),
-                    "end_abs": act.get("ts_end", 0),
-                    "iteration": act.get("iteration", 0),
-                    "detail": detail,
-                })
-    else:
-        # ── v3 legacy: pair events into spans, steps as fallback ──
-        _SPAN_PAIRS = {
-            "llm": ("llm_call_start", "llm_call_end"),
-            "tool": ("tool_exec_start", "tool_exec_end"),
-        }
-        event_role: dict[str, tuple[str, str]] = {}
-        for stype, (s, e) in _SPAN_PAIRS.items():
-            event_role[s] = (stype, "start")
-            event_role[e] = (stype, "end")
-
-        starts: dict[tuple, dict[str, Any]] = {}
-        paired_keys: set[tuple] = set()
-
-        for ev in events:
-            ename = ev.get("event", "")
-            if ename not in event_role:
-                continue
-            span_type, role = event_role[ename]
-            idx = ev.get("step_idx", 0)
-            tool_name = (ev.get("data") or {}).get("tool_name", "")
-            key = (span_type, idx, tool_name) if span_type == "tool" else (span_type, idx)
-
-            if role == "start":
-                if key not in paired_keys:
-                    starts[key] = ev
-            elif role == "end":
-                start_ev = starts.pop(key, None)
-                if start_ev is not None:
-                    paired_keys.add(key)
-                    detail = _extract_detail_from_event(start_ev)
-                    detail.update(_extract_detail_from_event(ev))
-                    spans.append({
-                        "type": span_type,
-                        "start": start_ev.get("ts", 0) - t0,
-                        "end": ev.get("ts", 0) - t0,
-                        "start_abs": start_ev.get("ts", 0),
-                        "end_abs": ev.get("ts", 0),
-                        "iteration": ev.get("step_idx", 0),
-                        "detail": detail,
-                    })
-
-        # Fallback: steps without matched event pairs
-        iters_with_spans = {s["iteration"] for s in spans}
-        for act in actions:
-            idx = act.get("step_idx", 0)
-            if idx not in iters_with_spans:
-                ts_s = act.get("ts_start", 0)
-                ts_e = act.get("ts_end", 0)
-                if ts_s and ts_e and ts_e > ts_s:
-                    spans.append({
-                        "type": "llm",
-                        "start": ts_s - t0,
-                        "end": ts_e - t0,
-                        "start_abs": ts_s,
-                        "end_abs": ts_e,
-                        "iteration": idx,
-                        "detail": {
-                            "tool_name": act.get("tool_name"),
-                            "prompt_tokens": act.get("prompt_tokens"),
-                        },
-                    })
+    for act in actions:
+        action_type = act.get("action_type")
+        if action_type not in _ACTION_TYPE_MAP:
+            continue
+        span_type = _ACTION_TYPE_MAP[action_type]
+        spans.append({
+            "type": span_type,
+            "start": act.get("ts_start", 0) - t0,
+            "end": act.get("ts_end", 0) - t0,
+            "start_abs": act.get("ts_start", 0),
+            "end_abs": act.get("ts_end", 0),
+            "iteration": act.get("iteration", 0),
+            "detail": _extract_detail_from_action(act),
+        })
 
     # ── Compute scheduling spans from inter-action gaps ──
     if spans:
@@ -286,7 +216,7 @@ def _build_spans_and_markers(
                 "event": ev.get("event", "unknown"),
                 "t": ev.get("ts", 0) - t0,
                 "t_abs": ev.get("ts", 0),
-                "iteration": ev.get("step_idx", 0),
+                "iteration": ev.get("iteration", 0),
                 "detail": _extract_detail_from_event(ev),
             })
 
