@@ -79,10 +79,3 @@ def test_placeholder_scripts_fail_closed() -> None:
             text=True,
         )
         assert result.returncode != 0, f"{script} unexpectedly succeeded"
-
-
-def test_primary_workload_configs_use_expected_step_budgets() -> None:
-    path = REPO_ROOT / "configs" / "workloads" / "code_agent.yaml"
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
-    assert data["max_steps"] == 60

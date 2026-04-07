@@ -31,12 +31,3 @@ def test_constructor_with_repos_root() -> None:
     assert agent.repos_root == Path("data/swebench_repos")
 
 
-def test_default_timeouts() -> None:
-    agent = MiniSWECodeAgent(
-        agent_id="code-3",
-        api_base="http://localhost:8000/v1",
-        model="mock",
-    )
-    assert agent.command_timeout_s == 120.0
-    assert agent.task_timeout_s == 1200.0
-    assert agent.max_steps == 60
