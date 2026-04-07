@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -25,6 +25,9 @@ from agents.openclaw._session_runner import (
 from agents.openclaw.eval.prepare import prepare_workspace
 from agents.openclaw.eval.types import EvalResult, EvalTask
 from agents.openclaw.providers.base import LLMProvider
+
+if TYPE_CHECKING:
+    from agents.benchmarks.base import Benchmark
 
 __all__ = [
     "SWEBenchRunner",
@@ -51,6 +54,7 @@ class SWEBenchRunner:
         max_tool_result_chars: int | None = None,
         model: str | None = None,
         repos_root: Path | None = None,
+        benchmark: "Benchmark | None" = None,
     ) -> None:
         self.provider = provider
         self.workspace_base = Path(workspace_base).resolve()
@@ -60,6 +64,7 @@ class SWEBenchRunner:
         self.max_tool_result_chars = max_tool_result_chars
         self.model = model or provider.get_default_model()
         self.repos_root = repos_root
+        self.benchmark = benchmark
 
         self._session_runner = SessionRunner(
             provider,

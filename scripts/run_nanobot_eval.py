@@ -68,7 +68,7 @@ def main() -> None:
             if not line:
                 continue
             data = json.loads(line)
-            tasks.append(EvalTask.from_swebench_instance(data, ws_base))
+            tasks.append(EvalTask.from_benchmark_instance(data, ws_base))
 
     print(f"Loaded {len(tasks)} tasks")
     for t in tasks:

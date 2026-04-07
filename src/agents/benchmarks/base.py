@@ -9,6 +9,7 @@ New code should instantiate benchmarks via::
 
 from __future__ import annotations
 
+import json
 import yaml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -109,14 +110,22 @@ class Benchmark(ABC):
     # ------------------------------------------------------------------
 
     def derive_test_cmd(self, task: dict[str, Any]) -> str:
-        """Derive a pytest command string from ``task["FAIL_TO_PASS"]``.
+        """Derive a pytest command from ``task["FAIL_TO_PASS"]``.
 
-        Delegates to :func:`agents.swebench_data.derive_test_cmd` so that
-        the SWE-bench-specific logic lives in one place.
+        Handles both native list (SWE-rebench) and JSON-encoded string
+        (SWE-Bench Verified) forms. No dependency on the legacy shim.
         """
-        from agents.swebench_data import derive_test_cmd as _derive
-
-        return _derive(task)
+        raw = task.get("FAIL_TO_PASS", "[]")
+        if isinstance(raw, str):
+            try:
+                test_ids = json.loads(raw)
+            except json.JSONDecodeError:
+                test_ids = [raw] if raw else []
+        else:
+            test_ids = list(raw)
+        if not test_ids:
+            return "python -m pytest --no-header -q"
+        return f"python -m pytest {' '.join(test_ids)} -x --no-header -q"
 
     def select_subset(
         self,
@@ -124,18 +133,15 @@ class Benchmark(ABC):
         n: int | None = None,
         seed: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Return a stratified subset of *n* tasks.
+        """Return the first ``n`` tasks, sorted by instance_id for determinism.
 
-        Delegates to :func:`agents.swebench_data.select_tool_intensive_tasks`
-        using config defaults when *n* / *seed* are not provided.
+        This is the simplest possible benchmark-agnostic default. Subclasses
+        with specific selection needs (repo-stratified like SWE-Bench Verified,
+        lite-filtering like SWE-rebench) MUST override this.
         """
-        from agents.swebench_data import select_tool_intensive_tasks
-
-        return select_tool_intensive_tasks(
-            tasks,
-            n=n if n is not None else self.config.selection_n,
-            seed=seed if seed is not None else self.config.selection_seed,
-        )
+        effective_n = n if n is not None else self.config.selection_n
+        sorted_tasks = sorted(tasks, key=lambda t: t.get("instance_id", ""))
+        return sorted_tasks[:effective_n]
 
     def build_harness_args(
         self,
