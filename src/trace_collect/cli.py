@@ -555,8 +555,20 @@ def _run_gantt(argv: list[str]) -> None:
     )
     parser.add_argument(
         "traces",
-        nargs="+",
-        help="One or more JSONL trace files to visualize.",
+        nargs="*",
+        help=(
+            "Zero or more JSONL trace files to embed in the generated HTML. "
+            "Pass --empty to skip embedding and open a blank viewer the user "
+            "can drag-drop traces onto."
+        ),
+    )
+    parser.add_argument(
+        "--empty",
+        action="store_true",
+        help=(
+            "Generate a blank viewer with no embedded traces. The browser "
+            "loads traces at runtime via drag-drop or the + button."
+        ),
     )
     parser.add_argument(
         "--output", "-o",
@@ -573,20 +585,41 @@ def _run_gantt(argv: list[str]) -> None:
 
     from pathlib import Path
 
-    from trace_collect.gantt_serve import generate_gantt_html, open_gantt, serve_gantt, write_gantt
+    from trace_collect.gantt_serve import (
+        generate_empty_gantt_html,
+        generate_gantt_html,
+        open_gantt,
+        serve_gantt,
+        write_gantt,
+    )
     from trace_collect.trace_inspector import TraceData
 
-    traces = []
-    for tp in parsed.traces:
-        p = Path(tp)
-        if not p.exists():
-            print(f"ERROR: trace file not found: {tp}", file=sys.stderr)
-            sys.exit(1)
-        data = TraceData.load(p)
-        label = p.stem
-        traces.append((label, data))
+    if parsed.empty and parsed.traces:
+        print(
+            "ERROR: --empty cannot be combined with positional trace files.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not parsed.empty and not parsed.traces:
+        print(
+            "ERROR: pass at least one trace file, or use --empty for a blank viewer.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    html = generate_gantt_html(traces)
+    if parsed.empty:
+        html = generate_empty_gantt_html()
+    else:
+        traces = []
+        for tp in parsed.traces:
+            p = Path(tp)
+            if not p.exists():
+                print(f"ERROR: trace file not found: {tp}", file=sys.stderr)
+                sys.exit(1)
+            data = TraceData.load(p)
+            label = p.stem
+            traces.append((label, data))
+        html = generate_gantt_html(traces)
 
     if parsed.output:
         out = Path(parsed.output)

@@ -126,6 +126,102 @@
     border-right: 1px solid var(--border);
     overflow-y: auto;
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Drag-over state: whole sidebar highlights as a drop zone. */
+  #sidebar.drop-over {
+    background: #121b28;
+    box-shadow: inset 0 0 0 2px var(--cyan);
+  }
+
+  /* ── Trace list section ──────────────────────────────────────── */
+
+  #trace-list {
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .trace-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    background: var(--bg);
+  }
+
+  .trace-add-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 12px;
+    width: 20px;
+    height: 20px;
+    line-height: 1;
+    border-radius: 3px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .trace-add-btn:hover { color: var(--cyan); border-color: var(--cyan); }
+
+  #trace-items:empty::before {
+    content: 'Drop .jsonl files or click +';
+    display: block;
+    padding: 8px 12px 12px;
+    font-size: 10px;
+    color: var(--text-dim);
+    font-style: italic;
+    text-align: center;
+  }
+
+  .trace-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-bottom: 1px solid var(--grid);
+    font-size: 10px;
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  .trace-item .trace-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .trace-item .trace-label {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .trace-item .trace-remove {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .trace-item .trace-remove:hover { color: var(--red); background: var(--border); }
+
+  #sidebar-lanes {
+    flex: 1;
   }
 
   .lane-label {
@@ -172,9 +268,20 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 10px 14px;
-    max-width: 400px;
+    max-width: 540px;
     z-index: 100;
     box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  }
+
+  /* When pinned, the tooltip stays put, gets a cyan accent border, and
+     allows vertical scroll + manual resize so long llm_content blocks
+     are readable. Hover tooltips keep content-hug sizing. */
+  #tooltip.pinned {
+    border-color: var(--cyan);
+    max-height: 60vh;
+    overflow-y: auto;
+    resize: both;
+    min-width: 320px;
   }
 
   #tooltip .tt-header {
@@ -184,24 +291,74 @@
     font-size: 12px;
     border-bottom: 1px solid var(--border);
     padding-bottom: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    /* Keep the header visible when the body scrolls. */
+    position: sticky;
+    top: -10px;
+    background: var(--bg-panel);
+    padding-top: 10px;
+    margin-top: -10px;
   }
 
-  #tooltip .tt-row {
-    display: flex;
-    gap: 8px;
+  #tooltip .tt-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #tooltip .tt-close {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    border-radius: 2px;
+  }
+  #tooltip.pinned .tt-close { display: inline-block; }
+  #tooltip .tt-close:hover { color: var(--text-bright); background: var(--border); }
+
+  #tooltip .tt-hint {
+    display: none;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+  #tooltip.pinned .tt-hint { display: block; }
+
+  #tooltip .tt-rows {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 14px;
+    row-gap: 2px;
     line-height: 1.6;
     font-size: 11px;
+    max-width: 480px;
   }
 
   #tooltip .tt-key {
     color: var(--text-dim);
-    flex-shrink: 0;
-    min-width: 90px;
+    white-space: nowrap;
   }
 
   #tooltip .tt-val {
     color: var(--text);
     word-break: break-all;
+    /* Preserve newlines from multi-line detail values (e.g. multiple
+       tool_calls_requested entries joined with \n) while still wrapping
+       very long single-line values. */
+    white-space: pre-wrap;
   }
 
   #source-ref {
@@ -228,17 +385,32 @@
 <div id="legend" role="presentation"></div>
 
 <div id="main">
-  <div id="sidebar"></div>
+  <div id="sidebar">
+    <div id="trace-list">
+      <div class="trace-list-header">
+        <span>TRACES</span>
+        <button class="trace-add-btn" type="button" onclick="openFilePicker()" title="Add .jsonl trace">+</button>
+      </div>
+      <div id="trace-items"></div>
+    </div>
+    <div id="sidebar-lanes"></div>
+  </div>
   <div id="canvas-wrap">
     <canvas id="gantt-canvas"></canvas>
   </div>
 </div>
 
+<input id="trace-file-input" type="file" accept=".jsonl,application/jsonl,text/plain" multiple style="display:none">
 <div id="tooltip"></div>
 <div id="source-ref"></div>
 
 <script>var __TRACE_DATA__ = __TRACE_JSON__;</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" crossorigin>
+<!-- gantt_builder.js — spliced in at build time by gantt_serve.py.
+     Exposes window.GanttBuilder for browser-side trace parsing. -->
+<script>
+__GANTT_BUILDER_JS__
+</script>
 <script>
 'use strict';
 
@@ -286,9 +458,17 @@ const SPAN_PAD = 4;
 
 let hitBoxes = [];  // [{x, y, w, h, item}]
 
+// When non-null, the tooltip is pinned to this hit and ignores mouseover
+// updates. Cleared by click-on-empty, the × button, or ESC.
+let pinnedHit = null;
+
 // ─── Init ──────────────────────────────────────────────────────────
 function init() {
   try {
+    // Accept three init shapes:
+    //   1) __TRACE_DATA__ undefined / null → show legacy error message.
+    //   2) __TRACE_DATA__ with traces: [] → empty state (--empty flag).
+    //   3) __TRACE_DATA__ with traces: [...] → CLI-embedded traces.
     if (typeof __TRACE_DATA__ === 'undefined' || !__TRACE_DATA__) {
       document.body.innerHTML = '<div style="padding:40px;color:#c5c8d4;font-family:monospace">No trace data embedded. Use: python -m trace_collect.cli gantt &lt;trace.jsonl&gt;</div>';
       return;
@@ -299,10 +479,30 @@ function init() {
       if (DATA.registries.spans)   SPAN_REGISTRY = DATA.registries.spans;
       if (DATA.registries.markers) MARKER_REGISTRY = DATA.registries.markers;
     }
+    // Seed the LoadedTraces Map from any CLI-embedded traces so the user
+    // can remove/augment them at runtime (the canonical source of truth
+    // for DATA.traces going forward is LoadedTraces, not __TRACE_DATA__).
+    // Disambiguate collisions (two CLI files with the same Path.stem) the
+    // same way addTraceFile does, otherwise the second trace would
+    // silently overwrite the first in the Map.
+    if (Array.isArray(DATA.traces)) {
+      for (const tp of DATA.traces) {
+        const baseLabel = tp.id || `trace_${LoadedTraces.size + 1}`;
+        let label = baseLabel;
+        let n = 2;
+        while (LoadedTraces.has(label)) {
+          label = `${baseLabel}_${n}`;
+          n += 1;
+        }
+        LoadedTraces.set(label, { payload: tp });
+      }
+    }
     buildLegend();
+    buildTraceList();
     buildSidebar();
     updateHeaderMeta();
     setupCanvas();
+    setupTraceLoading();
   } catch (err) {
     document.body.innerHTML = `<pre style="padding:40px;color:#FF1744;font-family:monospace">${esc(err.stack || err.message)}</pre>`;
   }
@@ -321,7 +521,7 @@ function buildLegend() {
 
 // ─── Sidebar ───────────────────────────────────────────────────────
 function buildSidebar() {
-  const el = document.getElementById('sidebar');
+  const el = document.getElementById('sidebar-lanes');
   let html = '';
   // Time axis row
   html += `<div class="lane-label" style="height:${TIME_AXIS_H}px"><span class="trace-name" style="font-size:10px;color:var(--text-dim)">TIME</span></div>`;
@@ -344,6 +544,169 @@ function buildSidebar() {
     }
   }
   el.innerHTML = html;
+}
+
+// ─── Trace list (add/remove UI) ─────────────────────────────────────
+// Small fixed palette for the per-trace dot. Cycles for traces beyond
+// its length; it's only a visual affordance so repetition is fine.
+const TRACE_DOT_COLORS = ['#00E5FF', '#FF6D00', '#76FF03', '#FF1744', '#4FC3F7', '#FFC107'];
+
+// Canonical store of loaded traces. Keys are labels (filename stems or
+// CLI-provided trace ids). Values are {payload} — the JS-built or CLI-
+// provided payload dict that DATA.traces points at after each rebuild.
+const LoadedTraces = new Map();
+
+function buildTraceList() {
+  const el = document.getElementById('trace-items');
+  if (!el) return;
+  let html = '';
+  let idx = 0;
+  // Use a data-label attribute + delegated click handler instead of an
+  // inline onclick — interpolating JSON.stringify(label) into a double-
+  // quoted onclick attribute terminates the attribute mid-value for any
+  // plain-ASCII label (e.g. ``removeTrace("foo")`` breaks the HTML).
+  for (const [label] of LoadedTraces) {
+    const color = TRACE_DOT_COLORS[idx % TRACE_DOT_COLORS.length];
+    idx += 1;
+    html += (
+      '<div class="trace-item">' +
+        `<span class="trace-dot" style="background:${color}"></span>` +
+        `<span class="trace-label" title="${esc(label)}">${esc(label)}</span>` +
+        `<button class="trace-remove" type="button" title="Remove" data-label="${esc(label)}">&times;</button>` +
+      '</div>'
+    );
+  }
+  el.innerHTML = html;
+}
+
+// Delegated click handler — attached once in init(), survives every
+// subsequent innerHTML rebuild of #trace-items.
+function onTraceItemsClick(e) {
+  const btn = e.target.closest('.trace-remove');
+  if (!btn) return;
+  const label = btn.getAttribute('data-label');
+  if (label !== null) removeTrace(label);
+}
+
+function rebuildDataFromLoaded() {
+  if (!DATA) DATA = { registries: { spans: SPAN_REGISTRY, markers: MARKER_REGISTRY }, traces: [] };
+  DATA.traces = [...LoadedTraces.values()].map(v => v.payload);
+}
+
+function rerender() {
+  rebuildDataFromLoaded();
+  buildTraceList();
+  buildSidebar();
+  updateHeaderMeta();
+  render();
+  // render() rebuilt hitBoxes from scratch, so the pinned hitBox we
+  // captured at click time is stale. Re-anchor (or unpin) so the pinned
+  // tooltip tracks its underlying item across trace add/remove.
+  reanchorPinned();
+}
+
+// Re-anchor the pinned tooltip to its underlying item's fresh hitBox.
+// If the item is no longer represented (trace removed, lane re-laid out
+// off-screen), unpin cleanly. Called after any render() that rebuilds
+// hitBoxes — both resize() and rerender().
+function reanchorPinned() {
+  if (!pinnedHit) return;
+  const fresh = hitBoxes.find(b => b.item === pinnedHit.item);
+  if (!fresh) {
+    unpin();
+    return;
+  }
+  pinnedHit = fresh;
+  const canvas = document.getElementById('gantt-canvas');
+  const rect = canvas.getBoundingClientRect();
+  const cx = rect.left + fresh.x + fresh.w / 2;
+  const cy = rect.top + fresh.y + fresh.h / 2;
+  positionTooltip(cx, cy, document.getElementById('tooltip'));
+}
+
+async function addTraceFile(file) {
+  if (!file) return;
+  const text = await file.text();
+  let parsed;
+  try {
+    parsed = GanttBuilder.parseJsonl(text);
+  } catch (err) {
+    console.error('Failed to parse', file.name, err);
+    return;
+  }
+  // Disambiguate duplicate filenames by suffixing _2, _3, ...
+  const baseLabel = file.name.replace(/\.jsonl$/i, '');
+  let label = baseLabel;
+  let n = 2;
+  while (LoadedTraces.has(label)) {
+    label = `${baseLabel}_${n}`;
+    n += 1;
+  }
+  const payload = GanttBuilder.buildPayload(parsed, label);
+  LoadedTraces.set(label, { payload });
+  rerender();
+}
+
+function removeTrace(label) {
+  if (!LoadedTraces.has(label)) return;
+  LoadedTraces.delete(label);
+  // If the pinned tooltip belonged to a removed trace's lane, clear it.
+  if (pinnedHit) {
+    const stillReferenced = [...LoadedTraces.values()].some(v =>
+      v.payload.lanes.some(lane =>
+        lane.spans.includes(pinnedHit.item) || lane.markers.includes(pinnedHit.item)
+      )
+    );
+    if (!stillReferenced) unpin();
+  }
+  rerender();
+}
+
+function openFilePicker() {
+  document.getElementById('trace-file-input').click();
+}
+
+function setupTraceLoading() {
+  const input = document.getElementById('trace-file-input');
+  input.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const f of files) { await addTraceFile(f); }
+    input.value = '';  // allow re-picking the same file
+  });
+
+  // Delegated click handler for trace-item remove buttons. Attached once
+  // to the stable #trace-items container so it survives the innerHTML
+  // rebuild inside buildTraceList().
+  const items = document.getElementById('trace-items');
+  if (items) items.addEventListener('click', onTraceItemsClick);
+
+  const sidebar = document.getElementById('sidebar');
+  // Prevent the browser from navigating away on drop anywhere on the page.
+  ['dragenter', 'dragover'].forEach(ev => {
+    sidebar.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sidebar.classList.add('drop-over');
+    });
+  });
+  ['dragleave', 'dragend'].forEach(ev => {
+    sidebar.addEventListener(ev, (e) => {
+      if (e.target === sidebar) sidebar.classList.remove('drop-over');
+    });
+  });
+  sidebar.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    sidebar.classList.remove('drop-over');
+    const files = Array.from(e.dataTransfer?.files || [])
+      .filter(f => /\.jsonl$/i.test(f.name));
+    for (const f of files) { await addTraceFile(f); }
+  });
+
+  // Block default drag-drop on the whole document so files dropped outside
+  // the sidebar don't navigate the browser away from the page.
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => e.preventDefault());
 }
 
 // ─── Header meta ───────────────────────────────────────────────────
@@ -370,6 +733,7 @@ function setupCanvas() {
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     render();
+    reanchorPinned();
   }
 
   new ResizeObserver(resize).observe(wrap);
@@ -377,8 +741,56 @@ function setupCanvas() {
 
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => {
+    // Don't hide a pinned tooltip when the cursor leaves the canvas.
+    if (pinnedHit) return;
     document.getElementById('tooltip').style.display = 'none';
   });
+  canvas.addEventListener('click', onCanvasClick);
+
+  // Global ESC handler unpins the tooltip.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') unpin();
+  });
+}
+
+// ─── Pin / unpin ───────────────────────────────────────────────────
+function pin(hit, clientX, clientY) {
+  pinnedHit = hit;
+  const tooltip = document.getElementById('tooltip');
+  tooltip.classList.add('pinned');
+  showTooltipFor(hit);
+  positionTooltip(clientX, clientY, tooltip);
+}
+
+function unpin() {
+  pinnedHit = null;
+  const tooltip = document.getElementById('tooltip');
+  tooltip.classList.remove('pinned');
+  tooltip.style.display = 'none';
+  // Reset any user-applied resize so the next hover tooltip sizes to content.
+  tooltip.style.width = '';
+  tooltip.style.height = '';
+}
+
+function onCanvasClick(e) {
+  const canvas = document.getElementById('gantt-canvas');
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const hit = hitTest(mx, my);
+  if (hit) {
+    pin(hit, e.clientX, e.clientY);
+  } else {
+    unpin();
+  }
+}
+
+function hitTest(mx, my) {
+  for (let i = hitBoxes.length - 1; i >= 0; i--) {
+    const b = hitBoxes[i];
+    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) return b;
+  }
+  return null;
 }
 
 // ─── Time mode toggle ──────────────────────────────────────────────
@@ -556,19 +968,14 @@ function render() {
 
 // ─── Mouse / Tooltip ───────────────────────────────────────────────
 function onMouseMove(e) {
+  // Pinned tooltip: ignore hover updates entirely.
+  if (pinnedHit) return;
+
   const canvas = document.getElementById('gantt-canvas');
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
-
-  let hit = null;
-  for (let i = hitBoxes.length - 1; i >= 0; i--) {
-    const b = hitBoxes[i];
-    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-      hit = b;
-      break;
-    }
-  }
+  const hit = hitTest(mx, my);
 
   const tooltip = document.getElementById('tooltip');
   if (!hit) {
@@ -576,45 +983,77 @@ function onMouseMove(e) {
     return;
   }
 
-  let html = '';
+  showTooltipFor(hit);
+  positionTooltip(e.clientX, e.clientY, tooltip);
+}
+
+// Build the tooltip HTML for a given hit and display it. Shared between
+// hover (onMouseMove) and click-to-pin (pin) paths.
+function showTooltipFor(hit) {
+  const tooltip = document.getElementById('tooltip');
+  let titleColor = '#fff';
+  let titleText = '';
+  const rows = [];
+
   if (hit.kind === 'span') {
     const s = hit.item;
-    const reg = SPAN_REGISTRY[s.type] || {};
+    const reg = SPAN_REGISTRY[s.type] || UNKNOWN_SPAN_STYLE;
+    titleColor = reg.color || '#fff';
+    titleText = `${reg.label || s.type} — Iter ${s.iteration}`;
     const dur = ((s.end_abs - s.start_abs) * 1000).toFixed(1);
-    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${reg.label||s.type} &mdash; Iter ${s.iteration}</div>`;
-    html += ttRow('Duration', dur + ' ms');
-    html += ttRow('Start', formatAbsTime(s.start_abs));
-    html += ttRow('Relative', '+' + s.start.toFixed(3) + 's');
+    rows.push(['Duration', dur + ' ms']);
+    rows.push(['Start', formatAbsTime(s.start_abs)]);
+    rows.push(['Relative', '+' + s.start.toFixed(3) + 's']);
     for (const [k, v] of Object.entries(s.detail || {})) {
       if (v === null || v === undefined || v === '') continue;
-      html += ttRow(k, String(v));
+      rows.push([k, formatDetailValue(v)]);
     }
   } else {
     const m = hit.item;
     const reg = MARKER_REGISTRY[m.event] || MARKER_REGISTRY._default;
-    html += `<div class="tt-header" style="color:${reg.color||'#fff'}">${m.event} &mdash; Iter ${m.iteration}</div>`;
-    html += ttRow('Time', formatAbsTime(m.t_abs));
-    html += ttRow('Relative', '+' + m.t.toFixed(3) + 's');
+    titleColor = reg.color || '#fff';
+    titleText = `${m.event} — Iter ${m.iteration}`;
+    rows.push(['Time', formatAbsTime(m.t_abs)]);
+    rows.push(['Relative', '+' + m.t.toFixed(3) + 's']);
     for (const [k, v] of Object.entries(m.detail || {})) {
       if (v === null || v === undefined || v === '') continue;
-      html += ttRow(k, String(v).substring(0, 120));
+      rows.push([k, formatDetailValue(v)]);
     }
   }
 
-  tooltip.innerHTML = html;
-  tooltip.style.display = 'block';
+  const headerHtml =
+    `<div class="tt-header" style="color:${titleColor}">
+       <span class="tt-title">${esc(titleText)}</span>
+       <button class="tt-close" type="button" onclick="unpin()" title="Unpin (ESC)">&times;</button>
+     </div>`;
+  const rowsHtml =
+    '<div class="tt-rows">' +
+    rows.map(([k, v]) =>
+      `<span class="tt-key">${esc(k)}</span><span class="tt-val">${esc(v)}</span>`
+    ).join('') +
+    '</div>';
+  const hintHtml = '<div class="tt-hint">Click canvas or press ESC to unpin</div>';
 
-  // Position near cursor
-  const tx = e.clientX + 16;
-  const ty = e.clientY + 16;
-  const tw = tooltip.offsetWidth;
-  const th = tooltip.offsetHeight;
-  tooltip.style.left = (tx + tw > window.innerWidth ? e.clientX - tw - 8 : tx) + 'px';
-  tooltip.style.top = (ty + th > window.innerHeight ? e.clientY - th - 8 : ty) + 'px';
+  tooltip.innerHTML = headerHtml + rowsHtml + hintHtml;
+  tooltip.style.display = 'block';
 }
 
-function ttRow(key, val) {
-  return `<div class="tt-row"><span class="tt-key">${esc(key)}</span><span class="tt-val">${esc(val)}</span></div>`;
+// Format an arbitrary detail value (string / number / array / object) into
+// a string suitable for inlining into a tooltip row. Arrays are joined with
+// newlines so multi-tool-call summaries display as stacked lines.
+function formatDetailValue(v) {
+  if (Array.isArray(v)) return v.map(x => String(x)).join('\n');
+  if (v && typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function positionTooltip(clientX, clientY, tooltip) {
+  const tx = clientX + 16;
+  const ty = clientY + 16;
+  const tw = tooltip.offsetWidth;
+  const th = tooltip.offsetHeight;
+  tooltip.style.left = (tx + tw > window.innerWidth ? clientX - tw - 8 : tx) + 'px';
+  tooltip.style.top = (ty + th > window.innerHeight ? clientY - th - 8 : ty) + 'px';
 }
 
 // ─── Time formatting ───────────────────────────────────────────────
