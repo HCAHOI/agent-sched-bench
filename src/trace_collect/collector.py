@@ -822,21 +822,12 @@ def _normalize_openclaw_trace(
     max_steps: int,
     instance_id: str,
 ) -> None:
-    """Copy an OpenClaw trace to benchmark run-dir layout, preserving the
-    runner's own trace_metadata while backfilling any fields the runner
-    did not know (benchmark/benchmark_split/api_base).
+    """Copy an OpenClaw trace to benchmark run-dir layout.
 
-    Previously this function always overwrote the source trace_metadata
-    with a hardcoded openclaw capability list — that was correct for the
-    legacy nanobot import path but wrong for runners like
-    :class:`~agents.benchmarks.bfcl_runner.BFCLRunner` that stamp their
-    own accurate scaffold_capabilities (``tools='benchmark_provided'``,
-    ``file_ops='none'``, etc.).
-
-    The new behavior: read the source's first trace_metadata record (if
-    present and v5-shaped), merge the collector-known fields on top only
-    where absent, and write the merged record. Source fields win on
-    conflict so runner-specific capabilities survive.
+    Reads the source's first ``trace_metadata`` record (if present), merges
+    collector-known fields (benchmark, benchmark_split, api_base, etc.) only
+    where absent, then writes the merged record. Source fields win on conflict
+    so runner-specific ``scaffold_capabilities`` survive.
     """
     lines = src.read_text(encoding="utf-8").splitlines()
 
@@ -859,13 +850,9 @@ def _normalize_openclaw_trace(
             body_start_idx = idx  # keep this record in the body
         break
 
-    # Default metadata — used only when the source trace has NO
-    # trace_metadata record at all (legacy nanobot path, or a partial
-    # write before a crash). Must be conservative: if we didn't see the
-    # runner's own capabilities we cannot invent them without risking a
-    # data-integrity lie. Previously this hardcoded the openclaw full
-    # tool list, which silently corrupted BFCL crash-recovery traces
-    # (reviewer finding M2).
+    # Conservative default — used only when the source trace has no
+    # trace_metadata (partial write from a crash). We cannot invent
+    # capabilities we didn't observe, so we stamp an explicit "unknown" marker.
     default_metadata = {
         "type": "trace_metadata",
         "scaffold": "openclaw",

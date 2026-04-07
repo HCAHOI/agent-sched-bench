@@ -1,22 +1,9 @@
 """BFCL v4 (Berkeley Function-Calling Leaderboard v4) benchmark plugin.
 
-Dataset: ``gorilla-llm/Berkeley-Function-Calling-Leaderboard`` (HuggingFace
-mirror) or the canonical source at
-``berkeley-function-call-leaderboard/bfcl_eval/data/`` in the Gorilla repo
-on GitHub. Tasks are pure JSONL — the official guidance is to NOT use
-:func:`datasets.load_dataset`; parse line-by-line instead.
-
-Task shape: ``function_call`` — the model emits structured function calls
-(OpenAI ``tools`` format) against a provided JSON-Schema tool spec.
-Scoring is pure-Python AST comparison against ground truth; no Docker,
-no sandboxed test execution.
-
-v1 scope limitation (documented in ``configs/benchmarks/bfcl-v4.yaml``
-and ``docs/benchmark_plugin_spec.md``): only single-turn categories are
-supported. Multi-turn / memory / web-search / format-sensitivity
-categories each require a stateful tool simulator and are deferred to
-v2. They are loaded-and-filtered by :meth:`load_tasks` with a WARN log
-listing the drop count per category.
+``task_shape='function_call'``: tasks carry a JSON-Schema tool spec per
+instance; scoring is pure-Python AST comparison (no Docker). See
+``docs/benchmark_plugin_spec.md §10`` and ``configs/benchmarks/bfcl-v4.yaml``
+for scope, data layout, and the v1 category coverage.
 """
 
 from __future__ import annotations
@@ -38,39 +25,27 @@ class BFCLv4Benchmark(Benchmark):
     task_shape: ClassVar[str] = "function_call"
 
     #: Single-turn categories supported in v1. Names mirror the canonical
-    #: BFCL v4 file names in the Gorilla repo (e.g. ``BFCL_v4_simple_python.json``
-    #: becomes category ``simple_python``). Each row is (task, tools,
-    #: ground_truth) and scoring is AST comparison.
+    #: BFCL v4 file stems (e.g. ``BFCL_v4_simple_python.json`` → ``simple_python``).
     _SUPPORTED_CATEGORIES: ClassVar[frozenset[str]] = frozenset(
         {
-            # Basic single-turn (non-live, one language each)
             "simple_python",
             "simple_java",
             "simple_javascript",
-            # Non-live single-turn with multiple / parallel call requirements
             "multiple",
             "parallel",
             "parallel_multiple",
-            # Live API single-turn variants (real REST endpoints; may
-            # require network and/or auth to execute end-to-end, but the
-            # AST score still works offline against ground_truth)
             "live_simple",
             "live_multiple",
             "live_parallel",
             "live_parallel_multiple",
-            # Relevance / irrelevance probes (model must correctly
-            # abstain or invoke a tool)
             "irrelevance",
             "live_relevance",
             "live_irrelevance",
         }
     )
 
-    #: Categories deferred to v2. These require stateful simulators
-    #: (filesystem/API mutation across turns, snapshot-and-reload, etc.)
-    #: or instrumented prompt-format measurement that are out of scope
-    #: for the first BFCL plugin pass. Filtered loudly in :meth:`load_tasks`
-    #: with a WARN log.
+    #: Categories deferred to v2 — require a stateful tool simulator.
+    #: Filtered loudly in :meth:`load_tasks` with a WARN log.
     _DEFERRED_CATEGORIES: ClassVar[frozenset[str]] = frozenset(
         {
             "multi_turn_base",
@@ -88,19 +63,11 @@ class BFCLv4Benchmark(Benchmark):
     # ------------------------------------------------------------------
 
     def load_tasks(self) -> list[dict[str, Any]]:
-        """Load BFCL v4 tasks from ``<data_root>/tasks.json``.
+        """Load BFCL v4 tasks from ``<data_root>/tasks.json`` (merged JSONL).
 
-        The setup script :file:`scripts/setup/bfcl_v4_data.sh` writes a
-        merged JSONL file where each line carries ``category``, ``id``,
-        ``question``, ``function``, and ``ground_truth`` — already joined
-        from the per-category source files and their matching
-        ``possible_answer/`` entries.
-
-        Rows belonging to :attr:`_DEFERRED_CATEGORIES` are dropped with a
-        single WARN log summarizing the per-category counts. Rows with
-        unknown categories are kept and warned about individually (they
-        may be newly added upstream BFCL categories we have not yet
-        classified).
+        Deferred-category rows are dropped with a WARN summary. Unknown-category
+        rows are also dropped loudly — silently keeping them biases results
+        (CLAUDE.md §5 completeness).
         """
         tasks_path = self.config.data_root / "tasks.json"
         if not tasks_path.exists():
@@ -134,13 +101,6 @@ class BFCLv4Benchmark(Benchmark):
                     deferred_counts[category] = deferred_counts.get(category, 0) + 1
                     continue
                 if category not in self._SUPPORTED_CATEGORIES:
-                    # Research-integrity: silently keeping unknown rows
-                    # biases results toward whatever happens to ship
-                    # upstream without the reader knowing which subset
-                    # was actually scored (CLAUDE.md §5 completeness).
-                    # Drop unknown rows and log them loudly so the
-                    # maintainer knows to classify any new category
-                    # before running real experiments.
                     unknown_counts[category] = unknown_counts.get(category, 0) + 1
                     continue
                 supported.append(self.normalize_task(row))
@@ -224,14 +184,8 @@ class BFCLv4Benchmark(Benchmark):
 
         Proportional allocation with leftover quota going to the largest
         categories. Deterministic order: sorted by ``(category, instance_id)``.
-
-        The ``seed`` parameter is accepted for API compatibility with the
-        base class but is unused. Stratified proportional allocation with
-        a deterministic tie-breaker on ``(category, instance_id)`` is
-        already reproducible without randomness, so no RNG is needed.
-        This is NOT a policy against seeded sampling — the sister
-        SWE-bench plugin uses ``seed`` because its stratification has a
-        random leftover-assignment step.
+        ``seed`` is accepted for API compatibility but unused — proportional
+        allocation with a deterministic tie-breaker needs no RNG.
         """
         del seed  # unused — deterministic by construction
         effective_n = n if n is not None else self.config.selection_n
@@ -339,15 +293,12 @@ class BFCLv4Benchmark(Benchmark):
         """
         if scaffold == "mini-swe-agent":
             raise NotImplementedError(
-                f"BFCL v4 (task_shape='function_call') is incompatible with "
-                f"the 'mini-swe-agent' scaffold: mini-swe is bash-in-repo and "
-                f"cannot emit structured function calls against a JSON-Schema "
-                f"tool spec. Use scaffold='openclaw' instead."
+                "BFCL v4 (task_shape='function_call') requires scaffold='openclaw'; "
+                "mini-swe-agent is bash-in-repo and cannot emit structured function calls."
             )
         if scaffold != "openclaw":
             raise NotImplementedError(
-                f"BFCL v4 does not support scaffold={scaffold!r}; "
-                f"use scaffold='openclaw'."
+                f"BFCL v4 does not support scaffold={scaffold!r}; use scaffold='openclaw'."
             )
 
         # Lazy import to avoid circular dependency with the runner module.

@@ -168,11 +168,8 @@ class SWERebenchBenchmark(Benchmark):
     ) -> Any:
         """Return a :class:`~agents.openclaw.eval.runner.SWEBenchRunner`.
 
-        SWE-rebench uses the same swe_patch task shape as Verified, so we
-        reuse the existing runner. The harness-args difference (no
-        namespace prefix) is handled by :meth:`build_harness_args` above.
-        The plugin self-injects ``repos_root`` and ``benchmark`` from its
-        own config.
+        Reuses SWEBenchRunner (same ``swe_patch`` shape). The plugin
+        self-injects ``repos_root`` and ``benchmark`` from its own config.
         """
         if scaffold != "openclaw":
             raise NotImplementedError(

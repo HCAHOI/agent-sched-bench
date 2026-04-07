@@ -80,10 +80,8 @@ def test_ast_match_irrelevance_requires_empty_predicted() -> None:
 
 
 def test_ast_match_live_irrelevance_requires_empty_predicted() -> None:
-    """The live_irrelevance category must use the same abstention rule
-    as irrelevance — reviewer C2 caught a category-string mismatch where
-    only 'irrelevance' was handled and live_irrelevance silently fell
-    through to the generic length-match path."""
+    """live_irrelevance must use the same abstention rule as irrelevance."""
+    # reviewer C2: live_irrelevance previously fell through to generic length-match
     assert (
         BFCLRunner._ast_match(
             predicted=[], ground_truth=[], category="live_irrelevance"
@@ -277,10 +275,9 @@ def test_run_task_populates_official_resolved_false(tmp_path: Path) -> None:
 
 
 def test_run_task_evaluation_report_round_trips(tmp_path: Path) -> None:
-    """The evaluation_report dict must carry category + per-task score
-    breakdown so downstream analysis can read it from results.jsonl
-    without re-walking traces. Reviewer C3: previously this dict was
-    dropped at the collector boundary."""
+    """evaluation_report must carry category + per-task score breakdown
+    so downstream analysis can read it from results.jsonl without re-walking traces."""
+    # reviewer C3: this dict was previously dropped at the collector boundary
     provider = _StubProvider(
         LLMResponse(
             content=None,
@@ -359,7 +356,7 @@ def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> No
     assert summary["type"] == "summary"
     assert summary["success"] is True
     assert summary["total_tokens"] == 49
-    assert summary["n_steps"] == 1  # Reviewer C3: honest count, not 0
+    assert summary["n_steps"] == 1  # honest count: one llm_call action performed
 
 
 def test_run_task_irrelevance_with_empty_predicted(tmp_path: Path) -> None:

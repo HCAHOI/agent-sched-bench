@@ -340,30 +340,18 @@ and rely on the collector gate for the primary production guard.
 
 ### 10.3 BFCLRunner — skips SessionRunner, bypasses openclaw tool set
 
-`BFCLRunner` (in `src/agents/benchmarks/bfcl_runner.py`) intentionally
-**does not route through** `agents.openclaw._session_runner.SessionRunner`.
-Openclaw's `AgentLoop` hardcodes its own tool set (bash/file/web/memory)
-which is incompatible with BFCL's JSON-Schema-provided tool specs: each
-BFCL task ships its OWN list of functions the model must call against.
+`BFCLRunner` (in `src/agents/benchmarks/bfcl_runner.py`) calls
+`provider.chat()` directly rather than routing through
+`agents.openclaw._session_runner.SessionRunner`. Openclaw's `AgentLoop`
+hardcodes its own tool set (bash/file/web/memory), which is incompatible
+with BFCL's per-task JSON-Schema tool specs.
 
-Instead, `BFCLRunner.run_task` calls `provider.chat()` directly with:
-- `messages = task.question[0]` (first turn, with an injected system
-  message if none is present)
-- `tools = [{type: "function", function: f} for f in task.tools]` — BFCL
-  function specs wrapped in the OpenAI envelope
-- `tool_choice = "auto"`
-
-It records the model's returned `tool_calls`, scores them with
-`_ast_match`, and emits a v5-compliant trace via `TraceLogger`:
-one `trace_metadata` header + one `llm_call` `TraceAction` + one summary
-record per task. Gantt / inspector tooling renders BFCL traces
-identically to SWE-patch traces.
-
-**v1 scope**: single-turn categories only (simple_python/java/javascript,
-multiple, parallel, parallel_multiple, live_*, irrelevance,
-live_relevance, live_irrelevance). Multi-turn / memory / web-search /
-format-sensitivity each require a stateful tool simulator and are
-filtered out at `load_tasks` with a WARN log.
+`BFCLRunner.run_task` issues one chat call per task with the task's tool
+spec wrapped in the OpenAI envelope (`{type: "function", function: f}`),
+records the returned `tool_calls`, scores them with `_ast_match`, and
+emits a v5-compliant trace: one `trace_metadata` + one `llm_call`
+`TraceAction` + one `summary` record. Gantt / inspector tooling renders
+BFCL traces identically to SWE-patch traces.
 
 ### 10.4 AST-match rules
 

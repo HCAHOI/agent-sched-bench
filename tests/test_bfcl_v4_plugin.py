@@ -167,10 +167,8 @@ def test_load_tasks_skips_malformed_lines(
 def test_load_tasks_drops_unknown_categories_loudly(
     plugin: BFCLv4Benchmark, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Per research integrity §5 (completeness), categories that are not
-    classified as either supported or deferred MUST be dropped with a
-    loud warning, not silently kept. Silently keeping unknown rows
-    biases results toward whatever happens to ship upstream."""
+    """Unknown categories must be dropped with a loud warning, not silently kept."""
+    # CLAUDE.md §5 completeness: silently keeping unknown rows biases results
     rows = [
         {"id": "s0", "category": "simple_python",
          "question": [[{"role": "user", "content": "x"}]], "function": []},
@@ -192,9 +190,8 @@ def test_load_tasks_drops_unknown_categories_loudly(
 
 
 def test_normalize_task_is_idempotent(plugin: BFCLv4Benchmark) -> None:
-    """collector.collect_traces hoists normalize_task before dispatch,
-    and EvalTask.from_benchmark_instance calls it a second time — the
-    second pass must be a no-op on already-normalized input."""
+    """normalize_task applied twice must produce the same result as once."""
+    # collector hoists normalize_task before dispatch; from_benchmark_instance calls it again
     raw = {
         "id": "simple_0",
         "category": "simple_python",
