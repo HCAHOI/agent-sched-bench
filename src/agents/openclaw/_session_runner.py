@@ -77,11 +77,13 @@ class TraceCollectorHook(AgentHook):
         self._tool_times: dict[str, float] = {}
         self._tool_timeouts: dict[str, int] = {}
         self._tool_start_ts: dict[str, float] = {}
-        self._iter_start_ts: float = 0.0
         self._iter_start_wall: float = 0.0
-        self._after_llm_ts: float = 0.0
-        self._after_llm_wall: float = 0.0
-        self._before_exec_ts: float = 0.0
+        # Snapshot of messages-in at the start of the current iteration —
+        # captured before tool results mutate ``context.messages``.
+        self._iter_messages_snapshot: list[dict[str, Any]] | None = None
+        # Wall-clock when the LLM response landed (just before tool exec).
+        # Used as ts_end of the llm_call action when the iteration calls tools.
+        self._before_exec_wall: float = 0.0
         self._actions: list[dict[str, Any]] = []
         self._fh = open(trace_file, "a", encoding="utf-8")  # noqa: SIM115
 
@@ -112,61 +114,24 @@ class TraceCollectorHook(AgentHook):
         self._fh.flush()
 
     async def before_iteration(self, context: AgentHookContext) -> None:
-        self._iter_start_ts = time.monotonic()
         self._iter_start_wall = time.time()
+        # Snapshot the prompt messages NOW — by the time after_iteration
+        # fires, ``context.messages`` will include the assistant turn AND
+        # any tool result messages, so it can no longer be used as the
+        # ``messages_in`` field of the llm_call action.
+        self._iter_messages_snapshot = self._clone_messages(context.messages)
         self.emit_event(
             LLM, "llm_call_start",
-            {"messages_in": self._clone_messages(context.messages)},
+            {"messages_in": self._iter_messages_snapshot},
             iteration=context.iteration,
         )
-
-    async def after_llm_response(self, context: AgentHookContext) -> None:
-        self._after_llm_ts = time.monotonic()
-        self._after_llm_wall = time.time()
-        usage = context.usage or {}
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-        llm_latency_ms = (self._after_llm_ts - self._iter_start_ts) * 1000
-
-        # Emit llm_call_end observability event
-        resp_dict = self._build_raw_response(
-            context=context,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-        self.emit_event(
-            LLM, "llm_call_end",
-            {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "llm_latency_ms": round(llm_latency_ms, 2),
-                "finish_reason": context.response.finish_reason if context.response else None,
-            },
-            iteration=context.iteration,
-        )
-
-        # Emit llm_call TraceAction (the replayable action record)
-        llm_action = TraceAction(
-            action_type="llm_call",
-            action_id=f"llm_{context.iteration}",
-            agent_id=self.agent_id,
-            program_id=self.program_id,
-            instance_id=self.instance_id,
-            iteration=context.iteration,
-            ts_start=self._iter_start_wall,
-            ts_end=self._after_llm_wall,
-            data={
-                "messages_in": self._clone_messages(context.messages),
-                "raw_response": resp_dict,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "llm_latency_ms": round(llm_latency_ms, 2),
-            },
-        )
-        self._write_action(llm_action)
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
-        self._before_exec_ts = time.monotonic()
+        # Wall clock when the LLM response landed and we're about to dispatch
+        # tools. AgentLoop's ``_LoopHookChain`` does not forward an
+        # ``after_llm_response`` lifecycle method to extra hooks, so this is
+        # the earliest hook point at which we know the LLM call has finished.
+        self._before_exec_wall = time.time()
         if context.tool_calls:
             for tc in context.tool_calls:
                 self._tool_start_ts[tc.name] = time.monotonic()
@@ -191,6 +156,55 @@ class TraceCollectorHook(AgentHook):
         prompt_tokens = usage.get("prompt_tokens", 0)
         completion_tokens = usage.get("completion_tokens", 0)
         self._total_tokens += prompt_tokens + completion_tokens
+
+        # ─── Emit llm_call TraceAction (the replayable LLM record) ─────
+        # OpenClaw's AgentLoop ``_LoopHookChain`` only forwards
+        # ``before_iteration`` / ``before_execute_tools`` / ``after_iteration``
+        # to extra hooks — there is no ``after_llm_response`` lifecycle
+        # method invoked on the chain. So we emit the llm_call action
+        # here at the top of after_iteration — BEFORE the tool_exec
+        # actions, to preserve chronological order in the JSONL trace.
+        # ts_end = ``_before_exec_wall`` (set in before_execute_tools) when
+        # tools were called this iteration; otherwise it's "now".
+        llm_ts_end = self._before_exec_wall or ts_now
+        llm_latency_ms = (llm_ts_end - self._iter_start_wall) * 1000
+        resp_dict = self._build_raw_response(
+            context=context,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        self.emit_event(
+            LLM, "llm_call_end",
+            {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "llm_latency_ms": round(llm_latency_ms, 2),
+                "finish_reason": context.response.finish_reason if context.response else None,
+            },
+            iteration=context.iteration,
+        )
+        llm_action = TraceAction(
+            action_type="llm_call",
+            action_id=f"llm_{context.iteration}",
+            agent_id=self.agent_id,
+            program_id=self.program_id,
+            instance_id=self.instance_id,
+            iteration=context.iteration,
+            ts_start=self._iter_start_wall,
+            ts_end=llm_ts_end,
+            data={
+                "messages_in": self._iter_messages_snapshot,
+                "raw_response": resp_dict,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "llm_latency_ms": round(llm_latency_ms, 2),
+            },
+        )
+        self._write_action(llm_action)
+        # Reset per-iteration scratch state so a stale value cannot leak
+        # into the NEXT iteration's llm_call action.
+        self._before_exec_wall = 0.0
+        self._iter_messages_snapshot = None
 
         # Emit tool_exec TraceAction per tool call result
         tool_results_from_messages = self._extract_tool_results(context.messages)
