@@ -275,16 +275,21 @@ class AgentBase(ABC):
 
     def summary(self) -> dict[str, Any]:
         """Aggregate per-agent trace statistics for downstream analysis."""
+        # ``.get(key, 0)`` returns None (not 0) when the key exists with a
+        # None value, so use ``(... or 0)`` to coerce missing-or-None fields
+        # to a numeric default. mini-swe-agent's _convert_trajectory can
+        # store ``duration_ms=None`` when the last tool result lacks a
+        # timestamp; without this guard sum() explodes with TypeError.
         total_llm_ms = sum(
-            a.data.get("llm_latency_ms", 0) for a in self.actions
+            (a.data.get("llm_latency_ms") or 0) for a in self.actions
             if a.action_type == "llm_call"
         )
         total_tool_ms = sum(
-            a.data.get("duration_ms", 0) for a in self.actions
+            (a.data.get("duration_ms") or 0) for a in self.actions
             if a.action_type == "tool_exec"
         )
         total_tokens = sum(
-            a.data.get("prompt_tokens", 0) + a.data.get("completion_tokens", 0)
+            (a.data.get("prompt_tokens") or 0) + (a.data.get("completion_tokens") or 0)
             for a in self.actions if a.action_type == "llm_call"
         )
         tool_ms_by_name: dict[str, float] = {}
