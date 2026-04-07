@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from agents.benchmarks.base import Benchmark, BenchmarkConfig
 from agents.benchmarks.swe_bench_verified import SWEBenchVerified
+from agents.benchmarks.swe_rebench import SWERebenchBenchmark
 
 if TYPE_CHECKING:
     pass
@@ -25,11 +26,13 @@ __all__ = [
     "Benchmark",
     "BenchmarkConfig",
     "SWEBenchVerified",
+    "SWERebenchBenchmark",
 ]
 
 #: Maps benchmark slug → concrete :class:`~agents.benchmarks.base.Benchmark` subclass.
 REGISTRY: dict[str, type[Benchmark]] = {
     "swe-bench-verified": SWEBenchVerified,
+    "swe-rebench": SWERebenchBenchmark,
 }
 
 
@@ -51,7 +54,7 @@ def get_benchmark_class(slug: str) -> type[Benchmark]:
         raise KeyError(
             f"Benchmark slug {slug!r} is not registered. "
             f"Known slugs: {known}. "
-            "To add swe-rebench or another benchmark, register its class in "
-            "agents.benchmarks.REGISTRY."
+            "To add a new benchmark, create src/agents/benchmarks/<slug>.py "
+            "and register its class in agents.benchmarks.REGISTRY."
         )
     return REGISTRY[slug]
