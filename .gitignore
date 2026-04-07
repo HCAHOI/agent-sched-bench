@@ -16,6 +16,11 @@ results/raw/
 results/processed/
 results/figures/
 traces/swebench/*.jsonl
+traces/openclaw_cli/
+
+# Generated visualization artifacts
+gantt_*.html
+
 /data/models/
 models/
 .omc/

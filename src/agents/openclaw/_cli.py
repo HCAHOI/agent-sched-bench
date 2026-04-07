@@ -150,6 +150,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Working directory for the agent (default: cwd).",
     )
+    parser.add_argument(
+        "--trace-output",
+        default=None,
+        help=(
+            "Output path for the trace JSONL file. Default: "
+            "<repo>/traces/openclaw_cli/<model_slug>/<UTC_TS>/<session_id>.jsonl "
+            "(relative to the agent-sched-bench repo root, NOT the workspace). "
+            "Set this to override (e.g., for one-off experiments)."
+        ),
+    )
 
     parser.add_argument(
         "--async",
@@ -235,6 +245,52 @@ def _resolve_api_base(args: argparse.Namespace) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Trace output path resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_repo_root() -> Path | None:
+    """Walk up from this file to find the agent-sched-bench repo root.
+
+    Returns ``None`` if no ``pyproject.toml`` is found above this file —
+    callers should fall back to ``Path.cwd()``.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").exists():
+            return parent
+    return None
+
+
+def _slug_model(name: str) -> str:
+    """Convert a model identifier to a filesystem-safe slug.
+
+    e.g., ``qwen/qwen3.6-plus:free`` -> ``qwen_qwen3.6-plus_free``.
+    """
+    return name.replace("/", "_").replace(":", "_")
+
+
+def _resolve_trace_output(
+    args: argparse.Namespace, session_id: str, model: str
+) -> Path:
+    """Decide where the OpenClaw CLI should write its trace JSONL.
+
+    Precedence:
+      1. Explicit ``--trace-output`` (resolved with ``expanduser`` + ``resolve``).
+      2. ``<repo>/traces/openclaw_cli/<model_slug>/<UTC_TS>/<session_id>.jsonl``
+         where ``<repo>`` is the agent-sched-bench root.
+      3. ``<cwd>/traces/openclaw_cli/<model_slug>/<UTC_TS>/<session_id>.jsonl``
+         if the repo root cannot be located (e.g., installed wheel).
+    """
+    if args.trace_output:
+        return Path(args.trace_output).expanduser().resolve()
+
+    base = _resolve_repo_root() or Path.cwd().resolve()
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return base / "traces" / "openclaw_cli" / _slug_model(model) / ts / f"{session_id}.jsonl"
+
+
+# ---------------------------------------------------------------------------
 # Sync runner — uses SessionRunner (full bus path)
 # ---------------------------------------------------------------------------
 
@@ -274,9 +330,10 @@ def _run_sync(args: argparse.Namespace) -> int:
         temperature=args.temperature,
     )
 
-    trace_dir = workspace / ".openclaw" / "traces"
-    trace_dir.mkdir(parents=True, exist_ok=True)
-    trace_file = trace_dir / f"{session_id}.jsonl"
+    trace_file = _resolve_trace_output(args, session_id, model)
+    trace_file.parent.mkdir(parents=True, exist_ok=True)
+    if not is_daemon:
+        print(f"Trace: {trace_file}", file=sys.stderr)
 
     runner = SessionRunner(
         provider,
@@ -366,6 +423,15 @@ def _run_async(args: argparse.Namespace) -> int:
     pid_dir.mkdir(parents=True, exist_ok=True)
     pid_file = pid_dir / f"{session_id}.pid"
 
+    # Resolve the trace path in the parent so:
+    #   1) ``--trace-output`` overrides are honored in async mode (the
+    #      daemon would otherwise compute its own default), and
+    #   2) ``--status`` can locate the trace via the PID file metadata
+    #      without re-deriving the path.
+    model = _resolve_model(args)
+    trace_file = _resolve_trace_output(args, session_id, model)
+    trace_file.parent.mkdir(parents=True, exist_ok=True)
+
     cmd = [
         sys.executable,
         "-m",
@@ -378,7 +444,7 @@ def _run_async(args: argparse.Namespace) -> int:
         "--workspace",
         str(workspace),
         "--model",
-        _resolve_model(args),
+        model,
         "--api-base",
         _resolve_api_base(args),
         "--max-iterations",
@@ -389,12 +455,18 @@ def _run_async(args: argparse.Namespace) -> int:
         str(args.temperature),
         "--session-id",
         session_id,
+        "--trace-output",
+        str(trace_file),
     ]
 
     # Pass API key via environment, not argv (avoid ps leaking secrets)
     api_key = _resolve_api_key(args)
     pid = spawn_daemon(
-        cmd, pid_file, session_id, extra_env={"OPENCLAW_API_KEY": api_key}
+        cmd,
+        pid_file,
+        session_id,
+        extra_env={"OPENCLAW_API_KEY": api_key},
+        trace_file=trace_file,
     )
 
     result = {
@@ -402,6 +474,7 @@ def _run_async(args: argparse.Namespace) -> int:
         "pid": pid,
         "pid_file": str(pid_file),
         "workspace": str(workspace),
+        "trace_file": str(trace_file),
     }
     print(json.dumps(result, indent=2))
     return 0
