@@ -3,9 +3,12 @@
 Uses mini-swe-agent (https://github.com/SWE-agent/mini-swe-agent) as the
 underlying LLM loop, preserving the AgentBase interface for trace collection.
 
-prepare() clones the repo at base_commit into a temp directory.
-run()     wraps DefaultAgent.run() via asyncio.to_thread, then converts
-          the trajectory into TraceAction records for our trace logger.
+The agent runs inside the task's pre-built SWE-bench/SWE-rebench container
+(``task["image_name"]``) via mini-swe-agent's ``DockerEnvironment``. The
+container has the repo at ``/testbed`` with ``base_commit`` already checked
+out and dependencies pre-installed, so no host-side clone or pip install is
+required. The container runtime defaults to ``podman`` but can be overridden
+via the ``MSWEA_DOCKER_EXECUTABLE`` environment variable.
 """
 
 from __future__ import annotations
@@ -13,9 +16,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -194,65 +197,16 @@ class MiniSWECodeAgent(AgentBase):
         self._prepared = False
 
     # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _repo_dir_name(self, task: dict[str, Any]) -> str:
-        owner, name = task["repo"].split("/")
-        return f"{owner}__{name}"
-
-    # ------------------------------------------------------------------
     # Two-phase lifecycle
     # ------------------------------------------------------------------
 
-    async def prepare(self, task: dict[str, Any]) -> None:
-        """Clone repo at base_commit into an isolated temp directory."""
-        workdir = Path(tempfile.mkdtemp(prefix="miniswe_"))
-        repo_dir = workdir / "repo"
-        base_commit: str = task["base_commit"]
+    async def prepare(self, task: dict[str, Any]) -> None:  # noqa: ARG002
+        """Create a host tempdir for the mini-swe-agent trajectory file.
 
-        if self.repos_root:
-            local_repo = self.repos_root / self._repo_dir_name(task)
-            clone_cmd = f"git clone {local_repo} {repo_dir}"
-        else:
-            repo_url = f"https://github.com/{task['repo']}.git"
-            clone_cmd = f"git clone {repo_url} {repo_dir}"
-
-        checkout_cmd = f"git -C {repo_dir} checkout {base_commit}"
-        install_cmd = (
-            f"cd {repo_dir}"
-            " && if [ -f setup.py ] || [ -f pyproject.toml ]; then"
-            "   pip install -e . 2>&1 | tail -5;"
-            " fi"
-        )
-
-        for cmd in (clone_cmd, checkout_cmd):
-            result = await asyncio.to_thread(
-                subprocess.run,
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=300.0,
-            )
-            if result.returncode != 0:
-                shutil.rmtree(workdir, ignore_errors=True)
-                raise RuntimeError(
-                    f"Repo setup failed for {task['instance_id']}: "
-                    f"{(result.stdout + result.stderr)[:300]}"
-                )
-
-        # pip install – best effort
-        await asyncio.to_thread(
-            subprocess.run,
-            install_cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=600.0,
-        )
-
-        self._workdir = workdir
+        The repo itself lives inside the task container at ``/testbed``; no
+        host-side clone or dependency install is required.
+        """
+        self._workdir = Path(tempfile.mkdtemp(prefix="miniswe_"))
         self._prepared = True
 
     async def run(self, task: dict[str, Any]) -> bool:
@@ -267,10 +221,9 @@ class MiniSWECodeAgent(AgentBase):
             await self.prepare(task)
 
         assert self._workdir is not None
-        repo_dir = self._workdir / "repo"
 
         try:
-            return await self._run_mini_agent(task, repo_dir)
+            return await self._run_mini_agent(task)
         finally:
             shutil.rmtree(self._workdir, ignore_errors=True)
             self._workdir = None
@@ -280,9 +233,17 @@ class MiniSWECodeAgent(AgentBase):
     # Inner agent loop
     # ------------------------------------------------------------------
 
-    async def _run_mini_agent(self, task: dict[str, Any], repo_dir: Path) -> bool:
-        from minisweagent.environments.local import LocalEnvironment
+    async def _run_mini_agent(self, task: dict[str, Any]) -> bool:
+        from minisweagent.environments.docker import DockerEnvironment
         from minisweagent.models.litellm_model import LitellmModel
+
+        image = task.get("image_name")
+        if not image:
+            raise RuntimeError(
+                f"Task {task.get('instance_id')!r} has no 'image_name'; "
+                "the SWE-rebench/SWE-bench plugin must populate it via "
+                "normalize_task() before running mini-swe-agent."
+            )
 
         lm = LitellmModel(
             model_name=f"openai/{self.model}",
@@ -294,9 +255,13 @@ class MiniSWECodeAgent(AgentBase):
             },
             cost_tracking="ignore_errors",
         )
-        env = LocalEnvironment(
-            cwd=str(repo_dir),
+        # Default to podman; override with MSWEA_DOCKER_EXECUTABLE=docker if needed.
+        executable = os.getenv("MSWEA_DOCKER_EXECUTABLE", "podman")
+        env = DockerEnvironment(
+            image=image,
+            cwd="/testbed",
             timeout=int(self.command_timeout_s),
+            executable=executable,
             env={"PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"},
         )
         mini_agent = ContextManagedAgent(
@@ -314,14 +279,18 @@ class MiniSWECodeAgent(AgentBase):
 
         result: dict[str, Any] = {"exit_status": "error", "submission": ""}
         try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(mini_agent.run, task["problem_statement"]),
-                timeout=self.task_timeout_s,
-            )
-        except TimeoutError:
-            result = {"exit_status": "timeout", "submission": ""}
-        except Exception as exc:
-            result = {"exit_status": "error", "submission": "", "error": str(exc)}
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(mini_agent.run, task["problem_statement"]),
+                    timeout=self.task_timeout_s,
+                )
+            except TimeoutError:
+                result = {"exit_status": "timeout", "submission": ""}
+            except Exception as exc:
+                result = {"exit_status": "error", "submission": "", "error": str(exc)}
+        finally:
+            # Stop and remove the container explicitly; do not rely on __del__.
+            env.cleanup()
 
         wall_end = time.time()
 
