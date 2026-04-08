@@ -79,6 +79,7 @@ def test_ast_match_irrelevance_requires_empty_predicted() -> None:
 
 def test_ast_match_live_irrelevance_requires_empty_predicted() -> None:
     """live_irrelevance must use the same abstention rule as irrelevance."""
+    # reviewer C2: live_irrelevance previously fell through to generic length-match
     assert (
         BFCLRunner._ast_match(
             predicted=[], ground_truth=[], category="live_irrelevance"

@@ -12,8 +12,6 @@ from typing import Any, Callable
 
 import httpx
 
-from harness.prometheus import parse_prometheus_metric_values
-
 
 class VLLMMetricsCollector:
     """Periodic collector for Prometheus-style vLLM metrics snapshots."""
@@ -29,15 +27,6 @@ class VLLMMetricsCollector:
         "vllm:e2e_request_latency_seconds",
         "vllm:time_to_first_token_seconds",
     ]
-    FLAT_METRICS = [
-        metric
-        for metric in METRICS_OF_INTEREST
-        if metric not in {
-            "vllm:e2e_request_latency_seconds",
-            "vllm:time_to_first_token_seconds",
-        }
-    ]
-
     HISTOGRAM_METRICS = {
         "vllm:e2e_request_latency_seconds",
         "vllm:time_to_first_token_seconds",
@@ -54,15 +43,7 @@ class VLLMMetricsCollector:
         self.gpu_sample_provider = gpu_sample_provider or sample_nvidia_smi
 
     def _parse_prometheus(self, metrics_payload: str) -> dict[str, Any]:
-        snapshot = {
-            metric: value
-            for metric, value in parse_prometheus_metric_values(
-                metrics_payload,
-                {metric: metric for metric in self.FLAT_METRICS},
-                include_missing=False,
-            ).items()
-            if value is not None
-        }
+        snapshot: dict[str, Any] = {}
         for line in metrics_payload.splitlines():
             if not line or line.startswith("#"):
                 continue

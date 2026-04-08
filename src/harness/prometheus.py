@@ -7,7 +7,17 @@ def parse_prometheus_metric_values(
     *,
     include_missing: bool,
 ) -> dict[str, float | None]:
-    """Extract numeric metric values keyed by their caller-provided aliases."""
+    """Extract numeric metric values keyed by their caller-provided aliases.
+
+    Args:
+        metrics_payload: Raw Prometheus text-format response body.
+        metric_names: Mapping of Prometheus metric name → result alias.
+            **No key may be a prefix of another key** — the inner loop
+            breaks on the first match per line, so a prefix would shadow
+            any longer metric name that starts with the same string.
+        include_missing: When True, aliases for unseen metrics are set to
+            None. When False, missing metrics are omitted from the result.
+    """
     values: dict[str, float | None] = {}
     if include_missing:
         values = {alias: None for alias in metric_names.values()}

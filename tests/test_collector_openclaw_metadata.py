@@ -70,6 +70,8 @@ def test_normalize_openclaw_trace_preserves_runner_scaffold_capabilities(
     tmp_path: Path,
 ) -> None:
     """_normalize_openclaw_trace must not overwrite the runner's scaffold_capabilities."""
+    # reviewer M2: BFCL runner writes tools='benchmark_provided'/file_ops='none';
+    # merging with default-openclaw capabilities would silently corrupt the trace
     from trace_collect.collector import _normalize_openclaw_trace
 
     src = tmp_path / "src.jsonl"
@@ -113,6 +115,8 @@ def test_normalize_openclaw_trace_conservative_default_when_no_source_metadata(
 ) -> None:
     """When the source trace has no trace_metadata, the collector stamps a
     conservative 'unknown' marker rather than inventing a capability list."""
+    # reviewer M2: previously hardcoded the openclaw bash+file+web tool list,
+    # silently corrupting BFCL crash-recovery traces
     from trace_collect.collector import _normalize_openclaw_trace
 
     # Partial trace: one action but no metadata header.

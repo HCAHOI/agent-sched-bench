@@ -65,6 +65,8 @@ def _unwrap_tool_args(
             return (tool_name or only_name), only_value, True
 
     return tool_name, parsed, False
+
+
 def _map_workspace_path(raw_path: str, repo_dir: Path, agent_id: str) -> Path:
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
