@@ -2,15 +2,13 @@ import { For, Show, createEffect, createMemo } from "solid-js";
 
 import type { TracePayload } from "../api/client";
 import type { HitCard } from "../canvas/hit";
-import { flattenVisibleLanes, TIME_AXIS_H, effectiveLaneH } from "../canvas/layout";
-import type { ViewMode } from "../state/signals";
+import { flattenVisibleLanes } from "../canvas/layout";
 
 interface SidebarProps {
   onPinLane: (card: HitCard) => void;
   onScroll?: (scrollTop: number) => void;
   scrollTop: number;
   traces: TracePayload[];
-  viewMode: ViewMode;
   visibility: Record<string, boolean>;
 }
 
@@ -19,8 +17,6 @@ export default function Sidebar(props: SidebarProps) {
   let shellEl!: HTMLElement;
   let suppressNextScroll = false;
 
-  // Mirror external scrollTop into the shell's native scrollbar so wheel
-  // input on the sidebar moves the same distance the canvas would.
   createEffect(() => {
     const target = props.scrollTop;
     if (!shellEl || shellEl.scrollTop === target) {
@@ -39,25 +35,17 @@ export default function Sidebar(props: SidebarProps) {
   };
 
   return (
-    <aside
-      class="sidebar-shell"
-      onScroll={handleScroll}
-      ref={shellEl}
-    >
+    <aside class="sidebar-shell" onScroll={handleScroll} ref={shellEl}>
       <div class="sidebar-track">
-        <div class="sidebar-time" style={{ height: `${TIME_AXIS_H}px` }}>
-          Time
-        </div>
-
+        <div class="sidebar-time">TIME</div>
         <Show
-          fallback={<div class="sidebar-empty">Loaded lane labels appear here.</div>}
+          fallback={<div class="sidebar-empty">Load traces from the bar above.</div>}
           when={rows().length > 0}
         >
           <For each={rows()}>
             {(row) => (
               <button
                 class="lane-label"
-                classList={{ concise: props.viewMode === "concise" }}
                 onClick={(event) =>
                   props.onPinLane({
                     hit: {
@@ -71,7 +59,6 @@ export default function Sidebar(props: SidebarProps) {
                     y: event.clientY,
                   })
                 }
-                style={{ height: `${effectiveLaneH(props.viewMode)}px` }}
                 type="button"
               >
                 <strong>{row.traceLabel}</strong>

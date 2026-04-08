@@ -72,15 +72,16 @@ export default function App() {
   const headerSummary = createMemo(() => {
     const traces = loadedTraces();
     if (traces.length === 0) {
-      return "No traces loaded yet.";
+      return "no traces loaded";
     }
-    return traces
-      .map((trace) => {
-        const metadata = trace.metadata;
-        return `${trace.label}: ${metadata.scaffold} ${metadata.model ?? ""}`.trim() +
-          ` (${metadata.n_actions} actions / ${metadata.n_iterations} iters, ${(metadata.elapsed_s ?? 0).toFixed(1)}s)`;
-      })
-      .join(" · ");
+    if (traces.length === 1) {
+      const t = traces[0];
+      const m = t.metadata;
+      return `${t.label} · ${m.scaffold}${m.model ? " · " + m.model : ""} · ${m.n_actions} actions · ${(m.elapsed_s ?? 0).toFixed(1)}s`;
+    }
+    const totalActions = traces.reduce((acc, t) => acc + t.metadata.n_actions, 0);
+    const scaffolds = new Set(traces.map((t) => t.metadata.scaffold));
+    return `${traces.length} traces · ${[...scaffolds].join("/")} · ${totalActions} actions total`;
   });
 
   async function initialize(): Promise<void> {
@@ -185,10 +186,13 @@ export default function App() {
         summary={headerSummary}
         onTimeModeChange={setTimeMode}
         onViewModeChange={setViewMode}
+        onZoomChange={setZoom}
         timeMode={timeMode}
         viewMode={viewMode}
         zoom={zoom}
       />
+
+      <Legend registries={registries()} />
 
       <TraceChipBar
         descriptors={descriptors()}
@@ -202,7 +206,7 @@ export default function App() {
       />
 
       <Show when={appError()}>
-        <section class="toolbar-card error-banner">{appError()}</section>
+        <section class="error-banner">{appError()}</section>
       </Show>
 
       <section class="workspace-card">
@@ -211,7 +215,6 @@ export default function App() {
           onScroll={setScrollTop}
           scrollTop={scrollTop()}
           traces={loadedTraces()}
-          viewMode={viewMode()}
           visibility={visibility()}
         />
         <CanvasStage
@@ -247,7 +250,6 @@ export default function App() {
         />
       </section>
 
-      <Legend registries={registries()} />
       <DropZone onUpload={handleUpload} />
 
       <Switch>

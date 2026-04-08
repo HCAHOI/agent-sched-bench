@@ -14,14 +14,17 @@ interface RenderHitBox {
   y: number;
 }
 
-const GRID_COLOR = "#dbe4ec";
-const LANE_BG = "#edf2f7";
-const LANE_BORDER = "#d2dce7";
-const UNKNOWN_SPAN_COLOR = "#94a3b8";
-const TEXT_COLOR = "#1f2937";
+const GRID_COLOR = "#141a24";
+const LANE_BG = "#0a0e14";
+const LANE_BORDER = "#1e2633";
+const UNKNOWN_SPAN_COLOR = "#6b7280";
+const TEXT_COLOR = "#c5c8d4";
+const AXIS_TEXT_COLOR = "#6b7280";
+const SPAN_LABEL_COLOR = "#0a0e14";
 const ZOOM_MAX = 32;
 const ZOOM_MIN = 0.25;
 const ZOOM_STEP = 1.25;
+export const ZOOM_PRESETS = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
 
 export class CanvasRenderer extends EventTarget {
   private canvas: HTMLCanvasElement;
@@ -30,6 +33,7 @@ export class CanvasRenderer extends EventTarget {
   private keydownHandler: (event: KeyboardEvent) => void;
   private payload: GanttPayload | null = null;
   private rafId: number | null = null;
+  private resizeRafId: number | null = null;
   private resizeObserver: ResizeObserver;
   private timeMode: TimeMode = "sync";
   private viewMode: ViewMode = "layered";
@@ -48,7 +52,7 @@ export class CanvasRenderer extends EventTarget {
     this.ctx = ctx;
     this.wrap = wrap;
 
-    this.resizeObserver = new ResizeObserver(() => this.resizeCanvas());
+    this.resizeObserver = new ResizeObserver(() => this.scheduleResize());
     this.resizeObserver.observe(this.wrap);
 
     this.canvas.addEventListener("mousemove", (event) => this.onMouseMove(event));
@@ -72,7 +76,7 @@ export class CanvasRenderer extends EventTarget {
     this.keydownHandler = (event) => this.onKeyDown(event);
     document.addEventListener("keydown", this.keydownHandler);
 
-    this.resizeCanvas();
+    this.resizeCanvasImmediate();
   }
 
   destroy(): void {
@@ -80,13 +84,17 @@ export class CanvasRenderer extends EventTarget {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    if (this.resizeRafId !== null) {
+      cancelAnimationFrame(this.resizeRafId);
+      this.resizeRafId = null;
+    }
     this.resizeObserver.disconnect();
     document.removeEventListener("keydown", this.keydownHandler);
   }
 
   setPayload(payload: GanttPayload | null): void {
     this.payload = payload;
-    this.resizeCanvas();
+    this.scheduleResize();
   }
 
   setTimeMode(mode: TimeMode): void {
@@ -102,7 +110,7 @@ export class CanvasRenderer extends EventTarget {
       return;
     }
     this.viewMode = mode;
-    this.resizeCanvas();
+    this.scheduleResize();
   }
 
   setZoom(factor: number, cursorFrac?: number): void {
@@ -118,7 +126,9 @@ export class CanvasRenderer extends EventTarget {
     }
 
     this.zoomFactor = clamped;
-    this.resizeCanvas();
+    // Synchronous resize for cursor-anchored zoom: scrollLeft needs the
+    // new logical width, which scheduleResize would only produce next frame.
+    this.resizeCanvasImmediate();
 
     const nextWidth = this.canvas.clientWidth || this.wrap.clientWidth || 1;
     const offset =
@@ -137,7 +147,7 @@ export class CanvasRenderer extends EventTarget {
 
   setVisibility(map: Record<string, boolean>): void {
     this.visibility = map;
-    this.resizeCanvas();
+    this.scheduleResize();
   }
 
   rerender(): void {
@@ -245,7 +255,17 @@ export class CanvasRenderer extends EventTarget {
     });
   }
 
-  private resizeCanvas(): void {
+  private scheduleResize(): void {
+    if (this.resizeRafId !== null) {
+      return;
+    }
+    this.resizeRafId = requestAnimationFrame(() => {
+      this.resizeRafId = null;
+      this.resizeCanvasImmediate();
+    });
+  }
+
+  private resizeCanvasImmediate(): void {
     const dpr = window.devicePixelRatio || 1;
     const logicalWidth = Math.max(this.wrap.clientWidth * this.zoomFactor, this.wrap.clientWidth || 1);
     const logicalHeight = computeTotalContentHeight(
@@ -255,8 +275,17 @@ export class CanvasRenderer extends EventTarget {
       this.wrap.clientHeight || 320,
     );
 
-    this.canvas.width = logicalWidth * dpr;
-    this.canvas.height = logicalHeight * dpr;
+    // canvas.width/height reset the backing buffer (and clear it) even on a
+    // no-op write. Gate the writes so rapid re-renders from the same viewport
+    // size don't thrash the GPU texture at high zoom.
+    const nextBufW = Math.round(logicalWidth * dpr);
+    const nextBufH = Math.round(logicalHeight * dpr);
+    if (this.canvas.width !== nextBufW) {
+      this.canvas.width = nextBufW;
+    }
+    if (this.canvas.height !== nextBufH) {
+      this.canvas.height = nextBufH;
+    }
     this.canvas.style.width = `${logicalWidth}px`;
     this.canvas.style.height = `${logicalHeight}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -274,8 +303,8 @@ export class CanvasRenderer extends EventTarget {
       (trace) => this.visibility[trace.id] !== false,
     );
     if (traces.length === 0) {
-      this.ctx.fillStyle = TEXT_COLOR;
-      this.ctx.font = "14px sans-serif";
+      this.ctx.fillStyle = AXIS_TEXT_COLOR;
+      this.ctx.font = '12px "JetBrains Mono", monospace';
       this.ctx.fillText("Load a trace to render the timeline.", 20, 48);
       return;
     }
@@ -306,7 +335,13 @@ export class CanvasRenderer extends EventTarget {
 
     const range = maxTime - minTime || 1;
     const margin = range * 0.02;
-    minTime -= margin;
+    // Sync mode anchors t=0 on the trace start — a negative left margin
+    // would display "-Xs" ticks that have no referent.
+    if (this.timeMode === "sync") {
+      minTime = 0;
+    } else {
+      minTime -= margin;
+    }
     maxTime += margin;
     const totalRange = maxTime - minTime || 1;
     const laneHeight = effectiveLaneH(this.viewMode);
@@ -327,8 +362,8 @@ export class CanvasRenderer extends EventTarget {
       this.ctx.stroke();
     }
 
-    this.ctx.fillStyle = TEXT_COLOR;
-    this.ctx.font = '10px "IBM Plex Mono", monospace';
+    this.ctx.fillStyle = AXIS_TEXT_COLOR;
+    this.ctx.font = '10px "JetBrains Mono", "Menlo", monospace';
     this.ctx.textAlign = "center";
     for (
       let tick = Math.ceil(minTime / gridStep) * gridStep;
@@ -383,7 +418,7 @@ export class CanvasRenderer extends EventTarget {
             this.ctx.globalAlpha = 1;
 
             if (widthPx > 22) {
-              this.ctx.fillStyle = "#0f172a";
+              this.ctx.fillStyle = SPAN_LABEL_COLOR;
               this.ctx.textAlign = "left";
               this.ctx.fillText(String(span.iteration), x0 + 4, yOffset + 12);
             }

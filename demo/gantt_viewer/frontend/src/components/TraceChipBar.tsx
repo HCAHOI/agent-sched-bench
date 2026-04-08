@@ -18,45 +18,8 @@ export default function TraceChipBar(props: TraceChipBarProps) {
   let fileInputEl!: HTMLInputElement;
 
   return (
-    <section class="toolbar-card trace-strip">
-      <div class="trace-strip-header">
-        <div>
-          <span class="metric-label">traces</span>
-          <strong>Load individual traces or pull all discovered entries.</strong>
-        </div>
-        <div class="trace-actions">
-          <button
-            class="secondary-btn"
-            onClick={() => fileInputEl.click()}
-            type="button"
-          >
-            Add JSONL
-          </button>
-          <button
-            class="primary-btn"
-            onClick={() => props.onLoad(props.descriptors.map((descriptor) => descriptor.id))}
-            type="button"
-          >
-            Load all
-          </button>
-        </div>
-      </div>
-
-      <input
-        accept=".jsonl"
-        class="visually-hidden"
-        multiple
-        onChange={(event) => {
-          const files = Array.from(event.currentTarget.files ?? []);
-          if (files.length > 0) {
-            void props.onUpload(files);
-          }
-          event.currentTarget.value = "";
-        }}
-        ref={fileInputEl}
-        type="file"
-      />
-
+    <section class="trace-strip">
+      <span class="trace-strip-header">TRACES</span>
       <div class="trace-chip-grid">
         <For each={props.descriptors}>
           {(descriptor) => {
@@ -73,6 +36,7 @@ export default function TraceChipBar(props: TraceChipBarProps) {
               >
                 <button
                   class="trace-chip-main"
+                  title={`${descriptor.label} · ${descriptor.source_format}`}
                   onClick={() =>
                     loaded()
                       ? props.onToggleVisibility(descriptor.id)
@@ -80,8 +44,7 @@ export default function TraceChipBar(props: TraceChipBarProps) {
                   }
                   type="button"
                 >
-                  <span>{descriptor.label}</span>
-                  <small>{descriptor.source_format}</small>
+                  {descriptor.label}
                 </button>
                 <Show when={loaded()}>
                   <button
@@ -97,6 +60,36 @@ export default function TraceChipBar(props: TraceChipBarProps) {
           }}
         </For>
       </div>
+      <div class="trace-actions">
+        <button
+          class="secondary-btn"
+          onClick={() => fileInputEl.click()}
+          type="button"
+        >
+          + JSONL
+        </button>
+        <button
+          class="primary-btn"
+          onClick={() => props.onLoad(props.descriptors.map((d) => d.id))}
+          type="button"
+        >
+          Load all
+        </button>
+      </div>
+      <input
+        accept=".jsonl"
+        class="visually-hidden"
+        multiple
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          if (files.length > 0) {
+            void props.onUpload(files);
+          }
+          event.currentTarget.value = "";
+        }}
+        ref={fileInputEl}
+        type="file"
+      />
     </section>
   );
 }

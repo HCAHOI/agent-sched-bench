@@ -16,7 +16,7 @@ export default function Tooltip(props: TooltipProps) {
     if (!props.card || typeof window === "undefined") {
       return {};
     }
-    const maxWidth = 360;
+    const maxWidth = 540;
     const maxHeight = 420;
     return {
       left: `${Math.min(props.card.x + 16, window.innerWidth - maxWidth - 16)}px`,
@@ -34,7 +34,7 @@ export default function Tooltip(props: TooltipProps) {
         <div class="tooltip-head" style={{ color: hitAccent(props.card!.hit, props.registries) }}>
           <strong>{hitTitle(props.card!.hit, props.registries)}</strong>
           <Show when={props.pinned}>
-            <button class="trace-remove" onClick={props.onClose} type="button">
+            <button class="tooltip-close" onClick={props.onClose} type="button">
               ×
             </button>
           </Show>
@@ -48,7 +48,7 @@ export default function Tooltip(props: TooltipProps) {
           ))}
         </div>
         <Show when={props.pinned}>
-          <p class="tooltip-hint">Pinned. Click the canvas or press ESC to clear.</p>
+          <p class="tooltip-hint">Pinned — click canvas or press ESC to clear.</p>
         </Show>
       </aside>
     </Show>
