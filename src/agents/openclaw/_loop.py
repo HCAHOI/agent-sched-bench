@@ -225,11 +225,8 @@ class AgentLoop:
 
         self.context = ContextBuilder(workspace, timezone=timezone)
         self.sessions = session_manager or SessionManager(workspace)
-        # Replace semantics: if the caller provides a pre-built ToolRegistry,
-        # use it verbatim and skip _register_default_tools() below. This is
-        # the extension point for function_call benchmarks (BFCL v4+) that
-        # need the LLM to see only their own per-task JSON-Schema tools and
-        # not the openclaw bash/file/web defaults.
+        # Replace semantics: a caller-supplied registry is used verbatim;
+        # _register_default_tools() is skipped. See §11 of benchmark_plugin_spec.md.
         self._custom_tools_provided = tools is not None
         self.tools = tools if tools is not None else ToolRegistry()
         self.runner = AgentRunner(provider)
@@ -268,9 +265,6 @@ class AgentLoop:
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
         )
-        # Only register the default environment tools (bash/file/web/...)
-        # when the caller did NOT supply a custom registry. Custom registries
-        # are expected to be fully populated by the caller.
         if not self._custom_tools_provided:
             self._register_default_tools()
 

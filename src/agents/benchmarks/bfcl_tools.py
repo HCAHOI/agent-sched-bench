@@ -1,16 +1,11 @@
 """BFCL-as-openclaw Tool wrappers + BFCL→JSON-Schema normalizer.
 
-Used by :mod:`agents.benchmarks.bfcl_runner` to wrap each BFCL task's
-function specs into :class:`agents.openclaw.tools.base.Tool` instances
-that can be registered with an :class:`agents.openclaw.tools.registry.ToolRegistry`
-and passed to ``SessionRunner.run(tools=...)`` via the Phase 0
-extension point.
-
-BFCL ships parameter schemas using a non-standard JSON Schema dialect
-(``type: "dict"`` instead of ``"object"``, ``"tuple"`` instead of
-``"array"``, ``"any"`` for polymorphic args). :func:`_normalize_bfcl_schema`
-recursively rewrites these to standard JSON Schema before wrapping so
-openclaw's :meth:`Tool.validate_params` doesn't reject them.
+Wraps each BFCL task's function specs as :class:`~agents.openclaw.tools.base.Tool`
+instances for use with the custom-registry extension point
+(``SessionRunner.run(tools=...)``). Schema normalization rewrites
+BFCL's non-standard types (``"dict"``, ``"tuple"``, ``"any"``) to
+standard JSON Schema before registration. See
+``docs/benchmark_plugin_spec.md §11`` for the full wiring pattern.
 """
 
 from __future__ import annotations
@@ -95,19 +90,12 @@ def _normalize_bfcl_schema(schema: Any) -> dict[str, Any]:
 class BFCLNoOpTool(Tool):
     """Openclaw Tool wrapper for a single BFCL function spec.
 
-    Single-turn BFCL categories ask the model to emit the right
-    structured tool call — not to actually execute it. This wrapper
-    records each invocation in a caller-supplied ``recorder`` list and
-    returns a neutral acknowledgment string so openclaw's dispatch
-    path (``AgentRunner._run_tool`` → ``await tool.execute()``)
-    completes cleanly. After the session returns, the BFCL runner reads
-    ``recorder`` directly and scores it against ground truth via
-    ``_ast_match``.
-
-    Non-reentrant: the ``recorder`` list is shared by reference, so
-    callers must instantiate a fresh recorder per ``BFCLRunner.run_task``
-    invocation. :func:`build_bfcl_tool_registry` enforces this by
-    returning ``(registry, recorder)`` together.
+    Records each invocation in a caller-supplied ``recorder`` list and
+    returns ``"OK"`` so openclaw's dispatch path completes cleanly.
+    The BFCL runner reads ``recorder`` after the session ends and scores
+    it against ground truth via ``_ast_match``. The recorder is shared
+    by reference — :func:`build_bfcl_tool_registry` returns a fresh one
+    per call to keep concurrent ``run_task`` invocations isolated.
     """
 
     def __init__(self, spec: dict[str, Any], recorder: list[dict[str, Any]]) -> None:
@@ -164,23 +152,10 @@ def build_bfcl_tool_registry(
 ) -> tuple[ToolRegistry, list[dict[str, Any]]]:
     """Build a :class:`ToolRegistry` from a BFCL task's function specs.
 
-    Args:
-        task_tools: The ``tools`` field of an :class:`~agents.openclaw.eval.types.EvalTask`
-            that was populated by ``BFCLv4Benchmark.normalize_task``.
-            Each entry is a BFCL function spec dict
-            (``{name, description, parameters}``).
-
-    Returns:
-        A pair ``(registry, recorder)``:
-        - ``registry`` has one :class:`BFCLNoOpTool` per valid spec and is
-          ready to pass as ``tools=`` to ``SessionRunner.run()``.
-        - ``recorder`` is an initially-empty list that will be populated
-          as the LLM (via openclaw's dispatch loop) invokes each tool.
-          After the session ends the runner reads this list directly
-          for scoring.
-
-    Non-dict entries in ``task_tools`` are dropped with a WARN log
-    (CLAUDE.md §4 "no silent failures").
+    Returns ``(registry, recorder)`` where ``registry`` has one
+    :class:`BFCLNoOpTool` per valid spec and ``recorder`` is the shared
+    list that each tool appends to on execution. Non-dict entries are
+    dropped with a WARN log.
     """
     registry = ToolRegistry()
     recorder: list[dict[str, Any]] = []

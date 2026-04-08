@@ -1,27 +1,9 @@
 """BFCL v4 runner — routes through openclaw ``SessionRunner`` with a
 per-task custom :class:`ToolRegistry`.
 
-Each BFCL task ships its own JSON-Schema tool spec (``task.tools``) that
-the model must call against. In v2 the runner builds a
-``BFCLNoOpTool``-backed registry via
-:func:`agents.benchmarks.bfcl_tools.build_bfcl_tool_registry`, hands it
-to ``SessionRunner.run(tools=...)`` via the Phase 0 extension point,
-and lets the full openclaw scheduling path (bus dispatch, concurrency
-gate, context window manager, hook events) handle the LLM turn and
-tool dispatch. After the session completes the runner reads the
-recorder list, scores the collected tool calls against
-``task.ground_truth`` via :meth:`_ast_match`, and returns an
-:class:`EvalResult`.
-
-v2 routes single-turn BFCL through the SAME openclaw path as SWE-patch
-benchmarks, so BFCL traces now emit ``llm_call_start/end``,
-``tool_exec_start/end``, and session-level scheduling events instead
-of the v1 bypass's single ``llm_call`` action. This gives BFCL tasks
-parity with SWE-bench for scheduling research.
-
-AST-match rules and known v1 limitations (no ``dont_care`` wildcard,
-no recursive nested-dict matching) are documented in
-``docs/benchmark_plugin_spec.md §10.4``.
+Architecture and per-task flow are documented in
+``docs/benchmark_plugin_spec.md §10.3``. AST-match rules and known
+limitations (no ``dont_care`` wildcard) are in §10.4.
 """
 
 from __future__ import annotations
@@ -75,10 +57,7 @@ class BFCLRunner:
         self.model = model or (
             provider.get_default_model() if provider is not None else "unknown"
         )
-        # Single-turn BFCL: the model emits tool_calls on its first
-        # response and we stop. max_iterations=1 is the honest bound.
-        # If a BFCLv3-style multi-turn category is later re-enabled it
-        # will need a higher limit, but v2's scope is single-turn only.
+        # Default 1: single-turn BFCL makes exactly one LLM call per task.
         effective_max_iterations = (
             max_iterations if max_iterations is not None else 1
         )
@@ -212,15 +191,11 @@ class BFCLRunner:
     def _extract_absorbed_llm_error(trace_file: Path) -> str | None:
         """Return the error message of the first absorbed LLM error, if any.
 
-        When ``provider.chat()`` raises inside ``SessionRunner``, openclaw's
-        agent runner catches it, wraps the response as
-        ``finish_reason='error'``, and emits an ``llm_error`` trace event.
-        The session completes normally with an empty recorder, so the
-        runner cannot tell "model produced wrong answer" from "model
-        crashed" by inspecting the return value alone. Walk the trace
-        once looking for the error event and lift its message into
-        ``EvalResult.error`` so ``results.jsonl`` can distinguish the
-        two failure modes without re-walking the trace downstream.
+        When ``provider.chat()`` raises, the agent runner absorbs it and
+        emits an ``llm_error`` trace event; the session completes with an
+        empty recorder. This walks the trace once to lift the error message
+        into ``EvalResult.error`` so callers can distinguish "wrong answer"
+        from "model crashed" without re-walking the trace downstream.
         """
         if not trace_file.exists():
             return None
@@ -235,8 +210,6 @@ class BFCLRunner:
             if rec.get("type") == "event" and rec.get("event") == "llm_error":
                 # TraceCollectorHook emits llm_error with shape
                 # {"error_message": str, "finish_reason": str, ...extras}
-                # See agents.openclaw._session_runner.py:285 for the canonical
-                # field layout.
                 data = rec.get("data", {})
                 msg = (
                     data.get("error_message")
@@ -258,11 +231,8 @@ class BFCLRunner:
         """Collapse BFCL's nested question-turn list into one prompt string.
 
         Single-turn categories have ``task.question = [[user_msg]]`` or
-        ``[[system_msg, user_msg]]``. We concatenate the user-role
-        messages (the system prompt, if any, is folded into the
-        session's own system setup — openclaw's SessionRunner injects
-        its own system context via ``ContextBuilder``). If the task has
-        no question turns, fall back to ``task.problem_statement``.
+        ``[[system_msg, user_msg]]``. Only user-role content is extracted;
+        falls back to ``task.problem_statement`` when no question turns exist.
         """
         if not task.question:
             return task.problem_statement or ""
@@ -326,10 +296,6 @@ class BFCLRunner:
                 },
             )
 
-        # The recorder captured each tool call the LLM emitted during
-        # the session (via BFCLNoOpTool.execute). Each entry is already
-        # shaped as {"name": str, "arguments": dict} — the exact input
-        # format _ast_match expects.
         predicted_calls = list(recorder)
         tools_used = [c["name"] for c in predicted_calls]
 

@@ -276,8 +276,10 @@ def test_run_task_populates_official_resolved_false(tmp_path: Path) -> None:
 
 def test_run_task_evaluation_report_round_trips(tmp_path: Path) -> None:
     """evaluation_report must carry category + per-task score breakdown
-    so downstream analysis can read it from results.jsonl without re-walking traces."""
-    # reviewer C3: this dict was previously dropped at the collector boundary
+    so downstream analysis can read it from results.jsonl without re-walking traces.
+
+    Previously dropped at the collector boundary (reviewer C3).
+    """
     provider = _StubProvider(
         LLMResponse(
             content=None,

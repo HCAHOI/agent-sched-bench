@@ -536,11 +536,8 @@ class SessionRunner:
         # Write trace_metadata header — must be first record for downstream tools
         import json as _json
 
-        # When the caller supplies a custom registry, auto-derive the tool
-        # list from it so scaffold_capabilities.tools accurately reflects
-        # what the LLM actually saw. Otherwise fall back to the hardcoded
-        # openclaw default list (matches what _register_default_tools
-        # registers).
+        # Auto-derive scaffold_capabilities from the custom registry when
+        # provided; otherwise use the hardcoded openclaw default tool list.
         if tools is not None:
             tool_definitions = tools.get_definitions()
             capability_tools: list[str] = [
