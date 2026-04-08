@@ -39,8 +39,6 @@ from typing import Any, Iterator
 logger = logging.getLogger(__name__)
 
 
-# ─── Constants ─────────────────────────────────────────────────────────
-
 SCAFFOLD_LABEL = "claude-code"
 V5_FORMAT_VERSION = 5
 _TOOL_RESULT_MAX_CHARS = 8000  # storage cap; viewer truncates display separately
@@ -73,9 +71,6 @@ _DISCARDABLE_TYPES = frozenset(
 )
 
 
-# ─── Timestamp conversion ──────────────────────────────────────────────
-
-
 def _iso_to_unix(iso_str: str | None) -> float | None:
     """Convert an ISO 8601 timestamp (e.g. ``2026-04-03T08:33:47.356Z``) → Unix float.
 
@@ -94,9 +89,6 @@ def _iso_to_unix(iso_str: str | None) -> float | None:
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
-
-
-# ─── Metadata harvest (first pass) ─────────────────────────────────────
 
 
 def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
@@ -142,7 +134,6 @@ def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
     return harvested
 
 
-# ─── Anthropic → OpenAI content adapter ────────────────────────────────
 
 
 def _split_assistant_content(
@@ -239,7 +230,6 @@ def _extract_tool_result_text(
     return "\n".join(parts)
 
 
-# ─── Per-tool toolUseResult backfill (FIX-4) ───────────────────────────
 
 
 # Bash stderr preview cap. 2000 chars ≈ 25 80-col lines, fits in a Gantt
@@ -312,7 +302,7 @@ def _backfill_per_tool(
     return backfill, success_override
 
 
-# ─── Main streaming conversion ─────────────────────────────────────────
+
 
 
 def _convert_session_records(
@@ -655,7 +645,7 @@ def _convert_session_records(
     }
 
 
-# ─── Public entry point ────────────────────────────────────────────────
+
 
 
 def import_claude_code_session(

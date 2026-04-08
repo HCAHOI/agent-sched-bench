@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw download-bfcl-v4 setup-bfcl-v4 smoke-bfcl-v4-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw download-bfcl-v4 setup-bfcl-v4 smoke-bfcl-v4-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
@@ -19,9 +19,7 @@ help:
 	@printf "  lint              Run ruff\n"
 	@printf "  serve-vllm        Run the raw vLLM launcher\n"
 	@printf "  run-smoke         Run the current infrastructure smoke suite\n"
-	@printf "  smoke-code        Reserved for AGENT-2 smoke test\n"
-	@printf "  smoke-data        Reserved for AGENT-3 smoke test\n"
-	@printf "  smoke-research    Reserved for AGENT-4 smoke test\n"
+	@printf "  smoke-code        Run mini-swe-agent code agent smoke test\n"
 	@printf "  run-sweep         Run the harness sweep when HARNESS-1 is available\n"
 	@printf "  collect-results   Pull result artifacts back via rsync\n"
 	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
@@ -152,9 +150,6 @@ smoke-bfcl-v4-openclaw:
 	    --benchmark bfcl-v4 \
 	    --scaffold openclaw \
 	    --sample $(SMOKE_N)
-
-collect-traces:
-	PYTHONPATH=src $(PYTHON) -m trace_collect.cli $(ARGS)
 
 gantt-viewer-install:
 	cd demo/gantt_viewer/frontend && npm install

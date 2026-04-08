@@ -37,8 +37,6 @@ import sys
 from pathlib import Path
 
 
-# ── Provider presets ──────────────────────────────────────────────────
-
 _PROVIDERS: dict[str, dict[str, str]] = {
     "openrouter": {
         "api_base": "https://openrouter.ai/api/v1",

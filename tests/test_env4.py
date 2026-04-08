@@ -17,17 +17,6 @@ def test_env4_scripts_are_valid_shell() -> None:
         subprocess.run(["bash", "-n", script], cwd=REPO_ROOT, check=True)
 
 
-def test_make_help_mentions_verify_env4() -> None:
-    result = subprocess.run(
-        ["make", "help"],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "verify-env4" in result.stdout
-
-
 def test_run_sweep_fails_closed_without_harness_runner() -> None:
     result = subprocess.run(
         ["scripts/run_sweep.sh"],

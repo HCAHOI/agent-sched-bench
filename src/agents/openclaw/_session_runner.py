@@ -157,7 +157,7 @@ class TraceCollectorHook(AgentHook):
         completion_tokens = usage.get("completion_tokens", 0)
         self._total_tokens += prompt_tokens + completion_tokens
 
-        # ─── Emit llm_call TraceAction (the replayable LLM record) ─────
+        # Emit llm_call TraceAction (the replayable LLM record).
         # OpenClaw's AgentLoop ``_LoopHookChain`` only forwards
         # ``before_iteration`` / ``before_execute_tools`` / ``after_iteration``
         # to extra hooks — there is no ``after_llm_response`` lifecycle

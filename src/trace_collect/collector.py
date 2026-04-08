@@ -24,9 +24,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ─── Phase 4: --mcp-config helpers ─────────────────────────────────────
-
-
 def _mcp_config_label(mcp_config: str | None) -> str | None:
     """Map an --mcp-config value to its trace-header label.
 

@@ -272,8 +272,6 @@ class EvalTraceSummary:
         }
 
 
-# ── Event Categories ──────────────────────────────────────────────────
-
 SCHEDULING = "SCHEDULING"
 SESSION = "SESSION"
 CONTEXT = "CONTEXT"
