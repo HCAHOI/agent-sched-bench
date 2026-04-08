@@ -235,7 +235,8 @@
   .trace-add-btn:hover { color: var(--cyan); border-color: var(--cyan); }
 
   .lane-label {
-    height: 60px;
+    /* FIX-B: --lane-h set by setViewMode; 60 fallback for pre-JS paint */
+    height: var(--lane-h, 60px);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -274,10 +275,22 @@
     text-overflow: ellipsis;
   }
 
+  /* FIX-B: concise lane (26px) only fits one line — show just trace name */
+  body.view-concise .lane-label .lane-scaffold,
+  body.view-concise .lane-label .lane-agent {
+    display: none;
+  }
+  body.view-concise .lane-label .lane-trace-name {
+    font-size: 10px;
+    line-height: 1;
+  }
+
   #canvas-wrap {
     flex: 1;
     position: relative;
-    overflow: hidden;
+    /* FIX-C: horizontal scroll for zoom. FIX-D: vertical scroll for
+       overflowing lane count — synced with sidebar via JS listeners. */
+    overflow: auto;
   }
 
   #gantt-canvas {
@@ -379,10 +392,16 @@
   #tooltip .tt-val {
     color: var(--text);
     word-break: break-all;
-    /* Preserve newlines from multi-line detail values (e.g. multiple
-       tool_calls_requested entries joined with \n) while still wrapping
-       very long single-line values. */
+    /* pre-wrap preserves \n for joined multi-line values; FIX-A hover cap */
     white-space: pre-wrap;
+    max-height: 180px;
+    overflow: hidden;
+  }
+
+  /* FIX-A: pinned container scrolls (max-height:60vh), so lift the row cap */
+  #tooltip.pinned .tt-val {
+    max-height: none;
+    overflow: visible;
   }
 
   #source-ref {
@@ -400,9 +419,15 @@
 <div id="header">
   <span class="title">TRACE GANTT</span>
   <span class="meta" id="header-meta"></span>
+  <span class="meta" id="zoom-indicator" title="Ctrl+wheel or +/-/0 to zoom">100%</span>
   <div class="toggle-group">
     <button class="toggle-btn active" id="btn-sync" onclick="setTimeMode('sync')">SYNC</button>
     <button class="toggle-btn" id="btn-abs" onclick="setTimeMode('abs')">ABS</button>
+  </div>
+  <!-- FIX-B: LAYER stacks llm+tool sub-rows; CONCISE collapses to one row -->
+  <div class="toggle-group">
+    <button class="toggle-btn active" id="btn-layered" onclick="setViewMode('layered')">LAYER</button>
+    <button class="toggle-btn" id="btn-concise" onclick="setViewMode('concise')">CONCISE</button>
   </div>
 </div>
 
@@ -476,11 +501,57 @@ const UNKNOWN_SPAN_STYLE = { color: '#6b7280', label: 'Unknown', order: 99 };
 // ─── State ─────────────────────────────────────────────────────────
 let DATA = null;
 let timeMode = 'sync';   // 'sync' | 'abs'
+// FIX-B: LAYER (default) stacks llm + tool on separate sub-rows;
+// CONCISE collapses onto a single sub-row + shrinks lane height.
+// Persisted via localStorage so the preference survives page reloads.
+let viewMode = (typeof localStorage !== 'undefined'
+                && localStorage.getItem('gantt.viewMode')) || 'layered';
 const LANE_H = 60;
+const LANE_H_CONCISE = 26;  // SPAN_H (18) + 2 * SPAN_PAD (4) = 26
 const SPAN_H = 18;
 const MARKER_H = 6;
 const TIME_AXIS_H = 28;
 const SPAN_PAD = 4;
+
+// FIX-B: concise=26, layered=60. Single source of truth for draw loop + sidebar CSS var.
+function effectiveLaneH() {
+  return viewMode === 'concise' ? LANE_H_CONCISE : LANE_H;
+}
+
+// FIX-C: time-axis zoom. Bounds: 0.25 = 4-viewport fit-down;
+// 32 = ~0.5ms/pixel, fine enough for sub-second bash spans. STEP 1.25 = 5 clicks per ~3x.
+let zoomFactor = 1.0;
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 32.0;
+const ZOOM_STEP = 1.25;
+
+// FIX-D: total content height. Reads DATA.traces (same source as render())
+// to avoid drift with LoadedTraces during removeTrace's transient window.
+function computeTotalContentHeight() {
+  let n = 0;
+  if (DATA && Array.isArray(DATA.traces)) {
+    for (const t of DATA.traces) n += t.lanes.length;
+  }
+  return TIME_AXIS_H + n * effectiveLaneH();
+}
+
+// FIX-D: module-level resize so setZoom / setViewMode / add-trace can
+// all recompute canvas dimensions through one path.
+function resizeCanvas() {
+  const canvas = document.getElementById('gantt-canvas');
+  const wrap = document.getElementById('canvas-wrap');
+  if (!canvas || !wrap) return;
+  const dpr = window.devicePixelRatio || 1;
+  const logicalW = wrap.clientWidth * zoomFactor;
+  const logicalH = Math.max(computeTotalContentHeight(), wrap.clientHeight);
+  canvas.width = logicalW * dpr;
+  canvas.height = logicalH * dpr;
+  canvas.style.width = logicalW + 'px';
+  canvas.style.height = logicalH + 'px';
+  canvas.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+  render();
+  reanchorPinned();
+}
 
 let hitBoxes = [];  // [{x, y, w, h, item}]
 
@@ -529,6 +600,8 @@ function init() {
     updateHeaderMeta();
     setupCanvas();
     setupTraceLoading();
+    // FIX-B: apply persisted viewMode after build
+    setViewMode(viewMode);
   } catch (err) {
     document.body.innerHTML = `<pre style="padding:40px;color:#FF1744;font-family:monospace">${esc(err.stack || err.message)}</pre>`;
   }
@@ -704,15 +777,7 @@ async function addTraceFile(file) {
 function removeTrace(label) {
   if (!LoadedTraces.has(label)) return;
   LoadedTraces.delete(label);
-  // If the pinned tooltip belonged to a removed trace's lane, clear it.
-  if (pinnedHit) {
-    const stillReferenced = [...LoadedTraces.values()].some(v =>
-      v.payload.lanes.some(lane =>
-        lane.spans.includes(pinnedHit.item) || lane.markers.includes(pinnedHit.item)
-      )
-    );
-    if (!stillReferenced) unpin();
-  }
+  // rerender() → reanchorPinned() handles stale pins for both span and lane kinds
   rerender();
 }
 
@@ -789,33 +854,79 @@ function setupCanvas() {
   const canvas = document.getElementById('gantt-canvas');
   const wrap = document.getElementById('canvas-wrap');
 
-  function resize() {
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = wrap.clientWidth * dpr;
-    canvas.height = wrap.clientHeight * dpr;
-    canvas.style.width = wrap.clientWidth + 'px';
-    canvas.style.height = wrap.clientHeight + 'px';
-    const ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-    render();
-    reanchorPinned();
-  }
+  new ResizeObserver(resizeCanvas).observe(wrap);
+  resizeCanvas();
 
-  new ResizeObserver(resize).observe(wrap);
-  resize();
+  // FIX-D: two-way scroll sync. Equality short-circuit guards against
+  // fast-wheel jitter where two queued scroll events race.
+  const sidebar = document.getElementById('sidebar');
+  let syncing = false;
+  sidebar.addEventListener('scroll', () => {
+    if (syncing || wrap.scrollTop === sidebar.scrollTop) return;
+    syncing = true;
+    wrap.scrollTop = sidebar.scrollTop;
+    syncing = false;
+  });
+  wrap.addEventListener('scroll', () => {
+    if (syncing || sidebar.scrollTop === wrap.scrollTop) return;
+    syncing = true;
+    sidebar.scrollTop = wrap.scrollTop;
+    syncing = false;
+  });
 
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseleave', () => {
-    // Don't hide a pinned tooltip when the cursor leaves the canvas.
     if (pinnedHit) return;
     document.getElementById('tooltip').style.display = 'none';
   });
   canvas.addEventListener('click', onCanvasClick);
 
-  // Global ESC handler unpins the tooltip.
+  // FIX-C: Ctrl/Cmd+wheel zoom centered on cursor time position.
+  canvas.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const cursorFrac = canvas.clientWidth > 0 ? cursorX / canvas.clientWidth : 0.5;
+    const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    setZoom(zoomFactor * factor, cursorFrac);
+  }, { passive: false });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') unpin();
+    // FIX-C: keyboard zoom. Skip when typing in inputs.
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if (e.key === '+' || e.key === '=') { setZoom(zoomFactor * ZOOM_STEP); e.preventDefault(); }
+    else if (e.key === '-' || e.key === '_') { setZoom(zoomFactor / ZOOM_STEP); e.preventDefault(); }
+    else if (e.key === '0') { setZoom(1.0); e.preventDefault(); }
   });
+}
+
+// FIX-C: apply zoom with optional cursor-anchored recenter.
+function setZoom(factor, cursorFrac) {
+  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, factor));
+  const wrap = document.getElementById('canvas-wrap');
+  const canvas = document.getElementById('gantt-canvas');
+  // Capture anchor BEFORE the early return so a no-op zoom at the cap
+  // still recenters the cursor (otherwise wheel-at-max drifts visually).
+  const oldW = canvas.clientWidth || wrap.clientWidth;
+  const oldScroll = wrap.scrollLeft;
+  const anchorTimeFrac = cursorFrac != null
+    ? (oldScroll + cursorFrac * wrap.clientWidth) / oldW
+    : (oldScroll + wrap.clientWidth / 2) / oldW;
+  if (clamped !== zoomFactor) {
+    zoomFactor = clamped;
+    resizeCanvas();
+  }
+  const newW = canvas.clientWidth;
+  const cursorOffset = cursorFrac != null ? cursorFrac * wrap.clientWidth : wrap.clientWidth / 2;
+  wrap.scrollLeft = anchorTimeFrac * newW - cursorOffset;
+  updateZoomIndicator();
+}
+
+function updateZoomIndicator() {
+  const el = document.getElementById('zoom-indicator');
+  if (el) el.textContent = Math.round(zoomFactor * 100) + '%';
 }
 
 // ─── Pin / unpin ───────────────────────────────────────────────────
@@ -866,13 +977,40 @@ function setTimeMode(mode) {
   render();
 }
 
+// ─── View mode toggle (FIX-B) ──────────────────────────────────────
+// Updates the sidebar CSS var + re-renders the canvas so sidebar
+// labels AND canvas lanes resize in lockstep. Persists preference in
+// localStorage so the mode survives page reloads.
+function setViewMode(mode) {
+  viewMode = mode;
+  const layeredBtn = document.getElementById('btn-layered');
+  const conciseBtn = document.getElementById('btn-concise');
+  if (layeredBtn) layeredBtn.classList.toggle('active', mode === 'layered');
+  if (conciseBtn) conciseBtn.classList.toggle('active', mode === 'concise');
+  // Drive the .lane-label CSS height via var so sidebar resizes to
+  // match the canvas lane height chosen by effectiveLaneH().
+  document.documentElement.style.setProperty('--lane-h', effectiveLaneH() + 'px');
+  // Toggle a body class so the sidebar CSS can hide sub-lines
+  // (.lane-scaffold and .lane-agent) in concise mode — the 26px lane
+  // only fits one line of text, so we show just the trace name.
+  document.body.classList.toggle('view-concise', mode === 'concise');
+  try { localStorage.setItem('gantt.viewMode', mode); } catch (_e) { /* private mode / quota */ }
+  // FIX-B+D: resizeCanvas because lane height affects canvas total height.
+  if (DATA) resizeCanvas();
+  unpin();
+}
+
 // ─── Render ────────────────────────────────────────────────────────
 function render() {
   if (!DATA) return;
   const canvas = document.getElementById('gantt-canvas');
   const wrap = document.getElementById('canvas-wrap');
-  const W = wrap.clientWidth;
-  const H = wrap.clientHeight;
+  // FIX-C/D: use canvas logical dimensions (zoom-stretched width,
+  // total-content-height height). Hit-testing via getBoundingClientRect
+  // returns canvas-relative coords so scroll offsets are handled
+  // automatically.
+  const W = canvas.clientWidth || wrap.clientWidth;
+  const H = canvas.clientHeight || wrap.clientHeight;
   const ctx = canvas.getContext('2d');
 
   ctx.clearRect(0, 0, W, H);
@@ -938,19 +1076,24 @@ function render() {
   }
 
   // ── Draw lanes ──
+  // FIX-B: resolve lane height once per render so LAYER (60) and
+  // CONCISE (26) paths use a single source of truth. Substituting
+  // LANE_H → laneH everywhere in the draw loop keeps hit-test Y
+  // math consistent with drawing Y math.
+  const laneH = effectiveLaneH();
   let laneY = TIME_AXIS_H;
 
   for (const trace of DATA.traces) {
     for (const lane of trace.lanes) {
       // Lane background
       ctx.fillStyle = '#0c1018';
-      ctx.fillRect(0, laneY, W, LANE_H);
+      ctx.fillRect(0, laneY, W, laneH);
 
       // Lane separator
       ctx.strokeStyle = '#1a1f2e';
       ctx.beginPath();
-      ctx.moveTo(0, laneY + LANE_H);
-      ctx.lineTo(W, laneY + LANE_H);
+      ctx.moveTo(0, laneY + laneH);
+      ctx.lineTo(W, laneY + laneH);
       ctx.stroke();
 
       // ── Draw spans ──
@@ -974,7 +1117,12 @@ function render() {
           const x0 = tToX(st);
           const x1 = tToX(et);
           const w = Math.max(x1 - x0, 3); // minimum visible width
-          const yOff = laneY + SPAN_PAD + i * (SPAN_H + 2);
+          // FIX-B: in CONCISE mode, force every span type onto sub-row 0
+          // so llm + tool for the same iteration share a single Y. They
+          // don't overlap visually because they're sequential in time
+          // (tool starts after llm ends within one iteration).
+          const subRow = viewMode === 'concise' ? 0 : i;
+          const yOff = laneY + SPAN_PAD + subRow * (SPAN_H + 2);
 
           // Span bar
           ctx.fillStyle = reg.color;
@@ -999,7 +1147,7 @@ function render() {
         const mt = timeMode === 'sync' ? m.t : m.t_abs;
         const x = tToX(mt);
         const reg = MARKER_REGISTRY[m.event] || MARKER_REGISTRY._default;
-        const cy = laneY + LANE_H - MARKER_H - 2;
+        const cy = laneY + laneH - MARKER_H - 2;
 
         ctx.fillStyle = reg.color;
         ctx.globalAlpha = 0.7;
@@ -1026,7 +1174,7 @@ function render() {
         hitBoxes.push({ x: x - 6, y: cy - 6, w: 12, h: 12, item: m, kind: 'marker' });
       }
 
-      laneY += LANE_H;
+      laneY += laneH;
     }
   }
 }

@@ -223,12 +223,8 @@
       }
     }
 
+    // FIX-A: no per-key truncation on actions (parity with gantt_data.py).
     delete data.messages_in;
-    for (const key of ['tool_result', 'tool_args', 'args_preview', 'result_preview']) {
-      if (typeof data[key] === 'string' && data[key].length > 100) {
-        data[key] = data[key].slice(0, 100) + '...';
-      }
-    }
     return data;
   }
 

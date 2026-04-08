@@ -170,12 +170,17 @@ def test_rerender_reanchors_pinned_tooltip() -> None:
 
 
 def test_resize_still_calls_reanchor_after_extraction() -> None:
-    """Make sure extracting the helper didn't drop the call from resize()."""
+    """Resize path must still call reanchorPinned().
+
+    FIX-D refactor moved the nested `function resize()` inside
+    setupCanvas out to module-level `function resizeCanvas()` so
+    setZoom / setViewMode can reuse it. The invariant is the same:
+    the canvas-sizing path must call reanchorPinned() after render()
+    so a pinned tooltip doesn't stick to the wrong screen coords.
+    """
     src = TEMPLATE.read_text(encoding="utf-8")
-    resize_start = src.index("function resize()")
-    # resize is defined inside setupCanvas, its closing brace is local;
-    # walk forward until we hit the sibling function.
-    resize_end = src.index("new ResizeObserver", resize_start)
+    resize_start = src.index("function resizeCanvas()")
+    resize_end = src.index("\n}\n", resize_start)
     resize_body = src[resize_start:resize_end]
     assert "reanchorPinned()" in resize_body
 

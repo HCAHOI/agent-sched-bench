@@ -414,12 +414,9 @@ def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
                 if summaries:
                     data["tool_calls_requested"] = summaries
 
-    # Drop heavy fields
+    # Drop heavy fields. FIX-A: no per-key truncation — writer caps at 8000,
+    # pinned tooltip scrolls. Event path below still truncates (hover-only).
     data.pop("messages_in", None)
-    for key in ("tool_result", "tool_args", "args_preview", "result_preview"):
-        if key in data and isinstance(data[key], str) and len(data[key]) > 100:
-            data[key] = data[key][:100] + "..."
-
     return data
 
 

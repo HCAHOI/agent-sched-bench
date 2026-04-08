@@ -531,3 +531,77 @@ def test_action_type_map_module_constant() -> None:
     """ACTION_TYPE_MAP is a public, mutable extension surface."""
     assert ACTION_TYPE_MAP["llm_call"] == "llm"
     assert ACTION_TYPE_MAP["tool_exec"] == "tool"
+
+
+# ── FIX-A: untruncated tool_args / tool_result on actions ──────────────
+
+
+def test_action_detail_preserves_full_tool_fields(tmp_path: Path) -> None:
+    """FIX-A: _extract_detail_from_action must ship the full tool_args /
+    tool_result strings without the old 100-char cap.
+
+    The renderer's pinned tooltip has max-height:60vh + overflow-y:auto,
+    so it can display up to the writer-side _TOOL_RESULT_MAX_CHARS=8000
+    cap. Truncating to 100 at the data layer makes the pinned tooltip
+    useless for inspecting real Bash / pytest output.
+    """
+    long_args = json.dumps({
+        "command": "python3 -m pytest tests/ -x -q --ignore=tests/test_main.py 2>&1 | tail -30",
+        "description": "Run focused regression subset with clean output",
+    })
+    long_result = (
+        "........................................ [  8%]\n"
+        "........................................ [ 16%]\n"
+        "........................................ [ 24%]\n" * 10
+    )
+    assert len(long_args) > 100  # sanity: precondition for the test
+    assert len(long_result) > 100
+
+    tool_act = _tool_action(0, 1000.0, 1000.5, "Bash")
+    tool_act["data"]["tool_args"] = long_args
+    tool_act["data"]["tool_result"] = long_result
+
+    payload = _build(tmp_path, [_llm_action(0, 999.9, 1000.0), tool_act])
+    tool_spans = [s for s in payload["lanes"][0]["spans"] if s["type"] == "tool"]
+    assert len(tool_spans) == 1
+    detail = tool_spans[0]["detail"]
+
+    assert detail["tool_args"] == long_args, (
+        "FIX-A broken: tool_args was truncated at the data layer "
+        f"(length={len(detail['tool_args'])}, expected={len(long_args)})"
+    )
+    assert detail["tool_result"] == long_result, (
+        "FIX-A broken: tool_result was truncated at the data layer "
+        f"(length={len(detail['tool_result'])}, expected={len(long_result)})"
+    )
+    # No trailing '...' marker — full content, not a preview
+    assert not detail["tool_args"].endswith("...")
+    assert not detail["tool_result"].endswith("...")
+
+
+def test_event_detail_still_truncates_at_100_chars(tmp_path: Path) -> None:
+    """FIX-A asymmetry: events still get the 100-char cap because event
+    tooltips are hover-only (no click-to-pin path). Keeping the cap
+    there avoids blowing up hover cards on observability events.
+    """
+    long_value = "x" * 500
+
+    # Inject a synthetic event directly via _extract_detail_from_event
+    # (it's private but importable for this focused test).
+    from trace_collect.gantt_data import _extract_detail_from_event
+
+    event = {
+        "type": "event",
+        "category": "SCHEDULING",
+        "event": "message_dispatch",
+        "iteration": 0,
+        "ts": 1000.0,
+        "data": {"tool_args": long_value, "tool_result": long_value},
+    }
+    detail = _extract_detail_from_event(event)
+    assert len(detail["tool_args"]) == 103, (  # 100 chars + "..."
+        f"event path should truncate; got length {len(detail['tool_args'])}"
+    )
+    assert detail["tool_args"].endswith("...")
+    assert len(detail["tool_result"]) == 103
+    assert detail["tool_result"].endswith("...")
