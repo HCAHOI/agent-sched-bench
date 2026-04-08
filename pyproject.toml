@@ -31,6 +31,17 @@ dev = [
   "pytest-asyncio>=0.26,<1.0",
   "ruff>=0.11,<1.0",
 ]
+# Phase 5 of trace-sim-vastai-pipeline: gantt_template DOM regression
+# tests use BeautifulSoup + lxml for parsing the rendered HTML.
+# Phase 5 e2e (deferred to US-010 manual smoke runbook): playwright is
+# required for tests/test_gantt_browser_smoke.py — install via
+# `playwright install chromium` (NOT `playwright install`, which would
+# pull the full ~450MB browser matrix). CI cache spec for
+# ~/.cache/ms-playwright lives in docs/vastai_setup.md.
+gantt-test = [
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+]
 
 [project.scripts]
 openclaw = "agents.openclaw._cli:main"

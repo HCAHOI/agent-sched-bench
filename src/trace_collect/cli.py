@@ -132,6 +132,19 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Agent scaffold to use: mini-swe-agent (bash-only) or openclaw (structured tools).",
     )
     parser.add_argument(
+        "--mcp-config",
+        default=None,
+        help=(
+            "MCP server configuration. Required when --scaffold=openclaw. "
+            "Accepts a YAML path (e.g. configs/mcp/context7.yaml) OR the "
+            "literal string 'none' for an affirmative MCP-less run. The "
+            "trace header records the chosen value under "
+            "metadata.run_config.mcp_config so analysis can distinguish "
+            "explicit 'none' from a legacy MCP-less default. Phase 4 of "
+            "trace-sim-vastai-pipeline."
+        ),
+    )
+    parser.add_argument(
         "--max-context-tokens",
         type=int,
         default=256_000,
@@ -226,6 +239,33 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Timeout for the entire simulation.",
     )
     parser.add_argument(
+        "--metrics-url",
+        default=None,
+        help=(
+            "vLLM Prometheus /metrics endpoint URL. When set, the simulator "
+            "snapshots scheduler metrics (PreemptionSnapshot) per iteration "
+            "and stores them under TraceAction.data.sim_metrics. When unset, "
+            "the simulator records empty (all-None) snapshots — the explicit "
+            "opt-out path used for local runs without a vLLM server. "
+            "Phase 2 of trace-sim-vastai-pipeline."
+        ),
+    )
+    parser.add_argument(
+        "--warmup-skip-iterations",
+        type=int,
+        default=0,
+        help=(
+            "Tag the first N replay iterations with sim_metrics.warmup=true "
+            "for analysis-time exclusion. Iterations are still measured at "
+            "collection time; the flag controls analysis treatment only. "
+            "Default 0 (no warmup tagging) per CLAUDE.md No Unjustified "
+            "Complexity. Opt in only when an empirical probe shows "
+            "first-iteration latency variance >20%% vs steady-state — see "
+            ".omc/plans/phase1.5-design.md Q4 deferral. Phase 1.5.1 of "
+            "trace-sim-vastai-pipeline."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -287,6 +327,19 @@ def _run_collect(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    # Phase 4 of trace-sim-vastai-pipeline: --mcp-config is MANDATORY for
+    # openclaw runs. Driver 3 ("OpenClaw realism delta") is violated if a
+    # forgotten flag silently produces an MCP-less openclaw trace, so the
+    # CLI refuses to start. Opt-out is the affirmative literal "none".
+    if args.scaffold == "openclaw" and args.mcp_config is None:
+        print(
+            "ERROR: MCP config is required for openclaw; pass "
+            "--mcp-config configs/mcp/context7.yaml or --mcp-config none "
+            "to acknowledge running without MCP",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     preset = _PROVIDERS[args.provider]
     api_base = args.api_base or preset["api_base"]
     api_key = args.api_key or os.environ.get(preset["env_key"])
@@ -330,6 +383,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             harness_timeout=args.harness_timeout,
             harness_run_id=args.harness_run_id,
             harness_report_dir=args.harness_report_dir,
+            mcp_config=args.mcp_config,
         )
     )
     print(f"Traces written to: {run_dir}/")
@@ -364,6 +418,8 @@ def _run_simulate(args: argparse.Namespace) -> None:
             model=args.model,
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,
+            metrics_url=args.metrics_url,
+            warmup_skip_iterations=args.warmup_skip_iterations,
         )
     )
     print(f"Simulate trace written to: {trace_file}")

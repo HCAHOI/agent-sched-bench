@@ -13,6 +13,15 @@ US-006:
 These tests are text-level assertions against the generated HTML (no
 browser automation). They confirm the generated artifact carries the
 fix and catch regression via source audit.
+
+Phase 5 of trace-sim-vastai-pipeline plan adds:
+  test_gantt_dom_snapshot_pre_p5_unchanged
+    — DOM-payload regression test using BeautifulSoup + lxml. Renders
+      the openclaw_minimal_v5.jsonl fixture (no mcp_call actions, no
+      MCP events) and asserts the embedded payload's lane shape +
+      action sequence is identical to a golden fixture. Catches any
+      Phase 5 edit that accidentally regresses pre-Phase-5 trace
+      rendering.
 """
 
 from __future__ import annotations
@@ -23,6 +32,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -167,3 +178,137 @@ def test_resize_still_calls_reanchor_after_extraction() -> None:
     resize_end = src.index("new ResizeObserver", resize_start)
     resize_body = src[resize_start:resize_end]
     assert "reanchorPinned()" in resize_body
+
+
+# ── Phase 5: DOM-payload regression test ──────────────────────────────
+
+
+OPENCLAW_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "openclaw_minimal_v5.jsonl"
+GOLDEN_PAYLOAD = REPO_ROOT / "tests" / "fixtures" / "gantt_baseline_pre_p5.golden.json"
+
+
+def test_gantt_dom_snapshot_pre_p5_unchanged(tmp_path: Path) -> None:
+    """Phase 5 regression invariant: a pre-Phase-5 trace renders to the
+    same payload structure after the Phase 5 edits as it did before.
+
+    The Phase 5 edits are additive — they extend ``_MARKER_CATEGORIES``,
+    ``ACTION_TYPE_MAP``, and ``DEFAULT_SPAN_REGISTRY`` with new entries
+    that only fire when the input trace contains the new shapes
+    (mcp_call action_type, MCP-category events). The
+    openclaw_minimal_v5.jsonl fixture contains NEITHER, so its rendered
+    output must be unchanged.
+
+    The test:
+    1. Renders the fixture through ``generate_gantt_html``
+    2. Parses the rendered HTML with BeautifulSoup + lxml to verify
+       the static HTML structure is well-formed
+    3. Extracts the embedded JSON payload via the same regex pattern
+       used by ``test_cli_disambiguates_duplicate_stems``
+    4. Compares the traces section against
+       ``tests/fixtures/gantt_baseline_pre_p5.golden.json``
+    5. Asserts byte-equal match modulo dict key order
+
+    Catches Phase 5 regressions like:
+    - Accidentally pop'ing or truncating sim_metrics in
+      _extract_detail_from_action
+    - Removing an old span/marker entry while adding the new mcp one
+    - Breaking the JSONL → payload pipeline for openclaw traces
+    """
+    bs4 = pytest.importorskip("bs4")
+    pytest.importorskip("lxml")
+
+    # Lazy import the renderer to avoid loading agents.* at module import
+    from trace_collect.gantt_serve import generate_gantt_html
+    from trace_collect.trace_inspector import TraceData
+
+    assert OPENCLAW_FIXTURE.exists(), f"missing fixture: {OPENCLAW_FIXTURE}"
+    assert GOLDEN_PAYLOAD.exists(), (
+        f"missing golden: {GOLDEN_PAYLOAD}. Regenerate with: "
+        f"python -c 'from trace_collect.gantt_data import "
+        f"build_gantt_payload_multi; from trace_collect.trace_inspector "
+        f"import TraceData; import json; "
+        f"d=TraceData.load(\"{OPENCLAW_FIXTURE}\"); "
+        f"p=build_gantt_payload_multi([(\"test\", d)]); "
+        f"open(\"{GOLDEN_PAYLOAD}\", \"w\").write(json.dumps("
+        f"{{\"traces\": p[\"traces\"]}}, indent=2, sort_keys=True))'"
+    )
+
+    # ── Step 1: Render the fixture through the live pipeline ──
+    data = TraceData.load(OPENCLAW_FIXTURE)
+    html = generate_gantt_html([("test", data)])
+
+    # ── Step 2: Parse via BeautifulSoup + lxml ──
+    soup = bs4.BeautifulSoup(html, "lxml")
+
+    # Static HTML structure must be well-formed
+    assert soup.html is not None, "rendered HTML missing <html> root"
+    assert soup.body is not None, "rendered HTML missing <body>"
+
+    # The script tag carrying the payload must be present
+    script_tags = soup.find_all("script")
+    assert len(script_tags) >= 1, (
+        f"expected at least 1 script tag in rendered HTML; got {len(script_tags)}"
+    )
+
+    # ── Step 3: Extract the embedded payload via regex ──
+    payload_match = re.search(
+        r"var __TRACE_DATA__ = (\{.*?\});", html, re.DOTALL
+    )
+    assert payload_match is not None, (
+        "rendered HTML did not contain the __TRACE_DATA__ assignment; "
+        "the gantt_template.html splice mechanism may have changed"
+    )
+
+    embedded_payload = json.loads(payload_match.group(1))
+    assert "traces" in embedded_payload
+    assert "registries" in embedded_payload
+
+    # Phase 5 invariant: the new mcp entry must be in the registries
+    # (this is the post-Phase-5 expected state, not a regression check)
+    assert "mcp" in embedded_payload["registries"]["spans"], (
+        "Phase 5 missing: registries.spans should contain 'mcp'"
+    )
+
+    # ── Step 4: Compare traces against golden ──
+    golden = json.loads(GOLDEN_PAYLOAD.read_text(encoding="utf-8"))
+
+    # Normalize: sort keys recursively so dict ordering doesn't matter
+    def _normalize(obj):
+        if isinstance(obj, dict):
+            return {k: _normalize(obj[k]) for k in sorted(obj.keys())}
+        if isinstance(obj, list):
+            return [_normalize(x) for x in obj]
+        return obj
+
+    embedded_traces_norm = _normalize(embedded_payload["traces"])
+    golden_traces_norm = _normalize(golden["traces"])
+
+    # ── Step 5: Byte-equal match (modulo key order) ──
+    assert embedded_traces_norm == golden_traces_norm, (
+        "Phase 5 regression: openclaw_minimal_v5 fixture renders to a "
+        "DIFFERENT payload than the pre-Phase-5 golden. The Phase 5 "
+        "edits should be additive only — pre-Phase-5 traces must render "
+        "identically. Diff:\n"
+        f"expected: {json.dumps(golden_traces_norm, indent=2)[:500]}\n"
+        f"actual: {json.dumps(embedded_traces_norm, indent=2)[:500]}"
+    )
+
+
+def test_gantt_dom_snapshot_html_is_lxml_parseable() -> None:
+    """The rendered HTML must be lxml-parseable (catches malformed tags).
+
+    A separate, faster test from the full DOM snapshot — runs even if
+    the golden fixture is missing or stale, so a developer can iterate
+    on the template without regenerating the golden first.
+    """
+    bs4 = pytest.importorskip("bs4")
+    pytest.importorskip("lxml")
+
+    from trace_collect.gantt_serve import generate_empty_gantt_html
+
+    html = generate_empty_gantt_html()
+    soup = bs4.BeautifulSoup(html, "lxml")
+    assert soup.html is not None
+    assert soup.body is not None
+    # The empty gantt should still embed the registries
+    assert "__TRACE_DATA__" in html or "registries" in html

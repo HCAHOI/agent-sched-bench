@@ -24,6 +24,75 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# ─── Phase 4: --mcp-config helpers ─────────────────────────────────────
+
+
+def _mcp_config_label(mcp_config: str | None) -> str | None:
+    """Map an --mcp-config value to its trace-header label.
+
+    The label flows into ``metadata.run_config.mcp_config`` so analysis
+    can distinguish:
+    - ``None`` → flag was not provided (legacy / mini-swe path)
+    - ``"none"`` → researcher affirmatively opted out of MCP
+    - ``"<basename>"`` → MCP YAML at that basename was loaded
+
+    Phase 4 of trace-sim-vastai-pipeline.
+    """
+    if mcp_config is None:
+        return None
+    if mcp_config == "none":
+        return "none"
+    return Path(mcp_config).name
+
+
+def load_mcp_servers(mcp_config: str | None) -> dict:
+    """Parse a --mcp-config argument into a dict[str, MCPServerConfig].
+
+    Returns an empty dict for ``None`` (mini-swe / legacy path) and for
+    the literal ``"none"`` (affirmative opt-out). For a YAML path, loads
+    the file and instantiates ``MCPServerConfig`` for each top-level
+    entry per Phase 0 schema audit (a) — connect_mcp_servers requires
+    Pydantic config instances, not raw dicts.
+
+    Raises:
+        FileNotFoundError: if the YAML path does not exist.
+        ValueError: if the YAML root is not a mapping.
+    """
+    if mcp_config is None or mcp_config == "none":
+        return {}
+
+    import yaml
+
+    path = Path(mcp_config)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"--mcp-config path does not exist: {path}"
+        )
+
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"--mcp-config YAML root must be a mapping (server-name → "
+            f"config); got {type(raw).__name__} in {path}"
+        )
+
+    # Lazy import the Pydantic schema so collector.py does not eagerly
+    # pull in agents.openclaw.config when running mini-swe.
+    from agents.openclaw.config.schema import MCPServerConfig
+
+    servers: dict = {}
+    for name, entry in raw.items():
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"--mcp-config entry for '{name}' must be a mapping; "
+                f"got {type(entry).__name__}"
+            )
+        servers[name] = MCPServerConfig.model_validate(entry)
+    return servers
+
+
 @dataclass(slots=True)
 class CollectedTaskResult:
     """Durable per-task result emitted by the trace collector."""
@@ -307,6 +376,7 @@ async def collect_traces(
     harness_timeout: int = 1800,
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
+    mcp_config: str | None = None,
 ) -> Path:
     """Collect agent traces for a benchmark.
 
@@ -383,6 +453,7 @@ async def collect_traces(
             harness_timeout=harness_timeout,
             harness_run_id=harness_run_id,
             harness_report_dir=harness_report_dir,
+            mcp_config=mcp_config,
         )
 
     from agents.miniswe import MiniSWECodeAgent
@@ -609,6 +680,7 @@ async def _collect_openclaw(
     harness_timeout: int = 1800,
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
+    mcp_config: str | None = None,
 ) -> Path:
     """Collect traces via the OpenClaw scaffold, routing runner construction
     through ``benchmark.build_runner`` so plugins own their own runner class.
@@ -627,6 +699,12 @@ async def _collect_openclaw(
     if completed:
         logger.info("Resuming: %d tasks already completed", len(completed))
 
+    # Phase 4: Load MCP server config from --mcp-config and pass through
+    # to the runner. Phase 0 schema audit (a) confirms connect_mcp_servers
+    # expects a dict[str, MCPServerConfig], not a dict of dicts.
+    mcp_servers = load_mcp_servers(mcp_config)
+    mcp_config_label = _mcp_config_label(mcp_config)
+
     provider = UnifiedProvider(
         api_key=api_key,
         api_base=api_base,
@@ -639,6 +717,7 @@ async def _collect_openclaw(
         max_iterations=max_steps,
         context_window_tokens=max_context_tokens,
         model=model,
+        mcp_servers=mcp_servers,
     )
 
     total = len(tasks)
@@ -673,6 +752,7 @@ async def _collect_openclaw(
                     api_base=api_base,
                     max_steps=max_steps,
                     instance_id=instance_id,
+                    mcp_config_label=mcp_config_label,
                 )
             results.append(
                 CollectedTaskResult(
@@ -748,6 +828,7 @@ async def _collect_openclaw(
                 api_base=api_base,
                 max_steps=max_steps,
                 instance_id=instance_id,
+                mcp_config_label=mcp_config_label,
             )
 
         results.append(task_result)
@@ -821,6 +902,7 @@ def _normalize_openclaw_trace(
     api_base: str,
     max_steps: int,
     instance_id: str,
+    mcp_config_label: str | None = None,
 ) -> None:
     """Copy an OpenClaw trace to benchmark run-dir layout.
 
@@ -880,6 +962,15 @@ def _normalize_openclaw_trace(
     # traces that had a different type field).
     merged["type"] = "trace_metadata"
     merged["trace_format_version"] = 5
+
+    # Phase 4: stamp metadata.run_config.mcp_config under the new
+    # extension blob (per Phase 0 schema audit + R1-2 of the plan: v5
+    # frozen contract holds because run_config is an additive nest under
+    # metadata, not a top-level field).
+    if mcp_config_label is not None:
+        existing_run_config = merged.get("run_config") or {}
+        existing_run_config["mcp_config"] = mcp_config_label
+        merged["run_config"] = existing_run_config
 
     with open(dst, "w", encoding="utf-8") as f:
         f.write(json.dumps(merged, ensure_ascii=False) + "\n")

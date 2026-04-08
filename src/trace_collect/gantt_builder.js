@@ -28,19 +28,25 @@
 
   // ─── Constants ─────────────────────────────────────────────────
   // Mirror of gantt_data.py:_MARKER_CATEGORIES
-  const MARKER_CATEGORIES = new Set(['SCHEDULING', 'SESSION', 'CONTEXT']);
+  // Phase 5 of trace-sim-vastai-pipeline plan: MCP added (paired with
+  // gantt_data.py:21).
+  const MARKER_CATEGORIES = new Set(['SCHEDULING', 'SESSION', 'CONTEXT', 'MCP']);
 
   // Mirror of gantt_data.py:ACTION_TYPE_MAP
+  // Phase 5: mcp_call → mcp added (paired with gantt_data.py:48-52).
   const ACTION_TYPE_MAP = {
     llm_call: 'llm',
     tool_exec: 'tool',
+    mcp_call: 'mcp',
   };
 
   // Mirror of DEFAULT_SPAN_REGISTRY / DEFAULT_MARKER_REGISTRY
+  // Phase 5: mcp span entry added (paired with gantt_data.py:55-60).
   const DEFAULT_SPAN_REGISTRY = {
     llm:        { color: '#00E5FF', label: 'LLM Call',   order: 0 },
     tool:       { color: '#FF6D00', label: 'Tool Exec',  order: 1 },
     scheduling: { color: '#76FF03', label: 'Scheduling', order: 2 },
+    mcp:        { color: '#AB47BC', label: 'MCP Call',   order: 3 },
   };
 
   const DEFAULT_MARKER_REGISTRY = {

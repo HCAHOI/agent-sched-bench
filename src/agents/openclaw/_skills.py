@@ -88,15 +88,41 @@ class SkillsLoader:
         # Check workspace first
         workspace_skill = self.workspace_skills / name / "SKILL.md"
         if workspace_skill.exists():
-            return workspace_skill.read_text(encoding="utf-8")
+            content = workspace_skill.read_text(encoding="utf-8")
+            self._emit_skill_loaded(name, source="workspace")
+            return content
 
         # Check built-in
         if self.builtin_skills:
             builtin_skill = self.builtin_skills / name / "SKILL.md"
             if builtin_skill.exists():
-                return builtin_skill.read_text(encoding="utf-8")
+                content = builtin_skill.read_text(encoding="utf-8")
+                self._emit_skill_loaded(name, source="builtin")
+                return content
 
         return None
+
+    def _emit_skill_loaded(self, name: str, *, source: str) -> None:
+        """Emit a CONTEXT category skill_loaded event if a callback is wired.
+
+        Phase 4 of trace-sim-vastai-pipeline plan: skill loads become
+        observable in the trace via the existing CONTEXT category (no
+        new schema). The callback is wired by
+        `_session_runner.inject_event_callbacks` at runtime — when the
+        SkillsLoader runs outside the runner (e.g. in tests) the
+        callback is None and the emit is a silent no-op.
+        """
+        if self._event_callback is None:
+            return
+        try:
+            self._event_callback(
+                "CONTEXT",
+                "skill_loaded",
+                {"skill_name": name, "skill_source": source},
+            )
+        except Exception:
+            # Never let an event-emit failure break skill loading itself.
+            pass
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:
         """

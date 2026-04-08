@@ -45,6 +45,19 @@ bash "${SETUP_DIR}/clone_repos.sh"
 step "6/6  Build Podman container images"
 bash "${SETUP_DIR}/build_images.sh"
 
+# ─── Optional: vast.ai podman bootstrap (Phase 3 of trace-sim-vastai-pipeline) ──
+# Guarded so existing local-mode setups (which don't need rootless podman)
+# are unaffected. Triggered by setting AGENT_SCHED_BENCH_VASTAI=1 in the
+# environment, OR by running on a host where /etc/vastai-host exists.
+if [[ "${AGENT_SCHED_BENCH_VASTAI:-}" = "1" ]] || [[ -e /etc/vastai-host ]]; then
+    step "vast.ai bootstrap: install podman + start socket"
+    bash "${SETUP_DIR}/install_podman_vastai.sh"
+    bash "${SETUP_DIR}/start_podman_socket.sh"
+    echo ""
+    echo "  reminder: export DOCKER_HOST=unix:///run/user/\$(id -u)/podman/podman.sock"
+    echo "  (or: eval \"\$(bash scripts/setup/start_podman_socket.sh --print-export)\")"
+fi
+
 echo ""
 echo "========================================"
 echo "  Setup complete — summary"

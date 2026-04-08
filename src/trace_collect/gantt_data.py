@@ -18,7 +18,12 @@ from typing import Any
 from trace_collect.trace_inspector import TraceData
 
 # Categories that produce point markers (not spans).
-_MARKER_CATEGORIES = frozenset({"SCHEDULING", "SESSION", "CONTEXT"})
+# Phase 5 of trace-sim-vastai-pipeline plan: MCP added so the events
+# emitted by `_session_runner.TraceCollectorHook.before_execute_tools`
+# for `mcp_*` tools become visible in the Gantt as point markers
+# instead of being silently dropped. Paired JS edit lives in
+# gantt_builder.js:31 (MARKER_CATEGORIES Set).
+_MARKER_CATEGORIES = frozenset({"SCHEDULING", "SESSION", "CONTEXT", "MCP"})
 
 # Maximum preview length for LLM narrative content in a tooltip. Large
 # enough to show a full paragraph of reasoning in the click-to-pin
@@ -43,19 +48,28 @@ _TOOL_PRIMARY_FIELDS: tuple[str, ...] = (
     "url",
 )
 
-# Map v4 ``action_type`` -> Gantt span type. Public so downstream code can
-# extend it (e.g., adding ``mcp_call`` -> ``mcp``).
+# Map v5 ``action_type`` -> Gantt span type. Public so downstream code
+# can extend it. Phase 5 of trace-sim-vastai-pipeline plan adds the
+# forward-compatible ``mcp_call`` -> ``mcp`` mapping so any future
+# scaffold (or trace producer) that emits a first-class MCP action
+# renders correctly without further changes. Paired JS edit at
+# gantt_builder.js:34 (ACTION_TYPE_MAP object).
 ACTION_TYPE_MAP: dict[str, str] = {
     "llm_call": "llm",
     "tool_exec": "tool",
+    "mcp_call": "mcp",
 }
 
 # Default span registry shipped inside the payload.
 # ``order`` controls vertical stacking when multiple span types share an iteration.
+# Phase 5: ``mcp`` span entry added (purple, distinct from llm cyan and tool
+# orange) for the new ``mcp_call`` action type. Paired JS edit at
+# gantt_builder.js:40 (DEFAULT_SPAN_REGISTRY object).
 DEFAULT_SPAN_REGISTRY: dict[str, dict[str, Any]] = {
     "llm":        {"color": "#00E5FF", "label": "LLM Call",   "order": 0},
     "tool":       {"color": "#FF6D00", "label": "Tool Exec",  "order": 1},
     "scheduling": {"color": "#76FF03", "label": "Scheduling", "order": 2},
+    "mcp":        {"color": "#AB47BC", "label": "MCP Call",   "order": 3},
 }
 
 # Default marker registry — point-in-time event symbols.

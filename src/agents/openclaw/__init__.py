@@ -1,4 +1,12 @@
-"""OpenClaw agent core — self-contained port of nanobot's agent engine."""
+"""OpenClaw agent core — self-contained port of nanobot's agent engine.
+
+Side effect on import: registers the openclaw scaffold prepare adapter
+into `trace_collect.scaffold_registry` for the trace simulator (Phase
+1.5.1 of the trace-sim-vastai-pipeline plan). Importing the adapter
+itself is light (the heavy openclaw imports happen lazily inside the
+adapter callable's body), so this side effect does not violate the
+existing `__getattr__` lazy-load pattern below.
+"""
 
 
 def __getattr__(name: str):  # noqa: ANN001
@@ -16,6 +24,22 @@ def __getattr__(name: str):  # noqa: ANN001
         mod = importlib.import_module(module_path)
         return getattr(mod, attr)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _register_openclaw_prepare() -> None:
+    """Register the openclaw scaffold prepare adapter.
+
+    Called as a side effect of `import agents.openclaw`. Both imports
+    inside this function are light (no transitive heavy openclaw module
+    loads) so the existing lazy-load firewall is preserved.
+    """
+    from agents.openclaw.simulate_adapter import _openclaw_prepare
+    from trace_collect.scaffold_registry import register_scaffold_prepare
+
+    register_scaffold_prepare("openclaw", _openclaw_prepare)
+
+
+_register_openclaw_prepare()
 
 
 __all__ = [

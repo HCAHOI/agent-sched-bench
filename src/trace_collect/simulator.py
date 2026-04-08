@@ -23,9 +23,17 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+import dataclasses
+
 from agents.base import TraceAction
+from harness.metrics_client import VLLMMetricsClient
 from harness.trace_logger import TraceLogger
 from trace_collect.openclaw_tools import execute_trace_tool
+from trace_collect.scaffold_registry import (
+    PreparedWorkspace,
+    SimulatePrepareConfig,
+    get_prepare,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +193,8 @@ async def simulate(
     command_timeout_s: float = 120.0,
     task_timeout_s: float = 1200.0,
     max_context_tokens: int = 256_000,
+    metrics_url: str | None = None,
+    warmup_skip_iterations: int = 0,
 ) -> Path:
     """Simulate an agent run using a source API trace with local model timing.
 
@@ -210,37 +220,56 @@ async def simulate(
     Returns:
         Path to the simulate trace JSONL file.
     """
-    from agents.miniswe import MiniSWECodeAgent
+    # 1. Load source trace + detect scaffold from v5 metadata header.
+    # Phase 6: refuse BFCL v4 traces with a descriptive NotImplementedError
+    # BEFORE any scaffold registry lookup or agent.* import side effect.
+    metadata = _load_trace_metadata(source_trace)
+    _refuse_bfcl_v4_simulate(metadata)
 
-    # 1. Load source trace
     first_agent_id = _detect_agent_id(source_trace)
     iterations, summary = load_trace_actions(source_trace, first_agent_id)
     agent_id = first_agent_id
+    scaffold = _detect_scaffold(source_trace)
 
     # 2. Find task
     task = _find_task(task_source, agent_id)
     source_model = (summary or {}).get("model", "unknown")
     logger.info(
-        "Simulating %s: %d iterations from %s, local model=%s",
+        "Simulating %s [scaffold=%s]: %d iterations from %s, local model=%s",
         agent_id,
+        scaffold,
         len(iterations),
         source_model,
         model,
     )
 
-    # 3. Prepare environment (clone repo)
-    agent = MiniSWECodeAgent(
+    # 3. Prepare environment via the scaffold registry. The lookup
+    # raises NotImplementedError with a descriptive message for
+    # unsupported scaffolds (e.g. openclaw before Phase 1.5.1 lands).
+    prepare_callable = get_prepare(scaffold)
+    prepare_config = SimulatePrepareConfig(
         agent_id=agent_id,
         api_base=api_base,
         model=model,
         api_key=api_key,
         command_timeout_s=command_timeout_s,
         task_timeout_s=task_timeout_s,
-        repos_root=str(repos_root),
+        repos_root=Path(repos_root) if repos_root else None,
         max_context_tokens=max_context_tokens,
     )
-    await agent.prepare(task)
-    repo_dir = agent._workdir / "repo"  # type: ignore[union-attr]
+    prepared: PreparedWorkspace = await prepare_callable(task, prepare_config)
+    repo_dir = prepared.repo_dir
+
+    # 3a. Construct metrics client. When metrics_url is None the client
+    # returns empty PreemptionSnapshots (all-None fields) on every call
+    # — this is the explicit opt-out path. Real vLLM smoke is deferred
+    # to US-010 manual runbook; the absent-URL path is what runs in
+    # local Ralph iterations.
+    metrics_client = VLLMMetricsClient(metrics_url=metrics_url)
+    logger.info(
+        "vLLM metrics client: %s",
+        f"enabled (url={metrics_url})" if metrics_client.is_enabled else "disabled",
+    )
 
     # 4. Set up trace logger
     run_id = _build_simulate_run_id(model)
@@ -301,7 +330,17 @@ async def simulate(
 
             ts_after_llm = time.time()
 
-            # 6b. Emit llm_call TraceAction
+            # 6a-bis. Snapshot vLLM scheduler state. Phase 2 of the
+            # trace-sim-vastai-pipeline plan: store ABSOLUTE field values
+            # field-for-field under sim_metrics.vllm_scheduler_snapshot.
+            # Deltas are computed post-hoc in src/analysis/sim_metrics_delta.py.
+            scheduler_snapshot = metrics_client.get_snapshot()
+
+            # 6b. Emit llm_call TraceAction. The legacy top-level
+            # ttft_ms / tpot_ms / llm_latency_ms fields are preserved for
+            # backward compatibility with pre-Phase-2 readers; the new
+            # nested sim_metrics blob is the canonical location for
+            # Phase-2-aware analysis (Gantt tooltips, sim_metrics_delta).
             llm_record = TraceAction(
                 action_type="llm_call",
                 action_id=f"llm_{it_num}",
@@ -320,11 +359,34 @@ async def simulate(
                     "tpot_ms": tpot_ms,
                     "simulate_source": str(source_trace),
                     "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
+                    "sim_metrics": {
+                        "timing": {
+                            "ttft_ms": ttft_ms,
+                            "tpot_ms": tpot_ms,
+                            "total_ms": llm_latency_ms,
+                        },
+                        # PreemptionSnapshot uses @dataclass(slots=True) so
+                        # instances have no __dict__; use dataclasses.asdict
+                        # to serialize all fields field-for-field.
+                        "vllm_scheduler_snapshot": dataclasses.asdict(
+                            scheduler_snapshot
+                        ),
+                        # Phase 1.5.1 warmup tagging: position-index-based
+                        # (NOT iteration-number-based) so sparse iteration
+                        # numbers in source traces don't break the cutoff.
+                        "warmup": i < warmup_skip_iterations,
+                    },
                 },
             )
             trace_logger.log_trace_action(agent_id, llm_record)
 
-            # 6c. Execute tool calls from source trace
+            # 6c. Execute tool calls from source trace.
+            # Phase 1.5.1: MCP tools (tool_name starts with "mcp_") are
+            # REPLAYED FROM RECORDED RESULTS — never re-dispatched to a
+            # live MCP server (Pre-mortem C item 2 of trace-sim-vastai-
+            # pipeline plan: zero context7 egress during replay).
+            from agents.openclaw.simulate_adapter import is_mcp_tool_call
+
             total_tool_ms = 0.0
             for tool_act in tool_actions:
                 td = tool_act.get("data", {})
@@ -334,11 +396,22 @@ async def simulate(
                     continue
 
                 tool_ts_start = time.time()
-                tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                    agent_id, repo_dir, tool_name, tool_args,
-                    command_timeout_s, llm_data.get("raw_response"),
-                )
-                tool_ts_end = time.time()
+                if is_mcp_tool_call(tool_name):
+                    # Reuse the recorded MCP result instead of re-dispatching.
+                    # Provenance is recorded under sim_metrics.source so
+                    # downstream analysis can distinguish replayed vs live.
+                    tool_result = td.get("tool_result", "")
+                    tool_duration_ms = float(td.get("duration_ms") or 0.0)
+                    tool_success = bool(td.get("success", True))
+                    tool_ts_end = tool_ts_start
+                    sim_provenance = "replayed_from_trace"
+                else:
+                    tool_result, tool_duration_ms, tool_success = await _exec_tool(
+                        agent_id, repo_dir, tool_name, tool_args,
+                        command_timeout_s, llm_data.get("raw_response"),
+                    )
+                    tool_ts_end = time.time()
+                    sim_provenance = "executed_locally"
                 total_tool_ms += tool_duration_ms
 
                 tool_record = TraceAction(
@@ -355,6 +428,10 @@ async def simulate(
                         "tool_result": tool_result,
                         "duration_ms": tool_duration_ms,
                         "success": tool_success,
+                        "sim_metrics": {
+                            "source": sim_provenance,
+                            "warmup": i < warmup_skip_iterations,
+                        },
                     },
                 )
                 trace_logger.log_trace_action(agent_id, tool_record)
@@ -386,11 +463,10 @@ async def simulate(
         trace_logger.log_summary(agent_id, simulate_summary)
         trace_logger.close()
 
-        # Cleanup workdir
-        if agent._workdir:
-            import shutil
-
-            shutil.rmtree(agent._workdir, ignore_errors=True)
+        # Cleanup workdir via the scaffold's PreparedWorkspace.cleanup
+        # closure. The closure captures the scaffold-specific state
+        # (e.g. mini-swe agent._workdir) and owns the rmtree call.
+        prepared.cleanup()
 
     trace_file = output_path / f"{run_id}.jsonl"
     logger.info(
@@ -406,6 +482,17 @@ async def simulate(
 
 def _detect_scaffold(trace_path: Path) -> str:
     """Detect the scaffold from a trace's trace_metadata record."""
+    metadata = _load_trace_metadata(trace_path)
+    return metadata.get("scaffold", "unknown") if metadata else "unknown"
+
+
+def _load_trace_metadata(trace_path: Path) -> dict[str, Any] | None:
+    """Read the first trace_metadata record from a v5 trace JSONL.
+
+    Returns the parsed dict, or None if no metadata record is present
+    in the first few non-empty lines (the metadata is conventionally
+    line 0 of a v5 trace).
+    """
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -416,11 +503,47 @@ def _detect_scaffold(trace_path: Path) -> str:
             except json.JSONDecodeError:
                 continue
             if record.get("type") == "trace_metadata":
-                return record.get("scaffold", "unknown")
-            # Only check the first few records
-            if record.get("type") in ("step", "summary"):
+                return record
+            # Only check the first few records before giving up
+            if record.get("type") in ("step", "summary", "action"):
                 break
-    return "unknown"
+    return None
+
+
+def _refuse_bfcl_v4_simulate(metadata: dict[str, Any] | None) -> None:
+    """Phase 6: refuse BFCL v4 traces in the simulator with a descriptive error.
+
+    BFCL v4 has ``task_shape='function_call'`` and ``needs_prepare=False``
+    — there is no repo to clone, no workspace to prepare, and the
+    function-call dispatch shape is fundamentally incompatible with the
+    simulator's iterate-then-replay model. Mirrors the existing refusal
+    pattern at ``src/agents/benchmarks/bfcl_v4.py:294-301``.
+
+    Triggered by ANY of:
+    - ``metadata.task_shape == "function_call"``
+    - ``metadata.benchmark`` is one of the BFCL slugs (``"bfcl-v4"``,
+      ``"bfcl_v4"``)
+    - ``metadata.needs_prepare`` is explicitly False (forward-compat
+      hook for any future task type with no prepare phase)
+
+    The check happens BEFORE scaffold registry lookup so that NO
+    ``agents.*`` package gets imported as a side effect of the refusal.
+    """
+    if metadata is None:
+        return
+
+    is_bfcl = (
+        metadata.get("task_shape") == "function_call"
+        or metadata.get("benchmark") in ("bfcl-v4", "bfcl_v4")
+        or metadata.get("needs_prepare") is False
+    )
+
+    if is_bfcl:
+        raise NotImplementedError(
+            "BFCL v4 traces have task_shape='function_call' with "
+            "needs_prepare=False, which the simulator does not support. "
+            "Simulate mode requires a prepare-able scaffold."
+        )
 
 
 def _detect_agent_id(trace_path: Path) -> str:
