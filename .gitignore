@@ -10,6 +10,7 @@ uv.lock
 .omc/
 .trae/
 .playwright-mcp/
+.omx/
 
 data/swebench_repos/
 data/swebench_verified/tasks.json
