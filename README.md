@@ -99,6 +99,25 @@ All nontrivial checkpoints must pass targeted tests, undergo an independent
 review, and then be committed with the checkpoint identifier in the commit
 message.
 
+## Gantt Viewer
+
+The old static `python -m trace_collect.cli gantt ...` flow has been replaced
+by the dynamic viewer under `demo/gantt_viewer/`.
+
+Useful entrypoints:
+
+```bash
+make gantt-viewer-install
+make gantt-viewer-dev
+make gantt-viewer-build
+make gantt-viewer-test
+```
+
+The viewer discovers the shipped acceptance traces from
+`demo/gantt_viewer/configs/example.yaml`, serves API routes from FastAPI, and
+in production mounts the built frontend from `demo/gantt_viewer/frontend/dist`.
+See `demo/gantt_viewer/README.md` for the exact workflow and acceptance checks.
+
 Smoke-only subsets belong in dedicated `*_smoke.yaml` workload configs. Default
 workload configs should describe the full benchmark dataset path.
 

@@ -181,6 +181,7 @@ export default function App() {
         loadedIds={loadedIds()}
         loadingIds={loadingIds()}
         onLoad={loadTraceIds}
+        onUpload={handleUpload}
         onRemove={removeTrace}
         onToggleVisibility={toggleVisibility}
         visibility={visibility()}
@@ -212,9 +213,18 @@ export default function App() {
               setHoverCard(card);
             }
           }}
+          onPinnedReanchor={(card) =>
+            setPinnedCard((current) => {
+              if (!current || current.hit.kind === "lane") {
+                return current;
+              }
+              return card;
+            })
+          }
           onScroll={setScrollTop}
           onZoom={setZoom}
           payload={payload()}
+          pinnedHit={pinnedCard()?.hit ?? null}
           timeMode={timeMode()}
           viewMode={viewMode()}
           visibility={visibility()}

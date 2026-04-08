@@ -100,6 +100,48 @@ Remaining work after this checkpoint:
   sidebar/scroll polish, broader multi-trace ergonomics)
 - add frontend-side tests
 
+Latest progress after the last checkpoint:
+
+- added frontend vitest wiring (`vite.config.ts` test block + jsdom setup)
+- added frontend tests for:
+  - `state/persist.ts` localStorage persistence
+  - `canvas/CanvasRenderer.ts` hit-testing, zoom clamp, and concise-mode
+    re-anchor behavior
+- extended `make gantt-viewer-test` to run both backend pytest and frontend
+  vitest
+- added `test_openapi_frozen` plus
+  `demo/gantt_viewer/tests/fixtures/openapi.snapshot.json`
+- kept the full regression path green:
+  - backend tests: 51 passing
+  - frontend tests: 4 passing
+  - frontend build: passing
+
+Updated remaining work:
+
+- add broader browser-level regression coverage for upload/drag-drop and pinned
+  tooltip behavior
+- further polish multi-trace UX and canvas parity where the old template still
+  had richer behavior
+- refresh top-level README/docs to describe the new viewer workflow end-to-end
+
+Latest follow-up progress:
+
+- added frontend vitest coverage and folded it into `make gantt-viewer-test`
+- added browser smoke automation via `scripts/smoke_gantt_viewer.sh` and
+  `make gantt-viewer-smoke`
+- verified the browser smoke against the built app:
+  - default loaded count reaches `1`
+  - synthetic drag-drop raises the loaded count to `2`
+  - button-triggered upload raises the loaded count to `3`
+  - clicking the first lane label produces a pinned tooltip
+  - `Load all` after the ad hoc uploads raises the loaded count to `14`
+
+Remaining work after this update:
+
+- continue parity/polish work where the old viewer still had richer UX details
+- optionally expand frontend test coverage beyond the current persistence +
+  renderer-state checks
+
 ## Verification For This Checkpoint
 
 - `python -c "from demo.gantt_viewer.backend import payload"`

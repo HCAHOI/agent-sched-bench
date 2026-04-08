@@ -14,3 +14,7 @@ export function enablePersistence(): void {
     window.localStorage.setItem("gantt.viewMode", viewMode());
   });
 }
+
+export function __resetPersistenceForTests(): void {
+  started = false;
+}

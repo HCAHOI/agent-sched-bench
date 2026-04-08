@@ -2,15 +2,17 @@ import { createEffect, onCleanup, onMount } from "solid-js";
 
 import type { GanttPayload } from "../api/client";
 import { CanvasRenderer } from "../canvas/CanvasRenderer";
-import type { HitCard } from "../canvas/hit";
+import type { Hit, HitCard } from "../canvas/hit";
 import type { TimeMode, ViewMode } from "../state/signals";
 
 interface CanvasStageProps {
   onClick: (card: HitCard | null) => void;
   onHover: (card: HitCard | null) => void;
+  onPinnedReanchor: (card: HitCard | null) => void;
   onScroll: (scrollTop: number) => void;
   onZoom: (factor: number) => void;
   payload: GanttPayload | null;
+  pinnedHit: Hit | null;
   timeMode: TimeMode;
   viewMode: ViewMode;
   visibility: Record<string, boolean>;
@@ -21,6 +23,13 @@ export default function CanvasStage(props: CanvasStageProps) {
   let canvasEl!: HTMLCanvasElement;
   let wrapEl!: HTMLDivElement;
   let renderer: CanvasRenderer | null = null;
+
+  const reanchorPinned = () => {
+    if (!renderer || !props.pinnedHit || props.pinnedHit.kind === "lane") {
+      return;
+    }
+    props.onPinnedReanchor(renderer.locateHit(props.pinnedHit));
+  };
 
   onMount(() => {
     renderer = new CanvasRenderer(canvasEl, wrapEl);
@@ -33,9 +42,11 @@ export default function CanvasStage(props: CanvasStageProps) {
     renderer.addEventListener("scroll", (event) =>
       props.onScroll((event as CustomEvent<{ scrollTop: number }>).detail.scrollTop),
     );
+    renderer.addEventListener("scroll", reanchorPinned);
     renderer.addEventListener("zoom", (event) =>
       props.onZoom((event as CustomEvent<{ factor: number }>).detail.factor),
     );
+    renderer.addEventListener("render", reanchorPinned);
   });
 
   createEffect(() => {
@@ -56,6 +67,13 @@ export default function CanvasStage(props: CanvasStageProps) {
 
   createEffect(() => {
     renderer?.setZoom(props.zoom);
+  });
+
+  createEffect(() => {
+    if (!renderer || !props.pinnedHit || props.pinnedHit.kind === "lane") {
+      return;
+    }
+    props.onPinnedReanchor(renderer.locateHit(props.pinnedHit));
   });
 
   onCleanup(() => {

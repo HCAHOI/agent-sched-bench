@@ -7,6 +7,7 @@ interface TraceChipBarProps {
   loadedIds: string[];
   loadingIds: Record<string, boolean>;
   onLoad: (ids: string[]) => Promise<void> | void;
+  onUpload: (files: File[]) => Promise<void> | void;
   onRemove: (id: string) => void;
   onToggleVisibility: (id: string) => void;
   visibility: Record<string, boolean>;
@@ -14,6 +15,7 @@ interface TraceChipBarProps {
 
 export default function TraceChipBar(props: TraceChipBarProps) {
   const loadedSet = createMemo(() => new Set(props.loadedIds));
+  let fileInputEl!: HTMLInputElement;
 
   return (
     <section class="toolbar-card trace-strip">
@@ -22,14 +24,38 @@ export default function TraceChipBar(props: TraceChipBarProps) {
           <span class="metric-label">traces</span>
           <strong>Load individual traces or pull all discovered entries.</strong>
         </div>
-        <button
-          class="primary-btn"
-          onClick={() => props.onLoad(props.descriptors.map((descriptor) => descriptor.id))}
-          type="button"
-        >
-          Load all
-        </button>
+        <div class="trace-actions">
+          <button
+            class="secondary-btn"
+            onClick={() => fileInputEl.click()}
+            type="button"
+          >
+            Add JSONL
+          </button>
+          <button
+            class="primary-btn"
+            onClick={() => props.onLoad(props.descriptors.map((descriptor) => descriptor.id))}
+            type="button"
+          >
+            Load all
+          </button>
+        </div>
       </div>
+
+      <input
+        accept=".jsonl"
+        class="visually-hidden"
+        multiple
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          if (files.length > 0) {
+            void props.onUpload(files);
+          }
+          event.currentTarget.value = "";
+        }}
+        ref={fileInputEl}
+        type="file"
+      />
 
       <div class="trace-chip-grid">
         <For each={props.descriptors}>

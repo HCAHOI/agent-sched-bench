@@ -1,7 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
 
-.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw download-bfcl-v4 setup-bfcl-v4 smoke-bfcl-v4-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-clean
+.PHONY: help pull sync build verify-bootstrap verify-env1 verify-env2 verify-env3a verify-env3b verify-env3c verify-env4 verify-env5 test lint serve-vllm run-smoke smoke-code smoke-data smoke-research run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw download-bfcl-v4 setup-bfcl-v4 smoke-bfcl-v4-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
@@ -36,9 +36,10 @@ help:
 	@printf "  setup-bfcl-v4               Alias for download-bfcl-v4 (BFCL has no git repos to clone)\n"
 	@printf "  smoke-bfcl-v4-openclaw      Run $(SMOKE_N) BFCL v4 tasks through openclaw (mini-swe-agent is unsupported for function_call shape)\n"
 	@printf "  gantt-viewer-install        Install frontend dependencies with npm\n"
-	@printf "  gantt-viewer-dev            Launch the new dynamic Gantt viewer CLI scaffold\n"
+	@printf "  gantt-viewer-dev            Launch the dynamic Gantt viewer in dev mode\n"
 	@printf "  gantt-viewer-build          Build the frontend bundle\n"
-	@printf "  gantt-viewer-test           Run migrated Gantt payload tests\n"
+	@printf "  gantt-viewer-test           Run backend pytest plus frontend vitest\n"
+	@printf "  gantt-viewer-smoke          Run a browser smoke test against the built viewer\n"
 	@printf "  gantt-viewer-clean          Remove viewer build/cache artifacts\n"
 
 pull:
@@ -166,6 +167,10 @@ gantt-viewer-build:
 
 gantt-viewer-test:
 	PYTHONPATH=src:. $(PYTHON) -m pytest demo/gantt_viewer/tests -v
+	cd demo/gantt_viewer/frontend && npm test
+
+gantt-viewer-smoke:
+	./scripts/smoke_gantt_viewer.sh
 
 gantt-viewer-clean:
 	rm -rf demo/gantt_viewer/frontend/dist demo/gantt_viewer/frontend/node_modules

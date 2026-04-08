@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ from trace_collect.trace_inspector import TraceData
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CC_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "claude_code_minimal.jsonl"
+OPENAPI_SNAPSHOT = REPO_ROOT / "demo" / "gantt_viewer" / "tests" / "fixtures" / "openapi.snapshot.json"
 
 
 def _llm_action() -> dict:
@@ -169,3 +171,19 @@ def test_upload_malformed_trace_returns_422(tmp_path: Path) -> None:
         files={"file": ("broken.jsonl", b"not jsonl", "application/octet-stream")},
     )
     assert response.status_code == 422
+
+
+def test_openapi_frozen(monkeypatch) -> None:
+    monkeypatch.delenv("GANTT_VIEWER_CONFIG", raising=False)
+    monkeypatch.delenv("GANTT_VIEWER_DEV", raising=False)
+    client = TestClient(create_app())
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+
+    actual = json.dumps(response.json(), indent=2, sort_keys=True)
+    expected = OPENAPI_SNAPSHOT.read_text(encoding="utf-8").strip()
+    assert actual == expected, (
+        "OpenAPI snapshot drifted. Regenerate "
+        "demo/gantt_viewer/tests/fixtures/openapi.snapshot.json and "
+        "demo/gantt_viewer/frontend/src/api/schema.gen.ts together."
+    )

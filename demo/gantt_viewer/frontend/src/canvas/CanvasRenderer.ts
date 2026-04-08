@@ -1,5 +1,5 @@
 import type { GanttPayload } from "../api/client";
-import type { Hit, HitCard } from "./hit";
+import { sameHit, type Hit, type HitCard } from "./hit";
 import { computeTotalContentHeight, effectiveLaneH, MARKER_H, SPAN_H, SPAN_PAD, TIME_AXIS_H } from "./layout";
 import { formatTimeLabel, niceStep } from "./time";
 
@@ -152,6 +152,19 @@ export class CanvasRenderer extends EventTarget {
       }
     }
     return null;
+  }
+
+  locateHit(hit: Hit): HitCard | null {
+    const box = this.hitBoxes.find((candidate) => sameHit(candidate.hit, hit));
+    if (!box) {
+      return null;
+    }
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      hit: box.hit,
+      x: rect.left + box.x + box.w / 2,
+      y: rect.top + box.y + box.h / 2,
+    };
   }
 
   private emitHover(card: HitCard | null): void {
@@ -440,5 +453,7 @@ export class CanvasRenderer extends EventTarget {
         laneY += laneHeight;
       }
     }
+
+    this.dispatchEvent(new CustomEvent("render"));
   }
 }
