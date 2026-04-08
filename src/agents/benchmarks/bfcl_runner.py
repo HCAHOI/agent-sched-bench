@@ -78,11 +78,20 @@ class BFCLRunner:
         # Single-turn BFCL: the model emits tool_calls on its first
         # response and we stop. max_iterations=1 is the honest bound.
         # If a BFCLv3-style multi-turn category is later re-enabled it
-        # will need a higher limit, but v2 v1 scope is single-turn only.
+        # will need a higher limit, but v2's scope is single-turn only.
+        effective_max_iterations = (
+            max_iterations if max_iterations is not None else 1
+        )
+        if effective_max_iterations < 1:
+            raise ValueError(
+                f"BFCLRunner requires max_iterations >= 1, got "
+                f"{effective_max_iterations}; the LLM must be allowed at "
+                f"least one turn to emit tool calls."
+            )
         self._session_runner = SessionRunner(
             provider,
             model=self.model,
-            max_iterations=(max_iterations if max_iterations is not None else 1),
+            max_iterations=effective_max_iterations,
             context_window_tokens=context_window_tokens,
         )
 
@@ -173,13 +182,21 @@ class BFCLRunner:
             return {}
         prompt_tokens = 0
         completion_tokens = 0
-        for line in trace_file.read_text(encoding="utf-8").splitlines():
+        for lineno, line in enumerate(
+            trace_file.read_text(encoding="utf-8").splitlines(), start=1
+        ):
             line = line.strip()
             if not line:
                 continue
             try:
                 rec = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "BFCL: skipping malformed trace line %s:%d (%s)",
+                    trace_file,
+                    lineno,
+                    exc,
+                )
                 continue
             if rec.get("type") == "action" and rec.get("action_type") == "llm_call":
                 data = rec.get("data", {})
@@ -190,6 +207,47 @@ class BFCLRunner:
             usage["prompt_tokens"] = prompt_tokens
             usage["completion_tokens"] = completion_tokens
         return usage
+
+    @staticmethod
+    def _extract_absorbed_llm_error(trace_file: Path) -> str | None:
+        """Return the error message of the first absorbed LLM error, if any.
+
+        When ``provider.chat()`` raises inside ``SessionRunner``, openclaw's
+        agent runner catches it, wraps the response as
+        ``finish_reason='error'``, and emits an ``llm_error`` trace event.
+        The session completes normally with an empty recorder, so the
+        runner cannot tell "model produced wrong answer" from "model
+        crashed" by inspecting the return value alone. Walk the trace
+        once looking for the error event and lift its message into
+        ``EvalResult.error`` so ``results.jsonl`` can distinguish the
+        two failure modes without re-walking the trace downstream.
+        """
+        if not trace_file.exists():
+            return None
+        for line in trace_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") == "event" and rec.get("event") == "llm_error":
+                # TraceCollectorHook emits llm_error with shape
+                # {"error_message": str, "finish_reason": str, ...extras}
+                # See agents.openclaw._session_runner.py:285 for the canonical
+                # field layout.
+                data = rec.get("data", {})
+                msg = (
+                    data.get("error_message")
+                    or data.get("error")
+                    or data.get("content")
+                    or data.get("message")
+                )
+                if msg:
+                    return str(msg)
+                return "llm_error event present but no message field"
+        return None
 
     # ------------------------------------------------------------------
     # Prompt flattening
@@ -283,6 +341,7 @@ class BFCLRunner:
 
         run_ms = session_result.elapsed_s * 1000 if session_result else 0.0
         usage = self._sum_usage_from_trace(trace_file)
+        absorbed_error = self._extract_absorbed_llm_error(trace_file)
 
         return EvalResult(
             instance_id=task.instance_id,
@@ -290,6 +349,7 @@ class BFCLRunner:
             tools_used=tools_used,
             usage=usage,
             stop_reason="completed",
+            error=absorbed_error,
             trace_file=trace_file,
             run_ms=run_ms,
             workspace_dir=ws,

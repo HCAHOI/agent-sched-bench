@@ -52,6 +52,11 @@ def _normalize_bfcl_schema(schema: Any) -> dict[str, Any]:
         result["type"] = "object"
     elif raw_type == "tuple":
         result["type"] = "array"
+    elif raw_type == "float":
+        # BFCL uses "float" where JSON Schema has "number". Preserve the
+        # type info rather than dropping it so prompt-level tool schemas
+        # still carry a meaningful constraint.
+        result["type"] = "number"
     elif raw_type == "any":
         result.pop("type", None)
     elif isinstance(raw_type, str) and raw_type not in (

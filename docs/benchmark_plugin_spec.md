@@ -338,20 +338,61 @@ benchmark that supports a different scaffold combination should override
 its own `build_runner` to refuse the unsupported scaffolds explicitly
 and rely on the collector gate for the primary production guard.
 
-### 10.3 BFCLRunner — skips SessionRunner, bypasses openclaw tool set
+### 10.3 BFCLRunner — routes through SessionRunner via custom ToolRegistry
 
-`BFCLRunner` (in `src/agents/benchmarks/bfcl_runner.py`) calls
-`provider.chat()` directly rather than routing through
-`agents.openclaw._session_runner.SessionRunner`. Openclaw's `AgentLoop`
-hardcodes its own tool set (bash/file/web/memory), which is incompatible
-with BFCL's per-task JSON-Schema tool specs.
+`BFCLRunner` (in `src/agents/benchmarks/bfcl_runner.py`) walks the same
+`SessionRunner` + `AgentLoop` scheduling path as SWE-patch benchmarks.
+Each task builds a per-task `ToolRegistry` populated with
+`BFCLNoOpTool` wrappers (one per entry in `task.tools`) and passes it
+to `SessionRunner.run(tools=<registry>)` via the Phase 0 extension
+point (see §11). Openclaw's default bash/file/web tools are NOT
+registered on this path — the LLM sees only the BFCL-shipped function
+schemas.
 
-`BFCLRunner.run_task` issues one chat call per task with the task's tool
-spec wrapped in the OpenAI envelope (`{type: "function", function: f}`),
-records the returned `tool_calls`, scores them with `_ast_match`, and
-emits a v5-compliant trace: one `trace_metadata` + one `llm_call`
-`TraceAction` + one `summary` record. Gantt / inspector tooling renders
-BFCL traces identically to SWE-patch traces.
+Per-task flow:
+
+1. `build_bfcl_tool_registry(task.tools)` returns `(registry, recorder)`
+   where `recorder` is a list closure shared across the registry's
+   tool instances.
+2. `_flatten_single_turn_question(task)` collapses `task.question[0]`
+   into a single prompt string.
+3. `SessionRunner.run(tools=registry, ...)` constructs an `AgentLoop`
+   with the custom registry and walks the full bus dispatch path.
+4. Every `tool_call` the LLM emits is dispatched to
+   `BFCLNoOpTool.execute(**kwargs)`, which appends
+   `{"name", "arguments"}` to the recorder and returns `"OK"` — no
+   openclaw invariants assume side effects or bash output.
+5. After the session ends, the runner reads the recorder as the
+   `predicted_calls` list and scores it via `_ast_match`.
+6. `EvalResult.usage` is recovered by summing `llm_call` action tokens
+   from the trace file via `_sum_usage_from_trace`.
+
+`max_iterations=1`: single-turn BFCL categories make exactly one LLM
+call per task. The recorder captures the dispatched tool calls in
+iteration 0 (the only iteration) before the loop's ``for-else``
+branch fires. ``BFCLRunner.__init__`` validates ``max_iterations >= 1``
+and raises ``ValueError`` otherwise — a zero cap would leave the
+recorder permanently empty and silently yield score 0.0.
+
+Scheduling-data delta vs v1: v1's bypass path emitted exactly 3
+records per trace (metadata + single llm_call action + summary). v2's
+SessionRunner path emits 8-20+ records depending on tool-call count
+(irrelevance floors at ~8 with no tool dispatch; tasks with 1+ tool
+calls produce 11+). Records include llm_call_start / llm_call_end /
+tool_exec_start / tool_exec_end events + scheduling events from the
+TraceCollectorHook. BFCL is now first-class for scheduling research.
+
+**Error absorption**: a `provider.chat()` exception is caught inside
+`AgentLoop` and surfaces as an "LLM returned error" trace event; the
+session still completes with an empty recorder, and the runner
+produces `stop_reason="completed"` + `official_resolved=False`. This
+is the research-honest semantic: a provider error is "the model
+couldn't produce a correct prediction", which scores False.
+`EvalResult.error` is populated from the trace's ``llm_error`` event
+(via ``BFCLRunner._extract_absorbed_llm_error``) so downstream
+analysis can distinguish "wrong answer" (``score=0, error=None``)
+from "model crashed" (``score=0, error=<message>``) without
+re-walking the trace file.
 
 ### 10.4 AST-match rules
 
@@ -416,3 +457,71 @@ JSONL row per task with keys: `category`, `id`, `question`, `function`,
 
 `src/trace_collect/collector.py::load_tasks` auto-detects between JSON
 array (SWE convention) and JSONL (BFCL convention) — both formats work.
+
+---
+
+## 11. Custom tool registries for non-swe_patch benchmarks
+
+Function-call benchmarks (BFCL v4+, future OpenFunctions / API-Bank /
+ToolBench integrations) need the LLM to see a per-task set of
+functions that are not part of openclaw's default tool set. The
+extension point is a new keyword-only parameter on both `AgentLoop`
+and `SessionRunner.run()`:
+
+```python
+async def run(
+    self,
+    prompt: str,
+    workspace: Path,
+    *,
+    ...
+    tools: ToolRegistry | None = None,
+) -> SessionRunResult:
+```
+
+**Replace semantics**: when `tools` is provided, `AgentLoop` uses the
+registry as-is and does NOT call `_register_default_tools()`. The
+default bash/file/web/memory tool set is only registered on the
+no-override path. This is deliberate: if the LLM could see bash in
+addition to the benchmark-provided functions, it could compute
+answers out-of-band and return plain text — which would score False
+under AST-match even when the model "knew" the answer.
+
+**trace_metadata auto-derive**: when a custom registry is supplied,
+`SessionRunner.run()` derives `scaffold_capabilities.tools` from the
+registry's `get_definitions()` output and stamps
+`scaffold_capabilities.source = "custom_registry"` as a sentinel so
+downstream analysis can distinguish function_call traces from swe_patch
+traces without re-parsing the plugin registry.
+
+**How to wire up a new function_call benchmark** (BFCL is the reference
+implementation):
+
+1. Subclass `Tool` once per task (or once per schema dialect) with
+   `execute()` recording the call and returning a neutral
+   acknowledgment. See `agents.benchmarks.bfcl_tools.BFCLNoOpTool`.
+2. Override `validate_params` to return `[]` if your schema dialect
+   doesn't match standard JSON Schema — the runner scores at a
+   dedicated match layer, not at openclaw's strict per-call validator.
+3. Write a registry builder that returns `(registry, recorder)` — the
+   recorder must be a closure shared across all tool instances in one
+   `run_task` call so the runner can read a single chronological call
+   log. See `build_bfcl_tool_registry`.
+4. In your runner's `run_task`, call
+   `self._session_runner.run(prompt=..., tools=<registry>, ...)` and
+   read the recorder after the session returns.
+5. Score the recorder contents however your benchmark demands
+   (AST-match, execution comparison, llm-as-judge, etc.) and populate
+   `EvalResult.official_resolved` + `evaluation_report`.
+
+The pattern is non-reentrant — a fresh `(registry, recorder)` pair
+per `run_task` call keeps concurrent invocations from
+cross-contaminating. For BFCL, the recorder is a local `list[dict]`
+bound at registry construction time.
+
+**Schema normalization**: benchmarks that ship non-standard JSON
+Schema dialects (BFCL uses `"type": "dict"` instead of `"object"`,
+`"tuple"` instead of `"array"`, `"any"` for polymorphic args) should
+normalize parameters before wrapping them as `Tool` instances. BFCL's
+`_normalize_bfcl_schema` is a pure function that recursively rewrites
+these to standard JSON Schema; copy-and-adapt for other dialects.

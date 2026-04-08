@@ -449,3 +449,8 @@ def test_run_task_llm_error_yields_score_zero_via_absorbed_error(
     assert result.evaluation_report["score"] == 0.0
     # predicted_calls empty because the recorder never got hit.
     assert json.loads(result.content) == []
+    # Debuggability: EvalResult.error must carry the absorbed LLM error
+    # message so downstream analysis can distinguish "wrong answer" from
+    # "model crashed" without re-walking the trace file (reviewer v2-M3).
+    assert result.error is not None
+    assert "upstream down" in result.error
