@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sys
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
+
+from serving._common import print_or_exec_command, resolve_python_sibling_executable
 
 
 @dataclass(slots=True)
@@ -23,9 +21,8 @@ class ThunderAgentConfig:
 
 def build_thunderagent_command(config: ThunderAgentConfig) -> list[str]:
     """Build the ThunderAgent CLI command from structured config."""
-    thunderagent_executable = str(Path(sys.executable).with_name("thunderagent"))
     command = [
-        thunderagent_executable,
+        resolve_python_sibling_executable("thunderagent"),
         "--backend-type",
         config.backend_type,
         "--backends",
@@ -71,10 +68,7 @@ def main() -> None:
         profile_dir=args.profile_dir,
     )
     command = build_thunderagent_command(config)
-    if args.print_only:
-        print(json.dumps({"config": asdict(config), "command": command}, indent=2))
-        return
-    os.execvpe(command[0], command, os.environ)
+    print_or_exec_command(config=config, command=command, print_only=args.print_only)
 
 
 if __name__ == "__main__":

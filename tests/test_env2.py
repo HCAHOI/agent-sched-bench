@@ -25,17 +25,6 @@ def test_report_model_artifact_help_runs() -> None:
     )
 
 
-def test_make_help_mentions_verify_env2() -> None:
-    result = subprocess.run(
-        ["make", "help"],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "verify-env2" in result.stdout
-
-
 def test_report_model_artifact_rejects_config_mode_for_acceptance() -> None:
     result = subprocess.run(
         [

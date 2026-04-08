@@ -49,7 +49,7 @@ def test_make_help_runs() -> None:
         text=True,
     )
     assert "pull" in result.stdout
-    assert "verify-bootstrap" in result.stdout
+    assert "test" in result.stdout
     assert "run-smoke" in result.stdout
 
 

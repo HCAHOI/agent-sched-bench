@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from harness.prometheus import parse_prometheus_metric_values
+
 
 @dataclass(slots=True)
 class PreemptionSnapshot:
@@ -58,11 +60,11 @@ def parse_prometheus_metrics(metrics_payload: str) -> PreemptionSnapshot:
         "vllm:gpu_prefix_cache_hit_rate": "gpu_prefix_cache_hit_rate",
         "vllm:cpu_prefix_cache_hit_rate": "cpu_prefix_cache_hit_rate",
     }
-    values: dict[str, float | None] = {field: None for field in wanted.values()}
-    for line in metrics_payload.splitlines():
-        for metric_name, field_name in wanted.items():
-            if line.startswith(metric_name):
-                values[field_name] = float(line.split()[-1])
+    values = parse_prometheus_metric_values(
+        metrics_payload,
+        wanted,
+        include_missing=True,
+    )
     return PreemptionSnapshot(**values)
 
 

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from trace_collect._raw_response import parsed_tool_args_from_raw_response
+
 
 def _build_import_run_dir(
     output_dir: str | Path, model_name: str, run_id: str | None
@@ -166,25 +168,10 @@ def _normalize_step_tool_args(record: dict[str, Any]) -> None:
     except json.JSONDecodeError:
         pass
 
-    raw_response = record.get("raw_response") or {}
-    message = (raw_response.get("choices") or [{}])[0].get("message") or {}
-    tool_calls = message.get("tool_calls") or []
-    if not tool_calls:
+    fallback = parsed_tool_args_from_raw_response(record.get("raw_response"))
+    if fallback is None:
         return
-
-    function = (tool_calls[0] or {}).get("function") or {}
-    tool_name = function.get("name")
-    arguments = function.get("arguments")
-    if not tool_name or not arguments:
-        return
-
-    try:
-        parsed_args = json.loads(arguments)
-    except json.JSONDecodeError:
-        return
-    if not isinstance(parsed_args, dict):
-        return
-
+    tool_name, parsed_args = fallback
     record["tool_args"] = json.dumps({tool_name: parsed_args}, ensure_ascii=False)
 
 

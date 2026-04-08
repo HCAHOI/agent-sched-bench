@@ -6,11 +6,12 @@ Implements the :class:`~agents.benchmarks.base.Benchmark` protocol for the
 
 from __future__ import annotations
 
-import json
-import random
 from pathlib import Path
 from typing import Any, ClassVar
 
+from agents.benchmarks._swebench_selection import (
+    select_tool_intensive as _select_tool_intensive,
+)
 from agents.benchmarks.base import Benchmark
 
 
@@ -39,17 +40,6 @@ CLASS_LEVEL_REPO_QUOTAS: dict[str, int] = {
     "matplotlib/matplotlib": 4,
     # Remaining 7 slots filled from other repos
 }
-
-
-def _count_fail_to_pass(task: dict[str, Any]) -> int:
-    """Count the number of tests in FAIL_TO_PASS (module-private helper)."""
-    raw = task.get("FAIL_TO_PASS", "[]")
-    if isinstance(raw, str):
-        try:
-            return len(json.loads(raw))
-        except json.JSONDecodeError:
-            return 1 if raw.strip() else 0
-    return len(raw)
 
 
 class SWEBenchVerified(Benchmark):
@@ -85,12 +75,9 @@ class SWEBenchVerified(Benchmark):
         return tasks
 
     def normalize_task(self, raw: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a raw SWE-bench row by deriving ``test_cmd``.
-
-        Handles both JSON-string and native-list ``FAIL_TO_PASS`` values.
-        """
+        """Normalize a raw SWE-bench row by deriving ``test_cmd``."""
         task = dict(raw)
-        task["test_cmd"] = self._derive_test_cmd_internal(task)
+        task["test_cmd"] = self.derive_test_cmd(task)
         return task
 
     # ------------------------------------------------------------------
@@ -113,7 +100,12 @@ class SWEBenchVerified(Benchmark):
         """
         effective_n = n if n is not None else self.config.selection_n
         effective_seed = seed if seed is not None else self.config.selection_seed
-        return _select_tool_intensive(tasks, n=effective_n, seed=effective_seed)
+        return _select_tool_intensive(
+            tasks,
+            repo_quotas=CLASS_LEVEL_REPO_QUOTAS,
+            n=effective_n,
+            seed=effective_seed,
+        )
 
     # ------------------------------------------------------------------
     # Override: build a SWE-bench runner for the given scaffold
@@ -153,82 +145,7 @@ class SWEBenchVerified(Benchmark):
             **kwargs,
         )
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _derive_test_cmd_internal(task: dict[str, Any]) -> str:
-        """Derive a pytest command from FAIL_TO_PASS (handles list and str)."""
-        fail_to_pass_raw = task.get("FAIL_TO_PASS", "[]")
-        if isinstance(fail_to_pass_raw, str):
-            try:
-                test_ids = json.loads(fail_to_pass_raw)
-            except json.JSONDecodeError:
-                test_ids = [fail_to_pass_raw]
-        else:
-            test_ids = list(fail_to_pass_raw)
-
-        if not test_ids:
-            return "python -m pytest --no-header -q"
-
-        tests_str = " ".join(test_ids)
-        return f"python -m pytest {tests_str} -x --no-header -q"
-
-
 # ---------------------------------------------------------------------------
 # Module-level selection function (called by base.Benchmark.select_subset and
 # by the legacy shim in agents.swebench_data)
 # ---------------------------------------------------------------------------
-
-
-def _select_tool_intensive(
-    tasks: list[dict[str, Any]],
-    n: int = 32,
-    seed: int = 42,
-) -> list[dict[str, Any]]:
-    """Core stratified selection logic; shared by plugin and legacy shim."""
-    rng = random.Random(seed)
-
-    # Filter out trivial tasks
-    candidates = [
-        t
-        for t in tasks
-        if _count_fail_to_pass(t) > 0 and len(t.get("problem_statement", "")) > 100
-    ]
-
-    # Group by repo
-    by_repo: dict[str, list[dict[str, Any]]] = {}
-    for t in candidates:
-        repo = t["repo"]
-        by_repo.setdefault(repo, []).append(t)
-
-    # Sort each repo's tasks by FAIL_TO_PASS count (descending)
-    for repo_tasks in by_repo.values():
-        repo_tasks.sort(key=_count_fail_to_pass, reverse=True)
-
-    selected: list[dict[str, Any]] = []
-
-    # Phase 1: Fill quotas from priority repos
-    for repo, quota in CLASS_LEVEL_REPO_QUOTAS.items():
-        pool = by_repo.get(repo, [])
-        take = min(quota, len(pool))
-        selected.extend(pool[:take])
-
-    # Phase 2: Fill remaining slots from other repos
-    remaining = n - len(selected)
-    if remaining > 0:
-        other_repos = [r for r in by_repo if r not in CLASS_LEVEL_REPO_QUOTAS]
-        rng.shuffle(other_repos)
-        other_pool: list[dict[str, Any]] = []
-        for repo in other_repos:
-            other_pool.extend(by_repo[repo])
-        other_pool.sort(key=_count_fail_to_pass, reverse=True)
-        selected.extend(other_pool[:remaining])
-
-    # Trim to exactly n if we over-selected
-    selected = selected[:n]
-
-    # Stable output order
-    selected.sort(key=lambda t: t["instance_id"])
-    return selected

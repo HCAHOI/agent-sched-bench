@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+
+from serving._common import print_or_exec_command
 
 
 @dataclass(slots=True)
@@ -112,10 +112,7 @@ def main() -> None:
         scheduler_hook_report_path=args.scheduler_hook_report_path,
     )
     command = build_vllm_command(config)
-    if args.print_only:
-        print(json.dumps({"config": asdict(config), "command": command}, indent=2))
-        return
-    os.execvpe(command[0], command, os.environ)
+    print_or_exec_command(config=config, command=command, print_only=args.print_only)
 
 
 if __name__ == "__main__":

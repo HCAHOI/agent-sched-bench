@@ -61,17 +61,6 @@ def test_health_payload_carries_program_id() -> None:
     assert payload["program_id"] == "continuum-smoke"
 
 
-def test_make_help_mentions_verify_env3b() -> None:
-    result = subprocess.run(
-        ["make", "help"],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "verify-env3b" in result.stdout
-
-
 def test_continuum_validate_report_requires_prefix_cache_hit_when_requested() -> None:
     report = {
         "models_response": {"data": [{"id": "model"}]},

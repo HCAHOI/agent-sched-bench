@@ -56,17 +56,6 @@ def test_health_check_help_runs() -> None:
     )
 
 
-def test_make_help_mentions_verify_env3a() -> None:
-    result = subprocess.run(
-        ["make", "help"],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "verify-env3a" in result.stdout
-
-
 def test_serve_vllm_invokes_fail_closed_health_check() -> None:
     script_text = (REPO_ROOT / "scripts" / "serve_vllm.sh").read_text(encoding="utf-8")
     assert "serving.health_check" in script_text

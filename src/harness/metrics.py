@@ -27,7 +27,6 @@ class VLLMMetricsCollector:
         "vllm:e2e_request_latency_seconds",
         "vllm:time_to_first_token_seconds",
     ]
-
     HISTOGRAM_METRICS = {
         "vllm:e2e_request_latency_seconds",
         "vllm:time_to_first_token_seconds",

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sys
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
+
+from serving._common import print_or_exec_command, resolve_python_sibling_executable
 
 
 @dataclass(slots=True)
@@ -21,9 +19,8 @@ class ContinuumServerConfig:
 
 def build_continuum_command(config: ContinuumServerConfig) -> list[str]:
     """Build the `vllm serve` command for Continuum scheduling mode."""
-    vllm_executable = str(Path(sys.executable).with_name("vllm"))
     command = [
-        vllm_executable,
+        resolve_python_sibling_executable("vllm"),
         "serve",
         config.model_path,
         "--scheduling-policy",
@@ -66,10 +63,7 @@ def main() -> None:
         cpu_offload_gib=args.cpu_offload_gib,
     )
     command = build_continuum_command(config)
-    if args.print_only:
-        print(json.dumps({"config": asdict(config), "command": command}, indent=2))
-        return
-    os.execvpe(command[0], command, os.environ)
+    print_or_exec_command(config=config, command=command, print_only=args.print_only)
 
 
 if __name__ == "__main__":

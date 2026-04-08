@@ -11,7 +11,7 @@ to know about them:
    arrive as **native Python lists**, not JSON-encoded strings as in
    Verified. We keep them as native lists end-to-end — ``derive_test_cmd``
    and ``_count_fail_to_pass`` already handle both shapes, so no conversion
-   is needed (this closes open question O2 from the ralplan consensus).
+   is needed.
 2. Each row carries an explicit ``docker_image`` URI (e.g.
    ``swerebench/sweb.eval.x86_64.django_1776_django-11734``). We pin it to
    ``task['image_name']`` in :meth:`normalize_task` so the harness uses the
@@ -79,12 +79,8 @@ class SWERebenchBenchmark(Benchmark):
         if docker_image:
             task["image_name"] = docker_image
 
-        # Derive test_cmd. The base helper delegates to
-        # ``agents.swebench_data.derive_test_cmd`` which already handles
-        # native lists (see its ``else: list(raw)`` branch). We do NOT
-        # convert FAIL_TO_PASS to a JSON string — that would perpetuate a
-        # lossy round-trip for no downstream benefit (see open question O2
-        # in docs/CURRENT_PLAN.md).
+        # Derive test_cmd. The base helper handles native lists directly;
+        # no conversion needed to avoid a lossy round-trip.
         task["test_cmd"] = self.derive_test_cmd(task)
         return task
 
@@ -146,10 +142,6 @@ class SWERebenchBenchmark(Benchmark):
         )
         args["namespace"] = None
         return args
-
-    def image_name_for(self, task: dict[str, Any]) -> str | None:
-        """Return the ``docker_image`` URI pinned by :meth:`normalize_task`."""
-        return task.get("image_name")
 
     # ------------------------------------------------------------------
     # Override: reuse the SWEBenchRunner for swe_patch tasks

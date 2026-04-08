@@ -24,9 +24,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ─── Phase 4: --mcp-config helpers ─────────────────────────────────────
-
-
 def _mcp_config_label(mcp_config: str | None) -> str | None:
     """Map an --mcp-config value to its trace-header label.
 
@@ -36,7 +33,6 @@ def _mcp_config_label(mcp_config: str | None) -> str | None:
     - ``"none"`` → researcher affirmatively opted out of MCP
     - ``"<basename>"`` → MCP YAML at that basename was loaded
 
-    Phase 4 of trace-sim-vastai-pipeline.
     """
     if mcp_config is None:
         return None
@@ -51,8 +47,7 @@ def load_mcp_servers(mcp_config: str | None) -> dict:
     Returns an empty dict for ``None`` (mini-swe / legacy path) and for
     the literal ``"none"`` (affirmative opt-out). For a YAML path, loads
     the file and instantiates ``MCPServerConfig`` for each top-level
-    entry per Phase 0 schema audit (a) — connect_mcp_servers requires
-    Pydantic config instances, not raw dicts.
+    entry; connect_mcp_servers requires Pydantic config instances, not raw dicts.
 
     Raises:
         FileNotFoundError: if the YAML path does not exist.
@@ -343,17 +338,40 @@ def _rewrite_trace_summary(trace_file: Path, result: CollectedTaskResult) -> Non
     trace_file.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
 
 
-def _ordered_results(
+def _apply_evaluation_results(
+    results: "list[CollectedTaskResult]",
+    evaluation: "Any",
     *,
-    task_ids: list[str],
-    results_by_id: dict[str, CollectedTaskResult],
-) -> list[CollectedTaskResult]:
-    ordered = [
-        results_by_id[task_id] for task_id in task_ids if task_id in results_by_id
-    ]
-    extra_ids = sorted(set(results_by_id) - set(task_ids))
-    ordered.extend(results_by_id[task_id] for task_id in extra_ids)
-    return ordered
+    rewrite_trace: bool = True,
+) -> None:
+    """Apply official harness results to each CollectedTaskResult in-place.
+
+    Args:
+        results: Task results to update.
+        evaluation: Return value of :func:`run_official_evaluation`.
+        rewrite_trace: When True, also rewrite the on-disk trace summary
+            record so the JSONL file reflects the official verdict.
+            Set to False for paths that write results separately.
+    """
+    for result in results:
+        report = evaluation.instance_reports.get(result.instance_id)
+        report_payload = (
+            report.get(result.instance_id)
+            if isinstance(report, dict) and result.instance_id in report
+            else report
+        )
+        result.success_basis = "official_resolved"
+        result.official_resolved = bool(
+            isinstance(report_payload, dict) and report_payload.get("resolved")
+        )
+        result.success = bool(result.official_resolved)
+        result.evaluation_run_id = evaluation.run_id
+        report_path = evaluation.instance_report_paths.get(result.instance_id)
+        result.evaluation_report_path = str(report_path) if report_path else None
+        result.evaluation_report = report
+        if rewrite_trace:
+            _rewrite_trace_summary(result.trace_file, result)
+
 
 
 async def collect_traces(
@@ -588,7 +606,9 @@ async def collect_traces(
         run_dir,
     )
     task_ids = [task["instance_id"] for task in tasks]
-    ordered_results = _ordered_results(task_ids=task_ids, results_by_id=results_by_id)
+    ordered_results = [results_by_id[t] for t in task_ids if t in results_by_id]
+    extra_ids = sorted(set(results_by_id) - set(task_ids))
+    ordered_results.extend(results_by_id[t] for t in extra_ids)
 
     prediction_count = _write_predictions(
         ordered_results,
@@ -636,25 +656,7 @@ async def collect_traces(
                     "Official SWE-bench harness failed "
                     f"(exit {evaluation.returncode}): {(evaluation.stderr or evaluation.stdout)[-4000:]}"
                 )
-            for result in ordered_results:
-                report = evaluation.instance_reports.get(result.instance_id)
-                report_payload = (
-                    report.get(result.instance_id)
-                    if isinstance(report, dict) and result.instance_id in report
-                    else report
-                )
-                result.success_basis = "official_resolved"
-                result.official_resolved = bool(
-                    isinstance(report_payload, dict) and report_payload.get("resolved")
-                )
-                result.success = bool(result.official_resolved)
-                result.evaluation_run_id = evaluation.run_id
-                report_path = evaluation.instance_report_paths.get(result.instance_id)
-                result.evaluation_report_path = (
-                    str(report_path) if report_path else None
-                )
-                result.evaluation_report = report
-                _rewrite_trace_summary(result.trace_file, result)
+            _apply_evaluation_results(ordered_results, evaluation, rewrite_trace=True)
             if evaluation.report_path is not None:
                 logger.info(
                     "Official SWE-bench report written to %s", evaluation.report_path
@@ -699,9 +701,6 @@ async def _collect_openclaw(
     if completed:
         logger.info("Resuming: %d tasks already completed", len(completed))
 
-    # Phase 4: Load MCP server config from --mcp-config and pass through
-    # to the runner. Phase 0 schema audit (a) confirms connect_mcp_servers
-    # expects a dict[str, MCPServerConfig], not a dict of dicts.
     mcp_servers = load_mcp_servers(mcp_config)
     mcp_config_label = _mcp_config_label(mcp_config)
 
@@ -867,27 +866,7 @@ async def _collect_openclaw(
                     (evaluation.stderr or evaluation.stdout)[-4000:],
                 )
             else:
-                for result in results:
-                    report = evaluation.instance_reports.get(result.instance_id)
-                    report_payload = (
-                        report.get(result.instance_id)
-                        if isinstance(report, dict) and result.instance_id in report
-                        else report
-                    )
-                    result.success_basis = "official_resolved"
-                    result.official_resolved = bool(
-                        isinstance(report_payload, dict)
-                        and report_payload.get("resolved")
-                    )
-                    result.success = bool(result.official_resolved)
-                    result.evaluation_run_id = evaluation.run_id
-                    report_path = evaluation.instance_report_paths.get(
-                        result.instance_id
-                    )
-                    result.evaluation_report_path = (
-                        str(report_path) if report_path else None
-                    )
-                    result.evaluation_report = report
+                _apply_evaluation_results(results, evaluation, rewrite_trace=False)
                 _write_results(results, results_path)
 
     return run_dir
@@ -963,10 +942,7 @@ def _normalize_openclaw_trace(
     merged["type"] = "trace_metadata"
     merged["trace_format_version"] = 5
 
-    # Phase 4: stamp metadata.run_config.mcp_config under the new
-    # extension blob (per Phase 0 schema audit + R1-2 of the plan: v5
-    # frozen contract holds because run_config is an additive nest under
-    # metadata, not a top-level field).
+    # run_config is an additive nest under metadata, not a top-level field.
     if mcp_config_label is not None:
         existing_run_config = merged.get("run_config") or {}
         existing_run_config["mcp_config"] = mcp_config_label

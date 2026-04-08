@@ -12,8 +12,7 @@ simulation — this is pure post-hoc conversion for visualization.
 
 Rich Claude Code fields are preserved as additive backfill under
 ``data.*`` on actions and ``metadata.run_config.*`` on the header, per
-the v5 extension convention introduced in Phase 4 of the
-trace-sim-vastai-pipeline plan. See
+the v5 extension convention. See
 ``docs/plans/claude-code-gantt-import.md`` for the full field mapping
 table and operator runbook.
 
@@ -38,8 +37,6 @@ from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
-
-# ─── Constants ─────────────────────────────────────────────────────────
 
 SCAFFOLD_LABEL = "claude-code"
 V5_FORMAT_VERSION = 5
@@ -73,9 +70,6 @@ _DISCARDABLE_TYPES = frozenset(
 )
 
 
-# ─── Timestamp conversion ──────────────────────────────────────────────
-
-
 def _iso_to_unix(iso_str: str | None) -> float | None:
     """Convert an ISO 8601 timestamp (e.g. ``2026-04-03T08:33:47.356Z``) → Unix float.
 
@@ -94,9 +88,6 @@ def _iso_to_unix(iso_str: str | None) -> float | None:
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
-
-
-# ─── Metadata harvest (first pass) ─────────────────────────────────────
 
 
 def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
@@ -142,7 +133,6 @@ def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
     return harvested
 
 
-# ─── Anthropic → OpenAI content adapter ────────────────────────────────
 
 
 def _split_assistant_content(
@@ -239,7 +229,6 @@ def _extract_tool_result_text(
     return "\n".join(parts)
 
 
-# ─── Per-tool toolUseResult backfill (FIX-4) ───────────────────────────
 
 
 # Bash stderr preview cap. 2000 chars ≈ 25 80-col lines, fits in a Gantt
@@ -255,13 +244,10 @@ def _backfill_per_tool(
 ) -> tuple[dict[str, Any], bool | None]:
     """Extract per-tool backfill keys from a ``toolUseResult`` dict.
 
-    The Quest 004 implementation assumed ``toolUseResult`` has a uniform
-    shape (``status``, ``totalDurationMs``, ``agentId``, ...). Validation
-    against a real swe-rebench Claude Code trace revealed those fields
-    are actually **Task/Agent-specific**: baseline tools each carry their
-    own per-tool dict shape with no overlap. This helper translates the
-    per-tool data into additive backfill keys without touching the
-    universal fields the rest of the converter still consumes.
+    ``toolUseResult`` fields are **Task/Agent-specific**: baseline tools each
+    carry their own per-tool dict shape with no overlap. This helper translates
+    per-tool data into additive backfill keys without touching the universal
+    fields the rest of the converter consumes.
 
     Verified shapes (CC CLI 2.1.96):
 
@@ -312,7 +298,7 @@ def _backfill_per_tool(
     return backfill, success_override
 
 
-# ─── Main streaming conversion ─────────────────────────────────────────
+
 
 
 def _convert_session_records(
@@ -655,7 +641,7 @@ def _convert_session_records(
     }
 
 
-# ─── Public entry point ────────────────────────────────────────────────
+
 
 
 def import_claude_code_session(
@@ -716,8 +702,7 @@ def import_claude_code_session(
 
     # Build the v5 metadata header — mandatory trace_format_version=5
     # plus a metadata.run_config extension blob carrying the CC-specific
-    # runtime context (cwd / git_branch / cli_version) per the Phase 4
-    # extension convention of the trace-sim-vastai-pipeline plan.
+    # runtime context (cwd / git_branch / cli_version).
     run_config: dict[str, Any] = {}
     if harvested["cwd"]:
         run_config["cwd"] = harvested["cwd"]

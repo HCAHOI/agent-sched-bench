@@ -118,11 +118,6 @@ async def _exec_tool(
 # ---------------------------------------------------------------------------
 
 
-def _build_simulate_run_id(model: str) -> str:
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
-    safe_model = model.replace("/", "-").replace(":", "-")
-    return f"simulate_{safe_model}_{ts}"
-
 
 def load_trace_actions(
     trace_path: Path,
@@ -221,8 +216,7 @@ async def simulate(
         Path to the simulate trace JSONL file.
     """
     # 1. Load source trace + detect scaffold from v5 metadata header.
-    # Phase 6: refuse BFCL v4 traces with a descriptive NotImplementedError
-    # BEFORE any scaffold registry lookup or agent.* import side effect.
+    # Refuse BFCL v4 traces before any scaffold registry lookup or agent.* import.
     metadata = _load_trace_metadata(source_trace)
     _refuse_bfcl_v4_simulate(metadata)
 
@@ -243,9 +237,7 @@ async def simulate(
         model,
     )
 
-    # 3. Prepare environment via the scaffold registry. The lookup
-    # raises NotImplementedError with a descriptive message for
-    # unsupported scaffolds (e.g. openclaw before Phase 1.5.1 lands).
+    # 3. Prepare environment via the scaffold registry.
     prepare_callable = get_prepare(scaffold)
     prepare_config = SimulatePrepareConfig(
         agent_id=agent_id,
@@ -272,7 +264,7 @@ async def simulate(
     )
 
     # 4. Set up trace logger
-    run_id = _build_simulate_run_id(model)
+    run_id = f"simulate_{model.replace('/', '-').replace(':', '-')}_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%S')}"
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     trace_logger = TraceLogger(output_path, run_id)
@@ -330,17 +322,13 @@ async def simulate(
 
             ts_after_llm = time.time()
 
-            # 6a-bis. Snapshot vLLM scheduler state. Phase 2 of the
-            # trace-sim-vastai-pipeline plan: store ABSOLUTE field values
-            # field-for-field under sim_metrics.vllm_scheduler_snapshot.
-            # Deltas are computed post-hoc in src/analysis/sim_metrics_delta.py.
+            # 6a-bis. Snapshot vLLM scheduler state. Absolute field values stored
+            # under sim_metrics.vllm_scheduler_snapshot; deltas computed post-hoc
+            # in src/analysis/sim_metrics_delta.py.
             scheduler_snapshot = metrics_client.get_snapshot()
 
-            # 6b. Emit llm_call TraceAction. The legacy top-level
-            # ttft_ms / tpot_ms / llm_latency_ms fields are preserved for
-            # backward compatibility with pre-Phase-2 readers; the new
-            # nested sim_metrics blob is the canonical location for
-            # Phase-2-aware analysis (Gantt tooltips, sim_metrics_delta).
+            # 6b. Emit llm_call TraceAction. Legacy top-level timing fields are
+            # preserved for backward compatibility; sim_metrics is canonical.
             llm_record = TraceAction(
                 action_type="llm_call",
                 action_id=f"llm_{it_num}",
@@ -371,9 +359,8 @@ async def simulate(
                         "vllm_scheduler_snapshot": dataclasses.asdict(
                             scheduler_snapshot
                         ),
-                        # Phase 1.5.1 warmup tagging: position-index-based
-                        # (NOT iteration-number-based) so sparse iteration
-                        # numbers in source traces don't break the cutoff.
+                        # Position-index-based (not iteration-number-based) so
+                        # sparse iteration numbers in source traces don't break cutoff.
                         "warmup": i < warmup_skip_iterations,
                     },
                 },
@@ -381,10 +368,8 @@ async def simulate(
             trace_logger.log_trace_action(agent_id, llm_record)
 
             # 6c. Execute tool calls from source trace.
-            # Phase 1.5.1: MCP tools (tool_name starts with "mcp_") are
-            # REPLAYED FROM RECORDED RESULTS — never re-dispatched to a
-            # live MCP server (Pre-mortem C item 2 of trace-sim-vastai-
-            # pipeline plan: zero context7 egress during replay).
+            # MCP tools (tool_name starts with "mcp_") are replayed from
+            # recorded results — never re-dispatched to a live MCP server.
             from agents.openclaw.simulate_adapter import is_mcp_tool_call
 
             total_tool_ms = 0.0
