@@ -1,12 +1,26 @@
-"""BFCL v4 runner — in-process function-call task execution + AST scoring.
+"""BFCL v4 runner — routes through openclaw ``SessionRunner`` with a
+per-task custom :class:`ToolRegistry`.
 
-Calls ``provider.chat()`` directly (bypassing SessionRunner) because each
-BFCL task provides its own JSON-Schema tool spec that is incompatible with
-Openclaw's hardcoded bash/file/web tool set. One LLM call per task; trace
-emission conforms to the v5 contract (trace_metadata + llm_call + summary).
+Each BFCL task ships its own JSON-Schema tool spec (``task.tools``) that
+the model must call against. In v2 the runner builds a
+``BFCLNoOpTool``-backed registry via
+:func:`agents.benchmarks.bfcl_tools.build_bfcl_tool_registry`, hands it
+to ``SessionRunner.run(tools=...)`` via the Phase 0 extension point,
+and lets the full openclaw scheduling path (bus dispatch, concurrency
+gate, context window manager, hook events) handle the LLM turn and
+tool dispatch. After the session completes the runner reads the
+recorder list, scores the collected tool calls against
+``task.ground_truth`` via :meth:`_ast_match`, and returns an
+:class:`EvalResult`.
 
-AST-match rules and known v1 limitations (no ``dont_care`` wildcard, no
-recursive nested-dict matching) are documented in
+v2 routes single-turn BFCL through the SAME openclaw path as SWE-patch
+benchmarks, so BFCL traces now emit ``llm_call_start/end``,
+``tool_exec_start/end``, and session-level scheduling events instead
+of the v1 bypass's single ``llm_call`` action. This gives BFCL tasks
+parity with SWE-bench for scheduling research.
+
+AST-match rules and known v1 limitations (no ``dont_care`` wildcard,
+no recursive nested-dict matching) are documented in
 ``docs/benchmark_plugin_spec.md §10.4``.
 """
 
@@ -14,13 +28,12 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from agents.base import TraceAction
+from agents.benchmarks.bfcl_tools import build_bfcl_tool_registry
+from agents.openclaw._session_runner import SessionRunner
 from agents.openclaw.eval.types import EvalResult, EvalTask
-from harness.trace_logger import TraceLogger
 
 if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
@@ -39,7 +52,12 @@ _DEFAULT_BFCL_SYSTEM_PROMPT: str = (
 
 
 class BFCLRunner:
-    """Runs a single BFCL v4 task through one LLM call + AST scoring."""
+    """Runs a single BFCL v4 task through openclaw SessionRunner + AST scoring.
+
+    Non-reentrant: each ``run_task`` call builds its own per-task
+    ``ToolRegistry`` + recorder list and drives a fresh session, so
+    concurrent calls on the same BFCLRunner instance are safe.
+    """
 
     def __init__(
         self,
@@ -54,15 +72,18 @@ class BFCLRunner:
         self.provider = provider
         self.workspace_base = Path(workspace_base).resolve()
         self.benchmark = benchmark
-        # max_iterations + context_window_tokens are accepted for trace
-        # metadata stamping (so Gantt / inspector render BFCL traces
-        # consistently with SWE-patch traces) but are not enforced as
-        # hard limits: single-turn BFCL makes exactly one LLM call per
-        # task, so there is no loop to bound.
-        self.max_iterations = max_iterations
-        self.context_window_tokens = context_window_tokens
         self.model = model or (
             provider.get_default_model() if provider is not None else "unknown"
+        )
+        # Single-turn BFCL: the model emits tool_calls on its first
+        # response and we stop. max_iterations=1 is the honest bound.
+        # If a BFCLv3-style multi-turn category is later re-enabled it
+        # will need a higher limit, but v2 v1 scope is single-turn only.
+        self._session_runner = SessionRunner(
+            provider,
+            model=self.model,
+            max_iterations=(max_iterations if max_iterations is not None else 1),
+            context_window_tokens=context_window_tokens,
         )
 
     # ------------------------------------------------------------------
@@ -86,8 +107,6 @@ class BFCLRunner:
                 return False
             pred_value = predicted_args[name]
             if not isinstance(alternatives, list):
-                # Defensive: some ground-truth rows may wrap the single
-                # acceptable value without a list. Treat as [alternative].
                 alternatives = [alternatives]
             if pred_value not in alternatives:
                 return False
@@ -99,12 +118,6 @@ class BFCLRunner:
         predicted: dict[str, Any],
         gt_entry: dict[str, dict[str, list[Any]]],
     ) -> bool:
-        """Check if a single predicted call matches a single ground-truth entry.
-
-        A ground-truth entry is ``{function_name: {arg: [values]}}``.
-        Matches iff the function name is identical and the predicted
-        args satisfy :meth:`_args_match_ground_truth`.
-        """
         if len(gt_entry) != 1:
             return False
         gt_name, gt_args = next(iter(gt_entry.items()))
@@ -123,37 +136,15 @@ class BFCLRunner:
         *,
         category: str = "",
     ) -> bool:
-        """AST-level comparison of predicted vs ground-truth function calls.
-
-        Args:
-            predicted: List of ``{"name": str, "arguments": dict}`` calls
-                that the model emitted.
-            ground_truth: List of ground-truth entries, each of shape
-                ``{function_name: {arg: [acceptable_values]}}``. For
-                single-call categories the list has length 1; for
-                parallel/multiple categories each list element is an
-                independent call that must be matched.
-            category: Task category. Triggers the irrelevance shortcut
-                for :data:`_IRRELEVANCE_CATEGORIES`.
-
-        Returns:
-            True iff the prediction is correct under BFCL's rules.
-        """
+        """AST-level comparison of predicted vs ground-truth function calls."""
         if category in _IRRELEVANCE_CATEGORIES:
-            # Irrelevance / live_irrelevance: the model must correctly
-            # abstain. Ground truth is empty for these categories per
-            # BFCL schema; we assert both to catch any upstream schema
-            # drift (e.g., a hypothetical "negative example" ground
-            # truth) loudly rather than silently miscategorizing.
+            # Model must correctly abstain. Both sides empty by BFCL schema;
+            # the pair-check catches upstream schema drift loudly.
             return len(predicted) == 0 and len(ground_truth) == 0
 
         if len(predicted) != len(ground_truth):
             return False
 
-        # For parallel/multiple categories, match as sets: every
-        # ground-truth entry must be matched by exactly one predicted
-        # call (and vice versa). We greedy-assign because entries may
-        # differ by function name and by arg values.
         remaining_predicted = list(predicted)
         for gt_entry in ground_truth:
             matched_idx: int | None = None
@@ -167,131 +158,105 @@ class BFCLRunner:
         return not remaining_predicted
 
     # ------------------------------------------------------------------
-    # Prompt construction
+    # Trace aggregation helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_messages(task: EvalTask) -> list[dict[str, Any]]:
-        """Flatten BFCL's nested question-turn list into a message list.
+    def _sum_usage_from_trace(trace_file: Path) -> dict[str, int]:
+        """Sum prompt/completion tokens across all llm_call actions in a trace.
 
-        Single-turn categories have ``task.question = [[user_msg]]`` or
-        ``[[system_msg, user_msg]]`` — we unwrap the outer list. If the
-        first turn contains no system message, prepend the default
-        function-calling system prompt (see :data:`_DEFAULT_BFCL_SYSTEM_PROMPT`).
+        BFCL single-turn tasks emit exactly one llm_call action so this is
+        effectively a read of that one record, but the implementation
+        handles multi-action traces correctly for forward compatibility.
         """
-        if not task.question:
-            return [
-                {"role": "system", "content": _DEFAULT_BFCL_SYSTEM_PROMPT},
-                {"role": "user", "content": task.problem_statement or ""},
-            ]
+        if not trace_file.exists():
+            return {}
+        prompt_tokens = 0
+        completion_tokens = 0
+        for line in trace_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") == "action" and rec.get("action_type") == "llm_call":
+                data = rec.get("data", {})
+                prompt_tokens += int(data.get("prompt_tokens", 0) or 0)
+                completion_tokens += int(data.get("completion_tokens", 0) or 0)
+        usage: dict[str, int] = {}
+        if prompt_tokens or completion_tokens:
+            usage["prompt_tokens"] = prompt_tokens
+            usage["completion_tokens"] = completion_tokens
+        return usage
 
-        first_turn = task.question[0] if isinstance(task.question[0], list) else []
-        messages = list(first_turn)
-        if not any(m.get("role") == "system" for m in messages):
-            messages.insert(
-                0,
-                {"role": "system", "content": _DEFAULT_BFCL_SYSTEM_PROMPT},
-            )
-        return messages
+    # ------------------------------------------------------------------
+    # Prompt flattening
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _to_openai_tools_schema(
-        bfcl_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Wrap BFCL function definitions in OpenAI's ``tools`` envelope.
+    def _flatten_single_turn_question(task: EvalTask) -> str:
+        """Collapse BFCL's nested question-turn list into one prompt string.
 
-        BFCL rows ship bare ``{name, description, parameters}`` dicts; the
-        OpenAI-compatible providers expect
-        ``{"type": "function", "function": {...}}``.
+        Single-turn categories have ``task.question = [[user_msg]]`` or
+        ``[[system_msg, user_msg]]``. We concatenate the user-role
+        messages (the system prompt, if any, is folded into the
+        session's own system setup — openclaw's SessionRunner injects
+        its own system context via ``ContextBuilder``). If the task has
+        no question turns, fall back to ``task.problem_statement``.
         """
-        wrapped: list[dict[str, Any]] = []
-        for fn in bfcl_tools:
-            if not isinstance(fn, dict):
-                # Loud warning rather than silent drop — CLAUDE.md §4
-                # research integrity "no silent failures".
-                logger.warning(
-                    "BFCLRunner: dropping non-dict tool entry (got %s): %r",
-                    type(fn).__name__,
-                    fn,
-                )
+        if not task.question:
+            return task.problem_statement or ""
+
+        first_turn = task.question[0] if isinstance(task.question[0], list) else []
+        user_parts: list[str] = []
+        for msg in first_turn:
+            if not isinstance(msg, dict):
                 continue
-            if "type" in fn and "function" in fn:
-                wrapped.append(fn)  # Already wrapped
-            else:
-                wrapped.append({"type": "function", "function": fn})
-        return wrapped
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "user" and content:
+                user_parts.append(str(content))
+        if user_parts:
+            return "\n\n".join(user_parts)
+        return task.problem_statement or ""
 
     # ------------------------------------------------------------------
     # Main entry
     # ------------------------------------------------------------------
 
     async def run_task(self, task: EvalTask) -> EvalResult:
-        """Run one BFCL task: single LLM call + AST scoring + trace emit."""
+        """Run one BFCL task through SessionRunner + score via AST match."""
         ws = task.workspace_dir
         ws.mkdir(parents=True, exist_ok=True)
-
         trace_file = ws / "trace.jsonl"
-        # TraceLogger takes (output_dir, run_id) and builds
-        # ``<output_dir>/<run_id>.jsonl`` — use the workspace as the
-        # output dir and "trace" as the run_id so the resulting path is
-        # ``ws/trace.jsonl``.
-        trace_logger = TraceLogger(ws, "trace")
-        # "unknown" fallback: unit tests that stub the provider without a
-        # benchmark attached — never invent a plausible-looking slug/split.
-        benchmark_slug = (
-            self.benchmark.config.slug
-            if self.benchmark is not None
-            else "unknown"
-        )
-        benchmark_split = (
-            self.benchmark.config.harness_split
-            if self.benchmark is not None
-            else "unknown"
-        )
-        trace_logger.log_metadata(
-            scaffold="openclaw",
-            mode="collect",
-            model=self.model,
-            benchmark=benchmark_slug,
-            benchmark_split=benchmark_split,
-            instance_id=task.instance_id,
-            category=task.category,
-            max_iterations=self.max_iterations,
-            scaffold_capabilities={
-                "tools": "benchmark_provided",
-                "memory": False,
-                "skills": False,
-                "file_ops": "none",
-            },
-        )
 
-        messages = self._build_messages(task)
-        openai_tools = self._to_openai_tools_schema(task.tools)
+        # Build per-task BFCL registry + recorder (non-reentrant contract —
+        # local to this run_task call).
+        registry, recorder = build_bfcl_tool_registry(task.tools)
 
-        t_llm_start = time.monotonic()
+        prompt = self._flatten_single_turn_question(task)
+        session_key = f"eval:{task.instance_id}"
+
         try:
-            response = await self.provider.chat(
-                messages=messages,
-                tools=openai_tools if openai_tools else None,
-                model=self.model,
-                tool_choice="auto" if openai_tools else None,
+            session_result = await self._session_runner.run(
+                prompt=prompt,
+                workspace=ws,
+                session_key=session_key,
+                trace_file=trace_file,
+                instance_id=task.instance_id,
+                channel="cli",
+                tools=registry,
             )
         except Exception as exc:
-            logger.exception("BFCL LLM call failed for %s", task.instance_id)
-            trace_logger.log_summary(
-                task.instance_id,
-                {
-                    "instance_id": task.instance_id,
-                    "elapsed_s": time.monotonic() - t_llm_start,
-                    "success": False,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
+            logger.exception(
+                "BFCL SessionRunner.run failed for %s", task.instance_id
             )
-            trace_logger.close()
             return EvalResult(
                 instance_id=task.instance_id,
                 content=None,
-                stop_reason="llm_error",
+                stop_reason="session_error",
                 error=f"{type(exc).__name__}: {exc}",
                 trace_file=trace_file,
                 workspace_dir=ws,
@@ -302,41 +267,13 @@ class BFCLRunner:
                     "error": str(exc),
                 },
             )
-        t_llm_end = time.monotonic()
-        llm_latency_ms = (t_llm_end - t_llm_start) * 1000
 
-        predicted_calls: list[dict[str, Any]] = []
-        tools_used: list[str] = []
-        for tc in response.tool_calls:
-            predicted_calls.append({"name": tc.name, "arguments": tc.arguments})
-            tools_used.append(tc.name)
-
-        usage = response.usage or {}
-        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-
-        action = TraceAction(
-            action_type="llm_call",
-            action_id=f"llm_0_{task.instance_id}",
-            agent_id=task.instance_id,
-            program_id=task.instance_id,
-            iteration=0,
-            ts_start=t_llm_start,
-            ts_end=t_llm_end,
-            data={
-                "messages_in": messages,
-                "tools_in": openai_tools,
-                "raw_response": {
-                    "content": response.content,
-                    "tool_calls": [tc.to_openai_tool_call() for tc in response.tool_calls],
-                    "finish_reason": response.finish_reason,
-                },
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "llm_latency_ms": llm_latency_ms,
-            },
-        )
-        trace_logger.log_trace_action(task.instance_id, action)
+        # The recorder captured each tool call the LLM emitted during
+        # the session (via BFCLNoOpTool.execute). Each entry is already
+        # shaped as {"name": str, "arguments": dict} — the exact input
+        # format _ast_match expects.
+        predicted_calls = list(recorder)
+        tools_used = [c["name"] for c in predicted_calls]
 
         resolved = self._ast_match(
             predicted_calls,
@@ -344,32 +281,17 @@ class BFCLRunner:
             category=task.category or "",
         )
 
-        trace_logger.log_summary(
-            task.instance_id,
-            {
-                "instance_id": task.instance_id,
-                "category": task.category,
-                "n_steps": 1,
-                "elapsed_s": t_llm_end - t_llm_start,
-                "total_llm_ms": llm_latency_ms,
-                "total_tool_ms": 0,
-                "total_tokens": prompt_tokens + completion_tokens,
-                "success": resolved,
-            },
-        )
-        trace_logger.close()
+        run_ms = session_result.elapsed_s * 1000 if session_result else 0.0
+        usage = self._sum_usage_from_trace(trace_file)
 
         return EvalResult(
             instance_id=task.instance_id,
             content=json.dumps(predicted_calls, ensure_ascii=False),
             tools_used=tools_used,
-            usage={
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-            },
+            usage=usage,
             stop_reason="completed",
             trace_file=trace_file,
-            run_ms=llm_latency_ms,
+            run_ms=run_ms,
             workspace_dir=ws,
             official_resolved=resolved,
             evaluation_report={
