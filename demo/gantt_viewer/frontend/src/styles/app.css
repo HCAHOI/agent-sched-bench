@@ -1,0 +1,390 @@
+:root {
+  color-scheme: light;
+  font-family: "IBM Plex Sans", "Helvetica Neue", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(255, 214, 165, 0.55), transparent 38%),
+    linear-gradient(135deg, #f5efe4 0%, #e7edf3 100%);
+  color: #17202a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 32px 20px 48px;
+}
+
+.toolbar-card,
+.workspace-card {
+  max-width: 1280px;
+  margin: 0 auto 20px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 40px rgba(23, 32, 42, 0.08);
+}
+
+.toolbar-card {
+  padding: 24px 28px;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #9e4d24;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  line-height: 1;
+}
+
+.lede {
+  max-width: 56ch;
+  margin: 20px 0 0;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: #314354;
+}
+
+.lede.compact {
+  margin-top: 12px;
+  font-size: 0.96rem;
+}
+
+.metric-label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #6b7280;
+}
+
+.toolbar-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.toggle-group,
+.metric-block {
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.9);
+  padding: 12px 14px;
+}
+
+.toggle-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle-group button,
+.primary-btn,
+.trace-chip-main,
+.trace-remove,
+.lane-label {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.toggle-group button,
+.primary-btn {
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: #e8eef4;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.toggle-group button.active,
+.primary-btn {
+  background: #0f766e;
+  color: #fff;
+}
+
+.metric-block strong {
+  display: block;
+  font-size: 1.45rem;
+}
+
+.trace-strip {
+  display: grid;
+  gap: 18px;
+}
+
+.trace-strip-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.trace-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.trace-chip {
+  display: flex;
+  align-items: center;
+  border-radius: 16px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  background: #fff;
+  min-width: 220px;
+}
+
+.trace-chip.loaded {
+  border-color: rgba(15, 118, 110, 0.45);
+}
+
+.trace-chip.hidden {
+  opacity: 0.55;
+}
+
+.trace-chip.loading {
+  background: #fff7ed;
+}
+
+.trace-chip-main {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.trace-chip-main span {
+  font-weight: 700;
+}
+
+.trace-chip-main small {
+  color: #6b7280;
+}
+
+.trace-remove {
+  width: 42px;
+  height: 42px;
+  border-left: 1px solid rgba(23, 32, 42, 0.08);
+  font-size: 1.4rem;
+}
+
+.error-banner {
+  color: #9f1239;
+  font-weight: 600;
+}
+
+.workspace-card {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+}
+
+.sidebar-shell {
+  position: relative;
+  overflow: hidden;
+  border-right: 1px solid rgba(23, 32, 42, 0.08);
+  background: rgba(248, 250, 252, 0.96);
+  min-height: 560px;
+}
+
+.sidebar-track {
+  position: relative;
+}
+
+.sidebar-time,
+.lane-label {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 14px;
+  text-align: left;
+}
+
+.sidebar-time {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #6b7280;
+}
+
+.lane-label {
+  border-bottom: 1px solid rgba(23, 32, 42, 0.06);
+  background: transparent;
+}
+
+.lane-label strong {
+  font-size: 0.9rem;
+}
+
+.lane-label span {
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+
+.lane-label.concise span {
+  display: none;
+}
+
+.sidebar-empty {
+  padding: 18px 14px;
+  color: #6b7280;
+}
+
+.canvas-panel {
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.canvas-wrap {
+  overflow: auto;
+  min-height: 560px;
+  max-height: 70vh;
+}
+
+.canvas-wrap canvas {
+  display: block;
+}
+
+.legend-card {
+  display: grid;
+  gap: 12px;
+}
+
+.legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(23, 32, 42, 0.08);
+  border-radius: 999px;
+  background: #fff;
+}
+
+.legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+}
+
+.tooltip-card {
+  position: fixed;
+  z-index: 20;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 32px));
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(23, 32, 42, 0.14);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.18);
+  padding: 16px;
+}
+
+.tooltip-card.pinned {
+  border-color: rgba(15, 118, 110, 0.45);
+}
+
+.tooltip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.tooltip-grid {
+  display: grid;
+  grid-template-columns: minmax(96px, 112px) minmax(0, 1fr);
+  gap: 10px 12px;
+}
+
+.tooltip-key {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.tooltip-value {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.dropzone-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(4px);
+}
+
+.dropzone-card {
+  min-width: min(520px, calc(100vw - 32px));
+  padding: 28px 32px;
+  border: 2px dashed rgba(15, 118, 110, 0.55);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.94);
+  text-align: center;
+  box-shadow: 0 24px 40px rgba(15, 23, 42, 0.16);
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    padding: 24px 16px;
+  }
+
+  .toolbar-card,
+  .workspace-card {
+    padding: 24px;
+    border-radius: 18px;
+  }
+
+  .workspace-card {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar-shell {
+    min-height: 220px;
+  }
+
+  .trace-strip-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

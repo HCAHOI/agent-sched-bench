@@ -95,3 +95,8 @@ class HealthResponse(BaseModel):
 
 class PayloadRequest(BaseModel):
     ids: list[str] = Field(min_length=1)
+
+
+class UploadTraceResponse(BaseModel):
+    descriptor: TraceDescriptor
+    payload_fragment: TracePayload

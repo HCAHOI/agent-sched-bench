@@ -30,8 +30,9 @@ supporting both:
    Status: completed
    Add lazy Claude Code import cache and wire it into payload loading.
 5. Phase 4+
-   Status: pending
-   Build Solid frontend, port canvas renderer, then add tests/docs.
+   Status: partial
+   Phase 4 frontend scaffold and a first Phase 5 canvas port are completed;
+   deeper renderer parity and remaining chrome are still pending.
 
 ## This Checkpoint
 
@@ -69,6 +70,35 @@ Phase 3 outcome:
   `traces/swe-rebench/claude-code-haiku/*/attempt_1/trace.jsonl` through the
   API: first import returned HTTP 200 with `metadata.scaffold == "claude-code"`
   and the second call hit the cache path successfully
+
+Phase 4 outcome:
+
+- created the Solid + Vite + TypeScript frontend scaffold under
+  `demo/gantt_viewer/frontend/`
+- added a minimal health page that fetches `/api/health` through the Vite proxy
+- installed npm dependencies and committed the generated `package-lock.json`
+- generated `src/api/schema.gen.ts` from the backend OpenAPI schema
+- verified the frontend with `npm run build`
+
+Next checkpoint:
+
+- Phase 5 progress:
+  - added `CanvasRenderer`, `CanvasStage`, hit/layout/time helpers, state
+    signals, and Solid chrome (`Header`, `TraceChipBar`, `Sidebar`, `Legend`,
+    `Tooltip`)
+  - app now fetches `/api/traces`, auto-loads the first v5 trace, and can load
+    additional traces through `/api/payload`
+  - `gantt-serve` in prod now mounts `frontend/dist`, and `gantt-serve --dev`
+    starts a Vite dev server before the backend
+  - browser smoke passed against `http://127.0.0.1:8765/`: the page loaded,
+    AC1 auto-loaded, the chip bar listed all discovered traces, and the browser
+    console was clean after adding a favicon
+
+Remaining work after this checkpoint:
+
+- finish deeper canvas parity (pin re-anchoring, drag-drop, upload flow,
+  sidebar/scroll polish, broader multi-trace ergonomics)
+- add frontend-side tests
 
 ## Verification For This Checkpoint
 

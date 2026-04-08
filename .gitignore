@@ -11,6 +11,9 @@ uv.lock
 .trae/
 .playwright-mcp/
 .omx/
+.playwright-cli/
+demo/gantt_viewer/frontend/node_modules/
+demo/gantt_viewer/frontend/dist/
 
 data/swebench_repos/
 data/swebench_verified/tasks.json

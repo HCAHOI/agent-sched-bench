@@ -118,3 +118,54 @@ def test_reload_endpoint_rewalks_discovery(tmp_path: Path) -> None:
     response = client.post("/api/traces/reload")
     assert response.status_code == 200
     assert len(response.json()["traces"]) == 2
+
+
+def test_upload_v5_trace_registers_descriptor(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    upload_path = write_v5_trace(
+        tmp_path / "upload" / "demo_trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+
+    with upload_path.open("rb") as handle:
+        response = client.post(
+            "/api/traces/upload",
+            files={"file": (upload_path.name, handle, "application/json")},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["descriptor"]["source_format"] == "v5"
+    assert body["payload_fragment"]["metadata"]["scaffold"] == "openclaw"
+
+    payload_response = client.post("/api/payload", json={"ids": [body["descriptor"]["id"]]})
+    assert payload_response.status_code == 200
+
+
+def test_upload_claude_code_trace_registers_descriptor(tmp_path: Path, monkeypatch) -> None:
+    client, _, _ = _make_client(tmp_path)
+    monkeypatch.setattr(cc_cache, "CACHE_ROOT", tmp_path / "cache")
+
+    with CC_FIXTURE.open("rb") as handle:
+        response = client.post(
+            "/api/traces/upload",
+            files={"file": ("claude_code_minimal.jsonl", handle, "application/json")},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["descriptor"]["source_format"] == "claude-code"
+    assert body["payload_fragment"]["metadata"]["scaffold"] == "claude-code"
+
+    payload_response = client.post("/api/payload", json={"ids": [body["descriptor"]["id"]]})
+    assert payload_response.status_code == 200
+
+
+def test_upload_malformed_trace_returns_422(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    response = client.post(
+        "/api/traces/upload",
+        files={"file": ("broken.jsonl", b"not jsonl", "application/octet-stream")},
+    )
+    assert response.status_code == 422

@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import anyio
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 
 from demo.gantt_viewer.backend.cc_cache import load_or_import
 from demo.gantt_viewer.backend.discovery import DiscoveryState
@@ -22,7 +22,10 @@ from demo.gantt_viewer.backend.schema import (
     Registries,
     TraceDescriptor,
     TraceListResponse,
+    TracePayload,
+    UploadTraceResponse,
 )
+from demo.gantt_viewer.backend.uploads import build_upload_id, persist_upload
 from trace_collect.trace_inspector import TraceData
 
 
@@ -48,6 +51,32 @@ def reload_traces_endpoint(request: Request) -> TraceListResponse:
     return TraceListResponse(traces=state.descriptors, registries=_build_registries())
 
 
+@router.post("/traces/upload", response_model=UploadTraceResponse)
+async def upload_trace_endpoint(
+    file: UploadFile,
+    request: Request,
+) -> UploadTraceResponse:
+    filename = file.filename or "upload.jsonl"
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail={"message": "empty upload"})
+
+    upload_path = persist_upload(filename, content)
+    source_format = _sniff_or_422(upload_path)
+    descriptor = TraceDescriptor(
+        id=build_upload_id(filename, content),
+        label=Path(filename).stem or "upload",
+        source_format=source_format,
+        path=str(upload_path.resolve()),
+        size_bytes=upload_path.stat().st_size,
+        mtime=upload_path.stat().st_mtime,
+    )
+
+    trace_payload = await _build_trace_payload(descriptor)
+    _get_discovery_state(request).register_descriptor(descriptor)
+    return UploadTraceResponse(descriptor=descriptor, payload_fragment=trace_payload)
+
+
 @router.post("/payload", response_model=GanttPayload)
 async def payload_endpoint(
     payload_request: PayloadRequest,
@@ -55,34 +84,11 @@ async def payload_endpoint(
 ) -> GanttPayload:
     state = _get_discovery_state(request)
     descriptors = _resolve_descriptors(state, payload_request.ids)
-    labels_by_id = {descriptor.id: descriptor.label for descriptor in descriptors}
-    traces: list[tuple[str, TraceData]] = []
-
-    for descriptor in descriptors:
-        try:
-            trace_path = await _resolve_trace_path(descriptor)
-            trace_data = TraceData.load(trace_path)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "trace_id": descriptor.id,
-                    "stage": "cc_import"
-                    if descriptor.source_format == "claude-code"
-                    else "trace_load",
-                    "error": str(exc),
-                },
-            ) from exc
-        traces.append((descriptor.id, trace_data))
-
-    raw_payload = build_gantt_payload_multi(
-        traces,
-        span_registry=deepcopy(DEFAULT_SPAN_REGISTRY),
-        marker_registry=_build_marker_registry_payload(),
+    traces = [await _build_trace_payload(descriptor) for descriptor in descriptors]
+    return GanttPayload(
+        registries=_build_registries(),
+        traces=traces,
     )
-    for trace_payload in raw_payload["traces"]:
-        trace_payload["label"] = labels_by_id[trace_payload["id"]]
-    return GanttPayload.model_validate(raw_payload)
 
 
 def _get_discovery_state(request: Request) -> DiscoveryState:
@@ -93,6 +99,38 @@ async def _resolve_trace_path(descriptor: TraceDescriptor) -> Path:
     if descriptor.source_format == "v5":
         return Path(descriptor.path)
     return await anyio.to_thread.run_sync(load_or_import, Path(descriptor.path))
+
+
+async def _build_trace_payload(descriptor: TraceDescriptor) -> TracePayload:
+    try:
+        trace_path = await _resolve_trace_path(descriptor)
+        trace_data = TraceData.load(trace_path)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "trace_id": descriptor.id,
+                "stage": "cc_import" if descriptor.source_format == "claude-code" else "trace_load",
+                "error": str(exc),
+            },
+        ) from exc
+
+    raw_payload = build_gantt_payload_multi(
+        [(descriptor.id, trace_data)],
+        span_registry=deepcopy(DEFAULT_SPAN_REGISTRY),
+        marker_registry=_build_marker_registry_payload(),
+    )
+    raw_payload["traces"][0]["label"] = descriptor.label
+    return TracePayload.model_validate(raw_payload["traces"][0])
+
+
+def _sniff_or_422(path: Path) -> str:
+    from demo.gantt_viewer.backend.discovery import sniff_format
+
+    try:
+        return sniff_format(path)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail={"message": str(exc)}) from exc
 
 
 def _resolve_descriptors(

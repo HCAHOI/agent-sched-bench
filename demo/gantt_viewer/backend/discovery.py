@@ -56,6 +56,19 @@ class DiscoveryState:
         self.descriptors = discover_traces(self.config)
         self.descriptors_by_id = {descriptor.id: descriptor for descriptor in self.descriptors}
 
+    def register_descriptor(self, descriptor: TraceDescriptor) -> None:
+        """Register a runtime descriptor, e.g. for uploads."""
+        existing = self.descriptors_by_id.get(descriptor.id)
+        if existing is not None:
+            self.descriptors = [
+                descriptor if current.id == descriptor.id else current
+                for current in self.descriptors
+            ]
+        else:
+            self.descriptors.append(descriptor)
+            self.descriptors.sort(key=lambda current: current.id)
+        self.descriptors_by_id[descriptor.id] = descriptor
+
 
 def load_discovery_config(
     config_path: Path,
