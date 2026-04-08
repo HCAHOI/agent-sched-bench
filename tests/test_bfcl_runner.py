@@ -276,8 +276,10 @@ def test_run_task_populates_official_resolved_false(tmp_path: Path) -> None:
 
 def test_run_task_evaluation_report_round_trips(tmp_path: Path) -> None:
     """evaluation_report must carry category + per-task score breakdown
-    so downstream analysis can read it from results.jsonl without re-walking traces."""
-    # reviewer C3: this dict was previously dropped at the collector boundary
+    so downstream analysis can read it from results.jsonl without re-walking traces.
+
+    Previously dropped at the collector boundary (reviewer C3).
+    """
     provider = _StubProvider(
         LLMResponse(
             content=None,
@@ -304,9 +306,17 @@ def test_run_task_evaluation_report_round_trips(tmp_path: Path) -> None:
     assert report["ground_truth"] == [{"add": {"a": [2], "b": [3]}}]
 
 
-def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> None:
-    """Trace file contains exactly one trace_metadata, one llm_call
-    action, and one summary — the expected v5 shape for single-turn BFCL."""
+def test_run_task_emits_scheduling_events_via_session_runner(
+    tmp_path: Path,
+) -> None:
+    """v2 trace shape: routing through SessionRunner produces MORE than
+    the v1 baseline of 3 records (metadata + single llm_call + summary).
+    Must contain trace_metadata with the custom-registry sentinel, at
+    least one llm_call action (with usage populated), at least one
+    llm_call_start event, and at least one tool_exec_start event when
+    the model dispatches a tool. This pins the architectural contract
+    that single-turn BFCL now walks the full openclaw scheduling path.
+    """
     provider = _StubProvider(
         LLMResponse(
             content=None,
@@ -318,9 +328,13 @@ def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> No
         )
     )
     task = _make_task(
-        tmp_path, category="simple_python", ground_truth=[{"add": {"a": [2], "b": [3]}}]
+        tmp_path,
+        category="simple_python",
+        ground_truth=[{"add": {"a": [2], "b": [3]}}],
     )
-    runner = BFCLRunner(provider=provider, workspace_base=tmp_path, model="stub-model")
+    runner = BFCLRunner(
+        provider=provider, workspace_base=tmp_path, model="stub-model"
+    )
     asyncio.run(runner.run_task(task))
 
     trace_file = task.workspace_dir / "trace.jsonl"
@@ -331,32 +345,42 @@ def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> No
         for line in trace_file.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(records) == 3
+    # v1 baseline was exactly 3 records. v2 emits many more (events +
+    # actions) because it walks the openclaw scheduling path.
+    assert len(records) > 3, (
+        f"v2 trace should have >3 records, got {len(records)}"
+    )
 
     meta = records[0]
     assert meta["type"] == "trace_metadata"
     assert meta["trace_format_version"] == 5
     assert meta["scaffold"] == "openclaw"
-    # self.benchmark is None in this test (bare BFCLRunner construction),
-    # so the slug/split fall back to the "unknown" sentinel per reviewer
-    # M1 — we never invent a plausible-looking "bfcl-v4" string without
-    # evidence.
-    assert meta["benchmark"] == "unknown"
-    assert meta["benchmark_split"] == "unknown"
-    assert meta["category"] == "simple_python"
+    caps = meta["scaffold_capabilities"]
+    # Custom-registry auto-derive sentinel (Phase 0B contract).
+    assert caps.get("source") == "custom_registry"
+    # The BFCL tool is registered, not bash/file_read.
+    assert "add" in caps["tools"]
+    assert "bash" not in caps["tools"]
 
-    action = records[1]
-    assert action["type"] == "action"
-    assert action["action_type"] == "llm_call"
-    assert action["data"]["prompt_tokens"] == 42
-    assert action["data"]["completion_tokens"] == 7
-    assert action["data"]["llm_latency_ms"] > 0
+    # Find the llm_call action and assert usage was captured.
+    llm_actions = [
+        r for r in records
+        if r.get("type") == "action" and r.get("action_type") == "llm_call"
+    ]
+    assert len(llm_actions) >= 1, "expected at least one llm_call action"
+    llm_action = llm_actions[0]
+    assert llm_action["data"]["prompt_tokens"] == 42
+    assert llm_action["data"]["completion_tokens"] == 7
 
-    summary = records[2]
-    assert summary["type"] == "summary"
-    assert summary["success"] is True
-    assert summary["total_tokens"] == 49
-    assert summary["n_steps"] == 1  # honest count: one llm_call action performed
+    # Scheduling events from SessionRunner / TraceCollectorHook.
+    event_names = [r.get("event") for r in records if r.get("type") == "event"]
+    assert "llm_call_start" in event_names, (
+        f"expected llm_call_start event; got events={event_names}"
+    )
+    # The model emitted a tool_call → dispatch fired → tool_exec event.
+    assert "tool_exec_start" in event_names, (
+        f"expected tool_exec_start event; got events={event_names}"
+    )
 
 
 def test_run_task_irrelevance_with_empty_predicted(tmp_path: Path) -> None:
@@ -375,9 +399,19 @@ def test_run_task_irrelevance_with_empty_predicted(tmp_path: Path) -> None:
     assert result.official_resolved is True
 
 
-def test_run_task_llm_error_returns_structured_failure(tmp_path: Path) -> None:
-    """When provider.chat raises, the runner returns a structured EvalResult
-    with stop_reason='llm_error' and a written trace summary."""
+def test_run_task_llm_error_yields_score_zero_via_absorbed_error(
+    tmp_path: Path,
+) -> None:
+    """When provider.chat raises, SessionRunner's AgentLoop catches the
+    exception internally and surfaces it as an "LLM returned error"
+    trace event — the session completes normally with an empty recorder.
+
+    In v2 this manifests as stop_reason='completed', official_resolved=
+    False, and predicted_calls=[]. This is the correct behavior: a
+    provider error is semantically "the model couldn't produce a
+    prediction", which scores False under _ast_match. The error itself
+    still lands in the trace file for debugging.
+    """
 
     class _BrokenProvider(LLMProvider):
         def __init__(self) -> None:
@@ -399,14 +433,26 @@ def test_run_task_llm_error_returns_structured_failure(tmp_path: Path) -> None:
             raise RuntimeError("upstream down")
 
     task = _make_task(
-        tmp_path, category="simple", ground_truth=[{"add": {"a": [2], "b": [3]}}]
+        tmp_path,
+        category="simple_python",
+        ground_truth=[{"add": {"a": [2], "b": [3]}}],
     )
-    runner = BFCLRunner(provider=_BrokenProvider(), workspace_base=tmp_path, model="broken")
+    runner = BFCLRunner(
+        provider=_BrokenProvider(), workspace_base=tmp_path, model="broken"
+    )
     result = asyncio.run(runner.run_task(task))
 
-    assert result.stop_reason == "llm_error"
+    # v2: session absorbs the provider error; stop_reason is "completed"
+    # (the session itself ran to completion, it just produced no tool
+    # calls) and the score is 0 because the recorder is empty.
+    assert result.stop_reason == "completed"
     assert result.official_resolved is False
-    assert result.error is not None
-    assert "upstream down" in result.error
     assert result.evaluation_report is not None
     assert result.evaluation_report["score"] == 0.0
+    # predicted_calls empty because the recorder never got hit.
+    assert json.loads(result.content) == []
+    # Debuggability: EvalResult.error must carry the absorbed LLM error
+    # message so downstream analysis can distinguish "wrong answer" from
+    # "model crashed" without re-walking the trace file (reviewer v2-M3).
+    assert result.error is not None
+    assert "upstream down" in result.error

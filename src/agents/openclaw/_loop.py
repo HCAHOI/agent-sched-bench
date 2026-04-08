@@ -186,6 +186,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
+        tools: ToolRegistry | None = None,
     ):
         from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -224,7 +225,10 @@ class AgentLoop:
 
         self.context = ContextBuilder(workspace, timezone=timezone)
         self.sessions = session_manager or SessionManager(workspace)
-        self.tools = ToolRegistry()
+        # Replace semantics: a caller-supplied registry is used verbatim;
+        # _register_default_tools() is skipped. See §11 of benchmark_plugin_spec.md.
+        self._custom_tools_provided = tools is not None
+        self.tools = tools if tools is not None else ToolRegistry()
         self.runner = AgentRunner(provider)
         self.subagents = SubagentManager(
             provider=provider,
@@ -261,7 +265,8 @@ class AgentLoop:
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
         )
-        self._register_default_tools()
+        if not self._custom_tools_provided:
+            self._register_default_tools()
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
