@@ -301,6 +301,52 @@ def parse_import_openclaw_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Convert a Claude Code session JSONL to a v5 trace for the Gantt "
+            "viewer. Post-hoc, read-only — no collection, no simulation. "
+            "Rich Claude Code fields (cache tokens, thinking blocks, "
+            "toolUseResult sidecar) are backfilled into additive data.* and "
+            "metadata.run_config.* slots per the v5 extension convention."
+        ),
+    )
+    parser.add_argument(
+        "--session",
+        required=True,
+        help=(
+            "Path to the Claude Code session JSONL "
+            "(typically ~/.claude/projects/<slug>/<session-uuid>.jsonl)."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="traces",
+        help=(
+            "Root output directory. Final file lands at "
+            "<output-dir>/claude-code-import/<session-uuid>/<session-uuid>.jsonl."
+        ),
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Optional explicit run directory suffix (default: session uuid)."
+        ),
+    )
+    parser.add_argument(
+        "--no-sidechains",
+        dest="include_sidechains",
+        action="store_false",
+        default=True,
+        help=(
+            "Skip folding <session-dir>/<session-uuid>/subagents/agent-*.jsonl "
+            "into the output. Default: include them as distinct agent_id lanes."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
     # Keyword detection: subcommand as first arg routes to the right parser.
     if len(sys.argv) > 1 and sys.argv[1] == "simulate":
@@ -309,6 +355,9 @@ def main() -> None:
     elif len(sys.argv) > 1 and sys.argv[1] == "import-openclaw":
         args = parse_import_openclaw_args(sys.argv[2:])
         _run_import_openclaw(args)
+    elif len(sys.argv) > 1 and sys.argv[1] == "import-claude-code":
+        args = parse_import_claude_code_args(sys.argv[2:])
+        _run_import_claude_code(args)
     elif len(sys.argv) > 1 and sys.argv[1] == "inspect":
         _run_inspect(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "gantt":
@@ -437,6 +486,20 @@ def _run_import_openclaw(args: argparse.Namespace) -> None:
     print(f"Imported OpenClaw traces to: {run_dir}/")
     print(f"Results written to: {run_dir / 'results.jsonl'}")
     print(f"Predictions written to: {run_dir / 'preds.json'}")
+
+
+def _run_import_claude_code(args: argparse.Namespace) -> None:
+    """Convert a Claude Code session JSONL into a v5 trace for the Gantt viewer."""
+    from trace_collect.claude_code_import import import_claude_code_session
+
+    trace_file = import_claude_code_session(
+        session_path=Path(args.session),
+        output_dir=Path(args.output_dir),
+        include_sidechains=args.include_sidechains,
+        run_id=args.run_id,
+    )
+    print(f"Claude Code trace written to: {trace_file}")
+    print(f"Open in the Gantt viewer with: python -m trace_collect.cli gantt {trace_file}")
 
 
 def _run_inspect(argv: list[str]) -> None:
