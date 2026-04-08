@@ -33,7 +33,6 @@ def _mcp_config_label(mcp_config: str | None) -> str | None:
     - ``"none"`` → researcher affirmatively opted out of MCP
     - ``"<basename>"`` → MCP YAML at that basename was loaded
 
-    Phase 4 of trace-sim-vastai-pipeline.
     """
     if mcp_config is None:
         return None
@@ -48,8 +47,7 @@ def load_mcp_servers(mcp_config: str | None) -> dict:
     Returns an empty dict for ``None`` (mini-swe / legacy path) and for
     the literal ``"none"`` (affirmative opt-out). For a YAML path, loads
     the file and instantiates ``MCPServerConfig`` for each top-level
-    entry per Phase 0 schema audit (a) — connect_mcp_servers requires
-    Pydantic config instances, not raw dicts.
+    entry; connect_mcp_servers requires Pydantic config instances, not raw dicts.
 
     Raises:
         FileNotFoundError: if the YAML path does not exist.
@@ -696,9 +694,6 @@ async def _collect_openclaw(
     if completed:
         logger.info("Resuming: %d tasks already completed", len(completed))
 
-    # Phase 4: Load MCP server config from --mcp-config and pass through
-    # to the runner. Phase 0 schema audit (a) confirms connect_mcp_servers
-    # expects a dict[str, MCPServerConfig], not a dict of dicts.
     mcp_servers = load_mcp_servers(mcp_config)
     mcp_config_label = _mcp_config_label(mcp_config)
 
@@ -960,10 +955,7 @@ def _normalize_openclaw_trace(
     merged["type"] = "trace_metadata"
     merged["trace_format_version"] = 5
 
-    # Phase 4: stamp metadata.run_config.mcp_config under the new
-    # extension blob (per Phase 0 schema audit + R1-2 of the plan: v5
-    # frozen contract holds because run_config is an additive nest under
-    # metadata, not a top-level field).
+    # run_config is an additive nest under metadata, not a top-level field.
     if mcp_config_label is not None:
         existing_run_config = merged.get("run_config") or {}
         existing_run_config["mcp_config"] = mcp_config_label

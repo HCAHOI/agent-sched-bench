@@ -1,15 +1,11 @@
 """Post-hoc delta computation over absolute sim_metrics snapshots.
 
-Phase 2 of the trace-sim-vastai-pipeline plan. The simulator stores
-absolute `PreemptionSnapshot` field values per `llm_call` action under
-`TraceAction.data.sim_metrics.vllm_scheduler_snapshot` (per CLAUDE.md
-"preserve all intermediate outputs"). This module computes derived
-delta values at analysis time — separating the lossless collection
-path from the lossy aggregation path.
+The simulator stores absolute `PreemptionSnapshot` field values per
+`llm_call` action under `TraceAction.data.sim_metrics.vllm_scheduler_snapshot`.
+This module computes derived delta values at analysis time, separating
+the lossless collection path from the lossy aggregation path.
 
-Field type rules (sourced verbatim from
-`.omc/plans/phase0-schemas.md` section (b) — DO NOT silently broaden
-the whitelist):
+Field type rules (DO NOT silently broaden the whitelist):
 
 - `num_preemptions_total`  → COUNTER (monotonic non-decreasing).
                              Delta = current - previous = preemptions
@@ -34,10 +30,7 @@ from typing import Any
 from harness.scheduler_hooks import PreemptionSnapshot
 
 
-# Whitelist of PreemptionSnapshot fields where pairwise subtraction
-# yields a meaningful value. Sourced from .omc/plans/phase0-schemas.md
-# section (b). Adding fields here MUST be accompanied by a citation
-# update in that doc.
+# Counter fields where pairwise subtraction yields a meaningful value.
 _DELTA_VALID_FIELDS: frozenset[str] = frozenset({"num_preemptions_total"})
 
 
@@ -61,8 +54,7 @@ def _assert_field_is_counter(field_name: str) -> None:
             f"Cannot compute delta of gauge/ratio field '{field_name}'. "
             f"Only counter fields support delta semantics; the valid set is "
             f"{sorted(_DELTA_VALID_FIELDS)}. Use mean/max aggregation for "
-            f"non-counter fields instead — see "
-            f".omc/plans/phase0-schemas.md section (b)."
+            f"non-counter fields instead."
         )
 
 

@@ -141,8 +141,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
             "literal string 'none' for an affirmative MCP-less run. The "
             "trace header records the chosen value under "
             "metadata.run_config.mcp_config so analysis can distinguish "
-            "explicit 'none' from a legacy MCP-less default. Phase 4 of "
-            "trace-sim-vastai-pipeline."
+            "explicit 'none' from a legacy MCP-less default."
         ),
     )
     parser.add_argument(
@@ -247,8 +246,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "snapshots scheduler metrics (PreemptionSnapshot) per iteration "
             "and stores them under TraceAction.data.sim_metrics. When unset, "
             "the simulator records empty (all-None) snapshots — the explicit "
-            "opt-out path used for local runs without a vLLM server. "
-            "Phase 2 of trace-sim-vastai-pipeline."
+            "opt-out path used for local runs without a vLLM server."
         ),
     )
     parser.add_argument(
@@ -259,11 +257,8 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "Tag the first N replay iterations with sim_metrics.warmup=true "
             "for analysis-time exclusion. Iterations are still measured at "
             "collection time; the flag controls analysis treatment only. "
-            "Default 0 (no warmup tagging) per CLAUDE.md No Unjustified "
-            "Complexity. Opt in only when an empirical probe shows "
-            "first-iteration latency variance >20%% vs steady-state — see "
-            ".omc/plans/phase1.5-design.md Q4 deferral. Phase 1.5.1 of "
-            "trace-sim-vastai-pipeline."
+            "Default 0 (no warmup tagging). Opt in only when first-iteration "
+            "latency variance is empirically >20%% vs steady-state."
         ),
     )
     parser.add_argument(
@@ -377,10 +372,8 @@ def _run_collect(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # Phase 4 of trace-sim-vastai-pipeline: --mcp-config is MANDATORY for
-    # openclaw runs. Driver 3 ("OpenClaw realism delta") is violated if a
-    # forgotten flag silently produces an MCP-less openclaw trace, so the
-    # CLI refuses to start. Opt-out is the affirmative literal "none".
+    # --mcp-config is MANDATORY for openclaw runs: a forgotten flag would
+    # silently produce an MCP-less trace. Opt-out is the literal "none".
     if args.scaffold == "openclaw" and args.mcp_config is None:
         print(
             "ERROR: MCP config is required for openclaw; pass "
