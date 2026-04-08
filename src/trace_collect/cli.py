@@ -21,6 +21,9 @@ Usage (inspect):
     python -m trace_collect.cli inspect <trace.jsonl> overview
     python -m trace_collect.cli inspect <trace.jsonl> step 5 [--json]
     python -m trace_collect.cli inspect <trace.jsonl> search "pattern"
+
+Usage (gantt server):
+    python -m trace_collect.cli gantt-serve --config demo/gantt_viewer/configs/example.yaml
 """
 
 from __future__ import annotations
@@ -360,8 +363,8 @@ def main() -> None:
         _run_import_claude_code(args)
     elif len(sys.argv) > 1 and sys.argv[1] == "inspect":
         _run_inspect(sys.argv[2:])
-    elif len(sys.argv) > 1 and sys.argv[1] == "gantt":
-        _run_gantt(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == "gantt-serve":
+        _run_gantt_serve(sys.argv[2:])
     else:
         args = parse_collect_args()
         _run_collect(args)
@@ -499,7 +502,10 @@ def _run_import_claude_code(args: argparse.Namespace) -> None:
         run_id=args.run_id,
     )
     print(f"Claude Code trace written to: {trace_file}")
-    print(f"Open in the Gantt viewer with: python -m trace_collect.cli gantt {trace_file}")
+    print(
+        "Start the dynamic Gantt viewer with: "
+        "python -m trace_collect.cli gantt-serve --dev"
+    )
 
 
 def _run_inspect(argv: list[str]) -> None:
@@ -659,91 +665,11 @@ examples:
         cmd_timeline(data)
 
 
-def _run_gantt(argv: list[str]) -> None:
-    """Top-level gantt subcommand: generate interactive Gantt HTML from traces."""
-    import argparse as _ap
+def _run_gantt_serve(argv: list[str]) -> None:
+    """Top-level dynamic Gantt viewer subcommand."""
+    from demo.gantt_viewer.backend.dev import main as run_gantt_server
 
-    parser = _ap.ArgumentParser(
-        prog="python -m trace_collect.cli gantt",
-        description="Generate interactive Gantt chart from JSONL traces.",
-    )
-    parser.add_argument(
-        "traces",
-        nargs="*",
-        help=(
-            "Zero or more JSONL trace files to embed in the generated HTML. "
-            "Pass --empty to skip embedding and open a blank viewer the user "
-            "can drag-drop traces onto."
-        ),
-    )
-    parser.add_argument(
-        "--empty",
-        action="store_true",
-        help=(
-            "Generate a blank viewer with no embedded traces. The browser "
-            "loads traces at runtime via drag-drop or the + button."
-        ),
-    )
-    parser.add_argument(
-        "--output", "-o",
-        type=str,
-        default=None,
-        help="Write HTML to this file instead of opening browser.",
-    )
-    parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Start a local HTTP server (Ctrl+C to stop).",
-    )
-    parsed = parser.parse_args(argv)
-
-    from pathlib import Path
-
-    from trace_collect.gantt_serve import (
-        generate_empty_gantt_html,
-        generate_gantt_html,
-        open_gantt,
-        serve_gantt,
-        write_gantt,
-    )
-    from trace_collect.trace_inspector import TraceData
-
-    if parsed.empty and parsed.traces:
-        print(
-            "ERROR: --empty cannot be combined with positional trace files.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not parsed.empty and not parsed.traces:
-        print(
-            "ERROR: pass at least one trace file, or use --empty for a blank viewer.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    if parsed.empty:
-        html = generate_empty_gantt_html()
-    else:
-        traces = []
-        for tp in parsed.traces:
-            p = Path(tp)
-            if not p.exists():
-                print(f"ERROR: trace file not found: {tp}", file=sys.stderr)
-                sys.exit(1)
-            data = TraceData.load(p)
-            label = p.stem
-            traces.append((label, data))
-        html = generate_gantt_html(traces)
-
-    if parsed.output:
-        out = Path(parsed.output)
-        write_gantt(html, out)
-        print(f"Gantt HTML written to: {out}")
-    elif parsed.serve:
-        serve_gantt(html)
-    else:
-        tmp = open_gantt(html)
-        print(f"Opened in browser: {tmp}")
+    run_gantt_server(argv)
 
 
 if __name__ == "__main__":

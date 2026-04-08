@@ -1,4 +1,4 @@
-"""Tests for trace_collect.gantt_data — v4 action/event payload contract.
+"""Tests for demo.gantt_viewer.backend.payload.
 
 These tests use synthetic in-memory v4 traces (action records, no step
 records) to validate that the Gantt data builder:
@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from trace_collect.gantt_data import (
+from demo.gantt_viewer.backend.payload import (
     ACTION_TYPE_MAP,
     DEFAULT_MARKER_REGISTRY,
     DEFAULT_SPAN_REGISTRY,
@@ -588,7 +588,7 @@ def test_event_detail_still_truncates_at_100_chars(tmp_path: Path) -> None:
 
     # Inject a synthetic event directly via _extract_detail_from_event
     # (it's private but importable for this focused test).
-    from trace_collect.gantt_data import _extract_detail_from_event
+    from demo.gantt_viewer.backend.payload import _extract_detail_from_event
 
     event = {
         "type": "event",

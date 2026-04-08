@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from trace_collect.gantt_data import (
+from demo.gantt_viewer.backend.payload import (
     ACTION_TYPE_MAP,
     DEFAULT_SPAN_REGISTRY,
     _MARKER_CATEGORIES,
@@ -29,7 +29,7 @@ from trace_collect.gantt_data import (
 from trace_collect.trace_inspector import TraceData
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 OPENCLAW_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "openclaw_minimal_v5.jsonl"
 
 
@@ -212,7 +212,7 @@ def test_openclaw_fixture_spans_unchanged_by_phase5_edits() -> None:
 
 def test_phase5_payload_still_carries_full_default_span_registry() -> None:
     """build_gantt_payload_multi ships the post-Phase-5 registries."""
-    from trace_collect.gantt_data import build_gantt_payload_multi
+    from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
 
     data = TraceData.load(OPENCLAW_FIXTURE)
     multi = build_gantt_payload_multi([("test", data)])
@@ -224,7 +224,7 @@ def test_phase5_payload_still_carries_full_default_span_registry() -> None:
 
 def test_synthetic_mcp_call_action_renders_as_mcp_span() -> None:
     """Forward-compat smoke: an action with action_type='mcp_call' renders as mcp span."""
-    from trace_collect.gantt_data import _build_spans_and_markers
+    from demo.gantt_viewer.backend.payload import _build_spans_and_markers
 
     fake_actions = [
         {
@@ -243,7 +243,7 @@ def test_synthetic_mcp_call_action_renders_as_mcp_span() -> None:
 
 def test_synthetic_mcp_event_renders_as_marker() -> None:
     """Forward-compat smoke: a CONTEXT-style MCP event renders as a marker."""
-    from trace_collect.gantt_data import _build_spans_and_markers
+    from demo.gantt_viewer.backend.payload import _build_spans_and_markers
 
     fake_actions = [
         {

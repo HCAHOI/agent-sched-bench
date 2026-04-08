@@ -366,7 +366,7 @@ def test_converted_output_loads_via_trace_data(converted_trace: Path) -> None:
 
 def test_build_gantt_payload_succeeds(converted_trace: Path) -> None:
     """The converted trace renders through build_gantt_payload_multi."""
-    from trace_collect.gantt_data import build_gantt_payload_multi
+    from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
     from trace_collect.trace_inspector import TraceData
 
     data = TraceData.load(converted_trace)
@@ -1382,7 +1382,7 @@ def test_real_swe_rebench_claude_code_trace_converts_cleanly(
         )
 
     # Trace loads through the strict v5 reader and renders via the Gantt
-    from trace_collect.gantt_data import build_gantt_payload_multi
+    from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
     from trace_collect.trace_inspector import TraceData
 
     data = TraceData.load(result)
