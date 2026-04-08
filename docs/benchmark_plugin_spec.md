@@ -22,11 +22,14 @@ src/agents/benchmarks/
 ├── __init__.py          # REGISTRY dict + get_benchmark_class()
 ├── base.py              # BenchmarkConfig dataclass + Benchmark ABC
 ├── swe_bench_verified.py
-└── swe_rebench.py
+├── swe_rebench.py
+├── bfcl_v4.py           # task_shape='function_call' reference plugin
+└── bfcl_runner.py       # In-process function-call runner + AST scoring
 
 configs/benchmarks/
 ├── swe-bench-verified.yaml
-└── swe-rebench.yaml
+├── swe-rebench.yaml
+└── bfcl-v4.yaml
 ```
 
 ---
@@ -130,12 +133,31 @@ task_shape: ClassVar[Literal["swe_patch", "function_call"]] = "swe_patch"
 Set as a class variable on each plugin. Current values:
 
 - `"swe_patch"` — SWE-bench-style patch tasks; `build_runner` returns an
-  `SWEBenchRunner`.
-- `"function_call"` — Reserved for future BFCL-v4-style benchmarks; will
-  return a dedicated runner.
+  `SWEBenchRunner`. Requires `repos_root` to be set (collector enforces
+  this at dispatch time). Scaffolds supported: `mini-swe-agent`, `openclaw`.
+- `"function_call"` — BFCL-v4-style function-call tasks; `build_runner`
+  returns a `BFCLRunner`. `repos_root` is typically `null` and the
+  collector's `repos_root` gate is skipped based on this shape.
+  Scaffolds supported: `openclaw` only. Plugins with this shape MUST
+  refuse `mini-swe-agent` in `build_runner` with a descriptive
+  `NotImplementedError` — mini-swe is bash-in-repo and cannot emit
+  structured function calls against a JSON-Schema tool spec.
 
-This discriminator was introduced in Phase 4 (PM-2 mitigation) to prevent a
-non-SWE benchmark from silently inheriting SWE-specific runner logic.
+The collector branches on `task_shape` in two places only, both in
+`src/trace_collect/collector.py`:
+
+1. The `repos_root is None` ValueError gate (fires only for `swe_patch`).
+2. The `CollectedTaskResult.success` derivation — `swe_patch` uses
+   `bool(model_patch)`, `function_call` uses
+   `bool(eval_result.official_resolved)`.
+
+No other collector or scaffold code knows about `task_shape`. Adding a
+new shape (e.g. `"ml_eval"`) would require extending these two branches.
+
+This discriminator was introduced in Phase 4 of the SWE-rebench refactor
+(PM-2 mitigation) to prevent a non-SWE benchmark from silently
+inheriting SWE-specific runner logic. It was first exercised by the
+BFCL v4 plugin.
 
 ---
 
@@ -146,6 +168,7 @@ non-SWE benchmark from silently inheriting SWE-specific runner logic.
 REGISTRY: dict[str, type[Benchmark]] = {
     "swe-bench-verified": SWEBenchVerified,
     "swe-rebench": SWERebenchBenchmark,
+    "bfcl-v4": BFCLv4Benchmark,
 }
 ```
 
@@ -265,3 +288,131 @@ dataset `<HF dataset>` and split `<split>`.
    Per CLAUDE.md "Mandatory Review Gate", spawn a fresh `code-reviewer` agent
    before running any experiments. Document the findings in
    `docs/reviews/<slug>-plugin-review.md`.
+
+---
+
+## 10. Function-call benchmarks (BFCL v4 reference)
+
+BFCL v4 is the first plugin with `task_shape = "function_call"`. This
+section documents the differences from the default `swe_patch` shape so
+future function-call benchmarks (OpenFunctions, API-Bank, ToolBench, …)
+can be added with minimal surgery.
+
+### 10.1 EvalTask extensions
+
+Function-call benchmarks carry per-task data that SWE-patch tasks don't
+need. These live on `EvalTask` as optional fields and are populated by
+`from_benchmark_instance` after `benchmark.normalize_task` runs:
+
+| Field | Type | Populated for | Description |
+|---|---|---|---|
+| `tools` | `list[dict]` | BFCL | JSON-Schema function specs the model must call against |
+| `question` | `list[list[dict]]` | BFCL | Turn list; `[0][0]` is the initial user message |
+| `ground_truth` | `list[dict]` | BFCL | Expected function calls, shape `[{fn_name: {arg: [accepted_values]}}]` |
+| `category` | `str \| None` | BFCL | BFCL category (e.g. `"simple_python"`, `"irrelevance"`) |
+
+`EvalTask.needs_prepare` returns `False` when `repo is None`, so function-call
+tasks naturally skip the git-clone phase.
+
+### 10.2 Scaffold compatibility
+
+| Scaffold | `swe_patch` | `function_call` |
+|---|---|---|
+| `mini-swe-agent` | supported | **refused** (bash-in-repo only) |
+| `openclaw` | supported | supported |
+
+The `mini-swe-agent` refusal is enforced in two places with explicit
+precedence:
+
+1. **Collector dispatch gate** (`src/trace_collect/collector.py` —
+   the `scaffold == "mini-swe-agent" and task_shape != "swe_patch"`
+   branch in `collect_traces`) raises `ValueError` **first** for any
+   production run routed through the CLI. This is the primary guard.
+2. **Plugin-level `build_runner` refusal** (`BFCLv4Benchmark.build_runner`
+   at `src/agents/benchmarks/bfcl_v4.py`) raises `NotImplementedError`.
+   This is defense-in-depth for direct callers that bypass the
+   collector (unit tests, future third-party harnesses).
+
+Both fire loudly; there is no silent-fallback path. A new function-call
+benchmark that supports a different scaffold combination should override
+its own `build_runner` to refuse the unsupported scaffolds explicitly
+and rely on the collector gate for the primary production guard.
+
+### 10.3 BFCLRunner — skips SessionRunner, bypasses openclaw tool set
+
+`BFCLRunner` (in `src/agents/benchmarks/bfcl_runner.py`) calls
+`provider.chat()` directly rather than routing through
+`agents.openclaw._session_runner.SessionRunner`. Openclaw's `AgentLoop`
+hardcodes its own tool set (bash/file/web/memory), which is incompatible
+with BFCL's per-task JSON-Schema tool specs.
+
+`BFCLRunner.run_task` issues one chat call per task with the task's tool
+spec wrapped in the OpenAI envelope (`{type: "function", function: f}`),
+records the returned `tool_calls`, scores them with `_ast_match`, and
+emits a v5-compliant trace: one `trace_metadata` + one `llm_call`
+`TraceAction` + one `summary` record. Gantt / inspector tooling renders
+BFCL traces identically to SWE-patch traces.
+
+### 10.4 AST-match rules
+
+Implemented in `BFCLRunner._ast_match`. Mirrors the documented BFCL rules:
+
+1. Function name must match exactly.
+2. Every required argument must be present with an exact value match.
+   Ground-truth values are lists of acceptable alternatives — the
+   prediction matches if it equals any alternative.
+3. Optional arguments (not listed in ground truth) may be omitted
+   without failing the match.
+4. All-or-nothing per call — no partial credit.
+5. Categories with multiple expected calls (`parallel`, `multiple`,
+   `parallel_multiple`) compare as sets — order doesn't matter.
+6. The `irrelevance` / `live_irrelevance` categories are correct iff
+   the predicted call list is empty (the model must NOT invoke any tool).
+
+The scoring is reimplemented in-process rather than shelling out to
+`bfcl-eval` because the PyPI package is not a hard dependency of this
+repo. If `bfcl-eval` becomes available it can be swapped in behind the
+same `_ast_match` interface.
+
+### 10.5 Collector success field
+
+`CollectedTaskResult.success` for function-call benchmarks is derived
+from `eval_result.official_resolved` (set by `BFCLRunner._ast_match`),
+not from `model_patch`. The `success_basis` field reports
+`"official_resolved"` accordingly, so downstream analysis can tell the
+two shapes apart without guessing.
+
+### 10.6 No docker, no SWE-bench harness
+
+BFCL v4 scoring is pure Python AST comparison — no containers, no
+sandboxed test execution. The plugin explicitly refuses the SWE-bench
+harness path:
+
+- `BFCLv4Benchmark.build_harness_args` raises `NotImplementedError`.
+- `BFCLv4Benchmark.image_name_for` returns `None`.
+- `BFCLv4Benchmark.derive_test_cmd` raises `NotImplementedError`
+  (defensive; should never be called on this shape).
+
+The `--evaluate` flag on `trace_collect.cli` does not apply to BFCL
+tasks. Scoring happens in-process inside `BFCLRunner.run_task`.
+
+### 10.7 Data layout
+
+```text
+data/bfcl-v4/
+├── raw/                      # Copied from ShishirPatil/gorilla
+│   ├── BFCL_v4_simple_python.json
+│   ├── BFCL_v4_multiple.json
+│   ├── possible_answer/
+│   │   └── BFCL_v4_simple_python.json
+│   └── ...
+└── tasks.json                # Merged JSONL (one row per line)
+```
+
+The merge step (in `scripts/setup/bfcl_v4_data.sh`) joins each task row
+with its matching `possible_answer/` entry by `id` and writes one
+JSONL row per task with keys: `category`, `id`, `question`, `function`,
+`ground_truth`. The plugin's `load_tasks` reads this merged file.
+
+`src/trace_collect/collector.py::load_tasks` auto-detects between JSON
+array (SWE convention) and JSONL (BFCL convention) — both formats work.

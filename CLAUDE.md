@@ -279,6 +279,19 @@ and `configs/benchmarks/<slug>.yaml`. See `docs/benchmark_plugin_spec.md`.
   `exclude_lite` knob for SWE-rebench) in the YAML's prose comment
   block. Per the research integrity rules, undocumented selection
   filters are not acceptable.
+- When `task_shape != 'swe_patch'`, the plugin's `build_runner` **must**
+  refuse scaffolds that cannot handle the shape, with a descriptive
+  `NotImplementedError`. Example: BFCL v4 (`task_shape='function_call'`)
+  refuses `mini-swe-agent` because mini-swe is bash-in-repo and cannot
+  emit structured function calls against a JSON Schema. The collector
+  enforces a parallel guard at dispatch time; both must fire loudly so
+  the failure mode is always "impossible combination" rather than
+  "silent fallback to the wrong runner".
+- Function-call benchmarks (`task_shape='function_call'`) populate
+  `EvalTask.tools`, `EvalTask.question`, and `EvalTask.ground_truth`
+  via `normalize_task`. They must leave `repo`/`base_commit` unset so
+  `EvalTask.needs_prepare` returns `False` and the git-clone phase is
+  skipped automatically.
 
 ---
 

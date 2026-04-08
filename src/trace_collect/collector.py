@@ -81,9 +81,44 @@ class CollectedTaskResult:
 
 
 def load_tasks(task_source: str | Path) -> list[dict[str, Any]]:
-    """Load tasks from a JSON file."""
+    """Load tasks from a JSON file.
+
+    Auto-detects between two formats:
+    - JSON array: ``[{...}, {...}]`` (SWE-bench convention, written by
+      ``scripts/setup/swebench_data.sh`` / ``swe_rebench_data.sh``)
+    - JSONL: one JSON object per line (BFCL v4 convention, written by
+      ``scripts/setup/bfcl_v4_data.sh``)
+
+    JSON array is tried first; on parse failure the file is read
+    line-by-line and malformed lines are skipped with a warning via
+    the module logger.
+    """
     path = Path(task_source)
-    return json.loads(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        rows: list[dict[str, Any]] = []
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Skipping malformed JSONL line at %s:%d: %s",
+                    path,
+                    lineno,
+                    exc,
+                )
+        return rows
+    if isinstance(data, list):
+        return data
+    raise ValueError(
+        f"Task file {path} parsed as JSON but is not a list "
+        f"(got {type(data).__name__}); expected list[dict] or JSONL."
+    )
 
 
 def load_completed_ids(run_dir: Path) -> set[str]:
@@ -301,13 +336,30 @@ async def collect_traces(
     if task_source is None:
         task_source = benchmark.config.data_root / "tasks.json"
     repos_root = benchmark.config.repos_root
-    if repos_root is None:
+    if benchmark.task_shape == "swe_patch" and repos_root is None:
         raise ValueError(
-            f"Benchmark {benchmark.config.slug!r} has no repos_root configured; "
-            f"cannot run code-patching scaffolds without local repos."
+            f"Benchmark {benchmark.config.slug!r} has task_shape='swe_patch' but "
+            f"no repos_root configured; cannot run code-patching scaffolds without local repos."
+        )
+    if scaffold == "mini-swe-agent" and benchmark.task_shape != "swe_patch":
+        raise ValueError(
+            f"mini-swe-agent scaffold only supports task_shape='swe_patch'; "
+            f"benchmark {benchmark.config.slug!r} has task_shape={benchmark.task_shape!r}. "
+            f"Use scaffold='openclaw' for function_call benchmarks."
         )
 
     tasks = load_tasks(task_source)
+    # Normalize every raw row through the plugin's normalize_task so the
+    # downstream pipeline (instance_id filtering, _collect_openclaw,
+    # EvalTask.from_benchmark_instance, normalize_openclaw_trace) sees a
+    # canonical shape regardless of whether the disk format was pre-
+    # normalized (SWE setup scripts call plugin.load_tasks which already
+    # normalizes) or raw (BFCL setup script writes the joined JSONL
+    # verbatim without normalization). normalize_task is idempotent for
+    # every shipped plugin: SWE plugins recompute test_cmd (no-op if
+    # already set); BFCL plugin handles both ``id`` and ``instance_id``
+    # lookups.
+    tasks = [benchmark.normalize_task(t) for t in tasks]
     if instance_ids is not None:
         id_set = set(instance_ids)
         tasks = [t for t in tasks if t["instance_id"] in id_set]
@@ -558,9 +610,10 @@ async def _collect_openclaw(
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
 ) -> Path:
-    """Collect traces using the OpenClaw (nanobot) scaffold via SWEBenchRunner."""
+    """Collect traces via the OpenClaw scaffold, routing runner construction
+    through ``benchmark.build_runner`` so plugins own their own runner class.
+    """
     from agents.openclaw.unified_provider import UnifiedProvider
-    from agents.openclaw.eval.runner import SWEBenchRunner
     from agents.openclaw.eval.types import EvalTask
 
     if run_id is not None:
@@ -579,14 +632,13 @@ async def _collect_openclaw(
         api_base=api_base,
         default_model=model,
     )
-    runner = SWEBenchRunner(
+    runner = benchmark.build_runner(
+        scaffold="openclaw",
         provider=provider,
         workspace_base=run_dir / "_workspaces",
         max_iterations=max_steps,
         context_window_tokens=max_context_tokens,
         model=model,
-        repos_root=benchmark.config.repos_root,
-        benchmark=benchmark,
     )
 
     total = len(tasks)
@@ -650,13 +702,25 @@ async def _collect_openclaw(
                         trace_summary = rec
                         break
 
-        # Map EvalResult -> CollectedTaskResult
+        # Map EvalResult -> CollectedTaskResult. The success field and
+        # basis differ by task shape: swe_patch benchmarks key off the
+        # git-diff model_patch; function_call benchmarks (BFCL v4) key
+        # off the plugin's AST-match verdict which the runner reports
+        # as ``official_resolved``.
         model_patch = eval_result.model_patch or ""
+        if benchmark.task_shape == "function_call":
+            official_resolved = eval_result.official_resolved
+            success = bool(official_resolved)
+            success_basis = "official_resolved"
+        else:
+            official_resolved = eval_result.official_resolved
+            success = bool(model_patch)
+            success_basis = "patch_generated"
         task_result = CollectedTaskResult(
             instance_id=instance_id,
             trace_file=run_dir / f"{instance_id}.jsonl",
-            success=bool(model_patch),
-            success_basis="patch_generated",
+            success=success,
+            success_basis=success_basis,
             patch_generated=bool(model_patch),
             model_patch=model_patch,
             exit_status=eval_result.stop_reason,
@@ -667,6 +731,11 @@ async def _collect_openclaw(
             total_tool_ms=trace_summary.get("total_tool_ms", 0.0),
             total_tokens=trace_summary.get("total_tokens", 0),
             prepare_ms=eval_result.prepare_ms or 0.0,
+            official_resolved=official_resolved,
+            # Preserve plugin-specific scoring breakdown (BFCL AST match
+            # details, per-category scores, etc.) so downstream analysis
+            # can read it from results.jsonl without re-walking traces.
+            evaluation_report=eval_result.evaluation_report,
         )
 
         # Normalize trace: copy to benchmark run-dir layout + inject metadata
@@ -753,55 +822,77 @@ def _normalize_openclaw_trace(
     max_steps: int,
     instance_id: str,
 ) -> None:
-    """Copy an OpenClaw trace to benchmark run-dir layout with metadata injection."""
+    """Copy an OpenClaw trace to benchmark run-dir layout.
+
+    Reads the source's first ``trace_metadata`` record (if present), merges
+    collector-known fields (benchmark, benchmark_split, api_base, etc.) only
+    where absent, then writes the merged record. Source fields win on conflict
+    so runner-specific ``scaffold_capabilities`` survive.
+    """
     lines = src.read_text(encoding="utf-8").splitlines()
+
+    # Try to recover the runner's own metadata from the first non-empty line.
+    source_metadata: dict[str, Any] | None = None
+    body_start_idx = 0
+    for idx, line in enumerate(lines):
+        if not line.strip():
+            body_start_idx = idx + 1
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            body_start_idx = idx + 1
+            continue
+        if rec.get("type") == "trace_metadata":
+            source_metadata = rec
+            body_start_idx = idx + 1
+        else:
+            body_start_idx = idx  # keep this record in the body
+        break
+
+    # Conservative default — used only when the source trace has no
+    # trace_metadata (partial write from a crash). We cannot invent
+    # capabilities we didn't observe, so we stamp an explicit "unknown" marker.
+    default_metadata = {
+        "type": "trace_metadata",
+        "scaffold": "openclaw",
+        "trace_format_version": 5,
+        "mode": "collect",
+        "scaffold_capabilities": {
+            "unknown": True,
+            "reason": "source trace had no metadata record; runner crashed "
+                      "before writing it or was never hooked up",
+        },
+    }
+
+    # Merge: runner's metadata wins where it exists; collector fields fill gaps.
+    merged = dict(default_metadata)
+    if source_metadata is not None:
+        merged.update(source_metadata)
+    # Collector-known fields that the runner may not have stamped.
+    merged.setdefault("benchmark", benchmark.config.slug)
+    merged.setdefault("benchmark_split", benchmark.config.harness_split)
+    merged.setdefault("model", model)
+    merged.setdefault("api_base", api_base)
+    merged.setdefault("max_steps", max_steps)
+    merged.setdefault("instance_id", instance_id)
+    # Always ensure type + version are correct (defense against legacy
+    # traces that had a different type field).
+    merged["type"] = "trace_metadata"
+    merged["trace_format_version"] = 5
+
     with open(dst, "w", encoding="utf-8") as f:
-        # Inject trace_metadata header. trace_format_version: 5 is stamped
-        # at write time — every openclaw trace routed through the collector
-        # must carry the version field so downstream TraceData.load() can
-        # enforce its strict v5 check. v4 support was dropped during the
-        # SWE-rebench plugin refactor (no backfill, no tolerance).
-        metadata = {
-            "type": "trace_metadata",
-            "scaffold": "openclaw",
-            "trace_format_version": 5,
-            "benchmark": benchmark.config.slug,
-            "benchmark_split": benchmark.config.harness_split,
-            "model": model,
-            "api_base": api_base,
-            "max_steps": max_steps,
-            "instance_id": instance_id,
-            "mode": "collect",
-            "scaffold_capabilities": {
-                "tools": [
-                    "bash",
-                    "file_read",
-                    "file_write",
-                    "file_edit",
-                    "list_dir",
-                    "web_search",
-                    "web_fetch",
-                    "send_message",
-                ],
-                "memory": True,
-                "skills": True,
-                "file_ops": "structured",
-            },
-        }
-        f.write(json.dumps(metadata, ensure_ascii=False) + "\n")
-        for line in lines:
+        f.write(json.dumps(merged, ensure_ascii=False) + "\n")
+        for line in lines[body_start_idx:]:
             if not line.strip():
                 continue
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
-                # Mirror the defensive-parse pattern used elsewhere in this
-                # module; a single malformed line (e.g. partial write before
-                # a crash) must not abort normalization of the rest of the
-                # trace. Skip and continue.
+                # Skip malformed lines from partial-write crashes.
                 continue
-            # Skip any existing trace_metadata from nanobot (we write our own
-            # v5-compliant header above).
+            # Defensive: if an additional trace_metadata record sneaked
+            # into the body, drop it (we already wrote the merged one).
             if rec.get("type") == "trace_metadata":
                 continue
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

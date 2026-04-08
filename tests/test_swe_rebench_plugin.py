@@ -103,13 +103,8 @@ def test_plugin_slug_and_task_shape() -> None:
 
 
 def test_normalize_task_keeps_native_lists() -> None:
-    """Quirk 1: FAIL_TO_PASS / PASS_TO_PASS stay as native Python lists.
-
-    This is the O2 fix — we do NOT json.dumps them on the way in. The
-    downstream derive_test_cmd and _count_fail_to_pass already handle
-    native lists, so perpetuating the JSON-string round-trip would just
-    be a lossy ceremony.
-    """
+    """Quirk 1: FAIL_TO_PASS / PASS_TO_PASS stay as native Python lists (no JSON round-trip)."""
+    # derive_test_cmd and _count_fail_to_pass handle both shapes; json.dumps here would be lossy
     plugin = SWERebenchBenchmark(_make_config())
     row = _make_rebench_row(
         "django__django-11734",
@@ -263,9 +258,11 @@ def test_build_runner_returns_swebench_runner() -> None:
         max_iterations=50,
         context_window_tokens=128000,
         model="test/model",
-        repos_root=Path("/tmp/repos"),
     )
     assert isinstance(runner, SWEBenchRunner)
+    # Plugin self-injects repos_root and benchmark from its own config.
+    assert runner.repos_root == plugin.config.repos_root
+    assert runner.benchmark is plugin
 
 
 # ── HF-online integration (opt-in via env var) ──────────────────────────

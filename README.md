@@ -43,16 +43,21 @@ plus a YAML config in `configs/benchmarks/<slug>.yaml`.
 
 Currently registered:
 
-| Slug | Dataset | Split | Docker | Scaffolds |
-|---|---|---|---|---|
-| `swe-bench-verified` | `princeton-nlp/SWE-bench_Verified` | `test` | `swebench/sweb.eval.x86.*` (namespace-prefixed) | mini-swe-agent, openclaw |
-| `swe-rebench` | `nebius/SWE-rebench` | `filtered` | `swerebench/sweb.eval.x86_64.*` (fully qualified) | mini-swe-agent, openclaw |
+| Slug | `task_shape` | Dataset | Split | Docker | Scaffolds | Scoring |
+|---|---|---|---|---|---|---|
+| `swe-bench-verified` | `swe_patch` | `princeton-nlp/SWE-bench_Verified` | `test` | `swebench/sweb.eval.x86.*` (namespace-prefixed) | mini-swe-agent, openclaw | harness (pytest in container) |
+| `swe-rebench` | `swe_patch` | `nebius/SWE-rebench` | `filtered` | `swerebench/sweb.eval.x86_64.*` (fully qualified) | mini-swe-agent, openclaw | harness (pytest in container) |
+| `bfcl-v4` | `function_call` | `gorilla-llm/Berkeley-Function-Calling-Leaderboard` | `v4` | none | openclaw only | in-process AST match |
+
+**Note on scaffold compatibility**: `mini-swe-agent` is a bash-in-repo
+scaffold; it only supports `task_shape='swe_patch'`. Function-call
+benchmarks (BFCL v4) refuse `mini-swe-agent` loudly at dispatch time.
 
 ### Running a benchmark
 
     conda activate ML
-    make download-swe-rebench          # (or download-swebench-verified)
-    make setup-swe-rebench-repos       # (or setup-swebench-repos)
+    make download-swe-rebench          # or download-swebench-verified, download-bfcl-v4
+    make setup-swe-rebench-repos       # or setup-swebench-repos (BFCL has no repo step)
     PYTHONPATH=src python -m trace_collect.cli \
         --provider dashscope \
         --benchmark swe-rebench \

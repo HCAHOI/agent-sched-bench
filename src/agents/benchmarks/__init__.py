@@ -11,20 +11,17 @@ New benchmarks register here by adding an entry to :data:`REGISTRY`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from agents.benchmarks.base import Benchmark, BenchmarkConfig
+from agents.benchmarks.bfcl_v4 import BFCLv4Benchmark
 from agents.benchmarks.swe_bench_verified import SWEBenchVerified
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = [
     "REGISTRY",
     "get_benchmark_class",
     "Benchmark",
     "BenchmarkConfig",
+    "BFCLv4Benchmark",
     "SWEBenchVerified",
     "SWERebenchBenchmark",
 ]
@@ -33,6 +30,7 @@ __all__ = [
 REGISTRY: dict[str, type[Benchmark]] = {
     "swe-bench-verified": SWEBenchVerified,
     "swe-rebench": SWERebenchBenchmark,
+    "bfcl-v4": BFCLv4Benchmark,
 }
 
 
