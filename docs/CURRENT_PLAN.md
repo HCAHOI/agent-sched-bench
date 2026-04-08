@@ -24,7 +24,7 @@ supporting both:
    `demo/gantt_viewer/backend/payload.py`, delete legacy Gantt files, and
    replace CLI `gantt` with `gantt-serve`.
 3. Phase 2
-   Status: pending
+   Status: completed
    Implement FastAPI backend scaffold, discovery, and typed schema.
 4. Phase 3
    Status: pending
@@ -45,6 +45,17 @@ Current checkpoint outcome:
 - `gantt-serve` CLI interface reserved with a Phase 1 scaffold
 - moved and directly affected tests updated to the new payload import path
 - minimal verification passed
+
+Phase 2 outcome:
+
+- added `schema.py`, `discovery.py`, `app.py`, and `routes.py`
+- implemented `/api/health`, `/api/traces`, `/api/traces/reload`, `/api/payload`
+- discovery now finds AC1 + all 11 AC2 raw Claude Code traces
+- `/api/payload` currently supports v5 traces and explicitly returns 501 for
+  Claude Code traces until Phase 3 cache/import wiring lands
+- added backend tests for discovery and routes
+- verified real AC1 payload through FastAPI and matched it against
+  `build_gantt_payload_multi(...)`
 
 ## Verification For This Checkpoint
 

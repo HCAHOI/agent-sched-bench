@@ -1,0 +1,111 @@
+"""Tests for the FastAPI backend scaffold."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from demo.gantt_viewer.backend.app import create_app
+from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
+from demo.gantt_viewer.tests.helpers import (
+    write_claude_code_trace,
+    write_config,
+    write_v5_trace,
+)
+from trace_collect.trace_inspector import TraceData
+
+
+def _llm_action() -> dict:
+    return {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "agent-1",
+        "iteration": 0,
+        "ts_start": 1000.0,
+        "ts_end": 1001.0,
+        "data": {
+            "raw_response": {
+                "choices": [{"message": {"content": "hello from llm"}}]
+            }
+        },
+    }
+
+
+def _make_client(tmp_path: Path) -> tuple[TestClient, Path, Path]:
+    v5_path = write_v5_trace(
+        tmp_path / "runs" / "repo__issue-1" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+    cc_path = write_claude_code_trace(
+        tmp_path / "cc" / "encode_httpx-2701" / "attempt_1" / "trace.jsonl"
+    )
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        [str(v5_path), str(cc_path)],
+    )
+    client = TestClient(create_app(config_path=config_path))
+    return client, v5_path, cc_path
+
+
+def test_health_endpoint_reports_discovered_traces(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "n_discovered": 2}
+
+
+def test_list_traces_returns_descriptors_and_registries(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    response = client.get("/api/traces")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert [trace["id"] for trace in body["traces"]] == [
+        "ac1-encode_httpx-2701",
+        "ac1-repo__issue-1",
+    ]
+    assert body["traces"][0]["source_format"] == "claude-code"
+    assert body["registries"]["spans"]["llm"]["label"] == "LLM Call"
+    assert body["registries"]["markers"]["message_dispatch"]["label"] == "Message Dispatch"
+
+
+def test_payload_endpoint_returns_v5_payload(tmp_path: Path) -> None:
+    client, v5_path, _ = _make_client(tmp_path)
+    response = client.post("/api/payload", json={"ids": ["ac1-repo__issue-1"]})
+    assert response.status_code == 200
+
+    body = response.json()
+    assert len(body["traces"]) == 1
+    assert body["traces"][0]["id"] == "ac1-repo__issue-1"
+    assert body["traces"][0]["label"] == "repo__issue-1"
+    assert body["traces"][0]["metadata"]["scaffold"] == "openclaw"
+
+    direct_payload = build_gantt_payload_multi(
+        [("ac1-repo__issue-1", TraceData.load(v5_path))]
+    )
+    direct_payload["traces"][0]["label"] = "repo__issue-1"
+    assert body["traces"] == direct_payload["traces"]
+
+
+def test_payload_endpoint_rejects_unknown_id(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    response = client.post("/api/payload", json={"ids": ["missing-id"]})
+    assert response.status_code == 404
+    assert response.json()["detail"]["trace_ids"] == ["missing-id"]
+
+
+def test_payload_endpoint_rejects_claude_code_until_phase3(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    response = client.post("/api/payload", json={"ids": ["ac1-encode_httpx-2701"]})
+    assert response.status_code == 501
+    assert response.json()["detail"]["trace_ids"] == ["ac1-encode_httpx-2701"]
+
+
+def test_reload_endpoint_rewalks_discovery(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    response = client.post("/api/traces/reload")
+    assert response.status_code == 200
+    assert len(response.json()["traces"]) == 2

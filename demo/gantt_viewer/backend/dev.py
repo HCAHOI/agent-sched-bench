@@ -1,8 +1,15 @@
-"""CLI entrypoint scaffold for the dynamic Gantt viewer backend."""
+"""CLI entrypoint for the dynamic Gantt viewer backend."""
 
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
+from pathlib import Path
+
+import uvicorn
+
+from demo.gantt_viewer.backend.cc_cache import CACHE_ROOT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,9 +53,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Parse arguments and reserve the final Phase 2 interface."""
-    build_parser().parse_args(argv)
-    raise SystemExit(
-        "gantt-serve backend scaffolded in Phase 1; Phase 2 will add the "
-        "FastAPI server implementation."
+    """Launch the backend server."""
+    args = build_parser().parse_args(argv)
+    os.environ["GANTT_VIEWER_CONFIG"] = str(Path(args.config).resolve())
+    if args.clear_cache and CACHE_ROOT.exists():
+        shutil.rmtree(CACHE_ROOT)
+    uvicorn.run(
+        "demo.gantt_viewer.backend.app:create_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        reload=args.dev,
     )
