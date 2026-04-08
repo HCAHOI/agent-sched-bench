@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLAUDE_CODE_TYPES = frozenset(
     {"queue-operation", "assistant", "user", "tool_use", "tool_result", "message"}
 )
+_CLAUDE_CODE_PREAMBLE_TYPES = frozenset({"file-history-snapshot", "system"})
 
 
 @dataclass(slots=True)
@@ -106,38 +107,43 @@ def discover_traces(config: DiscoveryConfig) -> list[TraceDescriptor]:
 
 
 def sniff_format(path: Path) -> Literal["v5", "claude-code"]:
-    """Sniff the trace format from the first non-empty JSONL record."""
+    """Sniff the trace format from the first recognized JSONL record."""
     resolved_path = path.resolve()
     if not resolved_path.is_file():
         raise FileNotFoundError(f"trace file not found: {resolved_path}")
 
-    first_line = ""
+    observed_types: list[str] = []
     with resolved_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             stripped = line.strip()
             if stripped:
-                first_line = stripped
-                break
-    if not first_line:
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"invalid JSONL record in {resolved_path}: {exc}"
+                    ) from exc
+                if not isinstance(record, dict):
+                    raise ValueError(f"record in {resolved_path} is not a JSON object")
+
+                record_type = record.get("type")
+                observed_types.append(str(record_type))
+                if record_type == "trace_metadata":
+                    return "v5"
+                if record_type in _CLAUDE_CODE_TYPES:
+                    return "claude-code"
+                if record_type in _CLAUDE_CODE_PREAMBLE_TYPES:
+                    continue
+                observed_keys = ",".join(sorted(record.keys()))
+                raise ValueError(
+                    f"unable to sniff trace format for {resolved_path}; "
+                    f"type={record_type!r}, keys=[{observed_keys}]"
+                )
+    if not observed_types:
         raise ValueError(f"empty JSONL file: {resolved_path}")
-
-    try:
-        record = json.loads(first_line)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid JSONL first record in {resolved_path}: {exc}") from exc
-    if not isinstance(record, dict):
-        raise ValueError(f"first record in {resolved_path} is not a JSON object")
-
-    record_type = record.get("type")
-    if record_type == "trace_metadata":
-        return "v5"
-    if record_type in _CLAUDE_CODE_TYPES:
-        return "claude-code"
-
-    observed_keys = ",".join(sorted(record.keys()))
     raise ValueError(
         f"unable to sniff trace format for {resolved_path}; "
-        f"type={record_type!r}, keys=[{observed_keys}]"
+        f"observed types={observed_types}"
     )
 
 

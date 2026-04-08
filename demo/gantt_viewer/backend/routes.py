@@ -5,8 +5,10 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request
 
+from demo.gantt_viewer.backend.cc_cache import load_or_import
 from demo.gantt_viewer.backend.discovery import DiscoveryState
 from demo.gantt_viewer.backend.payload import (
     DEFAULT_MARKER_REGISTRY,
@@ -47,32 +49,31 @@ def reload_traces_endpoint(request: Request) -> TraceListResponse:
 
 
 @router.post("/payload", response_model=GanttPayload)
-def payload_endpoint(
+async def payload_endpoint(
     payload_request: PayloadRequest,
     request: Request,
 ) -> GanttPayload:
     state = _get_discovery_state(request)
     descriptors = _resolve_descriptors(state, payload_request.ids)
-
-    unsupported = [
-        descriptor.id
-        for descriptor in descriptors
-        if descriptor.source_format != "v5"
-    ]
-    if unsupported:
-        raise HTTPException(
-            status_code=501,
-            detail={
-                "message": "Claude Code import is implemented in Phase 3",
-                "trace_ids": unsupported,
-            },
-        )
-
-    traces = [
-        (descriptor.id, TraceData.load(Path(descriptor.path)))
-        for descriptor in descriptors
-    ]
     labels_by_id = {descriptor.id: descriptor.label for descriptor in descriptors}
+    traces: list[tuple[str, TraceData]] = []
+
+    for descriptor in descriptors:
+        try:
+            trace_path = await _resolve_trace_path(descriptor)
+            trace_data = TraceData.load(trace_path)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "trace_id": descriptor.id,
+                    "stage": "cc_import"
+                    if descriptor.source_format == "claude-code"
+                    else "trace_load",
+                    "error": str(exc),
+                },
+            ) from exc
+        traces.append((descriptor.id, trace_data))
 
     raw_payload = build_gantt_payload_multi(
         traces,
@@ -86,6 +87,12 @@ def payload_endpoint(
 
 def _get_discovery_state(request: Request) -> DiscoveryState:
     return request.app.state.discovery_state
+
+
+async def _resolve_trace_path(descriptor: TraceDescriptor) -> Path:
+    if descriptor.source_format == "v5":
+        return Path(descriptor.path)
+    return await anyio.to_thread.run_sync(load_or_import, Path(descriptor.path))
 
 
 def _resolve_descriptors(

@@ -27,7 +27,7 @@ supporting both:
    Status: completed
    Implement FastAPI backend scaffold, discovery, and typed schema.
 4. Phase 3
-   Status: pending
+   Status: completed
    Add lazy Claude Code import cache and wire it into payload loading.
 5. Phase 4+
    Status: pending
@@ -56,6 +56,19 @@ Phase 2 outcome:
 - added backend tests for discovery and routes
 - verified real AC1 payload through FastAPI and matched it against
   `build_gantt_payload_multi(...)`
+
+Phase 3 outcome:
+
+- implemented `cc_cache.cache_key(...)` and `cc_cache.load_or_import(...)`
+- wired `/api/payload` to auto-convert raw Claude Code traces on demand and
+  then load the cached v5 JSONL through `TraceData`
+- upgraded `sniff_format(...)` to skip Claude Code preamble records like
+  `file-history-snapshot` and continue until it sees a recognizable record
+- added cache and Claude Code route tests
+- verified one real trace under
+  `traces/swe-rebench/claude-code-haiku/*/attempt_1/trace.jsonl` through the
+  API: first import returned HTTP 200 with `metadata.scaffold == "claude-code"`
+  and the second call hit the cache path successfully
 
 ## Verification For This Checkpoint
 

@@ -6,14 +6,18 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from demo.gantt_viewer.backend import cc_cache
 from demo.gantt_viewer.backend.app import create_app
 from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
 from demo.gantt_viewer.tests.helpers import (
-    write_claude_code_trace,
     write_config,
     write_v5_trace,
 )
 from trace_collect.trace_inspector import TraceData
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CC_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "claude_code_minimal.jsonl"
 
 
 def _llm_action() -> dict:
@@ -39,9 +43,7 @@ def _make_client(tmp_path: Path) -> tuple[TestClient, Path, Path]:
         [_llm_action()],
         scaffold="openclaw",
     )
-    cc_path = write_claude_code_trace(
-        tmp_path / "cc" / "encode_httpx-2701" / "attempt_1" / "trace.jsonl"
-    )
+    cc_path = CC_FIXTURE
     config_path = write_config(
         tmp_path / "config.yaml",
         [str(v5_path), str(cc_path)],
@@ -63,11 +65,11 @@ def test_list_traces_returns_descriptors_and_registries(tmp_path: Path) -> None:
     assert response.status_code == 200
 
     body = response.json()
-    assert [trace["id"] for trace in body["traces"]] == [
-        "ac1-encode_httpx-2701",
-        "ac1-repo__issue-1",
-    ]
-    assert body["traces"][0]["source_format"] == "claude-code"
+    assert len(body["traces"]) == 2
+    assert {trace["source_format"] for trace in body["traces"]} == {
+        "v5",
+        "claude-code",
+    }
     assert body["registries"]["spans"]["llm"]["label"] == "LLM Call"
     assert body["registries"]["markers"]["message_dispatch"]["label"] == "Message Dispatch"
 
@@ -97,11 +99,18 @@ def test_payload_endpoint_rejects_unknown_id(tmp_path: Path) -> None:
     assert response.json()["detail"]["trace_ids"] == ["missing-id"]
 
 
-def test_payload_endpoint_rejects_claude_code_until_phase3(tmp_path: Path) -> None:
+def test_payload_endpoint_imports_claude_code_trace(tmp_path: Path, monkeypatch) -> None:
     client, _, _ = _make_client(tmp_path)
-    response = client.post("/api/payload", json={"ids": ["ac1-encode_httpx-2701"]})
-    assert response.status_code == 501
-    assert response.json()["detail"]["trace_ids"] == ["ac1-encode_httpx-2701"]
+    monkeypatch.setattr(cc_cache, "CACHE_ROOT", tmp_path / "cache")
+    traces = client.get("/api/traces").json()["traces"]
+    cc_id = next(trace["id"] for trace in traces if trace["source_format"] == "claude-code")
+
+    response = client.post("/api/payload", json={"ids": [cc_id]})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["traces"]) == 1
+    assert body["traces"][0]["metadata"]["scaffold"] == "claude-code"
+    assert len(body["traces"][0]["lanes"]) >= 1
 
 
 def test_reload_endpoint_rewalks_discovery(tmp_path: Path) -> None:

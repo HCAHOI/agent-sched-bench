@@ -18,6 +18,9 @@ from demo.gantt_viewer.tests.helpers import (
     write_v5_trace,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CC_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "claude_code_minimal.jsonl"
+
 
 def test_sniff_format_v5(tmp_path: Path) -> None:
     trace_path = write_v5_trace(tmp_path / "runs" / "task-1" / "trace.jsonl", [])
@@ -29,6 +32,10 @@ def test_sniff_format_claude_code(tmp_path: Path) -> None:
         tmp_path / "cc" / "example-task" / "attempt_1" / "trace.jsonl"
     )
     assert sniff_format(trace_path) == "claude-code"
+
+
+def test_sniff_format_skips_claude_code_preamble_records() -> None:
+    assert sniff_format(CC_FIXTURE) == "claude-code"
 
 
 def test_sniff_format_empty_file_raises(tmp_path: Path) -> None:
