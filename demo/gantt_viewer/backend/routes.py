@@ -21,6 +21,7 @@ from demo.gantt_viewer.backend.runtime_registry import (
 from demo.gantt_viewer.backend.schema import (
     GanttPayload,
     HealthResponse,
+    PayloadError,
     PayloadRequest,
     RegisterTracesRequest,
     RegisterTracesResponse,
@@ -34,6 +35,16 @@ from demo.gantt_viewer.backend.schema import (
 )
 from demo.gantt_viewer.backend.uploads import build_upload_id, persist_upload
 from trace_collect.trace_inspector import TraceData
+
+
+class _TracePayloadError(Exception):
+    """Internal exception carrying structured partial-failure context."""
+
+    def __init__(self, trace_id: str, stage: str, error: str) -> None:
+        super().__init__(error)
+        self.trace_id = trace_id
+        self.stage = stage
+        self.error = error
 
 
 router = APIRouter(prefix="/api")
@@ -110,7 +121,13 @@ async def upload_trace_endpoint(
         mtime=upload_path.stat().st_mtime,
     )
 
-    trace_payload = await _build_trace_payload(descriptor)
+    try:
+        trace_payload = await _build_trace_payload(descriptor)
+    except _TracePayloadError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"trace_id": exc.trace_id, "stage": exc.stage, "error": exc.error},
+        ) from exc
     _get_trace_registry(request).register_uploaded_descriptor(descriptor)
     return UploadTraceResponse(descriptor=descriptor, payload_fragment=trace_payload)
 
@@ -122,10 +139,25 @@ async def payload_endpoint(
 ) -> GanttPayload:
     trace_registry = _get_trace_registry(request)
     descriptors = _resolve_descriptors(trace_registry, payload_request.ids)
-    traces = [await _build_trace_payload(descriptor) for descriptor in descriptors]
+
+    traces: list[TracePayload] = []
+    errors: list[PayloadError] = []
+    for descriptor in descriptors:
+        try:
+            traces.append(await _build_trace_payload(descriptor))
+        except _TracePayloadError as exc:
+            errors.append(PayloadError(trace_id=exc.trace_id, stage=exc.stage, error=exc.error))
+
+    if not traces and errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "all requested traces failed", "errors": [e.model_dump() for e in errors]},
+        )
+
     return GanttPayload(
         registries=_build_registries(),
         traces=traces,
+        errors=errors,
     )
 
 
@@ -144,22 +176,26 @@ async def _build_trace_payload(descriptor: TraceDescriptor) -> TracePayload:
         trace_path = await _resolve_trace_path(descriptor)
         trace_data = TraceData.load(trace_path)
     except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "trace_id": descriptor.id,
-                "stage": "cc_import" if descriptor.source_format == "claude-code" else "trace_load",
-                "error": str(exc),
-            },
+        raise _TracePayloadError(
+            trace_id=descriptor.id,
+            stage="cc_import" if descriptor.source_format == "claude-code" else "trace_load",
+            error=str(exc),
         ) from exc
 
-    raw_payload = build_gantt_payload_multi(
-        [(descriptor.id, trace_data)],
-        span_registry=deepcopy(DEFAULT_SPAN_REGISTRY),
-        marker_registry=_build_marker_registry_payload(),
-    )
-    raw_payload["traces"][0]["label"] = descriptor.label
-    return TracePayload.model_validate(raw_payload["traces"][0])
+    try:
+        raw_payload = build_gantt_payload_multi(
+            [(descriptor.id, trace_data)],
+            span_registry=deepcopy(DEFAULT_SPAN_REGISTRY),
+            marker_registry=deepcopy(DEFAULT_MARKER_REGISTRY),
+        )
+        raw_payload["traces"][0]["label"] = descriptor.label
+        return TracePayload.model_validate(raw_payload["traces"][0])
+    except Exception as exc:
+        raise _TracePayloadError(
+            trace_id=descriptor.id,
+            stage="payload_build",
+            error=str(exc),
+        ) from exc
 
 
 def _sniff_or_422(path: Path) -> str:
@@ -192,17 +228,5 @@ def _resolve_descriptors(
 def _build_registries() -> Registries:
     return Registries(
         spans=deepcopy(DEFAULT_SPAN_REGISTRY),
-        markers=_build_marker_registry_payload(),
+        markers=deepcopy(DEFAULT_MARKER_REGISTRY),
     )
-
-
-def _build_marker_registry_payload() -> dict[str, dict[str, str]]:
-    marker_registry = deepcopy(DEFAULT_MARKER_REGISTRY)
-    for key, value in marker_registry.items():
-        value.setdefault("label", _marker_label(key))
-    return marker_registry
-
-
-def _marker_label(key: str) -> str:
-    normalized = key.lstrip("_").replace("_", " ").strip()
-    return normalized.title() if normalized else "Default"

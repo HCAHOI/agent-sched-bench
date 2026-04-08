@@ -17,12 +17,8 @@ from typing import Any
 
 from trace_collect.trace_inspector import TraceData
 
-# Categories that produce point markers (not spans).
-# Phase 5 of trace-sim-vastai-pipeline plan: MCP added so the events
-# emitted by `_session_runner.TraceCollectorHook.before_execute_tools`
-# for `mcp_*` tools become visible in the Gantt as point markers
-# instead of being silently dropped. Paired JS edit lives in
-# gantt_builder.js:31 (MARKER_CATEGORIES Set).
+# Event categories that produce point markers (not spans). MCP present
+# so mcp_* tool events render as markers instead of being dropped.
 _MARKER_CATEGORIES = frozenset({"SCHEDULING", "SESSION", "CONTEXT", "MCP"})
 
 # Maximum preview length for LLM narrative content in a tooltip. Large
@@ -48,23 +44,15 @@ _TOOL_PRIMARY_FIELDS: tuple[str, ...] = (
     "url",
 )
 
-# Map v5 ``action_type`` -> Gantt span type. Public so downstream code
-# can extend it. Phase 5 of trace-sim-vastai-pipeline plan adds the
-# forward-compatible ``mcp_call`` -> ``mcp`` mapping so any future
-# scaffold (or trace producer) that emits a first-class MCP action
-# renders correctly without further changes. Paired JS edit at
-# gantt_builder.js:34 (ACTION_TYPE_MAP object).
+# Map v5 action_type → Gantt span type. Public; downstream may extend.
 ACTION_TYPE_MAP: dict[str, str] = {
     "llm_call": "llm",
     "tool_exec": "tool",
     "mcp_call": "mcp",
 }
 
-# Default span registry shipped inside the payload.
-# ``order`` controls vertical stacking when multiple span types share an iteration.
-# Phase 5: ``mcp`` span entry added (purple, distinct from llm cyan and tool
-# orange) for the new ``mcp_call`` action type. Paired JS edit at
-# gantt_builder.js:40 (DEFAULT_SPAN_REGISTRY object).
+# Default span registry shipped inside the payload. `order` controls
+# vertical stacking when multiple span types share an iteration.
 DEFAULT_SPAN_REGISTRY: dict[str, dict[str, Any]] = {
     "llm":        {"color": "#00E5FF", "label": "LLM Call",   "order": 0},
     "tool":       {"color": "#FF6D00", "label": "Tool Exec",  "order": 1},
@@ -75,15 +63,15 @@ DEFAULT_SPAN_REGISTRY: dict[str, dict[str, Any]] = {
 # Default marker registry — point-in-time event symbols.
 # ``_default`` is the fallback when an event name is not in the map.
 DEFAULT_MARKER_REGISTRY: dict[str, dict[str, str]] = {
-    "message_dispatch":     {"symbol": "diamond", "color": "#76FF03"},
-    "session_lock_acquire": {"symbol": "diamond", "color": "#76FF03"},
-    "session_load":         {"symbol": "dot",     "color": "#76FF03"},
-    "message_list_build":   {"symbol": "dot",     "color": "#4FC3F7"},
-    "session_turn_save":    {"symbol": "dot",     "color": "#76FF03"},
-    "task_complete":        {"symbol": "flag",    "color": "#FF6D00"},
-    "llm_error":            {"symbol": "cross",   "color": "#FF1744"},
-    "max_iterations":       {"symbol": "cross",   "color": "#FF1744"},
-    "_default":             {"symbol": "dot",     "color": "#6b7280"},
+    "message_dispatch":     {"symbol": "diamond", "color": "#76FF03", "label": "Message Dispatch"},
+    "session_lock_acquire": {"symbol": "diamond", "color": "#76FF03", "label": "Session Lock Acquire"},
+    "session_load":         {"symbol": "dot",     "color": "#76FF03", "label": "Session Load"},
+    "message_list_build":   {"symbol": "dot",     "color": "#4FC3F7", "label": "Message List Build"},
+    "session_turn_save":    {"symbol": "dot",     "color": "#76FF03", "label": "Session Turn Save"},
+    "task_complete":        {"symbol": "flag",    "color": "#FF6D00", "label": "Task Complete"},
+    "llm_error":            {"symbol": "cross",   "color": "#FF1744", "label": "Llm Error"},
+    "max_iterations":       {"symbol": "cross",   "color": "#FF1744", "label": "Max Iterations"},
+    "_default":             {"symbol": "dot",     "color": "#6b7280", "label": "Default"},
 }
 
 

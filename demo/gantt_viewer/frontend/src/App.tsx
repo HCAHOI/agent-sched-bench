@@ -208,6 +208,7 @@ export default function App() {
       <section class="workspace-card">
         <Sidebar
           onPinLane={(card) => setPinnedCard(card)}
+          onScroll={setScrollTop}
           scrollTop={scrollTop()}
           traces={loadedTraces()}
           viewMode={viewMode()}

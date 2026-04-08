@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 SCAFFOLD_LABEL = "claude-code"
 V5_FORMAT_VERSION = 5
-_TOOL_RESULT_MAX_CHARS = 8000  # storage cap; gantt_data truncates display separately
+_TOOL_RESULT_MAX_CHARS = 8000  # storage cap; viewer truncates display separately
 
 # Canonical 36-char lowercase-hex UUID shape. Used to decide whether the
 # session filename stem is itself the session UUID (native CC layout at
@@ -186,9 +186,10 @@ def _build_openai_raw_response(
 ) -> dict[str, Any]:
     """Synthesize an OpenAI-shape chat-completion response from Anthropic content.
 
-    The existing Gantt tooltip extractor (``_extract_detail_from_action``
-    in ``gantt_data.py``) reads ``data.raw_response.choices[0].message``
-    expecting the OpenAI schema (``content`` + ``tool_calls`` array).
+    The Gantt tooltip extractor (``_extract_detail_from_action`` in
+    ``demo/gantt_viewer/backend/payload.py``) reads
+    ``data.raw_response.choices[0].message`` expecting the OpenAI schema
+    (``content`` + ``tool_calls`` array).
     We adapt Anthropic's native shape into that skeleton so the
     existing tooltip path renders Claude traces without any renderer
     changes.

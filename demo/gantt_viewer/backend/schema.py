@@ -69,9 +69,16 @@ class TracePayload(BaseModel):
     lanes: list[Lane]
 
 
+class PayloadError(BaseModel):
+    trace_id: str
+    stage: str
+    error: str
+
+
 class GanttPayload(BaseModel):
     registries: Registries
     traces: list[TracePayload]
+    errors: list[PayloadError] = Field(default_factory=list)
 
 
 class TraceDescriptor(BaseModel):

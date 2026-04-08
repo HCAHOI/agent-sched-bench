@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from demo.gantt_viewer.backend import cc_cache
 from demo.gantt_viewer.backend.app import create_app
-from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
+from demo.gantt_viewer.backend.payload import (
+    DEFAULT_MARKER_REGISTRY,
+    build_gantt_payload_multi,
+)
+from demo.gantt_viewer.backend.schema import MarkerDef
 from demo.gantt_viewer.tests.helpers import (
     write_config,
     write_v5_trace,
@@ -341,10 +347,153 @@ def test_upload_malformed_trace_returns_422(tmp_path: Path) -> None:
     assert response.status_code == 422
 
 
-def test_openapi_frozen(monkeypatch) -> None:
+def test_payload_partial_failure_returns_200_with_errors(tmp_path: Path) -> None:
+    """One good + one bad id: good trace returned in traces, bad in errors."""
+    good_path = write_v5_trace(
+        tmp_path / "runs" / "good-repo" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+    bad_path = tmp_path / "runs" / "bad-repo" / "trace.jsonl"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    bad_path.write_text(
+        json.dumps({
+            "type": "trace_metadata",
+            "scaffold": "openclaw",
+            "trace_format_version": 3,
+            "max_iterations": 1,
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    config_path = write_config(tmp_path / "config.yaml", [str(good_path), str(bad_path)])
+    client = TestClient(
+        create_app(
+            config_path=config_path,
+            runtime_state_path=tmp_path / "runtime-state.json",
+        )
+    )
+
+    descriptors = client.get("/api/traces").json()["traces"]
+    ids = [descriptor["id"] for descriptor in descriptors]
+    assert len(ids) == 2
+
+    response = client.post("/api/payload", json={"ids": ids})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["traces"]) == 1
+    assert len(body["errors"]) == 1
+    assert body["errors"][0]["stage"] == "trace_load"
+    assert body["traces"][0]["metadata"]["scaffold"] == "openclaw"
+
+
+def test_payload_all_failed_returns_422(tmp_path: Path) -> None:
+    """If every requested id fails, the endpoint returns 422 (no partial success)."""
+    bad_path = tmp_path / "runs" / "only-bad" / "trace.jsonl"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    bad_path.write_text(
+        json.dumps({
+            "type": "trace_metadata",
+            "scaffold": "openclaw",
+            "trace_format_version": 2,
+            "max_iterations": 1,
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    config_path = write_config(tmp_path / "config.yaml", [str(bad_path)])
+    client = TestClient(
+        create_app(
+            config_path=config_path,
+            runtime_state_path=tmp_path / "runtime-state.json",
+        )
+    )
+
+    ids = [descriptor["id"] for descriptor in client.get("/api/traces").json()["traces"]]
+    response = client.post("/api/payload", json={"ids": ids})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert len(detail["errors"]) == 1
+
+
+def test_default_marker_registry_matches_schema() -> None:
+    """Every DEFAULT_MARKER_REGISTRY entry must pass MarkerDef validation directly."""
+    assert DEFAULT_MARKER_REGISTRY, "registry must not be empty"
+    for key, entry in DEFAULT_MARKER_REGISTRY.items():
+        assert set(entry.keys()) >= {"symbol", "color", "label"}, (
+            f"{key} missing required fields: {entry}"
+        )
+        validated = MarkerDef.model_validate(entry)
+        assert validated.label, f"{key} has empty label"
+
+
+AC2_CC_GLOB = REPO_ROOT / "traces" / "swe-rebench" / "claude-code-haiku"
+
+
+@pytest.mark.slow
+def test_payload_cc_bulk_11_real_fixtures(tmp_path: Path, monkeypatch) -> None:
+    """AC2: simultaneously load all 11 real claude-code-haiku traces via /api/payload."""
+    if not AC2_CC_GLOB.exists():
+        pytest.skip(f"AC2 fixtures not present at {AC2_CC_GLOB}")
+
+    cc_paths = sorted(AC2_CC_GLOB.glob("*/attempt_1/trace.jsonl"))
+    if len(cc_paths) < 11:
+        pytest.skip(f"expected 11 AC2 fixtures, found {len(cc_paths)}")
+
+    monkeypatch.setattr(cc_cache, "CACHE_ROOT", tmp_path / "cache")
+
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        [str(path) for path in cc_paths],
+    )
+    client = TestClient(
+        create_app(
+            config_path=config_path,
+            runtime_state_path=tmp_path / "runtime-state.json",
+        )
+    )
+
+    descriptors = client.get("/api/traces").json()["traces"]
+    ids = [descriptor["id"] for descriptor in descriptors]
+    assert len(ids) == 11
+
+    first_start = time.perf_counter()
+    response = client.post("/api/payload", json={"ids": ids})
+    first_elapsed = time.perf_counter() - first_start
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["traces"]) == 11
+    assert body.get("errors", []) == []
+    scaffolds = {trace["metadata"]["scaffold"] for trace in body["traces"]}
+    assert scaffolds == {"claude-code"}
+
+    second_start = time.perf_counter()
+    second = client.post("/api/payload", json={"ids": ids})
+    second_elapsed = time.perf_counter() - second_start
+    assert second.status_code == 200
+    assert second_elapsed < first_elapsed, (
+        f"cache-hit call ({second_elapsed:.3f}s) should be faster than first import ({first_elapsed:.3f}s)"
+    )
+
+
+def test_openapi_frozen(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("GANTT_VIEWER_CONFIG", raising=False)
     monkeypatch.delenv("GANTT_VIEWER_DEV", raising=False)
-    client = TestClient(create_app())
+    # Isolate the test from the real repo config + user home cache state file.
+    # The snapshot is API-shape only, but discovery config must be valid —
+    # use a glob pointing at nothing under tmp_path so it resolves to zero
+    # descriptors without touching the live repo traces.
+    empty_config = write_config(
+        tmp_path / "config.yaml",
+        [str(tmp_path / "nothing" / "*.jsonl")],
+    )
+    client = TestClient(
+        create_app(
+            config_path=empty_config,
+            runtime_state_path=tmp_path / "runtime-state.json",
+        )
+    )
     response = client.get("/openapi.json")
     assert response.status_code == 200
 
@@ -355,3 +504,32 @@ def test_openapi_frozen(monkeypatch) -> None:
         "demo/gantt_viewer/tests/fixtures/openapi.snapshot.json and "
         "demo/gantt_viewer/frontend/src/api/schema.gen.ts together."
     )
+
+
+def test_payload_cc_cache_hit_does_not_reimport(tmp_path: Path, monkeypatch) -> None:
+    """Two /api/payload calls with the same CC id → claude_code_import runs exactly once."""
+    client, _, cc_path = _make_client(tmp_path)
+    monkeypatch.setattr(cc_cache, "CACHE_ROOT", tmp_path / "cc-cache")
+
+    call_count = {"n": 0}
+    real_import = cc_cache.import_claude_code_session
+
+    def counting_import(**kwargs):
+        call_count["n"] += 1
+        return real_import(**kwargs)
+
+    monkeypatch.setattr(cc_cache, "import_claude_code_session", counting_import)
+
+    cc_id = next(
+        trace["id"]
+        for trace in client.get("/api/traces").json()["traces"]
+        if trace["source_format"] == "claude-code"
+    )
+
+    first = client.post("/api/payload", json={"ids": [cc_id]})
+    assert first.status_code == 200
+    assert call_count["n"] == 1
+
+    second = client.post("/api/payload", json={"ids": [cc_id]})
+    assert second.status_code == 200
+    assert call_count["n"] == 1, "cache hit should not re-invoke claude_code_import"

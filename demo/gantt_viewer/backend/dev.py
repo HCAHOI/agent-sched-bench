@@ -6,13 +6,20 @@ import argparse
 import os
 import shutil
 import signal
+import socket
 import subprocess
+import sys
+import threading
 import time
+import webbrowser
 from pathlib import Path
 
 import uvicorn
 
+from demo.gantt_viewer.backend.app import FRONTEND_DIST_PATH
 from demo.gantt_viewer.backend.cc_cache import CACHE_ROOT
+
+VITE_DEV_PORT = 5173
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,7 +73,13 @@ def main(argv: list[str] | None = None) -> None:
     if args.dev:
         vite_process = _spawn_vite_dev_server()
         try:
-            _wait_for_vite_startup()
+            try:
+                _wait_for_vite_startup("127.0.0.1", VITE_DEV_PORT)
+            except RuntimeError as exc:
+                _print_vite_stderr_tail(vite_process)
+                print(f"ERROR: {exc}", file=sys.stderr)
+                raise
+            schedule_browser_open(args, host=args.host, port=VITE_DEV_PORT)
             uvicorn.run(
                 "demo.gantt_viewer.backend.app:create_app",
                 factory=True,
@@ -78,6 +91,15 @@ def main(argv: list[str] | None = None) -> None:
             _terminate_process(vite_process)
         return
 
+    if not FRONTEND_DIST_PATH.exists():
+        print(
+            "ERROR: frontend/dist is missing — run 'make gantt-viewer-build' "
+            f"(expected: {FRONTEND_DIST_PATH / 'index.html'})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    schedule_browser_open(args, host=args.host, port=args.port)
     uvicorn.run(
         "demo.gantt_viewer.backend.app:create_app",
         factory=True,
@@ -85,6 +107,14 @@ def main(argv: list[str] | None = None) -> None:
         port=args.port,
         reload=False,
     )
+
+
+def schedule_browser_open(args: argparse.Namespace, *, host: str, port: int) -> None:
+    """Schedule a browser open 1.5s after launch unless --no-browser was passed."""
+    if args.no_browser:
+        return
+    url = f"http://{host}:{port}"
+    threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
 
 def _spawn_vite_dev_server() -> subprocess.Popen[str]:
@@ -98,13 +128,26 @@ def _spawn_vite_dev_server() -> subprocess.Popen[str]:
             "--host",
             "127.0.0.1",
             "--port",
-            "5173",
+            str(VITE_DEV_PORT),
         ],
         cwd=frontend_dir,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
     )
+
+
+def _print_vite_stderr_tail(process: subprocess.Popen[str]) -> None:
+    """Drain vite's stderr (best-effort) so users see startup errors."""
+    if process.stderr is None:
+        return
+    try:
+        tail = process.stderr.read() or ""
+    except Exception:
+        return
+    if tail:
+        print("vite stderr tail:", file=sys.stderr)
+        print(tail, file=sys.stderr)
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:
@@ -117,7 +160,19 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
         process.kill()
 
 
-def _wait_for_vite_startup(timeout_s: float = 5.0) -> None:
+def _wait_for_vite_startup(
+    host: str = "127.0.0.1",
+    port: int = VITE_DEV_PORT,
+    timeout_s: float = 20.0,
+) -> None:
+    """Probe the Vite dev server port until it accepts connections or times out."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        time.sleep(0.1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.5)
+            if probe.connect_ex((host, port)) == 0:
+                return
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"vite dev server at {host}:{port} did not become ready within {timeout_s:.1f}s"
+    )

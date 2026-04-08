@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
+# Gantt viewer backend smoke — starts the FastAPI server against
+# demo/gantt_viewer/configs/example.yaml and exercises the 3 API endpoints
+# that back AC1 + AC2. Intentionally does NOT run a browser e2e — the
+# frontend Solid build is verified separately via vitest + tsc. The pytest
+# suite (`make gantt-viewer-test`) owns behavioral coverage; this script
+# only guards the "server boots + serves traces" smoke from a cold shell.
+
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if ! command -v npx >/dev/null 2>&1; then
-  echo "npx is required for the browser smoke test" >&2
+PORT="${GANTT_VIEWER_PORT:-8765}"
+# Project uses conda env "ML" — activate it before running, or override PYTHON_BIN.
+PYTHON_BIN="${PYTHON_BIN:-python}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "PYTHON_BIN='$PYTHON_BIN' not found; activate your conda ML env or set PYTHON_BIN" >&2
   exit 1
 fi
 
-PORT="${GANTT_VIEWER_PORT:-8765}"
-SESSION="gsmoke"
-PYTHON_BIN="${PYTHON_BIN:-./.venv/bin/python}"
+if ! command -v curl >/dev/null 2>&1; then
+  echo "curl is required for the smoke test" >&2
+  exit 1
+fi
 
 cleanup() {
-  npx --yes --package @playwright/cli playwright-cli -s="$SESSION" close >/dev/null 2>&1 || true
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" >/dev/null 2>&1; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
@@ -22,85 +32,64 @@ cleanup() {
 }
 trap cleanup EXIT
 
-PYTHONPATH=src:. "$PYTHON_BIN" -m trace_collect.cli gantt-serve \
-  --port "$PORT" \
-  --no-browser \
+"$PYTHON_BIN" -m uvicorn demo.gantt_viewer.backend.app:create_app \
+  --factory --host 127.0.0.1 --port "$PORT" \
   >/tmp/gantt-viewer-smoke.log 2>&1 &
 SERVER_PID=$!
 
-for _ in $(seq 1 50); do
+for _ in $(seq 1 60); do
   if curl -sf "http://127.0.0.1:${PORT}/api/health" >/dev/null; then
     break
   fi
   sleep 0.2
 done
 
-curl -sf "http://127.0.0.1:${PORT}/api/health" >/dev/null
-
-npx --yes --package @playwright/cli playwright-cli -s="$SESSION" open "http://127.0.0.1:${PORT}" >/dev/null
-
-default_loaded="$(
-  npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-    "() => [...document.querySelectorAll('strong')].map((el) => el.textContent).includes('1')"
-)"
-if [[ "$default_loaded" != "true" ]]; then
-  echo "expected default loaded count of 1, got: $default_loaded" >&2
+if ! curl -sf "http://127.0.0.1:${PORT}/api/health" >/dev/null; then
+  echo "server did not become ready — see /tmp/gantt-viewer-smoke.log" >&2
   exit 1
 fi
 
-npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-  "() => { const lines = [JSON.stringify({type:'trace_metadata', scaffold:'synthetic', model:'demo', trace_format_version:5, max_iterations:1}), JSON.stringify({type:'action', action_type:'llm_call', action_id:'llm_0', agent_id:'agent-1', iteration:0, ts_start:1000, ts_end:1000.25, data:{raw_response:{choices:[{message:{content:'drag upload'}}]}}})].join('\n'); const file = new File([lines], 'drag_trace.jsonl', { type: 'application/json' }); const dt = new DataTransfer(); dt.items.add(file); window.dispatchEvent(new DragEvent('drop', { dataTransfer: dt })); return true; }" \
-  >/dev/null
-
-after_drop="$(
-  npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-    "async () => { for (let i = 0; i < 40; i += 1) { const values = [...document.querySelectorAll('strong')].map((el) => el.textContent); if (values.includes('2')) return values.join('|'); await new Promise((resolve) => setTimeout(resolve, 100)); } return [...document.querySelectorAll('strong')].map((el) => el.textContent).join('|'); }"
-)"
-
-if [[ "$after_drop" != *"|2|"* && "$after_drop" != 2\|* && "$after_drop" != *\|2 ]]; then
-  echo "expected loaded count of 2 after synthetic drag-drop, got: $after_drop" >&2
+health_json="$(curl -sf "http://127.0.0.1:${PORT}/api/health")"
+if ! echo "$health_json" | grep -q '"status":"ok"'; then
+  echo "unexpected /api/health response: $health_json" >&2
   exit 1
 fi
 
-npx --yes --package @playwright/cli playwright-cli -s="$SESSION" click e30 >/dev/null
-npx --yes --package @playwright/cli playwright-cli -s="$SESSION" upload tests/fixtures/claude_code_minimal.jsonl >/dev/null
-
-after_upload="$(
-  npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-    "async () => { for (let i = 0; i < 40; i += 1) { const values = [...document.querySelectorAll('strong')].map((el) => el.textContent); if (values.includes('3')) return values.join('|'); await new Promise((resolve) => setTimeout(resolve, 100)); } return [...document.querySelectorAll('strong')].map((el) => el.textContent).join('|'); }"
-)"
-
-if [[ "$after_upload" != *"|3|"* && "$after_upload" != 3\|* && "$after_upload" != *\|3 ]]; then
-  echo "expected loaded count of 3 after button upload, got: $after_upload" >&2
+traces_json="$(curl -sf "http://127.0.0.1:${PORT}/api/traces")"
+if ! echo "$traces_json" | grep -q '"traces"'; then
+  echo "unexpected /api/traces response: $traces_json" >&2
   exit 1
 fi
 
-npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-  "() => { const lane = document.querySelector('.lane-label'); if (lane instanceof HTMLElement) lane.click(); return !!lane; }" \
-  >/dev/null
-
-pinned_state="$(
-  npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-    "async () => { for (let i = 0; i < 20; i += 1) { if (document.querySelector('.tooltip-card.pinned')) return true; await new Promise((resolve) => setTimeout(resolve, 100)); } return false; }"
+# Extract the first descriptor id; require python because grep/sed on JSON is fragile.
+first_id="$(
+  echo "$traces_json" \
+    | "$PYTHON_BIN" -c 'import json,sys; traces=json.load(sys.stdin)["traces"]; print(traces[0]["id"] if traces else "")'
 )"
-
-if [[ "$pinned_state" != "true" ]]; then
-  echo "expected pinned tooltip after clicking the first lane label" >&2
+if [[ -z "$first_id" ]]; then
+  echo "no traces discovered in example.yaml config" >&2
   exit 1
 fi
 
-npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-  "() => { const buttons=[...document.querySelectorAll('button')]; const loadAll=buttons.find((b)=>b.textContent?.includes('Load all')); if (loadAll) loadAll.click(); return !!loadAll; }" \
-  >/dev/null
-
-after_load="$(
-  npx --yes --package @playwright/cli playwright-cli -s="$SESSION" eval --raw \
-    "async () => { for (let i = 0; i < 40; i += 1) { const values = [...document.querySelectorAll('strong')].map((el) => el.textContent); if (values.includes('14')) return values.join('|'); await new Promise((resolve) => setTimeout(resolve, 100)); } return [...document.querySelectorAll('strong')].map((el) => el.textContent).join('|'); }"
+payload_status="$(
+  curl -s -o /tmp/gantt-viewer-payload.json -w '%{http_code}' \
+    -X POST "http://127.0.0.1:${PORT}/api/payload" \
+    -H 'Content-Type: application/json' \
+    -d "{\"ids\":[\"$first_id\"]}"
 )"
 
-if [[ "$after_load" != *"|14|"* && "$after_load" != 14\|* && "$after_load" != *\|14 ]]; then
-  echo "expected loaded count of 14 after drag-drop + upload + Load all, got: $after_load" >&2
+if [[ "$payload_status" != "200" ]]; then
+  echo "POST /api/payload failed with $payload_status" >&2
+  cat /tmp/gantt-viewer-payload.json >&2
   exit 1
 fi
 
-echo "gantt viewer smoke passed"
+n_traces="$(
+  "$PYTHON_BIN" -c 'import json; print(len(json.load(open("/tmp/gantt-viewer-payload.json"))["traces"]))'
+)"
+if [[ "$n_traces" != "1" ]]; then
+  echo "expected 1 trace in payload response, got $n_traces" >&2
+  exit 1
+fi
+
+echo "gantt viewer smoke passed (descriptor: $first_id)"

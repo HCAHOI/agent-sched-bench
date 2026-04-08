@@ -37,13 +37,7 @@ gantt-viewer = [
   "python-multipart>=0.0.9,<0.1",
   "anyio>=4.0,<5.0",
 ]
-# Phase 5 of trace-sim-vastai-pipeline: gantt_template DOM regression
-# tests use BeautifulSoup + lxml for parsing the rendered HTML.
-# Phase 5 e2e (deferred to US-010 manual smoke runbook): playwright is
-# required for tests/test_gantt_browser_smoke.py — install via
-# `playwright install chromium` (NOT `playwright install`, which would
-# pull the full ~450MB browser matrix). CI cache spec for
-# ~/.cache/ms-playwright lives in docs/vastai_setup.md.
+# Optional HTML-parsing deps retained for ad-hoc trace inspection tools.
 gantt-test = [
   "beautifulsoup4>=4.12",
   "lxml>=5.0",
@@ -53,14 +47,25 @@ gantt-test = [
 openclaw = "agents.openclaw._cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "src", "demo" = "demo"}
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = [
+  "trace_collect*",
+  "agents*",
+  "analysis*",
+  "serving*",
+  "harness*",
+  "demo*",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
-testpaths = ["tests"]
+testpaths = ["tests", "demo/gantt_viewer/tests"]
+markers = [
+  "slow: marks tests that hit real on-disk fixtures and may be skipped in fast CI runs",
+]
 
 [tool.ruff]
 line-length = 88

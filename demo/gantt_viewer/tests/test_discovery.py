@@ -75,3 +75,26 @@ def test_sniff_format_unknown_shape_raises(tmp_path: Path) -> None:
     trace_path.write_text(json.dumps({"foo": "bar"}) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unable to sniff trace format"):
         sniff_format(trace_path)
+
+
+def test_discover_traces_expands_glob_patterns(tmp_path: Path) -> None:
+    """A glob pattern in the config should expand to every matching trace."""
+    runs_root = tmp_path / "runs"
+    for instance in ("repo__issue-1", "repo__issue-2", "repo__issue-3"):
+        write_v5_trace(runs_root / instance / "trace.jsonl", [])
+
+    config_path = write_config(
+        tmp_path / "config.yaml",
+        [str(runs_root / "*" / "trace.jsonl")],
+    )
+
+    config = load_discovery_config(config_path)
+    descriptors = discover_traces(config)
+
+    ids = [descriptor.id for descriptor in descriptors]
+    assert ids == [
+        "ac1-repo__issue-1",
+        "ac1-repo__issue-2",
+        "ac1-repo__issue-3",
+    ]
+    assert all(descriptor.source_format == "v5" for descriptor in descriptors)

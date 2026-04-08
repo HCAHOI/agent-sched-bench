@@ -237,7 +237,8 @@ h1 {
 
 .sidebar-shell {
   position: relative;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   border-right: 1px solid rgba(23, 32, 42, 0.08);
   background: rgba(248, 250, 252, 0.96);
   min-height: 560px;

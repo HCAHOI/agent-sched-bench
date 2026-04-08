@@ -4,7 +4,7 @@
       "Body_upload_trace_endpoint_api_traces_upload_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -17,12 +17,19 @@
       },
       "GanttPayload": {
         "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/PayloadError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
           "registries": {
             "$ref": "#/components/schemas/Registries"
           },
           "traces": {
             "items": {
-              "$ref": "#/components/schemas/TracePayload-Output"
+              "$ref": "#/components/schemas/TracePayload"
             },
             "title": "Traces",
             "type": "array"
@@ -155,6 +162,29 @@
           "label"
         ],
         "title": "MarkerDef",
+        "type": "object"
+      },
+      "PayloadError": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "stage",
+          "error"
+        ],
+        "title": "PayloadError",
         "type": "object"
       },
       "PayloadRequest": {
@@ -444,42 +474,7 @@
         "title": "TraceMetadata",
         "type": "object"
       },
-      "TracePayload-Input": {
-        "properties": {
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "label": {
-            "title": "Label",
-            "type": "string"
-          },
-          "lanes": {
-            "items": {
-              "$ref": "#/components/schemas/Lane"
-            },
-            "title": "Lanes",
-            "type": "array"
-          },
-          "metadata": {
-            "$ref": "#/components/schemas/TraceMetadata"
-          },
-          "t0": {
-            "title": "T0",
-            "type": "number"
-          }
-        },
-        "required": [
-          "id",
-          "label",
-          "metadata",
-          "t0",
-          "lanes"
-        ],
-        "title": "TracePayload",
-        "type": "object"
-      },
-      "TracePayload-Output": {
+      "TracePayload": {
         "properties": {
           "id": {
             "title": "Id",
@@ -561,7 +556,7 @@
             "$ref": "#/components/schemas/TraceDescriptor"
           },
           "payload_fragment": {
-            "$ref": "#/components/schemas/TracePayload-Output"
+            "$ref": "#/components/schemas/TracePayload"
           }
         },
         "required": [
@@ -573,6 +568,13 @@
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
