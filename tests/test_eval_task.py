@@ -7,9 +7,6 @@ function-call fields introduced for BFCL v4 (US-002, Phase 0C).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from agents.openclaw.eval.types import EvalTask
 

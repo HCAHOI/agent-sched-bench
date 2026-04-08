@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import time
-from pathlib import Path
 from typing import Any
 
 import httpx
 
+from serving._common import (
+    append_followup_turn,
+    validate_chat_responses,
+    write_json_report,
+)
 from serving.health_check import run_chat_smoke, wait_for_models_endpoint
 
 
@@ -47,16 +50,11 @@ async def verify_proxy(args: argparse.Namespace) -> dict[str, Any]:
             )
             chat_responses.append(response)
             if index == 0:
-                assistant_message = (
-                    ((response.get("choices") or [{}])[0].get("message") or {}).get(
-                        "content"
-                    )
-                ) or ""
-                messages = [
-                    *messages,
-                    {"role": "assistant", "content": assistant_message},
-                    {"role": "user", "content": args.followup_prompt},
-                ]
+                messages = append_followup_turn(
+                    messages,
+                    chat_response=response,
+                    followup_prompt=args.followup_prompt,
+                )
 
         programs_payload = await fetch_json(client, f"{args.base_url}/programs")
         profile_payload = await fetch_json(
@@ -104,16 +102,7 @@ def validate_report(report: dict[str, Any]) -> list[str]:
         errors.append("ThunderAgent /metrics reported metrics disabled")
     if not metrics_response.get("backends"):
         errors.append("ThunderAgent /metrics returned no backend state")
-    for index, chat_response in enumerate(report["chat_responses"]):
-        choices = chat_response.get("choices") or []
-        if not choices:
-            errors.append(f"chat completion #{index} returned no choices")
-            continue
-        message = choices[0].get("message") or {}
-        content = message.get("content")
-        if not content:
-            errors.append(f"chat completion #{index} returned empty content")
-    return errors
+    return [*errors, *validate_chat_responses(report["chat_responses"])]
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,9 +124,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     report = asyncio.run(verify_proxy(args))
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    write_json_report(report, args.output)
     if args.fail_on_mismatch:
         errors = validate_report(report)
         if errors:

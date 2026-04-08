@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from trace_collect._raw_response import parsed_tool_args_from_raw_response
+
 _MAX_READ_CHARS = 128_000
 _DEFAULT_READ_LIMIT = 2_000
 _DEFAULT_LIST_LIMIT = 200
@@ -46,7 +48,7 @@ def _unwrap_tool_args(
     try:
         parsed = json.loads(tool_args_json or "{}")
     except json.JSONDecodeError:
-        fallback = _tool_args_from_raw_response(raw_response)
+        fallback = parsed_tool_args_from_raw_response(raw_response)
         if fallback is not None:
             fallback_name, fallback_args = fallback
             return (tool_name or fallback_name), fallback_args, True
@@ -63,31 +65,6 @@ def _unwrap_tool_args(
             return (tool_name or only_name), only_value, True
 
     return tool_name, parsed, False
-
-
-def _tool_args_from_raw_response(
-    raw_response: dict[str, Any] | None,
-) -> tuple[str, dict[str, Any]] | None:
-    if not raw_response:
-        return None
-    message = (raw_response.get("choices") or [{}])[0].get("message") or {}
-    tool_calls = message.get("tool_calls") or []
-    if not tool_calls:
-        return None
-    function = (tool_calls[0] or {}).get("function") or {}
-    tool_name = function.get("name")
-    arguments = function.get("arguments")
-    if not tool_name or not arguments:
-        return None
-    try:
-        parsed = json.loads(arguments)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return tool_name, parsed
-
-
 def _map_workspace_path(raw_path: str, repo_dir: Path, agent_id: str) -> Path:
     path = Path(raw_path).expanduser()
     if not path.is_absolute():

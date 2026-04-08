@@ -13,8 +13,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from agents.benchmarks.bfcl_runner import BFCLRunner
 from agents.openclaw.eval.types import EvalTask
 from agents.openclaw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -81,7 +79,6 @@ def test_ast_match_irrelevance_requires_empty_predicted() -> None:
 
 def test_ast_match_live_irrelevance_requires_empty_predicted() -> None:
     """live_irrelevance must use the same abstention rule as irrelevance."""
-    # reviewer C2: live_irrelevance previously fell through to generic length-match
     assert (
         BFCLRunner._ast_match(
             predicted=[], ground_truth=[], category="live_irrelevance"
@@ -277,7 +274,6 @@ def test_run_task_populates_official_resolved_false(tmp_path: Path) -> None:
 def test_run_task_evaluation_report_round_trips(tmp_path: Path) -> None:
     """evaluation_report must carry category + per-task score breakdown
     so downstream analysis can read it from results.jsonl without re-walking traces."""
-    # reviewer C3: this dict was previously dropped at the collector boundary
     provider = _StubProvider(
         LLMResponse(
             content=None,

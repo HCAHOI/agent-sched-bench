@@ -1,5 +1,7 @@
 PYTHON ?= python3
 UV ?= uv
+TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
+GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
 .PHONY: help pull sync test lint serve-vllm run-smoke smoke-code run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw download-bfcl-v4 smoke-bfcl-v4-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
@@ -82,16 +84,14 @@ PROVIDER ?= dashscope
 SMOKE_N ?= 2
 
 smoke-swe-rebench-miniswe:
-	PYTHONPATH=src $(PYTHON) -m trace_collect.cli \
-	    --provider $(PROVIDER) \
+	$(TRACE_COLLECT) \
 	    --benchmark swe-rebench \
 	    --scaffold mini-swe-agent \
 	    --sample $(SMOKE_N) \
 	    --verbose
 
 smoke-swe-rebench-openclaw:
-	PYTHONPATH=src $(PYTHON) -m trace_collect.cli \
-	    --provider $(PROVIDER) \
+	$(TRACE_COLLECT) \
 	    --benchmark swe-rebench \
 	    --scaffold openclaw \
 	    --sample $(SMOKE_N) \
@@ -106,30 +106,29 @@ download-bfcl-v4:
 	./scripts/setup/bfcl_v4_data.sh
 
 smoke-bfcl-v4-openclaw:
-	PYTHONPATH=src $(PYTHON) -m trace_collect.cli \
-	    --provider $(PROVIDER) \
+	$(TRACE_COLLECT) \
 	    --benchmark bfcl-v4 \
 	    --scaffold openclaw \
 	    --sample $(SMOKE_N)
 
 gantt-viewer-install:
-	cd demo/gantt_viewer/frontend && npm install
+	cd $(GANTT_VIEWER_FRONTEND) && npm install
 
 gantt-viewer-dev:
 	PYTHONPATH=src:. $(PYTHON) -m trace_collect.cli gantt-serve --dev
 
 gantt-viewer-build:
-	cd demo/gantt_viewer/frontend && npm run build
+	cd $(GANTT_VIEWER_FRONTEND) && npm run build
 
 gantt-viewer-test:
 	PYTHONPATH=src:. $(PYTHON) -m pytest demo/gantt_viewer/tests -v
-	cd demo/gantt_viewer/frontend && npm test
+	cd $(GANTT_VIEWER_FRONTEND) && npm test
 
 gantt-viewer-smoke:
 	./scripts/smoke_gantt_viewer.sh
 
 gantt-viewer-clean:
-	rm -rf demo/gantt_viewer/frontend/dist demo/gantt_viewer/frontend/node_modules
+	rm -rf $(GANTT_VIEWER_FRONTEND)/dist $(GANTT_VIEWER_FRONTEND)/node_modules
 	rm -rf ~/.cache/agent-sched-bench/gantt-cc-import
 	rm -rf ~/.cache/agent-sched-bench/gantt-uploads
 	rm -f ~/.cache/agent-sched-bench/gantt-runtime-state.json

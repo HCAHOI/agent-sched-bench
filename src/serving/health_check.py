@@ -3,13 +3,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.metadata
-import json
 import time
-from pathlib import Path
 from typing import Any
 
 import httpx
 
+from harness.prometheus import parse_prometheus_metric_values
+from serving._common import (
+    append_followup_turn,
+    validate_chat_responses,
+    write_json_report,
+)
 
 def safe_version(package: str) -> str | None:
     """Return the installed package version when available."""
@@ -113,17 +117,11 @@ async def verify_server(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
             if index < args.repeat - 1:
-                assistant_message = (
-                    (
-                        (chat_payloads[-1].get("choices") or [{}])[0].get("message")
-                        or {}
-                    ).get("content")
-                ) or ""
-                request_messages = [
-                    *request_messages,
-                    {"role": "assistant", "content": assistant_message},
-                    {"role": "user", "content": args.followup_prompt},
-                ]
+                request_messages = append_followup_turn(
+                    request_messages,
+                    chat_response=chat_payloads[-1],
+                    followup_prompt=args.followup_prompt,
+                )
         post_metrics_payload = await require_metrics_endpoint(client, args.metrics_url)
 
     pre_prefix_cache_hit_rates = parse_prefix_cache_hit_rates(pre_metrics_payload)
@@ -171,17 +169,7 @@ def validate_report(report: dict[str, Any]) -> list[str]:
         if max(deltas, default=0.0) <= 0.0:
             errors.append("prefix cache hit rate did not increase during this run")
 
-    for index, chat_response in enumerate(report["chat_responses"]):
-        choices = chat_response.get("choices") or []
-        if not choices:
-            errors.append(f"chat completion #{index} returned no choices")
-            continue
-        message = choices[0].get("message") or {}
-        content = message.get("content")
-        if not content:
-            errors.append(f"chat completion #{index} returned empty content")
-
-    return errors
+    return [*errors, *validate_chat_responses(report["chat_responses"])]
 
 
 def parse_args() -> argparse.Namespace:
@@ -210,21 +198,24 @@ def parse_args() -> argparse.Namespace:
 
 def parse_prefix_cache_hit_rates(metrics_payload: str) -> dict[str, float]:
     """Extract prefix cache hit-rate gauges from a Prometheus metrics payload."""
-    metrics: dict[str, float] = {}
-    for line in metrics_payload.splitlines():
-        if line.startswith("vllm:gpu_prefix_cache_hit_rate"):
-            metrics["gpu_prefix_cache_hit_rate"] = float(line.split()[-1])
-        if line.startswith("vllm:cpu_prefix_cache_hit_rate"):
-            metrics["cpu_prefix_cache_hit_rate"] = float(line.split()[-1])
-    return metrics
+    return {
+        name: value
+        for name, value in parse_prometheus_metric_values(
+            metrics_payload,
+            {
+                "vllm:gpu_prefix_cache_hit_rate": "gpu_prefix_cache_hit_rate",
+                "vllm:cpu_prefix_cache_hit_rate": "cpu_prefix_cache_hit_rate",
+            },
+            include_missing=False,
+        ).items()
+        if value is not None
+    }
 
 
 def main() -> None:
     args = parse_args()
     report = asyncio.run(verify_server(args))
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    write_json_report(report, args.output)
     if args.fail_on_mismatch:
         errors = validate_report(report)
         if errors:

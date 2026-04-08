@@ -17,11 +17,14 @@ plugin's methods using a module-level default :class:`BenchmarkConfig`.
 from __future__ import annotations
 
 import json
-import random
 from pathlib import Path
 from typing import Any
 
 from agents.benchmarks.base import BenchmarkConfig
+from agents.benchmarks._swebench_selection import (
+    count_fail_to_pass as _shared_count_fail_to_pass,
+    select_tool_intensive as _shared_select_tool_intensive,
+)
 from agents.benchmarks.swe_bench_verified import (
     SWEBenchVerified,
     CLASS_LEVEL_HEAVY_REPOS,
@@ -59,9 +62,8 @@ _DEFAULT_CONFIG = BenchmarkConfig(
 
 
 # ---------------------------------------------------------------------------
-# Legacy public API — implementations kept inline for clarity and to avoid
-# circular imports.  The plugin's select_subset() delegates back to
-# select_tool_intensive_tasks(), so the body must live here.
+# Legacy public API — keep these names stable, but delegate shared selection
+# logic to the benchmark plugin so the shim does not carry a second copy.
 # ---------------------------------------------------------------------------
 
 
@@ -90,13 +92,7 @@ def derive_test_cmd(task: dict[str, Any]) -> str:
 
 def _count_fail_to_pass(task: dict[str, Any]) -> int:
     """Count the number of tests in FAIL_TO_PASS."""
-    raw = task.get("FAIL_TO_PASS", "[]")
-    if isinstance(raw, str):
-        try:
-            return len(json.loads(raw))
-        except json.JSONDecodeError:
-            return 1 if raw.strip() else 0
-    return len(raw)
+    return _shared_count_fail_to_pass(task)
 
 
 def select_tool_intensive_tasks(
@@ -104,69 +100,8 @@ def select_tool_intensive_tasks(
     n: int = 32,
     seed: int = 42,
 ) -> list[dict[str, Any]]:
-    """Select *n* tool-intensive tasks from the full Verified dataset.
-
-    Selection strategy:
-    1. Prioritize large repos whose test suites are naturally slow
-       (django, sympy, scikit-learn, matplotlib).
-    2. Within each repo, rank by FAIL_TO_PASS test count (more tests ≈
-       longer pytest runtime).
-    3. Exclude trivial tasks (empty FAIL_TO_PASS or very short
-       problem_statement suggesting doc/typo fixes).
-    4. Stratified sampling ensures repo diversity.
-
-    Args:
-        tasks: Full list of SWE-bench Verified task dicts.
-        n: Number of tasks to select.
-        seed: Random seed for reproducibility.
-
-    Returns:
-        Selected subset of *n* tasks sorted by instance_id.
-    """
-    rng = random.Random(seed)
-
-    # Filter out trivial tasks
-    candidates = [
-        t
-        for t in tasks
-        if _count_fail_to_pass(t) > 0 and len(t.get("problem_statement", "")) > 100
-    ]
-
-    # Group by repo
-    by_repo: dict[str, list[dict[str, Any]]] = {}
-    for t in candidates:
-        repo = t["repo"]
-        by_repo.setdefault(repo, []).append(t)
-
-    # Sort each repo's tasks by FAIL_TO_PASS count (descending)
-    for repo_tasks in by_repo.values():
-        repo_tasks.sort(key=_count_fail_to_pass, reverse=True)
-
-    selected: list[dict[str, Any]] = []
-
-    # Phase 1: Fill quotas from priority repos
-    for repo, quota in REPO_QUOTAS.items():
-        pool = by_repo.get(repo, [])
-        take = min(quota, len(pool))
-        selected.extend(pool[:take])
-
-    # Phase 2: Fill remaining slots from other repos
-    remaining = n - len(selected)
-    if remaining > 0:
-        other_repos = [r for r in by_repo if r not in REPO_QUOTAS]
-        rng.shuffle(other_repos)
-        other_pool: list[dict[str, Any]] = []
-        for repo in other_repos:
-            other_pool.extend(by_repo[repo])
-        other_pool.sort(key=_count_fail_to_pass, reverse=True)
-        selected.extend(other_pool[:remaining])
-
-    # Trim to exactly n if we over-selected
-    selected = selected[:n]
-
-    # Stable output order
-    selected.sort(key=lambda t: t["instance_id"])
-    return selected
+    """Select *n* tool-intensive tasks from the full Verified dataset."""
+    return _shared_select_tool_intensive(tasks, repo_quotas=REPO_QUOTAS, n=n, seed=seed)
 
 
 def load_swebench_verified() -> list[dict[str, Any]]:
