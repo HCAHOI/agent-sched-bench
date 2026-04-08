@@ -118,11 +118,6 @@ async def _exec_tool(
 # ---------------------------------------------------------------------------
 
 
-def _build_simulate_run_id(model: str) -> str:
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
-    safe_model = model.replace("/", "-").replace(":", "-")
-    return f"simulate_{safe_model}_{ts}"
-
 
 def load_trace_actions(
     trace_path: Path,
@@ -269,7 +264,7 @@ async def simulate(
     )
 
     # 4. Set up trace logger
-    run_id = _build_simulate_run_id(model)
+    run_id = f"simulate_{model.replace('/', '-').replace(':', '-')}_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%S')}"
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     trace_logger = TraceLogger(output_path, run_id)

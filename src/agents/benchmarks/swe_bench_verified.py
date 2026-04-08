@@ -85,12 +85,9 @@ class SWEBenchVerified(Benchmark):
         return tasks
 
     def normalize_task(self, raw: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a raw SWE-bench row by deriving ``test_cmd``.
-
-        Handles both JSON-string and native-list ``FAIL_TO_PASS`` values.
-        """
+        """Normalize a raw SWE-bench row by deriving ``test_cmd``."""
         task = dict(raw)
-        task["test_cmd"] = self._derive_test_cmd_internal(task)
+        task["test_cmd"] = self.derive_test_cmd(task)
         return task
 
     # ------------------------------------------------------------------
@@ -152,29 +149,6 @@ class SWEBenchVerified(Benchmark):
             benchmark=self,
             **kwargs,
         )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _derive_test_cmd_internal(task: dict[str, Any]) -> str:
-        """Derive a pytest command from FAIL_TO_PASS (handles list and str)."""
-        fail_to_pass_raw = task.get("FAIL_TO_PASS", "[]")
-        if isinstance(fail_to_pass_raw, str):
-            try:
-                test_ids = json.loads(fail_to_pass_raw)
-            except json.JSONDecodeError:
-                test_ids = [fail_to_pass_raw]
-        else:
-            test_ids = list(fail_to_pass_raw)
-
-        if not test_ids:
-            return "python -m pytest --no-header -q"
-
-        tests_str = " ".join(test_ids)
-        return f"python -m pytest {tests_str} -x --no-header -q"
-
 
 # ---------------------------------------------------------------------------
 # Module-level selection function (called by base.Benchmark.select_subset and

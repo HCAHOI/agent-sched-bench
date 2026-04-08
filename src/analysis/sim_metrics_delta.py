@@ -59,47 +59,11 @@ def _assert_field_is_counter(field_name: str) -> None:
 
 
 def compute_preemption_delta(actions: list[dict[str, Any]]) -> list[int]:
-    """Compute consecutive deltas of `num_preemptions_total` across actions.
+    """Compute consecutive deltas of ``num_preemptions_total`` across actions.
 
-    Args:
-        actions: A list of TraceAction dicts (as parsed from a v5
-            trace's JSONL records). Each action is expected to have
-            `data.sim_metrics.vllm_scheduler_snapshot.num_preemptions_total`
-            populated. Actions that are missing the snapshot or have
-            None for the counter are skipped silently (the delta list
-            shrinks accordingly).
-
-    Returns:
-        A list of integer deltas. For an input of length N with valid
-        counters at every position, returns a list of length N-1
-        whose i-th element is `actions[i+1].counter - actions[i].counter`.
-
-    Raises:
-        TypeError: if any caller attempts to broaden this function to
-            non-counter fields without updating `_DELTA_VALID_FIELDS`
-            (see `_assert_field_is_counter`).
+    Thin wrapper around :func:`compute_field_delta` for the common case.
     """
-    # Self-check: this function operates on the counter field, so
-    # asserting it's in the whitelist guards against accidental copies
-    # of this function being repurposed for gauges/ratios.
-    _assert_field_is_counter("num_preemptions_total")
-
-    counters: list[int] = []
-    for action in actions:
-        snap = (
-            action.get("data", {})
-            .get("sim_metrics", {})
-            .get("vllm_scheduler_snapshot", {})
-        )
-        value = snap.get("num_preemptions_total")
-        if value is None:
-            continue
-        counters.append(int(value))
-
-    if len(counters) < 2:
-        return []
-
-    return [counters[i + 1] - counters[i] for i in range(len(counters) - 1)]
+    return compute_field_delta(actions, "num_preemptions_total")
 
 
 def compute_field_delta(

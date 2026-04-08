@@ -357,7 +357,9 @@ def main() -> None:
     elif len(sys.argv) > 1 and sys.argv[1] == "inspect":
         _run_inspect(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "gantt-serve":
-        _run_gantt_serve(sys.argv[2:])
+        from demo.gantt_viewer.backend.dev import main as run_gantt_server
+
+        run_gantt_server(sys.argv[2:])
     else:
         args = parse_collect_args()
         _run_collect(args)
@@ -655,12 +657,6 @@ examples:
             return
         cmd_timeline(data)
 
-
-def _run_gantt_serve(argv: list[str]) -> None:
-    """Top-level dynamic Gantt viewer subcommand."""
-    from demo.gantt_viewer.backend.dev import main as run_gantt_server
-
-    run_gantt_server(argv)
 
 
 if __name__ == "__main__":
