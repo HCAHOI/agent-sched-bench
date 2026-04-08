@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/payload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Payload Endpoint */
+        post: operations["payload_endpoint_api_payload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/traces": {
         parameters: {
             query?: never;
@@ -32,6 +49,23 @@ export interface paths {
         get: operations["list_traces_endpoint_api_traces_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/traces/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Traces Endpoint */
+        post: operations["register_traces_endpoint_api_traces_register_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -55,6 +89,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/traces/unregister": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unregister Traces Endpoint */
+        post: operations["unregister_traces_endpoint_api_traces_unregister_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/traces/upload": {
         parameters: {
             query?: never;
@@ -66,23 +117,6 @@ export interface paths {
         put?: never;
         /** Upload Trace Endpoint */
         post: operations["upload_trace_endpoint_api_traces_upload_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/payload": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Payload Endpoint */
-        post: operations["payload_endpoint_api_payload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -114,80 +148,94 @@ export interface components {
         };
         /** HealthResponse */
         HealthResponse: {
-            /** Status */
-            status: string;
             /** N Discovered */
             n_discovered: number;
+            /** Status */
+            status: string;
         };
         /** Lane */
         Lane: {
             /** Agent Id */
             agent_id: string;
-            /** Spans */
-            spans: components["schemas"]["Span"][];
             /** Markers */
             markers: components["schemas"]["Marker"][];
+            /** Spans */
+            spans: components["schemas"]["Span"][];
         };
         /** Marker */
         Marker: {
-            /** Type */
-            type: string;
-            /** Event */
-            event: string;
-            /** T */
-            t: number;
-            /** T Abs */
-            t_abs: number;
-            /** Iteration */
-            iteration: number;
             /** Detail */
             detail: {
                 [key: string]: unknown;
             };
+            /** Event */
+            event: string;
+            /** Iteration */
+            iteration: number;
+            /** T */
+            t: number;
+            /** T Abs */
+            t_abs: number;
+            /** Type */
+            type: string;
         };
         /** MarkerDef */
         MarkerDef: {
-            /** Symbol */
-            symbol: string;
             /** Color */
             color: string;
             /** Label */
             label: string;
+            /** Symbol */
+            symbol: string;
         };
         /** PayloadRequest */
         PayloadRequest: {
             /** Ids */
             ids: string[];
         };
+        /** RegisterTracesRequest */
+        RegisterTracesRequest: {
+            /** Labels By Path */
+            labels_by_path?: {
+                [key: string]: string;
+            };
+            /** Paths */
+            paths: string[];
+        };
+        /** RegisterTracesResponse */
+        RegisterTracesResponse: {
+            /** Registered */
+            registered: components["schemas"]["TraceDescriptor"][];
+        };
         /** Registries */
         Registries: {
-            /** Spans */
-            spans: {
-                [key: string]: components["schemas"]["SpanDef"];
-            };
             /** Markers */
             markers: {
                 [key: string]: components["schemas"]["MarkerDef"];
             };
+            /** Spans */
+            spans: {
+                [key: string]: components["schemas"]["SpanDef"];
+            };
         };
         /** Span */
         Span: {
-            /** Type */
-            type: string;
-            /** Start */
-            start: number;
-            /** End */
-            end: number;
-            /** Start Abs */
-            start_abs: number;
-            /** End Abs */
-            end_abs: number;
-            /** Iteration */
-            iteration: number;
             /** Detail */
             detail: {
                 [key: string]: unknown;
             };
+            /** End */
+            end: number;
+            /** End Abs */
+            end_abs: number;
+            /** Iteration */
+            iteration: number;
+            /** Start */
+            start: number;
+            /** Start Abs */
+            start_abs: number;
+            /** Type */
+            type: string;
         };
         /** SpanDef */
         SpanDef: {
@@ -204,47 +252,47 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Mtime */
+            mtime: number;
+            /** Path */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
             /**
              * Source Format
              * @enum {string}
              */
             source_format: "v5" | "claude-code";
-            /** Path */
-            path: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Mtime */
-            mtime: number;
         };
         /** TraceListResponse */
         TraceListResponse: {
+            registries: components["schemas"]["Registries"];
             /** Traces */
             traces: components["schemas"]["TraceDescriptor"][];
-            registries: components["schemas"]["Registries"];
         };
         /** TraceMetadata */
         TraceMetadata: {
-            /** Scaffold */
-            scaffold: string;
-            /** Model */
-            model?: string | null;
+            /** Elapsed S */
+            elapsed_s?: number | null;
             /**
              * Instance Id
              * @default
              */
             instance_id: string;
-            /** Mode */
-            mode?: string | null;
             /** Max Iterations */
             max_iterations?: number | null;
+            /** Mode */
+            mode?: string | null;
+            /** Model */
+            model?: string | null;
             /** N Actions */
             n_actions: number;
-            /** N Iterations */
-            n_iterations: number;
             /** N Events */
             n_events: number;
-            /** Elapsed S */
-            elapsed_s?: number | null;
+            /** N Iterations */
+            n_iterations: number;
+            /** Scaffold */
+            scaffold: string;
         };
         /** TracePayload */
         "TracePayload-Input": {
@@ -252,11 +300,11 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Lanes */
+            lanes: components["schemas"]["Lane"][];
             metadata: components["schemas"]["TraceMetadata"];
             /** T0 */
             t0: number;
-            /** Lanes */
-            lanes: components["schemas"]["Lane"][];
         };
         /** TracePayload */
         "TracePayload-Output": {
@@ -264,11 +312,23 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /** Lanes */
+            lanes: components["schemas"]["Lane"][];
             metadata: components["schemas"]["TraceMetadata"];
             /** T0 */
             t0: number;
-            /** Lanes */
-            lanes: components["schemas"]["Lane"][];
+        };
+        /** UnregisterTracesRequest */
+        UnregisterTracesRequest: {
+            /** Ids */
+            ids: string[];
+        };
+        /** UnregisterTracesResponse */
+        UnregisterTracesResponse: {
+            /** Missing Ids */
+            missing_ids: string[];
+            /** Removed Ids */
+            removed_ids: string[];
         };
         /** UploadTraceResponse */
         UploadTraceResponse: {
@@ -313,6 +373,39 @@ export interface operations {
             };
         };
     };
+    payload_endpoint_api_payload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayloadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GanttPayload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_traces_endpoint_api_traces_get: {
         parameters: {
             query?: never;
@@ -329,6 +422,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TraceListResponse"];
+                };
+            };
+        };
+    };
+    register_traces_endpoint_api_traces_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterTracesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterTracesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -353,6 +479,39 @@ export interface operations {
             };
         };
     };
+    unregister_traces_endpoint_api_traces_unregister_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnregisterTracesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnregisterTracesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_trace_endpoint_api_traces_upload_post: {
         parameters: {
             query?: never;
@@ -373,39 +532,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UploadTraceResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    payload_endpoint_api_payload_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PayloadRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GanttPayload"];
                 };
             };
             /** @description Validation Error */

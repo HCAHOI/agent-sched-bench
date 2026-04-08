@@ -117,6 +117,8 @@ The viewer discovers the shipped acceptance traces from
 `demo/gantt_viewer/configs/example.yaml`, serves API routes from FastAPI, and
 in production mounts the built frontend from `demo/gantt_viewer/frontend/dist`.
 See `demo/gantt_viewer/README.md` for the exact workflow and acceptance checks.
+For agent-oriented runtime trace management, use
+`demo/gantt_viewer/AGENT_INTERFACE.md`.
 
 Smoke-only subsets belong in dedicated `*_smoke.yaml` workload configs. Default
 workload configs should describe the full benchmark dataset path.

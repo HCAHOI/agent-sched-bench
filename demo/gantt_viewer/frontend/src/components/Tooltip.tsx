@@ -47,6 +47,9 @@ export default function Tooltip(props: TooltipProps) {
             </>
           ))}
         </div>
+        <Show when={props.pinned}>
+          <p class="tooltip-hint">Pinned. Click the canvas or press ESC to clear.</p>
+        </Show>
       </aside>
     </Show>
   );

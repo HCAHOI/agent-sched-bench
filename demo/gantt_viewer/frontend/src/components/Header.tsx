@@ -4,6 +4,7 @@ import type { TimeMode, ViewMode } from "../state/signals";
 
 interface HeaderProps {
   loadedCount: Accessor<number>;
+  summary: Accessor<string>;
   onTimeModeChange: (mode: TimeMode) => void;
   onViewModeChange: (mode: ViewMode) => void;
   timeMode: Accessor<TimeMode>;
@@ -20,6 +21,7 @@ export default function Header(props: HeaderProps) {
         <p class="lede compact">
           Render payloads on an imperative canvas while Solid owns the controls.
         </p>
+        <p class="toolbar-meta">{props.summary()}</p>
       </div>
 
       <div class="toolbar-groups">

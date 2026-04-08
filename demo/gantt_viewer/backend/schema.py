@@ -97,6 +97,24 @@ class PayloadRequest(BaseModel):
     ids: list[str] = Field(min_length=1)
 
 
+class RegisterTracesRequest(BaseModel):
+    paths: list[str] = Field(min_length=1)
+    labels_by_path: dict[str, str] = Field(default_factory=dict)
+
+
+class RegisterTracesResponse(BaseModel):
+    registered: list[TraceDescriptor]
+
+
+class UnregisterTracesRequest(BaseModel):
+    ids: list[str] = Field(min_length=1)
+
+
+class UnregisterTracesResponse(BaseModel):
+    removed_ids: list[str]
+    missing_ids: list[str]
+
+
 class UploadTraceResponse(BaseModel):
     descriptor: TraceDescriptor
     payload_fragment: TracePayload

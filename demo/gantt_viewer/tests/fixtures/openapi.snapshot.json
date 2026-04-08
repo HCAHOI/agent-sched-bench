@@ -174,6 +174,46 @@
         "title": "PayloadRequest",
         "type": "object"
       },
+      "RegisterTracesRequest": {
+        "properties": {
+          "labels_by_path": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels By Path",
+            "type": "object"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "title": "RegisterTracesRequest",
+        "type": "object"
+      },
+      "RegisterTracesResponse": {
+        "properties": {
+          "registered": {
+            "items": {
+              "$ref": "#/components/schemas/TraceDescriptor"
+            },
+            "title": "Registered",
+            "type": "array"
+          }
+        },
+        "required": [
+          "registered"
+        ],
+        "title": "RegisterTracesResponse",
+        "type": "object"
+      },
       "Registries": {
         "properties": {
           "markers": {
@@ -474,6 +514,47 @@
         "title": "TracePayload",
         "type": "object"
       },
+      "UnregisterTracesRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "UnregisterTracesRequest",
+        "type": "object"
+      },
+      "UnregisterTracesResponse": {
+        "properties": {
+          "missing_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Ids",
+            "type": "array"
+          },
+          "removed_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Removed Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "removed_ids",
+          "missing_ids"
+        ],
+        "title": "UnregisterTracesResponse",
+        "type": "object"
+      },
       "UploadTraceResponse": {
         "properties": {
           "descriptor": {
@@ -605,6 +686,44 @@
         "summary": "List Traces Endpoint"
       }
     },
+    "/api/traces/register": {
+      "post": {
+        "operationId": "register_traces_endpoint_api_traces_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterTracesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterTracesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Traces Endpoint"
+      }
+    },
     "/api/traces/reload": {
       "post": {
         "operationId": "reload_traces_endpoint_api_traces_reload_post",
@@ -621,6 +740,44 @@
           }
         },
         "summary": "Reload Traces Endpoint"
+      }
+    },
+    "/api/traces/unregister": {
+      "post": {
+        "operationId": "unregister_traces_endpoint_api_traces_unregister_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnregisterTracesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnregisterTracesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unregister Traces Endpoint"
       }
     },
     "/api/traces/upload": {

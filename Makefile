@@ -175,3 +175,5 @@ gantt-viewer-smoke:
 gantt-viewer-clean:
 	rm -rf demo/gantt_viewer/frontend/dist demo/gantt_viewer/frontend/node_modules
 	rm -rf ~/.cache/agent-sched-bench/gantt-cc-import
+	rm -rf ~/.cache/agent-sched-bench/gantt-uploads
+	rm -f ~/.cache/agent-sched-bench/gantt-runtime-state.json

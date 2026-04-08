@@ -68,6 +68,13 @@ h1 {
   font-size: 0.96rem;
 }
 
+.toolbar-meta {
+  margin: 12px 0 0;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: #516273;
+}
+
 .metric-label {
   display: block;
   font-size: 0.82rem;
@@ -367,6 +374,13 @@ h1 {
   font-size: 0.8rem;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.tooltip-hint {
+  margin: 14px 0 0;
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  color: #6b7280;
 }
 
 .dropzone-overlay {

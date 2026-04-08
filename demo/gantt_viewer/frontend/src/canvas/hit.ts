@@ -1,4 +1,5 @@
 import type { Registries, TracePayload } from "../api/client";
+import { formatAbsTime } from "./time";
 
 export interface SpanHit {
   item: TracePayload["lanes"][number]["spans"][number];
@@ -107,6 +108,7 @@ export function hitRows(hit: Hit): Array<[string, string]> {
       ["trace", hit.traceLabel],
       ["agent", hit.laneAgentId],
       ["duration", `${((hit.item.end_abs - hit.item.start_abs) * 1000).toFixed(1)} ms`],
+      ["start", formatAbsTime(hit.item.start_abs)],
       ["relative", `+${hit.item.start.toFixed(3)}s`],
     ];
     for (const [key, value] of Object.entries(hit.item.detail ?? {})) {
@@ -119,6 +121,7 @@ export function hitRows(hit: Hit): Array<[string, string]> {
     ["trace", hit.traceLabel],
     ["agent", hit.laneAgentId],
     ["event", hit.item.event],
+    ["time", formatAbsTime(hit.item.t_abs)],
     ["relative", `+${hit.item.t.toFixed(3)}s`],
   ];
   for (const [key, value] of Object.entries(hit.item.detail ?? {})) {

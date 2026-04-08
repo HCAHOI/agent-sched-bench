@@ -69,6 +69,19 @@ export default function App() {
   );
 
   const loadedIds = createMemo(() => loadedTraces().map((trace) => trace.id));
+  const headerSummary = createMemo(() => {
+    const traces = loadedTraces();
+    if (traces.length === 0) {
+      return "No traces loaded yet.";
+    }
+    return traces
+      .map((trace) => {
+        const metadata = trace.metadata;
+        return `${trace.label}: ${metadata.scaffold} ${metadata.model ?? ""}`.trim() +
+          ` (${metadata.n_actions} actions / ${metadata.n_iterations} iters, ${(metadata.elapsed_s ?? 0).toFixed(1)}s)`;
+      })
+      .join(" · ");
+  });
 
   async function initialize(): Promise<void> {
     try {
@@ -169,6 +182,7 @@ export default function App() {
     <main class="app-shell">
       <Header
         loadedCount={() => loadedTraces().length}
+        summary={headerSummary}
         onTimeModeChange={setTimeMode}
         onViewModeChange={setViewMode}
         timeMode={timeMode}

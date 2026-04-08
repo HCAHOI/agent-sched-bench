@@ -9,20 +9,27 @@ import anyio
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 
 from demo.gantt_viewer.backend.cc_cache import load_or_import
-from demo.gantt_viewer.backend.discovery import DiscoveryState
 from demo.gantt_viewer.backend.payload import (
     DEFAULT_MARKER_REGISTRY,
     DEFAULT_SPAN_REGISTRY,
     build_gantt_payload_multi,
 )
+from demo.gantt_viewer.backend.runtime_registry import (
+    RuntimeRegistryConflictError,
+    RuntimeTraceRegistry,
+)
 from demo.gantt_viewer.backend.schema import (
     GanttPayload,
     HealthResponse,
     PayloadRequest,
+    RegisterTracesRequest,
+    RegisterTracesResponse,
     Registries,
     TraceDescriptor,
     TraceListResponse,
     TracePayload,
+    UnregisterTracesRequest,
+    UnregisterTracesResponse,
     UploadTraceResponse,
 )
 from demo.gantt_viewer.backend.uploads import build_upload_id, persist_upload
@@ -34,21 +41,52 @@ router = APIRouter(prefix="/api")
 
 @router.get("/health", response_model=HealthResponse)
 def health_endpoint(request: Request) -> HealthResponse:
-    state = _get_discovery_state(request)
-    return HealthResponse(status="ok", n_discovered=len(state.descriptors))
+    trace_registry = _get_trace_registry(request)
+    return HealthResponse(status="ok", n_discovered=len(trace_registry.descriptors))
 
 
 @router.get("/traces", response_model=TraceListResponse)
 def list_traces_endpoint(request: Request) -> TraceListResponse:
-    state = _get_discovery_state(request)
-    return TraceListResponse(traces=state.descriptors, registries=_build_registries())
+    trace_registry = _get_trace_registry(request)
+    return TraceListResponse(traces=trace_registry.descriptors, registries=_build_registries())
 
 
 @router.post("/traces/reload", response_model=TraceListResponse)
 def reload_traces_endpoint(request: Request) -> TraceListResponse:
-    state = _get_discovery_state(request)
-    state.reload()
-    return TraceListResponse(traces=state.descriptors, registries=_build_registries())
+    trace_registry = _get_trace_registry(request)
+    trace_registry.reload()
+    return TraceListResponse(traces=trace_registry.descriptors, registries=_build_registries())
+
+
+@router.post("/traces/register", response_model=RegisterTracesResponse)
+def register_traces_endpoint(
+    register_request: RegisterTracesRequest,
+    request: Request,
+) -> RegisterTracesResponse:
+    trace_registry = _get_trace_registry(request)
+    try:
+        registered = trace_registry.register_paths(
+            register_request.paths,
+            labels_by_path=register_request.labels_by_path,
+        )
+    except RuntimeRegistryConflictError as exc:
+        raise HTTPException(status_code=409, detail={"message": str(exc)}) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail={"message": str(exc)}) from exc
+    return RegisterTracesResponse(registered=registered)
+
+
+@router.post("/traces/unregister", response_model=UnregisterTracesResponse)
+def unregister_traces_endpoint(
+    unregister_request: UnregisterTracesRequest,
+    request: Request,
+) -> UnregisterTracesResponse:
+    trace_registry = _get_trace_registry(request)
+    removed_ids, missing_ids = trace_registry.unregister_ids(unregister_request.ids)
+    return UnregisterTracesResponse(
+        removed_ids=removed_ids,
+        missing_ids=missing_ids,
+    )
 
 
 @router.post("/traces/upload", response_model=UploadTraceResponse)
@@ -73,7 +111,7 @@ async def upload_trace_endpoint(
     )
 
     trace_payload = await _build_trace_payload(descriptor)
-    _get_discovery_state(request).register_descriptor(descriptor)
+    _get_trace_registry(request).register_uploaded_descriptor(descriptor)
     return UploadTraceResponse(descriptor=descriptor, payload_fragment=trace_payload)
 
 
@@ -82,8 +120,8 @@ async def payload_endpoint(
     payload_request: PayloadRequest,
     request: Request,
 ) -> GanttPayload:
-    state = _get_discovery_state(request)
-    descriptors = _resolve_descriptors(state, payload_request.ids)
+    trace_registry = _get_trace_registry(request)
+    descriptors = _resolve_descriptors(trace_registry, payload_request.ids)
     traces = [await _build_trace_payload(descriptor) for descriptor in descriptors]
     return GanttPayload(
         registries=_build_registries(),
@@ -91,8 +129,8 @@ async def payload_endpoint(
     )
 
 
-def _get_discovery_state(request: Request) -> DiscoveryState:
-    return request.app.state.discovery_state
+def _get_trace_registry(request: Request) -> RuntimeTraceRegistry:
+    return request.app.state.trace_registry
 
 
 async def _resolve_trace_path(descriptor: TraceDescriptor) -> Path:
@@ -134,16 +172,21 @@ def _sniff_or_422(path: Path) -> str:
 
 
 def _resolve_descriptors(
-    state: DiscoveryState,
+    trace_registry: RuntimeTraceRegistry,
     trace_ids: list[str],
 ) -> list[TraceDescriptor]:
-    missing = [trace_id for trace_id in trace_ids if trace_id not in state.descriptors_by_id]
+    descriptors = [trace_registry.get_descriptor(trace_id) for trace_id in trace_ids]
+    missing = [
+        trace_id
+        for trace_id, descriptor in zip(trace_ids, descriptors, strict=False)
+        if descriptor is None
+    ]
     if missing:
         raise HTTPException(
             status_code=404,
             detail={"message": "unknown trace ids", "trace_ids": missing},
         )
-    return [state.descriptors_by_id[trace_id] for trace_id in trace_ids]
+    return [descriptor for descriptor in descriptors if descriptor is not None]
 
 
 def _build_registries() -> Registries:

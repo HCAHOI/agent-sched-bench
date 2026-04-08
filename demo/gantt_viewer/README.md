@@ -11,8 +11,10 @@ Implemented:
 
 - `GET /api/health`
 - `GET /api/traces`
+- `POST /api/traces/register`
 - `POST /api/payload`
 - `POST /api/traces/reload`
+- `POST /api/traces/unregister`
 - `POST /api/traces/upload`
 - Lazy Claude Code import cache for raw session JSONL
 - Solid/Vite frontend with:
@@ -101,6 +103,8 @@ Current smoke coverage:
 - button-triggered JSONL upload
 - pinned tooltip after lane click
 - `Load all` across the discovered trace set
+
+For agent-driven workflows, use `demo/gantt_viewer/AGENT_INTERFACE.md`.
 
 Frontend bundle check only:
 

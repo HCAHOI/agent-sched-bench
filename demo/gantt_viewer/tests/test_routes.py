@@ -40,6 +40,7 @@ def _llm_action() -> dict:
 
 
 def _make_client(tmp_path: Path) -> tuple[TestClient, Path, Path]:
+    runtime_state_path = tmp_path / "runtime-state.json"
     v5_path = write_v5_trace(
         tmp_path / "runs" / "repo__issue-1" / "trace.jsonl",
         [_llm_action()],
@@ -50,7 +51,12 @@ def _make_client(tmp_path: Path) -> tuple[TestClient, Path, Path]:
         tmp_path / "config.yaml",
         [str(v5_path), str(cc_path)],
     )
-    client = TestClient(create_app(config_path=config_path))
+    client = TestClient(
+        create_app(
+            config_path=config_path,
+            runtime_state_path=runtime_state_path,
+        )
+    )
     return client, v5_path, cc_path
 
 
@@ -120,6 +126,168 @@ def test_reload_endpoint_rewalks_discovery(tmp_path: Path) -> None:
     response = client.post("/api/traces/reload")
     assert response.status_code == 200
     assert len(response.json()["traces"]) == 2
+
+
+def test_register_v5_trace_path_adds_descriptor(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    extra_path = write_v5_trace(
+        tmp_path / "runtime" / "repo__issue-2" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+
+    response = client.post(
+        "/api/traces/register",
+        json={"paths": [str(extra_path)]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["registered"][0]["source_format"] == "v5"
+
+    traces = client.get("/api/traces").json()["traces"]
+    assert any(trace["path"] == str(extra_path.resolve()) for trace in traces)
+
+
+def test_register_claude_code_trace_path_adds_descriptor(tmp_path: Path) -> None:
+    client, _, cc_path = _make_client(tmp_path)
+    suppressed_id = next(
+        trace["id"]
+        for trace in client.get("/api/traces").json()["traces"]
+        if trace["path"] == str(cc_path.resolve())
+    )
+    client.post("/api/traces/unregister", json={"ids": [suppressed_id]})
+
+    response = client.post(
+        "/api/traces/register",
+        json={"paths": [str(cc_path)]},
+    )
+    assert response.status_code == 200
+    assert response.json()["registered"][0]["id"] == suppressed_id
+
+
+def test_register_duplicate_config_path_returns_409(tmp_path: Path) -> None:
+    client, v5_path, _ = _make_client(tmp_path)
+    response = client.post(
+        "/api/traces/register",
+        json={"paths": [str(v5_path)]},
+    )
+    assert response.status_code == 409
+
+
+def test_unregister_runtime_trace_removes_descriptor(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    extra_path = write_v5_trace(
+        tmp_path / "runtime" / "repo__issue-2" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+    registered = client.post(
+        "/api/traces/register",
+        json={"paths": [str(extra_path)]},
+    ).json()["registered"][0]
+
+    response = client.post(
+        "/api/traces/unregister",
+        json={"ids": [registered["id"]]},
+    )
+    assert response.status_code == 200
+    assert response.json()["removed_ids"] == [registered["id"]]
+    traces = client.get("/api/traces").json()["traces"]
+    assert all(trace["id"] != registered["id"] for trace in traces)
+
+
+def test_unregister_config_trace_persists_across_reload(tmp_path: Path) -> None:
+    client, _, _ = _make_client(tmp_path)
+    config_id = "ac1-repo__issue-1"
+
+    response = client.post("/api/traces/unregister", json={"ids": [config_id]})
+    assert response.status_code == 200
+    assert response.json()["removed_ids"] == [config_id]
+
+    traces = client.get("/api/traces").json()["traces"]
+    assert all(trace["id"] != config_id for trace in traces)
+
+    reloaded = client.post("/api/traces/reload").json()["traces"]
+    assert all(trace["id"] != config_id for trace in reloaded)
+
+
+def test_runtime_registered_trace_persists_across_app_restart(tmp_path: Path) -> None:
+    runtime_state_path = tmp_path / "runtime-state.json"
+    v5_path = write_v5_trace(
+        tmp_path / "runs" / "repo__issue-1" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+    extra_path = write_v5_trace(
+        tmp_path / "runtime" / "repo__issue-2" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+    config_path = write_config(tmp_path / "config.yaml", [str(v5_path)])
+
+    client = TestClient(create_app(config_path=config_path, runtime_state_path=runtime_state_path))
+    registered = client.post(
+        "/api/traces/register",
+        json={"paths": [str(extra_path)]},
+    ).json()["registered"][0]
+
+    restarted = TestClient(
+        create_app(config_path=config_path, runtime_state_path=runtime_state_path)
+    )
+    traces = restarted.get("/api/traces").json()["traces"]
+    assert any(trace["id"] == registered["id"] for trace in traces)
+
+
+def test_suppressed_config_trace_persists_across_app_restart(tmp_path: Path) -> None:
+    runtime_state_path = tmp_path / "runtime-state.json"
+    v5_path = write_v5_trace(
+        tmp_path / "runs" / "repo__issue-1" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+    config_path = write_config(tmp_path / "config.yaml", [str(v5_path)])
+
+    client = TestClient(create_app(config_path=config_path, runtime_state_path=runtime_state_path))
+    response = client.post("/api/traces/unregister", json={"ids": ["ac1-repo__issue-1"]})
+    assert response.status_code == 200
+
+    restarted = TestClient(
+        create_app(config_path=config_path, runtime_state_path=runtime_state_path)
+    )
+    traces = restarted.get("/api/traces").json()["traces"]
+    assert all(trace["id"] != "ac1-repo__issue-1" for trace in traces)
+
+
+def test_uploaded_trace_persists_across_app_restart(tmp_path: Path) -> None:
+    runtime_state_path = tmp_path / "runtime-state.json"
+    v5_path = write_v5_trace(
+        tmp_path / "runs" / "repo__issue-1" / "trace.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+    config_path = write_config(tmp_path / "config.yaml", [str(v5_path)])
+
+    client = TestClient(create_app(config_path=config_path, runtime_state_path=runtime_state_path))
+    upload_path = write_v5_trace(
+        tmp_path / "upload" / "persisted_upload.jsonl",
+        [_llm_action()],
+        scaffold="openclaw",
+    )
+
+    with upload_path.open("rb") as handle:
+        response = client.post(
+            "/api/traces/upload",
+            files={"file": (upload_path.name, handle, "application/json")},
+        )
+
+    assert response.status_code == 200
+    uploaded_id = response.json()["descriptor"]["id"]
+
+    restarted = TestClient(
+        create_app(config_path=config_path, runtime_state_path=runtime_state_path)
+    )
+    traces = restarted.get("/api/traces").json()["traces"]
+    assert any(trace["id"] == uploaded_id for trace in traces)
 
 
 def test_upload_v5_trace_registers_descriptor(tmp_path: Path) -> None:
