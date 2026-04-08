@@ -41,6 +41,7 @@ from agents.openclaw.eval.types import (
 )
 from agents.openclaw.providers.base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
+from agents.openclaw.tools.registry import ToolRegistry
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -506,6 +507,7 @@ class SessionRunner:
         instance_id: str | None = None,
         channel: str = "cli",
         prepare_ms: float | None = None,
+        tools: ToolRegistry | None = None,
     ) -> SessionRunResult:
         """Run a single prompt through the full bus dispatch path.
 
@@ -516,6 +518,12 @@ class SessionRunner:
             trace_file: Path to write the JSONL trace.
             instance_id: Identifier for trace records (defaults to session_key).
             channel: Message channel (default "cli").
+            tools: Optional custom ``ToolRegistry`` to use with REPLACE
+                semantics — when provided, the constructed ``AgentLoop``
+                uses this registry verbatim and does NOT register its
+                default bash/file/web tool set. Used by function_call
+                benchmarks (BFCL v4+) that need the LLM to see only
+                per-task JSON-Schema tools.
 
         Returns:
             SessionRunResult with content, timing, and session reference.
@@ -528,16 +536,27 @@ class SessionRunner:
         # Write trace_metadata header — must be first record for downstream tools
         import json as _json
 
-        metadata = {
-            "type": "trace_metadata",
-            "scaffold": "openclaw",
-            "trace_format_version": 5,
-            "mode": "collect",
-            "model": self.model,
-            "instance_id": iid,
-            "session_key": session_key,
-            "max_iterations": self.max_iterations,
-            "scaffold_capabilities": {
+        # When the caller supplies a custom registry, auto-derive the tool
+        # list from it so scaffold_capabilities.tools accurately reflects
+        # what the LLM actually saw. Otherwise fall back to the hardcoded
+        # openclaw default list (matches what _register_default_tools
+        # registers).
+        if tools is not None:
+            tool_definitions = tools.get_definitions()
+            capability_tools: list[str] = [
+                td["function"]["name"]
+                for td in tool_definitions
+                if isinstance(td, dict) and "function" in td
+            ]
+            scaffold_capabilities: dict[str, Any] = {
+                "tools": capability_tools,
+                "memory": False,
+                "skills": False,
+                "file_ops": "none",
+                "source": "custom_registry",
+            }
+        else:
+            scaffold_capabilities = {
                 "tools": [
                     "bash",
                     "file_read",
@@ -551,7 +570,18 @@ class SessionRunner:
                 "memory": True,
                 "skills": True,
                 "file_ops": "structured",
-            },
+            }
+
+        metadata = {
+            "type": "trace_metadata",
+            "scaffold": "openclaw",
+            "trace_format_version": 5,
+            "mode": "collect",
+            "model": self.model,
+            "instance_id": iid,
+            "session_key": session_key,
+            "max_iterations": self.max_iterations,
+            "scaffold_capabilities": scaffold_capabilities,
         }
         trace_hook._fh.write(_json.dumps(metadata, ensure_ascii=False) + "\n")
         trace_hook._fh.flush()
@@ -572,6 +602,7 @@ class SessionRunner:
             mcp_servers=self.mcp_servers,
             session_manager=session_manager,
             hooks=all_hooks,
+            tools=tools,
         )
 
         inject_event_callbacks(agent, trace_hook)
