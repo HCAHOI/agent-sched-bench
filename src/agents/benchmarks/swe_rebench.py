@@ -109,3 +109,10 @@ class SWERebenchBenchmark(Benchmark):
             model=model,
             **kwargs,
         )
+
+    def runtime_mode_for(self, scaffold: str) -> str:
+        if scaffold not in {"openclaw", "miniswe"}:
+            raise NotImplementedError(
+                f"SWE-rebench does not support scaffold={scaffold!r}"
+            )
+        return "task_container_agent"

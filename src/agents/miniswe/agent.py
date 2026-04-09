@@ -30,7 +30,7 @@ from agents.base import AgentBase, TraceAction
 from minisweagent.agents.default import DefaultAgent
 
 if TYPE_CHECKING:
-    from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
+    from trace_collect.attempt_pipeline import AttemptContext
 
 _logger = logging.getLogger(__name__)
 
@@ -136,6 +136,8 @@ class MiniSWECodeAgent(AgentBase):
         repos_root: str | None = None,
         max_context_tokens: int = 256_000,
         prompt_template: str = "default",
+        runtime_mode: str = "docker_container",
+        exec_working_dir: str = "/testbed",
     ) -> None:
         super().__init__(
             agent_id=agent_id,
@@ -150,6 +152,8 @@ class MiniSWECodeAgent(AgentBase):
         self.repos_root = Path(repos_root) if repos_root else None
         self.max_context_tokens = max_context_tokens
         self.prompt_template = prompt_template
+        self.runtime_mode = runtime_mode
+        self.exec_working_dir = exec_working_dir
         self._workdir: Path | None = None
         self._prepared = False
 
@@ -190,6 +194,7 @@ class MiniSWECodeAgent(AgentBase):
         attempt_ctx: "AttemptContext | None" = None,
     ) -> bool:
         from minisweagent.environments.docker import DockerEnvironment
+        from minisweagent.environments.local import LocalEnvironment
         from minisweagent.models.litellm_model import LitellmModel
         from trace_collect.prompt_loader import load_prompt_template
 
@@ -198,7 +203,7 @@ class MiniSWECodeAgent(AgentBase):
             if attempt_ctx is not None and attempt_ctx.fixed_image
             else task.get("image_name")
         )
-        if not image:
+        if self.runtime_mode == "docker_container" and not image:
             raise RuntimeError(
                 f"Task {task.get('instance_id')!r} has no 'image_name'; "
                 "the SWE-rebench/SWE-bench plugin must populate it via "
@@ -230,41 +235,49 @@ class MiniSWECodeAgent(AgentBase):
             },
             cost_tracking="ignore_errors",
         )
-        executable = os.getenv("MSWEA_DOCKER_EXECUTABLE", "podman")
-
         home_dir = os.environ.get("HOME", "/root")
-        run_args = [
-            "--rm",
-            "--userns=keep-id",
-            "--network=host",
-            "-v", f"{home_dir}:{home_dir}",
-        ]
-        env = DockerEnvironment(
-            image=image,
-            cwd="/testbed",
-            timeout=int(self.command_timeout_s),
-            executable=executable,
-            pull_timeout=300,
-            run_args=run_args,
-            env={
-                "HOME": home_dir,
-                "PATH": f"{home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
-                "PAGER": "cat",
-                "MANPAGER": "cat",
-                "LESS": "-R",
-            },
-        )
+        executable = os.getenv("MSWEA_DOCKER_EXECUTABLE", "podman")
+        shared_env = {
+            "HOME": home_dir,
+            "PATH": f"{home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+            "PAGER": "cat",
+            "MANPAGER": "cat",
+            "LESS": "-R",
+        }
 
-        if attempt_ctx is not None:
-            try:
-                env.execute({"command": "true"})
-            except Exception as exc:
-                _logger.warning(
-                    "env warmup execute failed: %s; proceeding anyway", exc
-                )
-            container_id = getattr(env, "container_id", None)
-            if container_id:
-                attempt_ctx.mark_container_ready(container_id)
+        if self.runtime_mode == "local_environment":
+            env = LocalEnvironment(
+                cwd=self.exec_working_dir,
+                timeout=int(self.command_timeout_s),
+                env=shared_env,
+            )
+        else:
+            run_args = [
+                "--rm",
+                "--userns=keep-id",
+                "--network=host",
+                "-v", f"{home_dir}:{home_dir}",
+            ]
+            env = DockerEnvironment(
+                image=image,
+                cwd=self.exec_working_dir,
+                timeout=int(self.command_timeout_s),
+                executable=executable,
+                pull_timeout=300,
+                run_args=run_args,
+                env=shared_env,
+            )
+
+            if attempt_ctx is not None:
+                try:
+                    env.execute({"command": "true"})
+                except Exception as exc:
+                    _logger.warning(
+                        "env warmup execute failed: %s; proceeding anyway", exc
+                    )
+                container_id = getattr(env, "container_id", None)
+                if container_id:
+                    attempt_ctx.mark_container_ready(container_id)
 
         mini_agent = ContextManagedAgent(
             lm,
@@ -291,13 +304,14 @@ class MiniSWECodeAgent(AgentBase):
             except Exception as exc:
                 result = {"exit_status": "error", "submission": "", "error": str(exc)}
         finally:
-            if attempt_ctx is not None:
+            if attempt_ctx is not None and self.runtime_mode == "docker_container":
                 container_id = getattr(env, "container_id", None)
                 if container_id:
                     attempt_ctx.container_stdout = _capture_container_logs(
                         container_id, executable
                     )
-            env.cleanup()
+            if hasattr(env, "cleanup"):
+                env.cleanup()
 
         wall_end = time.time()
 

@@ -116,11 +116,11 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--prompt-template",
-        default="default",
+        default=None,
         help=(
-            "Name of the prompt template under configs/prompts/swe_rebench/. "
-            "Options: 'default' (minimal patch-submit prompt) or 'cc_aligned' "
-            "(full CC harness prefix that mandates running the test suite)."
+            "Optional prompt template override under configs/prompts/swe_rebench/. "
+            "When omitted, uses the benchmark config default "
+            "(e.g. swe-rebench -> cc_aligned)."
         ),
     )
     parser.add_argument(

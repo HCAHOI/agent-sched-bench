@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +37,7 @@ class AttemptContext:
     scaffold: str
     source_image: str
     prompt_template: str = "default"
+    agent_runtime_mode: str = "host_controller"
     fixed_image: str | None = None
     container_id: str | None = None
     attempt_dir: Path = field(init=False)
@@ -168,6 +168,7 @@ class AttemptResult:
     total_llm_ms: float | None = None
     total_tool_ms: float | None = None
     total_tokens: int | None = None
+    runtime_proof: dict[str, Any] = field(default_factory=dict)
 
 
 async def _watch_for_container_ready(
@@ -210,7 +211,6 @@ async def run_attempt(
     attempt_layout.ensure_attempt_dir(ctx.attempt_dir)
 
     try:
-        fix_t0 = time.time()
         fixed_name, fix_elapsed = ensure_fixed_image(
             ctx.source_image, executable=executable
         )
@@ -275,6 +275,8 @@ async def run_attempt(
             "start_time": ctx.start_time_iso(),
             "end_time": ctx.end_time_iso(),
             "min_free_disk_gb": min_free_disk_gb,
+            "agent_runtime_mode": ctx.agent_runtime_mode,
+            "runtime_proof": result.runtime_proof if result is not None else {},
         },
         "replay": {
             "replay_ready": bool(ctx.fixed_image),
@@ -292,6 +294,7 @@ async def run_attempt(
         },
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
+        "agent_runtime_mode": ctx.agent_runtime_mode,
     }
 
     results_payload: dict[str, Any] = {
@@ -313,7 +316,10 @@ async def run_attempt(
         "success": success,
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
+        "agent_runtime_mode": ctx.agent_runtime_mode,
     }
+    if result is not None and result.runtime_proof:
+        results_payload["runtime_proof"] = result.runtime_proof
     if result is not None:
         results_payload["n_iterations"] = result.n_iterations
         results_payload["total_tokens"] = result.total_tokens

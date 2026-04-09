@@ -33,6 +33,7 @@ def _make_config(*, exclude_lite: bool = False) -> BenchmarkConfig:
         default_max_iterations=50,
         selection_n=4,  # small for tests
         selection_seed=42,
+        default_prompt_template="cc_aligned",
         exclude_lite=exclude_lite,
     )
 
@@ -138,6 +139,17 @@ def test_normalize_task_derives_test_cmd_from_list() -> None:
     assert "tests/beta.py::test_two" in normalized["test_cmd"]
 
 
+def test_swe_rebench_config_default_prompt_is_cc_aligned() -> None:
+    plugin = SWERebenchBenchmark(_make_config())
+    assert plugin.config.default_prompt_template == "cc_aligned"
+
+
+def test_swe_rebench_runtime_mode_for_openclaw_and_miniswe() -> None:
+    plugin = SWERebenchBenchmark(_make_config())
+    assert plugin.runtime_mode_for("openclaw") == "task_container_agent"
+    assert plugin.runtime_mode_for("miniswe") == "task_container_agent"
+
+
 # ── select_subset / exclude_lite knob ───────────────────────────────────
 
 
@@ -175,4 +187,3 @@ def test_select_subset_exclude_lite_true_drops_lite() -> None:
     assert lite_count == 0, (
         "exclude_lite=True must drop every task with meta.is_lite=True"
     )
-

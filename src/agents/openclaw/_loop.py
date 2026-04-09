@@ -157,6 +157,7 @@ class AgentLoop:
         bus: MessageBus,
         provider: LLMProvider,
         workspace: Path,
+        tool_workspace: Path | None = None,
         model: str | None = None,
         max_iterations: int | None = None,
         context_window_tokens: int | None = None,
@@ -179,6 +180,7 @@ class AgentLoop:
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
+        self.tool_workspace = tool_workspace or workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = (
             max_iterations
@@ -215,7 +217,7 @@ class AgentLoop:
         self.runner = AgentRunner(provider)
         self.subagents = SubagentManager(
             provider=provider,
-            workspace=workspace,
+            workspace=self.tool_workspace,
             bus=bus,
             model=self.model,
             max_tool_result_chars=self.max_tool_result_chars,
@@ -278,23 +280,25 @@ class AgentLoop:
                     )
                 )
         else:
-            allowed_dir = self.workspace if self.restrict_to_workspace else None
-            extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
+            tool_allowed_dir = (
+                self.tool_workspace if self.restrict_to_workspace else None
+            )
+            extra_read = [BUILTIN_SKILLS_DIR] if tool_allowed_dir else None
             self.tools.register(
                 ReadFileTool(
-                    workspace=self.workspace,
-                    allowed_dir=allowed_dir,
+                    workspace=self.tool_workspace,
+                    allowed_dir=tool_allowed_dir,
                     extra_allowed_dirs=extra_read,
                 )
             )
             for cls in (WriteFileTool, EditFileTool, ListDirTool):
                 self.tools.register(
-                    cls(workspace=self.workspace, allowed_dir=allowed_dir)
+                    cls(workspace=self.tool_workspace, allowed_dir=tool_allowed_dir)
                 )
             if self.exec_config.enable:
                 self.tools.register(
                     ExecTool(
-                        working_dir=str(self.workspace),
+                        working_dir=str(self.tool_workspace),
                         timeout=self.exec_config.timeout,
                         restrict_to_workspace=self.restrict_to_workspace,
                         path_append=self.exec_config.path_append,

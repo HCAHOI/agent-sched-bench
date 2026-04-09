@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -89,12 +90,16 @@ class SWEBenchRunner:
         *,
         container_workspace: Any,
         prompt_template: str,
+        tool_workspace: Path | None = None,
+        exec_working_dir: str | None = None,
+        trace_file: Path | None = None,
     ) -> EvalResult:
         """Run a single evaluation task inside the prepared task container."""
         ws = task.workspace_dir
         ws.mkdir(parents=True, exist_ok=True)
 
-        trace_file = ws / "trace.jsonl"
+        effective_trace_file = trace_file or (ws / "trace.jsonl")
+        effective_tool_workspace = tool_workspace or ws
 
         prompt_text = self._build_swe_bench_prompt(
             task.problem_statement, prompt_template=prompt_template
@@ -103,8 +108,9 @@ class SWEBenchRunner:
         result = await self._session_runner.run(
             prompt=prompt_text,
             workspace=ws,
+            tool_workspace=effective_tool_workspace,
             session_key=session_key,
-            trace_file=trace_file,
+            trace_file=effective_trace_file,
             instance_id=task.instance_id,
             channel="cli",
             prepare_ms=None,
@@ -115,7 +121,7 @@ class SWEBenchRunner:
         tools_used: list[str] = []
         tool_events: list[dict[str, Any]] = []
         usage: dict[str, int] = {}
-        n_iterations = _count_trace_iterations(trace_file)
+        n_iterations = _count_trace_iterations(effective_trace_file)
 
         if result.session_manager is not None:
             session = result.session_manager.get_or_create(session_key)
@@ -148,11 +154,12 @@ class SWEBenchRunner:
         # artifacts (trace.jsonl, memory, etc.) are all written to the host
         # attempt directory, not to /testbed, so no excludes are required.
         container_patch: str | None = None
+        diff_cwd = exec_working_dir or "/testbed"
         if container_workspace is not None:
             try:
                 diff_cmd = (
-                    "cd /testbed && "
-                    "git config --add safe.directory /testbed 2>/dev/null; "
+                    f"cd {diff_cwd} && "
+                    f"git config --add safe.directory {diff_cwd} 2>/dev/null; "
                     "git add -A 2>/dev/null; "
                     "git diff HEAD"
                 )
@@ -174,6 +181,47 @@ class SWEBenchRunner:
                     id=task.instance_id,
                     exc=exc,
                 )
+        elif exec_working_dir is not None:
+            try:
+                subprocess.run(
+                    ["git", "config", "--add", "safe.directory", diff_cwd],
+                    cwd=diff_cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                subprocess.run(
+                    ["git", "add", "-A"],
+                    cwd=diff_cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                diff_result = subprocess.run(
+                    ["git", "diff", "HEAD", "--", "."],
+                    cwd=diff_cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+                if diff_result.returncode == 0:
+                    container_patch = diff_result.stdout.strip() or None
+                else:
+                    logger.warning(
+                        "Local patch extraction failed for {id}: rc={rc} stderr={stderr}",
+                        id=task.instance_id,
+                        rc=diff_result.returncode,
+                        stderr=diff_result.stderr[:200],
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Local patch extraction raised for {id}: {exc}",
+                    id=task.instance_id,
+                    exc=exc,
+                )
 
         return EvalResult(
             instance_id=task.instance_id,
@@ -183,7 +231,7 @@ class SWEBenchRunner:
             stop_reason="completed",
             error=None,
             tool_events=tool_events,
-            trace_file=trace_file,
+            trace_file=effective_trace_file,
             prepare_ms=None,
             run_ms=result.elapsed_s * 1000,
             workspace_dir=ws,
