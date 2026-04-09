@@ -2,7 +2,7 @@
 
 The simulator only supports traces that can be prepared into a real workspace
 for local tool replay. This module keeps the early-fail invariant covered
-without hard-coding BFCL-specific policy into the replay path.
+without tying the validation logic to any specific benchmark slug.
 """
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BFCL_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "bfcl_v4_minimal_header.jsonl"
+FUNCTION_CALL_FIXTURE = (
+    REPO_ROOT / "tests" / "fixtures" / "function_call_minimal_header.jsonl"
+)
 OPENCLAW_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "openclaw_minimal_v5.jsonl"
 
 NEEDS_PREPARE_ERROR = (
@@ -72,13 +74,13 @@ def test_validate_trace_accepts_swe_patch_and_empty_metadata() -> None:
     _validate_trace_for_simulation({"scaffold": "miniswe", "task_shape": "swe_patch"})
 
 
-def test_load_trace_metadata_extracts_bfcl_header() -> None:
+def test_load_trace_metadata_extracts_function_call_header() -> None:
     from trace_collect.simulator import _load_trace_metadata
 
-    metadata = _load_trace_metadata(BFCL_FIXTURE)
+    metadata = _load_trace_metadata(FUNCTION_CALL_FIXTURE)
     assert metadata is not None
     assert metadata["scaffold"] == "openclaw"
-    assert metadata["benchmark"] == "bfcl-v4"
+    assert metadata["benchmark"] == "function-call-smoke"
     assert metadata["task_shape"] == "function_call"
     assert metadata["needs_prepare"] is False
 
@@ -87,7 +89,7 @@ def test_simulator_rejects_non_prepareable_trace_before_registry_lookup() -> Non
     from trace_collect.simulator import simulate
 
     coro = simulate(
-        source_trace=BFCL_FIXTURE,
+        source_trace=FUNCTION_CALL_FIXTURE,
         task_source=Path("/tmp/dummy_tasks.json"),
         repos_root=Path("/tmp/dummy_repos"),
         output_dir=Path("/tmp/dummy_out"),

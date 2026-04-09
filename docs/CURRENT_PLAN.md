@@ -16,10 +16,8 @@ artifacts internally consistent.
      everywhere in trace collection, simulation, CLI, registry, and tests.
    - Make inspector/analysis read v5 action fields from `data`.
    - Standardize tool success on `data["success"]`.
-   - Remove the stale BFCL simulator refusal branch if it is unreachable under
-     current collector constraints.
    Verification:
-   - `python3 -m pytest tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_simulator_bfcl_refusal.py tests/test_bfcl_v4_plugin.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py`
+   - `python3 -m pytest tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py`
 
 2. OpenClaw replay tool execution cleanup
    Status: completed
@@ -54,7 +52,7 @@ artifacts internally consistent.
 5. Full targeted regression
    Status: completed
    Verification:
-   - `python3 -m pytest tests/test_attempt_pipeline.py tests/test_attempt_layout.py tests/test_collector_openclaw_metadata.py tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_simulator_bfcl_refusal.py tests/test_bfcl_v4_plugin.py tests/test_bfcl_runner.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py tests/test_openclaw_tool_runtime.py tests/test_openclaw_raw_response.py tests/test_claude_code_import.py tests/test_openclaw_simulate_adapter.py demo/gantt_viewer/tests/test_payload.py`
+   - `python3 -m pytest tests/test_attempt_pipeline.py tests/test_attempt_layout.py tests/test_collector_openclaw_metadata.py tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py tests/test_openclaw_tool_runtime.py tests/test_openclaw_raw_response.py tests/test_claude_code_import.py tests/test_openclaw_simulate_adapter.py demo/gantt_viewer/tests/test_payload.py`
 
 ## Notes
 

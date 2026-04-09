@@ -1,6 +1,6 @@
 """Benchmark protocol contract tests — PM-2 mitigation.
 
-The default build_runner must raise NotImplementedError. A BFCL-v4-like
+The default build_runner must raise NotImplementedError. A generic
 function-call benchmark must satisfy the protocol without touching
 SWE-specific fields.
 """

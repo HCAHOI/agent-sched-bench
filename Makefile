@@ -3,7 +3,7 @@ UV ?= uv
 TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
 GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
-.PHONY: help pull sync test lint serve-vllm run-smoke smoke-code run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw download-bfcl-v4 smoke-bfcl-v4-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull sync test lint serve-vllm run-smoke smoke-code run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
@@ -24,8 +24,6 @@ help:
 	@printf "  setup-swe-rebench           Shortcut: download-swe-rebench + setup-swe-rebench-repos\n"
 	@printf "  smoke-swe-rebench-miniswe   Run $(SMOKE_N) SWE-rebench tasks through mini-swe-agent\n"
 	@printf "  smoke-swe-rebench-openclaw  Run $(SMOKE_N) SWE-rebench tasks through openclaw\n"
-	@printf "  download-bfcl-v4            Download BFCL v4 JSONL data to data/bfcl-v4/\n"
-	@printf "  smoke-bfcl-v4-openclaw      Run $(SMOKE_N) BFCL v4 tasks through openclaw\n"
 	@printf "  gantt-viewer-install        Install frontend dependencies with npm\n"
 	@printf "  gantt-viewer-dev            Launch the dynamic Gantt viewer in dev mode\n"
 	@printf "  gantt-viewer-build          Build the frontend bundle\n"
@@ -96,20 +94,6 @@ smoke-swe-rebench-openclaw:
 	    --scaffold openclaw \
 	    --sample $(SMOKE_N) \
 	    --verbose
-
-# ── BFCL v4 (Berkeley Function-Calling Leaderboard v4) ─────────────────
-# BFCL v4 has task_shape='function_call' — no git repos, no docker.
-# Only the openclaw scaffold is supported (mini-swe-agent is bash-in-repo
-# and cannot emit structured function calls; BFCLv4Benchmark.build_runner
-# raises NotImplementedError for mini-swe-agent).
-download-bfcl-v4:
-	./scripts/setup/bfcl_v4_data.sh
-
-smoke-bfcl-v4-openclaw:
-	$(TRACE_COLLECT) \
-	    --benchmark bfcl-v4 \
-	    --scaffold openclaw \
-	    --sample $(SMOKE_N)
 
 gantt-viewer-install:
 	cd $(GANTT_VIEWER_FRONTEND) && npm install

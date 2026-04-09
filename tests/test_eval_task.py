@@ -1,7 +1,7 @@
 """Tests for :class:`agents.openclaw.eval.types.EvalTask`.
 
 Covers both the existing SWE-patch extraction path and the new
-function-call fields introduced for BFCL v4 (US-002, Phase 0C).
+function-call fields for non-repo benchmarks.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ from agents.openclaw.eval.types import EvalTask
 def test_from_benchmark_instance_populates_function_call_fields(
     tmp_path: Path,
 ) -> None:
-    """BFCL-shaped row (no repo, with tools/question/ground_truth) produces
+    """A function-call row (no repo, with tools/question/ground_truth) produces
     an EvalTask carrying all three function-call fields verbatim."""
     row = {
-        "instance_id": "bfcl_simple_0",
+        "instance_id": "fc_simple_0",
         "problem_statement": "What is 2 + 2?",
         "category": "simple",
         "tools": [
@@ -42,7 +42,7 @@ def test_from_benchmark_instance_populates_function_call_fields(
     }
     task = EvalTask.from_benchmark_instance(row, tmp_path)
 
-    assert task.instance_id == "bfcl_simple_0"
+    assert task.instance_id == "fc_simple_0"
     assert task.problem_statement == "What is 2 + 2?"
     assert task.category == "simple"
     assert len(task.tools) == 1
@@ -50,7 +50,7 @@ def test_from_benchmark_instance_populates_function_call_fields(
     assert task.question == [[{"role": "user", "content": "What is 2 + 2?"}]]
     assert task.ground_truth == [{"add": {"a": [2], "b": [2]}}]
 
-    # SWE-patch fields are empty / None for BFCL rows.
+    # SWE-patch fields are empty / None for function-call rows.
     assert task.repo is None
     assert task.base_commit is None
     assert task.fail_to_pass == []
@@ -59,9 +59,9 @@ def test_from_benchmark_instance_populates_function_call_fields(
 
 def test_needs_prepare_false_for_function_call_task(tmp_path: Path) -> None:
     """needs_prepare must return False when repo is None, even if tools
-    are populated (guarantees BFCL tasks skip the git clone phase)."""
+    are populated (guarantees non-repo tasks skip the git clone phase)."""
     row = {
-        "instance_id": "bfcl_simple_0",
+        "instance_id": "fc_simple_0",
         "problem_statement": "x",
         "tools": [{"name": "f", "description": "", "parameters": {}}],
         "question": [[{"role": "user", "content": "x"}]],
@@ -73,10 +73,10 @@ def test_needs_prepare_false_for_function_call_task(tmp_path: Path) -> None:
 def test_from_benchmark_instance_missing_problem_statement_defaults_to_empty(
     tmp_path: Path,
 ) -> None:
-    """BFCL multi-turn rows may not have a flat ``problem_statement`` —
+    """Function-call rows may not have a flat ``problem_statement`` —
     the extraction must default to an empty string, not raise KeyError."""
     row = {
-        "instance_id": "bfcl_mt_0",
+        "instance_id": "fc_mt_0",
         "question": [[{"role": "user", "content": "hi"}]],
         "tools": [],
     }

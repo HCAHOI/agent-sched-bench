@@ -31,7 +31,7 @@ class EvalTask:
     pass_to_pass: list[str] = field(default_factory=list)
     image_name: str | None = None
 
-    # Function-call benchmark fields (BFCL v4 and future function_call plugins).
+    # Function-call benchmark fields for non-repo task shapes.
     # Populated by Benchmark.normalize_task; ignored by swe_patch scaffolds.
     tools: list[dict[str, Any]] = field(default_factory=list)
     question: list[list[dict[str, Any]]] = field(default_factory=list)
@@ -49,7 +49,7 @@ class EvalTask:
 
         If ``benchmark`` is provided, its ``normalize_task`` is applied first
         so benchmark-specific quirks (SWE-rebench's native-list FAIL_TO_PASS,
-        explicit docker_image pinning, BFCL's tools/question shape, etc.) are
+        explicit docker_image pinning, function-call tools/question shape, etc.) are
         absorbed before the row hits the generic extraction logic below.
         """
         if benchmark is not None:
