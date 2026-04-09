@@ -43,7 +43,7 @@ class TaskContainerRunResult:
 
 def current_container_python_runtime() -> str:
     """Return the Python interpreter path that the container should use."""
-    return str(REPO_VENV_PYTHON.resolve())
+    return str(REPO_VENV_PYTHON)
 
 
 def task_container_runtime_dir(attempt_dir: Path, scaffold: str) -> Path:

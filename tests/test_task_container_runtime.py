@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from trace_collect.runtime.task_container import (
@@ -24,10 +25,25 @@ def test_project_mount_args_include_attempt_dir_and_repo(
     assert str((Path(__file__).resolve().parents[1]).resolve()) in joined
 
 
-def test_current_container_python_runtime_points_at_repo_venv() -> None:
+def test_current_container_python_runtime_keeps_unresolved_venv_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    real_python = tmp_path / "real-python"
+    real_python.write_text("", encoding="utf-8")
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    symlink_python = bin_dir / "python"
+    os.symlink(real_python, symlink_python)
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.REPO_VENV_PYTHON",
+        symlink_python,
+    )
+
     runtime = Path(current_container_python_runtime())
-    assert runtime.exists()
-    assert runtime.name.startswith("python")
+    assert runtime == symlink_python
+    assert runtime.resolve() == real_python
 
 
 def test_preflight_task_container_runtime_reads_runtime_proof(
