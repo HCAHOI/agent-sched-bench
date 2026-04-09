@@ -15,7 +15,6 @@ import dataclasses
 from agents.base import TraceAction
 from harness.metrics_client import VLLMMetricsClient
 from harness.trace_logger import TraceLogger
-from trace_collect.openclaw_tools import execute_trace_tool
 from trace_collect.scaffold_registry import (
     PreparedWorkspace,
     SimulatePrepareConfig,
@@ -66,13 +65,14 @@ async def _exec_tool(
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
-    raw_response: dict[str, Any] | None = None,
 ) -> tuple[str, float, bool]:
     """Execute one source-trace tool call in *repo_dir*.
 
     Returns:
         (tool_result, tool_duration_ms, tool_success)
     """
+    from trace_collect.openclaw_tools import execute_trace_tool
+
     t0 = time.monotonic()
     tool_result, tool_success = await execute_trace_tool(
         agent_id=agent_id,
@@ -81,7 +81,6 @@ async def _exec_tool(
         repo_dir=repo_dir,
         command_timeout_s=command_timeout_s,
         command_output_style="raw",
-        raw_response=raw_response,
     )
     duration_ms = (time.monotonic() - t0) * 1000
     return tool_result, duration_ms, tool_success
@@ -156,14 +155,14 @@ async def simulate(
     warmup_skip_iterations: int = 0,
 ) -> Path:
     metadata = _load_trace_metadata(source_trace)
-    _validate_trace_for_simulation(metadata)
-
+    _validate_simulation_source_trace(metadata)
     first_agent_id = _detect_agent_id(source_trace)
     iterations, summary = load_trace_actions(source_trace, first_agent_id)
     agent_id = first_agent_id
     scaffold = _detect_scaffold(source_trace)
 
     task = _find_task(task_source, agent_id)
+    _validate_simulation_task(scaffold, task)
     source_model = (summary or {}).get("model", "unknown")
     logger.info(
         "Simulating %s [scaffold=%s]: %d iterations from %s, local model=%s",
@@ -303,7 +302,7 @@ async def simulate(
                 else:
                     tool_result, tool_duration_ms, tool_success = await _exec_tool(
                         agent_id, repo_dir, tool_name, tool_args,
-                        command_timeout_s, llm_data.get("raw_response"),
+                        command_timeout_s,
                     )
                     tool_ts_end = time.time()
                     sim_provenance = "executed_locally"
@@ -370,6 +369,24 @@ async def simulate(
     )
     return trace_file
 
+def _validate_simulation_task(scaffold: str, task: dict[str, Any]) -> None:
+    if scaffold == "openclaw" and (
+        not task.get("repo") or not task.get("base_commit")
+    ):
+        raise NotImplementedError(
+            "Simulate mode requires repo-backed OpenClaw tasks with repo and "
+            "base_commit."
+        )
+
+
+def _validate_simulation_source_trace(metadata: dict[str, Any] | None) -> None:
+    if metadata is None or metadata.get("scaffold") != "openclaw":
+        return
+    if metadata.get("needs_prepare") is False:
+        raise NotImplementedError("Simulate mode requires repo-backed OpenClaw traces.")
+    if metadata.get("task_shape") not in (None, "swe_patch"):
+        raise NotImplementedError("Simulate mode requires repo-backed OpenClaw traces.")
+
 def _detect_scaffold(trace_path: Path) -> str:
     metadata = _load_trace_metadata(trace_path)
     return metadata.get("scaffold", "unknown") if metadata else "unknown"
@@ -389,29 +406,6 @@ def _load_trace_metadata(trace_path: Path) -> dict[str, Any] | None:
             if record.get("type") in ("step", "summary", "action"):
                 break
     return None
-
-def _validate_trace_for_simulation(metadata: dict[str, Any] | None) -> None:
-    """Reject trace types the replay path cannot prepare into a workspace.
-
-    The simulator only supports traces whose scaffold can materialize a real
-    repo workspace for local tool replay. The check happens before scaffold
-    lookup so unrelated ``agents.*`` packages stay unloaded.
-    """
-    if metadata is None:
-        return
-
-    if metadata.get("needs_prepare") is False:
-        raise NotImplementedError(
-            "Simulate mode requires a prepare-able workspace trace; "
-            "metadata.needs_prepare was false."
-        )
-
-    task_shape = metadata.get("task_shape")
-    if task_shape not in (None, "swe_patch"):
-        raise NotImplementedError(
-            "Simulate mode only supports repo-backed swe_patch traces; "
-            f"got task_shape={task_shape!r}."
-        )
 
 def _detect_agent_id(trace_path: Path) -> str:
     with open(trace_path, encoding="utf-8") as f:

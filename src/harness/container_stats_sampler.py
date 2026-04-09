@@ -5,7 +5,6 @@ The summary format matches the harness resources.json schema.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import threading
 import time
@@ -27,48 +26,6 @@ def _parse_pipe_stats(raw: str) -> dict[str, Any] | None:
         "mem_percent": parts[1],
         "cpu_percent": parts[2],
     }
-
-def _parse_json_stats(raw: str) -> dict[str, Any] | None:
-    """Parse ``podman stats --format json`` output.
-
-    Kept as a secondary parser for backward-compat with existing tests.
-    """
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(payload, list):
-        if not payload:
-            return None
-        payload = payload[0]
-    if not isinstance(payload, dict):
-        return None
-
-    mem_usage = (
-        payload.get("mem_usage")
-        or payload.get("MemUsage")
-        or payload.get("mem_usage_bytes")
-        or ""
-    )
-    mem_percent = payload.get("mem_percent") or payload.get("MemPerc") or ""
-    cpu_percent = payload.get("cpu_percent") or payload.get("CPUPerc") or ""
-    if isinstance(mem_percent, (int, float)):
-        mem_percent = f"{float(mem_percent):.2f}%"
-    if isinstance(cpu_percent, (int, float)):
-        cpu_percent = f"{float(cpu_percent):.2f}%"
-    now = datetime.now(tz=timezone.utc)
-    return {
-        "timestamp": now.isoformat().replace("+00:00", ""),
-        "epoch": now.timestamp(),
-        "mem_usage": str(mem_usage),
-        "mem_percent": str(mem_percent),
-        "cpu_percent": str(cpu_percent),
-    }
-
-def _parse_podman_stats(raw: str) -> dict[str, Any] | None:
-    if raw and raw.lstrip().startswith(("{", "[")):
-        return _parse_json_stats(raw)
-    return _parse_pipe_stats(raw)
 
 def _parse_memory_mb(mem_usage: str) -> float | None:
     if not mem_usage:
@@ -172,11 +129,11 @@ class ContainerStatsSampler(threading.Thread):
         self.interval_s = interval_s
         self.executable = executable
         self.subprocess_timeout_s = subprocess_timeout_s
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._samples: list[dict[str, Any]] = []
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             tick_start = time.monotonic()
             try:
                 result = subprocess.run(
@@ -202,11 +159,11 @@ class ContainerStatsSampler(threading.Thread):
                 self._samples.append(sample)
             elapsed = time.monotonic() - tick_start
             remainder = max(0.0, self.interval_s - elapsed)
-            if self._stop.wait(remainder):
+            if self._stop_event.wait(remainder):
                 break
 
     def stop(self) -> list[dict[str, Any]]:
-        self._stop.set()
+        self._stop_event.set()
         if self.is_alive():
             self.join(timeout=self.subprocess_timeout_s + self.interval_s + 1.0)
         return list(self._samples)

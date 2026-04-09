@@ -16,7 +16,6 @@ from agents.openclaw.tools.filesystem import (
     ReadFileTool,
     WriteFileTool,
 )
-from trace_collect._raw_response import parsed_tool_args_from_raw_response
 
 _OBSERVATION_TEMPLATE = (
     "<returncode>{returncode}</returncode>\n<output>\n{output}\n</output>"
@@ -28,17 +27,12 @@ def _unwrap_tool_args(
     *,
     tool_name: str | None,
     tool_args_json: str,
-    raw_response: dict[str, Any] | None = None,
 ) -> tuple[str | None, dict[str, Any], bool]:
     """Return (resolved_tool_name, params, is_nested_openclaw_style)."""
 
     try:
         parsed = json.loads(tool_args_json or "{}")
     except json.JSONDecodeError:
-        fallback = parsed_tool_args_from_raw_response(raw_response)
-        if fallback is not None:
-            fallback_name, fallback_args = fallback
-            return (tool_name or fallback_name), fallback_args, True
         raise
     if not isinstance(parsed, dict):
         return tool_name, {}, False
@@ -166,14 +160,12 @@ async def execute_trace_tool(
     repo_dir: Path,
     command_timeout_s: float,
     command_output_style: str = "raw",
-    raw_response: dict[str, Any] | None = None,
 ) -> tuple[str, bool]:
     """Execute one benchmark or imported OpenClaw tool call inside *repo_dir*."""
 
     resolved_name, params, nested_style = _unwrap_tool_args(
         tool_name=tool_name,
         tool_args_json=tool_args_json,
-        raw_response=raw_response,
     )
 
     if "command" in params:

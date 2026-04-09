@@ -3,10 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from agents.benchmarks.base import Benchmark
+from typing import Any
 
 @dataclass
 class EvalTask:
@@ -16,65 +13,7 @@ class EvalTask:
 
     repo: str | None = None
     base_commit: str | None = None
-
-    test_patch: str | None = None
-    fail_to_pass: list[str] = field(default_factory=list)
-    pass_to_pass: list[str] = field(default_factory=list)
     image_name: str | None = None
-
-    tools: list[dict[str, Any]] = field(default_factory=list)
-    question: list[list[dict[str, Any]]] = field(default_factory=list)
-    ground_truth: list[dict[str, Any]] = field(default_factory=list)
-    category: str | None = None
-
-    @classmethod
-    def from_benchmark_instance(
-        cls,
-        row: dict[str, Any],
-        workspace_base: Path,
-        benchmark: "Benchmark | None" = None,
-    ) -> "EvalTask":
-        if benchmark is not None:
-            row = benchmark.normalize_task(dict(row))
-
-        fail_to_pass = row.get("FAIL_TO_PASS", [])
-        if isinstance(fail_to_pass, str):
-            import json
-
-            try:
-                fail_to_pass = json.loads(fail_to_pass)
-            except json.JSONDecodeError:
-                fail_to_pass = [fail_to_pass] if fail_to_pass else []
-
-        pass_to_pass = row.get("PASS_TO_PASS", [])
-        if isinstance(pass_to_pass, str):
-            import json
-
-            try:
-                pass_to_pass = json.loads(pass_to_pass)
-            except json.JSONDecodeError:
-                pass_to_pass = [pass_to_pass] if pass_to_pass else []
-
-        return cls(
-            instance_id=row["instance_id"],
-            problem_statement=row.get("problem_statement", ""),
-            workspace_dir=workspace_base / row["instance_id"],
-            repo=row.get("repo"),
-            base_commit=row.get("base_commit"),
-            test_patch=row.get("test_patch"),
-            fail_to_pass=fail_to_pass,
-            pass_to_pass=pass_to_pass,
-            image_name=row.get("image_name"),
-            tools=list(row.get("tools", [])),
-            question=list(row.get("question", [])),
-            ground_truth=list(row.get("ground_truth", [])),
-            category=row.get("category"),
-        )
-
-    @property
-    def needs_prepare(self) -> bool:
-        return bool(self.repo) and bool(self.base_commit)
-
 @dataclass
 class EvalResult:
 

@@ -21,7 +21,6 @@ class SWERebenchBenchmark(Benchmark):
     """
 
     slug: ClassVar[str] = "swe-rebench"
-    task_shape: ClassVar[str] = "swe_patch"
 
     # Abstract method implementations
 
@@ -93,8 +92,7 @@ class SWERebenchBenchmark(Benchmark):
     ) -> Any:
         """Return a :class:`~agents.openclaw.eval.runner.SWEBenchRunner`.
 
-        Reuses SWEBenchRunner (same ``swe_patch`` shape). The plugin
-        self-injects ``repos_root`` and ``benchmark`` from its own config.
+        Reuses the shared SWE runner for repo-backed patch tasks.
         """
         if scaffold != "openclaw":
             raise NotImplementedError(
@@ -109,7 +107,5 @@ class SWERebenchBenchmark(Benchmark):
             max_iterations=max_iterations,
             context_window_tokens=context_window_tokens,
             model=model,
-            repos_root=self.config.repos_root,
-            benchmark=self,
             **kwargs,
         )

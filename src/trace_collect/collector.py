@@ -244,14 +244,7 @@ async def collect_miniswe_traces(
     min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect miniswe traces inside the SWE-rebench task container."""
-    if benchmark.task_shape != "swe_patch":
-        raise ValueError(
-            f"miniswe only supports swe_patch benchmarks; "
-            f"{benchmark.config.slug!r} has task_shape={benchmark.task_shape!r}"
-        )
-
     tasks = benchmark.load_tasks()
-    tasks = [benchmark.normalize_task(t) for t in tasks]
     if instance_ids is not None:
         id_set = set(instance_ids)
         tasks = [t for t in tasks if t["instance_id"] in id_set]
@@ -349,14 +342,7 @@ async def collect_openclaw_traces(
     min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect openclaw traces inside the SWE-rebench task container."""
-    if benchmark.task_shape != "swe_patch":
-        raise ValueError(
-            f"openclaw SWE-rebench collection only supports swe_patch; "
-            f"{benchmark.config.slug!r} has task_shape={benchmark.task_shape!r}"
-        )
-
     tasks = benchmark.load_tasks()
-    tasks = [benchmark.normalize_task(t) for t in tasks]
     if instance_ids is not None:
         id_set = set(instance_ids)
         tasks = [t for t in tasks if t["instance_id"] in id_set]
@@ -400,8 +386,13 @@ async def collect_openclaw_traces(
             cw = ContainerWorkspace(container_id=container_id, cwd="/testbed")
 
             try:
-                eval_task = EvalTask.from_benchmark_instance(
-                    task, run_dir / "_workspaces", benchmark=benchmark
+                eval_task = EvalTask(
+                    instance_id=task["instance_id"],
+                    problem_statement=task.get("problem_statement", ""),
+                    workspace_dir=run_dir / "_workspaces" / task["instance_id"],
+                    repo=task.get("repo"),
+                    base_commit=task.get("base_commit"),
+                    image_name=task.get("image_name"),
                 )
                 eval_result = await runner.run_task(
                     eval_task,
@@ -502,10 +493,7 @@ def _normalize_openclaw_trace(
         "scaffold": "openclaw",
         "trace_format_version": 5,
         "mode": "collect",
-        "scaffold_capabilities": {
-            "unknown": True,
-            "reason": "source trace had no metadata record",
-        },
+        "scaffold_capabilities": {"unknown": True},
     }
     if source_metadata is not None:
         merged.update(source_metadata)

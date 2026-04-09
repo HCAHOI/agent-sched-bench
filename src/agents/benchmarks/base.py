@@ -14,7 +14,7 @@ import yaml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 @dataclass
 class BenchmarkConfig:
@@ -67,12 +67,11 @@ class BenchmarkConfig:
 class Benchmark(ABC):
     """Abstract base class for all benchmark plugins.
 
-    Subclasses must set :attr:`slug` and :attr:`task_shape` as class
-    variables, and implement :meth:`load_tasks` and :meth:`normalize_task`.
+    Subclasses must set :attr:`slug` and implement :meth:`load_tasks`
+    and :meth:`normalize_task`.
     """
 
     slug: ClassVar[str]
-    task_shape: ClassVar[Literal["swe_patch", "function_call"]] = "swe_patch"
 
     def __init__(self, config: BenchmarkConfig) -> None:
         self.config = config
@@ -105,7 +104,7 @@ class Benchmark(ABC):
         """Derive a pytest command from ``task["FAIL_TO_PASS"]``.
 
         Handles both native list (SWE-rebench) and JSON-encoded string
-        (SWE-Bench Verified) forms. No dependency on the legacy shim.
+        (SWE-Bench Verified) forms.
         """
         raw = task.get("FAIL_TO_PASS", "[]")
         if isinstance(raw, str):
@@ -149,6 +148,6 @@ class Benchmark(ABC):
             NotImplementedError: Always — subclasses must override.
         """
         raise NotImplementedError(
-            f"Benchmark {self.slug!r} (task_shape={self.task_shape!r}) does not implement "
-            f"build_runner; subclasses must override this method for scaffold={scaffold!r}"
+            f"Benchmark {self.slug!r} does not implement build_runner; "
+            f"subclasses must override this method for scaffold={scaffold!r}"
         )

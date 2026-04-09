@@ -14,8 +14,7 @@ from agents.benchmarks._swebench_selection import (
 )
 from agents.benchmarks.base import Benchmark
 
-# Repo-level constants — authoritative copies live here; the legacy shim
-# re-exports these for backward compatibility.
+# Repo-level selection constants.
 
 #: Repos known to have heavy test suites (large codebase, slow pytest).
 CLASS_LEVEL_HEAVY_REPOS: frozenset[str] = frozenset(
@@ -42,16 +41,9 @@ class SWEBenchVerified(Benchmark):
     """Benchmark plugin for SWE-bench Verified.
 
     Dataset: ``princeton-nlp/SWE-bench_Verified`` (HuggingFace).
-    Task shape: ``swe_patch`` — the agent must produce a git patch.
     """
 
     slug: ClassVar[str] = "swe-bench-verified"
-    task_shape: ClassVar[str] = "swe_patch"
-
-    # Make the class-level constants accessible as instance-level attributes
-    # so tests can reference SWEBenchVerified.CLASS_LEVEL_REPO_QUOTAS etc.
-    CLASS_LEVEL_HEAVY_REPOS = CLASS_LEVEL_HEAVY_REPOS
-    CLASS_LEVEL_REPO_QUOTAS = CLASS_LEVEL_REPO_QUOTAS
 
     # Abstract method implementations
 
@@ -113,8 +105,7 @@ class SWEBenchVerified(Benchmark):
     ) -> Any:
         """Return a :class:`~agents.openclaw.eval.runner.SWEBenchRunner`.
 
-        The plugin self-injects ``repos_root`` and ``benchmark`` from its own
-        config so the collector does not need to thread them through.
+        Reuses the shared SWE runner for repo-backed patch tasks.
         """
         if scaffold != "openclaw":
             raise NotImplementedError(
@@ -129,10 +120,5 @@ class SWEBenchVerified(Benchmark):
             max_iterations=max_iterations,
             context_window_tokens=context_window_tokens,
             model=model,
-            repos_root=self.config.repos_root,
-            benchmark=self,
             **kwargs,
         )
-
-# Module-level selection function (called by base.Benchmark.select_subset and
-# by the legacy shim in agents.swebench_data)

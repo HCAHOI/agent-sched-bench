@@ -34,7 +34,6 @@ class EvictionEvent:
 class SchedulerHookStatus:
 
     runtime_hook_enabled: bool
-    compatibility_ok: bool
     vllm_version: str | None
     target: str
     reason: str | None = None
@@ -146,7 +145,6 @@ def apply_scheduler_hook() -> SchedulerHookStatus:
     if getattr(scheduler_cls.schedule, "_agent_benchmark_hooked", False):
         return SchedulerHookStatus(
             runtime_hook_enabled=True,
-            compatibility_ok=True,
             vllm_version=version,
             target=target,
         )
@@ -179,7 +177,6 @@ def apply_scheduler_hook() -> SchedulerHookStatus:
     scheduler_cls.schedule = wrapped  # type: ignore[assignment]
     return SchedulerHookStatus(
         runtime_hook_enabled=True,
-        compatibility_ok=True,
         vllm_version=version,
         target=target,
     )

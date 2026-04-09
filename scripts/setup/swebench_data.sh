@@ -16,5 +16,23 @@ if [[ -f "$TASKS_FILE" ]]; then
 fi
 
 echo "[setup] Downloading SWE-bench Verified dataset..."
-"${REPO_ROOT}/.venv/bin/python" -m agents.swebench_data
+PYTHONPATH="${REPO_ROOT}/src" "${REPO_ROOT}/.venv/bin/python" - <<'PYEOF'
+import json
+from pathlib import Path
+
+from agents.benchmarks import get_benchmark_class
+from agents.benchmarks.base import BenchmarkConfig
+
+config = BenchmarkConfig.from_yaml(Path("configs/benchmarks/swe-bench-verified.yaml"))
+plugin = get_benchmark_class(config.slug)(config)
+tasks = plugin.select_subset(plugin.load_tasks())
+
+out = Path("data/swebench_verified/tasks.json")
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(
+    json.dumps(tasks, indent=2, ensure_ascii=False, default=str) + "\n",
+    encoding="utf-8",
+)
+print(f"[setup] Wrote {len(tasks)} tasks to {out}")
+PYEOF
 echo "[setup] swebench_data done"

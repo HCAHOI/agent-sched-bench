@@ -129,10 +129,7 @@ export interface components {
     schemas: {
         /** Body_upload_trace_endpoint_api_traces_upload_post */
         Body_upload_trace_endpoint_api_traces_upload_post: {
-            /**
-             * File
-             * Format: binary
-             */
+            /** File */
             file: string;
         };
         /** GanttPayload */
@@ -141,7 +138,7 @@ export interface components {
             errors?: components["schemas"]["PayloadError"][];
             registries: components["schemas"]["Registries"];
             /** Traces */
-            traces: components["schemas"]["TracePayload-Output"][];
+            traces: components["schemas"]["TracePayload"][];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -306,19 +303,7 @@ export interface components {
             scaffold: string;
         };
         /** TracePayload */
-        "TracePayload-Input": {
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Lanes */
-            lanes: components["schemas"]["Lane"][];
-            metadata: components["schemas"]["TraceMetadata"];
-            /** T0 */
-            t0: number;
-        };
-        /** TracePayload */
-        "TracePayload-Output": {
+        TracePayload: {
             /** Id */
             id: string;
             /** Label */
@@ -344,10 +329,14 @@ export interface components {
         /** UploadTraceResponse */
         UploadTraceResponse: {
             descriptor: components["schemas"]["TraceDescriptor"];
-            payload_fragment: components["schemas"]["TracePayload-Output"];
+            payload_fragment: components["schemas"]["TracePayload"];
         };
         /** ValidationError */
         ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */

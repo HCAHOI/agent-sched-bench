@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 import time
@@ -19,7 +18,7 @@ from harness.container_image_prep import (  # noqa: E402
 )
 from harness.container_stats_sampler import (  # noqa: E402
     ContainerStatsSampler,
-    _parse_podman_stats,
+    _parse_pipe_stats,
     summarize_samples,
 )
 from harness.disk_preflight import (  # noqa: E402
@@ -102,15 +101,9 @@ def test_ensure_fixed_image_raises_on_build_failure() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_parse_podman_stats_detects_json_vs_pipe() -> None:
-    pipe = _parse_podman_stats("1MB / 1GB|0.1%|0.5%")
+def test_parse_pipe_stats_parses_pipe_format() -> None:
+    pipe = _parse_pipe_stats("1MB / 1GB|0.1%|0.5%")
     assert pipe is not None and pipe["mem_usage"] == "1MB / 1GB"
-
-    raw = json.dumps(
-        [{"mem_usage": "x", "mem_percent": "1%", "cpu_percent": "2%"}]
-    )
-    jsn = _parse_podman_stats(raw)
-    assert jsn is not None and jsn["mem_usage"] == "x"
 
 
 def test_stats_sampler_collects_samples_and_stops_cleanly() -> None:

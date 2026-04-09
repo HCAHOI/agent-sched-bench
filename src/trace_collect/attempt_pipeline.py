@@ -303,7 +303,6 @@ async def run_attempt(
         "model": ctx.model,
         "output_dir": str(ctx.attempt_dir),
         "permission_fix_time": ctx.permission_fix_time_s,
-        "claude_time": ctx.elapsed_seconds(),
         "total_time": ctx.elapsed_seconds(),
         "active_time": manifest["result_summary"]["active_time"],
         "tool_time": manifest["result_summary"]["tool_time"],

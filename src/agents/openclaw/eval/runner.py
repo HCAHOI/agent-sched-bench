@@ -1,20 +1,10 @@
-"""SWE-bench evaluation runner — composes SessionRunner for scheduling.
-
-Adds SWE-bench specific logic on top of the shared bus-based dispatch:
-- prepare_workspace() for git clone + checkout
-- EvalResult assembly with model_patch extraction
-- run_batch() for concurrent multi-task evaluation
-
-The scheduling core (MessageBus + AgentLoop + ResultCollector + trace
-hooks) lives in ``agents.openclaw._session_runner``.
-"""
+"""SWE-bench evaluation runner backed by the OpenClaw container session loop."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import Any
 
 from loguru import logger
 
@@ -23,12 +13,8 @@ from agents.openclaw._session_runner import (
     TraceCollectorHook,
     inject_event_callbacks,
 )
-from agents.openclaw.eval.prepare import prepare_workspace
 from agents.openclaw.eval.types import EvalResult, EvalTask
 from agents.openclaw.providers.base import LLMProvider
-
-if TYPE_CHECKING:
-    from agents.benchmarks.base import Benchmark
 
 __all__ = [
     "SWEBenchRunner",
@@ -54,12 +40,7 @@ def _count_trace_iterations(trace_file: Path) -> int:
     return len(iterations)
 
 class SWEBenchRunner:
-    """Runs SWE-bench tasks through OpenClaw's full bus-based scheduling.
-
-    Composes ``SessionRunner`` for the dispatch phase, adding:
-    - ``prepare_workspace()`` (git clone + checkout)
-    - ``EvalResult`` assembly (tools_used, model_patch, etc.)
-    """
+    """Run one repo-backed SWE task through the containerized OpenClaw loop."""
 
     def __init__(
         self,
@@ -70,8 +51,6 @@ class SWEBenchRunner:
         context_window_tokens: int | None = None,
         max_tool_result_chars: int | None = None,
         model: str | None = None,
-        repos_root: Path | None = None,
-        benchmark: "Benchmark | None" = None,
     ) -> None:
         self.provider = provider
         self.workspace_base = Path(workspace_base).resolve()
@@ -80,8 +59,6 @@ class SWEBenchRunner:
         self.context_window_tokens = context_window_tokens
         self.max_tool_result_chars = max_tool_result_chars
         self.model = model or provider.get_default_model()
-        self.repos_root = repos_root
-        self.benchmark = benchmark
 
         self._session_runner = SessionRunner(
             provider,
@@ -96,123 +73,28 @@ class SWEBenchRunner:
     def _build_swe_bench_prompt(
         problem_statement: str,
         *,
-        prompt_template: str | None = None,
+        prompt_template: str,
     ) -> str:
-        """Render the SWE-bench task prompt from an external template.
+        """Render the SWE prompt from the configured external template."""
+        from trace_collect.prompt_loader import load_prompt_template, render_prompt
 
-        When ``prompt_template`` is provided, loads
-        ``configs/prompts/swe_rebench/<name>.md`` via
-        :func:`trace_collect.prompt_loader.load_prompt_template` and
-        substitutes ``{{task}}`` with the problem statement. This lets
-        openclaw share the same prompt set as mini-swe-agent.
-
-        Falls back to an inline minimal template when no name is given
-        (preserves legacy behavior for existing callers).
-        """
-        if prompt_template:
-            try:
-                from trace_collect.prompt_loader import (
-                    load_prompt_template,
-                    render_prompt,
-                )
-
-                return render_prompt(
-                    load_prompt_template(prompt_template), problem_statement
-                )
-            except (FileNotFoundError, ValueError, ImportError) as exc:
-                logger.warning(
-                    "Prompt template {name} unavailable ({exc}); falling back to inline default",
-                    name=prompt_template,
-                    exc=exc,
-                )
-
-        return f"""\
-<pr_description>
-Consider the following PR description:
-{problem_statement}
-</pr_description>
-
-<instructions>
-# Task Instructions
-
-## Overview
-
-You're a software engineer fixing a bug or implementing a feature.
-Your task is to make changes to non-test files in the current working
-directory to resolve the issue described in the PR description in a
-way that is general and consistent with the codebase.
-
-## Recommended Workflow
-
-1. Analyse the codebase by finding and reading relevant files.
-2. Create a script to reproduce the issue (use the exec tool).
-3. Edit the source code to resolve the issue.
-4. Verify your fix works by running your reproduction script again.
-5. Test edge cases to ensure your fix is robust.
-
-## Constraints
-
-- MODIFY: Regular source code files in the current working directory.
-- DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.).
-
-## When Done
-
-Stop after verifying your fix. The system will automatically extract
-your changes as a git patch from the workspace.
-</instructions>"""
+        return render_prompt(
+            load_prompt_template(prompt_template),
+            problem_statement,
+        )
 
     async def run_task(
         self,
         task: EvalTask,
         *,
-        container_workspace: Any = None,
-        prompt_template: str | None = None,
+        container_workspace: Any,
+        prompt_template: str,
     ) -> EvalResult:
-        """Run a single evaluation task.
-
-        Lifecycle (container-backed path, used by attempt_pipeline):
-        1. Skip ``prepare_workspace`` — the task container image has
-           ``/testbed`` at the right commit with dependencies pre-installed.
-        2. SessionRunner.run() with ``container_workspace`` so all
-           filesystem/shell tools route through ``podman exec``.
-        3. Extract result + model_patch from agent output.
-
-        Lifecycle (legacy host-backed path):
-        1. ``prepare_workspace()`` — host git clone + checkout + pip install
-        2. SessionRunner.run() with host-native tools
-        3. Same result assembly.
-        """
+        """Run a single evaluation task inside the prepared task container."""
         ws = task.workspace_dir
         ws.mkdir(parents=True, exist_ok=True)
 
         trace_file = ws / "trace.jsonl"
-
-        prepare_ms: float | None = None
-        if container_workspace is None and task.needs_prepare:
-            try:
-                prepare_ms = await prepare_workspace(
-                    ws,
-                    repo=task.repo,
-                    base_commit=task.base_commit,
-                    repos_root=self.repos_root,
-                )
-            except Exception as e:
-                logger.error("Prepare failed for {id}: {e}", id=task.instance_id, e=e)
-                return EvalResult(
-                    instance_id=task.instance_id,
-                    content=None,
-                    stop_reason="prepare_error",
-                    error=str(e),
-                    prepare_ms=prepare_ms,
-                    trace_file=trace_file,
-                    workspace_dir=ws,
-                    base_commit=task.base_commit,
-                )
-        else:
-            logger.info(
-                "Skipping prepare for {id} (container-backed or no repo)",
-                id=task.instance_id,
-            )
 
         prompt_text = self._build_swe_bench_prompt(
             task.problem_statement, prompt_template=prompt_template
@@ -225,7 +107,7 @@ your changes as a git patch from the workspace.
             trace_file=trace_file,
             instance_id=task.instance_id,
             channel="cli",
-            prepare_ms=prepare_ms,
+            prepare_ms=None,
             container_workspace=container_workspace,
         )
 
@@ -302,40 +184,10 @@ your changes as a git patch from the workspace.
             error=None,
             tool_events=tool_events,
             trace_file=trace_file,
-            prepare_ms=prepare_ms,
+            prepare_ms=None,
             run_ms=result.elapsed_s * 1000,
             workspace_dir=ws,
             base_commit=task.base_commit,
             container_model_patch=container_patch,
             n_iterations=n_iterations,
         )
-
-    async def run_batch(
-        self,
-        tasks: list[EvalTask],
-        max_concurrent: int = 1,
-        on_progress: Callable[[EvalResult], None] | None = None,
-    ) -> list[EvalResult]:
-        semaphore = asyncio.Semaphore(max_concurrent)
-        results: list[EvalResult | None] = [None] * len(tasks)
-
-        async def _run_one(idx: int, task: EvalTask) -> None:
-            async with semaphore:
-                try:
-                    result = await self.run_task(task)
-                    results[idx] = result
-                    if on_progress:
-                        on_progress(result)
-                except Exception as e:
-                    logger.error("Task {} failed: {}", task.instance_id, e)
-                    results[idx] = EvalResult(
-                        instance_id=task.instance_id,
-                        content=None,
-                        stop_reason="error",
-                        error=str(e),
-                    )
-                    if on_progress:
-                        on_progress(results[idx])
-
-        await asyncio.gather(*[_run_one(i, t) for i, t in enumerate(tasks)])
-        return [r for r in results if r is not None]
