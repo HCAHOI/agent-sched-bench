@@ -37,6 +37,67 @@ def _run(
         timeout=timeout,
     )
 
+
+def ensure_source_image(
+    source_image: str,
+    *,
+    executable: str = "podman",
+) -> None:
+    """Ensure ``source_image`` exists locally, pulling when missing."""
+    if not source_image:
+        return
+    if _image_exists(source_image, executable):
+        return
+    try:
+        _run(
+            [executable, "pull", source_image],
+            check=True,
+            timeout=3600,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"Failed to pull source image {source_image}: {exc}"
+        ) from exc
+
+
+def remove_image(
+    image: str,
+    *,
+    executable: str = "podman",
+) -> bool:
+    """Best-effort local image removal.
+
+    Returns ``True`` when an image existed and was removed, ``False`` when the
+    image was already absent.
+    """
+    if not image or not _image_exists(image, executable):
+        return False
+    result = _run(
+        [executable, "image", "rm", "-f", image],
+        check=False,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to remove image {image}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    return True
+
+
+def prune_dangling_images(*, executable: str = "podman") -> None:
+    """Best-effort prune of dangling image layers."""
+    result = _run(
+        [executable, "image", "prune", "-f"],
+        check=False,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to prune dangling images: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
 def _build_fixed_image(
     source_image: str,
     fixed_name: str,
@@ -102,6 +163,8 @@ def ensure_fixed_image(
         _IMAGE_CACHE[source_image] = (fixed_name, 0.0)
         return _IMAGE_CACHE[source_image]
 
+    ensure_source_image(source_image, executable=executable)
+
     uid = host_uid if host_uid is not None else os.getuid()
     gid = host_gid if host_gid is not None else os.getgid()
 
@@ -120,3 +183,8 @@ def ensure_fixed_image(
 
 def clear_image_cache() -> None:
     _IMAGE_CACHE.clear()
+
+
+def drop_cached_fixed_image(source_image: str) -> None:
+    """Forget any cached fixed-image lookup for ``source_image``."""
+    _IMAGE_CACHE.pop(source_image, None)

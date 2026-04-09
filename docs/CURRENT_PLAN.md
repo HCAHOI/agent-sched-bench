@@ -1,49 +1,27 @@
-# SWE-rebench Claude Parity Planning
+# Cloud OpenClaw Serial Prefetch Smoke
 
-## Goal
+## Summary
 
-Plan a complete implementation to:
+- Implement bounded serial image lifecycle for `swe-rebench` + `openclaw`.
+- Preserve canonical v5 trace output and the normal `attempt_1/` layout.
+- Keep the CLI contract stable; behavior change is internal to collection.
 
-1. make SWE-rebench default to the `cc_aligned` prompt
-2. move OpenClaw / MiniSWE agent bodies into the task container so their
-   runtime location matches Claude Code for motivation experiments
+## Work Items
 
-## Steps
+1. Update the serial collector path to:
+   - preserve the exact `--instance-ids` order
+   - prefetch the next source image while the current task runs
+   - wait for the prefetch before the next task starts
+   - clean up the completed task's fixed image and old source image after artifacts are written
+2. Add image lifecycle helpers in `src/harness/container_image_prep.py`.
+3. Extend focused tests for ordering, prefetch, cleanup, and cache eviction.
+4. Run targeted tests.
+5. Run an independent review sub-agent and fix findings.
+6. Stop at the checkpoint before the real 3-task smoke run unless the user explicitly requests autopilot.
 
-1. Branch + context anchor
-   Status: completed
-   Scope:
-   - Create branch `feat/swe-rebench-cc-parity`
-   - Save context snapshot under `.omx/context/`
+## Acceptance Checks
 
-2. Grounding audit
-   Status: completed
-   Scope:
-   - Inspect local SWE-rebench benchmark, collector, OpenClaw, MiniSWE runtime paths.
-   - Inspect `../agentcgroup` Claude Code single-task runner for execution semantics.
-
-3. Consensus plan draft
-   Status: completed
-   Scope:
-   - Planner drafted `.omx/plans/swe-rebench-cc-alignment.md`.
-
-4. Architect review
-   Status: completed
-   Scope:
-   - Architect flagged that prompt default and runtime strategy must be separated,
-     canonical artifact writing should stay host-owned, and container bootstrap
-     must be proven rather than assumed.
-
-5. Critic review + revision
-   Status: completed
-   Scope:
-   - Revise the plan accordingly, then re-run review.
-
-
-## Implementation progress
-
-- Phase 1 foundation landed on branch `feat/swe-rebench-cc-parity`.
-- Done: benchmark-owned prompt default plumbing (`cc_aligned` for swe-rebench), plugin runtime mode hook, host-owned manifest/results runtime metadata, task-container launcher/entrypoint skeleton, OpenClaw `tool_workspace` support, MiniSWE local-environment mode, and focused unit coverage.
-- Verified locally: targeted pytest suites covering prompt resolution, runtime dispatch, task-container host helpers, collector task-container helpers, attempt metadata, openclaw runtime changes, and local patch extraction all pass; targeted ruff passes too.
-- Real smoke evidence: pulled `swerebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384` and attempted task-container bootstrap. On this current macOS+Podman host, container start still fails before preflight with an amd64/arm64 OCI runtime mismatch. The earlier Python-runtime mount issue is gone after switching the in-container launcher to the repo `.venv` interpreter path.
-- Pending next: continue implementation and treat the remaining real-smoke blocker as macOS/Podman host-specific, not as a Linux experiment-path blocker.
+- Tasks execute serially.
+- At most the current task image/fixed image plus the next prefetched source image are retained.
+- Canonical `attempt_1/trace.jsonl` files still start with `trace_metadata` and `trace_format_version=5`.
+- No raw OpenClaw session trace is mistaken for the canonical trace output.

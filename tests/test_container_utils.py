@@ -14,7 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from harness.container_image_prep import (  # noqa: E402
     clear_image_cache,
+    drop_cached_fixed_image,
     ensure_fixed_image,
+    ensure_source_image,
+    prune_dangling_images,
+    remove_image,
 )
 from harness.container_stats_sampler import (  # noqa: E402
     ContainerStatsSampler,
@@ -72,9 +76,10 @@ def test_ensure_fixed_image_builds_when_derivative_missing() -> None:
         )
     assert fixed == "swebench-fixed-swerebench_foo_latest"
     assert elapsed >= 0.0
-    # Expect: exists (miss), run -d, exec chown, commit, stop, rm
+    # Expect: fixed exists (miss), source exists (miss), pull, run -d, exec chown, commit, stop, rm
     verbs = [" ".join(c[1:3]) for c in calls]
-    assert "image exists" in verbs
+    assert verbs.count("image exists") == 2
+    assert "pull swerebench/foo:latest" in [" ".join(c[1:4]) for c in calls]
     assert any("run -d" in v for v in verbs)
     assert any("exec cid_xyz" == " ".join(c[1:3]) for c in calls)
     assert any("commit cid_xyz" == " ".join(c[1:3]) for c in calls)
@@ -94,6 +99,66 @@ def test_ensure_fixed_image_raises_on_build_failure() -> None:
     ):
         with pytest.raises(RuntimeError, match="Failed to build"):
             ensure_fixed_image("swerebench/img")
+
+
+def test_ensure_source_image_pulls_when_missing() -> None:
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with patch(
+        "harness.container_image_prep.subprocess.run",
+        side_effect=fake_run,
+    ):
+        ensure_source_image("swerebench/source:latest")
+
+    assert calls[0][:3] == ["podman", "image", "exists"]
+    assert calls[1] == ["podman", "pull", "swerebench/source:latest"]
+
+
+def test_drop_cached_fixed_image_forces_reprobe() -> None:
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with patch(
+        "harness.container_image_prep.subprocess.run",
+        side_effect=fake_run,
+    ):
+        ensure_fixed_image("swerebench/cached:latest")
+        drop_cached_fixed_image("swerebench/cached:latest")
+        ensure_fixed_image("swerebench/cached:latest")
+
+    exists_calls = [cmd for cmd in calls if cmd[:3] == ["podman", "image", "exists"]]
+    assert len(exists_calls) == 2
+
+
+def test_remove_image_and_prune_dangling_images() -> None:
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with patch(
+        "harness.container_image_prep.subprocess.run",
+        side_effect=fake_run,
+    ):
+        assert remove_image("swerebench/source:latest") is True
+        prune_dangling_images()
+
+    assert ["podman", "image", "rm", "-f", "swerebench/source:latest"] in calls
+    assert ["podman", "image", "prune", "-f"] in calls
 
 
 # ---------------------------------------------------------------------------

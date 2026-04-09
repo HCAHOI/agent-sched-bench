@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import logging
 import time
@@ -10,6 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from harness.container_image_prep import (
+    drop_cached_fixed_image,
+    ensure_source_image,
+    prune_dangling_images,
+    remove_image,
+)
 from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
@@ -147,6 +154,127 @@ def write_results_jsonl(
             f.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
 
 
+def _select_tasks(
+    tasks: list[dict[str, Any]],
+    *,
+    instance_ids: list[str] | None,
+    sample: int | None,
+) -> list[dict[str, Any]]:
+    """Filter tasks while preserving the explicit ``instance_ids`` order."""
+    selected = list(tasks)
+    if instance_ids is not None:
+        by_id = {task["instance_id"]: task for task in tasks}
+        missing = [instance_id for instance_id in instance_ids if instance_id not in by_id]
+        if missing:
+            raise ValueError(f"No tasks matched instance_ids: {missing}")
+        selected = [by_id[instance_id] for instance_id in instance_ids]
+    if sample is not None:
+        selected = selected[:sample]
+    return selected
+
+
+def _task_source_image(task: dict[str, Any]) -> str:
+    return str(task.get("image_name") or "")
+
+
+def _next_pending_source_image(
+    tasks: list[dict[str, Any]],
+    *,
+    current_index: int,
+    completed: set[str],
+) -> str | None:
+    """Return the next incomplete task's source image, if any."""
+    for next_task in tasks[current_index + 1 :]:
+        if next_task["instance_id"] in completed:
+            continue
+        source_image = _task_source_image(next_task)
+        if source_image:
+            return source_image
+    return None
+
+
+def _ensure_task_source_ready(
+    *,
+    instance_id: str,
+    source_image: str,
+    prefetched_source_image: str | None,
+    prefetch_future: Future[None] | None,
+    executable: str = "podman",
+) -> None:
+    """Ensure the current task's source image is available locally."""
+    if not source_image:
+        return
+    if (
+        prefetch_future is not None
+        and prefetched_source_image == source_image
+    ):
+        try:
+            prefetch_future.result()
+            logger.info("prefetch ready for %s image=%s", instance_id, source_image)
+            return
+        except Exception as exc:
+            logger.warning(
+                "prefetch failed for %s image=%s; retrying foreground: %s",
+                instance_id,
+                source_image,
+                exc,
+            )
+    ensure_source_image(source_image, executable=executable)
+
+
+def _cleanup_task_images(
+    *,
+    instance_id: str,
+    source_image: str,
+    fixed_image: str | None,
+    keep_source_image: str | None,
+    executable: str = "podman",
+) -> None:
+    """Best-effort cleanup that keeps only the current/next-image budget."""
+    removed_any = False
+    try:
+        if fixed_image and fixed_image != source_image:
+            removed_any = (
+                remove_image(fixed_image, executable=executable) or removed_any
+            )
+            logger.info("cleanup %s removed fixed image %s", instance_id, fixed_image)
+    except Exception as exc:
+        logger.warning(
+            "cleanup %s failed removing fixed image %s: %s",
+            instance_id,
+            fixed_image,
+            exc,
+        )
+
+    try:
+        if source_image and source_image != keep_source_image:
+            removed_any = (
+                remove_image(source_image, executable=executable) or removed_any
+            )
+            logger.info(
+                "cleanup %s removed source image %s",
+                instance_id,
+                source_image,
+            )
+    except Exception as exc:
+        logger.warning(
+            "cleanup %s failed removing source image %s: %s",
+            instance_id,
+            source_image,
+            exc,
+        )
+
+    if source_image:
+        drop_cached_fixed_image(source_image)
+
+    if not removed_any:
+        return
+    try:
+        prune_dangling_images(executable=executable)
+    except Exception as exc:
+        logger.warning("cleanup %s prune failed: %s", instance_id, exc)
+
+
 async def _run_scaffold_tasks(
     *,
     benchmark: "Benchmark",
@@ -166,76 +294,112 @@ async def _run_scaffold_tasks(
 
     results: list[CollectedTaskResult] = []
     total = len(tasks)
+    prefetched_source_image: str | None = None
+    prefetch_future: Future[None] | None = None
 
-    for i, task in enumerate(tasks):
-        instance_id = task["instance_id"]
-        if instance_id in completed:
-            logger.info(
-                "[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id
-            )
-            continue
-
-        logger.info(
-            "[%d/%d] START %s (%s)", i + 1, total, instance_id, scaffold
-        )
-        t0 = time.monotonic()
-
-        attempt_ctx = AttemptContext(
-            run_dir=run_dir,
-            instance_id=instance_id,
-            attempt=1,
-            task=task,
-            model=model,
-            scaffold=scaffold,
-            source_image=task.get("image_name") or "",
-            prompt_template=_resolve_prompt_template(
-                benchmark=benchmark,
-                prompt_template=prompt_template,
-            ),
-            agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
-        )
-
-        _inner = inner_factory(task)
-
-        try:
-            result = await run_attempt(
-                attempt_ctx,
-                inner=_inner,
-                min_free_disk_gb=min_free_disk_gb,
-            )
-        except Exception as exc:
-            logger.exception("FAILED %s", instance_id)
-            results.append(
-                CollectedTaskResult(
-                    instance_id=instance_id,
-                    attempt_dir=attempt_ctx.attempt_dir,
-                    model_patch="",
-                    exit_status="error",
-                    error=f"{type(exc).__name__}: {exc}",
-                    elapsed_s=time.monotonic() - t0,
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="image-prefetch") as executor:
+        for i, task in enumerate(tasks):
+            instance_id = task["instance_id"]
+            if instance_id in completed:
+                logger.info(
+                    "[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id
                 )
-            )
-            continue
+                continue
 
-        results.append(
-            CollectedTaskResult(
-                instance_id=instance_id,
-                attempt_dir=attempt_ctx.attempt_dir,
-                model_patch=getattr(result, "model_patch", "") or "",
-                exit_status=result.exit_status,
-                error=result.error,
-                elapsed_s=time.monotonic() - t0,
-                n_iterations=result.n_iterations,
+            logger.info(
+                "[%d/%d] START %s (%s)", i + 1, total, instance_id, scaffold
             )
-        )
-        logger.info(
-            "[%d/%d] DONE %s success=%s elapsed=%.1fs",
-            i + 1,
-            total,
-            instance_id,
-            results[-1].success,
-            results[-1].elapsed_s,
-        )
+            t0 = time.monotonic()
+            source_image = _task_source_image(task)
+            next_source_image = _next_pending_source_image(
+                tasks,
+                current_index=i,
+                completed=completed,
+            )
+
+            attempt_ctx = AttemptContext(
+                run_dir=run_dir,
+                instance_id=instance_id,
+                attempt=1,
+                task=task,
+                model=model,
+                scaffold=scaffold,
+                source_image=source_image,
+                prompt_template=_resolve_prompt_template(
+                    benchmark=benchmark,
+                    prompt_template=prompt_template,
+                ),
+                agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
+            )
+
+            _inner = inner_factory(task)
+
+            try:
+                _ensure_task_source_ready(
+                    instance_id=instance_id,
+                    source_image=source_image,
+                    prefetched_source_image=prefetched_source_image,
+                    prefetch_future=prefetch_future,
+                )
+                prefetched_source_image = None
+                prefetch_future = None
+
+                if next_source_image and next_source_image != source_image:
+                    logger.info(
+                        "prefetch start for next task after %s image=%s",
+                        instance_id,
+                        next_source_image,
+                    )
+                    prefetched_source_image = next_source_image
+                    prefetch_future = executor.submit(
+                        ensure_source_image,
+                        next_source_image,
+                    )
+
+                result = await run_attempt(
+                    attempt_ctx,
+                    inner=_inner,
+                    min_free_disk_gb=min_free_disk_gb,
+                )
+            except Exception as exc:
+                logger.exception("FAILED %s", instance_id)
+                results.append(
+                    CollectedTaskResult(
+                        instance_id=instance_id,
+                        attempt_dir=attempt_ctx.attempt_dir,
+                        model_patch="",
+                        exit_status="error",
+                        error=f"{type(exc).__name__}: {exc}",
+                        elapsed_s=time.monotonic() - t0,
+                    )
+                )
+            else:
+                results.append(
+                    CollectedTaskResult(
+                        instance_id=instance_id,
+                        attempt_dir=attempt_ctx.attempt_dir,
+                        model_patch=getattr(result, "model_patch", "") or "",
+                        exit_status=result.exit_status,
+                        error=result.error,
+                        elapsed_s=time.monotonic() - t0,
+                        n_iterations=result.n_iterations,
+                    )
+                )
+                logger.info(
+                    "[%d/%d] DONE %s success=%s elapsed=%.1fs",
+                    i + 1,
+                    total,
+                    instance_id,
+                    results[-1].success,
+                    results[-1].elapsed_s,
+                )
+            finally:
+                _cleanup_task_images(
+                    instance_id=instance_id,
+                    source_image=source_image,
+                    fixed_image=attempt_ctx.fixed_image,
+                    keep_source_image=next_source_image,
+                )
 
     write_results_jsonl(results, run_dir / "results.jsonl")
     logger.info("Results written to %s", run_dir / "results.jsonl")
@@ -259,14 +423,11 @@ async def collect_miniswe_traces(
     min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect miniswe traces inside the SWE-rebench task container."""
-    tasks = benchmark.load_tasks()
-    if instance_ids is not None:
-        id_set = set(instance_ids)
-        tasks = [t for t in tasks if t["instance_id"] in id_set]
-        if not tasks:
-            raise ValueError(f"No tasks matched instance_ids: {instance_ids}")
-    if sample is not None:
-        tasks = tasks[:sample]
+    tasks = _select_tasks(
+        benchmark.load_tasks(),
+        instance_ids=instance_ids,
+        sample=sample,
+    )
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
 
@@ -374,14 +535,11 @@ async def collect_openclaw_traces(
     min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect openclaw traces inside the SWE-rebench task container."""
-    tasks = benchmark.load_tasks()
-    if instance_ids is not None:
-        id_set = set(instance_ids)
-        tasks = [t for t in tasks if t["instance_id"] in id_set]
-        if not tasks:
-            raise ValueError(f"No tasks matched instance_ids: {instance_ids}")
-    if sample is not None:
-        tasks = tasks[:sample]
+    tasks = _select_tasks(
+        benchmark.load_tasks(),
+        instance_ids=instance_ids,
+        sample=sample,
+    )
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
     mcp_servers = load_mcp_servers(mcp_config)
