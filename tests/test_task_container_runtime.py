@@ -50,9 +50,14 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    result_path = tmp_path / "_task_container_runtime" / "preflight" / "result.json"
+    seen: dict[str, object] = {}
+    monkeypatch.chdir(tmp_path)
+    attempt_dir = Path("relative-attempt")
+    result_path = tmp_path / "relative-attempt" / "_task_container_runtime" / "preflight" / "result.json"
 
     def fake_exec(**kwargs):
+        request = json.loads(Path(kwargs["request_path"]).read_text(encoding="utf-8"))
+        seen.update(request)
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
             json.dumps(
@@ -86,11 +91,14 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
 
     proof = preflight_task_container_runtime(
         container_id="cid-1",
-        attempt_dir=tmp_path,
+        attempt_dir=attempt_dir,
     )
 
     assert proof.container_id == "cid-1"
     assert proof.python_executable == "/repo/.venv/bin/python"
+    assert Path(str(seen["result_path"])).is_absolute()
+    assert Path(str(seen["writable_probe"])).is_absolute()
+    assert Path(str(seen["result_path"])) == result_path
 
 
 def test_run_task_container_agent_reads_result_and_writes_raw_logs(

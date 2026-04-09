@@ -771,7 +771,7 @@ async def _run_miniswe_in_task_container(
     if not fixed_image:
         raise RuntimeError(f"Task {ctx.instance_id!r} has no image_name")
 
-    runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "miniswe"
+    runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "miniswe"
     stdout_path = runtime_dir / "stdout.txt"
     stderr_path = runtime_dir / "stderr.txt"
     proof = None
@@ -865,7 +865,7 @@ async def _run_openclaw_in_task_container(
     if not fixed_image:
         raise RuntimeError(f"Task {ctx.instance_id!r} has no image_name")
 
-    runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "openclaw"
+    runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "openclaw"
     stdout_path = runtime_dir / "stdout.txt"
     stderr_path = runtime_dir / "stderr.txt"
     proof = None

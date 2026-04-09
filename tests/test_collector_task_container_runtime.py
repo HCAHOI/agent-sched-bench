@@ -38,12 +38,33 @@ def _make_ctx(tmp_path: Path, *, scaffold: str) -> AttemptContext:
     )
 
 
+def _make_relative_ctx(monkeypatch, tmp_path: Path, *, scaffold: str) -> AttemptContext:
+    monkeypatch.chdir(tmp_path)
+    return AttemptContext(
+        run_dir=Path("run"),
+        instance_id="encode__httpx-2701",
+        attempt=1,
+        task={
+            "instance_id": "encode__httpx-2701",
+            "repo": "encode/httpx",
+            "base_commit": "deadbeef",
+            "problem_statement": "Fix bug",
+            "image_name": "swerebench/example",
+        },
+        model="qwen-plus-latest",
+        scaffold=scaffold,
+        source_image="swerebench/example",
+        prompt_template="cc_aligned",
+        agent_runtime_mode="task_container_agent",
+    )
+
+
 def test_run_miniswe_in_task_container_collects_runtime_proof(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     seen: dict[str, object] = {}
-    ctx = _make_ctx(tmp_path, scaffold="miniswe")
+    ctx = _make_relative_ctx(monkeypatch, tmp_path, scaffold="miniswe")
     runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "miniswe"
     stdout_path = runtime_dir / "stdout.txt"
     stderr_path = runtime_dir / "stderr.txt"
@@ -119,6 +140,11 @@ def test_run_miniswe_in_task_container_collects_runtime_proof(
     assert result.runtime_proof["container_id"] == "cid-mini"
     assert result.runtime_proof["python_executable"] == "/opt/conda/envs/ML/bin/python"
     assert seen["kind"] == "run_miniswe"
+    assert Path(str(seen["result_path"])).is_absolute()
+    assert Path(str(seen["trace_file"])).is_absolute()
+    assert Path(str(seen["raw_stdout_path"])).is_absolute()
+    assert Path(str(seen["raw_stderr_path"])).is_absolute()
+    assert Path(str(seen["result_path"])) == runtime_dir.resolve() / "run.result.json"
     assert seen["exec_working_dir"] == "/testbed"
     assert "mini stdout" in ctx.container_stdout
     assert "container logs" in ctx.container_stdout
@@ -197,7 +223,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     monkeypatch,
 ) -> None:
     seen: dict[str, object] = {}
-    ctx = _make_ctx(tmp_path, scaffold="openclaw")
+    ctx = _make_relative_ctx(monkeypatch, tmp_path, scaffold="openclaw")
     runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "openclaw"
     stdout_path = runtime_dir / "stdout.txt"
     stderr_path = runtime_dir / "stderr.txt"
@@ -294,6 +320,13 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     assert metadata["agent_runtime_mode"] == "task_container_agent"
     assert metadata["runtime_proof"]["container_id"] == "cid-openclaw"
     assert seen["kind"] == "run_openclaw"
+    assert Path(str(seen["result_path"])).is_absolute()
+    assert Path(str(seen["workspace_base"])).is_absolute()
+    assert Path(str(seen["workspace_dir"])).is_absolute()
+    assert Path(str(seen["trace_file"])).is_absolute()
+    assert Path(str(seen["raw_stdout_path"])).is_absolute()
+    assert Path(str(seen["raw_stderr_path"])).is_absolute()
+    assert Path(str(seen["result_path"])) == runtime_dir.resolve() / "run.result.json"
     assert seen["tool_workspace"] == "/testbed"
     assert seen["exec_working_dir"] == "/testbed"
     assert result.total_llm_ms == 12.0

@@ -47,7 +47,7 @@ def current_container_python_runtime() -> str:
 
 
 def task_container_runtime_dir(attempt_dir: Path, scaffold: str) -> Path:
-    return attempt_dir / RUNTIME_ROOTNAME / scaffold
+    return attempt_dir.resolve() / RUNTIME_ROOTNAME / scaffold
 
 
 def project_mount_args(attempt_dir: Path) -> list[str]:
