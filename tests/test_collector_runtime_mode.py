@@ -223,12 +223,12 @@ def test_ensure_task_source_ready_falls_back_after_prefetch_failure(
 
     _ensure_task_source_ready(
         instance_id="encode__httpx-2701",
-        source_image="img-a",
-        prefetched_source_image="img-a",
+        source_image="docker.io/library/img-a",
+        prefetched_source_image="docker.io/library/img-a",
         prefetch_future=failed_prefetch,
     )
 
-    assert seen == ["img-a"]
+    assert seen == ["docker.io/library/img-a"]
 
 
 def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
@@ -252,7 +252,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
 
     def fake_ensure_source_image(image: str, executable: str = "podman") -> None:
         events.append(("ensure_source", image))
-        if image == "img-b":
+        if image == "docker.io/library/img-b":
             prefetch_started.set()
             assert allow_prefetch_finish.wait(timeout=1.0)
 
@@ -309,14 +309,14 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
     )
 
     assert [event for event in events if event[0] == "ensure_source"] == [
-        ("ensure_source", "img-a"),
-        ("ensure_source", "img-b"),
-        ("ensure_source", "img-c"),
+        ("ensure_source", "docker.io/library/img-a"),
+        ("ensure_source", "docker.io/library/img-b"),
+        ("ensure_source", "docker.io/library/img-c"),
     ]
-    assert events.index(("ensure_source", "img-b")) < events.index(("run_end", "task-a"))
-    assert events.index(("run_end", "task-a")) < events.index(("remove_image", "fixed-img-a"))
-    assert events.index(("run_end", "task-b")) < events.index(("remove_image", "fixed-img-b"))
-    assert events.index(("run_end", "task-c")) < events.index(("remove_image", "fixed-img-c"))
+    assert events.index(("ensure_source", "docker.io/library/img-b")) < events.index(("run_end", "task-a"))
+    assert events.index(("run_end", "task-a")) < events.index(("remove_image", "fixed-docker.io/library/img-a"))
+    assert events.index(("run_end", "task-b")) < events.index(("remove_image", "fixed-docker.io/library/img-b"))
+    assert events.index(("run_end", "task-c")) < events.index(("remove_image", "fixed-docker.io/library/img-c"))
 
 
 def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
@@ -383,8 +383,8 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
         )
     )
 
-    assert [event for event in events if event == ("remove_image", "shared-image")] == [
-        ("remove_image", "shared-image")
+    assert [event for event in events if event == ("remove_image", "docker.io/library/shared-image")] == [
+        ("remove_image", "docker.io/library/shared-image")
     ]
     assert events.index(("run_end", "task-a")) < events.index(("remove_image", "fixed-task-a"))
     assert events.index(("remove_image", "fixed-task-a")) < events.index(("run_end", "task-b"))

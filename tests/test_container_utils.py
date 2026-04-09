@@ -17,6 +17,7 @@ from harness.container_image_prep import (  # noqa: E402
     drop_cached_fixed_image,
     ensure_fixed_image,
     ensure_source_image,
+    normalize_image_reference,
     prune_dangling_images,
     remove_image,
 )
@@ -74,12 +75,12 @@ def test_ensure_fixed_image_builds_when_derivative_missing() -> None:
         fixed, elapsed = ensure_fixed_image(
             "swerebench/foo:latest", host_uid=1000, host_gid=1000
         )
-    assert fixed == "swebench-fixed-swerebench_foo_latest"
+    assert fixed == "swebench-fixed-docker.io_swerebench_foo_latest"
     assert elapsed >= 0.0
     # Expect: fixed exists (miss), source exists (miss), pull, run -d, exec chown, commit, stop, rm
     verbs = [" ".join(c[1:3]) for c in calls]
     assert verbs.count("image exists") == 2
-    assert "pull swerebench/foo:latest" in [" ".join(c[1:4]) for c in calls]
+    assert "pull docker.io/swerebench/foo:latest" in [" ".join(c[1:4]) for c in calls]
     assert any("run -d" in v for v in verbs)
     assert any("exec cid_xyz" == " ".join(c[1:3]) for c in calls)
     assert any("commit cid_xyz" == " ".join(c[1:3]) for c in calls)
@@ -116,8 +117,8 @@ def test_ensure_source_image_pulls_when_missing() -> None:
     ):
         ensure_source_image("swerebench/source:latest")
 
-    assert calls[0][:3] == ["podman", "image", "exists"]
-    assert calls[1] == ["podman", "pull", "swerebench/source:latest"]
+    assert calls[0] == ["podman", "image", "exists", "docker.io/swerebench/source:latest"]
+    assert calls[1] == ["podman", "pull", "docker.io/swerebench/source:latest"]
 
 
 def test_drop_cached_fixed_image_forces_reprobe() -> None:
@@ -154,11 +155,41 @@ def test_remove_image_and_prune_dangling_images() -> None:
         "harness.container_image_prep.subprocess.run",
         side_effect=fake_run,
     ):
-        assert remove_image("swerebench/source:latest") is True
+        assert remove_image("docker.io/swerebench/source:latest") is True
         prune_dangling_images()
 
-    assert ["podman", "image", "rm", "-f", "swerebench/source:latest"] in calls
+    assert ["podman", "image", "rm", "-f", "docker.io/swerebench/source:latest"] in calls
     assert ["podman", "image", "prune", "-f"] in calls
+
+
+def test_normalize_image_reference_qualifies_short_names() -> None:
+    assert normalize_image_reference("hello-world") == "docker.io/library/hello-world"
+    assert normalize_image_reference("alpine:3.20") == "docker.io/library/alpine:3.20"
+    assert (
+        normalize_image_reference("alpine@sha256:deadbeef")
+        == "docker.io/library/alpine@sha256:deadbeef"
+    )
+    assert normalize_image_reference("swerebench/foo:latest") == "docker.io/swerebench/foo:latest"
+    assert normalize_image_reference("docker.io/swerebench/foo:latest") == "docker.io/swerebench/foo:latest"
+
+
+def test_remove_image_keeps_local_fixed_tags_unqualified() -> None:
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with patch(
+        "harness.container_image_prep.subprocess.run",
+        side_effect=fake_run,
+    ):
+        assert remove_image("swebench-fixed-local_tag") is True
+
+    assert calls[0] == ["podman", "image", "exists", "swebench-fixed-local_tag"]
+    assert calls[1] == ["podman", "image", "rm", "-f", "swebench-fixed-local_tag"]
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from harness.container_image_prep import (
     drop_cached_fixed_image,
     ensure_source_image,
+    normalize_image_reference,
     prune_dangling_images,
     remove_image,
 )
@@ -174,7 +175,7 @@ def _select_tasks(
 
 
 def _task_source_image(task: dict[str, Any]) -> str:
-    return str(task.get("image_name") or "")
+    return normalize_image_reference(str(task.get("image_name") or ""))
 
 
 def _next_pending_source_image(
@@ -234,10 +235,14 @@ def _cleanup_task_images(
     removed_any = False
     try:
         if fixed_image and fixed_image != source_image:
-            removed_any = (
-                remove_image(fixed_image, executable=executable) or removed_any
-            )
-            logger.info("cleanup %s removed fixed image %s", instance_id, fixed_image)
+            removed_fixed = remove_image(fixed_image, executable=executable)
+            removed_any = removed_fixed or removed_any
+            if removed_fixed:
+                logger.info(
+                    "cleanup %s removed fixed image %s",
+                    instance_id,
+                    fixed_image,
+                )
     except Exception as exc:
         logger.warning(
             "cleanup %s failed removing fixed image %s: %s",
@@ -248,14 +253,14 @@ def _cleanup_task_images(
 
     try:
         if source_image and source_image != keep_source_image:
-            removed_any = (
-                remove_image(source_image, executable=executable) or removed_any
-            )
-            logger.info(
-                "cleanup %s removed source image %s",
-                instance_id,
-                source_image,
-            )
+            removed_source = remove_image(source_image, executable=executable)
+            removed_any = removed_source or removed_any
+            if removed_source:
+                logger.info(
+                    "cleanup %s removed source image %s",
+                    instance_id,
+                    source_image,
+                )
     except Exception as exc:
         logger.warning(
             "cleanup %s failed removing source image %s: %s",

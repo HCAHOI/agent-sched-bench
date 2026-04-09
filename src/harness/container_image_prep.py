@@ -15,6 +15,19 @@ _IMAGE_CACHE: dict[str, tuple[str, float]] = {}
 def _image_slug(source_image: str) -> str:
     return source_image.replace("/", "_").replace(":", "_").replace("@", "_")
 
+
+def normalize_image_reference(image: str) -> str:
+    """Return a Podman-safe fully qualified image reference when possible."""
+    if not image:
+        return ""
+    if "/" not in image:
+        return f"docker.io/library/{image}"
+    head = image.split("/", 1)[0]
+    if "." in head or ":" in head or head == "localhost":
+        return image
+    return f"docker.io/{image}"
+
+
 def fixed_image_name_for(source_image: str) -> str:
     return f"swebench-fixed-{_image_slug(source_image)}"
 
@@ -44,6 +57,7 @@ def ensure_source_image(
     executable: str = "podman",
 ) -> None:
     """Ensure ``source_image`` exists locally, pulling when missing."""
+    source_image = normalize_image_reference(source_image)
     if not source_image:
         return
     if _image_exists(source_image, executable):
@@ -64,12 +78,15 @@ def remove_image(
     image: str,
     *,
     executable: str = "podman",
+    normalize: bool = False,
 ) -> bool:
     """Best-effort local image removal.
 
     Returns ``True`` when an image existed and was removed, ``False`` when the
     image was already absent.
     """
+    if normalize:
+        image = normalize_image_reference(image)
     if not image or not _image_exists(image, executable):
         return False
     result = _run(
@@ -154,6 +171,7 @@ def ensure_fixed_image(
     because the container is always launched with ``--userns=keep-id`` and
     always needs the ``/testbed`` ownership fix.
     """
+    source_image = normalize_image_reference(source_image)
     if source_image in _IMAGE_CACHE:
         return _IMAGE_CACHE[source_image]
 
@@ -187,4 +205,4 @@ def clear_image_cache() -> None:
 
 def drop_cached_fixed_image(source_image: str) -> None:
     """Forget any cached fixed-image lookup for ``source_image``."""
-    _IMAGE_CACHE.pop(source_image, None)
+    _IMAGE_CACHE.pop(normalize_image_reference(source_image), None)
