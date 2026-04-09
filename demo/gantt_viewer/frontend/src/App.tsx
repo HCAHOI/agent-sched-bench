@@ -34,10 +34,12 @@ import {
   setPinnedCard,
   setRegistries,
   setScrollTop,
+  setThemeMode,
   setTimeMode,
   setViewMode,
   setVisibility,
   setZoom,
+  themeMode,
   timeMode,
   viewMode,
   visibility,
@@ -184,8 +186,10 @@ export default function App() {
       <Header
         loadedCount={() => loadedTraces().length}
         summary={headerSummary}
+        onThemeModeChange={setThemeMode}
         onTimeModeChange={setTimeMode}
         onViewModeChange={setViewMode}
+        themeMode={themeMode}
         onZoomChange={setZoom}
         timeMode={timeMode}
         viewMode={viewMode}
@@ -243,6 +247,7 @@ export default function App() {
           onZoom={setZoom}
           payload={payload()}
           pinnedHit={pinnedCard()?.hit ?? null}
+          themeMode={themeMode()}
           timeMode={timeMode()}
           viewMode={viewMode()}
           visibility={visibility()}

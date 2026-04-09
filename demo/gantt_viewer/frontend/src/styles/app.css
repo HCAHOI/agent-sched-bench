@@ -12,6 +12,9 @@
   --amber: #ff6d00;
   --green: #76ff03;
   --red: #ff1744;
+  --bg-hover: #121b28;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --overlay: rgba(10, 14, 20, 0.75);
   --sidebar-w: 200px;
   --header-h: 48px;
   --legend-h: 32px;
@@ -21,6 +24,25 @@
   font-size: 12px;
   color: var(--text);
   background: var(--bg);
+}
+
+:root.theme-light {
+  color-scheme: light;
+  --bg: #e8edf3;
+  --bg-header: #e1e7ef;
+  --bg-panel: #f2f5f9;
+  --border: #c9d3df;
+  --grid: #d7e0ea;
+  --text: #2c3747;
+  --text-dim: #667487;
+  --text-bright: #0f172a;
+  --cyan: #0b6e95;
+  --amber: #b05a10;
+  --green: #15803d;
+  --red: #b91c1c;
+  --bg-hover: #dbe3ec;
+  --shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
+  --overlay: rgba(225, 231, 239, 0.8);
 }
 
 * {
@@ -401,7 +423,7 @@ body.view-concise {
 }
 
 .lane-label:hover {
-  background: #121b28;
+  background: var(--bg-hover);
 }
 
 .lane-label strong {
@@ -481,7 +503,7 @@ body.view-concise .lane-label strong {
   max-width: 540px;
   color: var(--text);
   font-size: 11px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow);
 }
 
 .tooltip-card.pinned {
@@ -584,7 +606,7 @@ body.view-concise .lane-label strong {
   z-index: 200;
   display: grid;
   place-items: center;
-  background: rgba(10, 14, 20, 0.75);
+  background: var(--overlay);
   backdrop-filter: blur(4px);
 }
 

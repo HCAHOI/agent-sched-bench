@@ -1,4 +1,5 @@
 import type { Registries, TracePayload } from "../api/client";
+import { displayColor } from "../theme/displayColor";
 import { formatAbsTime } from "./time";
 
 export interface SpanHit {
@@ -62,13 +63,13 @@ export function sameHit(a: Hit | null, b: Hit | null): boolean {
 
 export function hitAccent(hit: Hit, registries: Registries | null): string {
   if (hit.kind === "lane") {
-    return "#00E5FF";
+    return displayColor("#00E5FF");
   }
   if (hit.kind === "span") {
-    return registries?.spans[hit.item.type]?.color ?? "#94A3B8";
+    return displayColor(registries?.spans[hit.item.type]?.color ?? "#94A3B8");
   }
   const marker = registries?.markers[hit.item.event] ?? registries?.markers[hit.item.type];
-  return marker?.color ?? "#94A3B8";
+  return displayColor(marker?.color ?? "#94A3B8");
 }
 
 export function hitTitle(hit: Hit, registries: Registries | null): string {

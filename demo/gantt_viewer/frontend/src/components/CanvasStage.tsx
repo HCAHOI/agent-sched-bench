@@ -3,7 +3,7 @@ import { createEffect, onCleanup, onMount } from "solid-js";
 import type { GanttPayload } from "../api/client";
 import { CanvasRenderer } from "../canvas/CanvasRenderer";
 import type { Hit, HitCard } from "../canvas/hit";
-import type { TimeMode, ViewMode } from "../state/signals";
+import type { ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface CanvasStageProps {
   onClick: (card: HitCard | null) => void;
@@ -13,6 +13,7 @@ interface CanvasStageProps {
   onZoom: (factor: number) => void;
   payload: GanttPayload | null;
   pinnedHit: Hit | null;
+  themeMode: ThemeMode;
   timeMode: TimeMode;
   viewMode: ViewMode;
   visibility: Record<string, boolean>;
@@ -67,6 +68,11 @@ export default function CanvasStage(props: CanvasStageProps) {
 
   createEffect(() => {
     renderer?.setZoom(props.zoom);
+  });
+
+  createEffect(() => {
+    props.themeMode;
+    renderer?.rerender();
   });
 
   createEffect(() => {

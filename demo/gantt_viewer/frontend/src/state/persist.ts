@@ -1,6 +1,6 @@
 import { createEffect } from "solid-js";
 
-import { viewMode } from "./signals";
+import { themeMode, viewMode } from "./signals";
 
 let started = false;
 
@@ -14,6 +14,10 @@ export function enablePersistence(): void {
     window.localStorage.setItem("gantt.viewMode", viewMode());
   });
 
+  createEffect(() => {
+    window.localStorage.setItem("gantt.themeMode", themeMode());
+  });
+
   // Global CSS hooks for viewMode — lets .sidebar and canvas share lane
   // height through a single CSS variable instead of threading a prop.
   createEffect(() => {
@@ -21,6 +25,11 @@ export function enablePersistence(): void {
     const concise = viewMode() === "concise";
     document.body.classList.toggle("view-concise", concise);
     document.documentElement.style.setProperty("--lane-h", concise ? "26px" : "60px");
+  });
+
+  createEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.classList.toggle("theme-light", themeMode() === "light");
   });
 }
 

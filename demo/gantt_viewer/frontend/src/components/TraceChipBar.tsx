@@ -1,6 +1,7 @@
 import { For, Show, createMemo } from "solid-js";
 
 import type { TraceDescriptor } from "../api/client";
+import { scrollTraceChipGrid } from "./traceChipScroll";
 
 interface TraceChipBarProps {
   descriptors: TraceDescriptor[];
@@ -16,11 +17,26 @@ interface TraceChipBarProps {
 export default function TraceChipBar(props: TraceChipBarProps) {
   const loadedSet = createMemo(() => new Set(props.loadedIds));
   let fileInputEl!: HTMLInputElement;
+  let chipGridEl!: HTMLDivElement;
 
   return (
     <section class="trace-strip">
       <span class="trace-strip-header">TRACES</span>
-      <div class="trace-chip-grid">
+      <div
+        class="trace-chip-grid"
+        onWheel={(event) => {
+          if (
+            scrollTraceChipGrid(
+              chipGridEl,
+              event.deltaX,
+              event.deltaY,
+            )
+          ) {
+            event.preventDefault();
+          }
+        }}
+        ref={chipGridEl}
+      >
         <For each={props.descriptors}>
           {(descriptor) => {
             const loaded = () => loadedSet().has(descriptor.id);

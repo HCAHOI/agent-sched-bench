@@ -2,13 +2,15 @@ import { For } from "solid-js";
 import type { Accessor } from "solid-js";
 
 import { ZOOM_PRESETS } from "../canvas/CanvasRenderer";
-import type { TimeMode, ViewMode } from "../state/signals";
+import type { ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface HeaderProps {
   loadedCount: Accessor<number>;
   summary: Accessor<string>;
+  onThemeModeChange: (mode: ThemeMode) => void;
   onTimeModeChange: (mode: TimeMode) => void;
   onViewModeChange: (mode: ViewMode) => void;
+  themeMode: Accessor<ThemeMode>;
   onZoomChange: (factor: number) => void;
   timeMode: Accessor<TimeMode>;
   viewMode: Accessor<ViewMode>;
@@ -55,6 +57,22 @@ export default function Header(props: HeaderProps) {
       <span class="toolbar-zoom">
         loaded {props.loadedCount()}
       </span>
+      <div class="toggle-group">
+        <button
+          classList={{ active: props.themeMode() === "dark" }}
+          onClick={() => props.onThemeModeChange("dark")}
+          type="button"
+        >
+          DARK
+        </button>
+        <button
+          classList={{ active: props.themeMode() === "light" }}
+          onClick={() => props.onThemeModeChange("light")}
+          type="button"
+        >
+          LIGHT
+        </button>
+      </div>
       <div class="toggle-group">
         <button
           classList={{ active: props.timeMode() === "sync" }}

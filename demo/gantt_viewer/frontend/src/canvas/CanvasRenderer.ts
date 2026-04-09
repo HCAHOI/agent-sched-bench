@@ -1,4 +1,5 @@
 import type { GanttPayload } from "../api/client";
+import { displayColor } from "../theme/displayColor";
 import { sameHit, type Hit, type HitCard } from "./hit";
 import { computeTotalContentHeight, effectiveLaneH, MARKER_H, SPAN_H, SPAN_PAD, TIME_AXIS_H } from "./layout";
 import { formatTimeLabel, niceStep } from "./time";
@@ -255,6 +256,13 @@ export class CanvasRenderer extends EventTarget {
     });
   }
 
+  private themeColor(variable: string, fallback: string): string {
+    const value = getComputedStyle(document.documentElement)
+      .getPropertyValue(variable)
+      .trim();
+    return value || fallback;
+  }
+
   private scheduleResize(): void {
     if (this.resizeRafId !== null) {
       return;
@@ -299,11 +307,18 @@ export class CanvasRenderer extends EventTarget {
     this.ctx.clearRect(0, 0, width, height);
     this.hitBoxes = [];
 
+    const gridColor = this.themeColor("--grid", GRID_COLOR);
+    const laneBackground = this.themeColor("--bg", LANE_BG);
+    const laneBorder = this.themeColor("--border", LANE_BORDER);
+    const textColor = this.themeColor("--text", TEXT_COLOR);
+    const axisTextColor = this.themeColor("--text-dim", AXIS_TEXT_COLOR);
+    const spanLabelColor = this.themeColor("--bg", SPAN_LABEL_COLOR);
+
     const traces = (this.payload?.traces ?? []).filter(
       (trace) => this.visibility[trace.id] !== false,
     );
     if (traces.length === 0) {
-      this.ctx.fillStyle = AXIS_TEXT_COLOR;
+      this.ctx.fillStyle = axisTextColor;
       this.ctx.font = '12px "JetBrains Mono", monospace';
       this.ctx.fillText("Load a trace to render the timeline.", 20, 48);
       return;
@@ -348,7 +363,7 @@ export class CanvasRenderer extends EventTarget {
     const gridStep = niceStep(totalRange, width / 80);
     const timeToX = (value: number) => ((value - minTime) / totalRange) * width;
 
-    this.ctx.strokeStyle = GRID_COLOR;
+    this.ctx.strokeStyle = gridColor;
     this.ctx.lineWidth = 1;
     for (
       let tick = Math.ceil(minTime / gridStep) * gridStep;
@@ -362,7 +377,7 @@ export class CanvasRenderer extends EventTarget {
       this.ctx.stroke();
     }
 
-    this.ctx.fillStyle = AXIS_TEXT_COLOR;
+    this.ctx.fillStyle = axisTextColor;
     this.ctx.font = '10px "JetBrains Mono", "Menlo", monospace';
     this.ctx.textAlign = "center";
     for (
@@ -376,10 +391,10 @@ export class CanvasRenderer extends EventTarget {
     let laneY = TIME_AXIS_H;
     for (const trace of traces) {
       for (const lane of trace.lanes) {
-        this.ctx.fillStyle = LANE_BG;
+        this.ctx.fillStyle = laneBackground;
         this.ctx.fillRect(0, laneY, width, laneHeight);
 
-        this.ctx.strokeStyle = LANE_BORDER;
+        this.ctx.strokeStyle = laneBorder;
         this.ctx.beginPath();
         this.ctx.moveTo(0, laneY + laneHeight);
         this.ctx.lineTo(width, laneY + laneHeight);
@@ -410,7 +425,9 @@ export class CanvasRenderer extends EventTarget {
               SPAN_PAD +
               (this.viewMode === "concise" ? 0 : index) * (SPAN_H + 2);
             const color =
-              this.payload?.registries.spans[span.type]?.color ?? UNKNOWN_SPAN_COLOR;
+              displayColor(
+                this.payload?.registries.spans[span.type]?.color ?? UNKNOWN_SPAN_COLOR,
+              );
 
             this.ctx.fillStyle = color;
             this.ctx.globalAlpha = 0.88;
@@ -418,7 +435,7 @@ export class CanvasRenderer extends EventTarget {
             this.ctx.globalAlpha = 1;
 
             if (widthPx > 22) {
-              this.ctx.fillStyle = SPAN_LABEL_COLOR;
+              this.ctx.fillStyle = spanLabelColor;
               this.ctx.textAlign = "left";
               this.ctx.fillText(String(span.iteration), x0 + 4, yOffset + 12);
             }
@@ -445,7 +462,7 @@ export class CanvasRenderer extends EventTarget {
           const markerReg =
             this.payload?.registries.markers[marker.event] ??
             this.payload?.registries.markers[marker.type];
-          const color = markerReg?.color ?? UNKNOWN_SPAN_COLOR;
+          const color = displayColor(markerReg?.color ?? UNKNOWN_SPAN_COLOR);
           const symbol = markerReg?.symbol ?? "dot";
           const centerY = laneY + laneHeight - MARKER_H - 2;
 
