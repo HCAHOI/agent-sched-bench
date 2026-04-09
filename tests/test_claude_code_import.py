@@ -200,8 +200,8 @@ def test_llm_content_extracted_from_text_blocks(converted_trace: Path) -> None:
     assert "loopback entries" in llm_main[1]["data"]["llm_content"]
 
 
-def test_raw_response_openai_shape(converted_trace: Path) -> None:
-    """raw_response must be in OpenAI shape so _extract_detail_from_action works."""
+def test_raw_response_preserves_claude_message_shape(converted_trace: Path) -> None:
+    """raw_response should preserve the native Claude assistant message blocks."""
     records = _load_records(converted_trace)
     first_llm = next(
         r
@@ -211,18 +211,17 @@ def test_raw_response_openai_shape(converted_trace: Path) -> None:
         and r.get("agent_id") == "claude_code_minimal"
     )
     resp = first_llm["data"]["raw_response"]
-    assert "choices" in resp
-    assert len(resp["choices"]) >= 1
-    msg = resp["choices"][0]["message"]
+    assert resp["provider"] == "anthropic"
+    msg = resp["message"]
     assert msg.get("role") == "assistant"
-    # First assistant has a tool_use block → tool_calls present
-    assert "tool_calls" in msg
-    assert len(msg["tool_calls"]) == 1
-    tc = msg["tool_calls"][0]
-    assert tc["type"] == "function"
-    assert tc["function"]["name"] == "Read"
-    # Arguments must be a JSON string (OpenAI convention)
-    args = json.loads(tc["function"]["arguments"])
+    tool_uses = [
+        block
+        for block in msg["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+    assert len(tool_uses) == 1
+    assert tool_uses[0]["name"] == "Read"
+    args = tool_uses[0]["input"]
     assert args["file_path"] == "/etc/hosts"
 
 
@@ -382,11 +381,18 @@ def test_build_gantt_payload_succeeds(converted_trace: Path) -> None:
 
     # Collect all span types across lanes
     all_span_types = set()
+    main_llm_details: list[dict[str, Any]] = []
     for lane in lanes:
         for span in lane.get("spans", []):
             all_span_types.add(span["type"])
+            if lane["agent_id"] == "claude_code_minimal" and span["type"] == "llm":
+                main_llm_details.append(span["detail"])
     assert "llm" in all_span_types
     assert "tool" in all_span_types
+    assert any(
+        detail.get("tool_calls_requested") == ['Read(file_path="/etc/hosts")']
+        for detail in main_llm_details
+    )
 
 
 # ─── Summary record ─────────────────────────────────────────────────────

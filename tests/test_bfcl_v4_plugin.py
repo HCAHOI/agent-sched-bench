@@ -253,10 +253,10 @@ def test_image_name_for_returns_none(plugin: BFCLv4Benchmark) -> None:
 def test_build_runner_refuses_mini_swe_agent(plugin: BFCLv4Benchmark) -> None:
     with pytest.raises(
         NotImplementedError,
-        match="mini-swe-agent.*bash-in-repo|function_call.*incompatible",
+        match="miniswe.*bash-in-repo|function_call.*incompatible",
     ):
         plugin.build_runner(
-            scaffold="mini-swe-agent",
+            scaffold="miniswe",
             provider=object(),
             workspace_base=Path("/tmp/ws"),
             max_iterations=10,

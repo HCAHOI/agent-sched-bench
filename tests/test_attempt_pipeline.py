@@ -29,8 +29,7 @@ def _make_ctx(tmp_path: Path) -> AttemptContext:
         attempt=1,
         task={"instance_id": "mozilla__bleach-259", "repo": "mozilla/bleach"},
         model="qwen-plus-latest",
-        requested_model="qwen-plus",
-        scaffold="mini-swe-agent",
+        scaffold="miniswe",
         source_image="swerebench/img:latest",
         prompt_template="default",
     )
@@ -62,7 +61,7 @@ def _mock_image_exists() -> None:
 def _write_trace(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        '{"type":"trace_metadata","scaffold":"mini-swe-agent","trace_format_version":5}\n'
+        '{"type":"trace_metadata","scaffold":"miniswe","trace_format_version":5}\n'
         '{"type":"summary","agent_id":"mozilla__bleach-259","success":true}\n',
         encoding="utf-8",
     )
@@ -110,17 +109,19 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert manifest["task"]["instance_id"] == "mozilla__bleach-259"
     assert manifest["task"]["repo"] == "mozilla/bleach"
     assert manifest["attempt"] == "attempt_1"
-    assert manifest["model"]["requested"] == "qwen-plus"
+    assert manifest["model"]["name"] == "qwen-plus-latest"
     assert manifest["result_summary"]["exit_code"] == 0
     assert manifest["result_summary"]["total_time"] >= 0.0
-    assert manifest["scaffold"] == "mini-swe-agent"
+    assert manifest["scaffold"] == "miniswe"
     assert manifest["prompt_template"] == "default"
+    assert "tool_call_count" not in manifest["replay"]
 
     results = json.loads((ctx.attempt_dir / "results.json").read_text())
     assert results["instance_id"] == "mozilla__bleach-259"
     assert results["success"] is True
-    assert results["container_stdout"]["stdout"] == "hello from container stdout"
-    assert results["container_stdout"]["exit_code"] == 0
+    assert results["model"] == "qwen-plus-latest"
+    assert "container_stdout" not in results
+    assert "resource_samples" not in results
 
     tool_calls = json.loads((ctx.attempt_dir / "tool_calls.json").read_text())
     assert isinstance(tool_calls, list)
@@ -129,6 +130,9 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
 
     resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
     assert "samples" in resources
+
+    container_stdout = (ctx.attempt_dir / "container_stdout.txt").read_text()
+    assert container_stdout == "hello from container stdout"
 
     trace = (ctx.attempt_dir / "trace.jsonl").read_text()
     assert "trace_metadata" in trace

@@ -75,6 +75,51 @@ DEFAULT_MARKER_REGISTRY: dict[str, dict[str, str]] = {
 }
 
 
+def _raw_response_message(raw_response: dict[str, Any]) -> dict[str, Any]:
+    choices = raw_response.get("choices") or []
+    if choices:
+        return choices[0].get("message") or {}
+    return raw_response.get("message") or {}
+
+
+def _raw_response_text(raw_response: dict[str, Any]) -> str:
+    message = _raw_response_message(raw_response)
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    text_parts = [
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return "\n".join(part for part in text_parts if part)
+
+
+def _raw_response_tool_calls(raw_response: dict[str, Any]) -> list[dict[str, Any]]:
+    message = _raw_response_message(raw_response)
+    tool_calls = message.get("tool_calls") or []
+    if tool_calls:
+        return [tc for tc in tool_calls if isinstance(tc, dict)]
+
+    content = message.get("content")
+    if not isinstance(content, list):
+        return []
+    calls: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        calls.append(
+            {
+                "id": block.get("id"),
+                "name": block.get("name"),
+                "arguments": block.get("input") or {},
+            }
+        )
+    return calls
+
+
 
 def _extract_detail(event: dict[str, Any]) -> dict[str, Any]:
     """Extract detail fields from event data for tooltip display.
@@ -87,12 +132,9 @@ def _extract_detail(event: dict[str, Any]) -> dict[str, Any]:
     # Extract LLM content preview from raw_response before dropping it
     raw_resp = data.pop("raw_response", None)
     if raw_resp and isinstance(raw_resp, dict):
-        choices = raw_resp.get("choices") or []
-        if choices:
-            msg = choices[0].get("message") or {}
-            content = msg.get("content") or ""
-            if content:
-                data["llm_content"] = content[:200] + ("..." if len(content) > 200 else "")
+        content = _raw_response_text(raw_resp)
+        if content:
+            data["llm_content"] = content[:200] + ("..." if len(content) > 200 else "")
 
     data.pop("messages_in", None)
     data.pop("tool_result", None)
@@ -369,7 +411,7 @@ def _summarize_tool_call(tc: dict[str, Any]) -> str | None:
 
 
 def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
-    """Extract tooltip detail from a v4 TraceAction record.
+    """Extract tooltip detail from a v5 TraceAction record.
 
     For ``llm_call`` actions we always try to surface *something* about
     the LLM's decision even when the assistant message has no textual
@@ -380,27 +422,24 @@ def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
     """
     data = dict(act.get("data") or {})
 
-    # Extract from raw_response (both content text AND tool_calls) before
+    # Extract from raw_response (both content text AND tool calls) before
     # dropping the heavy field.
     raw_resp = data.pop("raw_response", None)
     if raw_resp and isinstance(raw_resp, dict):
-        choices = raw_resp.get("choices") or []
-        if choices:
-            msg = choices[0].get("message") or {}
-            content = msg.get("content") or ""
-            if content:
-                if len(content) > _LLM_CONTENT_MAX:
-                    data["llm_content"] = content[:_LLM_CONTENT_MAX] + "..."
-                else:
-                    data["llm_content"] = content
-            tool_calls = msg.get("tool_calls") or []
-            if tool_calls:
-                summaries = [
-                    s for s in (_summarize_tool_call(tc) for tc in tool_calls)
-                    if s is not None
-                ]
-                if summaries:
-                    data["tool_calls_requested"] = summaries
+        content = _raw_response_text(raw_resp)
+        if content:
+            if len(content) > _LLM_CONTENT_MAX:
+                data["llm_content"] = content[:_LLM_CONTENT_MAX] + "..."
+            else:
+                data["llm_content"] = content
+        tool_calls = _raw_response_tool_calls(raw_resp)
+        if tool_calls:
+            summaries = [
+                s for s in (_summarize_tool_call(tc) for tc in tool_calls)
+                if s is not None
+            ]
+            if summaries:
+                data["tool_calls_requested"] = summaries
 
     # Drop heavy fields. FIX-A: no per-key truncation — writer caps at 8000,
     # pinned tooltip scrolls. Event path below still truncates (hover-only).
@@ -416,12 +455,9 @@ def _extract_detail_from_event(ev: dict[str, Any]) -> dict[str, Any]:
     # Extract LLM content preview before dropping raw_response
     raw_resp = data.pop("raw_response", None)
     if raw_resp and isinstance(raw_resp, dict):
-        choices = raw_resp.get("choices") or []
-        if choices:
-            msg = choices[0].get("message") or {}
-            content = msg.get("content") or ""
-            if content:
-                data["llm_content"] = content[:200] + ("..." if len(content) > 200 else "")
+        content = _raw_response_text(raw_resp)
+        if content:
+            data["llm_content"] = content[:200] + ("..." if len(content) > 200 else "")
 
     for key in ("args_preview", "result_preview", "tool_args", "tool_result"):
         if key in data and isinstance(data[key], str) and len(data[key]) > 100:

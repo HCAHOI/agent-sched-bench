@@ -29,7 +29,6 @@ agent-sched-bench/
 ├── scripts/
 ├── src/
 │   ├── agents/
-│   ├── analysis/
 │   ├── harness/
 │   └── serving/
 └── tests/
@@ -111,4 +110,3 @@ For agent-oriented runtime trace management, use
 
 Smoke-only subsets belong in dedicated `*_smoke.yaml` workload configs. Default
 workload configs should describe the full benchmark dataset path.
-

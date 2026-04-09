@@ -42,7 +42,7 @@ class MockFunctionCallBenchmark(Benchmark):
 def test_default_build_runner_raises_not_implemented() -> None:
     plugin = MockFunctionCallBenchmark(_make_config("mock-fc"))
     with pytest.raises(NotImplementedError, match="mock-fc"):
-        plugin.build_runner(scaffold="mini-swe-agent")
+        plugin.build_runner(scaffold="miniswe")
 
 
 def test_mock_function_call_benchmark_satisfies_protocol_without_repos_root() -> None:

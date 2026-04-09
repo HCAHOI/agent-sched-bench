@@ -118,8 +118,7 @@ def test_preemption_snapshot_field_set_is_stable() -> None:
     assert actual == expected, (
         f"PreemptionSnapshot field set drifted from Phase 0 audit. "
         f"Expected {expected}, got {actual}. Update "
-        f".omc/plans/phase0-schemas.md section (b) and "
-        f"sim_metrics_delta.py whitelist before changing this test."
+        f".omc/plans/phase0-schemas.md section (b) before changing this test."
     )
 
 

@@ -15,29 +15,16 @@ from trace_collect import attempt_layout  # noqa: E402
 from trace_collect.attempt_pipeline import AttemptContext  # noqa: E402
 
 
-REFERENCE_MANIFEST = (
-    Path(__file__).resolve().parents[1]
-    / "traces"
-    / "swe-rebench"
-    / "claude-code-haiku"
-    / "mozilla__bleach-259"
-    / "attempt_1"
-    / "run_manifest.json"
-)
-
-
-def test_write_run_manifest_matches_cc_top_level_keys(tmp_path: Path) -> None:
-    assert REFERENCE_MANIFEST.exists(), (
-        "CC reference manifest missing; schema test cannot run"
-    )
-    reference = json.loads(REFERENCE_MANIFEST.read_text(encoding="utf-8"))
-
+def test_write_run_manifest_writes_core_attempt_artifacts(tmp_path: Path) -> None:
     manifest_dict = {
         "status": "completed",
-        "characterization_only": False,
-        "task": reference["task"],
+        "task": {
+            "instance_id": "mozilla__bleach-259",
+            "repo": "mozilla/bleach",
+            "docker_image": "swerebench/example:latest",
+        },
         "attempt": "attempt_1",
-        "model": {"requested": "mini-swe-agent", "claude_binary": None},
+        "model": {"name": "miniswe"},
         "runtime": {
             "start_time": "2026-04-09T05:00:00",
             "end_time": "2026-04-09T05:05:00",
@@ -51,9 +38,24 @@ def test_write_run_manifest_matches_cc_top_level_keys(tmp_path: Path) -> None:
     written = json.loads((attempt_dir / "run_manifest.json").read_text())
 
     assert written["schema_version"] == attempt_layout.SCHEMA_VERSION
-    assert set(reference.keys()).issubset(set(written.keys())), (
-        f"Missing CC fields: {set(reference.keys()) - set(written.keys())}"
-    )
+    assert set(written.keys()) == {
+        "schema_version",
+        "status",
+        "task",
+        "attempt",
+        "model",
+        "runtime",
+        "artifacts",
+        "replay",
+        "result_summary",
+    }
+    assert written["artifacts"] == {
+        "results_json": "results.json",
+        "resources_json": "resources.json",
+        "trace_jsonl": "trace.jsonl",
+        "tool_calls_json": "tool_calls.json",
+        "container_stdout_txt": "container_stdout.txt",
+    }
 
 
 def test_write_resources_json_uses_samples_wrapper(tmp_path: Path) -> None:
@@ -92,11 +94,9 @@ def test_write_tool_calls_json_is_top_level_list(tmp_path: Path) -> None:
     assert doc == tool_calls
 
 
-def test_write_container_stdout_and_stderr(tmp_path: Path) -> None:
+def test_write_container_stdout(tmp_path: Path) -> None:
     attempt_layout.write_container_stdout(tmp_path, "hello stdout")
-    attempt_layout.write_container_stderr(tmp_path, "hello stderr")
     assert (tmp_path / "container_stdout.txt").read_text() == "hello stdout"
-    assert (tmp_path / "container_stderr.txt").read_text() == "hello stderr"
 
 
 def test_copy_trace_jsonl_round_trip(tmp_path: Path) -> None:
@@ -122,8 +122,7 @@ def test_attempt_context_computes_attempt_dir(tmp_path: Path) -> None:
         attempt=1,
         task={"instance_id": "mozilla__bleach-259"},
         model="qwen-plus-latest",
-        requested_model="qwen-plus",
-        scaffold="mini-swe-agent",
+        scaffold="miniswe",
         source_image="swerebench/...",
     )
     assert ctx.attempt_dir == tmp_path / "mozilla__bleach-259" / "attempt_1"
@@ -142,8 +141,7 @@ def test_attempt_context_elapsed_seconds_monotonic(tmp_path: Path) -> None:
         attempt=1,
         task={},
         model="m",
-        requested_model="m",
-        scaffold="mini-swe-agent",
+        scaffold="miniswe",
         source_image="img",
     )
     ctx.start_time = start

@@ -1,155 +1,64 @@
-# Gantt Viewer Migration Plan
-
-Source plan: `~/.claude/plans/iridescent-wondering-cosmos.md`
+# Trace Collect Cleanup Plan
 
 ## Goal
 
-Replace the static `src/trace_collect` Gantt HTML workflow with a dynamic
-server under `demo/gantt_viewer/`, while preserving payload semantics and
-supporting both:
+Execute the approved review findings across `src/trace_collect`, related agent
+packages and directly affected tests. Delete dead or duplicated
+schema ballast, fix broken dispatch and trace-shape reads, and keep the trace
+artifacts internally consistent.
 
-- AC1: the single openclaw v5 trace under
-  `traces/swe-rebench/smoke-20260407T121213Z/.../trace.jsonl`
-- AC2: all 11 raw Claude Code traces under
-  `traces/swe-rebench/claude-code-haiku/*/attempt_1/trace.jsonl`
+## Change Groups
 
-## Current Execution Order
-
-1. Phase 0
+1. Scaffold naming and trace field normalization
    Status: completed
-   Create branch, add package skeleton, update packaging and make targets.
-2. Phase 1
+   Scope:
+   - Rename the mini SWE scaffold key from `mini-swe-agent` to `miniswe`
+     everywhere in trace collection, simulation, CLI, registry, and tests.
+   - Make inspector/analysis read v5 action fields from `data`.
+   - Standardize tool success on `data["success"]`.
+   - Remove the stale BFCL simulator refusal branch if it is unreachable under
+     current collector constraints.
+   Verification:
+   - `python3 -m pytest tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_simulator_bfcl_refusal.py tests/test_bfcl_v4_plugin.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py`
+
+2. OpenClaw replay tool execution cleanup
    Status: completed
-   Move `src/trace_collect/gantt_data.py` to
-   `demo/gantt_viewer/backend/payload.py`, delete legacy Gantt files, and
-   replace CLI `gantt` with `gantt-serve`.
-3. Phase 2
+   Scope:
+   - Replace reimplemented filesystem operations in
+     `src/trace_collect/openclaw_tools.py` with the existing OpenClaw tool
+     layer or its shared backend primitives.
+   - Make unknown/unsupported tool names fail loudly instead of returning fake
+     success.
+   Verification:
+   - `python3 -m pytest tests/test_openclaw_tool_runtime.py tests/test_simulator.py tests/test_claude_code_import.py`
+
+3. Attempt artifact/schema pruning
    Status: completed
-   Implement FastAPI backend scaffold, discovery, and typed schema.
-4. Phase 3
+   Scope:
+   - Remove dead stderr/pull-time fields and redundant model/result/resource
+     payload duplication.
+   - Update layout/docstrings/comments to match the actual artifact set.
+   - Keep `results.json`, `resources.json`, `tool_calls.json`, and
+     `container_stdout.txt` as the canonical split outputs.
+   Verification:
+   - `python3 -m pytest tests/test_attempt_pipeline.py tests/test_attempt_layout.py tests/test_collector_openclaw_metadata.py`
+
+4. Claude import cleanup
    Status: completed
-   Add lazy Claude Code import cache and wire it into payload loading.
-5. Phase 4+
-   Status: partial
-   Phase 4 frontend scaffold and a first Phase 5 canvas port are completed;
-   deeper renderer parity and remaining chrome are still pending.
+   Scope:
+   - Stop describing Anthropic import as OpenAI-schema compatibility glue.
+   - Remove isolated legacy status fallback in tool success resolution.
+   Verification:
+   - `python3 -m pytest tests/test_claude_code_import.py tests/test_trace_inspector.py tests/test_openclaw_raw_response.py demo/gantt_viewer/tests/test_payload.py`
 
-## This Checkpoint
+5. Full targeted regression
+   Status: completed
+   Verification:
+   - `python3 -m pytest tests/test_attempt_pipeline.py tests/test_attempt_layout.py tests/test_collector_openclaw_metadata.py tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_simulator_bfcl_refusal.py tests/test_bfcl_v4_plugin.py tests/test_bfcl_runner.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py tests/test_openclaw_tool_runtime.py tests/test_openclaw_raw_response.py tests/test_claude_code_import.py tests/test_openclaw_simulate_adapter.py demo/gantt_viewer/tests/test_payload.py`
 
-Implement only through the Phase 0/1 checkpoint, then stop for human review.
+## Notes
 
-Current checkpoint outcome:
-
-- `dev/gantt-demo-server` branch created
-- payload module moved to `demo/gantt_viewer/backend/payload.py`
-- legacy static Gantt files and old Gantt-only tests deleted
-- `gantt-serve` CLI interface reserved with a Phase 1 scaffold
-- moved and directly affected tests updated to the new payload import path
-- minimal verification passed
-
-Phase 2 outcome:
-
-- added `schema.py`, `discovery.py`, `app.py`, and `routes.py`
-- implemented `/api/health`, `/api/traces`, `/api/traces/reload`, `/api/payload`
-- discovery now finds AC1 + all 11 AC2 raw Claude Code traces
-- `/api/payload` currently supports v5 traces and explicitly returns 501 for
-  Claude Code traces until Phase 3 cache/import wiring lands
-- added backend tests for discovery and routes
-- verified real AC1 payload through FastAPI and matched it against
-  `build_gantt_payload_multi(...)`
-
-Phase 3 outcome:
-
-- implemented `cc_cache.cache_key(...)` and `cc_cache.load_or_import(...)`
-- wired `/api/payload` to auto-convert raw Claude Code traces on demand and
-  then load the cached v5 JSONL through `TraceData`
-- upgraded `sniff_format(...)` to skip Claude Code preamble records like
-  `file-history-snapshot` and continue until it sees a recognizable record
-- added cache and Claude Code route tests
-- verified one real trace under
-  `traces/swe-rebench/claude-code-haiku/*/attempt_1/trace.jsonl` through the
-  API: first import returned HTTP 200 with `metadata.scaffold == "claude-code"`
-  and the second call hit the cache path successfully
-
-Phase 4 outcome:
-
-- created the Solid + Vite + TypeScript frontend scaffold under
-  `demo/gantt_viewer/frontend/`
-- added a minimal health page that fetches `/api/health` through the Vite proxy
-- installed npm dependencies and committed the generated `package-lock.json`
-- generated `src/api/schema.gen.ts` from the backend OpenAPI schema
-- verified the frontend with `npm run build`
-
-Next checkpoint:
-
-- Phase 5 progress:
-  - added `CanvasRenderer`, `CanvasStage`, hit/layout/time helpers, state
-    signals, and Solid chrome (`Header`, `TraceChipBar`, `Sidebar`, `Legend`,
-    `Tooltip`)
-  - app now fetches `/api/traces`, auto-loads the first v5 trace, and can load
-    additional traces through `/api/payload`
-  - `gantt-serve` in prod now mounts `frontend/dist`, and `gantt-serve --dev`
-    starts a Vite dev server before the backend
-  - browser smoke passed against `http://127.0.0.1:8765/`: the page loaded,
-    AC1 auto-loaded, the chip bar listed all discovered traces, and the browser
-    console was clean after adding a favicon
-
-Remaining work after this checkpoint:
-
-- finish deeper canvas parity (pin re-anchoring, drag-drop, upload flow,
-  sidebar/scroll polish, broader multi-trace ergonomics)
-- add frontend-side tests
-
-Latest progress after the last checkpoint:
-
-- added frontend vitest wiring (`vite.config.ts` test block + jsdom setup)
-- added frontend tests for:
-  - `state/persist.ts` localStorage persistence
-  - `canvas/CanvasRenderer.ts` hit-testing, zoom clamp, and concise-mode
-    re-anchor behavior
-- extended `make gantt-viewer-test` to run both backend pytest and frontend
-  vitest
-- added `test_openapi_frozen` plus
-  `demo/gantt_viewer/tests/fixtures/openapi.snapshot.json`
-- kept the full regression path green:
-  - backend tests: 51 passing
-  - frontend tests: 4 passing
-  - frontend build: passing
-
-Updated remaining work:
-
-- add broader browser-level regression coverage for upload/drag-drop and pinned
-  tooltip behavior
-- further polish multi-trace UX and canvas parity where the old template still
-  had richer behavior
-- refresh top-level README/docs to describe the new viewer workflow end-to-end
-
-Latest follow-up progress:
-
-- added frontend vitest coverage and folded it into `make gantt-viewer-test`
-- added browser smoke automation via `scripts/smoke_gantt_viewer.sh` and
-  `make gantt-viewer-smoke`
-- verified the browser smoke against the built app:
-  - default loaded count reaches `1`
-  - synthetic drag-drop raises the loaded count to `2`
-  - button-triggered upload raises the loaded count to `3`
-  - clicking the first lane label produces a pinned tooltip
-  - `Load all` after the ad hoc uploads raises the loaded count to `14`
-
-Remaining work after this update:
-
-- continue parity/polish work where the old viewer still had richer UX details
-- optionally expand frontend test coverage beyond the current persistence +
-  renderer-state checks
-
-## Verification For This Checkpoint
-
-- `python -c "from demo.gantt_viewer.backend import payload"`
-- `pytest demo/gantt_viewer/tests/test_payload.py`
-- Any directly affected tests that still import the moved payload module
-
-## Constraints
-
-- No backward compatibility for the old static Gantt generator.
-- Preserve payload behavior unless the migration itself requires API wiring.
-- Do not change trace formats or `claude_code_import.py` behavior in this phase.
+- Use aggressive deletion where the review found dead or redundant code.
+- Fix callers after each group instead of reverting cleanup.
+- No TODOs or compatibility aliases unless required to preserve current
+  behavior during the same patch series.

@@ -1,15 +1,4 @@
-"""Async orchestrator for the CC-style attempt_<N>/ collection pipeline.
-
-This module exposes ``AttemptContext`` and ``run_attempt``. Scaffolds build
-an ``AttemptContext``, pass a thin ``inner`` coroutine (the actual agent run)
-to ``run_attempt``, and the wrapper handles disk preflight, writable image
-derivation, container resource sampling, log capture, and the six-file
-attempt directory write-out.
-
-``run_attempt`` is deliberately tolerant: if ``inner`` raises, the wrapper
-still writes a manifest with ``status="error"`` so failed runs leave a
-forensic record on disk.
-"""
+"""Orchestrator for one attempt_<N> collection run."""
 
 from __future__ import annotations
 
@@ -39,19 +28,13 @@ def _utcnow_iso() -> str:
 
 @dataclass
 class AttemptContext:
-    """Shared per-task state between ``run_attempt`` and the scaffold ``inner``.
-
-    The scaffold populates ``container_id`` via :meth:`mark_container_ready`
-    the moment it has started the task container — the resource sampler uses
-    that callback to know when to begin/stop polling.
-    """
+    """Shared per-task state between ``run_attempt`` and scaffold code."""
 
     run_dir: Path
     instance_id: str
     attempt: int
     task: dict[str, Any]
     model: str
-    requested_model: str
     scaffold: str
     source_image: str
     prompt_template: str = "default"
@@ -61,8 +44,6 @@ class AttemptContext:
     start_time: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     end_time: datetime | None = None
     container_stdout: str = ""
-    container_stderr: str = ""
-    pull_time_s: float = 0.0
     permission_fix_time_s: float = 0.0
 
     def __post_init__(self) -> None:
@@ -71,17 +52,12 @@ class AttemptContext:
         )
 
     def mark_container_ready(self, container_id: str) -> None:
-        """Called by the scaffold once ``podman run -d`` returned an id.
-
-        The orchestrator watches ``self.container_id`` to decide when to
-        start the background stats sampler. Storing the id here is the
-        scaffold-to-orchestrator handshake.
-        """
+        """Publish the task container id so sampling can start."""
         self.container_id = container_id
 
     @property
     def attempt_label(self) -> str:
-        """CC-compatible string like ``attempt_1`` (matches manifest field)."""
+        """Stable string like ``attempt_1`` (matches the manifest field)."""
         return f"attempt_{self.attempt}"
 
     def elapsed_seconds(self) -> float:
@@ -103,14 +79,7 @@ def start_task_container(
     executable: str = "podman",
     extra_args: list[str] | None = None,
 ) -> str:
-    """Launch a sleep-infinity container for the task and return its id.
-
-    This is the shared "podman run -d" bootstrap that openclaw calls before
-    starting its agent loop. mini-swe-agent does NOT use this — it lets
-    ``DockerEnvironment`` own the container lifecycle. The container is
-    started with ``--userns=keep-id`` + host ``$HOME`` mount so /testbed
-    (chown'd by ``ensure_fixed_image``) is writable by the host uid.
-    """
+    """Launch the task container and return its id."""
     import os
     import subprocess
 
@@ -186,13 +155,7 @@ def stop_task_container(
 
 @dataclass
 class AttemptResult:
-    """What the scaffold ``inner`` coroutine returns to ``run_attempt``.
-
-    ``trace_path`` is the on-disk v5 trace.jsonl that the scaffold produced;
-    ``run_attempt`` copies it into ``ctx.attempt_dir / "trace.jsonl"``. The
-    other fields are scaffold-filled summary data that flows into
-    ``results.json`` / ``run_manifest.json``.
-    """
+    """Result returned by the scaffold ``inner`` coroutine."""
 
     success: bool
     exit_status: str | None
@@ -211,11 +174,7 @@ async def _watch_for_container_ready(
     ctx: AttemptContext,
     stop_event: threading.Event,
 ) -> ContainerStatsSampler | None:
-    """Poll ``ctx.container_id`` and spawn a sampler once it's populated.
-
-    Runs as a background asyncio task alongside ``inner``. Returns the started
-    sampler so the caller can stop it after inner returns.
-    """
+    """Wait for ``ctx.container_id`` and start sampling once it appears."""
     while not stop_event.is_set():
         if ctx.container_id:
             sampler = ContainerStatsSampler(
@@ -238,22 +197,7 @@ async def run_attempt(
     min_free_disk_gb: float = 30.0,
     executable: str = "podman",
 ) -> AttemptResult:
-    """Execute one scaffold attempt end-to-end with CC-style artifacts.
-
-    Steps:
-      1. ``preflight_disk`` (raises ``DiskSpaceError`` on shortfall)
-      2. ``ensure_fixed_image`` (no-op when source image is root-default)
-      3. spawn background task that starts the stats sampler when the
-         scaffold calls ``ctx.mark_container_ready``
-      4. ``await inner(ctx)`` — the scaffold's agent loop
-      5. stop sampler, collect samples
-      6. write all six attempt files (trace.jsonl, run_manifest, results,
-         resources, tool_calls, container_stdout)
-
-    On any exception from steps 1-4 the wrapper still writes a manifest with
-    ``status="error"`` so failed runs leave a forensic record, then re-raises.
-    """
-    # Step 1: disk preflight
+    """Execute one scaffold attempt and write its artifacts."""
     try:
         free_gb = preflight_disk(ctx.run_dir, min_free_disk_gb)
         logger.info(
@@ -265,7 +209,6 @@ async def run_attempt(
 
     attempt_layout.ensure_attempt_dir(ctx.attempt_dir)
 
-    # Step 2: writable image derivative (probe-gated; usually a no-op for root images)
     try:
         fix_t0 = time.time()
         fixed_name, fix_elapsed = ensure_fixed_image(
@@ -282,9 +225,7 @@ async def run_attempt(
     except Exception as exc:
         logger.error("image prep failed: %s", exc)
         ctx.fixed_image = ctx.source_image
-        # Continue — scaffold can still try the source image.
 
-    # Step 3: container-ready watcher (async) + sampler
     stop_watcher = threading.Event()
     watcher_task = asyncio.create_task(
         _watch_for_container_ready(ctx, stop_watcher)
@@ -296,13 +237,11 @@ async def run_attempt(
     inner_error: BaseException | None = None
 
     try:
-        # Step 4: run the scaffold inner
         result = await inner(ctx)
     except BaseException as exc:
         inner_error = exc
         logger.exception("scaffold inner raised: %s", exc)
     finally:
-        # Step 5: stop sampler + watcher
         stop_watcher.set()
         try:
             sampler = await asyncio.wait_for(watcher_task, timeout=2.0)
@@ -316,27 +255,18 @@ async def run_attempt(
 
         ctx.end_time = datetime.now(tz=timezone.utc)
 
-    # Step 6: write artifacts
     status = "error" if inner_error is not None else "completed"
     success = bool(result.success) if result is not None else False
 
     manifest = {
         "status": status,
-        "characterization_only": False,
         "task": {
             "instance_id": ctx.instance_id,
             "repo": ctx.task.get("repo", ""),
             "docker_image": ctx.source_image,
         },
         "attempt": ctx.attempt_label,
-        "model": {
-            "requested": ctx.requested_model,
-            "resolved": ctx.model,
-            "claude_binary": None,
-            "auth_mode": None,
-            "auth_env_vars_present": [],
-            "extra_env_keys": [],
-        },
+        "model": {"name": ctx.model},
         "runtime": {
             "home": None,
             "wrapper_enabled": False,
@@ -350,7 +280,6 @@ async def run_attempt(
             "replay_ready": bool(ctx.fixed_image),
             "source_image": ctx.source_image,
             "fixed_image_name": ctx.fixed_image or "",
-            "tool_call_count": len(result.tool_calls) if result is not None else 0,
         },
         "result_summary": {
             "exit_code": 0 if success else 1,
@@ -358,16 +287,13 @@ async def run_attempt(
                 result.error if result is not None else None
             ),
             "total_time": ctx.elapsed_seconds(),
-            "characterization_time": ctx.elapsed_seconds(),
             "active_time": (result.total_llm_ms or 0.0) / 1000.0 if result else 0.0,
             "tool_time": (result.total_tool_ms or 0.0) / 1000.0 if result else 0.0,
-            "tool_ratio_active": 0.0,
         },
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
     }
 
-    # results.json — more detailed timing breakdown (mirrors CC schema)
     results_payload: dict[str, Any] = {
         "image": ctx.source_image,
         "start_time": ctx.start_time_iso(),
@@ -375,22 +301,10 @@ async def run_attempt(
         "memory_limit": None,
         "cpu_limit": None,
         "model": ctx.model,
-        "model_requested": ctx.requested_model,
-        "characterization_only": False,
         "output_dir": str(ctx.attempt_dir),
-        "claude_binary": None,
-        "run_tests": ctx.prompt_template == "cc_aligned",
-        "pull_time": ctx.pull_time_s,
         "permission_fix_time": ctx.permission_fix_time_s,
         "claude_time": ctx.elapsed_seconds(),
-        "container_stdout": {
-            "stdout": ctx.container_stdout,
-            "stderr": ctx.container_stderr,
-            "exit_code": 0 if success else 1,
-        },
-        "resource_samples": {"samples": samples, "summary": {}},
         "total_time": ctx.elapsed_seconds(),
-        "characterization_time": ctx.elapsed_seconds(),
         "active_time": manifest["result_summary"]["active_time"],
         "tool_time": manifest["result_summary"]["tool_time"],
         "replay_ready": bool(ctx.fixed_image),
@@ -408,12 +322,7 @@ async def run_attempt(
             results_payload["scaffold_summary"] = result.summary
 
     resources_summary = summarize_samples(samples)
-    results_payload["resource_samples"] = {
-        "samples": samples,
-        "summary": resources_summary,
-    }
 
-    # trace.jsonl comes first — tool_calls.json is derived from it.
     if result is not None and result.trace_path.exists():
         attempt_layout.copy_trace_jsonl(ctx.attempt_dir, result.trace_path)
 
@@ -425,9 +334,6 @@ async def run_attempt(
     else:
         tool_calls = []
 
-    # Update the manifest tool_call_count now that we know it.
-    manifest["replay"]["tool_call_count"] = len(tool_calls)
-
     attempt_layout.write_run_manifest(ctx.attempt_dir, manifest)
     attempt_layout.write_results_json(ctx.attempt_dir, results_payload)
     attempt_layout.write_resources_json(
@@ -435,7 +341,6 @@ async def run_attempt(
     )
     attempt_layout.write_tool_calls_json(ctx.attempt_dir, tool_calls)
     attempt_layout.write_container_stdout(ctx.attempt_dir, ctx.container_stdout)
-    attempt_layout.write_container_stderr(ctx.attempt_dir, ctx.container_stderr)
 
     if inner_error is not None:
         raise inner_error

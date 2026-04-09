@@ -1,16 +1,4 @@
-"""SWE-rebench trace collection pipeline.
-
-Two entry points dispatched by ``--scaffold``:
-  * ``collect_miniswe_traces`` — mini-swe-agent runs inside the task
-    container via ``DockerEnvironment``.
-  * ``collect_openclaw_traces`` — openclaw runs its structured tool loop
-    inside the task container via ``ContainerToolBackend``.
-
-Both produce the same ``<run_dir>/<instance_id>/attempt_1/{trace.jsonl,
-run_manifest.json, results.json, resources.json, tool_calls.json,
-container_stdout.txt}`` layout, orchestrated by
-``attempt_pipeline.run_attempt``.
-"""
+"""Trace collection entrypoints for SWE-style benchmarks."""
 
 from __future__ import annotations
 
@@ -36,17 +24,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# MCP config parsing (shared between scaffolds)
-# ---------------------------------------------------------------------------
-
-
 def _mcp_config_label(mcp_config: str | None) -> str | None:
-    """Map an ``--mcp-config`` value to its trace-header label.
-
-    ``None`` → flag absent, ``"none"`` → affirmative opt-out,
-    ``<basename>`` → YAML at that basename was loaded.
-    """
+    """Map ``--mcp-config`` to the value stored in trace metadata."""
     if mcp_config is None:
         return None
     if mcp_config == "none":
@@ -86,19 +65,9 @@ def load_mcp_servers(mcp_config: str | None) -> dict:
     return servers
 
 
-# ---------------------------------------------------------------------------
-# Per-task result + run directory
-# ---------------------------------------------------------------------------
-
-
 @dataclass(slots=True)
 class CollectedTaskResult:
-    """Per-task result emitted alongside each attempt's artifacts.
-
-    Intentionally slim: ``success`` is derived from ``bool(model_patch)``
-    at construction time, so there is no ``success_basis`` enum or
-    redundant ``patch_generated`` flag.
-    """
+    """Per-task summary emitted alongside attempt artifacts."""
 
     instance_id: str
     attempt_dir: Path
@@ -167,11 +136,6 @@ def write_results_jsonl(
             f.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
 
 
-# ---------------------------------------------------------------------------
-# Shared per-task loop
-# ---------------------------------------------------------------------------
-
-
 async def _run_scaffold_tasks(
     *,
     benchmark: "Benchmark",
@@ -183,12 +147,7 @@ async def _run_scaffold_tasks(
     min_free_disk_gb: float,
     inner_factory,
 ) -> Path:
-    """Iterate over tasks, wrapping each in ``run_attempt``.
-
-    ``inner_factory`` is a callable ``(task: dict, ctx: AttemptContext) ->
-    Awaitable[AttemptResult]`` that the scaffold provides to run its agent
-    loop. Results are collected into ``<run_dir>/results.jsonl`` at the end.
-    """
+    """Iterate over tasks, wrapping each in ``run_attempt``."""
     run_dir.mkdir(parents=True, exist_ok=True)
     completed = load_completed_ids(run_dir)
     if completed:
@@ -216,14 +175,11 @@ async def _run_scaffold_tasks(
             attempt=1,
             task=task,
             model=model,
-            requested_model=model,
             scaffold=scaffold,
             source_image=task.get("image_name") or "",
             prompt_template=prompt_template,
         )
 
-        # Bind `task` into the inner via a default arg to avoid the closure
-        # capturing a stale reference in the async iterator.
         _inner = inner_factory(task)
 
         try:
@@ -271,11 +227,6 @@ async def _run_scaffold_tasks(
     return run_dir
 
 
-# ---------------------------------------------------------------------------
-# mini-swe-agent scaffold
-# ---------------------------------------------------------------------------
-
-
 async def collect_miniswe_traces(
     *,
     api_base: str,
@@ -292,10 +243,10 @@ async def collect_miniswe_traces(
     prompt_template: str = "default",
     min_free_disk_gb: float = 30.0,
 ) -> Path:
-    """Collect mini-swe-agent traces inside the SWE-rebench task container."""
+    """Collect miniswe traces inside the SWE-rebench task container."""
     if benchmark.task_shape != "swe_patch":
         raise ValueError(
-            f"mini-swe-agent only supports swe_patch benchmarks; "
+            f"miniswe only supports swe_patch benchmarks; "
             f"{benchmark.config.slug!r} has task_shape={benchmark.task_shape!r}"
         )
 
@@ -319,7 +270,7 @@ async def collect_miniswe_traces(
 
             trace_logger = TraceLogger(ctx.attempt_dir, "trace")
             trace_logger.log_metadata(
-                scaffold="mini-swe-agent",
+                scaffold="miniswe",
                 benchmark=benchmark.config.slug,
                 benchmark_split=benchmark.config.harness_split,
                 model=model,
@@ -375,16 +326,11 @@ async def collect_miniswe_traces(
         tasks=tasks,
         run_dir=run_dir,
         model=model,
-        scaffold="mini-swe-agent",
+        scaffold="miniswe",
         prompt_template=prompt_template,
         min_free_disk_gb=min_free_disk_gb,
         inner_factory=make_inner,
     )
-
-
-# ---------------------------------------------------------------------------
-# openclaw scaffold
-# ---------------------------------------------------------------------------
 
 
 async def collect_openclaw_traces(
@@ -504,18 +450,13 @@ async def collect_openclaw_traces(
     )
 
 
-# ---------------------------------------------------------------------------
-# CLI dispatcher
-# ---------------------------------------------------------------------------
-
-
 async def collect_traces(
     *,
     scaffold: str,
     **kwargs: Any,
 ) -> Path:
     """Dispatch to ``collect_miniswe_traces`` or ``collect_openclaw_traces``."""
-    if scaffold == "mini-swe-agent":
+    if scaffold == "miniswe":
         kwargs.pop("mcp_config", None)
         return await collect_miniswe_traces(**kwargs)
     if scaffold == "openclaw":
@@ -523,11 +464,6 @@ async def collect_traces(
         kwargs.pop("task_timeout_s", None)
         return await collect_openclaw_traces(**kwargs)
     raise ValueError(f"Unknown scaffold: {scaffold!r}")
-
-
-# ---------------------------------------------------------------------------
-# openclaw trace metadata merge
-# ---------------------------------------------------------------------------
 
 
 def _normalize_openclaw_trace(
@@ -541,12 +477,7 @@ def _normalize_openclaw_trace(
     instance_id: str,
     mcp_config_label: str | None = None,
 ) -> None:
-    """Copy an OpenClaw trace into the attempt dir, merging trace_metadata.
-
-    Runner-stamped fields win on conflict so ``scaffold_capabilities`` from
-    the live session survives. Missing fields are filled from the collector's
-    knowledge (benchmark slug, split, model, etc.).
-    """
+    """Copy an OpenClaw trace into the attempt dir, merging trace metadata."""
     lines = src.read_text(encoding="utf-8").splitlines()
     source_metadata: dict[str, Any] | None = None
     body_start = 0

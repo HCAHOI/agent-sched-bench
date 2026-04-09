@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import difflib
 import json
 import os
 import re
@@ -11,26 +10,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from agents.openclaw.tools.filesystem import (
+    EditFileTool,
+    ListDirTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from trace_collect._raw_response import parsed_tool_args_from_raw_response
 
-_MAX_READ_CHARS = 128_000
-_DEFAULT_READ_LIMIT = 2_000
-_DEFAULT_LIST_LIMIT = 200
-_IGNORE_DIRS = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "dist",
-    "build",
-    ".tox",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".coverage",
-    "htmlcov",
-}
 _OBSERVATION_TEMPLATE = (
     "<returncode>{returncode}</returncode>\n<output>\n{output}\n</output>"
 )
@@ -147,174 +134,28 @@ async def _run_shell_commands(
     )
 
 
-def _read_file(path: Path, *, offset: int = 1, limit: int | None = None) -> str:
-    if not path.exists():
-        return f"Error: File not found: {path}"
-    if not path.is_file():
-        return f"Error: Not a file: {path}"
-
-    raw = path.read_bytes()
-    if not raw:
-        return f"(Empty file: {path})"
-
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return f"Error: Cannot read binary file {path}"
-
-    all_lines = text.splitlines()
-    total = len(all_lines)
-    if offset < 1:
-        offset = 1
-    if total and offset > total:
-        return f"Error: offset {offset} is beyond end of file ({total} lines)"
-
-    start = offset - 1
-    end = min(start + (limit or _DEFAULT_READ_LIMIT), total)
-    numbered = [
-        f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])
-    ]
-    result = "\n".join(numbered)
-
-    if len(result) > _MAX_READ_CHARS:
-        trimmed: list[str] = []
-        chars = 0
-        for line in numbered:
-            chars += len(line) + 1
-            if chars > _MAX_READ_CHARS:
-                break
-            trimmed.append(line)
-        end = start + len(trimmed)
-        result = "\n".join(trimmed)
-
-    if end < total:
-        result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
-    else:
-        result += f"\n\n(End of file — {total} lines total)"
-    return result
+def _filesystem_tools(repo_dir: Path) -> dict[str, Any]:
+    return {
+        "read_file": ReadFileTool(workspace=repo_dir),
+        "write_file": WriteFileTool(workspace=repo_dir),
+        "edit_file": EditFileTool(workspace=repo_dir),
+        "list_dir": ListDirTool(workspace=repo_dir),
+    }
 
 
-def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
-    if old_text in content:
-        return old_text, content.count(old_text)
-
-    old_lines = old_text.splitlines()
-    if not old_lines:
-        return None, 0
-
-    stripped_old = [line.strip() for line in old_lines]
-    content_lines = content.splitlines()
-    candidates: list[str] = []
-    for idx in range(len(content_lines) - len(stripped_old) + 1):
-        window = content_lines[idx : idx + len(stripped_old)]
-        if [line.strip() for line in window] == stripped_old:
-            candidates.append("\n".join(window))
-
-    if candidates:
-        return candidates[0], len(candidates)
-    return None, 0
+def _tool_result_ok(result: Any) -> bool:
+    if not isinstance(result, str):
+        return True
+    return not (
+        result.startswith("Error")
+        or result.startswith("Warning:")
+    )
 
 
-def _edit_file(
-    path: Path,
-    *,
-    old_text: str,
-    new_text: str,
-    replace_all: bool = False,
-) -> str:
-    if not path.exists():
-        return f"Error: File not found: {path}"
-
-    raw = path.read_bytes()
-    uses_crlf = b"\r\n" in raw
-    content = raw.decode("utf-8").replace("\r\n", "\n")
-    match, count = _find_match(content, old_text.replace("\r\n", "\n"))
-    if match is None:
-        return _not_found_msg(old_text, content, str(path))
-    if count > 1 and not replace_all:
-        return (
-            f"Warning: old_text appears {count} times. "
-            "Provide more context to make it unique, or set replace_all=true."
-        )
-
-    normalized_new = new_text.replace("\r\n", "\n")
-    if replace_all:
-        updated = content.replace(match, normalized_new)
-    else:
-        updated = content.replace(match, normalized_new, 1)
-    if uses_crlf:
-        updated = updated.replace("\n", "\r\n")
-    path.write_bytes(updated.encode("utf-8"))
-    return f"Successfully edited {path}"
-
-
-def _not_found_msg(old_text: str, content: str, path: str) -> str:
-    lines = content.splitlines(keepends=True)
-    old_lines = old_text.splitlines(keepends=True)
-    window = len(old_lines)
-
-    best_ratio, best_start = 0.0, 0
-    for idx in range(max(1, len(lines) - window + 1)):
-        ratio = difflib.SequenceMatcher(
-            None, old_lines, lines[idx : idx + window]
-        ).ratio()
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_start = idx
-
-    if best_ratio > 0.5:
-        diff = "\n".join(
-            difflib.unified_diff(
-                old_lines,
-                lines[best_start : best_start + window],
-                fromfile="old_text (provided)",
-                tofile=f"{path} (actual, line {best_start + 1})",
-                lineterm="",
-            )
-        )
-        return (
-            f"Error: old_text not found in {path}.\n"
-            f"Best match ({best_ratio:.0%} similar) at line {best_start + 1}:\n{diff}"
-        )
-    return f"Error: old_text not found in {path}. No similar text found. Verify the file content."
-
-
-def _list_dir(
-    path: Path, *, recursive: bool = False, max_entries: int | None = None
-) -> str:
-    if not path.exists():
-        return f"Error: Directory not found: {path}"
-    if not path.is_dir():
-        return f"Error: Not a directory: {path}"
-
-    cap = max_entries or _DEFAULT_LIST_LIMIT
-    items: list[str] = []
-    total = 0
-
-    if recursive:
-        for item in sorted(path.rglob("*")):
-            if any(part in _IGNORE_DIRS for part in item.parts):
-                continue
-            total += 1
-            if len(items) < cap:
-                rel = item.relative_to(path)
-                items.append(f"{rel}/" if item.is_dir() else str(rel))
-    else:
-        for item in sorted(path.iterdir()):
-            if item.name in _IGNORE_DIRS:
-                continue
-            total += 1
-            if len(items) < cap:
-                prefix = "📁 " if item.is_dir() else "📄 "
-                items.append(f"{prefix}{item.name}")
-
-    if not items and total == 0:
-        return f"Directory {path} is empty"
-
-    result = "\n".join(items)
-    if total > cap:
-        result += f"\n\n(truncated, showing first {cap} of {total} entries)"
-    return result
+def _stringify_tool_result(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    return json.dumps(result, ensure_ascii=False)
 
 
 async def execute_trace_tool(
@@ -371,42 +212,16 @@ async def execute_trace_tool(
                 command_timeout_s=command_timeout_s,
                 command_output_style="raw" if nested_style else command_output_style,
             )
-        return "", True
+        return "Error: exec requires 'command' or 'commands'.", False
 
-    if resolved_name == "read_file":
-        path = _map_workspace_path(params["path"], repo_dir, agent_id)
-        return _read_file(
-            path, offset=params.get("offset", 1), limit=params.get("limit")
-        ), True
+    fs_tool = _filesystem_tools(repo_dir).get(resolved_name or "")
+    if fs_tool is not None:
+        tool_params = dict(params)
+        if "path" in tool_params:
+            tool_params["path"] = str(
+                _map_workspace_path(tool_params["path"], repo_dir, agent_id)
+            )
+        result = await fs_tool.execute(**tool_params)
+        return _stringify_tool_result(result), _tool_result_ok(result)
 
-    if resolved_name == "write_file":
-        path = _map_workspace_path(params["path"], repo_dir, agent_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        content = params.get("content", "")
-        path.write_text(content, encoding="utf-8")
-        return f"Successfully wrote {len(content)} bytes to {path}", True
-
-    if resolved_name == "edit_file":
-        path = _map_workspace_path(params["path"], repo_dir, agent_id)
-        return (
-            _edit_file(
-                path,
-                old_text=params.get("old_text", ""),
-                new_text=params.get("new_text", ""),
-                replace_all=bool(params.get("replace_all", False)),
-            ),
-            True,
-        )
-
-    if resolved_name == "list_dir":
-        path = _map_workspace_path(params["path"], repo_dir, agent_id)
-        return (
-            _list_dir(
-                path,
-                recursive=bool(params.get("recursive", False)),
-                max_entries=params.get("max_entries"),
-            ),
-            True,
-        )
-
-    return "", True
+    return f"Error: Unsupported replay tool {resolved_name!r}", False

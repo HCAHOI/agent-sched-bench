@@ -159,7 +159,7 @@ def test_miniswe_without_mcp_config_does_not_trigger_validation() -> None:
             sys.executable,
             "-m", "trace_collect.cli",
             "--benchmark", "swe-bench-verified",
-            "--scaffold", "mini-swe-agent",
+            "--scaffold", "miniswe",
             "--sample", "1",
         ],
         cwd=REPO_ROOT,

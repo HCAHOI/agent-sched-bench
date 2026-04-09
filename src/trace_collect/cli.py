@@ -3,7 +3,7 @@
 Usage (collect):
     DASHSCOPE_API_KEY=sk-xxx python -m trace_collect.cli \\
         --provider dashscope --benchmark swe-rebench \\
-        --scaffold mini-swe-agent --max-iterations 50 --sample 5
+        --scaffold miniswe --max-iterations 50 --sample 5
 
 Usage (simulate):
     python -m trace_collect.cli simulate \\
@@ -111,9 +111,9 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--scaffold",
-        choices=["mini-swe-agent", "openclaw"],
-        default="mini-swe-agent",
-        help="Agent scaffold to use: mini-swe-agent (bash-only) or openclaw (structured tools).",
+        choices=["miniswe", "openclaw"],
+        default="miniswe",
+        help="Agent scaffold to use: miniswe (bash-only) or openclaw (structured tools).",
     )
     parser.add_argument(
         "--mcp-config",
@@ -434,7 +434,7 @@ def _run_inspect(argv: list[str]) -> None:
 
     parser = _argparse.ArgumentParser(
         prog="python -m trace_collect.cli inspect",
-        description="Inspect an OpenClaw / mini-swe-agent JSONL trace file.",
+        description="Inspect an OpenClaw / miniswe JSONL trace file.",
         epilog="""commands:
   overview   Summary stats: steps, tokens, tool counts, elapsed time
   step N     Full details of step N (0-indexed): LLM stats, tool call, result

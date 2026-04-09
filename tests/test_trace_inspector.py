@@ -1,4 +1,4 @@
-"""Tests for trace_collect.trace_inspector (v4 action/event format)."""
+"""Tests for trace_collect.trace_inspector (v5 action/event format)."""
 
 from __future__ import annotations
 
@@ -70,12 +70,12 @@ def _tool_exec_action(iteration: int, ts_start: float, ts_end: float,
 
 @pytest.fixture
 def sample_trace(tmp_path: Path) -> Path:
-    """Minimal v4 trace: 2 iterations, each with llm_call + tool_exec actions."""
+    """Minimal v5 trace: 2 iterations, each with llm_call + tool_exec actions."""
     trace_file = tmp_path / "test_trace.jsonl"
     records = [
         {
             "type": "trace_metadata",
-            "scaffold": "mini-swe-agent",
+            "scaffold": "miniswe",
             "trace_format_version": 5,
             "mode": "collect",
             "model": "test-model",
@@ -120,7 +120,7 @@ def test_load_trace(sample_trace: Path) -> None:
     assert len(data.actions) == 4  # 2 llm_call + 2 tool_exec
     assert len(data.events) == 0
     assert len(data.summaries) == 1
-    assert data.metadata["scaffold"] == "mini-swe-agent"
+    assert data.metadata["scaffold"] == "miniswe"
     assert data.metadata["model"] == "test-model"
     # Sorted by (iteration, ts_start)
     assert data.actions[0]["iteration"] == 0
@@ -141,7 +141,7 @@ def test_load_with_agent_filter(sample_trace: Path) -> None:
 def test_load_skips_malformed_lines(tmp_path: Path) -> None:
     trace_file = tmp_path / "malformed.jsonl"
     trace_file.write_text(
-        '{"type": "trace_metadata", "scaffold": "mini-swe-agent", "trace_format_version": 5}\n'
+        '{"type": "trace_metadata", "scaffold": "miniswe", "trace_format_version": 5}\n'
         "NOT VALID JSON {{{\n"
         '{"type": "action", "action_type": "llm_call", "action_id": "llm_0",'
         ' "agent_id": "a1", "iteration": 0, "data": {}}\n'
@@ -157,7 +157,7 @@ def test_cmd_overview(sample_trace: Path, capsys: pytest.CaptureFixture) -> None
     data = TraceData.load(sample_trace)
     cmd_overview(data)
     out = capsys.readouterr().out
-    assert "mini-swe-agent" in out
+    assert "miniswe" in out
     assert "test-model" in out
     assert "bash" in out
 
@@ -167,7 +167,7 @@ def test_cmd_overview_json(sample_trace: Path, capsys: pytest.CaptureFixture) ->
     cmd_overview(data, as_json=True)
     out = capsys.readouterr().out
     parsed = json.loads(out)
-    assert parsed["scaffold"] == "mini-swe-agent"
+    assert parsed["scaffold"] == "miniswe"
     assert parsed["model"] == "test-model"
     assert parsed["tool_counts"]["bash"] == 2
     assert parsed["total_tokens"] == 430  # 100+50 + 200+80

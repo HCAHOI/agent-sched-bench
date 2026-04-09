@@ -4,12 +4,28 @@ Side effect on import: registers the miniswe scaffold prepare adapter
 into `trace_collect.scaffold_registry`. The lazy-import gate in
 `scaffold_registry._ensure_loaded` triggers this on the first
 `get_prepare("miniswe")` call.
+
+The package-level exports stay lazy so the registry path can load even
+when the optional `minisweagent` runtime dependency is absent.
 """
 
-from agents.miniswe.agent import (
-    MiniSWECodeAgent as MiniSWECodeAgent,
-    ContextManagedAgent as ContextManagedAgent,
-)
+from __future__ import annotations
+
+from typing import Any
+
+__all__ = ["MiniSWECodeAgent", "ContextManagedAgent"]
+
+
+def __getattr__(name: str) -> Any:
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from agents.miniswe.agent import ContextManagedAgent, MiniSWECodeAgent
+
+    exports = {
+        "MiniSWECodeAgent": MiniSWECodeAgent,
+        "ContextManagedAgent": ContextManagedAgent,
+    }
+    return exports[name]
 
 
 def _register_miniswe_prepare() -> None:
@@ -23,12 +39,8 @@ def _register_miniswe_prepare() -> None:
     async def _miniswe_prepare(
         task: dict, config: SimulatePrepareConfig
     ) -> PreparedWorkspace:
-        # MiniSWECodeAgent is already imported at the top of this
-        # module — the cycle break (Pre-mortem B item 2 of
-        # trace-sim-vastai-pipeline plan) lives in scaffold_registry's
-        # _ensure_loaded, which only invokes this module on the first
-        # get_prepare("miniswe") call. The closure here just uses the
-        # already-loaded class.
+        from agents.miniswe.agent import MiniSWECodeAgent
+
         agent = MiniSWECodeAgent(
             agent_id=config.agent_id,
             api_base=config.api_base,

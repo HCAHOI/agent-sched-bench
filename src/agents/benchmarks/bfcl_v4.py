@@ -272,14 +272,14 @@ class BFCLv4Benchmark(Benchmark):
     ) -> Any:
         """Return a :class:`BFCLRunner` for the openclaw scaffold.
 
-        The ``mini-swe-agent`` scaffold is refused loudly: mini-swe is a
+        The ``miniswe`` scaffold is refused loudly: miniswe is a
         bash-in-repo scaffold and cannot emit structured function calls
         against a JSON-Schema tool spec.
         """
-        if scaffold == "mini-swe-agent":
+        if scaffold == "miniswe":
             raise NotImplementedError(
                 "BFCL v4 (task_shape='function_call') requires scaffold='openclaw'; "
-                "mini-swe-agent is bash-in-repo and cannot emit structured function calls."
+                "miniswe is bash-in-repo and cannot emit structured function calls."
             )
         if scaffold != "openclaw":
             raise NotImplementedError(

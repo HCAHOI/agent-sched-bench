@@ -100,7 +100,7 @@ def test_mini_swe_scaffold_passes_none_mcp_config(monkeypatch, mock_collect_trac
         monkeypatch,
         [
             "--benchmark", "swe-bench-verified",
-            "--scaffold", "mini-swe-agent",
+            "--scaffold", "miniswe",
             "--sample", "0",
         ],
     )
@@ -125,7 +125,7 @@ def test_collect_traces_kwarg_is_not_read_from_environ(monkeypatch, mock_collect
         monkeypatch,
         [
             "--benchmark", "swe-bench-verified",
-            "--scaffold", "mini-swe-agent",
+            "--scaffold", "miniswe",
             "--sample", "0",
         ],
     )

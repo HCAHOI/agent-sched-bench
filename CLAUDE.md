@@ -255,7 +255,7 @@ When working with LLM agents or multi-step pipelines:
 ## Benchmark Plugin Architecture
 
 All benchmarks MUST be added via the plugin layer in `src/agents/benchmarks/`
-and `configs/benchmarks/<slug>.yaml`. See `docs/benchmark_plugin_spec.md`.
+and `configs/benchmarks/<slug>.yaml`.
 
 **FORBIDDEN:**
 - Hardcoding dataset names (`princeton-nlp/SWE-bench_Verified`,
@@ -267,31 +267,6 @@ and `configs/benchmarks/<slug>.yaml`. See `docs/benchmark_plugin_spec.md`.
   The canonical entry point is `EvalTask.from_benchmark_instance(row,
   workspace_base, benchmark=<plugin>)` which delegates to the plugin's
   `normalize_task` for benchmark-specific quirks.
-- Writing traces with `trace_format_version` other than `5`. Readers
-  reject pre-v5 traces on load — no backfill, no tolerance.
-
-**REQUIRED for new benchmarks:**
-- Register the plugin class in `agents.benchmarks.REGISTRY`.
-- Ship a `configs/benchmarks/<slug>.yaml` with all BenchmarkConfig fields.
-- Override `build_runner` — base class raises `NotImplementedError`, so
-  a plugin that forgets will fail loudly at first use.
-- Document any benchmark-specific selection filters (e.g., the
-  `exclude_lite` knob for SWE-rebench) in the YAML's prose comment
-  block. Per the research integrity rules, undocumented selection
-  filters are not acceptable.
-- When `task_shape != 'swe_patch'`, the plugin's `build_runner` **must**
-  refuse scaffolds that cannot handle the shape, with a descriptive
-  `NotImplementedError`. Example: BFCL v4 (`task_shape='function_call'`)
-  refuses `mini-swe-agent` because mini-swe is bash-in-repo and cannot
-  emit structured function calls against a JSON Schema. The collector
-  enforces a parallel guard at dispatch time; both must fire loudly so
-  the failure mode is always "impossible combination" rather than
-  "silent fallback to the wrong runner".
-- Function-call benchmarks (`task_shape='function_call'`) populate
-  `EvalTask.tools`, `EvalTask.question`, and `EvalTask.ground_truth`
-  via `normalize_task`. They must leave `repo`/`base_commit` unset so
-  `EvalTask.needs_prepare` returns `False` and the git-clone phase is
-  skipped automatically.
 
 ---
 

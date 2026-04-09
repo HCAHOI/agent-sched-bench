@@ -293,7 +293,6 @@ def test_metadata_uses_v4_keys(tmp_path: Path) -> None:
     assert "n_actions" in meta
     assert "n_iterations" in meta
     assert "max_iterations" in meta
-    assert "n_iterations" not in meta, "v3 'n_iterations' key must be removed"
     assert "max_steps" not in meta, "v3 'max_steps' key must be removed"
     assert meta["n_actions"] == 3
     assert meta["n_iterations"] == 2  # iterations 0 and 1
@@ -388,6 +387,39 @@ def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) ->
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert "Let me write" in detail["llm_content"]
     assert detail["tool_calls_requested"] == ['write_file(path="main.ts")']
+
+
+def test_llm_span_detail_supports_anthropic_raw_response(tmp_path: Path) -> None:
+    act = {
+        "type": "action",
+        "action_type": "llm_call",
+        "action_id": "llm_0",
+        "agent_id": "a1",
+        "iteration": 0,
+        "ts_start": 1000.0,
+        "ts_end": 1001.0,
+        "data": {
+            "raw_response": {
+                "provider": "anthropic",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "I'll read the config first."},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "Read",
+                            "input": {"file_path": "config.yaml"},
+                        },
+                    ],
+                },
+            },
+        },
+    }
+    payload = _build(tmp_path, [act])
+    detail = payload["lanes"][0]["spans"][0]["detail"]
+    assert "I'll read the config first." in detail["llm_content"]
+    assert detail["tool_calls_requested"] == ['Read(file_path="config.yaml")']
 
 
 def test_tool_calls_primary_field_path(tmp_path: Path) -> None:

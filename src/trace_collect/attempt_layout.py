@@ -1,14 +1,14 @@
-"""Writers for the CC-style attempt_<N>/ directory layout.
+"""Writers for the attempt_<N>/ directory layout.
 
-Every scaffold run (mini-swe-agent, openclaw, or the external Claude Code
+Every scaffold run (miniswe, openclaw, or the external Claude Code
 harness) emits the same six files into ``<run_dir>/<instance_id>/attempt_<N>/``:
 
 - ``trace.jsonl`` — canonical v5 trace (copied/written by the scaffold itself)
 - ``run_manifest.json`` — task + runtime + artifact metadata (schema_version=1)
-- ``results.json`` — timing breakdown + per-run summary (mirrors CC schema)
+- ``results.json`` — timing breakdown + per-run summary
 - ``resources.json`` — 1 Hz container CPU/mem time series
 - ``tool_calls.json`` — flat list of tool invocations with timing
-- ``container_stdout.txt`` — captured container stdout/stderr after the run
+- ``container_stdout.txt`` — captured container log output after the run
 
 This module only writes; orchestration lives in ``attempt_pipeline.py`` and the
 scaffold adapters.
@@ -31,7 +31,6 @@ RESULTS_FILENAME = "results.json"
 RESOURCES_FILENAME = "resources.json"
 TOOL_CALLS_FILENAME = "tool_calls.json"
 CONTAINER_STDOUT_FILENAME = "container_stdout.txt"
-CONTAINER_STDERR_FILENAME = "container_stderr.txt"
 TRACE_FILENAME = "trace.jsonl"
 
 SCHEMA_VERSION = 1
@@ -66,13 +65,12 @@ def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
       - ``runtime`` (dict with start_time / end_time ISO strings)
       - ``result_summary`` (dict with exit_code, total_time, etc.)
 
-    Missing top-level keys are filled with CC-compatible defaults so the
-    downstream Gantt viewer / analysis layer always sees the same shape.
+    Missing top-level keys are filled with stable defaults so the
+    downstream viewer / analysis layer always sees the same shape.
     """
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "status": manifest.get("status", "completed"),
-        "characterization_only": manifest.get("characterization_only", False),
         "task": manifest.get("task", {}),
         "attempt": manifest.get("attempt", "attempt_1"),
         "model": manifest.get("model", {}),
@@ -85,8 +83,6 @@ def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
                 "trace_jsonl": TRACE_FILENAME,
                 "tool_calls_json": TOOL_CALLS_FILENAME,
                 "container_stdout_txt": CONTAINER_STDOUT_FILENAME,
-                "container_stderr_txt": "",
-                "resource_plot_png": "",
             },
         ),
         "replay": manifest.get("replay", {"replay_ready": False}),
@@ -138,29 +134,19 @@ def write_tool_calls_json(
 
 
 def write_container_stdout(attempt_dir: Path, stdout_text: str) -> Path:
-    """Write captured container stdout to ``container_stdout.txt``.
-
-    Stderr goes to a sibling file when provided via ``write_container_stderr``.
-    """
+    """Write captured container log output to ``container_stdout.txt``."""
     path = attempt_dir / CONTAINER_STDOUT_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(stdout_text or "", encoding="utf-8")
     return path
 
 
-def write_container_stderr(attempt_dir: Path, stderr_text: str) -> Path:
-    path = attempt_dir / CONTAINER_STDERR_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(stderr_text or "", encoding="utf-8")
-    return path
-
-
 def build_tool_calls_from_trace(trace_path: Path) -> list[dict[str, Any]]:
-    """Convert a v5 trace's ``tool_exec`` actions into the CC tool_calls.json shape.
+    """Convert a v5 trace's ``tool_exec`` actions into the tool_calls.json shape.
 
-    The CC harness produces ``tool_calls.json`` as a flat list of
+    The harness stores ``tool_calls.json`` as a flat list of
     ``{timestamp, tool, id, input, end_timestamp, duration_ms, result_preview}``.
-    Mini-swe-agent and openclaw both emit ``tool_exec`` action records under
+    Miniswe and openclaw both emit ``tool_exec`` action records under
     v5 trace format, which we translate here so downstream analysis can
     compare all three scaffolds with a single schema.
     """

@@ -93,3 +93,21 @@ def test_simulator_exec_tool_supports_openclaw_write_file(tmp_path: Path) -> Non
     assert duration_ms >= 0.0
     assert "Successfully wrote" in tool_result
     assert (repo_dir / "out.txt").read_text(encoding="utf-8") == "payload\n"
+
+
+def test_execute_trace_tool_rejects_unsupported_tool(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir(parents=True)
+
+    result, success = asyncio.run(
+        execute_trace_tool(
+            agent_id="task-1",
+            tool_name="nope_tool",
+            tool_args_json="{}",
+            repo_dir=repo_dir,
+            command_timeout_s=5.0,
+        )
+    )
+
+    assert success is False
+    assert "Unsupported replay tool" in result

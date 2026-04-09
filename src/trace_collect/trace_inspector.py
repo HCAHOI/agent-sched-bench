@@ -1,16 +1,4 @@
-"""Trace Inspector: parse and query JSONL trace files produced by trace_collect.
-
-Supported record types (v5):
-    trace_metadata  – scaffold, mode, model info, trace_format_version, benchmark
-    action          – replayable LLM/tool action with ts_start, ts_end, data
-    event           – point-in-time observability events
-    summary         – end-of-run aggregates
-
-v4 support was dropped during the SWE-rebench plugin refactor (no
-backfill, no tolerance). Loading a pre-v5 trace raises ValueError so
-downstream code fails loudly instead of silently drifting across
-incompatible schemas.
-"""
+"""Parse and inspect v5 trace JSONL files."""
 
 from __future__ import annotations
 
@@ -35,15 +23,42 @@ def _to_str(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-# ---------------------------------------------------------------------------
-# Data model
-# ---------------------------------------------------------------------------
+def _action_get(action: dict[str, Any] | None, key: str, default: Any = None) -> Any:
+    """Read a v5 action field from ``data`` first, then the top level."""
+    if not action:
+        return default
+    data = action.get("data") or {}
+    if key in data and data[key] is not None:
+        return data[key]
+    return action.get(key, default)
 
+
+def _raw_response_text(raw_response: dict[str, Any]) -> str:
+    """Extract assistant text from either OpenAI or Anthropic raw_response."""
+    choices = raw_response.get("choices") or []
+    if choices:
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+
+    message = raw_response.get("message") or {}
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    text_parts = [
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return "\n".join(part for part in text_parts if part)
 
 @dataclass
 class TraceData:
     path: Path
-    metadata: dict[str, Any]
+    metadata: dict[str, Any]  # trace_metadata record
     actions: list[dict[str, Any]]  # sorted by iteration, then ts_start
     events: list[dict[str, Any]]  # sorted by ts
     summaries: list[dict[str, Any]]
@@ -51,19 +66,12 @@ class TraceData:
 
     @classmethod
     def load(cls, path: Path, agent_filter: str | None = None) -> "TraceData":
-        """Parse a JSONL trace file into a TraceData object.
-
-        Args:
-            path: Path to the JSONL trace file.
-            agent_filter: If provided, keep only records whose agent_id contains
-                          this substring. trace_metadata records (no agent_id)
-                          are always kept.
-        """
+        """Load one v5 trace file, optionally filtering agent ids by substring."""
         metadata: dict[str, Any] = {}
         actions: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         summaries: list[dict[str, Any]] = []
-        seen_agents: dict[str, None] = {}  # ordered-set via insertion-order dict
+        seen_agents: dict[str, None] = {}
 
         with path.open(encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, start=1):
@@ -97,8 +105,6 @@ class TraceData:
         actions.sort(key=lambda r: (r.get("iteration", 0), r.get("ts_start", 0)))
         events.sort(key=lambda r: r.get("ts", 0.0))
 
-        # Strict v5 version check — v4 support dropped in the SWE-rebench
-        # plugin refactor. No backfill, no tolerance.
         version = metadata.get("trace_format_version")
         if version != 5:
             raise ValueError(
@@ -108,7 +114,6 @@ class TraceData:
                 f"collector to produce a v5 trace."
             )
 
-        # Derive llm_output from raw_response for search/display
         for act in actions:
             data = act.get("data") or {}
             if "llm_output" not in act:
@@ -117,10 +122,7 @@ class TraceData:
                     act["llm_output"] = llm_content
                 else:
                     raw = data.get("raw_response") or {}
-                    choices = raw.get("choices") or []
-                    if choices:
-                        msg = choices[0].get("message") or {}
-                        act["llm_output"] = msg.get("content", "")
+                    act["llm_output"] = _raw_response_text(raw)
 
         return cls(
             path=path,
@@ -131,28 +133,19 @@ class TraceData:
             agents=list(seen_agents.keys()),
         )
 
-
-# ---------------------------------------------------------------------------
-# Command implementations
-# ---------------------------------------------------------------------------
-
-
 def cmd_overview(data: TraceData, as_json: bool = False) -> None:
     """Print a high-level summary of the trace."""
-    def _aget(act: dict, key: str, default: Any = 0) -> Any:
-        """Get a field from action — check data dict first, then top-level."""
-        val = (act.get("data") or {}).get(key)
-        if val is not None:
-            return val
-        return act.get(key, default)
-
-    total_prompt = sum(_aget(s, "prompt_tokens", 0) for s in data.actions)
-    total_completion = sum(_aget(s, "completion_tokens", 0) for s in data.actions)
+    total_prompt = sum(_action_get(s, "prompt_tokens", 0) for s in data.actions)
+    total_completion = sum(
+        _action_get(s, "completion_tokens", 0) for s in data.actions
+    )
     total_tokens = total_prompt + total_completion
-    total_llm_ms = sum(_aget(s, "llm_latency_ms", 0) for s in data.actions)
-    total_tool_ms = sum(_aget(s, "tool_duration_ms", 0) or _aget(s, "duration_ms", 0) for s in data.actions)
+    total_llm_ms = sum(_action_get(s, "llm_latency_ms", 0) for s in data.actions)
+    total_tool_ms = sum(
+        _action_get(s, "tool_duration_ms", 0) or _action_get(s, "duration_ms", 0)
+        for s in data.actions
+    )
 
-    # Aggregate elapsed from summaries if available
     elapsed_s: float | None = None
     success: bool | None = None
     for summary in data.summaries:
@@ -161,10 +154,9 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         if "success" in summary:
             success = summary["success"]
 
-    # Tool usage counts
     tool_counts: dict[str, int] = {}
     for act in data.actions:
-        tool = _aget(act, "tool_name", None)
+        tool = _action_get(act, "tool_name", None)
         if tool:
             tool_counts[tool] = tool_counts.get(tool, 0) + 1
 
@@ -221,8 +213,8 @@ def cmd_step(
     as_json: bool = False,
 ) -> None:
     """Print all fields of a single step record."""
-    step = next((s for s in data.actions if s.get("iteration") == step_idx), None)
-    if step is None:
+    matching = [s for s in data.actions if s.get("iteration") == step_idx]
+    if not matching:
         avail = sorted({s.get("iteration") for s in data.actions if s.get("iteration") is not None})
         msg = f"step {step_idx} not found (available: {avail})"
         if as_json:
@@ -231,35 +223,44 @@ def cmd_step(
             print(f"ERROR: {msg}")
         return
 
+    llm_step = next((s for s in matching if s.get("action_type") == "llm_call"), None)
+    tool_step = next((s for s in matching if s.get("action_type") == "tool_exec"), None)
+    step = llm_step or tool_step or matching[0]
+
     if as_json:
-        # Truncate large fields before JSON output
         out = dict(step)
-        for key in ("tool_args", "tool_result"):
-            if key in out:
-                out[key] = _truncate(_to_str(out[key]), truncate)
+        if tool_step is not None and tool_step is not step:
+            out["tool_exec"] = tool_step
         print(json.dumps(out, indent=2, ensure_ascii=False))
         return
 
     print(f"--- Step {step_idx} ---")
     print(f"  agent_id        : {step.get('agent_id')}")
     print(f"  phase           : {step.get('phase')}")
-    print(f"  prompt_tokens   : {step.get('prompt_tokens')}")
-    print(f"  completion_tokens: {step.get('completion_tokens')}")
-    print(f"  llm_latency_ms  : {step.get('llm_latency_ms')}")
-    print(f"  ttft_ms         : {step.get('ttft_ms')}")
-    print(f"  tpot_ms         : {step.get('tpot_ms')}")
+    print(f"  prompt_tokens   : {_action_get(llm_step or step, 'prompt_tokens')}")
+    print(f"  completion_tokens: {_action_get(llm_step or step, 'completion_tokens')}")
+    print(f"  llm_latency_ms  : {_action_get(llm_step or step, 'llm_latency_ms')}")
+    print(f"  ttft_ms         : {_action_get(llm_step or step, 'ttft_ms')}")
+    print(f"  tpot_ms         : {_action_get(llm_step or step, 'tpot_ms')}")
     print(f"  ts_start        : {step.get('ts_start')}")
     print(f"  ts_end          : {step.get('ts_end')}")
-    print(f"  tool_name       : {step.get('tool_name')}")
-    print(f"  tool_duration_ms: {step.get('tool_duration_ms')}")
-    print(f"  tool_success    : {step.get('tool_success')}")
-    print(f"  tool_ts_start   : {step.get('tool_ts_start')}")
-    print(f"  tool_ts_end     : {step.get('tool_ts_end')}")
-    if "tool_args" in step:
-        print(f"  tool_args       : {_truncate(_to_str(step['tool_args']), truncate)}")
-    if "tool_result" in step:
+    print(f"  tool_name       : {_action_get(tool_step, 'tool_name')}")
+    print(
+        f"  tool_duration_ms: "
+        f"{_action_get(tool_step, 'tool_duration_ms', _action_get(tool_step, 'duration_ms'))}"
+    )
+    print(f"  success         : {_action_get(tool_step, 'success')}")
+    print(f"  tool_ts_start   : {tool_step.get('ts_start') if tool_step else None}")
+    print(f"  tool_ts_end     : {tool_step.get('ts_end') if tool_step else None}")
+    if tool_step is not None and _action_get(tool_step, "tool_args") is not None:
         print(
-            f"  tool_result     : {_truncate(_to_str(step['tool_result']), truncate)}"
+            f"  tool_args       : "
+            f"{_truncate(_to_str(_action_get(tool_step, 'tool_args')), truncate)}"
+        )
+    if tool_step is not None and _action_get(tool_step, "tool_result") is not None:
+        print(
+            f"  tool_result     : "
+            f"{_truncate(_to_str(_action_get(tool_step, 'tool_result')), truncate)}"
         )
     if "llm_output" in step:
         print(f"  llm_output      : {_truncate(_to_str(step['llm_output']), truncate)}")
@@ -525,54 +526,40 @@ def cmd_search(
         print(f"  iter {r['iteration']}: ...{r['context']}...")
 
 
-# ---------------------------------------------------------------------------
-# Timeline rendering (ported from scripts/trace_timeline.py)
-# ---------------------------------------------------------------------------
-
 _TIMELINE_ICONS: dict[str, str] = {
-    # CONTEXT
     "skill_load": "📦", "skill_load_failed": "❌📦",
     "skills_summary_build": "📋", "memory_context_load": "🧠",
     "system_prompt_build": "📐", "message_list_build": "📬",
-    # MEMORY
     "consolidation_trigger": "🧹", "consolidation_llm_call": "🧠⚡",
     "memory_write": "💾", "history_append": "📝",
     "consolidation_failure": "⚠️🧠", "raw_archive": "📦⚠️",
     "consolidation_complete": "✅🧠",
     "background_consolidation_scheduled": "🔄🧠",
-    # MCP
     "mcp_connect_start": "🔌", "mcp_server_connect": "🔗",
     "mcp_server_connected": "✅🔌", "mcp_server_failed": "❌🔌",
     "mcp_tool_register": "📝🔧", "mcp_tool_call": "⚡🔧",
     "mcp_tool_timeout": "⏰🔧", "mcp_disconnect": "🔌❌",
-    # SESSION
     "session_create": "🆕", "session_load": "📂",
     "session_save": "💾", "session_turn_save": "💾↩️",
     "checkpoint_set": "📍", "checkpoint_restore": "🔄📍",
     "checkpoint_clear": "🗑️📍",
-    # LLM
     "llm_request": "▶️🤖", "llm_response": "◀️🤖",
     "llm_retry": "🔄🤖", "llm_error": "❌🤖",
     "finalization_retry": "🔄📝", "max_iterations": "⏹️",
-    # Normalized mini-swe events
     "llm_call_start": "▶️🤖", "llm_call_end": "◀️🤖",
     "llm_action": "▶️🤖",
     "tool_exec_start": "⚙️", "tool_exec_end": "✅",
-    # TOOL
     "tool_prepare": "🔧", "tool_prepare_error": "❌🔧",
     "tool_execute": "⚙️", "tool_complete": "✅",
     "tool_error": "❌", "tool_timeout": "⏰", "tool_cancelled": "🚫",
     "external_lookup_blocked": "🚫🔍",
-    # Tool-specific
     "file_read": "📖", "file_write": "📝", "file_edit": "✏️",
     "dir_list": "📁", "exec_command": "⚙️💻", "exec_safety_block": "🛡️",
     "web_search": "🔍", "web_fetch": "🌐", "send_message": "📨",
-    # SUBAGENT
     "subagent_spawn": "🌱", "subagent_start": "🏃🌱",
     "subagent_tool_execute": "⚙️🌱", "subagent_complete": "✅🌱",
     "subagent_error": "❌🌱", "subagent_cancel": "🚫🌱",
     "subagent_announcement": "📢🌱",
-    # SCHEDULING
     "message_dispatch": "📤", "session_lock_acquire": "🔒",
     "session_lock_release": "🔓", "concurrency_gate_acquire": "🚦",
     "task_complete": "🏁", "priority_command_bypass": "⚡",
@@ -586,7 +573,7 @@ _CATEGORY_SHORT: dict[str, str] = {
 
 
 def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
-    """Format a single v4 envelope event record for timeline display."""
+    """Format a single event record for timeline display."""
     event_name = rec.get("event", "unknown")
     category = rec.get("category", "")
     data = rec.get("data", {})
@@ -622,7 +609,7 @@ def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
 
 
 def _fmt_tl_action(rec: dict[str, Any], t0: float = 0.0) -> str:
-    """Format a v4 action record (llm_call or tool_exec) for timeline display."""
+    """Format one action record for timeline display."""
     action_type = rec.get("action_type", "?")
     iteration = rec.get("iteration", "?")
     data = rec.get("data") or {}
@@ -688,7 +675,6 @@ def cmd_timeline(data: TraceData) -> None:
     mode = data.metadata.get("mode", "collect")
     model = data.metadata.get("model") or data.metadata.get("local_model", "")
 
-    # Header
     print(f"Trace: {data.path.name}")
     print(f"  Scaffold: {scaffold}  Mode: {mode}")
     if model:
@@ -706,7 +692,6 @@ def cmd_timeline(data: TraceData) -> None:
         print(f"\nTimeline: {agent_id}")
         print("─" * 80)
 
-        # Interleave actions and events sorted by timestamp
         entries: list[tuple[float, str, dict[str, Any]]] = []
         for a in agent_actions:
             entries.append((a.get("ts_start", 0), "action", a))
