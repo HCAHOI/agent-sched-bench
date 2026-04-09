@@ -486,7 +486,7 @@ async def collect_openclaw_traces(
                 exit_status=eval_result.stop_reason,
                 trace_path=ctx.attempt_dir / "trace.jsonl",
                 model_patch=model_patch,
-                n_iterations=getattr(eval_result, "n_iterations", None),
+                n_iterations=eval_result.n_iterations,
                 error=eval_result.error,
             )
 

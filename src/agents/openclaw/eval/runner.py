@@ -12,6 +12,7 @@ hooks) lives in ``agents.openclaw._session_runner``.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -34,6 +35,25 @@ __all__ = [
     "TraceCollectorHook",
     "inject_event_callbacks",
 ]
+
+
+def _count_trace_iterations(trace_file: Path) -> int:
+    """Count distinct iteration numbers in the v5 trace's llm_call actions."""
+    if not trace_file.exists():
+        return 0
+    iterations: set[int] = set()
+    for line in trace_file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("type") == "action" and rec.get("action_type") == "llm_call":
+            it = rec.get("iteration")
+            if isinstance(it, int):
+                iterations.add(it)
+    return len(iterations)
 
 
 class SWEBenchRunner:
@@ -214,11 +234,12 @@ your changes as a git patch from the workspace.
             container_workspace=container_workspace,
         )
 
-        # Phase 3: Build EvalResult from session history
+        # Phase 3: Build EvalResult from session history + trace file
         content = result.content
         tools_used: list[str] = []
         tool_events: list[dict[str, Any]] = []
         usage: dict[str, int] = {}
+        n_iterations = _count_trace_iterations(trace_file)
 
         if result.session_manager is not None:
             session = result.session_manager.get_or_create(session_key)
@@ -292,6 +313,7 @@ your changes as a git patch from the workspace.
             workspace_dir=ws,
             base_commit=task.base_commit,
             container_model_patch=container_patch,
+            n_iterations=n_iterations,
         )
 
     async def run_batch(

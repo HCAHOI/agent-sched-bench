@@ -112,9 +112,8 @@ class EvalResult:
     workspace_dir: Path | None = None
     base_commit: str | None = None
     official_resolved: bool | None = None
-    evaluation_run_id: str | None = None
-    evaluation_report_path: str | None = None
     evaluation_report: dict[str, Any] | None = None
+    n_iterations: int | None = None
     #: Set by container-backed runs — unified diff captured from inside
     #: the task container via ``podman exec git diff``. When present, takes
     #: precedence over the host-workspace extraction.
@@ -199,46 +198,6 @@ class EvalResult:
             if line.startswith("diff --git"):
                 return "\n".join(lines[i:]).strip()
         return ""
-
-    @property
-    def patch_generated(self) -> bool:
-        """Whether the agent completed without error and produced a patch."""
-        return self.stop_reason == "completed" and bool(self.model_patch)
-
-    @property
-    def resolved(self) -> bool:
-        """Whether the official SWE-bench harness marked the instance resolved."""
-        return bool(self.official_resolved)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "instance_id": self.instance_id,
-            "content": self.content,
-            "model_patch": self.model_patch,
-            "tools_used": self.tools_used,
-            "usage": self.usage,
-            "stop_reason": self.stop_reason,
-            "error": self.error,
-            "tool_events": self.tool_events,
-            "trace_file": str(self.trace_file) if self.trace_file else None,
-            "prepare_ms": self.prepare_ms,
-            "run_ms": self.run_ms,
-            "patch_generated": self.patch_generated,
-            "official_resolved": self.official_resolved,
-            "evaluation_run_id": self.evaluation_run_id,
-            "evaluation_report_path": self.evaluation_report_path,
-            "evaluation_report": self.evaluation_report,
-            "resolved": self.resolved,
-        }
-
-    def to_swebench_prediction(self, model_name: str) -> dict[str, Any]:
-        """Format as a SWE-bench harness prediction entry."""
-        return {
-            "instance_id": self.instance_id,
-            "model_name_or_path": model_name,
-            "model_patch": self.model_patch,
-        }
-
 
 @dataclass
 class EvalTraceSummary:
