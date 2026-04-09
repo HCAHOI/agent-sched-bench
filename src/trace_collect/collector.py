@@ -185,17 +185,9 @@ def load_tasks(task_source: str | Path) -> list[dict[str, Any]]:
     )
 
 
-def load_completed_ids(run_dir: Path) -> set[str]:
-    """Scan a run directory for already-completed agent IDs.
-
-    Each task has its own JSONL file: {run_dir}/{agent_id}.jsonl.
-    A task is complete if its file contains a summary record.
-    """
-    completed: set[str] = set()
-    if not run_dir.exists():
-        return completed
-    for trace_file in run_dir.glob("*.jsonl"):
-        agent_id = trace_file.stem
+def _trace_has_summary(trace_file: Path) -> bool:
+    """Return True if *trace_file* contains a ``type: summary`` record."""
+    try:
         with open(trace_file, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -203,11 +195,42 @@ def load_completed_ids(run_dir: Path) -> set[str]:
                     continue
                 try:
                     entry = json.loads(line)
-                    if entry.get("type") == "summary":
-                        completed.add(agent_id)
-                        break
                 except json.JSONDecodeError:
                     continue
+                if entry.get("type") == "summary":
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def load_completed_ids(run_dir: Path) -> set[str]:
+    """Return instance_ids whose trace already has a summary record.
+
+    Supports both the legacy flat layout (``<run_dir>/<id>.jsonl``) and the
+    new nested attempt layout (``<run_dir>/<id>/attempt_*/trace.jsonl``).
+    """
+    completed: set[str] = set()
+    if not run_dir.exists():
+        return completed
+
+    # Legacy flat layout.
+    for trace_file in run_dir.glob("*.jsonl"):
+        if trace_file.name == "results.jsonl":
+            continue
+        if _trace_has_summary(trace_file):
+            completed.add(trace_file.stem)
+
+    # New nested attempt layout: <run_dir>/<id>/attempt_N/trace.jsonl.
+    for instance_dir in run_dir.iterdir():
+        if not instance_dir.is_dir():
+            continue
+        for attempt_dir in sorted(instance_dir.glob("attempt_*")):
+            trace_file = attempt_dir / "trace.jsonl"
+            if trace_file.exists() and _trace_has_summary(trace_file):
+                completed.add(instance_dir.name)
+                break
+
     return completed
 
 
@@ -395,6 +418,8 @@ async def collect_traces(
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
     mcp_config: str | None = None,
+    prompt_template: str = "default",
+    min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect agent traces for a benchmark.
 
@@ -472,6 +497,8 @@ async def collect_traces(
             harness_run_id=harness_run_id,
             harness_report_dir=harness_report_dir,
             mcp_config=mcp_config,
+            prompt_template=prompt_template,
+            min_free_disk_gb=min_free_disk_gb,
         )
 
     from agents.miniswe import MiniSWECodeAgent
@@ -494,6 +521,12 @@ async def collect_traces(
     succeeded = 0
     failed = 0
 
+    from trace_collect.attempt_pipeline import (
+        AttemptContext,
+        AttemptResult,
+        run_attempt,
+    )
+
     for i, task in enumerate(tasks):
         instance_id = task["instance_id"]
         if instance_id in completed:
@@ -505,96 +538,116 @@ async def collect_traces(
         logger.info("[%d/%d] START %s", i + 1, total, instance_id)
         t0 = time.monotonic()
 
-        # One TraceLogger per task → one JSONL file per task
-        trace_logger = TraceLogger(run_dir, instance_id)
-        trace_logger.log_metadata(
-            scaffold="mini-swe-agent",
-            benchmark=benchmark.config.slug,
-            benchmark_split=benchmark.config.harness_split,
-            model=model,
-            api_base=api_base,
-            max_steps=max_steps,
+        attempt_ctx = AttemptContext(
+            run_dir=run_dir,
             instance_id=instance_id,
-            scaffold_capabilities={
-                "tools": ["bash"],
-                "memory": False,
-                "skills": False,
-                "file_ops": "bash_only",
-            },
-        )
-
-        agent = MiniSWECodeAgent(
-            agent_id=instance_id,
-            api_base=api_base,
+            attempt=1,
+            task=task,
             model=model,
-            api_key=api_key,
-            max_steps=max_steps,
-            command_timeout_s=command_timeout_s,
-            task_timeout_s=task_timeout_s,
-            repos_root=str(repos_root),
-            max_context_tokens=max_context_tokens,
+            requested_model=model,
+            scaffold="mini-swe-agent",
+            source_image=task.get("image_name") or "",
+            prompt_template=prompt_template,
         )
-        agent._trace_logger = trace_logger
-        agent.run_metadata = {"model": model, "api_provider": "dashscope"}
 
-        prepare_ms = 0.0
-        prepare_t0 = time.monotonic()
-        try:
-            await agent.prepare(task)
-            prepare_ms = (time.monotonic() - prepare_t0) * 1000
-            agent.run_metadata["prepare_ms"] = prepare_ms
+        async def _miniswe_inner(
+            ctx: AttemptContext,
+            *,
+            _task: dict = task,
+            _instance_id: str = instance_id,
+            _t0: float = t0,
+        ) -> AttemptResult:
+            # Trace file lives directly under the attempt directory.
+            trace_logger = TraceLogger(ctx.attempt_dir, "trace")
+            trace_logger.log_metadata(
+                scaffold="mini-swe-agent",
+                benchmark=benchmark.config.slug,
+                benchmark_split=benchmark.config.harness_split,
+                model=model,
+                api_base=api_base,
+                max_steps=max_steps,
+                instance_id=_instance_id,
+                scaffold_capabilities={
+                    "tools": ["bash"],
+                    "memory": False,
+                    "skills": False,
+                    "file_ops": "bash_only",
+                },
+            )
 
-            success = await agent.run(task)
-        except Exception as exc:
-            logger.exception("FAILED %s", instance_id)
-            failed += 1
-            elapsed = time.monotonic() - t0
-            if prepare_ms == 0.0:
+            agent = MiniSWECodeAgent(
+                agent_id=_instance_id,
+                api_base=api_base,
+                model=model,
+                api_key=api_key,
+                max_steps=max_steps,
+                command_timeout_s=command_timeout_s,
+                task_timeout_s=task_timeout_s,
+                repos_root=str(repos_root) if repos_root else None,
+                max_context_tokens=max_context_tokens,
+                prompt_template=ctx.prompt_template,
+            )
+            agent._trace_logger = trace_logger
+            agent.run_metadata = {"model": model, "api_provider": "dashscope"}
+
+            prepare_t0 = time.monotonic()
+            try:
+                await agent.prepare(_task)
                 prepare_ms = (time.monotonic() - prepare_t0) * 1000
-            error_summary = agent.summary()
-            error_summary["elapsed_s"] = elapsed
-            error_summary["prepare_ms"] = prepare_ms
-            error_summary["error"] = str(exc)
-            error_summary["error_type"] = type(exc).__name__
-            trace_logger.log_summary(agent.agent_id, error_summary)
-            trace_logger.close()
+                agent.run_metadata["prepare_ms"] = prepare_ms
+                success = await agent.run(_task, attempt_ctx=ctx)
+            finally:
+                elapsed = time.monotonic() - _t0
+                summary = agent.summary()
+                summary["elapsed_s"] = elapsed
+                summary["prepare_ms"] = (time.monotonic() - prepare_t0) * 1000
+                trace_logger.log_summary(agent.agent_id, summary)
+                trace_logger.close()
+
             task_result = _build_result_record(
                 agent=agent,
-                summary=error_summary,
+                summary=summary,
                 trace_file=trace_logger.path,
             )
             _rewrite_trace_summary(trace_logger.path, task_result)
-            results_by_id[instance_id] = task_result
+            results_by_id[_instance_id] = task_result
+
+            return AttemptResult(
+                success=bool(success),
+                exit_status=agent.task_exit_status,
+                trace_path=trace_logger.path,
+                n_steps=len(agent.trace),
+                total_llm_ms=summary.get("total_llm_ms"),
+                total_tool_ms=summary.get("total_tool_ms"),
+                total_tokens=summary.get("total_tokens"),
+                summary=summary,
+                error=agent.task_error,
+            )
+
+        try:
+            result = await run_attempt(
+                attempt_ctx,
+                inner=_miniswe_inner,
+                min_free_disk_gb=min_free_disk_gb,
+            )
+        except Exception as exc:
+            logger.exception("FAILED %s", instance_id)
+            failed += 1
             continue
 
-        elapsed = time.monotonic() - t0
-
-        summary = agent.summary()
-        summary["elapsed_s"] = elapsed
-        summary["prepare_ms"] = prepare_ms
-        trace_logger.log_summary(agent.agent_id, summary)
-        trace_logger.close()
-        task_result = _build_result_record(
-            agent=agent,
-            summary=summary,
-            trace_file=trace_logger.path,
-        )
-        _rewrite_trace_summary(trace_logger.path, task_result)
-        results_by_id[instance_id] = task_result
-
-        if success:
+        if result.success:
             succeeded += 1
         else:
             failed += 1
 
-        steps = len(agent.trace)
+        elapsed = time.monotonic() - t0
         logger.info(
-            "[%d/%d] DONE %s success=%s steps=%d elapsed=%.1fs",
+            "[%d/%d] DONE %s success=%s steps=%s elapsed=%.1fs",
             i + 1,
             total,
             instance_id,
-            success,
-            steps,
+            result.success,
+            result.n_steps,
             elapsed,
         )
 
@@ -683,6 +736,8 @@ async def _collect_openclaw(
     harness_run_id: str | None = None,
     harness_report_dir: str | Path | None = None,
     mcp_config: str | None = None,
+    prompt_template: str = "default",
+    min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect traces via the OpenClaw scaffold, routing runner construction
     through ``benchmark.build_runner`` so plugins own their own runner class.
@@ -722,6 +777,15 @@ async def _collect_openclaw(
     total = len(tasks)
     results: list[CollectedTaskResult] = []
 
+    from trace_collect.attempt_pipeline import (
+        AttemptContext,
+        AttemptResult,
+        run_attempt,
+        start_task_container,
+        stop_task_container,
+    )
+    from agents.openclaw.tools.container_backend import ContainerWorkspace
+
     for i, task in enumerate(tasks):
         instance_id = task["instance_id"]
         if instance_id in completed:
@@ -732,47 +796,53 @@ async def _collect_openclaw(
 
         logger.info("[%d/%d] START %s (openclaw)", i + 1, total, instance_id)
 
-        try:
-            eval_task = EvalTask.from_benchmark_instance(
-                task, run_dir / "_workspaces", benchmark=benchmark
-            )
-            eval_result = await runner.run_task(eval_task)
-        except Exception as exc:
-            logger.exception("FAILED %s (openclaw)", instance_id)
-            # Persist any partial trace that was written before the crash
-            ws_trace = run_dir / "_workspaces" / instance_id / "trace.jsonl"
-            dest_trace = run_dir / f"{instance_id}.jsonl"
-            if ws_trace.exists() and not dest_trace.exists():
-                _normalize_openclaw_trace(
-                    src=ws_trace,
-                    dst=dest_trace,
-                    benchmark=benchmark,
-                    model=model,
-                    api_base=api_base,
-                    max_steps=max_steps,
-                    instance_id=instance_id,
-                    mcp_config_label=mcp_config_label,
-                )
-            results.append(
-                CollectedTaskResult(
-                    instance_id=instance_id,
-                    trace_file=dest_trace,
-                    success=False,
-                    success_basis="patch_generated",
-                    patch_generated=False,
-                    model_patch="",
-                    exit_status="error",
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-            )
-            continue
+        attempt_ctx = AttemptContext(
+            run_dir=run_dir,
+            instance_id=instance_id,
+            attempt=1,
+            task=task,
+            model=model,
+            requested_model=model,
+            scaffold="openclaw",
+            source_image=task.get("image_name") or "",
+            prompt_template=prompt_template,
+        )
 
-        # Read summary from trace file to get aggregate metrics
-        trace_summary: dict[str, Any] = {}
-        if eval_result.trace_file:
-            trace_path = Path(eval_result.trace_file)
-            if trace_path.exists():
-                for line in trace_path.read_text(encoding="utf-8").splitlines():
+        async def _openclaw_inner(
+            ctx: AttemptContext,
+            *,
+            _task: dict = task,
+            _instance_id: str = instance_id,
+        ) -> AttemptResult:
+            # Launch the task container using the prepared fixed image.
+            fixed_image = ctx.fixed_image or task.get("image_name") or ""
+            if not fixed_image:
+                raise RuntimeError(
+                    f"Task {_instance_id!r} has no image_name; cannot launch container"
+                )
+            container_id = start_task_container(fixed_image)
+            ctx.mark_container_ready(container_id)
+            cw = ContainerWorkspace(container_id=container_id, cwd="/testbed")
+
+            try:
+                eval_task = EvalTask.from_benchmark_instance(
+                    _task, run_dir / "_workspaces", benchmark=benchmark
+                )
+                eval_result = await runner.run_task(
+                    eval_task,
+                    container_workspace=cw,
+                    prompt_template=ctx.prompt_template,
+                )
+            finally:
+                # Capture logs BEFORE removing the container, then stop/rm it.
+                ctx.claude_output = stop_task_container(container_id)
+
+            # Pull summary record out of the trace so we report n_steps/tokens.
+            trace_summary: dict[str, Any] = {}
+            if eval_result.trace_file and Path(eval_result.trace_file).exists():
+                for line in Path(eval_result.trace_file).read_text(
+                    encoding="utf-8"
+                ).splitlines():
                     try:
                         rec = json.loads(line)
                     except json.JSONDecodeError:
@@ -781,63 +851,94 @@ async def _collect_openclaw(
                         trace_summary = rec
                         break
 
-        # Map EvalResult -> CollectedTaskResult. The success field and
-        # basis differ by task shape: swe_patch benchmarks key off the
-        # git-diff model_patch; function_call benchmarks (BFCL v4) key
-        # off the plugin's AST-match verdict which the runner reports
-        # as ``official_resolved``.
-        model_patch = eval_result.model_patch or ""
-        if benchmark.task_shape == "function_call":
-            official_resolved = eval_result.official_resolved
-            success = bool(official_resolved)
-            success_basis = "official_resolved"
-        else:
-            official_resolved = eval_result.official_resolved
-            success = bool(model_patch)
-            success_basis = "patch_generated"
-        task_result = CollectedTaskResult(
-            instance_id=instance_id,
-            trace_file=run_dir / f"{instance_id}.jsonl",
-            success=success,
-            success_basis=success_basis,
-            patch_generated=bool(model_patch),
-            model_patch=model_patch,
-            exit_status=eval_result.stop_reason,
-            error=eval_result.error,
-            elapsed_s=eval_result.run_ms / 1000 if eval_result.run_ms else 0.0,
-            n_steps=trace_summary.get("n_steps", 0),
-            total_llm_ms=trace_summary.get("total_llm_ms", 0.0),
-            total_tool_ms=trace_summary.get("total_tool_ms", 0.0),
-            total_tokens=trace_summary.get("total_tokens", 0),
-            prepare_ms=eval_result.prepare_ms or 0.0,
-            official_resolved=official_resolved,
-            # Preserve plugin-specific scoring breakdown (BFCL AST match
-            # details, per-category scores, etc.) so downstream analysis
-            # can read it from results.jsonl without re-walking traces.
-            evaluation_report=eval_result.evaluation_report,
-        )
+            model_patch = eval_result.model_patch or ""
+            if benchmark.task_shape == "function_call":
+                official_resolved = eval_result.official_resolved
+                success = bool(official_resolved)
+                success_basis = "official_resolved"
+            else:
+                official_resolved = eval_result.official_resolved
+                success = bool(model_patch)
+                success_basis = "patch_generated"
 
-        # Normalize trace: copy to benchmark run-dir layout + inject metadata
-        if eval_result.trace_file and Path(eval_result.trace_file).exists():
-            _normalize_openclaw_trace(
-                src=Path(eval_result.trace_file),
-                dst=run_dir / f"{instance_id}.jsonl",
-                benchmark=benchmark,
-                model=model,
-                api_base=api_base,
-                max_steps=max_steps,
-                instance_id=instance_id,
-                mcp_config_label=mcp_config_label,
+            task_result = CollectedTaskResult(
+                instance_id=_instance_id,
+                trace_file=ctx.attempt_dir / "trace.jsonl",
+                success=success,
+                success_basis=success_basis,
+                patch_generated=bool(model_patch),
+                model_patch=model_patch,
+                exit_status=eval_result.stop_reason,
+                error=eval_result.error,
+                elapsed_s=eval_result.run_ms / 1000 if eval_result.run_ms else 0.0,
+                n_steps=trace_summary.get("n_steps", 0),
+                total_llm_ms=trace_summary.get("total_llm_ms", 0.0),
+                total_tool_ms=trace_summary.get("total_tool_ms", 0.0),
+                total_tokens=trace_summary.get("total_tokens", 0),
+                prepare_ms=eval_result.prepare_ms or 0.0,
+                official_resolved=official_resolved,
+                evaluation_report=eval_result.evaluation_report,
             )
 
-        results.append(task_result)
+            # Normalize trace into the attempt_1/ dir using the canonical
+            # openclaw metadata merge logic.
+            if (
+                eval_result.trace_file
+                and Path(eval_result.trace_file).exists()
+            ):
+                _normalize_openclaw_trace(
+                    src=Path(eval_result.trace_file),
+                    dst=ctx.attempt_dir / "trace.jsonl",
+                    benchmark=benchmark,
+                    model=model,
+                    api_base=api_base,
+                    max_steps=max_steps,
+                    instance_id=_instance_id,
+                    mcp_config_label=mcp_config_label,
+                )
+
+            results.append(task_result)
+            return AttemptResult(
+                success=success,
+                exit_status=eval_result.stop_reason,
+                trace_path=ctx.attempt_dir / "trace.jsonl",
+                n_steps=task_result.n_steps,
+                total_llm_ms=task_result.total_llm_ms,
+                total_tool_ms=task_result.total_tool_ms,
+                total_tokens=task_result.total_tokens,
+                summary=trace_summary,
+                error=task_result.error,
+            )
+
+        try:
+            await run_attempt(
+                attempt_ctx,
+                inner=_openclaw_inner,
+                min_free_disk_gb=min_free_disk_gb,
+            )
+        except Exception as exc:
+            logger.exception("FAILED %s (openclaw)", instance_id)
+            # Error manifest was already written by run_attempt.
+            if not any(r.instance_id == instance_id for r in results):
+                results.append(
+                    CollectedTaskResult(
+                        instance_id=instance_id,
+                        trace_file=attempt_ctx.attempt_dir / "trace.jsonl",
+                        success=False,
+                        success_basis="patch_generated",
+                        patch_generated=False,
+                        model_patch="",
+                        exit_status="error",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+            continue
+
         logger.info(
-            "[%d/%d] DONE %s  steps=%d patch=%s",
+            "[%d/%d] DONE %s (openclaw)",
             i + 1,
             total,
             instance_id,
-            task_result.n_steps,
-            task_result.patch_generated,
         )
 
     # Write results + predictions

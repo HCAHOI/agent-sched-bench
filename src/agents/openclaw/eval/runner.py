@@ -76,12 +76,39 @@ class SWEBenchRunner:
         )
 
     @staticmethod
-    def _build_swe_bench_prompt(problem_statement: str) -> str:
-        """Wrap problem_statement with SWE-bench task template.
+    def _build_swe_bench_prompt(
+        problem_statement: str,
+        *,
+        prompt_template: str | None = None,
+    ) -> str:
+        """Render the SWE-bench task prompt from an external template.
 
-        Aligned with mini-swe-agent's _INSTANCE_TEMPLATE for fair comparison,
-        adapted for openclaw's structured tool set.
+        When ``prompt_template`` is provided, loads
+        ``configs/prompts/swe_rebench/<name>.md`` via
+        :func:`trace_collect.prompt_loader.load_prompt_template` and
+        substitutes ``{{task}}`` with the problem statement. This lets
+        openclaw share the same prompt set as mini-swe-agent.
+
+        Falls back to an inline minimal template when no name is given
+        (preserves legacy behavior for existing callers).
         """
+        if prompt_template:
+            try:
+                from trace_collect.prompt_loader import (
+                    load_prompt_template,
+                    render_prompt,
+                )
+
+                return render_prompt(
+                    load_prompt_template(prompt_template), problem_statement
+                )
+            except (FileNotFoundError, ValueError, ImportError) as exc:
+                logger.warning(
+                    "Prompt template {name} unavailable ({exc}); falling back to inline default",
+                    name=prompt_template,
+                    exc=exc,
+                )
+
         return f"""\
 <pr_description>
 Consider the following PR description:
@@ -117,22 +144,35 @@ Stop after verifying your fix. The system will automatically extract
 your changes as a git patch from the workspace.
 </instructions>"""
 
-    async def run_task(self, task: EvalTask) -> EvalResult:
+    async def run_task(
+        self,
+        task: EvalTask,
+        *,
+        container_workspace: Any = None,
+        prompt_template: str | None = None,
+    ) -> EvalResult:
         """Run a single evaluation task.
 
-        Lifecycle:
-        1. prepare_workspace() — git clone + checkout + pip install (if needed)
-        2. SessionRunner.run() — full bus-based scheduling
-        3. Extract result + model_patch from agent output
+        Lifecycle (container-backed path, used by attempt_pipeline):
+        1. Skip ``prepare_workspace`` — the task container image has
+           ``/testbed`` at the right commit with dependencies pre-installed.
+        2. SessionRunner.run() with ``container_workspace`` so all
+           filesystem/shell tools route through ``podman exec``.
+        3. Extract result + model_patch from agent output.
+
+        Lifecycle (legacy host-backed path):
+        1. ``prepare_workspace()`` — host git clone + checkout + pip install
+        2. SessionRunner.run() with host-native tools
+        3. Same result assembly.
         """
         ws = task.workspace_dir
         ws.mkdir(parents=True, exist_ok=True)
 
         trace_file = ws / "trace.jsonl"
 
-        # Phase 1: Prepare workspace (git clone + checkout)
+        # Phase 1: Prepare workspace — SKIPPED in container-backed mode.
         prepare_ms: float | None = None
-        if task.needs_prepare:
+        if container_workspace is None and task.needs_prepare:
             try:
                 prepare_ms = await prepare_workspace(
                     ws,
@@ -154,20 +194,24 @@ your changes as a git patch from the workspace.
                 )
         else:
             logger.info(
-                "Skipping prepare for {id} (no repo/commit)",
+                "Skipping prepare for {id} (container-backed or no repo)",
                 id=task.instance_id,
             )
 
         # Phase 2: Run via SessionRunner (full bus dispatch)
+        prompt_text = self._build_swe_bench_prompt(
+            task.problem_statement, prompt_template=prompt_template
+        )
         session_key = f"eval:{task.instance_id}"
         result = await self._session_runner.run(
-            prompt=self._build_swe_bench_prompt(task.problem_statement),
+            prompt=prompt_text,
             workspace=ws,
             session_key=session_key,
             trace_file=trace_file,
             instance_id=task.instance_id,
             channel="cli",
             prepare_ms=prepare_ms,
+            container_workspace=container_workspace,
         )
 
         # Phase 3: Build EvalResult from session history
@@ -199,6 +243,41 @@ your changes as a git patch from the workspace.
                         content = m.get("content")
                         break
 
+        # Container-backed runs: extract the patch from inside the container
+        # BEFORE the caller tears it down. The host workspace is empty in
+        # this mode, so _extract_patch_from_workspace would return "".
+        # Note: we do NOT pass ``:(exclude)...`` pathspecs via bash because
+        # the parentheses are shell metacharacters; openclaw's runtime
+        # artifacts (trace.jsonl, memory, etc.) are all written to the host
+        # attempt directory, not to /testbed, so no excludes are required.
+        container_patch: str | None = None
+        if container_workspace is not None:
+            try:
+                diff_cmd = (
+                    "cd /testbed && "
+                    "git config --add safe.directory /testbed 2>/dev/null; "
+                    "git add -A 2>/dev/null; "
+                    "git diff HEAD"
+                )
+                rc, stdout, stderr = await container_workspace.exec(
+                    diff_cmd, timeout=60
+                )
+                if rc == 0:
+                    container_patch = stdout.strip() or None
+                else:
+                    logger.warning(
+                        "Container git diff failed for {id}: rc={rc} stderr={stderr}",
+                        id=task.instance_id,
+                        rc=rc,
+                        stderr=stderr[:200],
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Container patch extraction raised for {id}: {exc}",
+                    id=task.instance_id,
+                    exc=exc,
+                )
+
         return EvalResult(
             instance_id=task.instance_id,
             content=content,
@@ -212,6 +291,7 @@ your changes as a git patch from the workspace.
             run_ms=result.elapsed_s * 1000,
             workspace_dir=ws,
             base_commit=task.base_commit,
+            container_model_patch=container_patch,
         )
 
     async def run_batch(

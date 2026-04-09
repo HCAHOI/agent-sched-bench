@@ -506,6 +506,7 @@ class SessionRunner:
         instance_id: str | None = None,
         channel: str = "cli",
         prepare_ms: float | None = None,
+        container_workspace: Any = None,
     ) -> SessionRunResult:
         """Run a single prompt through the full bus dispatch path.
 
@@ -572,6 +573,7 @@ class SessionRunner:
             mcp_servers=self.mcp_servers,
             session_manager=session_manager,
             hooks=all_hooks,
+            container_workspace=container_workspace,
         )
 
         inject_event_callbacks(agent, trace_hook)

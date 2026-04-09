@@ -16,16 +16,23 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agents.base import AgentBase, TraceAction
 from minisweagent.agents.default import DefaultAgent
+
+if TYPE_CHECKING:
+    from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
+
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -114,48 +121,28 @@ _SYSTEM_TEMPLATE = (
     " programming tasks."
 )
 
-_INSTANCE_TEMPLATE = """\
-<pr_description>
-Consider the following PR description:
-{{task}}
-</pr_description>
+def _load_default_instance_template() -> str:
+    """Load ``configs/prompts/swe_rebench/default.md`` at import time.
 
-<instructions>
-# Task Instructions
+    Falls back to an inline minimal template if the config file is missing,
+    so early-boot test environments that have not yet created the configs
+    directory still work.
+    """
+    try:
+        from trace_collect.prompt_loader import load_prompt_template
 
-## Overview
+        return load_prompt_template("default")
+    except (FileNotFoundError, ValueError, ImportError):
+        return (
+            "<pr_description>\n"
+            "Consider the following PR description:\n"
+            "{{task}}\n"
+            "</pr_description>\n"
+            "\nSubmit your patch via: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt"
+        )
 
-You're a software engineer interacting continuously with a computer by submitting commands.
-Your task is to make changes to non-test files in the current working directory to fix the
-issue described in the PR description in a way that is general and consistent with the codebase.
 
-For each response:
-1. Include a THOUGHT section explaining your reasoning.
-2. Provide one or more bash tool calls to execute.
-
-## Recommended Workflow
-
-1. Analyse the codebase by finding and reading relevant files.
-2. Create a script to reproduce the issue.
-3. Edit the source code to resolve the issue.
-4. Verify your fix works by running your script again.
-5. Test edge cases to ensure your fix is robust.
-
-## Constraints
-
-- MODIFY: Regular source code files in the current working directory.
-- DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.).
-
-## Submission
-
-When done, submit your changes as a git patch using SEPARATE commands:
-
-  Step 1 – create patch:   git diff -- path/to/changed_file > patch.txt
-  Step 2 – verify patch:   cat patch.txt
-  Step 3 – submit (EXACT): echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
-
-You CANNOT continue working after submitting.
-</instructions>"""
+_INSTANCE_TEMPLATE = _load_default_instance_template()
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +167,7 @@ class MiniSWECodeAgent(AgentBase):
         max_tool_output_chars: int = 8000,
         repos_root: str | None = None,
         max_context_tokens: int = 256_000,
+        prompt_template: str = "default",
     ) -> None:
         super().__init__(
             agent_id=agent_id,
@@ -193,6 +181,7 @@ class MiniSWECodeAgent(AgentBase):
         self.task_timeout_s = task_timeout_s
         self.repos_root = Path(repos_root) if repos_root else None
         self.max_context_tokens = max_context_tokens
+        self.prompt_template = prompt_template
         self._workdir: Path | None = None
         self._prepared = False
 
@@ -209,7 +198,12 @@ class MiniSWECodeAgent(AgentBase):
         self._workdir = Path(tempfile.mkdtemp(prefix="miniswe_"))
         self._prepared = True
 
-    async def run(self, task: dict[str, Any]) -> bool:
+    async def run(
+        self,
+        task: dict[str, Any],
+        *,
+        attempt_ctx: "AttemptContext | None" = None,
+    ) -> bool:
         self.task_id = task["instance_id"]
         self.task_success = False
         self.task_submission = ""
@@ -223,7 +217,7 @@ class MiniSWECodeAgent(AgentBase):
         assert self._workdir is not None
 
         try:
-            return await self._run_mini_agent(task)
+            return await self._run_mini_agent(task, attempt_ctx=attempt_ctx)
         finally:
             shutil.rmtree(self._workdir, ignore_errors=True)
             self._workdir = None
@@ -233,17 +227,44 @@ class MiniSWECodeAgent(AgentBase):
     # Inner agent loop
     # ------------------------------------------------------------------
 
-    async def _run_mini_agent(self, task: dict[str, Any]) -> bool:
+    async def _run_mini_agent(
+        self,
+        task: dict[str, Any],
+        *,
+        attempt_ctx: "AttemptContext | None" = None,
+    ) -> bool:
         from minisweagent.environments.docker import DockerEnvironment
         from minisweagent.models.litellm_model import LitellmModel
+        from trace_collect.prompt_loader import load_prompt_template
 
-        image = task.get("image_name")
+        image = (
+            attempt_ctx.fixed_image
+            if attempt_ctx is not None and attempt_ctx.fixed_image
+            else task.get("image_name")
+        )
         if not image:
             raise RuntimeError(
                 f"Task {task.get('instance_id')!r} has no 'image_name'; "
                 "the SWE-rebench/SWE-bench plugin must populate it via "
                 "normalize_task() before running mini-swe-agent."
             )
+
+        # Load the instance template by name (falls back to module constant
+        # if the configs dir is missing — keeps existing tests happy).
+        template_name = (
+            attempt_ctx.prompt_template
+            if attempt_ctx is not None
+            else self.prompt_template
+        )
+        try:
+            instance_template = load_prompt_template(template_name)
+        except (FileNotFoundError, ValueError) as exc:
+            _logger.warning(
+                "prompt template %r load failed (%s); falling back to default",
+                template_name,
+                exc,
+            )
+            instance_template = _INSTANCE_TEMPLATE
 
         lm = LitellmModel(
             model_name=f"openai/{self.model}",
@@ -257,18 +278,54 @@ class MiniSWECodeAgent(AgentBase):
         )
         # Default to podman; override with MSWEA_DOCKER_EXECUTABLE=docker if needed.
         executable = os.getenv("MSWEA_DOCKER_EXECUTABLE", "podman")
+
+        # run_args mirror the Claude Code harness container launch
+        # (agentcgroup/scripts/run_swebench.py::_run_claude_with_monitoring):
+        # --userns=keep-id + host /home mount so /testbed is writable by the
+        # host uid (the fixed derivative image was chown'd for this), and
+        # binaries under ~/.local are accessible inside the container.
+        home_dir = os.environ.get("HOME", "/root")
+        run_args = [
+            "--rm",
+            "--userns=keep-id",
+            "--network=host",
+            "-v", f"{home_dir}:{home_dir}",
+        ]
         env = DockerEnvironment(
             image=image,
             cwd="/testbed",
             timeout=int(self.command_timeout_s),
             executable=executable,
-            env={"PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"},
+            pull_timeout=300,
+            run_args=run_args,
+            env={
+                "HOME": home_dir,
+                "PATH": f"{home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+                "PAGER": "cat",
+                "MANPAGER": "cat",
+                "LESS": "-R",
+            },
         )
+
+        # Force container start so env.container_id is populated, then
+        # hand the id to the attempt pipeline so its resource sampler can
+        # begin polling the right container.
+        if attempt_ctx is not None:
+            try:
+                env.execute({"command": "true"})
+            except Exception as exc:
+                _logger.warning(
+                    "env warmup execute failed: %s; proceeding anyway", exc
+                )
+            container_id = getattr(env, "container_id", None)
+            if container_id:
+                attempt_ctx.mark_container_ready(container_id)
+
         mini_agent = ContextManagedAgent(
             lm,
             env,
             system_template=_SYSTEM_TEMPLATE,
-            instance_template=_INSTANCE_TEMPLATE,
+            instance_template=instance_template,
             step_limit=self.max_steps,
             cost_limit=0.0,
             output_path=str(self._workdir / "trajectory.json"),
@@ -289,6 +346,14 @@ class MiniSWECodeAgent(AgentBase):
             except Exception as exc:
                 result = {"exit_status": "error", "submission": "", "error": str(exc)}
         finally:
+            # Capture container stdout BEFORE cleanup (cleanup backgrounds
+            # podman stop/rm, which may race with a subsequent logs call).
+            if attempt_ctx is not None:
+                container_id = getattr(env, "container_id", None)
+                if container_id:
+                    attempt_ctx.claude_output = _capture_container_logs(
+                        container_id, executable
+                    )
             # Stop and remove the container explicitly; do not rely on __del__.
             env.cleanup()
 
@@ -514,3 +579,24 @@ class MiniSWECodeAgent(AgentBase):
             prev_msg_len = j
             _prev_ts_end = ts_end
             i = j
+
+
+def _capture_container_logs(container_id: str, executable: str) -> str:
+    """Capture ``<executable> logs <container_id>`` output as UTF-8 text.
+
+    Returns an empty string on any failure; the caller is expected to treat
+    log capture as best-effort (the container may already be gone by the
+    time we get here if cleanup raced).
+    """
+    try:
+        result = subprocess.run(
+            [executable, "logs", container_id],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+    # podman merges stdout/stderr for logs unless --err is passed; capture both.
+    return (result.stdout or "") + (result.stderr or "")

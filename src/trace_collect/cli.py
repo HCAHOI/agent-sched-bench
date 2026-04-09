@@ -151,6 +151,21 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Sliding window token budget for context management.",
     )
     parser.add_argument(
+        "--prompt-template",
+        default="default",
+        help=(
+            "Name of the prompt template under configs/prompts/swe_rebench/. "
+            "Options: 'default' (minimal patch-submit prompt) or 'cc_aligned' "
+            "(full CC harness prefix that mandates running the test suite)."
+        ),
+    )
+    parser.add_argument(
+        "--min-free-disk-gb",
+        type=float,
+        default=30.0,
+        help="Abort per-task run if free disk falls below this threshold (GB).",
+    )
+    parser.add_argument(
         "--run-id",
         default=None,
         help="Resume an interrupted run by providing its existing run ID.",
@@ -429,6 +444,8 @@ def _run_collect(args: argparse.Namespace) -> None:
             harness_run_id=args.harness_run_id,
             harness_report_dir=args.harness_report_dir,
             mcp_config=args.mcp_config,
+            prompt_template=args.prompt_template,
+            min_free_disk_gb=args.min_free_disk_gb,
         )
     )
     print(f"Traces written to: {run_dir}/")

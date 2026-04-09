@@ -186,6 +186,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
+        container_workspace: Any = None,
     ):
         from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -215,6 +216,7 @@ class AgentLoop:
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        self.container_workspace = container_workspace
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
@@ -264,27 +266,56 @@ class AgentLoop:
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
-        """Register the default set of tools."""
-        allowed_dir = self.workspace if self.restrict_to_workspace else None
-        extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-        self.tools.register(
-            ReadFileTool(
-                workspace=self.workspace,
-                allowed_dir=allowed_dir,
-                extra_allowed_dirs=extra_read,
+        """Register the default set of tools.
+
+        When ``container_workspace`` is set (attempt_pipeline / SWE-rebench
+        path), the five filesystem + shell tools are registered as
+        ``podman exec``-backed variants so the work happens inside the task
+        container; the host conda environment is never touched.
+        """
+        if self.container_workspace is not None:
+            from agents.openclaw.tools.container_backend import (
+                ContainerEditFileTool,
+                ContainerExecTool,
+                ContainerListDirTool,
+                ContainerReadFileTool,
+                ContainerWriteFileTool,
             )
-        )
-        for cls in (WriteFileTool, EditFileTool, ListDirTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
-        if self.exec_config.enable:
+
+            self.tools.register(ContainerReadFileTool(self.container_workspace))
+            self.tools.register(ContainerWriteFileTool(self.container_workspace))
+            self.tools.register(ContainerEditFileTool(self.container_workspace))
+            self.tools.register(ContainerListDirTool(self.container_workspace))
+            if self.exec_config.enable:
+                self.tools.register(
+                    ContainerExecTool(
+                        self.container_workspace,
+                        timeout=self.exec_config.timeout,
+                    )
+                )
+        else:
+            allowed_dir = self.workspace if self.restrict_to_workspace else None
+            extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
             self.tools.register(
-                ExecTool(
-                    working_dir=str(self.workspace),
-                    timeout=self.exec_config.timeout,
-                    restrict_to_workspace=self.restrict_to_workspace,
-                    path_append=self.exec_config.path_append,
+                ReadFileTool(
+                    workspace=self.workspace,
+                    allowed_dir=allowed_dir,
+                    extra_allowed_dirs=extra_read,
                 )
             )
+            for cls in (WriteFileTool, EditFileTool, ListDirTool):
+                self.tools.register(
+                    cls(workspace=self.workspace, allowed_dir=allowed_dir)
+                )
+            if self.exec_config.enable:
+                self.tools.register(
+                    ExecTool(
+                        working_dir=str(self.workspace),
+                        timeout=self.exec_config.timeout,
+                        restrict_to_workspace=self.restrict_to_workspace,
+                        path_append=self.exec_config.path_append,
+                    )
+                )
         self.tools.register(
             WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
         )

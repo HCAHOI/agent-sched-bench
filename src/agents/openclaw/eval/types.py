@@ -115,15 +115,24 @@ class EvalResult:
     evaluation_run_id: str | None = None
     evaluation_report_path: str | None = None
     evaluation_report: dict[str, Any] | None = None
+    #: Set by container-backed runs — unified diff captured from inside
+    #: the task container via ``podman exec git diff``. When present, takes
+    #: precedence over the host-workspace extraction.
+    container_model_patch: str | None = None
 
     @property
     def model_patch(self) -> str:
-        """Extract the git patch from the workspace or agent output.
+        """Extract the git patch from the container, workspace, or agent output.
 
-        Primary: run ``git add -A && git diff {base_commit}`` in the
-        workspace to capture all file changes the agent made.
-        Fallback: regex extraction from agent output content.
+        Precedence:
+          1. ``container_model_patch`` (set by container-backed runs before
+             the container is torn down)
+          2. ``_extract_patch_from_workspace`` — host workspace ``git diff``
+          3. ``_extract_patch_from_content`` — regex fallback on the agent
+             output text
         """
+        if self.container_model_patch:
+            return self.container_model_patch
         patch = self._extract_patch_from_workspace()
         if patch:
             return patch
