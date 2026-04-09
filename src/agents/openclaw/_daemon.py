@@ -1,7 +1,4 @@
-"""Background process management for OpenClaw async mode.
-
-Handles daemon spawning via subprocess, PID file tracking, and status queries.
-"""
+"""Background process management for OpenClaw async mode."""
 
 from __future__ import annotations
 
@@ -11,12 +8,6 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-
-# ---------------------------------------------------------------------------
-# PID file management
-# ---------------------------------------------------------------------------
-
 
 def write_pid_file(
     pid_file: Path,
@@ -40,9 +31,7 @@ def write_pid_file(
         data["trace_file"] = str(trace_file)
     pid_file.write_text(json.dumps(data) + "\n", encoding="utf-8")
 
-
 def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
-    """Read and parse a PID file. Returns None if missing or malformed."""
     if not pid_file.exists():
         return None
     try:
@@ -50,38 +39,21 @@ def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError):
         return None
 
-
 def cleanup_pid_file(pid_file: Path) -> None:
-    """Remove a PID file if it exists."""
     try:
         pid_file.unlink(missing_ok=True)
     except OSError:
         pass
 
-
 def pid_file_for_session(workspace: Path, session_id: str) -> Path:
-    """Return the canonical PID file path for a session."""
     return workspace / ".openclaw" / "pids" / f"{session_id}.pid"
 
-
-# ---------------------------------------------------------------------------
-# Process liveness check
-# ---------------------------------------------------------------------------
-
-
 def _is_pid_alive(pid: int) -> bool:
-    """Check if a process with the given PID is alive."""
     try:
         os.kill(pid, 0)
         return True
     except (OSError, ProcessLookupError):
         return False
-
-
-# ---------------------------------------------------------------------------
-# Daemon spawning
-# ---------------------------------------------------------------------------
-
 
 def spawn_daemon(
     cmd: list[str],
@@ -91,19 +63,7 @@ def spawn_daemon(
     extra_env: dict[str, str] | None = None,
     trace_file: Path | None = None,
 ) -> int:
-    """Spawn a detached daemon process and write a PID file.
-
-    Args:
-        cmd: Full command to execute as a subprocess.
-        pid_file: Path to write the PID file.
-        session_id: Session identifier for the PID file metadata.
-        extra_env: Extra environment variables (e.g. API keys — avoids
-            leaking secrets in argv visible to ``ps``).
-
-    Returns:
-        The child process PID.
-    """
-    # Ensure log directory exists
+    """Spawn a detached daemon process and write its PID file."""
     log_dir = pid_file.parent.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{session_id}.log"
@@ -125,18 +85,8 @@ def spawn_daemon(
     write_pid_file(pid_file, proc.pid, session_id, trace_file=trace_file)
     return proc.pid
 
-
-# ---------------------------------------------------------------------------
-# Status query
-# ---------------------------------------------------------------------------
-
-
 def get_session_status(session_id: str, workspace: Path) -> dict[str, Any]:
-    """Get the current status of a session.
-
-    Resolves the trace file via the persisted PID metadata and summarizes the
-    canonical action/summary records when the trace is available.
-    """
+    """Get the current status of a session."""
     pid_file = pid_file_for_session(workspace, session_id)
     pid_data = read_pid_file(pid_file)
 
@@ -146,17 +96,13 @@ def get_session_status(session_id: str, workspace: Path) -> dict[str, Any]:
 
     if pid_data:
         pid = pid_data.get("pid")
-        # Recover the absolute trace path persisted at spawn time.
         if pid_data.get("trace_file"):
             trace_file = Path(pid_data["trace_file"])
         if pid and _is_pid_alive(pid):
             status = "running"
         else:
-            # Keep the PID file in place even after the daemon exits —
-            # ``_is_pid_alive`` already discriminates running vs completed
-            # on every subsequent query. The PID file is also the canonical
-            # record of the absolute trace path, so deleting it would break
-            # repeated status queries for completed sessions.
+            # Keep the PID file after exit so repeated status checks can still
+            # resolve the persisted trace path for completed sessions.
             status = "completed"
     else:
         status = "unknown"
@@ -181,7 +127,6 @@ def get_session_status(session_id: str, workspace: Path) -> dict[str, Any]:
                     distinct_iters.add(rec.get("iteration", 0))
                 elif rec_type == "summary":
                     elapsed_s = rec.get("elapsed_s", elapsed_s)
-                    # Prefer authoritative summary counts when present.
                     n_actions = rec.get("n_actions", n_actions)
                     n_iterations = rec.get("n_iterations", n_iterations)
             if not n_iterations:

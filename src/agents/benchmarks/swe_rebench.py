@@ -1,26 +1,9 @@
 """SWE-rebench benchmark plugin.
 
-Implements the :class:`~agents.benchmarks.base.Benchmark` protocol for the
-``nebius/SWE-rebench`` dataset (https://huggingface.co/datasets/nebius/SWE-rebench).
-
-SWE-rebench is structurally a superset of SWE-Bench Verified but has three
-concrete schema quirks that this plugin absorbs so the scaffolds don't need
-to know about them:
-
-1. ``FAIL_TO_PASS`` / ``PASS_TO_PASS`` / ``FAIL_TO_FAIL`` / ``PASS_TO_FAIL``
-   arrive as **native Python lists**, not JSON-encoded strings as in
-   Verified. We keep them as native lists end-to-end — ``derive_test_cmd``
-   and ``_count_fail_to_pass`` already handle both shapes, so no conversion
-   is needed.
-2. Each row carries an explicit ``docker_image`` URI (e.g.
-   ``swerebench/sweb.eval.x86_64.django_1776_django-11734``). We pin it to
-   ``task['image_name']`` in :meth:`normalize_task` so the harness uses the
-   pre-built image rather than deriving one from the repo name.
-3. ``meta.is_lite`` marks single-file "lite" tasks. Per CLAUDE.md §1 ("no
-   benchmark-specific tuning") we do **not** filter them out by default.
-   The ``exclude_lite`` knob on :class:`BenchmarkConfig` is opt-in and
-   defaults to ``False``; experimenters who want lite exclusion must flip
-   the YAML and document the rationale in the config comment.
+This plugin absorbs the benchmark-specific schema quirks that differ from
+SWE-bench Verified: native test-id lists, explicit docker image URIs, and the
+optional opt-in ``exclude_lite`` filter. Keeping that logic here prevents the
+rest of the harness from depending on dataset-specific branches.
 """
 
 from __future__ import annotations
@@ -29,7 +12,6 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from agents.benchmarks.base import Benchmark
-
 
 class SWERebenchBenchmark(Benchmark):
     """Benchmark plugin for ``nebius/SWE-rebench`` (filtered or test split).
@@ -41,9 +23,7 @@ class SWERebenchBenchmark(Benchmark):
     slug: ClassVar[str] = "swe-rebench"
     task_shape: ClassVar[str] = "swe_patch"
 
-    # ------------------------------------------------------------------
     # Abstract method implementations
-    # ------------------------------------------------------------------
 
     def load_tasks(self) -> list[dict[str, Any]]:
         """Load all rows from ``nebius/SWE-rebench`` and normalize each.
@@ -59,18 +39,7 @@ class SWERebenchBenchmark(Benchmark):
         return tasks
 
     def normalize_task(self, raw: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a raw SWE-rebench row.
-
-        Steps:
-        1. Copy the raw dict (avoid mutating the HF cache entry).
-        2. Leave ``FAIL_TO_PASS`` / ``PASS_TO_PASS`` / ``FAIL_TO_FAIL`` /
-           ``PASS_TO_FAIL`` as native lists. No JSON round-trip.
-        3. If the row carries an explicit ``docker_image`` URI, pin it to
-           ``task['image_name']`` so :meth:`image_name_for` can return it
-           without deriving from the repo.
-        4. Derive ``test_cmd`` via the base helper (which handles both list
-           and JSON-string shapes).
-        """
+        """Normalize a SWE-rebench row and preserve its dataset-specific fields."""
         task = dict(raw)
 
         # Quirk 2: pin explicit docker image so the harness uses the pre-built
@@ -84,9 +53,7 @@ class SWERebenchBenchmark(Benchmark):
         task["test_cmd"] = self.derive_test_cmd(task)
         return task
 
-    # ------------------------------------------------------------------
     # Override: opt-in ``meta.is_lite`` filter via YAML knob
-    # ------------------------------------------------------------------
 
     def select_subset(
         self,
@@ -111,9 +78,7 @@ class SWERebenchBenchmark(Benchmark):
             pool = list(tasks)
         return super().select_subset(pool, n=n, seed=seed)
 
-    # ------------------------------------------------------------------
     # Override: reuse the SWEBenchRunner for swe_patch tasks
-    # ------------------------------------------------------------------
 
     def build_runner(
         self,

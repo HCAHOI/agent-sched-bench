@@ -1,4 +1,3 @@
-"""Parse and inspect canonical trace JSONL files."""
 
 from __future__ import annotations
 
@@ -10,23 +9,17 @@ from typing import Any
 
 CURRENT_TRACE_FORMAT_VERSION = 5
 
-
 def _truncate(text: str, limit: int) -> str:
-    """Truncate text to `limit` chars. limit<=0 means no truncation."""
     if limit <= 0 or len(text) <= limit:
         return text
     return text[:limit] + f"... ({len(text) - limit} chars truncated)"
 
-
 def _to_str(value: Any) -> str:
-    """Convert any value to a string for display/truncation."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False)
 
-
 def _action_get(action: dict[str, Any] | None, key: str, default: Any = None) -> Any:
-    """Read an action field from ``data`` first, then the top level."""
     if not action:
         return default
     data = action.get("data") or {}
@@ -34,9 +27,7 @@ def _action_get(action: dict[str, Any] | None, key: str, default: Any = None) ->
         return data[key]
     return action.get(key, default)
 
-
 def _raw_response_text(raw_response: dict[str, Any]) -> str:
-    """Extract assistant text from either OpenAI or Anthropic raw_response."""
     choices = raw_response.get("choices") or []
     if choices:
         message = choices[0].get("message") or {}
@@ -68,7 +59,6 @@ class TraceData:
 
     @classmethod
     def load(cls, path: Path, agent_filter: str | None = None) -> "TraceData":
-        """Load one canonical trace file, optionally filtering agent ids by substring."""
         metadata: dict[str, Any] = {}
         actions: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
@@ -143,7 +133,6 @@ class TraceData:
         )
 
 def cmd_overview(data: TraceData, as_json: bool = False) -> None:
-    """Print a high-level summary of the trace."""
     total_prompt = sum(_action_get(s, "prompt_tokens", 0) for s in data.actions)
     total_completion = sum(
         _action_get(s, "completion_tokens", 0) for s in data.actions
@@ -218,7 +207,6 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
     if success is not None:
         print(f"  Success   : {success}")
 
-
 def cmd_step(
     data: TraceData,
     step_idx: int,
@@ -226,7 +214,6 @@ def cmd_step(
     truncate: int = 2000,
     as_json: bool = False,
 ) -> None:
-    """Print all fields of a single step record."""
     matching = [s for s in data.actions if s.get("iteration") == step_idx]
     if not matching:
         avail = sorted({s.get("iteration") for s in data.actions if s.get("iteration") is not None})
@@ -279,7 +266,6 @@ def cmd_step(
     if "llm_output" in step:
         print(f"  llm_output      : {_truncate(_to_str(step['llm_output']), truncate)}")
 
-
 def cmd_messages(
     data: TraceData,
     step_idx: int,
@@ -288,7 +274,6 @@ def cmd_messages(
     truncate: int = 2000,
     as_json: bool = False,
 ) -> None:
-    """Print messages_in from the llm_call action of a given iteration."""
     step = next(
         (s for s in data.actions
          if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"),
@@ -326,7 +311,6 @@ def cmd_messages(
         content = _truncate(_to_str(msg.get("content", "")), truncate)
         print(f"  [{i}] {role}: {content}")
 
-
 def cmd_response(
     data: TraceData,
     step_idx: int,
@@ -334,7 +318,6 @@ def cmd_response(
     truncate: int = 2000,
     as_json: bool = False,
 ) -> None:
-    """Print raw_response from the llm_call action of a given iteration."""
     step = next(
         (s for s in data.actions
          if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"),
@@ -371,7 +354,6 @@ def cmd_response(
     print(f"--- raw_response for step {step_idx} ---")
     print(text)
 
-
 def cmd_events(
     data: TraceData,
     *,
@@ -379,7 +361,6 @@ def cmd_events(
     iteration: int | None = None,
     as_json: bool = False,
 ) -> None:
-    """List events, optionally filtered by category and/or iteration."""
     events = data.events
 
     if category is not None:
@@ -418,14 +399,12 @@ def cmd_events(
             data_str = " | " + ", ".join(items)
         print(f"  ts={ts:<12} event={name:<20} cat={cat:<8} step={itr}{data_str}")
 
-
 def cmd_tools(
     data: TraceData,
     *,
     step_idx: int | None = None,
     as_json: bool = False,
 ) -> None:
-    """Aggregate tool usage statistics, sorted by count descending."""
     steps = data.actions
     if step_idx is not None:
         steps = [s for s in steps if s.get("iteration") == step_idx]
@@ -482,7 +461,6 @@ def cmd_tools(
             f"{row['total_duration_ms']:>10.0f} {row['success_rate'] * 100:>9.1f}%"
         )
 
-
 def cmd_search(
     data: TraceData,
     pattern: str,
@@ -490,7 +468,6 @@ def cmd_search(
     truncate: int = 200,
     as_json: bool = False,
 ) -> None:
-    """Search llm_output fields of all steps using a regex pattern."""
     if not pattern:
         if as_json:
             print(json.dumps({"error": "search pattern is required."}))
@@ -539,7 +516,6 @@ def cmd_search(
     for r in results:
         print(f"  iter {r['iteration']}: ...{r['context']}...")
 
-
 _TIMELINE_ICONS: dict[str, str] = {
     "skill_load": "📦", "skill_load_failed": "❌📦",
     "skills_summary_build": "📋", "memory_context_load": "🧠",
@@ -585,9 +561,7 @@ _CATEGORY_SHORT: dict[str, str] = {
     "MEMORY": "memory", "SUBAGENT": "subagent",
 }
 
-
 def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
-    """Format a single event record for timeline display."""
     event_name = rec.get("event", "unknown")
     category = rec.get("category", "")
     data = rec.get("data", {})
@@ -621,9 +595,7 @@ def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
     detail = "  ".join(parts)
     return f"  +{rel:7.1f}s {icon} [{cat:>7}] {event_name:<30} iter={itr:<3} {detail}"
 
-
 def _fmt_tl_action(rec: dict[str, Any], t0: float = 0.0) -> str:
-    """Format one action record for timeline display."""
     action_type = rec.get("action_type", "?")
     iteration = rec.get("iteration", "?")
     data = rec.get("data") or {}
@@ -651,9 +623,7 @@ def _fmt_tl_action(rec: dict[str, Any], t0: float = 0.0) -> str:
         )
     return f"  +{rel:7.1f}s iter={iteration:<3}  {action_type}"
 
-
 def _print_tl_summary(summary: dict[str, Any]) -> None:
-    """Print timeline summary footer."""
     llm_s = summary.get("total_llm_ms", 0) / 1000
     tool_s = summary.get("total_tool_ms", 0) / 1000
     elapsed = summary.get("elapsed_s", 0)
@@ -681,9 +651,7 @@ def _print_tl_summary(summary: dict[str, Any]) -> None:
         for name, count in sorted(timeouts.items()):
             print(f"    {name:20s}: {count}")
 
-
 def cmd_timeline(data: TraceData) -> None:
-    """Print a concise per-iteration timeline with icons and relative timestamps."""
 
     scaffold = data.metadata.get("scaffold", "")
     mode = data.metadata.get("mode", "collect")

@@ -34,20 +34,8 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# ContextManagedAgent — sliding window context management
-# ---------------------------------------------------------------------------
-
-
 class ContextManagedAgent(DefaultAgent):
-    """DefaultAgent with sliding window context management.
-
-    Always preserves system message [0] + task message [1].
-    Trims oldest assistant-tool groups from the middle to fit
-    within budget. Maintains a separate _full_messages list
-    that is never trimmed, for post-hoc trajectory conversion.
-    """
+    """DefaultAgent variant that trims old context but keeps a full transcript."""
 
     def __init__(
         self, *args: Any, max_context_tokens: int = 256_000, **kwargs: Any
@@ -58,8 +46,6 @@ class ContextManagedAgent(DefaultAgent):
 
     @staticmethod
     def _estimate_tokens(messages: list[dict]) -> int:
-        # Strip 'extra' metadata (not sent to the model) to avoid
-        # ~7x overestimation from response objects and timestamps.
         return (
             sum(
                 len(
@@ -78,10 +64,6 @@ class ContextManagedAgent(DefaultAgent):
         return super().query()
 
     def add_messages(self, *messages: dict) -> None:
-        # Keep an untrimmed copy of all messages for trajectory
-        # conversion. add_messages is the sole entry point for new
-        # messages (called by query() and run()), so this is the
-        # single place to maintain the full record.
         super().add_messages(*messages)
         self._full_messages.extend(messages)
 
@@ -96,8 +78,6 @@ class ContextManagedAgent(DefaultAgent):
             suffix and self._estimate_tokens(prefix + suffix) > self._max_context_tokens
         ):
             suffix.pop(0)
-        # Don't leave an orphaned tool result at the start of suffix;
-        # trim until we hit an assistant message to keep pairs intact.
         while suffix and suffix[0].get("role") != "assistant":
             suffix.pop(0)
         self.messages = prefix + suffix
@@ -110,11 +90,6 @@ class ContextManagedAgent(DefaultAgent):
                 self._estimate_tokens(self.messages),
                 self._max_context_tokens,
             )
-
-
-# ---------------------------------------------------------------------------
-# Templates (adapted from mini-swe-agent swebench.yaml)
-# ---------------------------------------------------------------------------
 
 _SYSTEM_TEMPLATE = (
     "You are a helpful assistant that can interact with a computer shell to solve"
@@ -141,18 +116,11 @@ def _load_default_instance_template() -> str:
             "\nSubmit your patch via: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt"
         )
 
-
 _INSTANCE_TEMPLATE = _load_default_instance_template()
 
-
-# ---------------------------------------------------------------------------
-# Regex to parse returncode from mini-swe-agent observation template
-# ---------------------------------------------------------------------------
 _RETURNCODE_RE = re.compile(r"<returncode>(\d+)</returncode>")
 
-
 class MiniSWECodeAgent(AgentBase):
-    """SWE-bench coding agent backed by mini-swe-agent's DefaultAgent."""
 
     def __init__(
         self,
@@ -185,16 +153,8 @@ class MiniSWECodeAgent(AgentBase):
         self._workdir: Path | None = None
         self._prepared = False
 
-    # ------------------------------------------------------------------
-    # Two-phase lifecycle
-    # ------------------------------------------------------------------
-
     async def prepare(self, task: dict[str, Any]) -> None:  # noqa: ARG002
-        """Create a host tempdir for the mini-swe-agent trajectory file.
-
-        The repo itself lives inside the task container at ``/testbed``; no
-        host-side clone or dependency install is required.
-        """
+        """Create the host tempdir used for the trajectory artifact."""
         self._workdir = Path(tempfile.mkdtemp(prefix="miniswe_"))
         self._prepared = True
 
@@ -223,10 +183,6 @@ class MiniSWECodeAgent(AgentBase):
             self._workdir = None
             self._prepared = False
 
-    # ------------------------------------------------------------------
-    # Inner agent loop
-    # ------------------------------------------------------------------
-
     async def _run_mini_agent(
         self,
         task: dict[str, Any],
@@ -249,8 +205,6 @@ class MiniSWECodeAgent(AgentBase):
                 "normalize_task() before running mini-swe-agent."
             )
 
-        # Load the instance template by name (falls back to module constant
-        # if the configs dir is missing — keeps existing tests happy).
         template_name = (
             attempt_ctx.prompt_template
             if attempt_ctx is not None
@@ -276,14 +230,8 @@ class MiniSWECodeAgent(AgentBase):
             },
             cost_tracking="ignore_errors",
         )
-        # Default to podman; override with MSWEA_DOCKER_EXECUTABLE=docker if needed.
         executable = os.getenv("MSWEA_DOCKER_EXECUTABLE", "podman")
 
-        # run_args mirror the Claude Code harness container launch
-        # (agentcgroup/scripts/run_swebench.py::_run_claude_with_monitoring):
-        # --userns=keep-id + host /home mount so /testbed is writable by the
-        # host uid (the fixed derivative image was chown'd for this), and
-        # binaries under ~/.local are accessible inside the container.
         home_dir = os.environ.get("HOME", "/root")
         run_args = [
             "--rm",
@@ -307,9 +255,6 @@ class MiniSWECodeAgent(AgentBase):
             },
         )
 
-        # Force container start so env.container_id is populated, then
-        # hand the id to the attempt pipeline so its resource sampler can
-        # begin polling the right container.
         if attempt_ctx is not None:
             try:
                 env.execute({"command": "true"})
@@ -346,15 +291,12 @@ class MiniSWECodeAgent(AgentBase):
             except Exception as exc:
                 result = {"exit_status": "error", "submission": "", "error": str(exc)}
         finally:
-            # Capture container stdout BEFORE cleanup (cleanup backgrounds
-            # podman stop/rm, which may race with a subsequent logs call).
             if attempt_ctx is not None:
                 container_id = getattr(env, "container_id", None)
                 if container_id:
                     attempt_ctx.container_stdout = _capture_container_logs(
                         container_id, executable
                     )
-            # Stop and remove the container explicitly; do not rely on __del__.
             env.cleanup()
 
         wall_end = time.time()
@@ -366,17 +308,9 @@ class MiniSWECodeAgent(AgentBase):
             result.get("submission", "").strip()
         )
         self.task_success = success
-        # Use _full_messages (never trimmed) for trajectory conversion so
-        # that all steps are recorded even when context was trimmed.
-        # Deep-copy to avoid data races: the background thread may still
-        # be running after TimeoutError and could mutate message dicts.
         msg_snapshot = copy.deepcopy(mini_agent._full_messages)
         self._convert_trajectory(msg_snapshot, wall_start, wall_end)
         return success
-
-    # ------------------------------------------------------------------
-    # Trajectory → TraceAction conversion
-    # ------------------------------------------------------------------
 
     def _convert_trajectory(
         self,
@@ -384,22 +318,10 @@ class MiniSWECodeAgent(AgentBase):
         run_ts_start: float,
         run_ts_end: float,
     ) -> None:
-        """Convert a snapshot of mini-swe-agent's message list into TraceActions."""
-
-        # Messages layout:
-        #   [0] system
-        #   [1] user (task)
-        #   [2] assistant (step 0 LLM response + tool calls)
-        #   [3..k] tool result messages  (one per parallel tool call)
-        #   [k+1] assistant (step 1)
-        #   ...
-        #   [-1] exit
 
         iteration = 0
-        prev_msg_len = 0  # for delta messages_in
-        _prev_ts_end = (
-            run_ts_start  # fallback ts_start when predecessor lacks timestamp
-        )
+        prev_msg_len = 0
+        _prev_ts_end = run_ts_start
         i = 0
 
         while i < len(messages):
@@ -413,13 +335,8 @@ class MiniSWECodeAgent(AgentBase):
                 i += 1
                 continue
 
-            # --- LLM call metadata ---
             extra = msg.get("extra", {})
             ts_end = extra.get("timestamp", run_ts_end)
-            # Use the previous message's timestamp when available; fall back
-            # to the previous step's ts_end rather than run_ts_start to avoid
-            # inflating LLM latency for steps whose predecessor lacks a timestamp
-            # (e.g. the submission step following a tool result without extra.ts).
             ts_start = (
                 messages[i - 1].get("extra", {}).get("timestamp") or _prev_ts_end
                 if i > 0
@@ -446,10 +363,8 @@ class MiniSWECodeAgent(AgentBase):
 
             raw_response = extra.get("response") or {}
 
-            # delta messages_in: only messages added since last step
             messages_in = list(messages[prev_msg_len:i])
 
-            # Emit llm_call TraceAction
             llm_action = TraceAction(
                 action_type="llm_call",
                 action_id=f"llm_{iteration}",
@@ -469,7 +384,6 @@ class MiniSWECodeAgent(AgentBase):
             )
             self._emit_action(llm_action)
 
-            # --- Tool call info ---
             actions = extra.get("actions", [])
             j = i + 1
             tool_outputs: list[str] = []
@@ -489,7 +403,6 @@ class MiniSWECodeAgent(AgentBase):
                     tool_outputs.append(content)
                 j += 1
 
-            # Submission path: exit message may carry final tool output
             _exit_ts: float | None = None
             _from_exit_msg = False
             if (
@@ -538,7 +451,6 @@ class MiniSWECodeAgent(AgentBase):
                     else None
                 )
 
-                # Emit tool_exec_start/end observability events
                 self._emit_event(
                     "TOOL", "tool_exec_start",
                     {"tool_name": "bash", "tool_args": tool_args},
@@ -555,7 +467,6 @@ class MiniSWECodeAgent(AgentBase):
                     iteration=iteration, ts=tool_ts_end or tool_ts_start,
                 )
 
-                # Emit tool_exec TraceAction
                 tool_action = TraceAction(
                     action_type="tool_exec",
                     action_id=f"tool_{iteration}_bash",
@@ -580,14 +491,8 @@ class MiniSWECodeAgent(AgentBase):
             _prev_ts_end = ts_end
             i = j
 
-
 def _capture_container_logs(container_id: str, executable: str) -> str:
-    """Capture ``<executable> logs <container_id>`` output as UTF-8 text.
-
-    Returns an empty string on any failure; the caller is expected to treat
-    log capture as best-effort (the container may already be gone by the
-    time we get here if cleanup raced).
-    """
+    """Capture ``<executable> logs <container_id>`` output as UTF-8 text."""
     try:
         result = subprocess.run(
             [executable, "logs", container_id],
@@ -598,5 +503,4 @@ def _capture_container_logs(container_id: str, executable: str) -> str:
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return ""
-    # podman merges stdout/stderr for logs unless --err is passed; capture both.
     return (result.stdout or "") + (result.stderr or "")

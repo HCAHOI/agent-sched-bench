@@ -14,7 +14,6 @@ from loguru import logger
 
 from agents.openclaw.bus.queue import MessageBus
 
-
 class ResultCollector:
     """Collects outbound messages keyed by session_key.
 
@@ -31,20 +30,17 @@ class ResultCollector:
         self._running = False
 
     async def start(self) -> None:
-        """Start the collection loop."""
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
         logger.info("Result collector started")
 
     def stop(self) -> None:
-        """Stop the collection loop."""
         self._running = False
         if self._task:
             self._task.cancel()
             self._task = None
 
     async def _run_loop(self) -> None:
-        """Main collection loop — consumes from bus.outbound."""
         while self._running:
             try:
                 msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
@@ -65,7 +61,6 @@ class ResultCollector:
                     event.set()
 
     async def wait_for_result(self, session_key: str) -> str | None:
-        """Wait for the result of a specific session."""
         event = self._done_events.setdefault(session_key, asyncio.Event())
         try:
             # No timeout — the agent loop controls lifecycle
@@ -75,10 +70,8 @@ class ResultCollector:
         return self._results.get(session_key)
 
     def get_result(self, session_key: str) -> str | None:
-        """Get the collected result for a session (non-blocking)."""
         return self._results.get(session_key)
 
     def clear(self) -> None:
-        """Clear all collected results and events."""
         self._results.clear()
         self._done_events.clear()

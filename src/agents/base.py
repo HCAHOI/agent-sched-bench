@@ -13,9 +13,7 @@ from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
-
 def _message_content_to_text(content: Any) -> str:
-    """Normalize OpenAI response content into a single plain-text string."""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -30,15 +28,12 @@ def _message_content_to_text(content: Any) -> str:
         return "\n".join(part for part in parts if part)
     return str(content)
 
-
 @dataclass(slots=True)
 class ToolCallResult:
-    """A single tool call extracted from the LLM response."""
 
     id: str
     name: str
     arguments: str
-
 
 @dataclass(slots=True)
 class TraceAction:
@@ -77,10 +72,8 @@ class TraceAction:
             "data": self.data,
         }
 
-
 @dataclass(slots=True)
 class LLMCallResult:
-    """Normalized result of one OpenAI-compatible chat-completions call."""
 
     content: str
     prompt_tokens: int
@@ -89,9 +82,7 @@ class LLMCallResult:
     raw_response: dict[str, Any]
     tool_calls: list[ToolCallResult] = field(default_factory=list)
 
-
 class AgentBase(ABC):
-    """Shared base class for all benchmark agents."""
 
     def __init__(
         self,
@@ -123,7 +114,6 @@ class AgentBase(ABC):
         )
 
     def _truncate(self, text: str) -> str:
-        """Truncate long tool outputs to stay within token limits."""
         if len(text) <= self.max_tool_output_chars:
             return text
         half = self.max_tool_output_chars // 2
@@ -250,7 +240,6 @@ class AgentBase(ABC):
         iteration: int = 0,
         ts: float | None = None,
     ) -> None:
-        """Emit a v4 envelope event. No-op if no logger is injected."""
         if self._trace_logger is not None:
             self._trace_logger.log_event(
                 self.agent_id, category, event, data,
@@ -258,7 +247,6 @@ class AgentBase(ABC):
             )
 
     def _emit_action(self, action: TraceAction) -> None:
-        """Append action to self.actions and write to logger."""
         if self.run_metadata:
             action.data.update(self.run_metadata)
         self.actions.append(action)
@@ -267,14 +255,12 @@ class AgentBase(ABC):
 
     @abstractmethod
     async def run(self, task: dict[str, Any]) -> bool:
-        """Run the agent on one task and return success/failure."""
+        """Run the agent on one task."""
 
     def get_trace(self) -> list[dict[str, Any]]:
-        """Export the trace as JSON-serializable dictionaries."""
         return [a.to_dict() for a in self.actions]
 
     def summary(self) -> dict[str, Any]:
-        """Aggregate per-agent trace statistics for downstream analysis."""
         # ``.get(key, 0)`` returns None (not 0) when the key exists with a
         # None value, so use ``(... or 0)`` to coerce missing-or-None fields
         # to a numeric default. mini-swe-agent's _convert_trajectory can

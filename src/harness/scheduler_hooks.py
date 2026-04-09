@@ -13,10 +13,8 @@ import httpx
 
 from harness.prometheus import parse_prometheus_metric_values
 
-
 @dataclass(slots=True)
 class PreemptionSnapshot:
-    """Subset of vLLM metrics relevant to ENV-5 preemption analysis."""
 
     num_preemptions_total: float | None
     gpu_cache_usage_perc: float | None
@@ -24,20 +22,16 @@ class PreemptionSnapshot:
     gpu_prefix_cache_hit_rate: float | None
     cpu_prefix_cache_hit_rate: float | None
 
-
 @dataclass(slots=True)
 class EvictionEvent:
-    """Structured eviction event parsed from scheduler instrumentation logs."""
 
     seq_id: str
     tokens: int
     reason: str
     gpu_usage: float
 
-
 @dataclass(slots=True)
 class SchedulerHookStatus:
-    """Runtime status for automatic scheduler-hook activation."""
 
     runtime_hook_enabled: bool
     compatibility_ok: bool
@@ -45,14 +39,11 @@ class SchedulerHookStatus:
     target: str
     reason: str | None = None
 
-
 EVICTION_PATTERN = re.compile(
     r"EVICT seq_id=(?P<seq_id>\S+) tokens=(?P<tokens>\d+) reason=(?P<reason>\S+) gpu_usage=(?P<gpu_usage>[0-9.]+)"
 )
 
-
 def parse_prometheus_metrics(metrics_payload: str) -> PreemptionSnapshot:
-    """Extract the preemption-related metrics from a Prometheus payload."""
     wanted = {
         "vllm:num_preemptions_total": "num_preemptions_total",
         "vllm:gpu_cache_usage_perc": "gpu_cache_usage_perc",
@@ -66,7 +57,6 @@ def parse_prometheus_metrics(metrics_payload: str) -> PreemptionSnapshot:
         include_missing=True,
     )
     return PreemptionSnapshot(**values)
-
 
 def empty_snapshot() -> PreemptionSnapshot:
     """Return a PreemptionSnapshot with all fields set to None.
@@ -84,16 +74,12 @@ def empty_snapshot() -> PreemptionSnapshot:
         cpu_prefix_cache_hit_rate=None,
     )
 
-
 def get_snapshot(
     metrics_url: str | None = None,
     *,
     timeout_s: float = 5.0,
 ) -> PreemptionSnapshot:
     """Fetch a single PreemptionSnapshot from a vLLM /metrics endpoint.
-
-    Phase 2 of the trace-sim-vastai-pipeline plan. Stable accessor used
-    by the simulator replay loop and by `harness.metrics_client`.
 
     Args:
         metrics_url: Prometheus endpoint URL. If None or empty, returns
@@ -117,9 +103,7 @@ def get_snapshot(
     response.raise_for_status()
     return parse_prometheus_metrics(response.text)
 
-
 def parse_eviction_events(log_text: str) -> list[EvictionEvent]:
-    """Parse scheduler hook eviction logs into structured events."""
     events: list[EvictionEvent] = []
     for line in log_text.splitlines():
         match = EVICTION_PATTERN.search(line)
@@ -135,14 +119,11 @@ def parse_eviction_events(log_text: str) -> list[EvictionEvent]:
         )
     return events
 
-
 def scheduler_log_snippet() -> str:
-    """Return the recommended vLLM scheduler instrumentation snippet."""
     return (
         'logger.info(f"EVICT seq_id={seq.seq_id} tokens={seq.get_len()} '
         'reason={reason} gpu_usage={self.block_manager.gpu_utilization}")'
     )
-
 
 def _safe_vllm_version() -> str | None:
     try:
@@ -150,9 +131,7 @@ def _safe_vllm_version() -> str | None:
     except importlib.metadata.PackageNotFoundError:
         return None
 
-
 def apply_scheduler_hook() -> SchedulerHookStatus:
-    """Apply a version-checked monkeypatch to Scheduler.schedule()."""
     version = _safe_vllm_version()
     target = "vllm.v1.core.sched.scheduler.Scheduler.schedule"
     if version is None:
@@ -205,9 +184,7 @@ def apply_scheduler_hook() -> SchedulerHookStatus:
         target=target,
     )
 
-
 def build_report(metrics_payload: str, log_text: str) -> dict[str, Any]:
-    """Build a JSON-serializable ENV-5 report from metrics and scheduler logs."""
     snapshot = parse_prometheus_metrics(metrics_payload)
     events = parse_eviction_events(log_text)
     return {
@@ -223,7 +200,6 @@ def build_report(metrics_payload: str, log_text: str) -> dict[str, Any]:
         "instrumentation_snippet": scheduler_log_snippet(),
     }
 
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Collect and parse vLLM preemption metrics plus scheduler-hook logs."
@@ -234,7 +210,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True)
     parser.add_argument("--write-hook-status")
     return parser.parse_args()
-
 
 def main() -> None:
     args = parse_args()
@@ -260,7 +235,6 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-
 
 if __name__ == "__main__":
     main()

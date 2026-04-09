@@ -1,4 +1,3 @@
-"""Agent loop: the core processing engine."""
 
 from __future__ import annotations
 
@@ -40,9 +39,7 @@ from agents.openclaw.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 if TYPE_CHECKING:
     from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
-
 class _LoopHook(AgentHook):
-    """Core hook for the main loop."""
 
     def __init__(
         self,
@@ -113,9 +110,7 @@ class _LoopHook(AgentHook):
     ) -> str | None:
         return self._loop._strip_think(content)
 
-
 class _LoopHookChain(AgentHook):
-    """Run the core hook before extra hooks."""
 
     __slots__ = ("_primary", "_extras")
 
@@ -152,18 +147,8 @@ class _LoopHookChain(AgentHook):
         content = self._primary.finalize_content(context, content)
         return self._extras.finalize_content(context, content)
 
-
 class AgentLoop:
-    """
-    The agent loop is the core processing engine.
-
-    It:
-    1. Receives messages from the bus
-    2. Builds context with history, memory, skills
-    3. Calls the LLM
-    4. Executes tool calls
-    5. Sends responses back
-    """
+    """Coordinate session state, model calls, and tool execution."""
 
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
 
@@ -221,8 +206,8 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
         self._event_callback = None
-        self._mcp_event_callback = None  # B2: needed for _inject_event_callbacks
-        self._dispatch_iteration = 0  # monotonic counter for trace events
+        self._mcp_event_callback = None
+        self._dispatch_iteration = 0
 
         self.context = ContextBuilder(workspace, timezone=timezone)
         self.sessions = session_manager or SessionManager(workspace)
@@ -245,10 +230,9 @@ class AgentLoop:
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
         self._mcp_connecting = False
-        self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
+        self._active_tasks: dict[str, list[asyncio.Task]] = {}
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
-        # NANOBOT_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
         _max = int(os.environ.get("NANOBOT_MAX_CONCURRENT_REQUESTS", "3"))
         self._concurrency_gate: asyncio.Semaphore | None = (
             asyncio.Semaphore(_max) if _max > 0 else None
@@ -397,13 +381,7 @@ class AgentLoop:
         chat_id: str = "direct",
         message_id: str | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
-        """Run the agent iteration loop.
-
-        *on_stream*: called with each content delta during streaming.
-        *on_stream_end(resuming)*: called when a streaming session finishes.
-        ``resuming=True`` means tool calls follow (spinner should restart);
-        ``resuming=False`` means this is the final response.
-        """
+        """Run the agent iteration loop."""
         loop_hook = _LoopHook(
             self,
             on_progress=on_progress,
@@ -451,12 +429,11 @@ class AgentLoop:
         return result.final_content, result.tools_used, result.messages
 
     def _emit_event(self, category: str, event: str, data: dict | None = None) -> None:
-        """Emit a scheduling/lifecycle event via the injected callback."""
         if self._event_callback:
             self._event_callback(category, event, data or {})
 
     async def run(self) -> None:
-        """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
+        """Run the agent loop."""
         self._running = True
         await self._connect_mcp()
         logger.info("Agent loop started")
@@ -467,8 +444,6 @@ class AgentLoop:
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
-                # Preserve real task cancellation so shutdown can complete cleanly.
-                # Only ignore non-task CancelledError signals that may leak from integrations.
                 if not self._running or asyncio.current_task().cancelling():
                     raise
                 continue
@@ -487,7 +462,7 @@ class AgentLoop:
             )
 
     async def _dispatch(self, msg: InboundMessage) -> None:
-        """Process a message: per-session serial, cross-session concurrent."""
+        """Process one message."""
         dispatch_t0 = time.monotonic()
         self._emit_event(
             "SCHEDULING",
@@ -514,7 +489,6 @@ class AgentLoop:
             try:
                 on_stream = on_stream_end = None
                 if msg.metadata.get("_wants_stream"):
-                    # Split one answer into distinct stream segments.
                     stream_base_id = f"{msg.session_key}:{time.time_ns()}"
                     stream_segment = 0
 
@@ -592,7 +566,7 @@ class AgentLoop:
                 )
 
     async def close_mcp(self) -> None:
-        """Drain pending background archives, then close MCP connections."""
+        """Drain pending background work and close MCP connections."""
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
@@ -600,11 +574,11 @@ class AgentLoop:
             try:
                 await self._mcp_stack.aclose()
             except (RuntimeError, BaseExceptionGroup):
-                pass  # MCP SDK cancel scope cleanup is noisy but harmless
+                pass
             self._mcp_stack = None
 
     def _schedule_background(self, coro) -> None:
-        """Schedule a coroutine as a tracked background task (drained on shutdown)."""
+        """Schedule a tracked background task."""
         task = asyncio.create_task(coro)
         self._background_tasks.append(task)
         task.add_done_callback(self._background_tasks.remove)
@@ -622,8 +596,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
-        """Process a single inbound message and return the response."""
-        # System messages: parse origin from chat_id ("channel:chat_id")
+        """Process one inbound message and return the response."""
         if msg.channel == "system":
             channel, chat_id = (
                 msg.chat_id.split(":", 1)

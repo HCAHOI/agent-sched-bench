@@ -13,9 +13,7 @@ from typing import Any, Callable
 from agents.base import AgentBase
 from harness.trace_logger import TraceLogger
 
-
 AgentFactory = Callable[[str, str, str], AgentBase]
-
 
 def build_arrival_offsets(
     num_tasks: int,
@@ -24,7 +22,6 @@ def build_arrival_offsets(
     arrival_rate_per_s: float | None = None,
     arrival_seed: int | None = None,
 ) -> list[float]:
-    """Build per-task arrival offsets for the selected runner mode."""
     if arrival_mode == "closed_loop":
         return [0.0] * num_tasks
     if arrival_mode != "poisson":
@@ -40,19 +37,15 @@ def build_arrival_offsets(
         elapsed += rng.expovariate(arrival_rate_per_s)
     return offsets
 
-
 @dataclass(slots=True)
 class RunnerTaskResult:
-    """Result bundle for one task execution under the harness."""
 
     summary: dict[str, Any]
     trace: list[dict[str, Any]]
 
-
 def build_agent_factory(
     agent_name: str, agent_kwargs: dict[str, Any] | None = None
 ) -> AgentFactory:
-    """Resolve a configured agent type into a constructor."""
     from agents.miniswe import MiniSWECodeAgent as CodeAgent
 
     mapping: dict[str, type[AgentBase]] = {
@@ -71,9 +64,7 @@ def build_agent_factory(
 
     return factory
 
-
 class BenchmarkRunner:
-    """Run a batch of agent tasks with bounded concurrency."""
 
     def __init__(
         self,
@@ -104,7 +95,6 @@ class BenchmarkRunner:
         self._stop_requested = False
 
     def request_stop(self) -> None:
-        """Signal that no new tasks should start."""
         self._stop_requested = True
 
     async def _run_single_task(
@@ -155,8 +145,6 @@ class BenchmarkRunner:
         return await self._run_poisson()
 
     async def _run_closed_loop(self) -> list[RunnerTaskResult]:
-        """Two-phase execution: prepare all, then run all simultaneously."""
-        # Phase 1: Create agents and prepare environments in parallel
         agents: list[tuple[AgentBase, dict[str, Any], int]] = []
         for idx, task in enumerate(self.tasks):
             agent = self.agent_factory(f"agent-{idx:04d}", self.api_base, self.model)
@@ -166,7 +154,6 @@ class BenchmarkRunner:
 
         await asyncio.gather(*[agent.prepare(task) for agent, task, _ in agents])
 
-        # Phase 2: Run all agent loops simultaneously
         async def _execute(
             agent: AgentBase, task: dict[str, Any], idx: int
         ) -> RunnerTaskResult:
@@ -202,7 +189,6 @@ class BenchmarkRunner:
         return list(result_list)
 
     async def _run_poisson(self) -> list[RunnerTaskResult]:
-        """Staggered-arrival execution with producer-consumer queue."""
         offsets = build_arrival_offsets(
             len(self.tasks),
             arrival_mode=self.arrival_mode,
@@ -247,9 +233,7 @@ class BenchmarkRunner:
         await asyncio.gather(*workers, return_exceptions=True)
         return [result for result in results if result is not None]
 
-
 def install_signal_handlers(runner: BenchmarkRunner) -> None:
-    """Install best-effort signal hooks so Ctrl-C stops starting new tasks."""
     loop = asyncio.get_running_loop()
 
     def _request_stop() -> None:
@@ -260,7 +244,6 @@ def install_signal_handlers(runner: BenchmarkRunner) -> None:
             loop.add_signal_handler(signum, _request_stop)
         except NotImplementedError:
             signal.signal(signum, lambda *_args: runner.request_stop())
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Concurrent benchmark runner.")
@@ -278,7 +261,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output")
     return parser.parse_args()
 
-
 async def _run_cli(args: argparse.Namespace) -> list[RunnerTaskResult]:
     tasks = json.loads(Path(args.tasks_file).read_text(encoding="utf-8"))
     runner = BenchmarkRunner(
@@ -294,7 +276,6 @@ async def _run_cli(args: argparse.Namespace) -> list[RunnerTaskResult]:
     )
     install_signal_handlers(runner)
     return await runner.run()
-
 
 def main() -> None:
     args = parse_args()
@@ -313,7 +294,6 @@ def main() -> None:
         output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     else:
         print(json.dumps(payload, indent=2))
-
 
 if __name__ == "__main__":
     main()

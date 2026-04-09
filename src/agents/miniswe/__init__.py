@@ -1,12 +1,6 @@
-"""Miniswe scaffold package init.
+"""Register the MiniSWE scaffold adapter on import.
 
-Side effect on import: registers the miniswe scaffold prepare adapter
-into `trace_collect.scaffold_registry`. The lazy-import gate in
-`scaffold_registry._ensure_loaded` triggers this on the first
-`get_prepare("miniswe")` call.
-
-The package-level exports stay lazy so the registry path can load even
-when the optional `minisweagent` runtime dependency is absent.
+The adapter keeps scaffold discovery aligned with the MiniSWE agent package.
 """
 
 from __future__ import annotations
@@ -14,7 +8,6 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = ["MiniSWECodeAgent", "ContextManagedAgent"]
-
 
 def __getattr__(name: str) -> Any:
     if name not in __all__:
@@ -27,9 +20,7 @@ def __getattr__(name: str) -> Any:
     }
     return exports[name]
 
-
 def _register_miniswe_prepare() -> None:
-    """Build and register the miniswe scaffold prepare adapter."""
     from trace_collect.scaffold_registry import (
         PreparedWorkspace,
         SimulatePrepareConfig,
@@ -72,6 +63,5 @@ def _register_miniswe_prepare() -> None:
         )
 
     register_scaffold_prepare("miniswe", _miniswe_prepare)
-
 
 _register_miniswe_prepare()

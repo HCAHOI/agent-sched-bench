@@ -1,19 +1,4 @@
-"""General-purpose agent session runner — full bus-based dispatch.
-
-Wires MessageBus + AgentLoop.run() + ResultCollector into a single
-``run()`` call.  Both the SWE-bench eval runner and the standalone CLI
-use this module, ensuring identical scheduling behavior (session locks,
-concurrency gates, dispatch routing) and trace output.
-
-This module owns:
-- TraceCollectorHook  (JSONL step/event/summary recording)
-- inject_event_callbacks  (subsystem trace wiring)
-- SessionRunner  (bus-based dispatch orchestrator)
-- SessionRunResult  (lightweight return type)
-
-SWE-bench specific logic (prepare_workspace, EvalResult, model_patch)
-stays in eval/runner.py.
-"""
+"""Shared bus-based session runner for CLI and evaluation flows."""
 
 from __future__ import annotations
 
@@ -42,20 +27,8 @@ from agents.openclaw.eval.types import (
 from agents.openclaw.providers.base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# TraceCollectorHook — JSONL trace recording (moved from eval/runner.py)
-# ═══════════════════════════════════════════════════════════════════════
-
-
 class TraceCollectorHook(AgentHook):
-    """Collects per-iteration checkpoints and fine-grained events as JSONL.
-
-    Emits three record types:
-    - ``step``: per-iteration checkpoint (LLM call + tool results)
-    - ``event``: fine-grained event from any subsystem
-    - ``summary``: aggregate stats at end of run
-    """
+    """Collect per-iteration actions, events, and summaries as JSONL."""
 
     def __init__(
         self,
@@ -78,11 +51,7 @@ class TraceCollectorHook(AgentHook):
         self._tool_timeouts: dict[str, int] = {}
         self._tool_start_ts: dict[str, float] = {}
         self._iter_start_wall: float = 0.0
-        # Snapshot of messages-in at the start of the current iteration —
-        # captured before tool results mutate ``context.messages``.
         self._iter_messages_snapshot: list[dict[str, Any]] | None = None
-        # Wall-clock when the LLM response landed (just before tool exec).
-        # Used as ts_end of the llm_call action when the iteration calls tools.
         self._before_exec_wall: float = 0.0
         self._actions: list[dict[str, Any]] = []
         self._fh = open(trace_file, "a", encoding="utf-8")  # noqa: SIM115
@@ -99,7 +68,6 @@ class TraceCollectorHook(AgentHook):
         *,
         iteration: int = 0,
     ) -> None:
-        """Emit a fine-grained event to the trace file."""
         entry = EvalTraceEvent(
             agent_id=self.agent_id,
             program_id=self.program_id,
@@ -115,10 +83,6 @@ class TraceCollectorHook(AgentHook):
 
     async def before_iteration(self, context: AgentHookContext) -> None:
         self._iter_start_wall = time.time()
-        # Snapshot the prompt messages NOW — by the time after_iteration
-        # fires, ``context.messages`` will include the assistant turn AND
-        # any tool result messages, so it can no longer be used as the
-        # ``messages_in`` field of the llm_call action.
         self._iter_messages_snapshot = self._clone_messages(context.messages)
         self.emit_event(
             LLM, "llm_call_start",
@@ -127,10 +91,6 @@ class TraceCollectorHook(AgentHook):
         )
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
-        # Wall clock when the LLM response landed and we're about to dispatch
-        # tools. AgentLoop's ``_LoopHookChain`` does not forward an
-        # ``after_llm_response`` lifecycle method to extra hooks, so this is
-        # the earliest hook point at which we know the LLM call has finished.
         self._before_exec_wall = time.time()
         if context.tool_calls:
             for tc in context.tool_calls:
@@ -157,15 +117,6 @@ class TraceCollectorHook(AgentHook):
         completion_tokens = usage.get("completion_tokens", 0)
         self._total_tokens += prompt_tokens + completion_tokens
 
-        # Emit llm_call TraceAction (the replayable LLM record).
-        # OpenClaw's AgentLoop ``_LoopHookChain`` only forwards
-        # ``before_iteration`` / ``before_execute_tools`` / ``after_iteration``
-        # to extra hooks — there is no ``after_llm_response`` lifecycle
-        # method invoked on the chain. So we emit the llm_call action
-        # here at the top of after_iteration — BEFORE the tool_exec
-        # actions, to preserve chronological order in the JSONL trace.
-        # ts_end = ``_before_exec_wall`` (set in before_execute_tools) when
-        # tools were called this iteration; otherwise it's "now".
         llm_ts_end = self._before_exec_wall or ts_now
         llm_latency_ms = (llm_ts_end - self._iter_start_wall) * 1000
         resp_dict = self._build_raw_response(
@@ -201,15 +152,11 @@ class TraceCollectorHook(AgentHook):
             },
         )
         self._write_action(llm_action)
-        # Reset per-iteration scratch state so a stale value cannot leak
-        # into the NEXT iteration's llm_call action.
         self._before_exec_wall = 0.0
         self._iter_messages_snapshot = None
 
-        # Emit tool_exec TraceAction per tool call result
         tool_results_from_messages = self._extract_tool_results(context.messages)
         if tool_results_from_messages:
-            # Build tool_args map from context.tool_calls
             tool_args_map: dict[str, str] = {}
             if context.tool_calls:
                 for tc in context.tool_calls:
@@ -232,7 +179,6 @@ class TraceCollectorHook(AgentHook):
                         self._tool_timeouts.get(tool_name, 0) + 1
                     )
 
-                # Emit tool_exec_end observability event
                 is_mcp = tool_name.startswith("mcp_")
                 self.emit_event(
                     MCP if is_mcp else TOOL,
@@ -253,7 +199,6 @@ class TraceCollectorHook(AgentHook):
                         iteration=context.iteration,
                     )
 
-                # Emit tool_exec TraceAction (replayable)
                 tool_ts_end = time.time()
                 tool_ts_start = (
                     tool_ts_end - duration_ms / 1000 if duration_ms else tool_ts_end
@@ -277,7 +222,6 @@ class TraceCollectorHook(AgentHook):
                 )
                 self._write_action(tool_action)
 
-        # Emit error/limit events
         if context.response:
             finish_reason = context.response.finish_reason
             if finish_reason == "error":
@@ -403,19 +347,7 @@ class TraceCollectorHook(AgentHook):
         self._fh.flush()
         self.close()
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# inject_event_callbacks — subsystem trace wiring
-# ═══════════════════════════════════════════════════════════════════════
-
-
 def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
-    """Wire subsystem event callbacks into the trace hook.
-
-    Injects ``hook.emit_event`` into memory consolidation, skill loading,
-    MCP connection, session management, and the top-level AgentLoop.
-    """
-
     def emit(category: str, event: str, data: dict, iteration: int = 0) -> None:
         hook.emit_event(category, event, data, iteration=iteration)
 
@@ -444,15 +376,8 @@ def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
     if hasattr(agent, "_event_callback"):
         agent._event_callback = lambda cat, evt, d: emit(cat, evt, d)
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# SessionRunner — the shared scheduling core
-# ═══════════════════════════════════════════════════════════════════════
-
-
 @dataclass
 class SessionRunResult:
-    """Outcome of a single session run through the full bus dispatch path."""
 
     content: str | None
     elapsed_s: float
@@ -460,22 +385,7 @@ class SessionRunResult:
     session_key: str = ""
     session_manager: SessionManager | None = None
 
-
 class SessionRunner:
-    """Runs a prompt through OpenClaw's full bus-based dispatch.
-
-    Lifecycle (identical for SWE-bench eval and standalone CLI):
-      1. Create MessageBus + ResultCollector + SessionManager
-      2. Create AgentLoop with hooks (TraceCollectorHook + extra_hooks)
-      3. Inject event callbacks into subsystems
-      4. Start AgentLoop.run() as background task (bus consumer)
-      5. Publish InboundMessage to bus
-      6. Wait for ResultCollector to receive the outbound response
-      7. Write trace summary, clean up
-
-    The agent goes through ``_dispatch()`` with ``session_lock`` and
-    ``concurrency_gate`` — the same path as SWE-bench evaluation.
-    """
 
     def __init__(
         self,
@@ -508,25 +418,11 @@ class SessionRunner:
         prepare_ms: float | None = None,
         container_workspace: Any = None,
     ) -> SessionRunResult:
-        """Run a single prompt through the full bus dispatch path.
-
-        Args:
-            prompt: The task/message content to send to the agent.
-            workspace: Working directory for the agent.
-            session_key: Session key for persistence.
-            trace_file: Path to write the JSONL trace.
-            instance_id: Identifier for trace records (defaults to session_key).
-            channel: Message channel (default "cli").
-
-        Returns:
-            SessionRunResult with content, timing, and session reference.
-        """
         workspace.mkdir(parents=True, exist_ok=True)
         iid = instance_id or session_key
 
         trace_hook = TraceCollectorHook(trace_file, iid, agent_id=iid, task_id=iid)
 
-        # Write trace_metadata header — must be first record for downstream tools
         import json as _json
 
         metadata = {

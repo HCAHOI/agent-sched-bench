@@ -1,21 +1,4 @@
-"""CLI entry point for trace collection, simulation, and Gantt serving.
-
-Usage (collect):
-    DASHSCOPE_API_KEY=sk-xxx python -m trace_collect.cli \\
-        --provider dashscope --benchmark swe-rebench \\
-        --scaffold miniswe --max-iterations 50 --sample 5
-
-Usage (simulate):
-    python -m trace_collect.cli simulate \\
-        --source-trace traces/swe-rebench/.../task.jsonl \\
-        --api-base http://localhost:8000/v1 --model Qwen/...
-
-Usage (inspect):
-    python -m trace_collect.cli inspect <trace.jsonl> overview
-
-Usage (gantt server):
-    python -m trace_collect.cli gantt-serve --dev
-"""
+"""CLI entry point for trace collection, import, replay, and viewer helpers."""
 
 from __future__ import annotations
 
@@ -26,7 +9,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-
 
 _PROVIDERS: dict[str, dict[str, str]] = {
     "openrouter": {
@@ -45,7 +27,6 @@ _PROVIDERS: dict[str, dict[str, str]] = {
         "default_model": "gpt-4o",
     },
 }
-
 
 def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -161,7 +142,6 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
-
 def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Simulate a trace with local model timing (TTFT/TPOT).",
@@ -239,7 +219,6 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
-
 def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -285,9 +264,7 @@ def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
-
 def main() -> None:
-    # Keyword detection: subcommand as first arg routes to the right parser.
     sub = sys.argv[1] if len(sys.argv) > 1 else None
     if sub == "simulate":
         _run_simulate(parse_simulate_args(sys.argv[2:]))
@@ -302,9 +279,7 @@ def main() -> None:
     else:
         _run_collect(parse_collect_args())
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
 
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
@@ -370,7 +345,6 @@ def _run_collect(args: argparse.Namespace) -> None:
     if results_path.exists():
         print(f"Results written to: {results_path}")
 
-
 def _run_simulate(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -400,7 +374,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
     )
     print(f"Simulate trace written to: {trace_file}")
 
-
 def _run_import_claude_code(args: argparse.Namespace) -> None:
     """Convert a Claude Code session JSONL into a canonical trace for the Gantt viewer."""
     from trace_collect.claude_code_import import import_claude_code_session
@@ -416,7 +389,6 @@ def _run_import_claude_code(args: argparse.Namespace) -> None:
         "Start the dynamic Gantt viewer with: "
         "python -m trace_collect.cli gantt-serve --dev"
     )
-
 
 def _run_inspect(argv: list[str]) -> None:
     import argparse as _argparse
@@ -530,7 +502,6 @@ examples:
     data = TraceData.load(Path(parsed.trace), agent_filter=parsed.agent)
 
     def _parse_step_idx(args: list[str]) -> int:
-        """Parse step index from CLI args, returning 0 as default."""
         if not args:
             return 0
         try:
@@ -573,8 +544,6 @@ examples:
             print(json.dumps({"error": "timeline does not support --json output"}))
             return
         cmd_timeline(data)
-
-
 
 if __name__ == "__main__":
     main()

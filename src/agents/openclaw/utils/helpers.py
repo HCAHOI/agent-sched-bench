@@ -1,4 +1,3 @@
-"""Utility functions for nanobot."""
 
 import base64
 import json
@@ -13,16 +12,13 @@ from typing import Any
 import tiktoken
 from loguru import logger
 
-
 def strip_think(text: str) -> str:
     """Remove <think>…</think> blocks and any unclosed trailing <think> tag."""
     text = re.sub(r"<think>[\s\S]*?</think>", "", text)
     text = re.sub(r"<think>[\s\S]*$", "", text)
     return text.strip()
 
-
 def detect_image_mime(data: bytes) -> str | None:
-    """Detect image MIME type from magic bytes, ignoring file extension."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
     if data[:3] == b"\xff\xd8\xff":
@@ -33,11 +29,9 @@ def detect_image_mime(data: bytes) -> str | None:
         return "image/webp"
     return None
 
-
 def build_image_content_blocks(
     raw: bytes, mime: str, path: str, label: str
 ) -> list[dict[str, Any]]:
-    """Build native image blocks plus a short text label."""
     b64 = base64.b64encode(raw).decode()
     return [
         {
@@ -48,20 +42,14 @@ def build_image_content_blocks(
         {"type": "text", "text": label},
     ]
 
-
 def ensure_dir(path: Path) -> Path:
-    """Ensure directory exists, return it."""
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-
 def timestamp() -> str:
-    """Current ISO timestamp."""
     return datetime.now().isoformat()
 
-
 def current_time_str(timezone: str | None = None) -> str:
-    """Return the current time string."""
     from zoneinfo import ZoneInfo
 
     try:
@@ -75,33 +63,24 @@ def current_time_str(timezone: str | None = None) -> str:
     tz_name = timezone or (time.strftime("%Z") or "UTC")
     return f"{now.strftime('%Y-%m-%d %H:%M (%A)')} ({tz_name}, UTC{offset_fmt})"
 
-
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
 _TOOL_RESULT_PREVIEW_CHARS = 1200
 _TOOL_RESULTS_DIR = ".nanobot/tool-results"
 _TOOL_RESULT_RETENTION_SECS = 7 * 24 * 60 * 60
 _TOOL_RESULT_MAX_BUCKETS = 32
 
-
 def safe_filename(name: str) -> str:
-    """Replace unsafe path characters with underscores."""
     return _UNSAFE_CHARS.sub("_", name).strip()
 
-
 def image_placeholder_text(path: str | None, *, empty: str = "[image]") -> str:
-    """Build an image placeholder string."""
     return f"[image: {path}]" if path else empty
 
-
 def truncate_text(text: str, max_chars: int) -> str:
-    """Truncate text with a stable suffix."""
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n... (truncated)"
 
-
 def find_legal_message_start(messages: list[dict[str, Any]]) -> int:
-    """Find the first index whose tool results have matching assistant calls."""
     declared: set[str] = set()
     start = 0
     for i, msg in enumerate(messages):
@@ -122,7 +101,6 @@ def find_legal_message_start(messages: list[dict[str, Any]]) -> int:
                                 declared.add(str(tc["id"]))
     return start
 
-
 def stringify_text_blocks(content: list[dict[str, Any]]) -> str | None:
     parts: list[str] = []
     for block in content:
@@ -135,7 +113,6 @@ def stringify_text_blocks(content: list[dict[str, Any]]) -> str | None:
             return None
         parts.append(text)
     return "\n".join(parts)
-
 
 def _render_tool_result_reference(
     filepath: Path,
@@ -154,13 +131,11 @@ def _render_tool_result_reference(
         result += "\n...\n(Read the saved file if you need the full output.)"
     return result
 
-
 def _bucket_mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
     except OSError:
         return 0.0
-
 
 def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
     siblings = [
@@ -178,7 +153,6 @@ def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
     for path in siblings[keep:]:
         shutil.rmtree(path, ignore_errors=True)
 
-
 def _write_text_atomic(path: Path, content: str) -> None:
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -188,7 +162,6 @@ def _write_text_atomic(path: Path, content: str) -> None:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
 
-
 def maybe_persist_tool_result(
     workspace: Path | None,
     session_key: str | None,
@@ -197,7 +170,7 @@ def maybe_persist_tool_result(
     *,
     max_chars: int,
 ) -> Any:
-    """Persist oversized tool output and replace it with a stable reference string."""
+    """Persist oversized tool output and replace it with a reference string."""
     if workspace is None or max_chars <= 0:
         return content
 
@@ -237,18 +210,8 @@ def maybe_persist_tool_result(
         truncated_preview=len(text_payload) > _TOOL_RESULT_PREVIEW_CHARS,
     )
 
-
 def split_message(content: str, max_len: int = 2000) -> list[str]:
-    """
-    Split content into chunks within max_len, preferring line breaks.
-
-    Args:
-        content: The text content to split.
-        max_len: Maximum length per chunk (default 2000 for Discord compatibility).
-
-    Returns:
-        List of message chunks, each within max_len.
-    """
+    """Split content into chunks within ``max_len``, preferring line breaks."""
     if not content:
         return []
     if len(content) <= max_len:
@@ -259,7 +222,6 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
             chunks.append(content)
             break
         cut = content[:max_len]
-        # Try to break at newline first, then space, then hard break
         pos = cut.rfind("\n")
         if pos <= 0:
             pos = cut.rfind(" ")
@@ -268,7 +230,6 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
         chunks.append(content[:pos])
         content = content[pos:].lstrip()
     return chunks
-
 
 def build_assistant_message(
     content: str | None,
@@ -287,7 +248,6 @@ def build_assistant_message(
     if thinking_blocks:
         msg["thinking_blocks"] = thinking_blocks
     return msg
-
 
 def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
@@ -333,7 +293,6 @@ def estimate_prompt_tokens(
     except Exception:
         return 0
 
-
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
     content = message.get("content")
@@ -371,7 +330,6 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     except Exception:
         return max(4, len(payload) // 4 + 4)
 
-
 def estimate_prompt_tokens_chain(
     provider: Any,
     model: str | None,
@@ -392,7 +350,6 @@ def estimate_prompt_tokens_chain(
     if estimated > 0:
         return int(estimated), "tiktoken"
     return 0, "none"
-
 
 def build_status_content(
     *,
@@ -435,7 +392,6 @@ def build_status_content(
             f"\u23f1 Uptime: {uptime}",
         ]
     )
-
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
     """Sync bundled templates to workspace. Only creates missing files."""

@@ -1,17 +1,7 @@
-"""Compatibility shim for SWE-bench data utilities.
+"""Compatibility shim for legacy SWE-bench data helpers.
 
-This module preserves the legacy public API so that all existing call sites
-continue to work without modification.  **New code should use the benchmark
-plugin directly:**
-
-    from agents.benchmarks import get_benchmark_class
-    cls = get_benchmark_class("swe-bench-verified")
-    plugin = cls(config)
-    tasks = plugin.load_tasks()
-
-All implementations live in :mod:`agents.benchmarks.swe_bench_verified`.
-This shim re-exports constants and provides thin wrappers around the
-plugin's methods using a module-level default :class:`BenchmarkConfig`.
+New code should use the benchmark plugin directly; this module exists to keep
+older imports working while delegating to the shared benchmark implementation.
 """
 
 from __future__ import annotations
@@ -31,10 +21,8 @@ from agents.benchmarks.swe_bench_verified import (
     CLASS_LEVEL_REPO_QUOTAS,
 )
 
-# ---------------------------------------------------------------------------
 # Re-export constants at module level for backward compatibility.
 # Tests and scripts import these directly from agents.swebench_data.
-# ---------------------------------------------------------------------------
 
 #: Repos known to have heavy test suites — re-exported from the plugin class.
 HEAVY_REPOS: frozenset[str] = CLASS_LEVEL_HEAVY_REPOS
@@ -42,9 +30,7 @@ HEAVY_REPOS: frozenset[str] = CLASS_LEVEL_HEAVY_REPOS
 #: Target allocation per repo for a 32-task selection — re-exported from the plugin class.
 REPO_QUOTAS: dict[str, int] = CLASS_LEVEL_REPO_QUOTAS
 
-# ---------------------------------------------------------------------------
 # Module-level default config used by the legacy wrapper functions below.
-# ---------------------------------------------------------------------------
 
 _DEFAULT_CONFIG = BenchmarkConfig(
     slug="swe-bench-verified",
@@ -59,12 +45,8 @@ _DEFAULT_CONFIG = BenchmarkConfig(
     selection_seed=42,
 )
 
-
-# ---------------------------------------------------------------------------
 # Legacy public API — keep these names stable, but delegate shared selection
 # logic to the benchmark plugin so the shim does not carry a second copy.
-# ---------------------------------------------------------------------------
-
 
 def derive_test_cmd(task: dict[str, Any]) -> str:
     """Derive a pytest command from the FAIL_TO_PASS field.
@@ -88,20 +70,15 @@ def derive_test_cmd(task: dict[str, Any]) -> str:
     tests_str = " ".join(test_ids)
     return f"python -m pytest {tests_str} -x --no-header -q"
 
-
 def _count_fail_to_pass(task: dict[str, Any]) -> int:
-    """Count the number of tests in FAIL_TO_PASS."""
     return _shared_count_fail_to_pass(task)
-
 
 def select_tool_intensive_tasks(
     tasks: list[dict[str, Any]],
     n: int = 32,
     seed: int = 42,
 ) -> list[dict[str, Any]]:
-    """Select *n* tool-intensive tasks from the full Verified dataset."""
     return _shared_select_tool_intensive(tasks, repo_quotas=REPO_QUOTAS, n=n, seed=seed)
-
 
 def load_swebench_verified() -> list[dict[str, Any]]:
     """Load the SWE-bench Verified dataset from HuggingFace.
@@ -115,7 +92,6 @@ def load_swebench_verified() -> list[dict[str, Any]]:
     """
     plugin = SWEBenchVerified(_DEFAULT_CONFIG)
     return plugin.load_tasks()
-
 
 def download_and_save(
     output_dir: str = "data/swebench_verified",
@@ -140,7 +116,6 @@ def download_and_save(
         encoding="utf-8",
     )
     return tasks_file
-
 
 if __name__ == "__main__":
     import argparse

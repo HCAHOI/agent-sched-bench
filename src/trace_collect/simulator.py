@@ -1,4 +1,3 @@
-"""Replay a source trace while measuring local-model latency."""
 
 from __future__ import annotations
 
@@ -25,10 +24,8 @@ from trace_collect.scaffold_registry import (
 
 logger = logging.getLogger(__name__)
 
-
 class SimulateError(Exception):
     """Raised when simulation encounters a fatal issue."""
-
 
 async def _call_local_model_streaming(
     client: AsyncOpenAI,
@@ -63,7 +60,6 @@ async def _call_local_model_streaming(
     tpot_ms = gen_ms / max(1, n_tokens - 1) if n_tokens > 1 else 0.0
     return ttft_ms, tpot_ms, total_ms
 
-
 async def _exec_tool(
     agent_id: str,
     repo_dir: Path,
@@ -89,7 +85,6 @@ async def _exec_tool(
     )
     duration_ms = (time.monotonic() - t0) * 1000
     return tool_result, duration_ms, tool_success
-
 
 def load_trace_actions(
     trace_path: Path,
@@ -138,15 +133,12 @@ def load_trace_actions(
             iterations[it]["tools"].append(a)
     return iterations, summary
 
-
 def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
-    """Look up a task by instance_id from the tasks JSON file."""
     tasks = json.loads(task_source.read_text(encoding="utf-8"))
     for task in tasks:
         if task["instance_id"] == agent_id:
             return task
     raise SimulateError(f"Task {agent_id!r} not found in {task_source}")
-
 
 async def simulate(
     *,
@@ -163,7 +155,6 @@ async def simulate(
     metrics_url: str | None = None,
     warmup_skip_iterations: int = 0,
 ) -> Path:
-    """Simulate a source trace with local-model timing and real tool replay."""
     metadata = _load_trace_metadata(source_trace)
     _validate_trace_for_simulation(metadata)
 
@@ -379,15 +370,11 @@ async def simulate(
     )
     return trace_file
 
-
 def _detect_scaffold(trace_path: Path) -> str:
-    """Detect the scaffold from a trace's trace_metadata record."""
     metadata = _load_trace_metadata(trace_path)
     return metadata.get("scaffold", "unknown") if metadata else "unknown"
 
-
 def _load_trace_metadata(trace_path: Path) -> dict[str, Any] | None:
-    """Read the first trace_metadata record from a canonical trace JSONL."""
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -402,7 +389,6 @@ def _load_trace_metadata(trace_path: Path) -> dict[str, Any] | None:
             if record.get("type") in ("step", "summary", "action"):
                 break
     return None
-
 
 def _validate_trace_for_simulation(metadata: dict[str, Any] | None) -> None:
     """Reject trace types the replay path cannot prepare into a workspace.
@@ -427,9 +413,7 @@ def _validate_trace_for_simulation(metadata: dict[str, Any] | None) -> None:
             f"got task_shape={task_shape!r}."
         )
 
-
 def _detect_agent_id(trace_path: Path) -> str:
-    """Read the first action record to detect the agent_id."""
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()

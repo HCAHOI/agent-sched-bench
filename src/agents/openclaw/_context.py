@@ -1,4 +1,3 @@
-"""Context builder for assembling agent prompts."""
 
 import base64
 import mimetypes
@@ -12,9 +11,7 @@ from agents.openclaw._memory import MemoryStore
 from agents.openclaw._skills import SkillsLoader
 from agents.openclaw.utils.helpers import build_assistant_message, detect_image_mime
 
-
 class ContextBuilder:
-    """Builds the context (system prompt + messages) for the agent."""
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
@@ -26,7 +23,6 @@ class ContextBuilder:
         self.skills = SkillsLoader(workspace)
 
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity()]
 
         bootstrap = self._load_bootstrap_files()
@@ -55,7 +51,6 @@ Skills with available="false" need dependencies installed first - you can try in
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self) -> str:
-        """Get the core identity section."""
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
@@ -132,7 +127,6 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         return _to_blocks(left) + _to_blocks(right)
 
     def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:
@@ -153,7 +147,6 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         chat_id: str | None = None,
         current_role: str = "user",
     ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone)
         user_content = self._build_user_content(current_message, media)
 
@@ -178,7 +171,6 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
     def _build_user_content(
         self, text: str, media: list[str] | None
     ) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
         if not media:
             return text
 
@@ -212,7 +204,6 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         tool_name: str,
         result: Any,
     ) -> list[dict[str, Any]]:
-        """Add a tool result to the message list."""
         messages.append(
             {
                 "role": "tool",

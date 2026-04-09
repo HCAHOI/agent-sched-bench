@@ -36,9 +36,7 @@ __all__ = [
     "inject_event_callbacks",
 ]
 
-
 def _count_trace_iterations(trace_file: Path) -> int:
-    """Count distinct iteration numbers in the canonical trace's llm_call actions."""
     if not trace_file.exists():
         return 0
     iterations: set[int] = set()
@@ -54,7 +52,6 @@ def _count_trace_iterations(trace_file: Path) -> int:
             if isinstance(it, int):
                 iterations.add(it)
     return len(iterations)
-
 
 class SWEBenchRunner:
     """Runs SWE-bench tasks through OpenClaw's full bus-based scheduling.
@@ -190,7 +187,6 @@ your changes as a git patch from the workspace.
 
         trace_file = ws / "trace.jsonl"
 
-        # Phase 1: Prepare workspace — SKIPPED in container-backed mode.
         prepare_ms: float | None = None
         if container_workspace is None and task.needs_prepare:
             try:
@@ -218,7 +214,6 @@ your changes as a git patch from the workspace.
                 id=task.instance_id,
             )
 
-        # Phase 2: Run via SessionRunner (full bus dispatch)
         prompt_text = self._build_swe_bench_prompt(
             task.problem_statement, prompt_template=prompt_template
         )
@@ -234,7 +229,6 @@ your changes as a git patch from the workspace.
             container_workspace=container_workspace,
         )
 
-        # Phase 3: Build EvalResult from session history + trace file
         content = result.content
         tools_used: list[str] = []
         tool_events: list[dict[str, Any]] = []
@@ -322,7 +316,6 @@ your changes as a git patch from the workspace.
         max_concurrent: int = 1,
         on_progress: Callable[[EvalResult], None] | None = None,
     ) -> list[EvalResult]:
-        """Run multiple tasks concurrently using a semaphore."""
         semaphore = asyncio.Semaphore(max_concurrent)
         results: list[EvalResult | None] = [None] * len(tasks)
 

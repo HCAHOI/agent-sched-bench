@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-
 @dataclass
 class BenchmarkConfig:
     """Configuration for a benchmark plugin.
@@ -65,7 +64,6 @@ class BenchmarkConfig:
             extras=dict(raw.get("extras", {})),
         )
 
-
 class Benchmark(ABC):
     """Abstract base class for all benchmark plugins.
 
@@ -79,9 +77,7 @@ class Benchmark(ABC):
     def __init__(self, config: BenchmarkConfig) -> None:
         self.config = config
 
-    # ------------------------------------------------------------------
     # Abstract interface
-    # ------------------------------------------------------------------
 
     @abstractmethod
     def load_tasks(self) -> list[dict[str, Any]]:
@@ -103,9 +99,7 @@ class Benchmark(ABC):
         """
         ...
 
-    # ------------------------------------------------------------------
     # Concrete defaults
-    # ------------------------------------------------------------------
 
     def derive_test_cmd(self, task: dict[str, Any]) -> str:
         """Derive a pytest command from ``task["FAIL_TO_PASS"]``.
@@ -142,7 +136,6 @@ class Benchmark(ABC):
         return sorted_tasks[:effective_n]
 
     def image_name_for(self, task: dict[str, Any]) -> str | None:
-        """Return the Docker image name for *task*, or ``None`` if not set."""
         return task.get("image_name")
 
     def build_runner(self, *, scaffold: str, **kwargs: Any) -> Any:

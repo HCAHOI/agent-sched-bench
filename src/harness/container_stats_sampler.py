@@ -1,13 +1,6 @@
-"""Background 1 Hz sampler for container CPU/mem stats via ``podman stats``.
+"""Background sampler for container CPU and memory statistics.
 
-Mirrors the Claude Code harness (``scripts/run_swebench.py::ResourceMonitor``
-in the agentcgroup reference repo). Uses the pipe-delimited output format
-``{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}`` which is stable across podman
-versions, where ``--format json`` has shown intermittent issues under
-Rosetta/amd64 emulation.
-
-The sampler runs in a dedicated ``threading.Thread`` so the scaffold's
-asyncio event loop never blocks on ``subprocess.run``.
+The summary format matches the harness resources.json schema.
 """
 
 from __future__ import annotations
@@ -19,13 +12,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-
 # The CC harness format — pipe-delimited, three fields.
 _PODMAN_FORMAT = "{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}"
 
-
 def _parse_pipe_stats(raw: str) -> dict[str, Any] | None:
-    """Parse ``mem_usage|mem_percent|cpu_percent`` into a CC-compatible sample."""
     parts = (raw or "").strip().split("|")
     if len(parts) < 3:
         return None
@@ -37,7 +27,6 @@ def _parse_pipe_stats(raw: str) -> dict[str, Any] | None:
         "mem_percent": parts[1],
         "cpu_percent": parts[2],
     }
-
 
 def _parse_json_stats(raw: str) -> dict[str, Any] | None:
     """Parse ``podman stats --format json`` output.
@@ -76,16 +65,12 @@ def _parse_json_stats(raw: str) -> dict[str, Any] | None:
         "cpu_percent": str(cpu_percent),
     }
 
-
 def _parse_podman_stats(raw: str) -> dict[str, Any] | None:
-    """Back-compat shim used by tests — tries JSON then pipe format."""
     if raw and raw.lstrip().startswith(("{", "[")):
         return _parse_json_stats(raw)
     return _parse_pipe_stats(raw)
 
-
 def _parse_memory_mb(mem_usage: str) -> float | None:
-    """Convert the ``<used> / <limit>`` left side into megabytes."""
     if not mem_usage:
         return None
     left = mem_usage.split("/")[0].strip()
@@ -110,13 +95,11 @@ def _parse_memory_mb(mem_usage: str) -> float | None:
         return None
     return None
 
-
 def _parse_percent(value: str) -> float | None:
     try:
         return float(value.replace("%", "").strip())
     except (ValueError, AttributeError):
         return None
-
 
 def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute CC-compatible resources.json summary from a sample list.
@@ -161,7 +144,6 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "avg": sum(cpu_values) / len(cpu_values) if cpu_values else 0,
         },
     }
-
 
 class ContainerStatsSampler(threading.Thread):
     """Background thread that samples ``podman stats`` for one container.

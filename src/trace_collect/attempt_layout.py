@@ -1,17 +1,7 @@
-"""Writers for the attempt_<N>/ directory layout.
+"""Write the canonical ``attempt_<N>`` artifact layout.
 
-Every scaffold run (miniswe, openclaw, or the external Claude Code
-harness) emits the same six files into ``<run_dir>/<instance_id>/attempt_<N>/``:
-
-- ``trace.jsonl`` — canonical trace (copied/written by the scaffold itself)
-- ``run_manifest.json`` — task + runtime + artifact metadata (schema_version=1)
-- ``results.json`` — timing breakdown + per-run summary
-- ``resources.json`` — 1 Hz container CPU/mem time series
-- ``tool_calls.json`` — flat list of tool invocations with timing
-- ``container_stdout.txt`` — captured container log output after the run
-
-This module only writes; orchestration lives in ``attempt_pipeline.py`` and the
-scaffold adapters.
+This module is intentionally write-only: callers provide already-computed
+payloads and it persists them under the stable filenames used downstream.
 """
 
 from __future__ import annotations
@@ -21,10 +11,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-
-# ---------------------------------------------------------------------------
 # Filenames — single source of truth so callers don't hardcode strings.
-# ---------------------------------------------------------------------------
 
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 RESULTS_FILENAME = "results.json"
@@ -35,12 +22,9 @@ TRACE_FILENAME = "trace.jsonl"
 
 SCHEMA_VERSION = 1
 
-
 def ensure_attempt_dir(attempt_dir: Path) -> Path:
-    """Create *attempt_dir* (parents ok) and return it."""
     attempt_dir.mkdir(parents=True, exist_ok=True)
     return attempt_dir
-
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,12 +32,8 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-
-# ---------------------------------------------------------------------------
 # Writers — one per artifact. Payloads are plain dicts/lists so the caller can
 # choose dataclass -> dict conversion whichever way suits them.
-# ---------------------------------------------------------------------------
-
 
 def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
     """Write run_manifest.json after stamping schema_version and defaults.
@@ -97,13 +77,10 @@ def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
     _write_json(path, payload)
     return path
 
-
 def write_results_json(attempt_dir: Path, result: dict[str, Any]) -> Path:
-    """Write results.json verbatim — caller owns the schema."""
     path = attempt_dir / RESULTS_FILENAME
     _write_json(path, result)
     return path
-
 
 def write_resources_json(
     attempt_dir: Path,
@@ -123,23 +100,18 @@ def write_resources_json(
     _write_json(path, payload)
     return path
 
-
 def write_tool_calls_json(
     attempt_dir: Path, tool_calls: list[dict[str, Any]]
 ) -> Path:
-    """Write tool_calls.json as a flat top-level JSON array."""
     path = attempt_dir / TOOL_CALLS_FILENAME
     _write_json(path, tool_calls)
     return path
 
-
 def write_container_stdout(attempt_dir: Path, stdout_text: str) -> Path:
-    """Write captured container log output to ``container_stdout.txt``."""
     path = attempt_dir / CONTAINER_STDOUT_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(stdout_text or "", encoding="utf-8")
     return path
-
 
 def build_tool_calls_from_trace(trace_path: Path) -> list[dict[str, Any]]:
     """Convert a canonical trace's ``tool_exec`` actions into the tool_calls.json shape.
@@ -202,14 +174,12 @@ def build_tool_calls_from_trace(trace_path: Path) -> list[dict[str, Any]]:
         )
     return tool_calls
 
-
 def _format_epoch(ts: Any) -> str | None:
     if not isinstance(ts, (int, float)):
         return None
     from datetime import datetime, timezone
 
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
 
 def copy_trace_jsonl(attempt_dir: Path, source_path: Path) -> Path:
     """Copy a produced trace.jsonl into the attempt dir under the canonical name.

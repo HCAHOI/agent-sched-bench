@@ -1,17 +1,7 @@
-"""Tests for demo.gantt_viewer.backend.payload.
+"""Regression tests for demo.gantt_viewer.backend.payload.
 
-These tests use synthetic canonical traces (action records, no step
-records) to validate that the Gantt data builder:
-
-1. Maps llm_call / tool_exec actions to spans with the right type and color.
-2. Computes scheduling spans from inter-action gaps above the threshold.
-3. Suppresses scheduling spans when actions overlap or share an iteration
-   (parallel tools).
-4. Forwards observability events as point markers.
-5. Skips unknown action types instead of crashing (forward compat).
-6. Ships span / marker registries inside the payload root.
-7. Exposes the canonical metadata keys (`n_actions`, `n_iterations`,
-   `max_iterations`) and does not emit retired keys.
+These tests pin span construction, scheduling-gap rendering, registry export,
+and tooltip detail extraction.
 """
 
 from __future__ import annotations
@@ -31,9 +21,7 @@ from demo.gantt_viewer.backend.payload import (
 )
 from trace_collect.trace_inspector import TraceData
 
-
 # ── Fixture builders ───────────────────────────────────────────────
-
 
 def _llm_action(
     iteration: int,
@@ -56,7 +44,6 @@ def _llm_action(
             "llm_latency_ms": (ts_end - ts_start) * 1000,
         },
     }
-
 
 def _tool_action(
     iteration: int,
@@ -81,7 +68,6 @@ def _tool_action(
         },
     }
 
-
 def _event(
     category: str,
     event_name: str,
@@ -100,9 +86,7 @@ def _event(
         "data": {},
     }
 
-
 def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
-    """Write a canonical trace JSONL file and return the path."""
     trace = tmp_path / "trace.jsonl"
     head = {
         "type": "trace_metadata",
@@ -117,15 +101,9 @@ def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
             fh.write(json.dumps(r) + "\n")
     return trace
 
-
 def _build(tmp_path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Convenience: write trace, load, build single-trace payload."""
     data = TraceData.load(_write_trace(tmp_path, records))
     return build_gantt_payload(data, label="test")
-
-
-# ── Action -> span mapping ─────────────────────────────────────────
-
 
 def test_llm_action_becomes_span(tmp_path: Path) -> None:
     payload = _build(tmp_path, [_llm_action(0, 1000.0, 1001.0)])
@@ -135,9 +113,7 @@ def test_llm_action_becomes_span(tmp_path: Path) -> None:
     assert llm_spans[0]["start"] == pytest.approx(0.0)
     assert llm_spans[0]["end"] == pytest.approx(1.0)
     assert llm_spans[0]["iteration"] == 0
-    # Color sourced from registry
     assert DEFAULT_SPAN_REGISTRY["llm"]["color"] == "#00E5FF"
-
 
 def test_tool_action_becomes_span(tmp_path: Path) -> None:
     payload = _build(tmp_path, [_tool_action(0, 1000.0, 1000.5, "bash")])
@@ -145,10 +121,6 @@ def test_tool_action_becomes_span(tmp_path: Path) -> None:
     tool_spans = [s for s in spans if s["type"] == "tool"]
     assert len(tool_spans) == 1
     assert tool_spans[0]["detail"]["tool_name"] == "bash"
-
-
-# ── Scheduling spans from inter-action gaps ────────────────────────
-
 
 def test_scheduling_span_requires_event_in_gap(tmp_path: Path) -> None:
     """A gap between two actions IS rendered as a scheduling span when
@@ -163,7 +135,6 @@ def test_scheduling_span_requires_event_in_gap(tmp_path: Path) -> None:
     assert len(sched) == 1
     # Hover detail must surface the underlying event for traceability.
     assert sched[0]["detail"]["events"] == ["message_dispatch"]
-
 
 def test_scheduling_span_suppressed_without_event(tmp_path: Path) -> None:
     """A gap with NO framework event inside → no scheduling span.
@@ -182,7 +153,6 @@ def test_scheduling_span_suppressed_without_event(tmp_path: Path) -> None:
     sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
     assert len(sched) == 0
 
-
 def test_scheduling_span_has_no_duration_threshold(tmp_path: Path) -> None:
     """A tiny 2ms gap with an event STILL produces a span — the rendering
     is gated purely on event presence, not on gap duration. This pins the
@@ -198,7 +168,6 @@ def test_scheduling_span_has_no_duration_threshold(tmp_path: Path) -> None:
     assert sched[0]["detail"]["events"] == ["session_lock_acquire"]
     assert sched[0]["detail"]["gap_ms"] == pytest.approx(2.0, abs=0.1)
 
-
 def test_parallel_tools_share_iteration(tmp_path: Path) -> None:
     """Three tool_exec actions all in iteration=5 → all rendered, no
     scheduling span between them (they may overlap or be close)."""
@@ -210,15 +179,10 @@ def test_parallel_tools_share_iteration(tmp_path: Path) -> None:
     payload = _build(tmp_path, records)
     tool_spans = [s for s in payload["lanes"][0]["spans"] if s["type"] == "tool"]
     assert len(tool_spans) == 3
-    # All share iteration
     assert {s["iteration"] for s in tool_spans} == {5}
-    # No scheduling spans because gaps are negative or near-zero
+
     sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
     assert len(sched) == 0
-
-
-# ── Events as markers ───────────────────────────────────────────────
-
 
 def test_event_becomes_marker(tmp_path: Path) -> None:
     records = [
@@ -230,10 +194,6 @@ def test_event_becomes_marker(tmp_path: Path) -> None:
     assert len(markers) == 1
     assert markers[0]["event"] == "message_dispatch"
     assert markers[0]["type"] == "scheduling"
-
-
-# ── Forward compat: unknown action_type ────────────────────────────
-
 
 def test_unknown_action_type_skipped(tmp_path: Path) -> None:
     """An unknown action_type is silently skipped, not crashed on."""
@@ -248,14 +208,9 @@ def test_unknown_action_type_skipped(tmp_path: Path) -> None:
         "data": {},
     }
     payload = _build(tmp_path, [bad, _llm_action(1, 1002.0, 1003.0)])
-    # Only the llm_call survives
     spans = [s for s in payload["lanes"][0]["spans"] if s["type"] != "scheduling"]
     assert len(spans) == 1
     assert spans[0]["type"] == "llm"
-
-
-# ── Payload registries ─────────────────────────────────────────────
-
 
 def test_payload_carries_registries(tmp_path: Path) -> None:
     data = TraceData.load(_write_trace(tmp_path, [_llm_action(0, 1.0, 2.0)]))
@@ -266,7 +221,6 @@ def test_payload_carries_registries(tmp_path: Path) -> None:
     assert payload["registries"]["spans"] == DEFAULT_SPAN_REGISTRY
     assert payload["registries"]["markers"] == DEFAULT_MARKER_REGISTRY
 
-
 def test_payload_registries_can_be_overridden(tmp_path: Path) -> None:
     """Caller-supplied registries replace the defaults."""
     custom_spans = {"llm": {"color": "#FF0000", "label": "Custom", "order": 0}}
@@ -275,12 +229,7 @@ def test_payload_registries_can_be_overridden(tmp_path: Path) -> None:
         [("a", data)], span_registry=custom_spans
     )
     assert payload["registries"]["spans"] == custom_spans
-    # Markers still default
     assert payload["registries"]["markers"] == DEFAULT_MARKER_REGISTRY
-
-
-# ── Metadata keys ──────────────────────────────────────────────────
-
 
 def test_metadata_uses_canonical_keys(tmp_path: Path) -> None:
     records = [
@@ -297,7 +246,6 @@ def test_metadata_uses_canonical_keys(tmp_path: Path) -> None:
     assert meta["n_actions"] == 3
     assert meta["n_iterations"] == 2  # iterations 0 and 1
     assert meta["max_iterations"] == 80  # from trace_metadata
-
 
 def test_llm_span_detail_surfaces_silent_tool_calls(tmp_path: Path) -> None:
     """An llm_call action whose raw_response has ``content: null`` but
@@ -345,9 +293,7 @@ def test_llm_span_detail_surfaces_silent_tool_calls(tmp_path: Path) -> None:
     assert len(llm_spans) == 1
     detail = llm_spans[0]["detail"]
     assert "llm_content" not in detail, "content was null, should not be set"
-    # US-002 rendering: primary-field extraction prefers ``path``.
     assert detail["tool_calls_requested"] == ['write_file(path="src/main.ts")']
-
 
 def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) -> None:
     """When the LLM produces narrative text AND tool calls, both are
@@ -388,7 +334,6 @@ def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) ->
     assert "Let me write" in detail["llm_content"]
     assert detail["tool_calls_requested"] == ['write_file(path="main.ts")']
 
-
 def test_llm_span_detail_supports_anthropic_raw_response(tmp_path: Path) -> None:
     act = {
         "type": "action",
@@ -420,7 +365,6 @@ def test_llm_span_detail_supports_anthropic_raw_response(tmp_path: Path) -> None
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert "I'll read the config first." in detail["llm_content"]
     assert detail["tool_calls_requested"] == ['Read(file_path="config.yaml")']
-
 
 def test_tool_calls_primary_field_path(tmp_path: Path) -> None:
     """A tool call with a JSON ``path`` argument renders as
@@ -454,7 +398,6 @@ def test_tool_calls_primary_field_path(tmp_path: Path) -> None:
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert detail["tool_calls_requested"] == ['write_file(path="src/main.ts")']
 
-
 def test_tool_calls_primary_field_command(tmp_path: Path) -> None:
     """A shell-style tool call uses the ``command`` field as primary."""
     act = {
@@ -482,7 +425,6 @@ def test_tool_calls_primary_field_command(tmp_path: Path) -> None:
     payload = _build(tmp_path, [act])
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert detail["tool_calls_requested"] == ['bash(command="ls -la src/")']
-
 
 def test_tool_calls_no_primary_field_falls_back(tmp_path: Path) -> None:
     """When no known primary field is present, fall back to the
@@ -516,7 +458,6 @@ def test_tool_calls_no_primary_field_falls_back(tmp_path: Path) -> None:
     assert summary.startswith('mystery_tool(')
     assert '"foo": "bar"' in summary
 
-
 def test_llm_content_truncation_at_1000_chars(tmp_path: Path) -> None:
     """Long llm_content is truncated to 1000 chars + ellipsis (was 200)."""
     long_text = "A" * 1500
@@ -538,7 +479,6 @@ def test_llm_content_truncation_at_1000_chars(tmp_path: Path) -> None:
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert detail["llm_content"] == "A" * 1000 + "..."
 
-
 def test_llm_content_short_is_not_truncated(tmp_path: Path) -> None:
     """Content shorter than the cap passes through unchanged (no ...)."""
     act = {
@@ -558,19 +498,12 @@ def test_llm_content_short_is_not_truncated(tmp_path: Path) -> None:
     payload = _build(tmp_path, [act])
     assert payload["lanes"][0]["spans"][0]["detail"]["llm_content"] == "hello"
 
-
 def test_action_type_map_module_constant() -> None:
-    """ACTION_TYPE_MAP is a public, mutable extension surface."""
     assert ACTION_TYPE_MAP["llm_call"] == "llm"
     assert ACTION_TYPE_MAP["tool_exec"] == "tool"
 
-
-# ── FIX-A: untruncated tool_args / tool_result on actions ──────────────
-
-
 def test_action_detail_preserves_full_tool_fields(tmp_path: Path) -> None:
-    """FIX-A: _extract_detail_from_action must ship the full tool_args /
-    tool_result strings without the old 100-char cap.
+    """Action detail should preserve full tool payloads.
 
     The renderer's pinned tooltip has max-height:60vh + overflow-y:auto,
     so it can display up to the writer-side _TOOL_RESULT_MAX_CHARS=8000
@@ -586,7 +519,7 @@ def test_action_detail_preserves_full_tool_fields(tmp_path: Path) -> None:
         "........................................ [ 16%]\n"
         "........................................ [ 24%]\n" * 10
     )
-    assert len(long_args) > 100  # sanity: precondition for the test
+    assert len(long_args) > 100
     assert len(long_result) > 100
 
     tool_act = _tool_action(0, 1000.0, 1000.5, "Bash")
@@ -606,20 +539,13 @@ def test_action_detail_preserves_full_tool_fields(tmp_path: Path) -> None:
         "FIX-A broken: tool_result was truncated at the data layer "
         f"(length={len(detail['tool_result'])}, expected={len(long_result)})"
     )
-    # No trailing '...' marker — full content, not a preview
     assert not detail["tool_args"].endswith("...")
     assert not detail["tool_result"].endswith("...")
 
-
 def test_event_detail_still_truncates_at_100_chars(tmp_path: Path) -> None:
-    """FIX-A asymmetry: events still get the 100-char cap because event
-    tooltips are hover-only (no click-to-pin path). Keeping the cap
-    there avoids blowing up hover cards on observability events.
-    """
+    """Event detail keeps the shorter hover-only truncation cap."""
     long_value = "x" * 500
 
-    # Inject a synthetic event directly via _extract_detail_from_event
-    # (it's private but importable for this focused test).
     from demo.gantt_viewer.backend.payload import _extract_detail_from_event
 
     event = {
@@ -631,7 +557,7 @@ def test_event_detail_still_truncates_at_100_chars(tmp_path: Path) -> None:
         "data": {"tool_args": long_value, "tool_result": long_value},
     }
     detail = _extract_detail_from_event(event)
-    assert len(detail["tool_args"]) == 103, (  # 100 chars + "..."
+    assert len(detail["tool_args"]) == 103, (
         f"event path should truncate; got length {len(detail['tool_args'])}"
     )
     assert detail["tool_args"].endswith("...")

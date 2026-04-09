@@ -1,4 +1,3 @@
-"""Convert Claude Code session JSONL into a canonical trace."""
 
 from __future__ import annotations
 
@@ -10,7 +9,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
-
 
 SCAFFOLD_LABEL = "claude-code"
 V5_FORMAT_VERSION = 5
@@ -35,9 +33,7 @@ _DISCARDABLE_TYPES = frozenset(
     }
 )
 
-
 def _iso_to_unix(iso_str: str | None) -> float | None:
-    """Convert an ISO 8601 timestamp to a Unix float."""
     if not iso_str:
         return None
     try:
@@ -49,9 +45,7 @@ def _iso_to_unix(iso_str: str | None) -> float | None:
     except (ValueError, TypeError):
         return None
 
-
 def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
-    """Extract header fields from the session file."""
     harvested: dict[str, Any] = {
         "model": None,
         "cwd": None,
@@ -89,7 +83,6 @@ def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
 def _split_assistant_content(
     content: list[dict[str, Any]] | str | None,
 ) -> tuple[str, str, list[dict[str, Any]]]:
-    """Split assistant content into text, thinking, and tool-use blocks."""
     if content is None or isinstance(content, str):
         text = content or ""
         return text, "", []
@@ -110,14 +103,12 @@ def _split_assistant_content(
 
     return "\n".join(text_parts), "\n".join(thinking_parts), tool_uses
 
-
 def _build_claude_raw_response(
     *,
     model: str | None,
     message_id: str | None,
     content: list[dict[str, Any]] | str | None,
 ) -> dict[str, Any]:
-    """Preserve the Claude assistant message in its native content-block shape."""
     return {
         "provider": "anthropic",
         "id": message_id or "",
@@ -128,11 +119,9 @@ def _build_claude_raw_response(
         },
     }
 
-
 def _extract_tool_result_text(
     tool_result_content: list[dict[str, Any]] | str | None,
 ) -> str:
-    """Flatten a tool_result block's content array into a single string."""
     if tool_result_content is None:
         return ""
     if isinstance(tool_result_content, str):
@@ -150,12 +139,10 @@ def _extract_tool_result_text(
 # Keep stderr previews short; full tool_result text is stored separately.
 _BASH_STDERR_PREVIEW_MAX = 2000
 
-
 def _backfill_per_tool(
     tool_name: str,
     result_dict: dict[str, Any],
 ) -> tuple[dict[str, Any], bool | None]:
-    """Extract tool-specific backfill from ``toolUseResult``."""
     backfill: dict[str, Any] = {}
     success_override: bool | None = None
 
@@ -190,7 +177,6 @@ def _convert_session_records(
     agent_id: str,
     session_start_ts: float | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Stream action records and a trailing summary sentinel for one session."""
     pending_tool_uses: dict[str, dict[str, Any]] = {}
     iteration = 0
     last_lane_ts: float | None = session_start_ts
@@ -265,7 +251,6 @@ def _convert_session_records(
                     "llm_content": llm_content_preview,
                     # Backfill: Claude-specific fields preserved under data.*
                     "message_id": message.get("id", ""),
-                    # FIX-5: Anthropic request id (top-level on assistant
                     # records since CC CLI 2.1.96). Empty string when
                     # absent so the schema is stable across versions.
                     "request_id": record.get("requestId", "") or "",
@@ -473,10 +458,6 @@ def _convert_session_records(
         "elapsed_s": round((last_ts or 0.0) - (first_ts or 0.0), 3),
     }
 
-
-
-
-
 def import_claude_code_session(
     *,
     session_path: Path,
@@ -484,7 +465,6 @@ def import_claude_code_session(
     include_sidechains: bool = True,
     run_id: str | None = None,
 ) -> Path:
-    """Convert a Claude Code session into a canonical trace JSONL."""
     session_path = Path(session_path).expanduser().resolve()
     if not session_path.exists():
         raise FileNotFoundError(f"Claude Code session not found: {session_path}")

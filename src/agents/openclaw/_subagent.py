@@ -1,4 +1,3 @@
-"""Subagent manager for background task execution."""
 
 import asyncio
 import json
@@ -25,9 +24,7 @@ from agents.openclaw.bus.queue import MessageBus
 from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 from agents.openclaw.providers.base import LLMProvider
 
-
 class _SubagentHook(AgentHook):
-    """Logging-only hook for subagent execution."""
 
     def __init__(self, task_id: str) -> None:
         self._task_id = task_id
@@ -42,9 +39,7 @@ class _SubagentHook(AgentHook):
                 args_str,
             )
 
-
 class SubagentManager:
-    """Manages background subagent execution."""
 
     def __init__(
         self,
@@ -79,7 +74,6 @@ class SubagentManager:
         origin_chat_id: str = "direct",
         session_key: str | None = None,
     ) -> str:
-        """Spawn a subagent to execute a task in the background."""
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
@@ -110,7 +104,6 @@ class SubagentManager:
         label: str,
         origin: dict[str, str],
     ) -> None:
-        """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
 
         try:
@@ -213,7 +206,6 @@ class SubagentManager:
         origin: dict[str, str],
         status: str,
     ) -> None:
-        """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
 
         announce_content = f"""[Subagent '{label}' {status_text}]
@@ -293,7 +285,6 @@ Tools like 'read_file' and 'web_fetch' can return native image content. Read vis
         return "\n\n".join(parts)
 
     async def cancel_by_session(self, session_key: str) -> int:
-        """Cancel all subagents for the given session. Returns count cancelled."""
         tasks = [
             self._running_tasks[tid]
             for tid in self._session_tasks.get(session_key, [])
@@ -306,5 +297,4 @@ Tools like 'read_file' and 'web_fetch' can return native image content. Read vis
         return len(tasks)
 
     def get_running_count(self) -> int:
-        """Return the number of currently running subagents."""
         return len(self._running_tasks)

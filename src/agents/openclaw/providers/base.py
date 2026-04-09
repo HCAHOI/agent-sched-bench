@@ -1,4 +1,3 @@
-"""Base LLM provider interface."""
 
 import asyncio
 import json
@@ -12,10 +11,8 @@ from loguru import logger
 
 from agents.openclaw.utils.helpers import image_placeholder_text
 
-
 @dataclass
 class ToolCallRequest:
-    """A tool call request from the LLM."""
 
     id: str
     name: str
@@ -25,7 +22,6 @@ class ToolCallRequest:
     function_provider_specific_fields: dict[str, Any] | None = None
 
     def to_openai_tool_call(self) -> dict[str, Any]:
-        """Serialize to an OpenAI-style tool_call payload."""
         tool_call = {
             "id": self.id,
             "type": "function",
@@ -44,10 +40,8 @@ class ToolCallRequest:
             )
         return tool_call
 
-
 @dataclass
 class LLMResponse:
-    """Response from an LLM provider."""
 
     content: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
@@ -59,21 +53,16 @@ class LLMResponse:
 
     @property
     def has_tool_calls(self) -> bool:
-        """Check if response contains tool calls."""
         return len(self.tool_calls) > 0
-
 
 @dataclass(frozen=True)
 class GenerationSettings:
-    """Default generation settings."""
 
     temperature: float = 0.7
     max_tokens: int = 4096
     reasoning_effort: str | None = None
 
-
 class LLMProvider(ABC):
-    """Base class for LLM providers."""
 
     _CHAT_RETRY_DELAYS = (1, 2, 4, 8, 16, 32)
     _PERSISTENT_MAX_DELAY = 60
@@ -231,7 +220,6 @@ class LLMProvider(ABC):
         return result if found else None
 
     async def _safe_chat(self, **kwargs: Any) -> LLMResponse:
-        """Call chat() and convert unexpected exceptions to error responses."""
         try:
             return await self.chat(**kwargs)
         except asyncio.CancelledError:
@@ -275,7 +263,6 @@ class LLMProvider(ABC):
         return response
 
     async def _safe_chat_stream(self, **kwargs: Any) -> LLMResponse:
-        """Call chat_stream() and convert unexpected exceptions to error responses."""
         try:
             return await self.chat_stream(**kwargs)
         except asyncio.CancelledError:
@@ -300,7 +287,6 @@ class LLMProvider(ABC):
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
-        """Call chat_stream() with retry on transient provider failures."""
         if max_tokens is self._SENTINEL:
             max_tokens = self.generation.max_tokens
         if temperature is self._SENTINEL:
@@ -481,5 +467,4 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def get_default_model(self) -> str:
-        """Get the default model for this provider."""
         pass

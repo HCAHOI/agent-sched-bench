@@ -1,13 +1,7 @@
-"""OpenClaw standalone CLI — argument parsing, streaming hook, sync/async runner.
+"""Standalone OpenClaw CLI.
 
-Uses the same full bus-based dispatch path as SWE-bench evaluation
-(MessageBus + AgentLoop.run() + ResultCollector) via SessionRunner.
-
-Usage:
-    python -m agents.openclaw --prompt "Create a Tetris game" --workspace ~/tetris
-    python -m agents.openclaw --prompt "Build Pac-Man" --workspace ~/pacman --async
-    python -m agents.openclaw --session-id oc-abc123 --prompt "Add multiplayer"
-    python -m agents.openclaw --session-id oc-abc123 --status
+This module keeps argument parsing and daemon entrypoints in one place while
+reusing the same SessionRunner path as evaluation runs.
 """
 
 from __future__ import annotations
@@ -25,24 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
-# ---------------------------------------------------------------------------
-# CLIStreamHook — real-time event output to stderr
-# ---------------------------------------------------------------------------
-
-
 def _ts() -> str:
-    """Current time as HH:MM:SS."""
     return datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
 
-
 class CLIStreamHook:
-    """Prints real-time agent events to stderr for CLI observation.
-
-    Injected into AgentLoop via SessionRunner's ``extra_hooks`` parameter.
-    CompositeHook calls lifecycle methods (before_iteration, after_iteration,
-    etc.) — CLIStreamHook prints them as structured log lines to stderr.
-    """
+    """Print real-time agent events to stderr."""
 
     def __init__(self, session_id: str, *, quiet: bool = False) -> None:
         self.sid_short = session_id[:10]
@@ -60,8 +41,6 @@ class CLIStreamHook:
             file=sys.stderr,
             flush=True,
         )
-
-    # -- AgentHook lifecycle methods (called via CompositeHook) --
 
     def wants_streaming(self) -> bool:
         return not self.quiet
@@ -95,11 +74,9 @@ class CLIStreamHook:
         pass
 
     def finalize_content(self, context: Any, content: str | None) -> str | None:
-        """Required by CompositeHook — pass through without modification."""
         return content
 
     def print_summary(self) -> None:
-        """Print final DONE line with aggregate stats."""
         elapsed = time.monotonic() - self._wall_start
         self._log(
             "DONE",
@@ -107,14 +84,7 @@ class CLIStreamHook:
             f"{self._total_tokens} total tokens",
         )
 
-
-# ---------------------------------------------------------------------------
-# Argument parsing
-# ---------------------------------------------------------------------------
-
-
 def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         prog="python -m agents.openclaw",
         description="Run the OpenClaw agent on an arbitrary task.",
@@ -203,20 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output final result as JSON to stdout.",
     )
 
-    # Internal (daemon mode)
     parser.add_argument("--_daemon", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_pid-file", default=None, help=argparse.SUPPRESS)
 
     return parser
 
-
-# ---------------------------------------------------------------------------
-# Config resolution (runs BEFORE heavy imports for fast failure)
-# ---------------------------------------------------------------------------
-
-
 def _resolve_api_key(args: argparse.Namespace) -> str:
-    """Resolve API key from args or environment. Fail fast if missing."""
     key = (
         args.api_key
         or os.environ.get("OPENCLAW_API_KEY")
@@ -233,21 +195,13 @@ def _resolve_api_key(args: argparse.Namespace) -> str:
         sys.exit(1)
     return key
 
-
 def _resolve_model(args: argparse.Namespace) -> str:
     return args.model or os.environ.get("OPENCLAW_MODEL", "qwen/qwen3.6-plus:free")
-
 
 def _resolve_api_base(args: argparse.Namespace) -> str:
     return args.api_base or os.environ.get(
         "OPENCLAW_API_BASE", "https://openrouter.ai/api/v1"
     )
-
-
-# ---------------------------------------------------------------------------
-# Trace output path resolution
-# ---------------------------------------------------------------------------
-
 
 def _resolve_repo_root() -> Path | None:
     """Walk up from this file to find the agent-sched-bench repo root.
@@ -261,7 +215,6 @@ def _resolve_repo_root() -> Path | None:
             return parent
     return None
 
-
 def _slug_model(name: str) -> str:
     """Convert a model identifier to a filesystem-safe slug.
 
@@ -269,18 +222,13 @@ def _slug_model(name: str) -> str:
     """
     return name.replace("/", "_").replace(":", "_")
 
-
 def _resolve_trace_output(
     args: argparse.Namespace, session_id: str, model: str
 ) -> Path:
-    """Decide where the OpenClaw CLI should write its trace JSONL.
+    """Resolve the trace output path for the current CLI invocation.
 
-    Precedence:
-      1. Explicit ``--trace-output`` (resolved with ``expanduser`` + ``resolve``).
-      2. ``<repo>/traces/openclaw_cli/<model_slug>/<UTC_TS>/<session_id>.jsonl``
-         where ``<repo>`` is the agent-sched-bench root.
-      3. ``<cwd>/traces/openclaw_cli/<model_slug>/<UTC_TS>/<session_id>.jsonl``
-         if the repo root cannot be located (e.g., installed wheel).
+    ``--trace-output`` wins; otherwise prefer the repo-root trace tree and
+    fall back to the current working directory when the repo root is unknown.
     """
     if args.trace_output:
         return Path(args.trace_output).expanduser().resolve()
@@ -289,15 +237,7 @@ def _resolve_trace_output(
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return base / "traces" / "openclaw_cli" / _slug_model(model) / ts / f"{session_id}.jsonl"
 
-
-# ---------------------------------------------------------------------------
-# Sync runner — uses SessionRunner (full bus path)
-# ---------------------------------------------------------------------------
-
-
 def _run_sync(args: argparse.Namespace) -> int:
-    """Run agent in sync (blocking) mode via SessionRunner."""
-    # Resolve config BEFORE heavy imports so missing API key fails fast
     api_key = _resolve_api_key(args)
     api_base = _resolve_api_base(args)
     model = _resolve_model(args)
@@ -342,7 +282,6 @@ def _run_sync(args: argparse.Namespace) -> int:
         extra_hooks=[cli_hook],
     )
 
-    # Daemon mode: register signal handlers for clean shutdown
     if is_daemon:
         _install_daemon_signal_handlers(args)
 
@@ -385,15 +324,10 @@ def _run_sync(args: argparse.Namespace) -> int:
 
     return 0
 
-
 def _install_daemon_signal_handlers(args: argparse.Namespace) -> None:
-    """Register SIGTERM/SIGINT handlers for clean daemon shutdown."""
     pid_file = getattr(args, "_pid_file", None)
 
     def _cleanup(*_args: Any) -> None:
-        # Don't write a fabricated summary — the real TraceCollectorHook
-        # inside SessionRunner.run() owns the trace file.  Just clean up
-        # the PID file so --status reports "completed" (not "running").
         if pid_file:
             try:
                 Path(pid_file).unlink(missing_ok=True)
@@ -405,14 +339,7 @@ def _install_daemon_signal_handlers(args: argparse.Namespace) -> None:
     if pid_file:
         atexit.register(lambda: Path(pid_file).unlink(missing_ok=True))
 
-
-# ---------------------------------------------------------------------------
-# Async runner
-# ---------------------------------------------------------------------------
-
-
 def _run_async(args: argparse.Namespace) -> int:
-    """Spawn daemon process, print session info, exit immediately."""
     from agents.openclaw._daemon import spawn_daemon
 
     session_id = args.session_id or f"oc-{uuid.uuid4().hex[:8]}"
@@ -423,11 +350,6 @@ def _run_async(args: argparse.Namespace) -> int:
     pid_dir.mkdir(parents=True, exist_ok=True)
     pid_file = pid_dir / f"{session_id}.pid"
 
-    # Resolve the trace path in the parent so:
-    #   1) ``--trace-output`` overrides are honored in async mode (the
-    #      daemon would otherwise compute its own default), and
-    #   2) ``--status`` can locate the trace via the PID file metadata
-    #      without re-deriving the path.
     model = _resolve_model(args)
     trace_file = _resolve_trace_output(args, session_id, model)
     trace_file.parent.mkdir(parents=True, exist_ok=True)
@@ -459,7 +381,6 @@ def _run_async(args: argparse.Namespace) -> int:
         str(trace_file),
     ]
 
-    # Pass API key via environment, not argv (avoid ps leaking secrets)
     api_key = _resolve_api_key(args)
     pid = spawn_daemon(
         cmd,
@@ -479,14 +400,7 @@ def _run_async(args: argparse.Namespace) -> int:
     print(json.dumps(result, indent=2))
     return 0
 
-
-# ---------------------------------------------------------------------------
-# Status query
-# ---------------------------------------------------------------------------
-
-
 def _run_status(args: argparse.Namespace) -> int:
-    """Print JSON status for a session."""
     from agents.openclaw._daemon import get_session_status
 
     if not args.session_id:
@@ -498,14 +412,7 @@ def _run_status(args: argparse.Namespace) -> int:
     print(json.dumps(status, indent=2))
     return 0
 
-
-# ---------------------------------------------------------------------------
-# Main dispatcher
-# ---------------------------------------------------------------------------
-
-
 def main() -> None:
-    """CLI entry point."""
     args = build_parser().parse_args()
 
     if args.status:

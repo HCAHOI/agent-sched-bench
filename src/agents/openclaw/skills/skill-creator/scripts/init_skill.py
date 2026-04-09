@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-Skill Initializer - Creates a new skill from template
-
-Usage:
-    init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples]
-
-Examples:
-    init_skill.py my-new-skill --path skills/public
-    init_skill.py my-new-skill --path skills/public --resources scripts,references
-    init_skill.py my-api-helper --path skills/private --resources scripts --examples
-    init_skill.py custom-skill --path /custom/location
-"""
+"""Create a new skill directory from the bundled template."""
 
 import argparse
 import re
@@ -190,20 +179,15 @@ Example asset files from other skills:
 Note: This is a text placeholder. Actual assets can be any file type.
 """
 
-
 def normalize_skill_name(skill_name):
-    """Normalize a skill name to lowercase hyphen-case."""
     normalized = skill_name.strip().lower()
     normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
     normalized = normalized.strip("-")
     normalized = re.sub(r"-{2,}", "-", normalized)
     return normalized
 
-
 def title_case_skill_name(skill_name):
-    """Convert hyphenated skill name to Title Case for display."""
     return " ".join(word.capitalize() for word in skill_name.split("-"))
-
 
 def parse_resources(raw_resources):
     if not raw_resources:
@@ -222,7 +206,6 @@ def parse_resources(raw_resources):
             deduped.append(resource)
             seen.add(resource)
     return deduped
-
 
 def create_resource_dirs(
     skill_dir, skill_name, skill_title, resources, include_examples
@@ -255,29 +238,14 @@ def create_resource_dirs(
             else:
                 print("[OK] Created assets/")
 
-
 def init_skill(skill_name, path, resources, include_examples):
-    """
-    Initialize a new skill directory with template SKILL.md.
-
-    Args:
-        skill_name: Name of the skill
-        path: Path where the skill directory should be created
-        resources: Resource directories to create
-        include_examples: Whether to create example files in resource directories
-
-    Returns:
-        Path to created skill directory, or None if error
-    """
-    # Determine skill directory path
+    """Initialize a new skill directory with the template files."""
     skill_dir = Path(path).resolve() / skill_name
 
-    # Check if directory already exists
     if skill_dir.exists():
         print(f"[ERROR] Skill directory already exists: {skill_dir}")
         return None
 
-    # Create skill directory
     try:
         skill_dir.mkdir(parents=True, exist_ok=False)
         print(f"[OK] Created skill directory: {skill_dir}")
@@ -285,7 +253,6 @@ def init_skill(skill_name, path, resources, include_examples):
         print(f"[ERROR] Error creating directory: {e}")
         return None
 
-    # Create SKILL.md from template
     skill_title = title_case_skill_name(skill_name)
     skill_content = SKILL_TEMPLATE.format(
         skill_name=skill_name, skill_title=skill_title
@@ -299,7 +266,6 @@ def init_skill(skill_name, path, resources, include_examples):
         print(f"[ERROR] Error creating SKILL.md: {e}")
         return None
 
-    # Create resource directories if requested
     if resources:
         try:
             create_resource_dirs(
@@ -309,7 +275,6 @@ def init_skill(skill_name, path, resources, include_examples):
             print(f"[ERROR] Error creating resource directories: {e}")
             return None
 
-    # Print next steps
     print(f"\n[OK] Skill '{skill_name}' initialized successfully at {skill_dir}")
     print("\nNext steps:")
     print("1. Edit SKILL.md to complete the TODO items and update the description")
@@ -327,7 +292,6 @@ def init_skill(skill_name, path, resources, include_examples):
     print("3. Run the validator when ready to check the skill structure")
 
     return skill_dir
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -384,7 +348,6 @@ def main():
         sys.exit(0)
     else:
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

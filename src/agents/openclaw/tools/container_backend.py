@@ -29,7 +29,6 @@ from agents.openclaw.tools.filesystem import (
 )
 from agents.openclaw.tools.shell import ExecTool
 
-
 class ContainerWorkspace:
     """Bundles a podman container id with exec/cp helpers.
 
@@ -96,7 +95,6 @@ class ContainerWorkspace:
         )
 
     async def read_bytes(self, container_path: str) -> bytes:
-        """Read file contents via ``podman cp``."""
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             host_path = tmp.name
         try:
@@ -149,11 +147,7 @@ class ContainerWorkspace:
         finally:
             Path(host_path).unlink(missing_ok=True)
 
-
-# ---------------------------------------------------------------------------
 # Tool subclasses — each overrides execute() only.
-# ---------------------------------------------------------------------------
-
 
 class ContainerReadFileTool(ReadFileTool):
     def __init__(self, workspace: ContainerWorkspace) -> None:
@@ -217,7 +211,6 @@ class ContainerReadFileTool(ReadFileTool):
         except Exception as exc:
             return f"Error reading file: {exc}"
 
-
 class ContainerWriteFileTool(WriteFileTool):
     def __init__(self, workspace: ContainerWorkspace) -> None:
         super().__init__(workspace=None, allowed_dir=None)
@@ -239,7 +232,6 @@ class ContainerWriteFileTool(WriteFileTool):
             return f"Wrote {len(content)} chars to {path}"
         except Exception as exc:
             return f"Error writing file: {exc}"
-
 
 class ContainerEditFileTool(EditFileTool):
     """Str-replace edit implemented via read+write round-trip.
@@ -295,7 +287,6 @@ class ContainerEditFileTool(EditFileTool):
         except Exception as exc:
             return f"Error editing file: {exc}"
 
-
 class ContainerListDirTool(ListDirTool):
     def __init__(self, workspace: ContainerWorkspace) -> None:
         super().__init__(workspace=None, allowed_dir=None)
@@ -319,9 +310,7 @@ class ContainerListDirTool(ListDirTool):
             return f"Error listing {path}: {stderr.strip() or stdout.strip()}"
         return stdout or "(empty)"
 
-
 class ContainerExecTool(ExecTool):
-    """``ExecTool`` that routes commands through ``podman exec`` inside the task container."""
 
     def __init__(
         self,
@@ -378,7 +367,6 @@ class ContainerExecTool(ExecTool):
                 + result[-half:]
             )
         return result
-
 
 __all__ = [
     "ContainerWorkspace",

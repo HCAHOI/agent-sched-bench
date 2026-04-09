@@ -14,11 +14,8 @@ from agents.benchmarks._swebench_selection import (
 )
 from agents.benchmarks.base import Benchmark
 
-
-# ---------------------------------------------------------------------------
 # Repo-level constants — authoritative copies live here; the legacy shim
 # re-exports these for backward compatibility.
-# ---------------------------------------------------------------------------
 
 #: Repos known to have heavy test suites (large codebase, slow pytest).
 CLASS_LEVEL_HEAVY_REPOS: frozenset[str] = frozenset(
@@ -41,7 +38,6 @@ CLASS_LEVEL_REPO_QUOTAS: dict[str, int] = {
     # Remaining 7 slots filled from other repos
 }
 
-
 class SWEBenchVerified(Benchmark):
     """Benchmark plugin for SWE-bench Verified.
 
@@ -57,9 +53,7 @@ class SWEBenchVerified(Benchmark):
     CLASS_LEVEL_HEAVY_REPOS = CLASS_LEVEL_HEAVY_REPOS
     CLASS_LEVEL_REPO_QUOTAS = CLASS_LEVEL_REPO_QUOTAS
 
-    # ------------------------------------------------------------------
     # Abstract method implementations
-    # ------------------------------------------------------------------
 
     def load_tasks(self) -> list[dict[str, Any]]:
         """Load all tasks from HuggingFace and normalize each row.
@@ -75,14 +69,11 @@ class SWEBenchVerified(Benchmark):
         return tasks
 
     def normalize_task(self, raw: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a raw SWE-bench row by deriving ``test_cmd``."""
         task = dict(raw)
         task["test_cmd"] = self.derive_test_cmd(task)
         return task
 
-    # ------------------------------------------------------------------
     # Override: task selection uses SWE-bench-specific repo quotas
-    # ------------------------------------------------------------------
 
     def select_subset(
         self,
@@ -107,9 +98,7 @@ class SWEBenchVerified(Benchmark):
             seed=effective_seed,
         )
 
-    # ------------------------------------------------------------------
     # Override: build a SWE-bench runner for the given scaffold
-    # ------------------------------------------------------------------
 
     def build_runner(
         self,
@@ -145,7 +134,5 @@ class SWEBenchVerified(Benchmark):
             **kwargs,
         )
 
-# ---------------------------------------------------------------------------
 # Module-level selection function (called by base.Benchmark.select_subset and
 # by the legacy shim in agents.swebench_data)
-# ---------------------------------------------------------------------------

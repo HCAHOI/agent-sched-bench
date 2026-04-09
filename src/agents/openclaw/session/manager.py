@@ -1,4 +1,3 @@
-"""Session management for conversation history."""
 
 import json
 from dataclasses import dataclass, field
@@ -14,20 +13,16 @@ from agents.openclaw.utils.helpers import (
     safe_filename,
 )
 
-
 @dataclass
 class Session:
-    """A conversation session."""
-
-    key: str  # channel:chat_id
+    key: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
-    last_consolidated: int = 0  # Number of messages already consolidated to files
+    last_consolidated: int = 0
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
-        """Add a message to the session."""
         msg = {
             "role": role,
             "content": content,
@@ -38,17 +33,15 @@ class Session:
         self.updated_at = datetime.now()
 
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
-        """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
+        """Return unconsolidated messages for LLM input."""
         unconsolidated = self.messages[self.last_consolidated :]
         sliced = unconsolidated[-max_messages:]
 
-        # Avoid starting mid-turn when possible.
         for i, message in enumerate(sliced):
             if message.get("role") == "user":
                 sliced = sliced[i:]
                 break
 
-        # Drop orphan tool results at the front.
         start = find_legal_message_start(sliced)
         if start:
             sliced = sliced[start:]
@@ -66,13 +59,12 @@ class Session:
         return out
 
     def clear(self) -> None:
-        """Clear all messages and reset session to initial state."""
         self.messages = []
         self.last_consolidated = 0
         self.updated_at = datetime.now()
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
-        """Keep a legal recent suffix, mirroring get_history boundary rules."""
+        """Keep a legal recent suffix of the session history."""
         if max_messages <= 0:
             self.clear()
             return
@@ -81,13 +73,11 @@ class Session:
 
         start_idx = max(0, len(self.messages) - max_messages)
 
-        # If the cutoff lands mid-turn, extend backward to the nearest user turn.
         while start_idx > 0 and self.messages[start_idx].get("role") != "user":
             start_idx -= 1
 
         retained = self.messages[start_idx:]
 
-        # Mirror get_history(): avoid persisting orphan tool results at the front.
         start = find_legal_message_start(retained)
         if start:
             retained = retained[start:]
@@ -97,13 +87,8 @@ class Session:
         self.last_consolidated = max(0, self.last_consolidated - dropped)
         self.updated_at = datetime.now()
 
-
 class SessionManager:
-    """
-    Manages conversation sessions.
-
-    Sessions are stored as JSONL files in the sessions directory.
-    """
+    """Store conversation sessions as JSONL files."""
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
@@ -112,20 +97,11 @@ class SessionManager:
         self._event_callback = None
 
     def _get_session_path(self, key: str) -> Path:
-        """Get the file path for a session."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.sessions_dir / f"{safe_key}.jsonl"
 
     def get_or_create(self, key: str) -> Session:
-        """
-        Get an existing session or create a new one.
-
-        Args:
-            key: Session key (usually channel:chat_id).
-
-        Returns:
-            The session.
-        """
+        """Get an existing session or create a new one."""
         if key in self._cache:
             return self._cache[key]
 
@@ -137,7 +113,6 @@ class SessionManager:
         return session
 
     def _load(self, key: str) -> Session | None:
-        """Load a session from disk."""
         path = self._get_session_path(key)
         if not path.exists():
             return None
@@ -179,7 +154,6 @@ class SessionManager:
             return None
 
     def save(self, session: Session) -> None:
-        """Save a session to disk."""
         path = self._get_session_path(session.key)
 
         with open(path, "w", encoding="utf-8") as f:
@@ -198,21 +172,14 @@ class SessionManager:
         self._cache[session.key] = session
 
     def invalidate(self, key: str) -> None:
-        """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        """
-        List all sessions.
-
-        Returns:
-            List of session info dicts.
-        """
+        """List saved sessions."""
         sessions = []
 
         for path in self.sessions_dir.glob("*.jsonl"):
             try:
-                # Read just the metadata line
                 with open(path, encoding="utf-8") as f:
                     first_line = f.readline().strip()
                     if first_line:

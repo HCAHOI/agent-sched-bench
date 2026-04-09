@@ -1,4 +1,3 @@
-"""Shell execution tool."""
 
 import asyncio
 import os
@@ -11,9 +10,7 @@ from loguru import logger
 
 from agents.openclaw.tools.base import Tool
 
-
 class ExecTool(Tool):
-    """Tool to execute shell commands."""
 
     def __init__(
         self,

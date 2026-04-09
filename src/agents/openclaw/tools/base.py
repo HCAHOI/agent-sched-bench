@@ -1,8 +1,6 @@
-"""Base class for agent tools."""
 
 from abc import ABC, abstractmethod
 from typing import Any
-
 
 class Tool(ABC):
     """
@@ -38,34 +36,28 @@ class Tool(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Tool name used in function calls."""
         pass
 
     @property
     @abstractmethod
     def description(self) -> str:
-        """Description of what the tool does."""
         pass
 
     @property
     @abstractmethod
     def parameters(self) -> dict[str, Any]:
-        """JSON Schema for tool parameters."""
         pass
 
     @property
     def read_only(self) -> bool:
-        """Whether this tool is side-effect free and safe to parallelize."""
         return False
 
     @property
     def concurrency_safe(self) -> bool:
-        """Whether this tool can run alongside other concurrency-safe tools."""
         return self.read_only and not self.exclusive
 
     @property
     def exclusive(self) -> bool:
-        """Whether this tool should run alone even if concurrency is enabled."""
         return False
 
     @abstractmethod
@@ -82,7 +74,6 @@ class Tool(ABC):
         pass
 
     def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Apply safe schema-driven casts before validation."""
         schema = self.parameters or {}
         if schema.get("type", "object") != "object":
             return params
@@ -90,7 +81,6 @@ class Tool(ABC):
         return self._cast_object(params, schema)
 
     def _cast_object(self, obj: Any, schema: dict[str, Any]) -> dict[str, Any]:
-        """Cast an object (dict) according to schema."""
         if not isinstance(obj, dict):
             return obj
 
@@ -106,7 +96,6 @@ class Tool(ABC):
         return result
 
     def _cast_value(self, val: Any, schema: dict[str, Any]) -> Any:
-        """Cast a single value according to schema."""
         target_type = self._resolve_type(schema.get("type"))
 
         if target_type == "boolean" and isinstance(val, bool):
@@ -226,7 +215,6 @@ class Tool(ABC):
         return errors
 
     def to_schema(self) -> dict[str, Any]:
-        """Convert tool to OpenAI function schema format."""
         return {
             "type": "function",
             "function": {

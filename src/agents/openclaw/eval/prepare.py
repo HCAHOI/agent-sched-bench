@@ -16,7 +16,6 @@ from pathlib import Path
 
 from loguru import logger
 
-
 async def prepare_workspace(
     workspace_dir: Path,
     repo: str,
@@ -47,12 +46,10 @@ async def prepare_workspace(
     """
     wall_start = time.monotonic()
 
-    # Clean existing workspace if present
     if workspace_dir.exists():
         logger.info("Cleaning existing workspace {ws}", ws=workspace_dir)
         shutil.rmtree(workspace_dir, ignore_errors=True)
 
-    # Determine clone source
     repo_dir = workspace_dir
     if repos_root and (repos_root / f"{repo.replace('/', '__')}.git").exists():
         local_path = repos_root / f"{repo.replace('/', '__')}.git"
@@ -61,7 +58,6 @@ async def prepare_workspace(
         repo_url = f"https://github.com/{repo}.git"
         clone_cmd = f"git clone --depth=1 {repo_url} {repo_dir}"
 
-    # Phase 1: Clone
     logger.info("Cloning {repo} → {ws}", repo=repo, ws=workspace_dir)
     result = await _run_bash(clone_cmd, timeout=clone_timeout)
     if result.returncode != 0:
@@ -70,7 +66,6 @@ async def prepare_workspace(
             f"Clone failed for {repo}: {(result.stdout + result.stderr)[:300]}"
         )
 
-    # Phase 2: Checkout base_commit (need full history for arbitrary commits)
     # If we used --depth=1, we need to fetch the specific commit.
     fetch_cmd = f"git -C {repo_dir} fetch --depth=1 origin {base_commit}"
     checkout_cmd = f"git -C {repo_dir} checkout {base_commit}"
@@ -93,7 +88,6 @@ async def prepare_workspace(
             f"{(result.stdout + result.stderr)[:300]}"
         )
 
-    # Phase 3: pip install -e . (best effort)
     install_cmd = (
         f"cd {repo_dir}"
         " && if [ -f setup.py ] || [ -f pyproject.toml ]; then"
@@ -112,9 +106,7 @@ async def prepare_workspace(
     )
     return elapsed_ms
 
-
 async def _run_bash(cmd: str, *, timeout: float) -> subprocess.CompletedProcess:
-    """Run a bash command asynchronously with timeout."""
     return await asyncio.to_thread(
         subprocess.run,
         cmd,
