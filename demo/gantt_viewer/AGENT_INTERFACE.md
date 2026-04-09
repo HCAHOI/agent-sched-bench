@@ -50,9 +50,11 @@ curl -s http://127.0.0.1:8765/api/traces/register \
 
 ### Upload a new trace blob
 
+The upload must already be a canonical trace JSONL. Raw session logs are not accepted.
+
 ```bash
 curl -s http://127.0.0.1:8765/api/traces/upload \
-  -F 'file=@tests/fixtures/claude_code_minimal.jsonl'
+  -F 'file=@/abs/path/to/trace.jsonl'
 ```
 
 ### Stop tracking one or more traces
@@ -103,7 +105,7 @@ base = "http://127.0.0.1:8765"
 
 registered = requests.post(
     f"{base}/api/traces/register",
-    json={"paths": ["tests/fixtures/claude_code_minimal.jsonl"]},
+    json={"paths": ["/abs/path/to/trace.jsonl"]},
 ).json()["registered"][0]
 
 trace_id = registered["id"]
@@ -123,8 +125,7 @@ requests.post(
 
 - `409` means the trace is already tracked or the requested registration would
   collide with an existing id/path
-- `422` means the path or file content is invalid or not sniffable as `v5` or
-  `claude-code`
+- `422` means the path or file content is invalid or not sniffable as a canonical trace JSONL
 - `404` on `payload` or `unregister` means the id is not known to the current
   merged registry
 

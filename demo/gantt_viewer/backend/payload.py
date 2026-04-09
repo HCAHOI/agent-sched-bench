@@ -44,7 +44,7 @@ _TOOL_PRIMARY_FIELDS: tuple[str, ...] = (
     "url",
 )
 
-# Map v5 action_type → Gantt span type. Public; downstream may extend.
+# Map canonical action_type → Gantt span type. Public; downstream may extend.
 ACTION_TYPE_MAP: dict[str, str] = {
     "llm_call": "llm",
     "tool_exec": "tool",
@@ -206,8 +206,8 @@ def build_gantt_payload(
             "model": meta.get("model"),
             "instance_id": instance_id,
             "mode": meta.get("mode"),
-            # v4 vocabulary: 'iterations' is the loop counter; 'actions' are
-            # the executable units (multiple actions can share an iteration).
+            # Iterations are the loop counter; actions are the executable
+            # units, so multiple actions can share one iteration.
             "max_iterations": meta.get("max_iterations") or meta.get("max_steps"),
             "n_actions": len(data.actions),
             "n_iterations": len(distinct_iters),
@@ -411,7 +411,7 @@ def _summarize_tool_call(tc: dict[str, Any]) -> str | None:
 
 
 def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
-    """Extract tooltip detail from a v5 TraceAction record.
+    """Extract tooltip detail from a canonical TraceAction record.
 
     For ``llm_call`` actions we always try to surface *something* about
     the LLM's decision even when the assistant message has no textual

@@ -1,4 +1,4 @@
-"""Parse and inspect v5 trace JSONL files."""
+"""Parse and inspect canonical trace JSONL files."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+CURRENT_TRACE_FORMAT_VERSION = 5
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -24,7 +26,7 @@ def _to_str(value: Any) -> str:
 
 
 def _action_get(action: dict[str, Any] | None, key: str, default: Any = None) -> Any:
-    """Read a v5 action field from ``data`` first, then the top level."""
+    """Read an action field from ``data`` first, then the top level."""
     if not action:
         return default
     data = action.get("data") or {}
@@ -66,7 +68,7 @@ class TraceData:
 
     @classmethod
     def load(cls, path: Path, agent_filter: str | None = None) -> "TraceData":
-        """Load one v5 trace file, optionally filtering agent ids by substring."""
+        """Load one canonical trace file, optionally filtering agent ids by substring."""
         metadata: dict[str, Any] = {}
         actions: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
@@ -101,17 +103,24 @@ class TraceData:
                     events.append(record)
                 elif rec_type == "summary":
                     summaries.append(record)
+                else:
+                    raise ValueError(
+                        f"Unsupported record type {rec_type!r} in {path}:{lineno}; "
+                        "expected a canonical trace JSONL."
+                    )
 
         actions.sort(key=lambda r: (r.get("iteration", 0), r.get("ts_start", 0)))
         events.sort(key=lambda r: r.get("ts", 0.0))
 
-        version = metadata.get("trace_format_version")
-        if version != 5:
+        if not metadata:
             raise ValueError(
-                f"Unsupported trace_format_version {version!r} in {path}: "
-                f"expected 5. v4 support was dropped during the SWE-rebench "
-                f"plugin refactor; regenerate the trace via the current "
-                f"collector to produce a v5 trace."
+                f"Missing trace_metadata record in {path}; expected a canonical trace JSONL."
+            )
+        if metadata.get("trace_format_version") != CURRENT_TRACE_FORMAT_VERSION:
+            raise ValueError(
+                f"Unsupported trace_format_version {metadata.get('trace_format_version')!r} "
+                f"in {path}; expected canonical trace format "
+                f"{CURRENT_TRACE_FORMAT_VERSION}."
             )
 
         for act in actions:
@@ -159,6 +168,11 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         tool = _action_get(act, "tool_name", None)
         if tool:
             tool_counts[tool] = tool_counts.get(tool, 0) + 1
+    distinct_iterations = {
+        act.get("iteration")
+        for act in data.actions
+        if act.get("iteration") is not None
+    }
 
     info: dict[str, Any] = {
         "path": str(data.path),
@@ -166,7 +180,7 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         "scaffold": data.metadata.get("scaffold"),
         "mode": data.metadata.get("mode"),
         "model": data.metadata.get("model"),
-        "n_iterations": len(data.actions),
+        "n_iterations": len(distinct_iterations),
         "n_events": len(data.events),
         "tool_counts": tool_counts,
         "total_tokens": total_tokens,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import signal
 import socket
 import subprocess
@@ -17,7 +16,6 @@ from pathlib import Path
 import uvicorn
 
 from demo.gantt_viewer.backend.app import FRONTEND_DIST_PATH
-from demo.gantt_viewer.backend.cc_cache import CACHE_ROOT
 
 VITE_DEV_PORT = 5173
 
@@ -54,11 +52,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not open the browser on startup.",
     )
-    parser.add_argument(
-        "--clear-cache",
-        action="store_true",
-        help="Clear cached Claude Code imports before launch.",
-    )
     return parser
 
 
@@ -67,8 +60,6 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     os.environ["GANTT_VIEWER_CONFIG"] = str(Path(args.config).resolve())
     os.environ["GANTT_VIEWER_DEV"] = "1" if args.dev else "0"
-    if args.clear_cache and CACHE_ROOT.exists():
-        shutil.rmtree(CACHE_ROOT)
 
     if args.dev:
         vite_process = _spawn_vite_dev_server()

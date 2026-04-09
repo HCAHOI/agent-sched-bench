@@ -2,6 +2,3 @@ groups:
   - name: "AC1 — openclaw sepal_ui"
     paths:
       - traces/swe-rebench/smoke-20260407T121213Z/openclaw__sepal_ui/_workspaces/12rambau__sepal_ui-411/trace.jsonl
-  - name: "AC2 — claude-code-haiku (all 11)"
-    paths:
-      - traces/swe-rebench/claude-code-haiku/*/attempt_1/trace.jsonl

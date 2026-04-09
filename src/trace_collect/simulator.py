@@ -95,7 +95,7 @@ def load_trace_actions(
     trace_path: Path,
     agent_id: str,
 ) -> tuple[dict[int, dict[str, Any]], dict[str, Any] | None]:
-    """Load v5 trace actions grouped by iteration, plus optional summary.
+    """Load canonical trace actions grouped by iteration, plus optional summary.
 
     Returns:
         (iterations dict {iteration_num: {"llm": action_dict, "tools": [action_dict, ...]}},
@@ -387,7 +387,7 @@ def _detect_scaffold(trace_path: Path) -> str:
 
 
 def _load_trace_metadata(trace_path: Path) -> dict[str, Any] | None:
-    """Read the first trace_metadata record from a v5 trace JSONL."""
+    """Read the first trace_metadata record from a canonical trace JSONL."""
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()

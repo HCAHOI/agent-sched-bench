@@ -1,13 +1,13 @@
-"""Unit tests for the Claude Code → v5 converter.
+"""Unit tests for the Claude Code → canonical trace converter.
 
 Phase US-002 of the claude-code-gantt-import plan. Verifies that:
-- The metadata header is well-formed (v5 + scaffold + run_config backfill)
+- The metadata header is well-formed (canonical trace + scaffold + run_config backfill)
 - Assistant records become llm_call actions with all backfill fields
 - Thinking blocks are preserved under data.thinking
 - tool_result pairs with the matching tool_use via tool_use_id
 - toolUseResult sidecar fields flow into data.subagent_meta + subagent_tokens
 - Unpaired tool_results still emit a tool_exec action with a descriptive note
-- Discarded record types produce zero v5 records
+- Discarded record types produce zero emitted trace records
 - Sidechain files fold into separate agent_id lanes
 - The converted output loads via TraceData and renders through the Gantt payload
 - Timestamp conversion handles ISO 8601 with Z suffix
@@ -821,7 +821,7 @@ def test_real_swe_rebench_claude_code_trace_converts_cleanly(
             f"FIX-4 broken: Edit action {edit['action_id']} missing structured_patch"
         )
 
-    # Trace loads through the strict v5 reader and renders via the Gantt
+    # Trace loads through the strict canonical trace reader and renders via the Gantt
     from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
     from trace_collect.trace_inspector import TraceData
 

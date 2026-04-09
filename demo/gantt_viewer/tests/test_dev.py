@@ -17,16 +17,12 @@ def _noop(*args: object, **kwargs: object) -> None:
     return None
 
 
-def test_dev_main_exports_config_and_clears_cache(
+def test_dev_main_exports_config(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("groups: []\n", encoding="utf-8")
-
-    cache_root = tmp_path / "cache-root"
-    cache_root.mkdir()
-    (cache_root / "stale.jsonl").write_text("old", encoding="utf-8")
 
     dist_path = tmp_path / "dist"
     dist_path.mkdir()
@@ -38,18 +34,16 @@ def test_dev_main_exports_config_and_clears_cache(
         captured["app"] = app
         captured.update(kwargs)
 
-    monkeypatch.setattr(dev, "CACHE_ROOT", cache_root)
     monkeypatch.setattr(dev, "FRONTEND_DIST_PATH", dist_path)
     monkeypatch.setattr(dev, "schedule_browser_open", _noop)
     monkeypatch.setattr(dev.uvicorn, "run", fake_run)
     monkeypatch.delenv("GANTT_VIEWER_CONFIG", raising=False)
     monkeypatch.delenv("GANTT_VIEWER_DEV", raising=False)
 
-    dev.main(["--config", str(config_path), "--clear-cache", "--port", "9999", "--no-browser"])
+    dev.main(["--config", str(config_path), "--port", "9999", "--no-browser"])
 
     assert os.environ["GANTT_VIEWER_CONFIG"] == str(config_path.resolve())
     assert os.environ["GANTT_VIEWER_DEV"] == "0"
-    assert not cache_root.exists()
     assert captured["app"] == "demo.gantt_viewer.backend.app:create_app"
     assert captured["factory"] is True
     assert captured["port"] == 9999

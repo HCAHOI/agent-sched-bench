@@ -12,15 +12,10 @@ from typing import Literal
 import yaml
 
 from demo.gantt_viewer.backend.schema import TraceDescriptor
+from trace_collect.trace_inspector import CURRENT_TRACE_FORMAT_VERSION
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-_CLAUDE_CODE_TYPES = frozenset(
-    {"queue-operation", "assistant", "user", "tool_use", "tool_result", "message"}
-)
-_CLAUDE_CODE_PREAMBLE_TYPES = frozenset({"file-history-snapshot", "system"})
-
-
 @dataclass(slots=True)
 class DiscoveryGroup:
     name: str
@@ -119,13 +114,12 @@ def discover_traces(config: DiscoveryConfig) -> list[TraceDescriptor]:
     return descriptors
 
 
-def sniff_format(path: Path) -> Literal["v5", "claude-code"]:
-    """Sniff the trace format from the first recognized JSONL record."""
+def sniff_format(path: Path) -> Literal["trace"]:
+    """Confirm that a JSONL file is a canonical trace."""
     resolved_path = path.resolve()
     if not resolved_path.is_file():
         raise FileNotFoundError(f"trace file not found: {resolved_path}")
 
-    observed_types: list[str] = []
     with resolved_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             stripped = line.strip()
@@ -140,24 +134,19 @@ def sniff_format(path: Path) -> Literal["v5", "claude-code"]:
                     raise ValueError(f"record in {resolved_path} is not a JSON object")
 
                 record_type = record.get("type")
-                observed_types.append(str(record_type))
                 if record_type == "trace_metadata":
-                    return "v5"
-                if record_type in _CLAUDE_CODE_TYPES:
-                    return "claude-code"
-                if record_type in _CLAUDE_CODE_PREAMBLE_TYPES:
-                    continue
+                    if record.get("trace_format_version") != CURRENT_TRACE_FORMAT_VERSION:
+                        raise ValueError(
+                            f"{resolved_path} is not a canonical trace JSONL; "
+                            f"trace_format_version={record.get('trace_format_version')!r}"
+                        )
+                    return "trace"
                 observed_keys = ",".join(sorted(record.keys()))
                 raise ValueError(
-                    f"unable to sniff trace format for {resolved_path}; "
-                    f"type={record_type!r}, keys=[{observed_keys}]"
+                    f"{resolved_path} is not a canonical trace JSONL; "
+                    f"first record type={record_type!r}, keys=[{observed_keys}]"
                 )
-    if not observed_types:
-        raise ValueError(f"empty JSONL file: {resolved_path}")
-    raise ValueError(
-        f"unable to sniff trace format for {resolved_path}; "
-        f"observed types={observed_types}"
-    )
+    raise ValueError(f"empty JSONL file: {resolved_path}")
 
 
 def _expand_pattern(config: DiscoveryConfig, raw_pattern: str) -> list[Path]:

@@ -1,4 +1,4 @@
-"""Convert Claude Code session JSONL into a v5 trace."""
+"""Convert Claude Code session JSONL into a canonical trace."""
 
 from __future__ import annotations
 
@@ -484,7 +484,7 @@ def import_claude_code_session(
     include_sidechains: bool = True,
     run_id: str | None = None,
 ) -> Path:
-    """Convert a Claude Code session into a v5 JSONL trace."""
+    """Convert a Claude Code session into a canonical trace JSONL."""
     session_path = Path(session_path).expanduser().resolve()
     if not session_path.exists():
         raise FileNotFoundError(f"Claude Code session not found: {session_path}")

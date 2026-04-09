@@ -33,7 +33,7 @@ class RuntimeRegisteredTrace:
     id: str
     label: str
     path: str
-    source_format: Literal["v5", "claude-code"]
+    source_format: Literal["trace"]
     origin: Literal["path_register", "upload"]
 
 
@@ -232,6 +232,13 @@ class RuntimeTraceRegistry:
                 registered = RuntimeRegisteredTrace(**item)
             except TypeError:
                 logger.warning("Skipping malformed runtime registration entry in %s", self.state_path)
+                continue
+            if registered.source_format != "trace":
+                logger.warning(
+                    "Skipping obsolete runtime registration entry in %s for %s",
+                    self.state_path,
+                    registered.path,
+                )
                 continue
             self.registered_by_id[registered.id] = registered
         self.suppressed_ids = {str(item) for item in suppressed_raw}

@@ -1,48 +1,47 @@
-# Test Pruning Plan
+# Trace Spec Unification Plan
 
 ## Goal
 
-Aggressively prune `tests/` in a one-way pass. Default action is delete.
-Keep only tests that protect core pipeline correctness, meaningful edge cases,
-or real end-to-end behavior.
+Remove all legacy, compact, and pre-current-spec trace compatibility. The codebase
+must assume every consumed trace already uses the current canonical schema.
 
 ## Steps
 
-1. Inventory and classification
+1. Plan file and implementation anchor
+   Status: completed
+   Scope:
+   - Replace the stale plan with this migration plan.
+
+2. Core trace-path cleanup
    Status: in_progress
    Scope:
-   - Enumerate every test file and collected test function.
-   - Check for dead imports or tests targeting removed behavior.
-   - Mark each test as keep or delete using the mission criteria.
+   - Remove legacy trace-path fallback from OpenClaw async status.
+   - Reword trace inspection and CLI messages around "current trace" instead of
+     versioned user-facing terminology.
+   - Delete obsolete migration scripts for retired layouts.
 
-2. File-level pruning
+3. Gantt viewer input boundary
    Status: pending
    Scope:
-   - Delete entire files when more than 70 percent of their tests fall in the
-     delete bucket.
-   - Do not leave a file behind with only one surviving test.
+   - Restrict discovery, register, upload, and payload flows to canonical traces only.
+   - Remove raw Claude Code direct-ingest and its cache path.
+   - Collapse public `source_format` API surface to a single canonical value.
 
-3. Shared test cleanup
+4. Tests and docs cleanup
    Status: pending
    Scope:
-   - Remove dead fixtures or shared test helpers that become unreferenced after
-     file deletion.
-   - Confirm whether `conftest.py` cleanup is needed.
+   - Delete or rewrite tests that pin legacy fallback or multi-format behavior.
+   - Update README and Gantt docs to require explicit Claude Code conversion first.
+   - Regenerate OpenAPI snapshot and frontend API types if schema changes.
 
-4. Verification
+5. Verification and review
    Status: pending
    Scope:
-   - Run the remaining test suite.
-   - Fix only breakage caused by deleted tests or dead test-only fixtures.
-
-5. Independent review
-   Status: pending
-   Scope:
-   - Spawn a strict reviewer sub-agent for the deletion diff before finalizing.
+   - Run targeted tests for trace collection, import, async status, and Gantt backend.
+   - Spawn an independent strict reviewer sub-agent and address findings.
 
 ## Notes
 
-- No test rewrites or improvements in this pass.
-- No import fixing for dead tests: delete instead.
-- Final report must include deleted files count, deleted test count, kept test
-  count, and a one-line justification for each kept test.
+- Keep the on-disk metadata field `trace_format_version` unchanged unless a
+  removal is required by implementation safety.
+- No backward-compatibility shims for old traces or old runtime state.

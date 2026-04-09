@@ -4,7 +4,7 @@
       "Body_upload_trace_endpoint_api_traces_upload_post": {
         "properties": {
           "file": {
-            "contentMediaType": "application/octet-stream",
+            "format": "binary",
             "title": "File",
             "type": "string"
           }
@@ -29,7 +29,7 @@
           },
           "traces": {
             "items": {
-              "$ref": "#/components/schemas/TracePayload"
+              "$ref": "#/components/schemas/TracePayload-Output"
             },
             "title": "Traces",
             "type": "array"
@@ -358,10 +358,7 @@
             "type": "integer"
           },
           "source_format": {
-            "enum": [
-              "v5",
-              "claude-code"
-            ],
+            "const": "trace",
             "title": "Source Format",
             "type": "string"
           }
@@ -474,7 +471,42 @@
         "title": "TraceMetadata",
         "type": "object"
       },
-      "TracePayload": {
+      "TracePayload-Input": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/Lane"
+            },
+            "title": "Lanes",
+            "type": "array"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/TraceMetadata"
+          },
+          "t0": {
+            "title": "T0",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "metadata",
+          "t0",
+          "lanes"
+        ],
+        "title": "TracePayload",
+        "type": "object"
+      },
+      "TracePayload-Output": {
         "properties": {
           "id": {
             "title": "Id",
@@ -556,7 +588,7 @@
             "$ref": "#/components/schemas/TraceDescriptor"
           },
           "payload_fragment": {
-            "$ref": "#/components/schemas/TracePayload"
+            "$ref": "#/components/schemas/TracePayload-Output"
           }
         },
         "required": [
@@ -568,13 +600,6 @@
       },
       "ValidationError": {
         "properties": {
-          "ctx": {
-            "title": "Context",
-            "type": "object"
-          },
-          "input": {
-            "title": "Input"
-          },
           "loc": {
             "items": {
               "anyOf": [

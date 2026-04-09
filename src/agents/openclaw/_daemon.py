@@ -28,10 +28,7 @@ def write_pid_file(
     """Write a JSON PID file for a daemon process.
 
     ``trace_file`` is persisted so ``get_session_status()`` can locate the
-    trace JSONL after the v4 migration moved it out of the workspace into
-    ``<repo>/traces/openclaw_cli/...``. Older PID files without this field
-    still load fine — the status query falls back to the legacy hidden
-    location for backward compatibility on existing daemons.
+    canonical trace JSONL directly.
     """
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, Any] = {
@@ -137,11 +134,8 @@ def spawn_daemon(
 def get_session_status(session_id: str, workspace: Path) -> dict[str, Any]:
     """Get the current status of a session.
 
-    Resolves the trace file via the PID metadata first (since the v4
-    migration moved traces out of the workspace), then falls back to the
-    legacy ``<workspace>/.openclaw/traces/<sid>.jsonl`` location for any
-    daemons that were spawned before the new ``trace_file`` field was
-    persisted. Counts v4 ``action`` records and reads v4 summary keys.
+    Resolves the trace file via the persisted PID metadata and summarizes the
+    canonical action/summary records when the trace is available.
     """
     pid_file = pid_file_for_session(workspace, session_id)
     pid_data = read_pid_file(pid_file)
@@ -160,22 +154,12 @@ def get_session_status(session_id: str, workspace: Path) -> dict[str, Any]:
         else:
             # Keep the PID file in place even after the daemon exits —
             # ``_is_pid_alive`` already discriminates running vs completed
-            # on every subsequent query, AND for v4 traces the PID file
-            # is the canonical record of the absolute trace path. Deleting
-            # it would make the second ``--status`` call lose the trace
-            # path and downgrade the result to ``status="unknown"``.
+            # on every subsequent query. The PID file is also the canonical
+            # record of the absolute trace path, so deleting it would break
+            # repeated status queries for completed sessions.
             status = "completed"
     else:
         status = "unknown"
-
-    # Fallback chain when PID metadata didn't carry the trace path
-    # (e.g. legacy daemon predating the v4 migration).
-    if trace_file is None:
-        legacy = workspace / ".openclaw" / "traces" / f"{session_id}.jsonl"
-        if legacy.exists():
-            trace_file = legacy
-            if status == "unknown":
-                status = "completed"
 
     n_actions = 0
     n_iterations = 0

@@ -5,10 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-import anyio
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 
-from demo.gantt_viewer.backend.cc_cache import load_or_import
 from demo.gantt_viewer.backend.payload import (
     DEFAULT_MARKER_REGISTRY,
     DEFAULT_SPAN_REGISTRY,
@@ -165,20 +163,13 @@ def _get_trace_registry(request: Request) -> RuntimeTraceRegistry:
     return request.app.state.trace_registry
 
 
-async def _resolve_trace_path(descriptor: TraceDescriptor) -> Path:
-    if descriptor.source_format == "v5":
-        return Path(descriptor.path)
-    return await anyio.to_thread.run_sync(load_or_import, Path(descriptor.path))
-
-
 async def _build_trace_payload(descriptor: TraceDescriptor) -> TracePayload:
     try:
-        trace_path = await _resolve_trace_path(descriptor)
-        trace_data = TraceData.load(trace_path)
+        trace_data = TraceData.load(Path(descriptor.path))
     except Exception as exc:
         raise _TracePayloadError(
             trace_id=descriptor.id,
-            stage="cc_import" if descriptor.source_format == "claude-code" else "trace_load",
+            stage="trace_load",
             error=str(exc),
         ) from exc
 

@@ -243,11 +243,11 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
 def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Convert a Claude Code session JSONL to a v5 trace for the Gantt "
+            "Convert a Claude Code session JSONL to a canonical trace for the Gantt "
             "viewer. Post-hoc, read-only — no collection, no simulation. "
             "Rich Claude Code fields (cache tokens, thinking blocks, "
             "toolUseResult sidecar) are backfilled into additive data.* and "
-            "metadata.run_config.* slots per the v5 extension convention."
+            "metadata.run_config.* slots in the canonical trace schema."
         ),
     )
     parser.add_argument(
@@ -402,7 +402,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
 
 
 def _run_import_claude_code(args: argparse.Namespace) -> None:
-    """Convert a Claude Code session JSONL into a v5 trace for the Gantt viewer."""
+    """Convert a Claude Code session JSONL into a canonical trace for the Gantt viewer."""
     from trace_collect.claude_code_import import import_claude_code_session
 
     trace_file = import_claude_code_session(

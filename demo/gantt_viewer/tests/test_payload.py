@@ -1,6 +1,6 @@
 """Tests for demo.gantt_viewer.backend.payload.
 
-These tests use synthetic in-memory v4 traces (action records, no step
+These tests use synthetic canonical traces (action records, no step
 records) to validate that the Gantt data builder:
 
 1. Maps llm_call / tool_exec actions to spans with the right type and color.
@@ -10,8 +10,8 @@ records) to validate that the Gantt data builder:
 4. Forwards observability events as point markers.
 5. Skips unknown action types instead of crashing (forward compat).
 6. Ships span / marker registries inside the payload root.
-7. Uses v4 vocabulary for metadata keys (n_actions / n_iterations /
-   max_iterations, NOT n_iterations / max_steps).
+7. Exposes the canonical metadata keys (`n_actions`, `n_iterations`,
+   `max_iterations`) and does not emit retired keys.
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def _event(
 
 
 def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
-    """Write a v4 trace JSONL file and return the path."""
+    """Write a canonical trace JSONL file and return the path."""
     trace = tmp_path / "trace.jsonl"
     head = {
         "type": "trace_metadata",
@@ -279,10 +279,10 @@ def test_payload_registries_can_be_overridden(tmp_path: Path) -> None:
     assert payload["registries"]["markers"] == DEFAULT_MARKER_REGISTRY
 
 
-# ── Metadata keys use v4 vocabulary ────────────────────────────────
+# ── Metadata keys ──────────────────────────────────────────────────
 
 
-def test_metadata_uses_v4_keys(tmp_path: Path) -> None:
+def test_metadata_uses_canonical_keys(tmp_path: Path) -> None:
     records = [
         _llm_action(0, 1000.0, 1001.0),
         _tool_action(0, 1001.0, 1001.1),

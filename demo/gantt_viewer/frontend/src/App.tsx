@@ -89,9 +89,9 @@ export default function App() {
       const traceList = await getTraces();
       setDescriptors(traceList.traces);
       setRegistries(traceList.registries);
-      const firstV5 = traceList.traces.find((trace) => trace.source_format === "v5");
-      if (firstV5) {
-        await loadTraceIds([firstV5.id]);
+      const firstTrace = traceList.traces[0];
+      if (firstTrace) {
+        await loadTraceIds([firstTrace.id]);
       }
     } catch (error) {
       setAppError(String(error));

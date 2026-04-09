@@ -16,7 +16,6 @@ Implemented:
 - `POST /api/traces/reload`
 - `POST /api/traces/unregister`
 - `POST /api/traces/upload`
-- Lazy Claude Code import cache for raw session JSONL
 - Solid/Vite frontend with:
   - `SYNC` / `ABS` time mode
   - `LAYERED` / `CONCISE` layout mode
@@ -106,6 +105,9 @@ Current smoke coverage:
 
 For agent-driven workflows, use `demo/gantt_viewer/AGENT_INTERFACE.md`.
 
+Raw Claude Code session JSONL is no longer accepted directly by the viewer.
+Convert it first with `python -m trace_collect.cli import-claude-code`.
+
 Frontend bundle check only:
 
 ```bash
@@ -116,8 +118,7 @@ make gantt-viewer-build
 
 The shipped example config currently discovers:
 
-- `1` v5 openclaw trace
-- `11` raw Claude Code traces
+- `1` canonical openclaw trace
 
 Quick API check:
 
@@ -129,16 +130,14 @@ from demo.gantt_viewer.backend.app import create_app
 client = TestClient(create_app())
 traces = client.get("/api/traces").json()["traces"]
 print("n_traces", len(traces))
-print("n_v5", sum(t["source_format"] == "v5" for t in traces))
-print("n_cc", sum(t["source_format"] == "claude-code" for t in traces))
+print("n_trace", sum(t["source_format"] == "trace" for t in traces))
 PY
 ```
 
 Expected today:
 
-- `n_traces 12`
-- `n_v5 1`
-- `n_cc 11`
+- `n_traces 1`
+- `n_trace 1`
 
 AC1 payload check:
 

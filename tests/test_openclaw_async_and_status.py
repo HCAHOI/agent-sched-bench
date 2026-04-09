@@ -1,10 +1,9 @@
 """Regression tests for OpenClaw async daemon trace-path forwarding and
-v4-aware ``get_session_status`` parsing.
+canonical ``get_session_status`` parsing.
 
 These pin down the codex-critic findings against the prior version that:
 1. silently dropped ``--trace-output`` when running in ``--async`` mode, and
-2. parsed ``type=step`` records and the ``n_iterations`` summary key, both of
-   which no longer exist after the v4 action/event refactor.
+2. failed to summarize canonical ``action``/``summary`` records correctly.
 """
 
 from __future__ import annotations
@@ -93,11 +92,11 @@ def test_run_async_default_trace_output_under_repo_root(tmp_path: Path) -> None:
     assert forwarded.suffix == ".jsonl"
 
 
-# ── get_session_status: v4 parsing + PID-based trace path lookup ────
+# ── get_session_status: canonical parsing + PID-based trace path lookup ────
 
 
-def _v4_trace(path: Path, *, n_actions: int, n_iterations: int, elapsed_s: float) -> None:
-    """Write a minimal v4 trace with the requested action/summary counts."""
+def _trace(path: Path, *, n_actions: int, n_iterations: int, elapsed_s: float) -> None:
+    """Write a minimal canonical trace with the requested action/summary counts."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         json.dumps({
@@ -126,13 +125,12 @@ def _v4_trace(path: Path, *, n_actions: int, n_iterations: int, elapsed_s: float
     path.write_text("\n".join(lines) + "\n")
 
 
-def test_get_session_status_reads_v4_actions_via_pid_metadata(tmp_path: Path) -> None:
-    """The PID file persists the absolute trace path; status counts v4
-    actions and reports n_actions / n_iterations / elapsed_s correctly."""
+def test_get_session_status_reads_actions_via_pid_metadata(tmp_path: Path) -> None:
+    """The PID file persists the absolute trace path and drives status recovery."""
     workspace = tmp_path / "ws"
     pid_file = pid_file_for_session(workspace, "oc-abc")
     trace = tmp_path / "out" / "oc-abc.jsonl"
-    _v4_trace(trace, n_actions=12, n_iterations=4, elapsed_s=37.5)
+    _trace(trace, n_actions=12, n_iterations=4, elapsed_s=37.5)
 
     # Pretend the daemon already exited (use a non-existent PID).
     write_pid_file(pid_file, pid=999999, session_id="oc-abc", trace_file=trace)
@@ -148,7 +146,7 @@ def test_get_session_status_reads_v4_actions_via_pid_metadata(tmp_path: Path) ->
     assert "steps" not in status
 
 
-def test_get_session_status_handles_v4_trace_with_no_summary(tmp_path: Path) -> None:
+def test_get_session_status_handles_trace_with_no_summary(tmp_path: Path) -> None:
     """Mid-flight trace (no summary record yet) — count actions and
     distinct iterations on the fly."""
     workspace = tmp_path / "ws"
@@ -180,7 +178,7 @@ def test_get_session_status_handles_v4_trace_with_no_summary(tmp_path: Path) -> 
 
 
 def test_get_session_status_is_idempotent_for_completed_sessions(tmp_path: Path) -> None:
-    """Regression for the codex review finding: a completed v4 async
+    """Regression for the codex review finding: a completed async
     session must remain status-queryable across multiple calls. Earlier
     the PID file was deleted on the first ``--status`` call, taking the
     canonical trace path with it and downgrading the second response to
@@ -189,7 +187,7 @@ def test_get_session_status_is_idempotent_for_completed_sessions(tmp_path: Path)
     workspace = tmp_path / "ws"
     pid_file = pid_file_for_session(workspace, "oc-rerun")
     trace = tmp_path / "out" / "oc-rerun.jsonl"
-    _v4_trace(trace, n_actions=4, n_iterations=2, elapsed_s=12.0)
+    _trace(trace, n_actions=4, n_iterations=2, elapsed_s=12.0)
     write_pid_file(pid_file, pid=999990, session_id="oc-rerun", trace_file=trace)
 
     first = get_session_status("oc-rerun", workspace)
@@ -205,17 +203,3 @@ def test_get_session_status_is_idempotent_for_completed_sessions(tmp_path: Path)
         assert snap["n_iterations"] == 2
     # The PID file must still exist after multiple completed-status queries.
     assert pid_file.exists(), "PID file was deleted, breaking idempotency"
-
-
-def test_get_session_status_legacy_workspace_fallback(tmp_path: Path) -> None:
-    """Old daemons spawned before US-011 didn't persist trace_file in the
-    PID metadata — fall back to the legacy hidden workspace path."""
-    workspace = tmp_path / "ws"
-    legacy = workspace / ".openclaw" / "traces" / "oc-old.jsonl"
-    _v4_trace(legacy, n_actions=2, n_iterations=2, elapsed_s=1.0)
-
-    # No PID file at all → should still find the trace via fallback
-    status = get_session_status("oc-old", workspace)
-    assert status["status"] == "completed"
-    assert status["trace_file"] == str(legacy)
-    assert status["n_actions"] == 2

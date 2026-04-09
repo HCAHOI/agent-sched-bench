@@ -3,7 +3,7 @@
 Every scaffold run (miniswe, openclaw, or the external Claude Code
 harness) emits the same six files into ``<run_dir>/<instance_id>/attempt_<N>/``:
 
-- ``trace.jsonl`` — canonical v5 trace (copied/written by the scaffold itself)
+- ``trace.jsonl`` — canonical trace (copied/written by the scaffold itself)
 - ``run_manifest.json`` — task + runtime + artifact metadata (schema_version=1)
 - ``results.json`` — timing breakdown + per-run summary
 - ``resources.json`` — 1 Hz container CPU/mem time series
@@ -142,12 +142,12 @@ def write_container_stdout(attempt_dir: Path, stdout_text: str) -> Path:
 
 
 def build_tool_calls_from_trace(trace_path: Path) -> list[dict[str, Any]]:
-    """Convert a v5 trace's ``tool_exec`` actions into the tool_calls.json shape.
+    """Convert a canonical trace's ``tool_exec`` actions into the tool_calls.json shape.
 
     The harness stores ``tool_calls.json`` as a flat list of
     ``{timestamp, tool, id, input, end_timestamp, duration_ms, result_preview}``.
     Miniswe and openclaw both emit ``tool_exec`` action records under
-    v5 trace format, which we translate here so downstream analysis can
+    canonical trace format, which we translate here so downstream analysis can
     compare all three scaffolds with a single schema.
     """
     if not trace_path.exists():

@@ -84,7 +84,7 @@ class GanttPayload(BaseModel):
 class TraceDescriptor(BaseModel):
     id: str
     label: str
-    source_format: Literal["v5", "claude-code"]
+    source_format: Literal["trace"]
     path: str
     size_bytes: int
     mtime: float

@@ -1,4 +1,4 @@
-"""Tests for trace discovery."""
+"""Tests for canonical trace discovery."""
 
 from __future__ import annotations
 
@@ -12,30 +12,44 @@ from demo.gantt_viewer.backend.discovery import (
     load_discovery_config,
     sniff_format,
 )
-from demo.gantt_viewer.tests.helpers import (
-    write_claude_code_trace,
-    write_config,
-    write_v5_trace,
-)
+from demo.gantt_viewer.tests.helpers import write_config, write_trace
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CC_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "claude_code_minimal.jsonl"
 
 
-def test_sniff_format_v5(tmp_path: Path) -> None:
-    trace_path = write_v5_trace(tmp_path / "runs" / "task-1" / "trace.jsonl", [])
-    assert sniff_format(trace_path) == "v5"
-
-
-def test_sniff_format_claude_code(tmp_path: Path) -> None:
-    trace_path = write_claude_code_trace(
-        tmp_path / "cc" / "example-task" / "attempt_1" / "trace.jsonl"
+def _write_legacy_trace(trace_path: Path) -> Path:
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text(
+        json.dumps(
+            {
+                "type": "trace_metadata",
+                "scaffold": "openclaw",
+                "trace_format_version": 4,
+            }
+        )
+        + "\n"
+        + json.dumps({"type": "step", "iteration": 0})
+        + "\n",
+        encoding="utf-8",
     )
-    assert sniff_format(trace_path) == "claude-code"
+    return trace_path
 
 
-def test_sniff_format_skips_claude_code_preamble_records() -> None:
-    assert sniff_format(CC_FIXTURE) == "claude-code"
+def test_sniff_format_trace(tmp_path: Path) -> None:
+    trace_path = write_trace(tmp_path / "runs" / "task-1" / "trace.jsonl", [])
+    assert sniff_format(trace_path) == "trace"
+
+
+def test_sniff_format_rejects_raw_claude_code_session() -> None:
+    with pytest.raises(ValueError, match="not a canonical trace JSONL"):
+        sniff_format(CC_FIXTURE)
+
+
+def test_sniff_format_rejects_legacy_trace_version(tmp_path: Path) -> None:
+    trace_path = _write_legacy_trace(tmp_path / "legacy.jsonl")
+    with pytest.raises(ValueError, match="trace_format_version=4"):
+        sniff_format(trace_path)
 
 
 def test_sniff_format_empty_file_raises(tmp_path: Path) -> None:
@@ -46,34 +60,27 @@ def test_sniff_format_empty_file_raises(tmp_path: Path) -> None:
 
 
 def test_discover_traces_builds_expected_ids(tmp_path: Path) -> None:
-    v5_path = write_v5_trace(
+    trace_path = write_trace(
         tmp_path / "runs" / "repo__issue-1" / "trace.jsonl",
         [],
     )
-    cc_path = write_claude_code_trace(
-        tmp_path / "cc" / "encode_httpx-2701" / "attempt_1" / "trace.jsonl"
-    )
     config_path = write_config(
         tmp_path / "config.yaml",
-        [str(v5_path), str(cc_path)],
+        [str(trace_path)],
     )
 
     config = load_discovery_config(config_path)
     descriptors = discover_traces(config)
 
-    assert [descriptor.id for descriptor in descriptors] == [
-        "ac1-encode_httpx-2701",
-        "ac1-repo__issue-1",
-    ]
-    assert descriptors[0].label == "encode_httpx-2701"
-    assert descriptors[0].source_format == "claude-code"
-    assert descriptors[1].source_format == "v5"
+    assert [descriptor.id for descriptor in descriptors] == ["ac1-repo__issue-1"]
+    assert descriptors[0].label == "repo__issue-1"
+    assert descriptors[0].source_format == "trace"
 
 
 def test_sniff_format_unknown_shape_raises(tmp_path: Path) -> None:
     trace_path = tmp_path / "unknown.jsonl"
     trace_path.write_text(json.dumps({"foo": "bar"}) + "\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="unable to sniff trace format"):
+    with pytest.raises(ValueError, match="not a canonical trace JSONL"):
         sniff_format(trace_path)
 
 
@@ -81,7 +88,7 @@ def test_discover_traces_expands_glob_patterns(tmp_path: Path) -> None:
     """A glob pattern in the config should expand to every matching trace."""
     runs_root = tmp_path / "runs"
     for instance in ("repo__issue-1", "repo__issue-2", "repo__issue-3"):
-        write_v5_trace(runs_root / instance / "trace.jsonl", [])
+        write_trace(runs_root / instance / "trace.jsonl", [])
 
     config_path = write_config(
         tmp_path / "config.yaml",
@@ -97,4 +104,4 @@ def test_discover_traces_expands_glob_patterns(tmp_path: Path) -> None:
         "ac1-repo__issue-2",
         "ac1-repo__issue-3",
     ]
-    assert all(descriptor.source_format == "v5" for descriptor in descriptors)
+    assert all(descriptor.source_format == "trace" for descriptor in descriptors)

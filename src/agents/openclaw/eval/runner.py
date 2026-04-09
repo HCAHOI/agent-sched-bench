@@ -38,7 +38,7 @@ __all__ = [
 
 
 def _count_trace_iterations(trace_file: Path) -> int:
-    """Count distinct iteration numbers in the v5 trace's llm_call actions."""
+    """Count distinct iteration numbers in the canonical trace's llm_call actions."""
     if not trace_file.exists():
         return 0
     iterations: set[int] = set()

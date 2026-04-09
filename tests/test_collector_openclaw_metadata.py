@@ -1,4 +1,4 @@
-"""Phase 4 regression: collector writes trace_format_version + benchmark fields."""
+"""Phase 4 regression: collector writes canonical trace metadata fields."""
 from __future__ import annotations
 
 import json
@@ -23,12 +23,12 @@ def _make_config() -> BenchmarkConfig:
     )
 
 
-def test_normalize_openclaw_trace_writes_v5_with_benchmark(tmp_path: Path) -> None:
+def test_normalize_openclaw_trace_writes_trace_metadata_with_benchmark(tmp_path: Path) -> None:
     """_normalize_openclaw_trace must stamp trace_format_version=5,
     benchmark, benchmark_split on the destination file."""
     from trace_collect.collector import _normalize_openclaw_trace
 
-    # Craft a minimal source trace (post-session_runner output): v5 metadata
+    # Craft a minimal source trace (post-session_runner output): canonical metadata
     # from the in-process openclaw writer, plus one action.
     src = tmp_path / "src.jsonl"
     src.write_text(
