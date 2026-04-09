@@ -407,8 +407,8 @@ class SessionRunner:
         self.extra_hooks = extra_hooks or []
 
     @staticmethod
-    def _scaffold_tools(container_workspace: Any) -> list[str]:
-        tools = [
+    def _scaffold_tools() -> list[str]:
+        return [
             "read_file",
             "write_file",
             "edit_file",
@@ -417,10 +417,8 @@ class SessionRunner:
             "web_search",
             "web_fetch",
             "message",
+            "spawn",
         ]
-        if container_workspace is None:
-            tools.append("spawn")
-        return tools
 
     async def run(
         self,
@@ -434,7 +432,6 @@ class SessionRunner:
         instance_id: str | None = None,
         channel: str = "cli",
         prepare_ms: float | None = None,
-        container_workspace: Any = None,
     ) -> SessionRunResult:
         workspace.mkdir(parents=True, exist_ok=True)
         iid = instance_id or session_key
@@ -453,7 +450,7 @@ class SessionRunner:
             "session_key": session_key,
             "max_iterations": self.max_iterations,
             "scaffold_capabilities": {
-                "tools": self._scaffold_tools(container_workspace),
+                "tools": self._scaffold_tools(),
                 "memory": True,
                 "skills": True,
                 "file_ops": "structured",
@@ -480,7 +477,6 @@ class SessionRunner:
             mcp_servers=self.mcp_servers,
             session_manager=session_manager,
             hooks=all_hooks,
-            container_workspace=container_workspace,
         )
 
         inject_event_callbacks(agent, trace_hook)

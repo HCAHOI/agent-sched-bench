@@ -88,7 +88,6 @@ class SWEBenchRunner:
         self,
         task: EvalTask,
         *,
-        container_workspace: Any,
         prompt_template: str,
         tool_workspace: Path | None = None,
         exec_working_dir: str | None = None,
@@ -100,11 +99,7 @@ class SWEBenchRunner:
 
         effective_trace_file = trace_file or (ws / "trace.jsonl")
         effective_tool_workspace = tool_workspace or ws
-        effective_project_workspace = (
-            Path("/testbed")
-            if container_workspace is not None
-            else effective_tool_workspace
-        )
+        effective_project_workspace = effective_tool_workspace
 
         prompt_text = self._build_swe_bench_prompt(
             task.problem_statement, prompt_template=prompt_template
@@ -120,7 +115,6 @@ class SWEBenchRunner:
             instance_id=task.instance_id,
             channel="cli",
             prepare_ms=None,
-            container_workspace=container_workspace,
         )
 
         content = result.content
@@ -152,42 +146,9 @@ class SWEBenchRunner:
                         content = m.get("content")
                         break
 
-        # Container-backed runs: extract the patch from inside the container
-        # BEFORE the caller tears it down. The host workspace is empty in
-        # this mode, so _extract_patch_from_workspace would return "".
-        # Note: we do NOT pass ``:(exclude)...`` pathspecs via bash because
-        # the parentheses are shell metacharacters; openclaw's runtime
-        # artifacts (trace.jsonl, memory, etc.) are all written to the host
-        # attempt directory, not to /testbed, so no excludes are required.
         container_patch: str | None = None
         diff_cwd = exec_working_dir or "/testbed"
-        if container_workspace is not None:
-            try:
-                diff_cmd = (
-                    f"cd {diff_cwd} && "
-                    f"git config --add safe.directory {diff_cwd} 2>/dev/null; "
-                    "git add -A 2>/dev/null; "
-                    "git diff HEAD"
-                )
-                rc, stdout, stderr = await container_workspace.exec(
-                    diff_cmd, timeout=60
-                )
-                if rc == 0:
-                    container_patch = stdout.strip() or None
-                else:
-                    logger.warning(
-                        "Container git diff failed for {id}: rc={rc} stderr={stderr}",
-                        id=task.instance_id,
-                        rc=rc,
-                        stderr=stderr[:200],
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Container patch extraction raised for {id}: {exc}",
-                    id=task.instance_id,
-                    exc=exc,
-                )
-        elif exec_working_dir is not None:
+        if exec_working_dir is not None:
             try:
                 subprocess.run(
                     ["git", "config", "--add", "safe.directory", diff_cwd],

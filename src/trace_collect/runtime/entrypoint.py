@@ -121,7 +121,6 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
     )
     result = await runner.run_task(
         eval_task,
-        container_workspace=None,
         prompt_template=request["prompt_template"],
         tool_workspace=Path(request["tool_workspace"]),
         exec_working_dir=request.get("exec_working_dir"),

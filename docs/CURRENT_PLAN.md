@@ -1,50 +1,54 @@
-# Kinto Task Container Root Cause And Fix
+# OpenClaw Runtime Consolidation
 
 ## Goal
 
-- Explain the real behavior divergence for `Kinto__kinto-http.py-384`.
-- Implement a fix in OpenClaw so the agent sees the true project workspace in
-  task-container mode while preserving the existing host-mounted state
-  workspace for memory, sessions, and runtime artifacts.
+- Remove the legacy OpenClaw host-controller container-backed path.
+- Make all supported SWE OpenClaw runs use `task_container_agent`.
+- Keep the earlier `/testbed` workspace-prompt fix intact while simplifying the
+  runtime surface before paying for a new Haiku trace.
 
 ## Findings
 
-1. The shell-level probe environment is not the issue: both launch modes use
-   `/usr/bin/python3`, both import `kinto_http`, and both pass
-   `python3 -m pytest tests/test_session.py -v`.
-2. OpenClaw task-container mode does use a different controller interpreter
-   (`.venv/bin/python`), but that is not the direct source of the observed
-   task behavior split.
-3. The concrete divergence is in the OpenClaw system prompt: it currently tells
-   the model that its workspace is the host-mounted runtime state directory
-   instead of the task code workspace `/testbed`.
-4. Tool execution is already correctly rooted in `/testbed`; the bug is the
-   prompt/context workspace mismatch.
+1. The real Kinto divergence came from the prompt-visible workspace, not the
+   task repo's `python3`/`pytest` environment.
+2. That prompt bug is already fixed and pushed.
+3. The remaining architectural confusion comes from two OpenClaw SWE paths:
+   `task_container_agent` (real SWE-rebench path) and a legacy host-controller
+   container-backed path.
+4. The legacy path is no longer needed for current supported SWE OpenClaw
+   benchmarks if `swe-bench-verified` is migrated to `task_container_agent`.
 
 ## Work Items
 
-1. Add a distinct prompt-visible `project_workspace` to the OpenClaw
-   runner/session/loop/context chain.
-2. Keep memory, sessions, and custom skills rooted in the existing state
-   workspace so runtime artifacts remain unchanged.
-3. Update prompt generation so bootstrap files come from the project workspace
-   first, with state-workspace fallback if needed.
-4. Add focused tests covering prompt content and parameter forwarding.
-5. Run the narrow validation suite.
-6. Run a strict independent review pass before finalizing.
-7. Commit and push the fix after review.
-8. Produce a fresh single-task OpenClaw Haiku trace for
-   `Kinto__kinto-http.py-384` using the patched code.
+1. Done: move `swe-bench-verified` OpenClaw onto `task_container_agent`.
+2. Done: remove the host-controller container-backed branch from
+   `collect_openclaw_traces()`.
+3. Done: delete the dead `container_workspace` / `container_backend`
+   OpenClaw code path and simplify runner/session/loop tool registration.
+4. Done: update tests so they cover the single remaining OpenClaw SWE runtime.
+5. Done: run the focused validation suite.
+6. Done: complete a strict independent review pass before finalizing.
+7. In progress: commit and push the cleanup.
+8. Pending: rerun the single-task Haiku collection for
+   `Kinto__kinto-http.py-384`.
 
 ## Acceptance Checks
 
-- In task-container mode, the system prompt reports `/testbed` as the project
-  workspace.
-- The system prompt still points memory/history/custom skills to the host
-  runtime state workspace.
-- Existing non-task-container behavior remains unchanged.
-- New tests cover both prompt generation and forwarding of the project
-  workspace through the evaluation stack.
-- The fix is committed and pushed.
-- A new OpenClaw Haiku trace exists for `Kinto__kinto-http.py-384` and can be
-  inspected against the prior bad trace.
+- Supported SWE OpenClaw benchmarks resolve to `task_container_agent`.
+- `collect_openclaw_traces()` has no host-controller container fallback.
+- OpenClaw no longer ships unused `container_backend` / `container_workspace`
+  code for SWE runs.
+- Tests cover the migrated runtime selection and the simplified runner/loop
+  behavior.
+- The cleanup is reviewed, committed, and pushed before any paid rerun.
+
+## Validation
+
+- `.venv/bin/pytest -q tests/test_openclaw_eval_runner.py
+  tests/test_openclaw_loop_tools.py tests/test_openclaw_runtime_selection.py
+  tests/test_collector_task_container_runtime.py
+  tests/test_task_container_entrypoint.py tests/test_collector_openclaw_metadata.py
+  tests/test_collector_runtime_mode.py tests/test_swe_rebench_plugin.py`
+  -> `30 passed`
+- `.venv/bin/pytest -q tests/test_task_container_runtime.py
+  tests/test_attempt_pipeline.py` -> `9 passed`

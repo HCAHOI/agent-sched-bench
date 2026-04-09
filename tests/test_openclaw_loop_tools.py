@@ -1,4 +1,4 @@
-"""Targeted tests for OpenClaw tool registration across runtimes."""
+"""Targeted tests for OpenClaw tool registration."""
 
 from __future__ import annotations
 
@@ -16,19 +16,6 @@ def _fake_provider() -> SimpleNamespace:
     )
 
 
-def test_agent_loop_disables_spawn_for_host_container_backend(tmp_path: Path) -> None:
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=_fake_provider(),
-        workspace=tmp_path / "state",
-        tool_workspace=tmp_path / "tool",
-        model="qwen-plus-latest",
-        container_workspace=SimpleNamespace(cwd="/testbed"),
-    )
-
-    assert loop.tools.has("spawn") is False
-
-
 def test_agent_loop_keeps_spawn_for_local_tools(tmp_path: Path) -> None:
     loop = AgentLoop(
         bus=MessageBus(),
@@ -36,7 +23,6 @@ def test_agent_loop_keeps_spawn_for_local_tools(tmp_path: Path) -> None:
         workspace=tmp_path / "state",
         tool_workspace=Path("/testbed"),
         model="qwen-plus-latest",
-        container_workspace=None,
     )
 
     assert loop.tools.has("spawn") is True

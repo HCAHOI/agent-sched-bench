@@ -64,7 +64,6 @@ def test_swebench_runner_extracts_patch_from_exec_working_dir(tmp_path: Path) ->
     result = asyncio.run(
         runner.run_task(
             task,
-            container_workspace=None,
             prompt_template="cc_aligned",
             exec_working_dir=str(repo),
             trace_file=tmp_path / "trace.jsonl",
@@ -131,7 +130,6 @@ def test_swebench_runner_local_patch_extraction_includes_untracked_files(
     result = asyncio.run(
         runner.run_task(
             task,
-            container_workspace=None,
             prompt_template="cc_aligned",
             exec_working_dir=str(repo),
             trace_file=tmp_path / "trace.jsonl",
@@ -174,7 +172,6 @@ def test_swebench_runner_passes_tool_workspace_as_project_workspace(
     asyncio.run(
         runner.run_task(
             task,
-            container_workspace=None,
             prompt_template="cc_aligned",
             tool_workspace=tool_workspace,
             trace_file=tmp_path / "trace.jsonl",
@@ -183,89 +180,3 @@ def test_swebench_runner_passes_tool_workspace_as_project_workspace(
 
     assert captured["tool_workspace"] == tool_workspace
     assert captured["project_workspace"] == tool_workspace
-
-
-def test_swebench_runner_uses_testbed_project_workspace_for_container_tools(
-    tmp_path: Path,
-) -> None:
-    captured: dict[str, object] = {}
-    provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
-    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
-
-    async def fake_run(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            content="done",
-            elapsed_s=0.1,
-            trace_file=kwargs["trace_file"],
-            session_key=kwargs["session_key"],
-            session_manager=None,
-        )
-
-    runner._session_runner.run = fake_run  # type: ignore[method-assign]
-
-    task = EvalTask(
-        instance_id="encode__httpx-2701",
-        problem_statement="fix bug",
-        workspace_dir=tmp_path / "runner-ws",
-        repo="encode/httpx",
-        base_commit="HEAD",
-        image_name="swerebench/example",
-    )
-    container_workspace = SimpleNamespace()
-
-    asyncio.run(
-        runner.run_task(
-            task,
-            container_workspace=container_workspace,
-            prompt_template="cc_aligned",
-            trace_file=tmp_path / "trace.jsonl",
-        )
-    )
-
-    assert captured["tool_workspace"] == task.workspace_dir
-    assert captured["project_workspace"] == Path("/testbed")
-
-
-def test_swebench_runner_keeps_testbed_project_workspace_with_explicit_tool_workspace(
-    tmp_path: Path,
-) -> None:
-    captured: dict[str, object] = {}
-    provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
-    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
-
-    async def fake_run(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            content="done",
-            elapsed_s=0.1,
-            trace_file=kwargs["trace_file"],
-            session_key=kwargs["session_key"],
-            session_manager=None,
-        )
-
-    runner._session_runner.run = fake_run  # type: ignore[method-assign]
-
-    task = EvalTask(
-        instance_id="encode__httpx-2701",
-        problem_statement="fix bug",
-        workspace_dir=tmp_path / "runner-ws",
-        repo="encode/httpx",
-        base_commit="HEAD",
-        image_name="swerebench/example",
-    )
-    tool_workspace = tmp_path / "host-tool-ws"
-    container_workspace = SimpleNamespace()
-
-    asyncio.run(
-        runner.run_task(
-            task,
-            container_workspace=container_workspace,
-            prompt_template="cc_aligned",
-            tool_workspace=tool_workspace,
-            trace_file=tmp_path / "trace.jsonl",
-        )
-    )
-
-    assert captured["tool_workspace"] == tool_workspace
-    assert captured["project_workspace"] == Path("/testbed")

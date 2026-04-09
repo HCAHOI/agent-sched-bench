@@ -58,6 +58,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
             default_prompt_template="cc_aligned",
         ),
         runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
     )
 
     def make_inner(task: dict):
@@ -124,6 +125,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
             default_prompt_template="cc_aligned",
         ),
         runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
     )
 
     def make_inner(task: dict):
@@ -154,6 +156,80 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
     assert seen == {
         "prompt_template": "default",
         "agent_runtime_mode": "task_container_agent",
+    }
+
+
+def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    seen: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, executable="podman": seen.setdefault(
+            "ensure_source_image", source_image
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, executable="podman": False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda executable="podman": None,
+    )
+
+    benchmark = SimpleNamespace(
+        config=SimpleNamespace(
+            slug="swe-bench-verified",
+            harness_split="test",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: (
+            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+        ),
+    )
+
+    def make_inner(task: dict):
+        async def inner(ctx) -> AttemptResult:
+            seen["ctx_source_image"] = ctx.source_image
+            return AttemptResult(
+                success=True,
+                exit_status="ok",
+                trace_path=trace_path,
+            )
+
+        return inner
+
+    asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "Kinto__kinto-http.py-384"}],
+            run_dir=tmp_path / "run",
+            model="qwen-plus-latest",
+            scaffold="openclaw",
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=make_inner,
+        )
+    )
+
+    assert seen == {
+        "ensure_source_image": (
+            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+        ),
+        "ctx_source_image": (
+            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+        ),
     }
 
 
@@ -245,6 +321,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
             default_prompt_template="cc_aligned",
         ),
         runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
     prefetch_started = threading.Event()
@@ -333,6 +410,7 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
             default_prompt_template="cc_aligned",
         ),
         runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
 

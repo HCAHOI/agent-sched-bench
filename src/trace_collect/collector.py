@@ -174,11 +174,12 @@ def _select_tasks(
     return selected
 
 
-def _task_source_image(task: dict[str, Any]) -> str:
-    return normalize_image_reference(str(task.get("image_name") or ""))
+def _task_source_image(benchmark: "Benchmark", task: dict[str, Any]) -> str:
+    return normalize_image_reference(str(benchmark.image_name_for(task) or ""))
 
 
 def _next_pending_source_image(
+    benchmark: "Benchmark",
     tasks: list[dict[str, Any]],
     *,
     current_index: int,
@@ -188,7 +189,7 @@ def _next_pending_source_image(
     for next_task in tasks[current_index + 1 :]:
         if next_task["instance_id"] in completed:
             continue
-        source_image = _task_source_image(next_task)
+        source_image = _task_source_image(benchmark, next_task)
         if source_image:
             return source_image
     return None
@@ -315,8 +316,9 @@ async def _run_scaffold_tasks(
                 "[%d/%d] START %s (%s)", i + 1, total, instance_id, scaffold
             )
             t0 = time.monotonic()
-            source_image = _task_source_image(task)
+            source_image = _task_source_image(benchmark, task)
             next_source_image = _next_pending_source_image(
+                benchmark,
                 tasks,
                 current_index=i,
                 completed=completed,
@@ -543,7 +545,14 @@ async def collect_openclaw_traces(
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
 ) -> Path:
-    """Collect openclaw traces inside the SWE-rebench task container."""
+    """Collect OpenClaw traces via the task-container runtime."""
+    runtime_mode = benchmark.runtime_mode_for("openclaw")
+    if runtime_mode != "task_container_agent":
+        raise NotImplementedError(
+            "OpenClaw SWE collection requires benchmark.runtime_mode_for("
+            "'openclaw') == 'task_container_agent'"
+        )
+
     tasks = _select_tasks(
         benchmark.load_tasks(),
         instance_ids=instance_ids,
@@ -551,96 +560,19 @@ async def collect_openclaw_traces(
     )
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
-    mcp_servers = load_mcp_servers(mcp_config)
-    mcp_config_label = _mcp_config_label(mcp_config)
-
-    from agents.openclaw.eval.types import EvalTask
-    from agents.openclaw.tools.container_backend import ContainerWorkspace
-    from agents.openclaw.unified_provider import UnifiedProvider
-
-    provider = UnifiedProvider(
-        api_key=api_key,
-        api_base=api_base,
-        default_model=model,
-    )
-    runner = benchmark.build_runner(
-        scaffold="openclaw",
-        provider=provider,
-        workspace_base=run_dir / "_workspaces",
-        max_iterations=max_iterations,
-        context_window_tokens=max_context_tokens,
-        model=model,
-        mcp_servers=mcp_servers,
-    )
 
     def make_inner(task: dict):
         async def inner(ctx: AttemptContext) -> AttemptResult:
-            if ctx.agent_runtime_mode == "task_container_agent":
-                return await _run_openclaw_in_task_container(
-                    ctx=ctx,
-                    task=task,
-                    benchmark=benchmark,
-                    api_base=api_base,
-                    api_key=api_key,
-                    model=model,
-                    max_iterations=max_iterations,
-                    max_context_tokens=max_context_tokens,
-                    mcp_config=mcp_config,
-                )
-
-            fixed_image = ctx.fixed_image or task.get("image_name") or ""
-            if not fixed_image:
-                raise RuntimeError(
-                    f"Task {ctx.instance_id!r} has no image_name"
-                )
-            container_id = start_task_container(fixed_image)
-            ctx.mark_container_ready(container_id)
-            cw = ContainerWorkspace(container_id=container_id, cwd="/testbed")
-
-            try:
-                eval_task = EvalTask(
-                    instance_id=task["instance_id"],
-                    problem_statement=task.get("problem_statement", ""),
-                    workspace_dir=run_dir / "_workspaces" / task["instance_id"],
-                    repo=task.get("repo"),
-                    base_commit=task.get("base_commit"),
-                    image_name=task.get("image_name"),
-                )
-                eval_result = await runner.run_task(
-                    eval_task,
-                    container_workspace=cw,
-                    prompt_template=ctx.prompt_template,
-                )
-            finally:
-                ctx.container_stdout = stop_task_container(container_id)
-
-            model_patch = eval_result.model_patch or ""
-            if (
-                eval_result.trace_file
-                and Path(eval_result.trace_file).exists()
-            ):
-                _normalize_openclaw_trace(
-                    src=Path(eval_result.trace_file),
-                    dst=ctx.attempt_dir / "trace.jsonl",
-                    benchmark=benchmark,
-                    model=model,
-                    api_base=api_base,
-                    max_iterations=max_iterations,
-                    instance_id=ctx.instance_id,
-                    mcp_config_label=mcp_config_label,
-                    prompt_template=ctx.prompt_template,
-                    agent_runtime_mode=ctx.agent_runtime_mode,
-                    runtime_proof={"container_id": container_id},
-                )
-
-            return AttemptResult(
-                success=bool(model_patch),
-                exit_status=eval_result.stop_reason,
-                trace_path=ctx.attempt_dir / "trace.jsonl",
-                model_patch=model_patch,
-                n_iterations=eval_result.n_iterations,
-                error=eval_result.error,
-                runtime_proof={"container_id": container_id},
+            return await _run_openclaw_in_task_container(
+                ctx=ctx,
+                task=task,
+                benchmark=benchmark,
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                max_iterations=max_iterations,
+                max_context_tokens=max_context_tokens,
+                mcp_config=mcp_config,
             )
 
         return inner

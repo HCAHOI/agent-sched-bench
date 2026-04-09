@@ -36,8 +36,8 @@ class EvalResult:
 
     @property
     def model_patch(self) -> str:
-        # Container-backed runs capture the authoritative diff before teardown.
-        # Otherwise fall back to the workspace diff, then to content scraping.
+        # Prefer the runner-captured diff when available. Otherwise fall back
+        # to the workspace diff, then to content scraping.
         if self.container_model_patch:
             return self.container_model_patch
         patch = self._extract_patch_from_workspace()

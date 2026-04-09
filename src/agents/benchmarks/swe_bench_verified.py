@@ -63,7 +63,24 @@ class SWEBenchVerified(Benchmark):
     def normalize_task(self, raw: dict[str, Any]) -> dict[str, Any]:
         task = dict(raw)
         task["test_cmd"] = self.derive_test_cmd(task)
+        task["image_name"] = self.image_name_for(task)
         return task
+
+    @staticmethod
+    def _default_image_name(instance_id: str) -> str:
+        docker_compatible_id = instance_id.replace("__", "_1776_")
+        return (
+            f"docker.io/swebench/sweb.eval.x86_64.{docker_compatible_id}:latest"
+        ).lower()
+
+    def image_name_for(self, task: dict[str, Any]) -> str | None:
+        image_name = task.get("image_name") or task.get("docker_image")
+        if image_name:
+            return str(image_name)
+        instance_id = task.get("instance_id")
+        if not instance_id:
+            return None
+        return self._default_image_name(str(instance_id))
 
     # Override: task selection uses SWE-bench-specific repo quotas
 
@@ -121,4 +138,13 @@ class SWEBenchVerified(Benchmark):
             context_window_tokens=context_window_tokens,
             model=model,
             **kwargs,
+        )
+
+    def runtime_mode_for(self, scaffold: str) -> str:
+        if scaffold == "openclaw":
+            return "task_container_agent"
+        if scaffold == "miniswe":
+            return "host_controller"
+        raise NotImplementedError(
+            f"SWE-bench Verified does not support scaffold={scaffold!r}"
         )
