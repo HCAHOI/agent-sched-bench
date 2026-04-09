@@ -406,6 +406,22 @@ class SessionRunner:
         self.mcp_servers = mcp_servers or {}
         self.extra_hooks = extra_hooks or []
 
+    @staticmethod
+    def _scaffold_tools(container_workspace: Any) -> list[str]:
+        tools = [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_dir",
+            "exec",
+            "web_search",
+            "web_fetch",
+            "message",
+        ]
+        if container_workspace is None:
+            tools.append("spawn")
+        return tools
+
     async def run(
         self,
         prompt: str,
@@ -437,17 +453,7 @@ class SessionRunner:
             "session_key": session_key,
             "max_iterations": self.max_iterations,
             "scaffold_capabilities": {
-                "tools": [
-                    "read_file",
-                    "write_file",
-                    "edit_file",
-                    "list_dir",
-                    "exec",
-                    "web_search",
-                    "web_fetch",
-                    "message",
-                    "spawn",
-                ],
+                "tools": self._scaffold_tools(container_workspace),
                 "memory": True,
                 "skills": True,
                 "file_ops": "structured",
