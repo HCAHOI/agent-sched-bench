@@ -59,9 +59,11 @@ Currently registered:
         --sample 2
 
 Flags the collect CLI accepts: `--benchmark <slug>` (default
-`swe-bench-verified`), `--scaffold mini-swe-agent|openclaw`,
+`swe-bench-verified`), `--scaffold miniswe|openclaw`,
 `--sample N` (optional task cap), `--instance-ids a,b,c` (optional
-explicit list), `--run-id <path>` (resume an interrupted run).
+explicit list), `--run-id <path>` (resume an interrupted run),
+`--prompt-template <name>` (optional override; when omitted, the benchmark
+config default is used — `swe-rebench` now defaults to `cc_aligned`).
 
 ### Adding a new benchmark
 

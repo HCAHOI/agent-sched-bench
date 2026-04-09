@@ -69,6 +69,7 @@ def _write_trace(path: Path) -> None:
 
 def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
+    ctx.agent_runtime_mode = "task_container_agent"
     trace_source = tmp_path / "scratch" / "trace.jsonl"
     _write_trace(trace_source)
 
@@ -86,6 +87,10 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
             total_llm_ms=94000.0,
             total_tool_ms=12000.0,
             total_tokens=98088,
+            runtime_proof={
+                "container_id": "fake_container_id_xyz",
+                "python_executable": "/opt/conda/envs/ML/bin/python",
+            },
         )
 
     result = asyncio.run(
@@ -114,12 +119,17 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert manifest["result_summary"]["total_time"] >= 0.0
     assert manifest["scaffold"] == "miniswe"
     assert manifest["prompt_template"] == "default"
+    assert manifest["agent_runtime_mode"] == "task_container_agent"
+    assert manifest["runtime"]["agent_runtime_mode"] == "task_container_agent"
+    assert manifest["runtime"]["runtime_proof"]["container_id"] == "fake_container_id_xyz"
     assert "tool_call_count" not in manifest["replay"]
 
     results = json.loads((ctx.attempt_dir / "results.json").read_text())
     assert results["instance_id"] == "mozilla__bleach-259"
     assert results["success"] is True
     assert results["model"] == "qwen-plus-latest"
+    assert results["agent_runtime_mode"] == "task_container_agent"
+    assert results["runtime_proof"]["python_executable"] == "/opt/conda/envs/ML/bin/python"
     assert "container_stdout" not in results
     assert "resource_samples" not in results
 

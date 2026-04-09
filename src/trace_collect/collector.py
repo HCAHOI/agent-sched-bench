@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,6 +16,11 @@ from trace_collect.attempt_pipeline import (
     run_attempt,
     start_task_container,
     stop_task_container,
+)
+from trace_collect.runtime.task_container import (
+    preflight_task_container_runtime,
+    project_mount_args,
+    run_task_container_agent,
 )
 
 if TYPE_CHECKING:
@@ -63,6 +68,12 @@ def load_mcp_servers(mcp_config: str | None) -> dict:
             )
         servers[name] = MCPServerConfig.model_validate(entry)
     return servers
+
+
+def _read_text_if_exists(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 @dataclass(slots=True)
@@ -143,7 +154,7 @@ async def _run_scaffold_tasks(
     run_dir: Path,
     model: str,
     scaffold: str,
-    prompt_template: str,
+    prompt_template: str | None,
     min_free_disk_gb: float,
     inner_factory,
 ) -> Path:
@@ -177,7 +188,11 @@ async def _run_scaffold_tasks(
             model=model,
             scaffold=scaffold,
             source_image=task.get("image_name") or "",
-            prompt_template=prompt_template,
+            prompt_template=_resolve_prompt_template(
+                benchmark=benchmark,
+                prompt_template=prompt_template,
+            ),
+            agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
         )
 
         _inner = inner_factory(task)
@@ -240,7 +255,7 @@ async def collect_miniswe_traces(
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
-    prompt_template: str = "default",
+    prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect miniswe traces inside the SWE-rebench task container."""
@@ -259,6 +274,20 @@ async def collect_miniswe_traces(
 
     def make_inner(task: dict):
         async def inner(ctx: AttemptContext) -> AttemptResult:
+            if ctx.agent_runtime_mode == "task_container_agent":
+                return await _run_miniswe_in_task_container(
+                    ctx=ctx,
+                    task=task,
+                    benchmark=benchmark,
+                    api_base=api_base,
+                    api_key=api_key,
+                    model=model,
+                    max_iterations=max_iterations,
+                    command_timeout_s=command_timeout_s,
+                    task_timeout_s=task_timeout_s,
+                    max_context_tokens=max_context_tokens,
+                )
+
             from harness.trace_logger import TraceLogger
 
             trace_logger = TraceLogger(ctx.attempt_dir, "trace")
@@ -270,6 +299,8 @@ async def collect_miniswe_traces(
                 api_base=api_base,
                 max_iterations=max_iterations,
                 instance_id=ctx.instance_id,
+                prompt_template=ctx.prompt_template,
+                agent_runtime_mode=ctx.agent_runtime_mode,
                 scaffold_capabilities={
                     "tools": ["bash"],
                     "memory": False,
@@ -310,6 +341,7 @@ async def collect_miniswe_traces(
                 total_tool_ms=summary.get("total_tool_ms"),
                 total_tokens=summary.get("total_tokens"),
                 error=agent.task_error,
+                runtime_proof={},
             )
 
         return inner
@@ -338,7 +370,7 @@ async def collect_openclaw_traces(
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
     mcp_config: str | None = None,
-    prompt_template: str = "default",
+    prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect openclaw traces inside the SWE-rebench task container."""
@@ -376,6 +408,19 @@ async def collect_openclaw_traces(
 
     def make_inner(task: dict):
         async def inner(ctx: AttemptContext) -> AttemptResult:
+            if ctx.agent_runtime_mode == "task_container_agent":
+                return await _run_openclaw_in_task_container(
+                    ctx=ctx,
+                    task=task,
+                    benchmark=benchmark,
+                    api_base=api_base,
+                    api_key=api_key,
+                    model=model,
+                    max_iterations=max_iterations,
+                    max_context_tokens=max_context_tokens,
+                    mcp_config=mcp_config,
+                )
+
             fixed_image = ctx.fixed_image or task.get("image_name") or ""
             if not fixed_image:
                 raise RuntimeError(
@@ -416,6 +461,9 @@ async def collect_openclaw_traces(
                     max_iterations=max_iterations,
                     instance_id=ctx.instance_id,
                     mcp_config_label=mcp_config_label,
+                    prompt_template=ctx.prompt_template,
+                    agent_runtime_mode=ctx.agent_runtime_mode,
+                    runtime_proof={"container_id": container_id},
                 )
 
             return AttemptResult(
@@ -425,6 +473,7 @@ async def collect_openclaw_traces(
                 model_patch=model_patch,
                 n_iterations=eval_result.n_iterations,
                 error=eval_result.error,
+                runtime_proof={"container_id": container_id},
             )
 
         return inner
@@ -467,6 +516,9 @@ def _normalize_openclaw_trace(
     max_iterations: int,
     instance_id: str,
     mcp_config_label: str | None = None,
+    prompt_template: str | None = None,
+    agent_runtime_mode: str | None = None,
+    runtime_proof: dict[str, Any] | None = None,
 ) -> None:
     """Copy an OpenClaw trace into the attempt dir, merging trace metadata."""
     lines = src.read_text(encoding="utf-8").splitlines()
@@ -503,6 +555,12 @@ def _normalize_openclaw_trace(
     merged.setdefault("api_base", api_base)
     merged.setdefault("max_iterations", max_iterations)
     merged.setdefault("instance_id", instance_id)
+    if prompt_template is not None:
+        merged["prompt_template"] = prompt_template
+    if agent_runtime_mode is not None:
+        merged["agent_runtime_mode"] = agent_runtime_mode
+    if runtime_proof:
+        merged["runtime_proof"] = runtime_proof
     merged["type"] = "trace_metadata"
     merged["trace_format_version"] = 5
     if mcp_config_label is not None:
@@ -523,3 +581,218 @@ def _normalize_openclaw_trace(
             if rec.get("type") == "trace_metadata":
                 continue
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def _resolve_prompt_template(
+    *,
+    benchmark: "Benchmark",
+    prompt_template: str | None,
+) -> str:
+    return prompt_template or benchmark.config.default_prompt_template
+
+
+async def _run_miniswe_in_task_container(
+    *,
+    ctx: AttemptContext,
+    task: dict[str, Any],
+    benchmark: "Benchmark",
+    api_base: str,
+    api_key: str,
+    model: str,
+    max_iterations: int,
+    command_timeout_s: float,
+    task_timeout_s: float,
+    max_context_tokens: int,
+) -> AttemptResult:
+    fixed_image = ctx.fixed_image or task.get("image_name") or ""
+    if not fixed_image:
+        raise RuntimeError(f"Task {ctx.instance_id!r} has no image_name")
+
+    runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "miniswe"
+    stdout_path = runtime_dir / "stdout.txt"
+    stderr_path = runtime_dir / "stderr.txt"
+    proof = None
+    runtime = None
+    container_id = start_task_container(
+        fixed_image,
+        extra_args=project_mount_args(ctx.attempt_dir),
+    )
+    ctx.mark_container_ready(container_id)
+    try:
+        proof = preflight_task_container_runtime(
+            container_id=container_id,
+            attempt_dir=ctx.attempt_dir,
+        )
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        runtime = run_task_container_agent(
+            container_id=container_id,
+            timeout=task_timeout_s + 120,
+            request={
+                "kind": "run_miniswe",
+                "scaffold": "miniswe",
+                "result_path": str(runtime_dir / "run.result.json"),
+                "container_id": container_id,
+                "benchmark": benchmark.config.slug,
+                "benchmark_split": benchmark.config.harness_split,
+                "api_base": api_base,
+                "api_key": api_key,
+                "model": model,
+                "max_iterations": max_iterations,
+                "command_timeout_s": command_timeout_s,
+                "task_timeout_s": task_timeout_s,
+                "max_context_tokens": max_context_tokens,
+                "prompt_template": ctx.prompt_template,
+                "agent_runtime_mode": ctx.agent_runtime_mode,
+                "exec_working_dir": "/testbed",
+                "task": task,
+                "trace_file": str(runtime_dir / "trace.jsonl"),
+                "raw_stdout_path": str(stdout_path),
+                "raw_stderr_path": str(stderr_path),
+            },
+        )
+    finally:
+        container_logs = stop_task_container(container_id)
+        ctx.container_stdout = "\n".join(
+            part
+            for part in [
+                stdout_path.read_text(encoding="utf-8")
+                if stdout_path.exists()
+                else "",
+                stderr_path.read_text(encoding="utf-8")
+                if stderr_path.exists()
+                else "",
+                container_logs,
+            ]
+            if part
+        )
+
+    assert proof is not None
+    assert runtime is not None
+    runtime_proof = {
+        **asdict(proof),
+        **runtime.runtime_proof,
+    }
+    return AttemptResult(
+        success=runtime.success,
+        exit_status=runtime.exit_status,
+        trace_path=runtime.trace_path,
+        model_patch=runtime.model_patch,
+        n_iterations=runtime.n_iterations,
+        total_llm_ms=runtime.total_llm_ms,
+        total_tool_ms=runtime.total_tool_ms,
+        total_tokens=runtime.total_tokens,
+        error=runtime.error,
+        runtime_proof=runtime_proof,
+    )
+
+
+async def _run_openclaw_in_task_container(
+    *,
+    ctx: AttemptContext,
+    task: dict[str, Any],
+    benchmark: "Benchmark",
+    api_base: str,
+    api_key: str,
+    model: str,
+    max_iterations: int,
+    max_context_tokens: int,
+    mcp_config: str | None,
+) -> AttemptResult:
+    fixed_image = ctx.fixed_image or task.get("image_name") or ""
+    if not fixed_image:
+        raise RuntimeError(f"Task {ctx.instance_id!r} has no image_name")
+
+    runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "openclaw"
+    stdout_path = runtime_dir / "stdout.txt"
+    stderr_path = runtime_dir / "stderr.txt"
+    proof = None
+    runtime = None
+    runtime_proof = None
+    container_id = start_task_container(
+        fixed_image,
+        extra_args=project_mount_args(ctx.attempt_dir),
+    )
+    ctx.mark_container_ready(container_id)
+    try:
+        proof = preflight_task_container_runtime(
+            container_id=container_id,
+            attempt_dir=ctx.attempt_dir,
+        )
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        runtime = run_task_container_agent(
+            container_id=container_id,
+            timeout=(max_iterations * 120) + 300,
+            request={
+                "kind": "run_openclaw",
+                "scaffold": "openclaw",
+                "result_path": str(runtime_dir / "run.result.json"),
+                "container_id": container_id,
+                "benchmark": benchmark.config.slug,
+                "api_base": api_base,
+                "api_key": api_key,
+                "model": model,
+                "max_iterations": max_iterations,
+                "max_context_tokens": max_context_tokens,
+                "prompt_template": ctx.prompt_template,
+                "agent_runtime_mode": ctx.agent_runtime_mode,
+                "mcp_config": (
+                    str(Path(mcp_config).resolve())
+                    if mcp_config not in {None, "none"}
+                    else mcp_config
+                ),
+                "task": task,
+                "workspace_base": str(runtime_dir / "workspace_base"),
+                "workspace_dir": str(runtime_dir / "workspace_base" / ctx.instance_id),
+                "tool_workspace": "/testbed",
+                "exec_working_dir": "/testbed",
+                "trace_file": str(runtime_dir / "trace.raw.jsonl"),
+                "raw_stdout_path": str(stdout_path),
+                "raw_stderr_path": str(stderr_path),
+            },
+        )
+        runtime_proof = {
+            **asdict(proof),
+            **runtime.runtime_proof,
+        }
+        _normalize_openclaw_trace(
+            src=runtime.trace_path,
+            dst=ctx.attempt_dir / "trace.jsonl",
+            benchmark=benchmark,
+            model=model,
+            api_base=api_base,
+            max_iterations=max_iterations,
+            instance_id=ctx.instance_id,
+            mcp_config_label=_mcp_config_label(mcp_config),
+            prompt_template=ctx.prompt_template,
+            agent_runtime_mode=ctx.agent_runtime_mode,
+            runtime_proof=runtime_proof,
+        )
+    finally:
+        container_logs = stop_task_container(container_id)
+        ctx.container_stdout = "\n".join(
+            part
+            for part in [
+                stdout_path.read_text(encoding="utf-8")
+                if stdout_path.exists()
+                else "",
+                stderr_path.read_text(encoding="utf-8")
+                if stderr_path.exists()
+                else "",
+                container_logs,
+            ]
+            if part
+        )
+    assert runtime is not None
+    assert runtime_proof is not None
+    return AttemptResult(
+        success=bool(runtime.model_patch),
+        exit_status=runtime.exit_status,
+        trace_path=ctx.attempt_dir / "trace.jsonl",
+        model_patch=runtime.model_patch,
+        n_iterations=runtime.n_iterations,
+        total_llm_ms=runtime.total_llm_ms,
+        total_tool_ms=runtime.total_tool_ms,
+        total_tokens=runtime.total_tokens,
+        error=runtime.error,
+        runtime_proof=runtime_proof,
+    )

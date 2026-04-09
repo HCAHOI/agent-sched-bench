@@ -33,6 +33,7 @@ class BenchmarkConfig:
     default_max_iterations: int
     selection_n: int
     selection_seed: int
+    default_prompt_template: str = "default"
     exclude_lite: bool = False
     extras: dict[str, Any] = field(default_factory=dict)
 
@@ -60,6 +61,7 @@ class BenchmarkConfig:
             default_max_iterations=int(raw["default_max_iterations"]),
             selection_n=int(raw["selection_n"]),
             selection_seed=int(raw["selection_seed"]),
+            default_prompt_template=str(raw.get("default_prompt_template", "default")),
             exclude_lite=bool(raw.get("exclude_lite", False)),
             extras=dict(raw.get("extras", {})),
         )
@@ -136,6 +138,10 @@ class Benchmark(ABC):
 
     def image_name_for(self, task: dict[str, Any]) -> str | None:
         return task.get("image_name")
+
+    def runtime_mode_for(self, scaffold: str) -> str:
+        """Return the runtime strategy label for the given scaffold."""
+        return "host_controller"
 
     def build_runner(self, *, scaffold: str, **kwargs: Any) -> Any:
         """Build and return a scaffold runner for this benchmark.
