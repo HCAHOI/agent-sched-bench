@@ -25,7 +25,6 @@ def _make_config(slug: str) -> BenchmarkConfig:
         default_max_iterations=10,
         selection_n=2,
         selection_seed=0,
-        docker_namespace=None,
     )
 
 

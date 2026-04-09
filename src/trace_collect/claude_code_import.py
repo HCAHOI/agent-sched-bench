@@ -5,10 +5,9 @@ written by ``claude-code`` to ``~/.claude/projects/<slug>/*.jsonl`` —
 and emits a v5-shape JSONL the existing Gantt tooling can consume with
 zero renderer modification.
 
-Design follows ``trace_collect.openclaw_import``: direct JSONL writes
-(no ``TraceLogger``), hand-constructed metadata header, one pass to
-harvest metadata + one pass to stream records. No collection, no
-simulation — this is pure post-hoc conversion for visualization.
+Direct JSONL writes (no ``TraceLogger``), hand-constructed metadata
+header, one pass to harvest metadata + one pass to stream records. No
+collection, no simulation — pure post-hoc conversion for visualization.
 
 Rich Claude Code fields are preserved as additive backfill under
 ``data.*`` on actions and ``metadata.run_config.*`` on the header, per

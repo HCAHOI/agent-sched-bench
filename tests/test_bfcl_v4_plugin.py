@@ -28,7 +28,6 @@ def _make_config(tmp_path: Path) -> BenchmarkConfig:
         default_max_iterations=20,
         selection_n=4,
         selection_seed=42,
-        docker_namespace=None,
     )
 
 
@@ -242,14 +241,6 @@ def test_select_subset_all_when_n_exceeds_total(
 def test_derive_test_cmd_raises(plugin: BFCLv4Benchmark) -> None:
     with pytest.raises(NotImplementedError, match="AST comparison"):
         plugin.derive_test_cmd({"instance_id": "x"})
-
-
-def test_build_harness_args_raises(plugin: BFCLv4Benchmark, tmp_path: Path) -> None:
-    with pytest.raises(NotImplementedError, match="SWE-bench harness"):
-        plugin.build_harness_args(
-            predictions_path=tmp_path / "preds.json",
-            run_id="test",
-        )
 
 
 def test_image_name_for_returns_none(plugin: BFCLv4Benchmark) -> None:

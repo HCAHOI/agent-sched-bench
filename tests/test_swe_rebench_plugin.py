@@ -7,7 +7,7 @@ Focused on the three schema quirks the plugin absorbs:
 3. ``meta.is_lite`` filter is opt-in via the ``exclude_lite`` config knob,
    defaulting to ``False`` per CLAUDE.md §1 "no benchmark-specific tuning".
 
-Plus contract checks that ``build_harness_args`` forces ``namespace=None``
+Plus contract checks for ``build_runner`` scaffold refusal
 and the registry entry resolves correctly.
 """
 
@@ -37,7 +37,6 @@ def _make_config(*, exclude_lite: bool = False) -> BenchmarkConfig:
         default_max_iterations=50,
         selection_n=4,  # small for tests
         selection_seed=42,
-        docker_namespace=None,
         exclude_lite=exclude_lite,
     )
 
@@ -200,39 +199,6 @@ def test_select_subset_exclude_lite_true_drops_lite() -> None:
     lite_count = sum(1 for t in selected if (t.get("meta") or {}).get("is_lite"))
     assert lite_count == 0, (
         "exclude_lite=True must drop every task with meta.is_lite=True"
-    )
-
-
-# ── build_harness_args forces namespace=None ────────────────────────────
-
-
-def test_build_harness_args_namespace_none() -> None:
-    """SWE-rebench images are fully qualified; namespace MUST be None."""
-    plugin = SWERebenchBenchmark(_make_config())
-    args = plugin.build_harness_args(
-        predictions_path=Path("/tmp/preds.json"),
-        run_id="test-run",
-    )
-    assert args["namespace"] is None
-    assert args["dataset_name"] == "nebius/SWE-rebench"
-    assert args["split"] == "filtered"
-
-
-def test_build_harness_args_namespace_none_even_if_config_lies() -> None:
-    """Belt-and-suspenders: if someone flips the YAML to set a namespace,
-    the plugin still forces it to None because SWE-rebench images are
-    fully qualified."""
-    config = _make_config()
-    config.docker_namespace = "rogue-prefix"  # simulate a misconfigured YAML
-    plugin = SWERebenchBenchmark(config)
-
-    args = plugin.build_harness_args(
-        predictions_path=Path("/tmp/preds.json"),
-        run_id="test-run",
-    )
-    assert args["namespace"] is None, (
-        "plugin must force namespace=None regardless of config to protect "
-        "against misconfigured YAML"
     )
 
 

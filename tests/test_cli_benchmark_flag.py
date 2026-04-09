@@ -34,7 +34,6 @@ def test_swe_bench_verified_yaml_exists_and_loads() -> None:
     assert config.display_name == "SWE-Bench Verified"
     assert config.harness_dataset == "princeton-nlp/SWE-bench_Verified"
     assert str(config.trace_root) == "traces/swebench_verified"  # legacy path preserved
-    assert config.docker_namespace == "swebench"
 
 
 def test_swe_rebench_yaml_exists_and_loads() -> None:
@@ -45,5 +44,4 @@ def test_swe_rebench_yaml_exists_and_loads() -> None:
     assert config.slug == "swe-rebench"
     assert config.harness_dataset == "nebius/SWE-rebench"
     assert config.harness_split == "filtered"
-    assert config.docker_namespace is None
     assert config.exclude_lite is False

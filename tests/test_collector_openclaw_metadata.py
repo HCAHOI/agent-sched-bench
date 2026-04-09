@@ -20,7 +20,6 @@ def _make_config() -> BenchmarkConfig:
         default_max_iterations=50,
         selection_n=32,
         selection_seed=42,
-        docker_namespace="swebench",
     )
 
 

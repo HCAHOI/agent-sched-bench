@@ -112,38 +112,6 @@ class SWERebenchBenchmark(Benchmark):
         return super().select_subset(pool, n=n, seed=seed)
 
     # ------------------------------------------------------------------
-    # Override: SWE-rebench images are fully qualified — no namespace prefix
-    # ------------------------------------------------------------------
-
-    def build_harness_args(
-        self,
-        *,
-        predictions_path: Path,
-        run_id: str,
-        max_workers: int = 1,
-        timeout: int = 1800,
-        report_dir: Path | None = None,
-    ) -> dict[str, Any]:
-        """Return harness args with ``namespace=None``.
-
-        SWE-rebench ships fully qualified ``swerebench/sweb.eval.*`` image
-        URIs, so the harness's ``--namespace`` prefix must not be applied.
-        The base implementation already reads ``namespace`` from
-        ``self.config.docker_namespace`` (which is ``None`` in
-        ``configs/benchmarks/swe-rebench.yaml``), but we force it here too
-        as a belt-and-suspenders guard against someone flipping the YAML.
-        """
-        args = super().build_harness_args(
-            predictions_path=predictions_path,
-            run_id=run_id,
-            max_workers=max_workers,
-            timeout=timeout,
-            report_dir=report_dir,
-        )
-        args["namespace"] = None
-        return args
-
-    # ------------------------------------------------------------------
     # Override: reuse the SWEBenchRunner for swe_patch tasks
     # ------------------------------------------------------------------
 

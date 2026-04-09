@@ -34,7 +34,6 @@ class BenchmarkConfig:
     default_max_iterations: int
     selection_n: int
     selection_seed: int
-    docker_namespace: str | None
     exclude_lite: bool = False
     extras: dict[str, Any] = field(default_factory=dict)
 
@@ -62,7 +61,6 @@ class BenchmarkConfig:
             default_max_iterations=int(raw["default_max_iterations"]),
             selection_n=int(raw["selection_n"]),
             selection_seed=int(raw["selection_seed"]),
-            docker_namespace=raw.get("docker_namespace"),
             exclude_lite=bool(raw.get("exclude_lite", False)),
             extras=dict(raw.get("extras", {})),
         )
@@ -142,33 +140,6 @@ class Benchmark(ABC):
         effective_n = n if n is not None else self.config.selection_n
         sorted_tasks = sorted(tasks, key=lambda t: t.get("instance_id", ""))
         return sorted_tasks[:effective_n]
-
-    def build_harness_args(
-        self,
-        *,
-        predictions_path: Path,
-        run_id: str,
-        max_workers: int = 1,
-        timeout: int = 1800,
-        report_dir: Path | None = None,
-    ) -> dict[str, Any]:
-        """Return keyword arguments suitable for invoking the SWE-bench harness.
-
-        Returns:
-            Dict with ``dataset_name``, ``split``, ``namespace``,
-            ``predictions_path``, ``run_id``, ``max_workers``, ``timeout``,
-            and ``report_dir``.
-        """
-        return {
-            "dataset_name": self.config.harness_dataset,
-            "split": self.config.harness_split,
-            "namespace": self.config.docker_namespace,
-            "predictions_path": predictions_path,
-            "run_id": run_id,
-            "max_workers": max_workers,
-            "timeout": timeout,
-            "report_dir": report_dir,
-        }
 
     def image_name_for(self, task: dict[str, Any]) -> str | None:
         """Return the Docker image name for *task*, or ``None`` if not set."""

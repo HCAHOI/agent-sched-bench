@@ -34,5 +34,3 @@ trace_root: traces/bfcl-v4
 default_max_iterations: 20
 selection_n: 32
 selection_seed: 42
-# No docker — scoring is in-process.
-docker_namespace: null

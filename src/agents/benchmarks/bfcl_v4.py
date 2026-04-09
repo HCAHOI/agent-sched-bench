@@ -251,21 +251,6 @@ class BFCLv4Benchmark(Benchmark):
             "ground_truth performed in-process by BFCLRunner."
         )
 
-    def build_harness_args(
-        self,
-        *,
-        predictions_path: Path,
-        run_id: str,
-        max_workers: int = 1,
-        timeout: int = 1800,
-        report_dir: Path | None = None,
-    ) -> dict[str, Any]:
-        raise NotImplementedError(
-            "BFCL v4 has no SWE-bench harness; evaluation is in-process AST "
-            "scoring via BFCLRunner. The --evaluate flag on trace_collect.cli "
-            "does not apply to this benchmark."
-        )
-
     def image_name_for(self, task: dict[str, Any]) -> str | None:
         """BFCL v4 has no Docker image — tasks run in-process."""
         return None

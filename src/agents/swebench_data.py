@@ -57,7 +57,6 @@ _DEFAULT_CONFIG = BenchmarkConfig(
     default_max_iterations=80,
     selection_n=32,
     selection_seed=42,
-    docker_namespace="swebench",
 )
 
 
