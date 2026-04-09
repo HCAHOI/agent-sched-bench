@@ -436,7 +436,7 @@ async def simulate(
         simulate_summary: dict[str, Any] = {
             "agent_id": agent_id,
             "task_id": agent_id,
-            "n_steps": succeeded_iters,
+            "n_iterations": succeeded_iters,
             "elapsed_s": wall_end - wall_start,
             "source_trace": str(source_trace),
             "source_model": source_model,

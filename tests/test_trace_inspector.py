@@ -98,7 +98,7 @@ def sample_trace(tmp_path: Path) -> Path:
         {
             "type": "summary",
             "agent_id": "django__django-11734",
-            "n_steps": 2,
+            "n_iterations": 2,
             "elapsed_s": 4.0,
             "total_llm_ms": 3500,
             "total_tool_ms": 80,

@@ -31,7 +31,7 @@ data_root: data/bfcl-v4
 # No git repos — BFCL tasks carry JSON-Schema tool specs, not codebases.
 repos_root: null
 trace_root: traces/bfcl-v4
-default_max_steps: 20
+default_max_iterations: 20
 selection_n: 32
 selection_seed: 42
 # No docker — scoring is in-process.

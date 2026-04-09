@@ -137,7 +137,7 @@ def extract_agent_kwargs(
     """Project workload config into the agent constructor kwargs we actually support."""
     if workload_name == "code_agent":
         return {
-            "max_steps": workload_config.get("max_steps", 60),
+            "max_iterations": workload_config.get("max_iterations", 60),
             "command_timeout_s": workload_config.get("command_timeout_s", 120.0),
             "task_timeout_s": workload_config.get("task_timeout_s", 1200.0),
             "repos_root": workload_config.get("repos_root"),

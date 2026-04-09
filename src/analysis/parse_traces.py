@@ -40,7 +40,7 @@ def summarize_trace_frame(frame: pd.DataFrame) -> dict[str, Any]:
         jct_series = pd.Series(dtype=float)
 
     return {
-        "n_steps": int(len(step_rows)),
+        "n_iterations": int(len(step_rows)),
         "n_summaries": int(len(summary_rows)),
         "throughput_steps_per_min": throughput_steps_per_min,
         "avg_jct_s": float(jct_series.mean()) if not jct_series.empty else 0.0,

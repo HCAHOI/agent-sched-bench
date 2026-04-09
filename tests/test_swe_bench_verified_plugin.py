@@ -25,7 +25,7 @@ def _make_config() -> BenchmarkConfig:
         data_root=Path("data/swebench_verified"),
         repos_root=None,
         trace_root=Path("traces/swebench_verified"),
-        default_max_steps=80,
+        default_max_iterations=80,
         selection_n=32,
         selection_seed=42,
         docker_namespace="swebench",

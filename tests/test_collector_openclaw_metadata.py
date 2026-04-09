@@ -17,7 +17,7 @@ def _make_config() -> BenchmarkConfig:
         data_root=Path("data/swebench_verified"),
         repos_root=Path("data/swebench_repos"),
         trace_root=Path("traces/swebench_verified"),
-        default_max_steps=50,
+        default_max_iterations=50,
         selection_n=32,
         selection_seed=42,
         docker_namespace="swebench",
@@ -51,7 +51,7 @@ def test_normalize_openclaw_trace_writes_v5_with_benchmark(tmp_path: Path) -> No
         src=src, dst=dst,
         benchmark=plugin,
         model="test/model", api_base="https://x.y",
-        max_steps=50, instance_id="test-1",
+        max_iterations=50, instance_id="test-1",
     )
 
     lines = dst.read_text(encoding="utf-8").strip().splitlines()
@@ -98,7 +98,7 @@ def test_normalize_openclaw_trace_preserves_runner_scaffold_capabilities(
     _normalize_openclaw_trace(
         src=src, dst=dst, benchmark=plugin,
         model="test/model", api_base="https://x.y",
-        max_steps=50, instance_id="test-1",
+        max_iterations=50, instance_id="test-1",
     )
 
     metadata = json.loads(dst.read_text(encoding="utf-8").splitlines()[0])
@@ -134,7 +134,7 @@ def test_normalize_openclaw_trace_conservative_default_when_no_source_metadata(
     _normalize_openclaw_trace(
         src=src, dst=dst, benchmark=plugin,
         model="test/model", api_base="https://x.y",
-        max_steps=50, instance_id="test-1",
+        max_iterations=50, instance_id="test-1",
     )
 
     metadata = json.loads(dst.read_text(encoding="utf-8").splitlines()[0])

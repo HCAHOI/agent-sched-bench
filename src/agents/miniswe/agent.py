@@ -161,7 +161,7 @@ class MiniSWECodeAgent(AgentBase):
         model: str,
         *,
         api_key: str = "EMPTY",
-        max_steps: int = 50,
+        max_iterations: int = 50,
         command_timeout_s: float = 120.0,
         task_timeout_s: float = 1200.0,
         max_tool_output_chars: int = 8000,
@@ -176,7 +176,7 @@ class MiniSWECodeAgent(AgentBase):
             api_key=api_key,
             max_tool_output_chars=max_tool_output_chars,
         )
-        self.max_steps = max_steps
+        self.max_iterations = max_iterations
         self.command_timeout_s = command_timeout_s
         self.task_timeout_s = task_timeout_s
         self.repos_root = Path(repos_root) if repos_root else None
@@ -326,7 +326,7 @@ class MiniSWECodeAgent(AgentBase):
             env,
             system_template=_SYSTEM_TEMPLATE,
             instance_template=instance_template,
-            step_limit=self.max_steps,
+            step_limit=self.max_iterations,
             cost_limit=0.0,
             output_path=str(self._workdir / "trajectory.json"),
             max_context_tokens=self.max_context_tokens,
@@ -351,7 +351,7 @@ class MiniSWECodeAgent(AgentBase):
             if attempt_ctx is not None:
                 container_id = getattr(env, "container_id", None)
                 if container_id:
-                    attempt_ctx.claude_output = _capture_container_logs(
+                    attempt_ctx.container_stdout = _capture_container_logs(
                         container_id, executable
                     )
             # Stop and remove the container explicitly; do not rely on __del__.

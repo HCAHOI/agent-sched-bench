@@ -312,7 +312,7 @@ class AgentBase(ABC):
             "agent_id": self.agent_id,
             "program_id": self.agent_id,
             "task_id": self.task_id,
-            "n_steps": n_iterations,
+            "n_iterations": n_iterations,
             "total_llm_ms": total_llm_ms,
             "total_tool_ms": total_tool_ms,
             "total_tokens": total_tokens,

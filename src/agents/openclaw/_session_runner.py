@@ -73,7 +73,7 @@ class TraceCollectorHook(AgentHook):
         self.trace_file.parent.mkdir(parents=True, exist_ok=True)
         self._wall_start = time.monotonic()
         self._total_tokens = 0
-        self._n_steps = 0
+        self._n_iterations = 0
         self._tool_times: dict[str, float] = {}
         self._tool_timeouts: dict[str, int] = {}
         self._tool_start_ts: dict[str, float] = {}
@@ -150,7 +150,7 @@ class TraceCollectorHook(AgentHook):
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         ts_now = time.time()
-        self._n_steps += 1
+        self._n_iterations += 1
 
         usage = context.usage or {}
         prompt_tokens = usage.get("prompt_tokens", 0)
@@ -385,7 +385,7 @@ class TraceCollectorHook(AgentHook):
             program_id=self.program_id,
             task_id=self.task_id,
             instance_id=self.instance_id,
-            n_steps=self._n_steps,
+            n_iterations=self._n_iterations,
             total_llm_ms=sum(
                 a.get("data", {}).get("llm_latency_ms", 0)
                 for a in self._actions

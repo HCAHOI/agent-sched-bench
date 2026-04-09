@@ -92,11 +92,11 @@ def test_write_tool_calls_json_is_top_level_list(tmp_path: Path) -> None:
     assert doc == tool_calls
 
 
-def test_write_claude_output_and_stderr(tmp_path: Path) -> None:
-    attempt_layout.write_claude_output(tmp_path, "hello stdout")
-    attempt_layout.write_claude_stderr(tmp_path, "hello stderr")
-    assert (tmp_path / "claude_output.txt").read_text() == "hello stdout"
-    assert (tmp_path / "claude_stderr.txt").read_text() == "hello stderr"
+def test_write_container_stdout_and_stderr(tmp_path: Path) -> None:
+    attempt_layout.write_container_stdout(tmp_path, "hello stdout")
+    attempt_layout.write_container_stderr(tmp_path, "hello stderr")
+    assert (tmp_path / "container_stdout.txt").read_text() == "hello stdout"
+    assert (tmp_path / "container_stderr.txt").read_text() == "hello stderr"
 
 
 def test_copy_trace_jsonl_round_trip(tmp_path: Path) -> None:

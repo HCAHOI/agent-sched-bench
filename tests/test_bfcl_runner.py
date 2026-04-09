@@ -353,7 +353,7 @@ def test_run_task_emits_trace_metadata_and_llm_call_action(tmp_path: Path) -> No
     assert summary["type"] == "summary"
     assert summary["success"] is True
     assert summary["total_tokens"] == 49
-    assert summary["n_steps"] == 1  # honest count: one llm_call action performed
+    assert summary["n_iterations"] == 1  # honest count: one llm_call action performed
 
 
 def test_run_task_irrelevance_with_empty_predicted(tmp_path: Path) -> None:

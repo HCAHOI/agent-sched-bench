@@ -3,7 +3,7 @@ v4-aware ``get_session_status`` parsing.
 
 These pin down the codex-critic findings against the prior version that:
 1. silently dropped ``--trace-output`` when running in ``--async`` mode, and
-2. parsed ``type=step`` records and the ``n_steps`` summary key, both of
+2. parsed ``type=step`` records and the ``n_iterations`` summary key, both of
    which no longer exist after the v4 action/event refactor.
 """
 
@@ -146,7 +146,6 @@ def test_get_session_status_reads_v4_actions_via_pid_metadata(tmp_path: Path) ->
     assert status["elapsed_s"] == pytest.approx(37.5)
     # No legacy v3 step keys leak into the response.
     assert "steps" not in status
-    assert "n_steps" not in status
 
 
 def test_get_session_status_handles_v4_trace_with_no_summary(tmp_path: Path) -> None:

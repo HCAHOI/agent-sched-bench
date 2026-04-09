@@ -632,7 +632,7 @@ def _convert_session_records(
     yield {
         "__summary__": True,
         "agent_id": agent_id,
-        "n_steps": n_llm_actions,
+        "n_iterations": n_llm_actions,
         "n_tool_actions": n_tool_actions,
         "total_llm_ms": round(total_llm_ms, 2),
         "total_tool_ms": round(total_tool_ms, 2),
@@ -760,7 +760,7 @@ def import_claude_code_session(
         (s for s in summaries if s["agent_id"] == main_agent_id), None
     )
     if main_summary:
-        metadata["max_iterations"] = main_summary["n_steps"]
+        metadata["max_iterations"] = main_summary["n_iterations"]
 
     # Write the v5 JSONL atomically: metadata header, sorted actions,
     # then one summary per agent lane.
@@ -773,7 +773,7 @@ def import_claude_code_session(
             record = {
                 "type": "summary",
                 "agent_id": summary_data["agent_id"],
-                "n_steps": summary_data["n_steps"],
+                "n_iterations": summary_data["n_iterations"],
                 "n_tool_actions": summary_data["n_tool_actions"],
                 "total_llm_ms": summary_data["total_llm_ms"],
                 "total_tool_ms": summary_data["total_tool_ms"],

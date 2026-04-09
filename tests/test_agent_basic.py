@@ -63,7 +63,7 @@ def test_agent_summary_aggregates_action_fields() -> None:
     ]
     summary = agent.summary()
     assert summary["program_id"] == "agent-0002"
-    assert summary["n_steps"] == 2  # 2 distinct iterations
+    assert summary["n_iterations"] == 2  # 2 distinct iterations
     assert summary["total_tokens"] == 15
     assert summary["total_tool_ms"] == 25.0
 

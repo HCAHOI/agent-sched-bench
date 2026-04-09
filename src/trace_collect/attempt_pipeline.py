@@ -60,8 +60,8 @@ class AttemptContext:
     attempt_dir: Path = field(init=False)
     start_time: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     end_time: datetime | None = None
-    claude_output: str = ""
-    claude_stderr: str = ""
+    container_stdout: str = ""
+    container_stderr: str = ""
     pull_time_s: float = 0.0
     permission_fix_time_s: float = 0.0
 
@@ -197,10 +197,11 @@ class AttemptResult:
     success: bool
     exit_status: str | None
     trace_path: Path
+    model_patch: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     summary: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
-    n_steps: int | None = None
+    n_iterations: int | None = None
     total_llm_ms: float | None = None
     total_tool_ms: float | None = None
     total_tokens: int | None = None
@@ -247,7 +248,7 @@ async def run_attempt(
       4. ``await inner(ctx)`` — the scaffold's agent loop
       5. stop sampler, collect samples
       6. write all six attempt files (trace.jsonl, run_manifest, results,
-         resources, tool_calls, claude_output)
+         resources, tool_calls, container_stdout)
 
     On any exception from steps 1-4 the wrapper still writes a manifest with
     ``status="error"`` so failed runs leave a forensic record, then re-raises.
@@ -382,9 +383,9 @@ async def run_attempt(
         "pull_time": ctx.pull_time_s,
         "permission_fix_time": ctx.permission_fix_time_s,
         "claude_time": ctx.elapsed_seconds(),
-        "claude_output": {
-            "stdout": ctx.claude_output,
-            "stderr": ctx.claude_stderr,
+        "container_stdout": {
+            "stdout": ctx.container_stdout,
+            "stderr": ctx.container_stderr,
             "exit_code": 0 if success else 1,
         },
         "resource_samples": {"samples": samples, "summary": {}},
@@ -401,7 +402,7 @@ async def run_attempt(
         "prompt_template": ctx.prompt_template,
     }
     if result is not None:
-        results_payload["n_steps"] = result.n_steps
+        results_payload["n_iterations"] = result.n_iterations
         results_payload["total_tokens"] = result.total_tokens
         if result.summary:
             results_payload["scaffold_summary"] = result.summary
@@ -433,8 +434,8 @@ async def run_attempt(
         ctx.attempt_dir, samples, summary=resources_summary
     )
     attempt_layout.write_tool_calls_json(ctx.attempt_dir, tool_calls)
-    attempt_layout.write_claude_output(ctx.attempt_dir, ctx.claude_output)
-    attempt_layout.write_claude_stderr(ctx.attempt_dir, ctx.claude_stderr)
+    attempt_layout.write_container_stdout(ctx.attempt_dir, ctx.container_stdout)
+    attempt_layout.write_container_stderr(ctx.attempt_dir, ctx.container_stderr)
 
     if inner_error is not None:
         raise inner_error

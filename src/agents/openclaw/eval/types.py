@@ -252,7 +252,7 @@ class EvalTraceSummary:
     program_id: str = ""
     task_id: str = ""
     instance_id: str = ""
-    n_steps: int = 0
+    n_iterations: int = 0
     total_llm_ms: float = 0.0
     total_tool_ms: float = 0.0
     total_tokens: int = 0
@@ -269,7 +269,7 @@ class EvalTraceSummary:
             "program_id": self.program_id,
             "task_id": self.task_id,
             "instance_id": self.instance_id,
-            "n_steps": self.n_steps,
+            "n_iterations": self.n_iterations,
             "total_llm_ms": self.total_llm_ms,
             "total_tool_ms": self.total_tool_ms,
             "total_tokens": self.total_tokens,

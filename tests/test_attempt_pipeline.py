@@ -75,7 +75,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
 
     async def inner(ctx: AttemptContext) -> AttemptResult:
         ctx.mark_container_ready("fake_container_id_xyz")
-        ctx.claude_output = "hello from container stdout"
+        ctx.container_stdout = "hello from container stdout"
         return AttemptResult(
             success=True,
             exit_status="Submitted",
@@ -83,7 +83,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
             tool_calls=[
                 {"tool": "Bash", "input": {"command": "ls"}, "duration_ms": 12.0}
             ],
-            n_steps=18,
+            n_iterations=18,
             total_llm_ms=94000.0,
             total_tool_ms=12000.0,
             total_tokens=98088,
@@ -101,7 +101,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
         "results.json",
         "resources.json",
         "tool_calls.json",
-        "claude_output.txt",
+        "container_stdout.txt",
     ):
         assert (ctx.attempt_dir / name).exists(), f"{name} missing"
 
@@ -119,8 +119,8 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     results = json.loads((ctx.attempt_dir / "results.json").read_text())
     assert results["instance_id"] == "mozilla__bleach-259"
     assert results["success"] is True
-    assert results["claude_output"]["stdout"] == "hello from container stdout"
-    assert results["claude_output"]["exit_code"] == 0
+    assert results["container_stdout"]["stdout"] == "hello from container stdout"
+    assert results["container_stdout"]["exit_code"] == 0
 
     tool_calls = json.loads((ctx.attempt_dir / "tool_calls.json").read_text())
     assert isinstance(tool_calls, list)

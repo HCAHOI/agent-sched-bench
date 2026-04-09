@@ -1,29 +1,20 @@
-"""CLI entry point for trace collection and simulation.
+"""CLI entry point for trace collection, simulation, and Gantt serving.
 
 Usage (collect):
-    OPENROUTER_API_KEY=sk-xxx python -m trace_collect.cli \\
-        --model qwen/qwen3.6-plus:free \\
-        --max-steps 50 \\
-        --sample 5
+    DASHSCOPE_API_KEY=sk-xxx python -m trace_collect.cli \\
+        --provider dashscope --benchmark swe-rebench \\
+        --scaffold mini-swe-agent --max-iterations 50 --sample 5
 
 Usage (simulate):
     python -m trace_collect.cli simulate \\
-        --source-trace traces/swebench/qwen-plus/.../task.jsonl \\
-        --api-base http://localhost:8000/v1 \\
-        --model Qwen/Qwen2.5-Coder-7B-Instruct
-
-Usage (import OpenClaw):
-    python -m trace_collect.cli import-openclaw \\
-        --results /path/to/nanobot/results.jsonl \\
-        --model-name Qwen3.6-Plus
+        --source-trace traces/swe-rebench/.../task.jsonl \\
+        --api-base http://localhost:8000/v1 --model Qwen/...
 
 Usage (inspect):
     python -m trace_collect.cli inspect <trace.jsonl> overview
-    python -m trace_collect.cli inspect <trace.jsonl> step 5 [--json]
-    python -m trace_collect.cli inspect <trace.jsonl> search "pattern"
 
 Usage (gantt server):
-    python -m trace_collect.cli gantt-serve --config demo/gantt_viewer/configs/example.yaml
+    python -m trace_collect.cli gantt-serve --dev
 """
 
 from __future__ import annotations
@@ -82,10 +73,10 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Model name (default: from --provider).",
     )
     parser.add_argument(
-        "--max-steps",
+        "--max-iterations",
         type=int,
         default=50,
-        help="Maximum agent steps per task.",
+        help="Maximum agent iterations per task.",
     )
     parser.add_argument(
         "--command-timeout",
@@ -105,14 +96,6 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Benchmark slug (e.g. 'swe-bench-verified', 'swe-rebench'). "
             "Loads configs/benchmarks/<slug>.yaml and constructs the plugin."
-        ),
-    )
-    parser.add_argument(
-        "--task-source",
-        default=None,
-        help=(
-            "Optional override for the tasks JSON file. Defaults to "
-            "<benchmark.data_root>/tasks.json from the benchmark YAML."
         ),
     )
     parser.add_argument(
@@ -168,35 +151,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--run-id",
         default=None,
-        help="Resume an interrupted run by providing its existing run ID.",
-    )
-    parser.add_argument(
-        "--evaluate",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Run the official SWE-bench harness on generated predictions.",
-    )
-    parser.add_argument(
-        "--harness-workers",
-        type=int,
-        default=1,
-        help="Official harness max_workers; keep 1 for serial evaluation.",
-    )
-    parser.add_argument(
-        "--harness-timeout",
-        type=int,
-        default=1800,
-        help="Official harness timeout per task in seconds.",
-    )
-    parser.add_argument(
-        "--harness-run-id",
-        default=None,
-        help="Optional explicit run id for the official harness.",
-    )
-    parser.add_argument(
-        "--harness-report-dir",
-        default=None,
-        help="Directory where official harness logs/reports should be written.",
+        help="Resume an interrupted run by passing its existing run directory path.",
     )
     parser.add_argument(
         "--verbose",
@@ -285,33 +240,6 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def parse_import_openclaw_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Import nanobot/OpenClaw traces into the benchmark run layout.",
-    )
-    parser.add_argument(
-        "--results",
-        required=True,
-        help="Path to nanobot results.jsonl.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="traces",
-        help="Root output directory for imported benchmark-compatible traces.",
-    )
-    parser.add_argument(
-        "--model-name",
-        default="Qwen3.6-Plus",
-        help="Recorded model name stored in preds.json for imported traces.",
-    )
-    parser.add_argument(
-        "--run-id",
-        default=None,
-        help="Optional explicit run directory suffix.",
-    )
-    return parser.parse_args(argv)
-
-
 def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -360,24 +288,19 @@ def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
 
 def main() -> None:
     # Keyword detection: subcommand as first arg routes to the right parser.
-    if len(sys.argv) > 1 and sys.argv[1] == "simulate":
-        args = parse_simulate_args(sys.argv[2:])
-        _run_simulate(args)
-    elif len(sys.argv) > 1 and sys.argv[1] == "import-openclaw":
-        args = parse_import_openclaw_args(sys.argv[2:])
-        _run_import_openclaw(args)
-    elif len(sys.argv) > 1 and sys.argv[1] == "import-claude-code":
-        args = parse_import_claude_code_args(sys.argv[2:])
-        _run_import_claude_code(args)
-    elif len(sys.argv) > 1 and sys.argv[1] == "inspect":
+    sub = sys.argv[1] if len(sys.argv) > 1 else None
+    if sub == "simulate":
+        _run_simulate(parse_simulate_args(sys.argv[2:]))
+    elif sub == "import-claude-code":
+        _run_import_claude_code(parse_import_claude_code_args(sys.argv[2:]))
+    elif sub == "inspect":
         _run_inspect(sys.argv[2:])
-    elif len(sys.argv) > 1 and sys.argv[1] == "gantt-serve":
+    elif sub == "gantt-serve":
         from demo.gantt_viewer.backend.dev import main as run_gantt_server
 
         run_gantt_server(sys.argv[2:])
     else:
-        args = parse_collect_args()
-        _run_collect(args)
+        _run_collect(parse_collect_args())
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -425,24 +348,18 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     run_dir = asyncio.run(
         collect_traces(
+            scaffold=args.scaffold,
             api_base=api_base,
             api_key=api_key,
             model=model,
             benchmark=benchmark,
-            task_source=args.task_source if args.task_source else None,
-            max_steps=args.max_steps,
+            max_iterations=args.max_iterations,
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,
             sample=args.sample,
             instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
-            scaffold=args.scaffold,
             run_id=args.run_id,
             max_context_tokens=args.max_context_tokens,
-            evaluate=args.evaluate,
-            harness_max_workers=args.harness_workers,
-            harness_timeout=args.harness_timeout,
-            harness_run_id=args.harness_run_id,
-            harness_report_dir=args.harness_report_dir,
             mcp_config=args.mcp_config,
             prompt_template=args.prompt_template,
             min_free_disk_gb=args.min_free_disk_gb,
@@ -452,9 +369,6 @@ def _run_collect(args: argparse.Namespace) -> None:
     results_path = run_dir / "results.jsonl"
     if results_path.exists():
         print(f"Results written to: {results_path}")
-    predictions_path = run_dir / "preds.json"
-    if predictions_path.exists():
-        print(f"Predictions written to: {predictions_path}")
 
 
 def _run_simulate(args: argparse.Namespace) -> None:
@@ -485,20 +399,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
         )
     )
     print(f"Simulate trace written to: {trace_file}")
-
-
-def _run_import_openclaw(args: argparse.Namespace) -> None:
-    from trace_collect.openclaw_import import import_openclaw_run
-
-    run_dir = import_openclaw_run(
-        results_path=Path(args.results),
-        output_dir=Path(args.output_dir),
-        model_name=args.model_name,
-        run_id=args.run_id,
-    )
-    print(f"Imported OpenClaw traces to: {run_dir}/")
-    print(f"Results written to: {run_dir / 'results.jsonl'}")
-    print(f"Predictions written to: {run_dir / 'preds.json'}")
 
 
 def _run_import_claude_code(args: argparse.Namespace) -> None:

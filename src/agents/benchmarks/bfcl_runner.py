@@ -349,7 +349,7 @@ class BFCLRunner:
             {
                 "instance_id": task.instance_id,
                 "category": task.category,
-                "n_steps": 1,
+                "n_iterations": 1,
                 "elapsed_s": t_llm_end - t_llm_start,
                 "total_llm_ms": llm_latency_ms,
                 "total_tool_ms": 0,

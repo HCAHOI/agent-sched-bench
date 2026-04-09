@@ -402,7 +402,7 @@ def test_summary_record_per_lane(converted_trace: Path) -> None:
         s for s in summaries if s["agent_id"] == "claude_code_minimal"
     )
     # 2 assistant records in main lane fixture
-    assert main_summary["n_steps"] == 2
+    assert main_summary["n_iterations"] == 2
     assert main_summary["n_tool_actions"] == 1
     assert main_summary["elapsed_s"] > 0
     assert main_summary["total_tokens"] > 0
@@ -791,7 +791,7 @@ def test_empty_session_with_only_discardable_records(tmp_path: Path) -> None:
     # Summary still emitted per lane
     summaries = [r for r in records if r.get("type") == "summary"]
     assert len(summaries) == 1
-    assert summaries[0]["n_steps"] == 0
+    assert summaries[0]["n_iterations"] == 0
     assert summaries[0]["n_tool_actions"] == 0
 
     # Loads via TraceData without ValueError

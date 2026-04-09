@@ -1,3 +1,3 @@
 {"type": "trace_metadata", "trace_format_version": 5, "scaffold": "openclaw", "benchmark": "bfcl-v4", "task_shape": "function_call", "needs_prepare": false, "instance_id": "bfcl_test_001", "model": "qwen-plus-latest", "mode": "collect"}
 {"type": "action", "action_type": "llm_call", "action_id": "llm_0", "agent_id": "bfcl_test_001", "iteration": 0, "ts_start": 1700000000.0, "ts_end": 1700000001.0, "data": {"messages_in": [{"role": "user", "content": "call function f(x=1)"}], "prompt_tokens": 10, "completion_tokens": 5}}
-{"type": "summary", "agent_id": "bfcl_test_001", "model": "qwen-plus-latest", "n_steps": 1, "elapsed_s": 1.0}
+{"type": "summary", "agent_id": "bfcl_test_001", "model": "qwen-plus-latest", "n_iterations": 1, "elapsed_s": 1.0}

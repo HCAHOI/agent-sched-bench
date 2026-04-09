@@ -22,7 +22,7 @@ def _make_config(slug: str) -> BenchmarkConfig:
         data_root=Path(f"data/{slug}"),
         repos_root=None,
         trace_root=Path(f"traces/{slug}"),
-        default_max_steps=10,
+        default_max_iterations=10,
         selection_n=2,
         selection_seed=0,
         docker_namespace=None,

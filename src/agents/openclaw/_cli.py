@@ -48,7 +48,7 @@ class CLIStreamHook:
         self.sid_short = session_id[:10]
         self.quiet = quiet
         self._iter_start = 0.0
-        self._n_steps = 0
+        self._n_iterations = 0
         self._total_tokens = 0
         self._wall_start = time.monotonic()
 
@@ -77,7 +77,7 @@ class CLIStreamHook:
             self._log("TOOL", f"{tc.name}({args_preview})")
 
     async def after_iteration(self, context: Any) -> None:
-        self._n_steps += 1
+        self._n_iterations += 1
         usage = context.usage or {}
         pt = usage.get("prompt_tokens", 0)
         ct = usage.get("completion_tokens", 0)
@@ -85,7 +85,7 @@ class CLIStreamHook:
         lat_ms = (time.monotonic() - self._iter_start) * 1000 if self._iter_start else 0
         self._log(
             "ITER",
-            f"step {self._n_steps}, tokens: {pt}+{ct}, llm: {lat_ms:.0f}ms",
+            f"step {self._n_iterations}, tokens: {pt}+{ct}, llm: {lat_ms:.0f}ms",
         )
 
     async def on_stream(self, context: Any, delta: str) -> None:
@@ -103,7 +103,7 @@ class CLIStreamHook:
         elapsed = time.monotonic() - self._wall_start
         self._log(
             "DONE",
-            f"completed in {elapsed:.1f}s, {self._n_steps} steps, "
+            f"completed in {elapsed:.1f}s, {self._n_iterations} steps, "
             f"{self._total_tokens} total tokens",
         )
 
@@ -374,7 +374,7 @@ def _run_sync(args: argparse.Namespace) -> int:
         output = {
             "session_key": session_key,
             "content": content,
-            "steps": cli_hook._n_steps,
+            "steps": cli_hook._n_iterations,
             "tokens": cli_hook._total_tokens,
             "elapsed_s": round(result.elapsed_s, 2),
             "trace_file": str(trace_file),

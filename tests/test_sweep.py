@@ -56,7 +56,7 @@ matrix:
     write_yaml(
         tmp_path / "configs/workloads/code_agent.yaml",
         """
-max_steps: 40
+max_iterations: 40
 command_timeout_s: 30
 task_timeout_s: 300
 task_source: """

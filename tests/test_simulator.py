@@ -158,7 +158,7 @@ class TestLoadTraceActions:
             {"type": "action", "action_type": "tool_exec", "action_id": "tool_0_bash",
              "agent_id": "t1", "iteration": 0, "ts_start": 102, "ts_end": 103,
              "data": {"tool_name": "bash", "tool_args": "{}"}},
-            {"type": "summary", "agent_id": "t1", "n_steps": 1},
+            {"type": "summary", "agent_id": "t1", "n_iterations": 1},
         ]
         trace.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
 

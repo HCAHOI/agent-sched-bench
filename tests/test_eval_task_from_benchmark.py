@@ -36,7 +36,7 @@ def test_from_benchmark_instance_with_rebench_plugin_pins_image() -> None:
         data_root=Path("data/swe-rebench"),
         repos_root=Path("data/swe-rebench/repos"),
         trace_root=Path("traces/swe-rebench"),
-        default_max_steps=50,
+        default_max_iterations=50,
         selection_n=32,
         selection_seed=42,
         docker_namespace=None,

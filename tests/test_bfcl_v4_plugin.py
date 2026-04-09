@@ -25,7 +25,7 @@ def _make_config(tmp_path: Path) -> BenchmarkConfig:
         data_root=tmp_path / "data",
         repos_root=None,
         trace_root=tmp_path / "traces",
-        default_max_steps=20,
+        default_max_iterations=20,
         selection_n=4,
         selection_seed=42,
         docker_namespace=None,

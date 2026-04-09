@@ -31,7 +31,7 @@ class BenchmarkConfig:
     data_root: Path
     repos_root: Path | None
     trace_root: Path
-    default_max_steps: int
+    default_max_iterations: int
     selection_n: int
     selection_seed: int
     docker_namespace: str | None
@@ -59,7 +59,7 @@ class BenchmarkConfig:
             data_root=Path(raw["data_root"]),
             repos_root=repos_root,
             trace_root=Path(raw["trace_root"]),
-            default_max_steps=int(raw["default_max_steps"]),
+            default_max_iterations=int(raw["default_max_iterations"]),
             selection_n=int(raw["selection_n"]),
             selection_seed=int(raw["selection_seed"]),
             docker_namespace=raw.get("docker_namespace"),

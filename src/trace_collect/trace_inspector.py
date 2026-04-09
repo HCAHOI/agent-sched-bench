@@ -174,7 +174,7 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         "scaffold": data.metadata.get("scaffold"),
         "mode": data.metadata.get("mode"),
         "model": data.metadata.get("model"),
-        "n_steps": len(data.actions),
+        "n_iterations": len(data.actions),
         "n_events": len(data.events),
         "tool_counts": tool_counts,
         "total_tokens": total_tokens,
@@ -195,7 +195,7 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
     print(f"  Scaffold  : {info['scaffold']}")
     print(f"  Mode      : {info['mode']}")
     print(f"  Model     : {info['model']}")
-    print(f"  Steps     : {info['n_steps']}")
+    print(f"  Steps     : {info['n_iterations']}")
     print(f"  Events    : {info['n_events']}")
     if tool_counts:
         counts_str = ", ".join(
@@ -656,7 +656,7 @@ def _print_tl_summary(summary: dict[str, Any]) -> None:
     llm_s = summary.get("total_llm_ms", 0) / 1000
     tool_s = summary.get("total_tool_ms", 0) / 1000
     elapsed = summary.get("elapsed_s", 0)
-    n = summary.get("n_steps", 0)
+    n = summary.get("n_iterations", 0)
     tokens = summary.get("total_tokens", 0)
     ok = "✓ success" if summary.get("success") else "✗ failed"
     prepare_ms = summary.get("prepare_ms")

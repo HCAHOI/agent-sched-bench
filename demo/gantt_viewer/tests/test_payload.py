@@ -11,7 +11,7 @@ records) to validate that the Gantt data builder:
 5. Skips unknown action types instead of crashing (forward compat).
 6. Ships span / marker registries inside the payload root.
 7. Uses v4 vocabulary for metadata keys (n_actions / n_iterations /
-   max_iterations, NOT n_steps / max_steps).
+   max_iterations, NOT n_iterations / max_steps).
 """
 
 from __future__ import annotations
@@ -293,7 +293,7 @@ def test_metadata_uses_v4_keys(tmp_path: Path) -> None:
     assert "n_actions" in meta
     assert "n_iterations" in meta
     assert "max_iterations" in meta
-    assert "n_steps" not in meta, "v3 'n_steps' key must be removed"
+    assert "n_iterations" not in meta, "v3 'n_iterations' key must be removed"
     assert "max_steps" not in meta, "v3 'max_steps' key must be removed"
     assert meta["n_actions"] == 3
     assert meta["n_iterations"] == 2  # iterations 0 and 1

@@ -11,7 +11,7 @@ harness_split: test
 data_root: data/swebench_verified
 repos_root: data/swebench_repos
 trace_root: traces/swebench_verified
-default_max_steps: 50
+default_max_iterations: 50
 selection_n: 32
 selection_seed: 42
 docker_namespace: swebench

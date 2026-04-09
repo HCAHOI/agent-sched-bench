@@ -8,7 +8,7 @@ harness) emits the same six files into ``<run_dir>/<instance_id>/attempt_<N>/``:
 - ``results.json`` — timing breakdown + per-run summary (mirrors CC schema)
 - ``resources.json`` — 1 Hz container CPU/mem time series
 - ``tool_calls.json`` — flat list of tool invocations with timing
-- ``claude_output.txt`` — captured container stdout/stderr after the run
+- ``container_stdout.txt`` — captured container stdout/stderr after the run
 
 This module only writes; orchestration lives in ``attempt_pipeline.py`` and the
 scaffold adapters.
@@ -30,8 +30,8 @@ RUN_MANIFEST_FILENAME = "run_manifest.json"
 RESULTS_FILENAME = "results.json"
 RESOURCES_FILENAME = "resources.json"
 TOOL_CALLS_FILENAME = "tool_calls.json"
-CLAUDE_OUTPUT_FILENAME = "claude_output.txt"
-CLAUDE_STDERR_FILENAME = "claude_stderr.txt"
+CONTAINER_STDOUT_FILENAME = "container_stdout.txt"
+CONTAINER_STDERR_FILENAME = "container_stderr.txt"
 TRACE_FILENAME = "trace.jsonl"
 
 SCHEMA_VERSION = 1
@@ -84,8 +84,8 @@ def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
                 "resources_json": RESOURCES_FILENAME,
                 "trace_jsonl": TRACE_FILENAME,
                 "tool_calls_json": TOOL_CALLS_FILENAME,
-                "claude_output_txt": CLAUDE_OUTPUT_FILENAME,
-                "claude_stderr_txt": "",
+                "container_stdout_txt": CONTAINER_STDOUT_FILENAME,
+                "container_stderr_txt": "",
                 "resource_plot_png": "",
             },
         ),
@@ -137,19 +137,19 @@ def write_tool_calls_json(
     return path
 
 
-def write_claude_output(attempt_dir: Path, stdout_text: str) -> Path:
-    """Write captured container stdout to ``claude_output.txt``.
+def write_container_stdout(attempt_dir: Path, stdout_text: str) -> Path:
+    """Write captured container stdout to ``container_stdout.txt``.
 
-    Stderr goes to a sibling file when provided via ``write_claude_stderr``.
+    Stderr goes to a sibling file when provided via ``write_container_stderr``.
     """
-    path = attempt_dir / CLAUDE_OUTPUT_FILENAME
+    path = attempt_dir / CONTAINER_STDOUT_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(stdout_text or "", encoding="utf-8")
     return path
 
 
-def write_claude_stderr(attempt_dir: Path, stderr_text: str) -> Path:
-    path = attempt_dir / CLAUDE_STDERR_FILENAME
+def write_container_stderr(attempt_dir: Path, stderr_text: str) -> Path:
+    path = attempt_dir / CONTAINER_STDERR_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(stderr_text or "", encoding="utf-8")
     return path

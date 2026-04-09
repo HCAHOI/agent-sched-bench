@@ -88,7 +88,7 @@ def test_parse_traces_and_detect_inefficiency(tmp_path: Path) -> None:
             "preemption_counter_delta": 1,
         },
     )
-    assert summary["n_steps"] == 2
+    assert summary["n_iterations"] == 2
     assert summary["avg_jct_s"] == 3.0
     assert ineff["heuristic_long_tool_wait_count"] == 1
     assert ineff["heuristic_failed_tool_count"] == 1
