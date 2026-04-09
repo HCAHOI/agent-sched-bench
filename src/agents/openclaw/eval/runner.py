@@ -100,6 +100,9 @@ class SWEBenchRunner:
 
         effective_trace_file = trace_file or (ws / "trace.jsonl")
         effective_tool_workspace = tool_workspace or ws
+        effective_project_workspace = effective_tool_workspace
+        if container_workspace is not None and tool_workspace is None:
+            effective_project_workspace = Path("/testbed")
 
         prompt_text = self._build_swe_bench_prompt(
             task.problem_statement, prompt_template=prompt_template
@@ -109,6 +112,7 @@ class SWEBenchRunner:
             prompt=prompt_text,
             workspace=ws,
             tool_workspace=effective_tool_workspace,
+            project_workspace=effective_project_workspace,
             session_key=session_key,
             trace_file=effective_trace_file,
             instance_id=task.instance_id,

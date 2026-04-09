@@ -16,8 +16,14 @@ class ContextBuilder:
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
-    def __init__(self, workspace: Path, timezone: str | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        timezone: str | None = None,
+        project_workspace: Path | None = None,
+    ):
         self.workspace = workspace
+        self.project_workspace = project_workspace or workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
@@ -51,9 +57,16 @@ Skills with available="false" need dependencies installed first - you can try in
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self) -> str:
-        workspace_path = str(self.workspace.expanduser().resolve())
+        workspace_path = str(self.project_workspace.expanduser().resolve())
+        state_workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
+        state_workspace_line = ""
+        if state_workspace_path != workspace_path:
+            state_workspace_line = (
+                f"- Agent state directory: {state_workspace_path} "
+                "(stores sessions, memory, and custom skills)\n"
+            )
 
         platform_policy = ""
         if system == "Windows":
@@ -77,9 +90,9 @@ You are OpenClaw Research Agent, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
-- History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+{state_workspace_line}- Long-term memory: {state_workspace_path}/memory/MEMORY.md (write important facts here)
+- History log: {state_workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+- Custom skills: {state_workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
 
@@ -128,12 +141,17 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
 
     def _load_bootstrap_files(self) -> str:
         parts = []
+        search_roots = [self.project_workspace]
+        if self.workspace != self.project_workspace:
+            search_roots.append(self.workspace)
 
         for filename in self.BOOTSTRAP_FILES:
-            file_path = self.workspace / filename
-            if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
-                parts.append(f"## {filename}\n\n{content}")
+            for root in search_roots:
+                file_path = root / filename
+                if file_path.exists():
+                    content = file_path.read_text(encoding="utf-8")
+                    parts.append(f"## {filename}\n\n{content}")
+                    break
 
         return "\n\n".join(parts) if parts else ""
 

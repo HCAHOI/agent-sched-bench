@@ -158,6 +158,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         tool_workspace: Path | None = None,
+        project_workspace: Path | None = None,
         model: str | None = None,
         max_iterations: int | None = None,
         context_window_tokens: int | None = None,
@@ -181,6 +182,7 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.tool_workspace = tool_workspace or workspace
+        self.project_workspace = project_workspace or self.tool_workspace
         self.model = model or provider.get_default_model()
         self.max_iterations = (
             max_iterations
@@ -211,7 +213,11 @@ class AgentLoop:
         self._mcp_event_callback = None
         self._dispatch_iteration = 0
 
-        self.context = ContextBuilder(workspace, timezone=timezone)
+        self.context = ContextBuilder(
+            workspace,
+            timezone=timezone,
+            project_workspace=self.project_workspace,
+        )
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
