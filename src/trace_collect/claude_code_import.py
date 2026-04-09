@@ -32,6 +32,7 @@ _DISCARDABLE_TYPES = frozenset(
         "last-prompt",  # CC >= 2.1.96 session bookmark; no trace-relevant info
     }
 )
+_CLAUDE_CODE_RECORD_TYPES = _DISCARDABLE_TYPES | {"assistant", "user"}
 
 def _iso_to_unix(iso_str: str | None) -> float | None:
     if not iso_str:
@@ -80,6 +81,40 @@ def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
                 break
 
     return harvested
+
+
+def looks_like_claude_code_session(
+    session_path: Path,
+    *,
+    max_records: int = 20,
+) -> bool:
+    """Best-effort sniff for raw Claude Code session JSONL."""
+
+    session_path = Path(session_path).expanduser().resolve()
+    seen_records = 0
+    with open(session_path, encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError:
+                return False
+            if not isinstance(record, dict):
+                return False
+
+            rtype = record.get("type")
+            if rtype == "trace_metadata":
+                return False
+            if rtype in _CLAUDE_CODE_RECORD_TYPES:
+                return True
+
+            seen_records += 1
+            if seen_records >= max_records:
+                return False
+
+    return False
 def _split_assistant_content(
     content: list[dict[str, Any]] | str | None,
 ) -> tuple[str, str, list[dict[str, Any]]]:

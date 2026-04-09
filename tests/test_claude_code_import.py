@@ -26,6 +26,7 @@ from trace_collect.claude_code_import import (
     SCAFFOLD_LABEL,
     V5_FORMAT_VERSION,
     import_claude_code_session,
+    looks_like_claude_code_session,
 )
 
 
@@ -68,6 +69,47 @@ def _load_records(path: Path) -> list[dict]:
                 continue
             records.append(json.loads(line))
     return records
+
+
+def test_looks_like_claude_code_session_accepts_fixture() -> None:
+    assert looks_like_claude_code_session(FIXTURE) is True
+
+
+def test_looks_like_claude_code_session_accepts_queue_operation_first_record(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "queue-first.jsonl"
+    session_path.write_text(
+        json.dumps(
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "timestamp": "2026-04-08T10:00:00.000Z",
+                "sessionId": "demo-session",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert looks_like_claude_code_session(session_path) is True
+
+
+def test_looks_like_claude_code_session_rejects_canonical_trace(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "type": "trace_metadata",
+                "trace_format_version": V5_FORMAT_VERSION,
+                "scaffold": "openclaw",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert looks_like_claude_code_session(trace_path) is False
 
 
 # ─── Timestamp conversion helpers ───────────────────────────────────────

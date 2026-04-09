@@ -102,8 +102,10 @@ in production mounts the built frontend from `demo/gantt_viewer/frontend/dist`.
 See `demo/gantt_viewer/README.md` for the exact workflow and acceptance checks.
 For agent-oriented runtime trace management, use
 `demo/gantt_viewer/AGENT_INTERFACE.md`.
-The viewer only accepts canonical trace JSONL; convert raw Claude Code
-sessions first via `python -m trace_collect.cli import-claude-code`.
+Discovery config files still accept only canonical trace JSONL. At runtime,
+`/api/traces/register` and `/api/traces/upload` can auto-import raw Claude
+Code sessions via the existing `import-claude-code` pipeline before loading
+them into the viewer.
 
 Smoke-only subsets belong in dedicated `*_smoke.yaml` workload configs. Default
 workload configs should describe the full benchmark dataset path.

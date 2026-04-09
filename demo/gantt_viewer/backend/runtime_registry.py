@@ -11,7 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
-from demo.gantt_viewer.backend.discovery import DiscoveryState, REPO_ROOT, sniff_format
+from demo.gantt_viewer.backend.discovery import DiscoveryState, REPO_ROOT
+from demo.gantt_viewer.backend.ingest import ensure_canonical_trace_path
 from demo.gantt_viewer.backend.schema import TraceDescriptor
 
 
@@ -74,15 +75,24 @@ class RuntimeTraceRegistry:
 
         labels_by_path = labels_by_path or {}
         operations: list[tuple[str, TraceDescriptor | RuntimeRegisteredTrace]] = []
-        seen_resolved: set[Path] = set()
+        seen_input_paths: set[Path] = set()
+        seen_canonical_paths: set[Path] = set()
 
         for raw_path in paths:
-            resolved_path = self._resolve_input_path(raw_path)
-            if resolved_path in seen_resolved:
+            input_path = self._resolve_input_path(raw_path)
+            if input_path in seen_input_paths:
                 raise RuntimeRegistryConflictError(
-                    f"duplicate registration request for path: {resolved_path}"
+                    f"duplicate registration request for path: {input_path}"
                 )
-            seen_resolved.add(resolved_path)
+            seen_input_paths.add(input_path)
+
+            canonicalized = ensure_canonical_trace_path(input_path)
+            resolved_path = canonicalized.canonical_path
+            if resolved_path in seen_canonical_paths:
+                raise RuntimeRegistryConflictError(
+                    f"duplicate registration request for canonical path: {resolved_path}"
+                )
+            seen_canonical_paths.add(resolved_path)
 
             config_descriptor = self._config_descriptor_for_path(resolved_path)
             if config_descriptor is not None:
@@ -99,10 +109,10 @@ class RuntimeTraceRegistry:
                     f"trace already registered at runtime: {resolved_path}"
                 )
 
-            source_format = sniff_format(resolved_path)
+            source_format = canonicalized.source_format
             label = self._label_for_path(
                 raw_path=raw_path,
-                resolved_path=resolved_path,
+                resolved_path=input_path,
                 labels_by_path=labels_by_path,
             )
             trace_id = _build_runtime_trace_id(resolved_path, label)

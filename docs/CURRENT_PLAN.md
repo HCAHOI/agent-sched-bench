@@ -1,47 +1,68 @@
-# Trace Spec Unification Plan
+# Gantt Claude Auto-Import Plan
 
 ## Goal
 
-Remove all legacy, compact, and pre-current-spec trace compatibility. The codebase
-must assume every consumed trace already uses the current canonical schema.
+Allow the Gantt viewer REST API to accept raw Claude Code session JSONL for
+runtime registration/upload by reusing the existing Claude Code importer, so the
+user can start the viewer without editing discovery config files and register
+existing raw traces directly.
 
 ## Steps
 
-1. Plan file and implementation anchor
+1. Plan + scope anchor
    Status: completed
    Scope:
-   - Replace the stale plan with this migration plan.
+   - Confirm current viewer only accepts canonical traces.
+   - Confirm the target 11 files under traces/swe-rebench/claude-code-haiku are raw Claude Code sessions.
 
-2. Core trace-path cleanup
+2. Backend auto-conversion
+   Status: completed
+   Scope:
+   - Add a backend helper that tries canonical sniff first.
+   - If the file is a raw Claude Code session, call the existing importer
+     (`trace_collect.claude_code_import.import_claude_code_session`) and then
+     continue with the converted canonical output.
+   - Reuse the same path for both `POST /api/traces/register` and
+     `POST /api/traces/upload`.
+   - Persist converted outputs under cache/runtime-managed storage; do not ask
+     users to edit config.
+
+3. Tests + docs
+   Status: completed
+   Scope:
+   - Update backend route tests for register/upload auto-import behavior.
+   - Keep canonical/legacy error handling intact.
+   - Update Gantt docs/agent interface to describe the new REST behavior.
+
+4. Review gate
    Status: in_progress
    Scope:
-   - Remove legacy trace-path fallback from OpenClaw async status.
-   - Reword trace inspection and CLI messages around "current trace" instead of
-     versioned user-facing terminology.
-   - Delete obsolete migration scripts for retired layouts.
+   - Spawn a strict independent reviewer sub-agent.
+   - Fix any major issues before proceeding.
 
-3. Gantt viewer input boundary
+## Review audit trail
+
+- First independent review result: **critical**
+  - Issue 1: Claude sniff was too permissive and could mis-import Claude-like
+    junk JSONL.
+  - Interim fix: tightened Claude-specific evidence requirements and added a
+    guard that imported traces must contain at least one canonical action.
+- First review also flagged environment-sensitive OpenAPI drift and upload
+  sidechain ambiguity.
+  - Fix: documented that `upload` imports only the main session JSONL, while
+    `register` preserves adjacent sidechains when present.
+  - Fix: regenerated the checked-in OpenAPI snapshot + frontend schema types
+    and simplified the frozen test to compare the stable API surface instead of
+    brittle env-specific schema internals.
+- User clarification superseded the first review's hardening goal:
+  - This is an academic project; trace ingestion can assume valid inputs.
+  - Final implementation intentionally removed Claude-like junk JSONL defenses
+    and related tests, keeping only the two supported input classes:
+    real Claude Code sessions and canonical standard traces.
+
+5. Launch + load
    Status: pending
    Scope:
-   - Restrict discovery, register, upload, and payload flows to canonical traces only.
-   - Remove raw Claude Code direct-ingest and its cache path.
-   - Collapse public `source_format` API surface to a single canonical value.
-
-4. Tests and docs cleanup
-   Status: pending
-   Scope:
-   - Delete or rewrite tests that pin legacy fallback or multi-format behavior.
-   - Update README and Gantt docs to require explicit Claude Code conversion first.
-   - Regenerate OpenAPI snapshot and frontend API types if schema changes.
-
-5. Verification and review
-   Status: pending
-   Scope:
-   - Run targeted tests for trace collection, import, async status, and Gantt backend.
-   - Spawn an independent strict reviewer sub-agent and address findings.
-
-## Notes
-
-- Keep the on-disk metadata field `trace_format_version` unchanged unless a
-  removal is required by implementation safety.
-- No backward-compatibility shims for old traces or old runtime state.
+   - Start the viewer locally.
+   - Register the 11 raw Claude Code traces through the REST API.
+   - Verify `/api/traces` + `/api/payload` and provide access instructions.

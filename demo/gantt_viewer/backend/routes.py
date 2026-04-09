@@ -12,6 +12,7 @@ from demo.gantt_viewer.backend.payload import (
     DEFAULT_SPAN_REGISTRY,
     build_gantt_payload_multi,
 )
+from demo.gantt_viewer.backend.ingest import CanonicalizedTrace, ensure_canonical_trace_path
 from demo.gantt_viewer.backend.runtime_registry import (
     RuntimeRegistryConflictError,
     RuntimeTraceRegistry,
@@ -109,14 +110,14 @@ async def upload_trace_endpoint(
         raise HTTPException(status_code=422, detail={"message": "empty upload"})
 
     upload_path = persist_upload(filename, content)
-    source_format = _sniff_or_422(upload_path)
+    canonicalized = _canonicalize_or_422(upload_path)
     descriptor = TraceDescriptor(
         id=build_upload_id(filename, content),
         label=Path(filename).stem or "upload",
-        source_format=source_format,
-        path=str(upload_path.resolve()),
-        size_bytes=upload_path.stat().st_size,
-        mtime=upload_path.stat().st_mtime,
+        source_format=canonicalized.source_format,
+        path=str(canonicalized.canonical_path),
+        size_bytes=canonicalized.canonical_path.stat().st_size,
+        mtime=canonicalized.canonical_path.stat().st_mtime,
     )
 
     try:
@@ -189,11 +190,9 @@ async def _build_trace_payload(descriptor: TraceDescriptor) -> TracePayload:
         ) from exc
 
 
-def _sniff_or_422(path: Path) -> str:
-    from demo.gantt_viewer.backend.discovery import sniff_format
-
+def _canonicalize_or_422(path: Path) -> CanonicalizedTrace:
     try:
-        return sniff_format(path)
+        return ensure_canonical_trace_path(path)
     except Exception as exc:
         raise HTTPException(status_code=422, detail={"message": str(exc)}) from exc
 

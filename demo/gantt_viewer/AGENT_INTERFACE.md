@@ -9,6 +9,8 @@ Assume the server is already running at `http://127.0.0.1:8765`.
 
 - Prefer HTTP over editing config files
 - Prefer `register` for existing paths and `upload` for ad hoc JSONL blobs
+- `register` / `upload` auto-import raw Claude Code session JSONL into canonical
+  trace JSONL before tracking
 - `unregister` only stops tracking; it never deletes files
 - After changing the registry, verify with `GET /api/traces` before calling
   `POST /api/payload`
@@ -23,7 +25,11 @@ curl -s http://127.0.0.1:8765/api/traces
 
 ### Register one or more existing trace files
 
-Absolute or repo-relative paths both work.
+Absolute or repo-relative paths both work. Canonical trace JSONL is accepted
+directly. Raw Claude Code session JSONL is auto-imported behind the scenes and
+then registered as a runtime canonical trace. For path registration, adjacent
+Claude Code sidechains are preserved when the original session file lives next
+to its `<session_uuid>/subagents/` directory.
 
 ```bash
 curl -s http://127.0.0.1:8765/api/traces/register \
@@ -50,7 +56,10 @@ curl -s http://127.0.0.1:8765/api/traces/register \
 
 ### Upload a new trace blob
 
-The upload must already be a canonical trace JSONL. Raw session logs are not accepted.
+Canonical trace JSONL is accepted directly. Raw Claude Code session JSONL is
+auto-imported behind the scenes and then tracked as a runtime canonical trace.
+Because upload only sends one blob, adjacent Claude Code `subagents/` sidechains
+are not available on this path.
 
 ```bash
 curl -s http://127.0.0.1:8765/api/traces/upload \
