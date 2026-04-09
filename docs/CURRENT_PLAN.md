@@ -1,27 +1,23 @@
-# Cloud OpenClaw Serial Prefetch Smoke
+# OpenRouter Provider And Haiku Rerun
 
 ## Summary
 
-- Implement bounded serial image lifecycle for `swe-rebench` + `openclaw`.
-- Preserve canonical v5 trace output and the normal `attempt_1/` layout.
-- Keep the CLI contract stable; behavior change is internal to collection.
+- Centralize `trace_collect` provider presets so CLI defaults and scaffold runtime behavior share one source of truth.
+- Make `miniswe` explicitly provider-aware so OpenRouter models do not get forced through the `openai/...` LiteLLM prefix.
+- Re-run the 5 successful `swe-rebench` OpenClaw smoke tasks on OpenRouter model `anthropic/claude-haiku-4.5`.
 
 ## Work Items
 
-1. Update the serial collector path to:
-   - preserve the exact `--instance-ids` order
-   - prefetch the next source image while the current task runs
-   - wait for the prefetch before the next task starts
-   - clean up the completed task's fixed image and old source image after artifacts are written
-2. Add image lifecycle helpers in `src/harness/container_image_prep.py`.
-3. Extend focused tests for ordering, prefetch, cleanup, and cache eviction.
-4. Run targeted tests.
-5. Run an independent review sub-agent and fix findings.
-6. Stop at the checkpoint before the real 3-task smoke run unless the user explicitly requests autopilot.
+1. Extract shared provider preset and resolution helpers under `src/trace_collect/`.
+2. Thread `provider_name` through `trace_collect` into the MiniSWE host and task-container runtime paths.
+3. Update `MiniSWECodeAgent` to derive the LiteLLM model identifier from provider metadata instead of hardcoding `openai/`.
+4. Add focused tests for provider resolution and task-container request plumbing.
+5. Run targeted tests for CLI/provider/collector runtime coverage.
+6. Run the 5-task OpenClaw OpenRouter smoke with `--max-iterations 100`.
 
 ## Acceptance Checks
 
-- Tasks execute serially.
-- At most the current task image/fixed image plus the next prefetched source image are retained.
-- Canonical `attempt_1/trace.jsonl` files still start with `trace_metadata` and `trace_format_version=5`.
-- No raw OpenClaw session trace is mistaken for the canonical trace output.
+- `--provider openrouter` resolves API base and env var defaults without reading `.bashrc`.
+- `miniswe` builds an OpenRouter-compatible LiteLLM model name for OpenRouter runs.
+- The 5-task OpenClaw rerun emits canonical v5 traces under a fresh run directory.
+- Normal attempt artifacts exist and disk cleanup remains bounded after the run.

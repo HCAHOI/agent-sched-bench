@@ -179,6 +179,7 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
         agent_id=task_raw["instance_id"],
         api_base=request["api_base"],
         model=request["model"],
+        provider_name=request.get("provider_name"),
         api_key=request["api_key"],
         max_iterations=int(request["max_iterations"]),
         command_timeout_s=float(request["command_timeout_s"]),

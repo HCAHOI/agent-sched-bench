@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from agents.base import AgentBase, TraceAction
 from minisweagent.agents.default import DefaultAgent
+from trace_collect.provider_presets import build_miniswe_litellm_model_name
 
 if TYPE_CHECKING:
     from trace_collect.attempt_pipeline import AttemptContext
@@ -128,6 +129,7 @@ class MiniSWECodeAgent(AgentBase):
         api_base: str,
         model: str,
         *,
+        provider_name: str | None = None,
         api_key: str = "EMPTY",
         max_iterations: int = 50,
         command_timeout_s: float = 120.0,
@@ -154,6 +156,7 @@ class MiniSWECodeAgent(AgentBase):
         self.prompt_template = prompt_template
         self.runtime_mode = runtime_mode
         self.exec_working_dir = exec_working_dir
+        self.provider_name = provider_name
         self._workdir: Path | None = None
         self._prepared = False
 
@@ -226,7 +229,11 @@ class MiniSWECodeAgent(AgentBase):
             instance_template = _INSTANCE_TEMPLATE
 
         lm = LitellmModel(
-            model_name=f"openai/{self.model}",
+            model_name=build_miniswe_litellm_model_name(
+                model=self.model,
+                provider_name=self.provider_name,
+                api_base=self.api_base,
+            ),
             model_kwargs={
                 "api_base": self.api_base,
                 "api_key": self.api_key,

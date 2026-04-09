@@ -413,6 +413,7 @@ async def _run_scaffold_tasks(
 
 async def collect_miniswe_traces(
     *,
+    provider_name: str | None = None,
     api_base: str,
     api_key: str,
     model: str,
@@ -445,6 +446,7 @@ async def collect_miniswe_traces(
                     ctx=ctx,
                     task=task,
                     benchmark=benchmark,
+                    provider_name=provider_name,
                     api_base=api_base,
                     api_key=api_key,
                     model=model,
@@ -479,6 +481,7 @@ async def collect_miniswe_traces(
                 agent_id=ctx.instance_id,
                 api_base=api_base,
                 model=model,
+                provider_name=provider_name,
                 api_key=api_key,
                 max_iterations=max_iterations,
                 command_timeout_s=command_timeout_s,
@@ -526,6 +529,7 @@ async def collect_miniswe_traces(
 
 async def collect_openclaw_traces(
     *,
+    provider_name: str | None = None,
     api_base: str,
     api_key: str,
     model: str,
@@ -656,16 +660,23 @@ async def collect_openclaw_traces(
 async def collect_traces(
     *,
     scaffold: str,
+    provider_name: str | None = None,
     **kwargs: Any,
 ) -> Path:
     """Dispatch to ``collect_miniswe_traces`` or ``collect_openclaw_traces``."""
     if scaffold == "miniswe":
         kwargs.pop("mcp_config", None)
-        return await collect_miniswe_traces(**kwargs)
+        return await collect_miniswe_traces(
+            provider_name=provider_name,
+            **kwargs,
+        )
     if scaffold == "openclaw":
         kwargs.pop("command_timeout_s", None)
         kwargs.pop("task_timeout_s", None)
-        return await collect_openclaw_traces(**kwargs)
+        return await collect_openclaw_traces(
+            provider_name=provider_name,
+            **kwargs,
+        )
     raise ValueError(f"Unknown scaffold: {scaffold!r}")
 
 
@@ -759,6 +770,7 @@ async def _run_miniswe_in_task_container(
     ctx: AttemptContext,
     task: dict[str, Any],
     benchmark: "Benchmark",
+    provider_name: str | None = None,
     api_base: str,
     api_key: str,
     model: str,
@@ -797,6 +809,7 @@ async def _run_miniswe_in_task_container(
                 "container_id": container_id,
                 "benchmark": benchmark.config.slug,
                 "benchmark_split": benchmark.config.harness_split,
+                "provider_name": provider_name,
                 "api_base": api_base,
                 "api_key": api_key,
                 "model": model,

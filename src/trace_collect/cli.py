@@ -10,23 +10,10 @@ import os
 import sys
 from pathlib import Path
 
-_PROVIDERS: dict[str, dict[str, str]] = {
-    "openrouter": {
-        "api_base": "https://openrouter.ai/api/v1",
-        "env_key": "OPENROUTER_API_KEY",
-        "default_model": "qwen/qwen3.6-plus:free",
-    },
-    "dashscope": {
-        "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "env_key": "DASHSCOPE_API_KEY",
-        "default_model": "qwen-plus-latest",
-    },
-    "openai": {
-        "api_base": "https://api.openai.com/v1",
-        "env_key": "OPENAI_API_KEY",
-        "default_model": "gpt-4o",
-    },
-}
+from trace_collect.provider_presets import (
+    provider_choices,
+    resolve_provider_config,
+)
 
 def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -34,7 +21,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
-        choices=list(_PROVIDERS.keys()),
+        choices=provider_choices(),
         default="openrouter",
         help="LLM provider preset (default: openrouter). Sets api-base, api-key env var, and default model.",
     )
@@ -298,13 +285,16 @@ def _run_collect(args: argparse.Namespace) -> None:
         )
         sys.exit(2)
 
-    preset = _PROVIDERS[args.provider]
-    api_base = args.api_base or preset["api_base"]
-    api_key = args.api_key or os.environ.get(preset["env_key"])
-    model = args.model or preset["default_model"]
-    if not api_key:
+    provider_config = resolve_provider_config(
+        provider=args.provider,
+        api_base=args.api_base,
+        api_key=args.api_key,
+        model=args.model,
+        environ=os.environ,
+    )
+    if not provider_config.api_key:
         print(
-            f"ERROR: Set {preset['env_key']} or pass --api-key.",
+            f"ERROR: Set {provider_config.env_key} or pass --api-key.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -324,9 +314,10 @@ def _run_collect(args: argparse.Namespace) -> None:
     run_dir = asyncio.run(
         collect_traces(
             scaffold=args.scaffold,
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
+            provider_name=provider_config.name,
+            api_base=provider_config.api_base,
+            api_key=provider_config.api_key,
+            model=provider_config.model,
             benchmark=benchmark,
             max_iterations=args.max_iterations,
             command_timeout_s=args.command_timeout,

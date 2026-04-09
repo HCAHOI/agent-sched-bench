@@ -125,6 +125,7 @@ def test_run_miniswe_in_task_container_collects_runtime_proof(
             benchmark=SimpleNamespace(
                 config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
             ),
+            provider_name="openrouter",
             api_base="https://example.com",
             api_key="test-key",
             model="qwen-plus-latest",
@@ -140,6 +141,7 @@ def test_run_miniswe_in_task_container_collects_runtime_proof(
     assert result.runtime_proof["container_id"] == "cid-mini"
     assert result.runtime_proof["python_executable"] == "/opt/conda/envs/ML/bin/python"
     assert seen["kind"] == "run_miniswe"
+    assert seen["provider_name"] == "openrouter"
     assert Path(str(seen["result_path"])).is_absolute()
     assert Path(str(seen["trace_file"])).is_absolute()
     assert Path(str(seen["raw_stdout_path"])).is_absolute()
@@ -199,6 +201,7 @@ def test_run_miniswe_in_task_container_keeps_raw_logs_on_failure(
                 benchmark=SimpleNamespace(
                     config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
                 ),
+                provider_name="dashscope",
                 api_base="https://example.com",
                 api_key="test-key",
                 model="qwen-plus-latest",
