@@ -16,12 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from harness.container_image_prep import (  # noqa: E402
     clear_image_cache,
     ensure_fixed_image,
-    fixed_image_name_for,
 )
 from harness.container_stats_sampler import (  # noqa: E402
     ContainerStatsSampler,
-    _parse_json_stats,
-    _parse_pipe_stats,
     _parse_podman_stats,
     summarize_samples,
 )
@@ -36,21 +33,10 @@ from harness.disk_preflight import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def test_preflight_disk_returns_free_gb_when_ok(tmp_path: Path) -> None:
-    free = preflight_disk(tmp_path, min_free_gb=0.001)
-    assert free > 0.001
-
-
 def test_preflight_disk_raises_on_shortfall(tmp_path: Path) -> None:
     with pytest.raises(DiskSpaceError) as exc:
         preflight_disk(tmp_path, min_free_gb=10**12)
     assert "GB required" in str(exc.value)
-
-
-def test_preflight_disk_walks_to_existing_parent(tmp_path: Path) -> None:
-    nonexistent = tmp_path / "does" / "not" / "exist" / "yet"
-    free = preflight_disk(nonexistent, min_free_gb=0.001)
-    assert free > 0.001
 
 
 # ---------------------------------------------------------------------------
@@ -63,36 +49,6 @@ def _reset_image_cache() -> None:
     clear_image_cache()
     yield
     clear_image_cache()
-
-
-def test_fixed_image_name_for_matches_cc_convention() -> None:
-    # Matches agentcgroup/scripts/run_swebench.py::_fix_permissions naming
-    assert (
-        fixed_image_name_for("swerebench/sweb.eval.x86_64.mozilla_1776_bleach-259")
-        == "swebench-fixed-swerebench_sweb.eval.x86_64.mozilla_1776_bleach-259"
-    )
-    assert (
-        fixed_image_name_for("swerebench/foo:latest")
-        == "swebench-fixed-swerebench_foo_latest"
-    )
-
-
-def test_ensure_fixed_image_reuses_existing_local_derivative() -> None:
-    # Simulate `podman image exists swebench-fixed-...` returning 0 → cached.
-    def fake_run(cmd, **kwargs):
-        if cmd[:3] == ["podman", "image", "exists"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    with patch(
-        "harness.container_image_prep.subprocess.run",
-        side_effect=fake_run,
-    ) as mock_run:
-        fixed, elapsed = ensure_fixed_image("swerebench/img:latest")
-    assert fixed == "swebench-fixed-swerebench_img_latest"
-    assert elapsed == 0.0
-    # Exactly one call (the existence check) — no build performed.
-    assert mock_run.call_count == 1
 
 
 def test_ensure_fixed_image_builds_when_derivative_missing() -> None:
@@ -125,21 +81,6 @@ def test_ensure_fixed_image_builds_when_derivative_missing() -> None:
     assert any("commit cid_xyz" == " ".join(c[1:3]) for c in calls)
 
 
-def test_ensure_fixed_image_caches_second_call() -> None:
-    def fake_run(cmd, **kwargs):
-        if cmd[:3] == ["podman", "image", "exists"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    with patch(
-        "harness.container_image_prep.subprocess.run",
-        side_effect=fake_run,
-    ) as mock_run:
-        ensure_fixed_image("swerebench/img:latest")
-        ensure_fixed_image("swerebench/img:latest")
-    assert mock_run.call_count == 1
-
-
 def test_ensure_fixed_image_raises_on_build_failure() -> None:
     def boom(cmd, **kwargs):
         if cmd[:3] == ["podman", "image", "exists"]:
@@ -161,20 +102,6 @@ def test_ensure_fixed_image_raises_on_build_failure() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_parse_pipe_stats_cc_format() -> None:
-    sample = _parse_pipe_stats("48.88MB / 52.93GB|0.09%|1.26%")
-    assert sample is not None
-    assert sample["mem_usage"] == "48.88MB / 52.93GB"
-    assert sample["mem_percent"] == "0.09%"
-    assert sample["cpu_percent"] == "1.26%"
-    assert "timestamp" in sample and "epoch" in sample
-
-
-def test_parse_pipe_stats_rejects_short_lines() -> None:
-    assert _parse_pipe_stats("") is None
-    assert _parse_pipe_stats("only|two") is None
-
-
 def test_parse_podman_stats_detects_json_vs_pipe() -> None:
     pipe = _parse_podman_stats("1MB / 1GB|0.1%|0.5%")
     assert pipe is not None and pipe["mem_usage"] == "1MB / 1GB"
@@ -184,20 +111,6 @@ def test_parse_podman_stats_detects_json_vs_pipe() -> None:
     )
     jsn = _parse_podman_stats(raw)
     assert jsn is not None and jsn["mem_usage"] == "x"
-
-
-def test_parse_json_stats_object_format() -> None:
-    raw = json.dumps({"MemUsage": "x", "MemPerc": 3.5, "CPUPerc": 12.0})
-    sample = _parse_json_stats(raw)
-    assert sample is not None
-    assert sample["mem_usage"] == "x"
-    assert sample["mem_percent"] == "3.50%"
-    assert sample["cpu_percent"] == "12.00%"
-
-
-def test_parse_json_stats_returns_none_on_garbage() -> None:
-    assert _parse_json_stats("not json") is None
-    assert _parse_json_stats("[]") is None
 
 
 def test_stats_sampler_collects_samples_and_stops_cleanly() -> None:
@@ -220,21 +133,6 @@ def test_stats_sampler_collects_samples_and_stops_cleanly() -> None:
         samples = sampler.stop()
     assert len(samples) >= 2
     assert samples[0]["mem_usage"] == "1MB / 1GB"
-
-
-def test_stats_sampler_stop_is_idempotent() -> None:
-    sampler = ContainerStatsSampler(container_id="never_started", interval_s=1.0)
-    first = sampler.stop()
-    second = sampler.stop()
-    assert first == []
-    assert second == []
-
-
-def test_summarize_samples_empty_returns_zero_shape() -> None:
-    summary = summarize_samples([])
-    assert summary["sample_count"] == 0
-    assert summary["memory_mb"] == {"min": 0, "max": 0, "avg": 0}
-    assert summary["cpu_percent"] == {"min": 0, "max": 0, "avg": 0}
 
 
 def test_summarize_samples_computes_min_max_avg() -> None:

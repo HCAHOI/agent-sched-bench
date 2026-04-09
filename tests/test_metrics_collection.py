@@ -82,10 +82,3 @@ def test_parse_nvidia_smi_csv_and_dump(tmp_path: Path) -> None:
     dump_nvidia_samples(samples, output)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload[1]["memory_used_mib"] == 2100.0
-
-
-def test_vllm_metrics_collector_resets_state_between_polls() -> None:
-    collector = VLLMMetricsCollector(metrics_url="http://localhost:8000/metrics")
-    collector.snapshots = [{"timestamp": 1.0}]
-    collector.snapshots = []
-    assert collector.snapshots == []

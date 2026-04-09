@@ -13,13 +13,9 @@ and the registry entry resolves correctly.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
-import pytest
-
-from agents.benchmarks import REGISTRY, get_benchmark_class
 from agents.benchmarks.base import BenchmarkConfig
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
 
@@ -75,27 +71,6 @@ def _make_rebench_row(
         "image_name": None,  # will be pinned by normalize_task
         "meta": {"is_lite": is_lite, "has_test_patch": True, "num_modified_files": 1},
     }
-
-
-# ── Registry ────────────────────────────────────────────────────────────
-
-
-def test_swe_rebench_registered() -> None:
-    assert "swe-rebench" in REGISTRY
-    assert REGISTRY["swe-rebench"] is SWERebenchBenchmark
-
-
-def test_get_benchmark_class_resolves_swe_rebench() -> None:
-    cls = get_benchmark_class("swe-rebench")
-    assert cls is SWERebenchBenchmark
-
-
-# ── Class identity ──────────────────────────────────────────────────────
-
-
-def test_plugin_slug_and_task_shape() -> None:
-    assert SWERebenchBenchmark.slug == "swe-rebench"
-    assert SWERebenchBenchmark.task_shape == "swe_patch"
 
 
 # ── normalize_task quirks ───────────────────────────────────────────────
@@ -201,48 +176,3 @@ def test_select_subset_exclude_lite_true_drops_lite() -> None:
         "exclude_lite=True must drop every task with meta.is_lite=True"
     )
 
-
-# ── build_runner override (PM-2 contract) ───────────────────────────────
-
-
-def test_build_runner_returns_swebench_runner() -> None:
-    """SWE-rebench reuses the SWEBenchRunner (same swe_patch task shape)."""
-    from agents.openclaw.eval.runner import SWEBenchRunner
-
-    plugin = SWERebenchBenchmark(_make_config())
-
-    # We can't construct a real provider without creds, but we can verify
-    # that build_runner does not raise NotImplementedError and returns the
-    # correct type when given stub args.
-    class _StubProvider:
-        pass
-
-    runner = plugin.build_runner(
-        scaffold="openclaw",
-        provider=_StubProvider(),
-        workspace_base=Path("/tmp/ws"),
-        max_iterations=50,
-        context_window_tokens=128000,
-        model="test/model",
-    )
-    assert isinstance(runner, SWEBenchRunner)
-    # Plugin self-injects repos_root and benchmark from its own config.
-    assert runner.repos_root == plugin.config.repos_root
-    assert runner.benchmark is plugin
-
-
-# ── HF-online integration (opt-in via env var) ──────────────────────────
-
-
-@pytest.mark.skipif(
-    not os.environ.get("HF_HUB_ONLINE"),
-    reason="HF fetch skipped by default; set HF_HUB_ONLINE=1 to run",
-)
-def test_load_tasks_returns_at_least_6500_rows() -> None:
-    """End-to-end: nebius/SWE-rebench filtered split must yield >= 6500 rows."""
-    plugin = SWERebenchBenchmark(_make_config())
-    tasks = plugin.load_tasks()
-    assert len(tasks) >= 6500
-    assert all("instance_id" in t for t in tasks)
-    # Spot-check that normalize_task ran on every row
-    assert all("test_cmd" in t for t in tasks)

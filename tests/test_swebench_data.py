@@ -7,7 +7,6 @@ from typing import Any
 
 from agents.swebench_data import (
     _count_fail_to_pass,
-    derive_test_cmd,
     select_tool_intensive_tasks,
 )
 
@@ -32,37 +31,6 @@ def _make_task(
         "test_patch": "",
         "version": "4.0",
     }
-
-
-def test_derive_test_cmd_single_test() -> None:
-    task = _make_task(fail_to_pass=["tests/test_models.py::TestFoo::test_bar"])
-    cmd = derive_test_cmd(task)
-    assert "python -m pytest" in cmd
-    assert "tests/test_models.py::TestFoo::test_bar" in cmd
-    assert "-x" in cmd
-
-
-def test_derive_test_cmd_multiple_tests() -> None:
-    tests = [
-        "tests/test_a.py::test_one",
-        "tests/test_b.py::test_two",
-    ]
-    task = _make_task(fail_to_pass=tests)
-    cmd = derive_test_cmd(task)
-    assert "test_a.py::test_one" in cmd
-    assert "test_b.py::test_two" in cmd
-
-
-def test_derive_test_cmd_empty() -> None:
-    task = _make_task(fail_to_pass=[])
-    cmd = derive_test_cmd(task)
-    assert "python -m pytest" in cmd
-
-
-def test_count_fail_to_pass() -> None:
-    assert _count_fail_to_pass(_make_task(fail_to_pass=["a", "b", "c"])) == 3
-    assert _count_fail_to_pass(_make_task(fail_to_pass=[])) == 0
-    assert _count_fail_to_pass(_make_task(fail_to_pass=["x"])) == 1
 
 
 def test_count_fail_to_pass_string_field() -> None:

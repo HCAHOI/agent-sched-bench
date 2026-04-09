@@ -1,62 +1,48 @@
-# Trace Collect Cleanup Plan
+# Test Pruning Plan
 
 ## Goal
 
-Execute the approved review findings across `src/trace_collect`, related agent
-packages and directly affected tests. Delete dead or duplicated
-schema ballast, fix broken dispatch and trace-shape reads, and keep the trace
-artifacts internally consistent.
+Aggressively prune `tests/` in a one-way pass. Default action is delete.
+Keep only tests that protect core pipeline correctness, meaningful edge cases,
+or real end-to-end behavior.
 
-## Change Groups
+## Steps
 
-1. Scaffold naming and trace field normalization
-   Status: completed
+1. Inventory and classification
+   Status: in_progress
    Scope:
-   - Rename the mini SWE scaffold key from `mini-swe-agent` to `miniswe`
-     everywhere in trace collection, simulation, CLI, registry, and tests.
-   - Make inspector/analysis read v5 action fields from `data`.
-   - Standardize tool success on `data["success"]`.
-   Verification:
-   - `python3 -m pytest tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py`
+   - Enumerate every test file and collected test function.
+   - Check for dead imports or tests targeting removed behavior.
+   - Mark each test as keep or delete using the mission criteria.
 
-2. OpenClaw replay tool execution cleanup
-   Status: completed
+2. File-level pruning
+   Status: pending
    Scope:
-   - Replace reimplemented filesystem operations in
-     `src/trace_collect/openclaw_tools.py` with the existing OpenClaw tool
-     layer or its shared backend primitives.
-   - Make unknown/unsupported tool names fail loudly instead of returning fake
-     success.
-   Verification:
-   - `python3 -m pytest tests/test_openclaw_tool_runtime.py tests/test_simulator.py tests/test_claude_code_import.py`
+   - Delete entire files when more than 70 percent of their tests fall in the
+     delete bucket.
+   - Do not leave a file behind with only one surviving test.
 
-3. Attempt artifact/schema pruning
-   Status: completed
+3. Shared test cleanup
+   Status: pending
    Scope:
-   - Remove dead stderr/pull-time fields and redundant model/result/resource
-     payload duplication.
-   - Update layout/docstrings/comments to match the actual artifact set.
-   - Keep `results.json`, `resources.json`, `tool_calls.json`, and
-     `container_stdout.txt` as the canonical split outputs.
-   Verification:
-   - `python3 -m pytest tests/test_attempt_pipeline.py tests/test_attempt_layout.py tests/test_collector_openclaw_metadata.py`
+   - Remove dead fixtures or shared test helpers that become unreferenced after
+     file deletion.
+   - Confirm whether `conftest.py` cleanup is needed.
 
-4. Claude import cleanup
-   Status: completed
+4. Verification
+   Status: pending
    Scope:
-   - Stop describing Anthropic import as OpenAI-schema compatibility glue.
-   - Remove isolated legacy status fallback in tool success resolution.
-   Verification:
-   - `python3 -m pytest tests/test_claude_code_import.py tests/test_trace_inspector.py tests/test_openclaw_raw_response.py demo/gantt_viewer/tests/test_payload.py`
+   - Run the remaining test suite.
+   - Fix only breakage caused by deleted tests or dead test-only fixtures.
 
-5. Full targeted regression
-   Status: completed
-   Verification:
-   - `python3 -m pytest tests/test_attempt_pipeline.py tests/test_attempt_layout.py tests/test_collector_openclaw_metadata.py tests/test_scaffold_registry.py tests/test_trace_inspector.py tests/test_simulator.py tests/test_simulator_miniswe_regression.py tests/test_collect_traces_kwarg_passthrough.py tests/test_cli_mcp_flag_enforcement.py tests/test_benchmark_protocol.py tests/test_openclaw_tool_runtime.py tests/test_openclaw_raw_response.py tests/test_claude_code_import.py tests/test_openclaw_simulate_adapter.py demo/gantt_viewer/tests/test_payload.py`
+5. Independent review
+   Status: pending
+   Scope:
+   - Spawn a strict reviewer sub-agent for the deletion diff before finalizing.
 
 ## Notes
 
-- Use aggressive deletion where the review found dead or redundant code.
-- Fix callers after each group instead of reverting cleanup.
-- No TODOs or compatibility aliases unless required to preserve current
-  behavior during the same patch series.
+- No test rewrites or improvements in this pass.
+- No import fixing for dead tests: delete instead.
+- Final report must include deleted files count, deleted test count, kept test
+  count, and a one-line justification for each kept test.

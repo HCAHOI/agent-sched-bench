@@ -1,30 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from agents.base import AgentBase, TraceAction
-from harness.trace_logger import TraceLogger, build_run_id
-
-
-def test_build_run_id_uses_expected_shape() -> None:
-    run_id = build_run_id(
-        system="vllm",
-        workload="code",
-        concurrency=4,
-        started_at=datetime(2026, 3, 31, 12, 0, 0, tzinfo=timezone.utc),
-    )
-    assert run_id == "vllm_code_4_20260331T120000000Z"
-
-
-def test_build_run_id_normalizes_non_utc_datetime() -> None:
-    run_id = build_run_id(
-        system="vllm",
-        workload="code",
-        concurrency=4,
-        started_at=datetime(2026, 3, 31, 20, 0, 0, tzinfo=timezone(timedelta(hours=8))),
-    )
-    assert run_id == "vllm_code_4_20260331T120000000Z"
+from harness.trace_logger import TraceLogger
 
 
 def test_trace_logger_writes_action_entries(tmp_path: Path) -> None:
@@ -117,12 +96,6 @@ def _make_concrete_agent(api_base: str = "http://localhost") -> AgentBase:
     return _ConcreteAgent(agent_id="agent-1", api_base=api_base, model="test-model")
 
 
-def test_emit_event_noop_when_no_logger() -> None:
-    agent = _make_concrete_agent()
-    agent._emit_event("LLM", "llm_call_start", {}, iteration=0, ts=1.0)
-    assert len(agent.actions) == 0
-
-
 def test_emit_action_appends_and_merges_metadata(tmp_path: Path) -> None:
     logger = TraceLogger(tmp_path, "action_run")
     agent = _make_concrete_agent()
@@ -141,13 +114,6 @@ def test_emit_action_appends_and_merges_metadata(tmp_path: Path) -> None:
     entry = json.loads(lines[0])
     assert entry["type"] == "action"
     assert entry["data"]["model"] == "qwen-plus"
-
-
-def test_emit_action_noop_on_logger_when_none() -> None:
-    agent = _make_concrete_agent()
-    action = _make_action()
-    agent._emit_action(action)
-    assert len(agent.actions) == 1
 
 
 def test_summary_tool_stats() -> None:

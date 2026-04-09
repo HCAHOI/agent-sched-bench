@@ -52,28 +52,6 @@ def _isolate_modules():
     )
 
 
-def test_validate_trace_rejects_needs_prepare_false() -> None:
-    from trace_collect.simulator import _validate_trace_for_simulation
-
-    with pytest.raises(NotImplementedError, match=NEEDS_PREPARE_ERROR):
-        _validate_trace_for_simulation({"needs_prepare": False})
-
-
-def test_validate_trace_rejects_non_swe_patch_task_shape() -> None:
-    from trace_collect.simulator import _validate_trace_for_simulation
-
-    with pytest.raises(NotImplementedError, match="task_shape='function_call'"):
-        _validate_trace_for_simulation({"task_shape": "function_call"})
-
-
-def test_validate_trace_accepts_swe_patch_and_empty_metadata() -> None:
-    from trace_collect.simulator import _validate_trace_for_simulation
-
-    _validate_trace_for_simulation(None)
-    _validate_trace_for_simulation({})
-    _validate_trace_for_simulation({"scaffold": "miniswe", "task_shape": "swe_patch"})
-
-
 def test_load_trace_metadata_extracts_function_call_header() -> None:
     from trace_collect.simulator import _load_trace_metadata
 

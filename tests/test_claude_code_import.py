@@ -25,7 +25,6 @@ import pytest
 from trace_collect.claude_code_import import (
     SCAFFOLD_LABEL,
     V5_FORMAT_VERSION,
-    _iso_to_unix,
     import_claude_code_session,
 )
 
@@ -73,37 +72,6 @@ def _load_records(path: Path) -> list[dict]:
 
 # ─── Timestamp conversion helpers ───────────────────────────────────────
 
-
-def test_iso_to_unix_handles_z_suffix() -> None:
-    ts = _iso_to_unix("2026-04-03T08:33:47.356Z")
-    assert ts is not None
-    # Sanity: 2026-04 is ~1775xxxxxxx
-    assert 1770_000_000 < ts < 1790_000_000
-
-
-def test_iso_to_unix_handles_none_and_malformed() -> None:
-    assert _iso_to_unix(None) is None
-    assert _iso_to_unix("") is None
-    assert _iso_to_unix("not-a-timestamp") is None
-
-
-def test_iso_to_unix_handles_offset_timezone() -> None:
-    """Explicit offset (not just Z) should also work."""
-    ts = _iso_to_unix("2026-04-03T08:33:47.356+00:00")
-    assert ts is not None
-    assert 1770_000_000 < ts < 1790_000_000
-
-
-# ─── Fixture sanity ─────────────────────────────────────────────────────
-
-
-def test_fixtures_exist() -> None:
-    assert FIXTURE.exists(), f"missing fixture: {FIXTURE}"
-    assert SUBAGENT_DIR.exists(), f"missing subagent dir: {SUBAGENT_DIR}"
-    agent_files = list(SUBAGENT_DIR.glob("agent-*.jsonl"))
-    assert len(agent_files) >= 1, "expected at least one agent-*.jsonl in fixture"
-
-
 # ─── Metadata header ────────────────────────────────────────────────────
 
 
@@ -117,26 +85,6 @@ def test_metadata_has_required_fields(converted_trace: Path) -> None:
     assert meta["instance_id"] == "claude_code_minimal"
     assert meta["model"] == "claude-sonnet-4-6"
     assert "source_trace" in meta
-
-
-def test_metadata_run_config_backfill(converted_trace: Path) -> None:
-    """cwd / git_branch / cli_version backfilled under metadata.run_config."""
-    records = _load_records(converted_trace)
-    meta = records[0]
-    run_config = meta.get("run_config", {})
-    assert run_config.get("cwd") == "/Users/test/project"
-    assert run_config.get("git_branch") == "main"
-    assert run_config.get("cli_version") == "2.1.92"
-
-
-def test_metadata_max_iterations_reflects_main_lane(converted_trace: Path) -> None:
-    """max_iterations should be the main-lane assistant count (2 in fixture)."""
-    records = _load_records(converted_trace)
-    meta = records[0]
-    # Fixture has 2 main-lane assistant records
-    assert meta.get("max_iterations") == 2
-
-
 # ─── Assistant → llm_call conversion ───────────────────────────────────
 
 
@@ -167,64 +115,6 @@ def test_assistant_becomes_llm_call_action(converted_trace: Path) -> None:
     assert data["message_id"] == "msg_test_a0001"
     assert data["service_tier"] == "standard"
     assert data["llm_latency_ms"] > 0
-
-
-def test_thinking_blocks_preserved(converted_trace: Path) -> None:
-    """The fixture's thinking block should end up under data.thinking."""
-    records = _load_records(converted_trace)
-    llm_main = [
-        r
-        for r in records
-        if r.get("type") == "action"
-        and r.get("action_type") == "llm_call"
-        and r.get("agent_id") == "claude_code_minimal"
-    ]
-    first = llm_main[0]
-    data = first["data"]
-    assert "thinking" in data, (
-        f"thinking block lost during conversion; data keys: {sorted(data.keys())}"
-    )
-    assert "user wants me to read /etc/hosts" in data["thinking"]
-
-
-def test_llm_content_extracted_from_text_blocks(converted_trace: Path) -> None:
-    records = _load_records(converted_trace)
-    llm_main = [
-        r
-        for r in records
-        if r.get("type") == "action"
-        and r.get("action_type") == "llm_call"
-        and r.get("agent_id") == "claude_code_minimal"
-    ]
-    assert "I'll read /etc/hosts" in llm_main[0]["data"]["llm_content"]
-    assert "loopback entries" in llm_main[1]["data"]["llm_content"]
-
-
-def test_raw_response_preserves_claude_message_shape(converted_trace: Path) -> None:
-    """raw_response should preserve the native Claude assistant message blocks."""
-    records = _load_records(converted_trace)
-    first_llm = next(
-        r
-        for r in records
-        if r.get("type") == "action"
-        and r.get("action_type") == "llm_call"
-        and r.get("agent_id") == "claude_code_minimal"
-    )
-    resp = first_llm["data"]["raw_response"]
-    assert resp["provider"] == "anthropic"
-    msg = resp["message"]
-    assert msg.get("role") == "assistant"
-    tool_uses = [
-        block
-        for block in msg["content"]
-        if isinstance(block, dict) and block.get("type") == "tool_use"
-    ]
-    assert len(tool_uses) == 1
-    assert tool_uses[0]["name"] == "Read"
-    args = tool_uses[0]["input"]
-    assert args["file_path"] == "/etc/hosts"
-
-
 # ─── user + tool_result → tool_exec conversion ──────────────────────────
 
 
@@ -284,21 +174,6 @@ def test_tool_exec_success_inferred_from_is_error(converted_trace: Path) -> None
     ]
     # Fixture has is_error: false → success: true
     assert tool_actions[0]["data"]["success"] is True
-
-
-# ─── Discarded types ───────────────────────────────────────────────────
-
-
-def test_discarded_types_do_not_produce_records(converted_trace: Path) -> None:
-    """file-history-snapshot + system records in the fixture should produce ZERO v5 records."""
-    records = _load_records(converted_trace)
-    # No v5 record should have type in the discardable set
-    for r in records:
-        assert r["type"] in {"trace_metadata", "action", "summary"}, (
-            f"unexpected record type in output: {r['type']}"
-        )
-
-
 # ─── Sidechain folding ──────────────────────────────────────────────────
 
 
@@ -348,53 +223,6 @@ def test_iteration_counter_per_agent_lane(converted_trace: Path) -> None:
     # Both start from 0 — counter is per-lane, not global
     assert main_iters == [0, 1]
     assert sub_iters == [0, 1]
-
-
-# ─── End-to-end: TraceData + Gantt payload ─────────────────────────────
-
-
-def test_converted_output_loads_via_trace_data(converted_trace: Path) -> None:
-    """The converted trace must load through the strict v5 reader."""
-    from trace_collect.trace_inspector import TraceData
-
-    data = TraceData.load(converted_trace)
-    assert data.metadata["trace_format_version"] == 5
-    assert data.metadata["scaffold"] == SCAFFOLD_LABEL
-    assert len(data.actions) >= 3  # 2 main llm_call + 1 main tool_exec minimum
-
-
-def test_build_gantt_payload_succeeds(converted_trace: Path) -> None:
-    """The converted trace renders through build_gantt_payload_multi."""
-    from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
-    from trace_collect.trace_inspector import TraceData
-
-    data = TraceData.load(converted_trace)
-    payload = build_gantt_payload_multi([("cc-test", data)])
-
-    assert "registries" in payload
-    assert "spans" in payload["registries"]
-    assert "traces" in payload
-    assert len(payload["traces"]) == 1
-
-    lanes = payload["traces"][0]["lanes"]
-    assert len(lanes) >= 2  # main + subagent
-
-    # Collect all span types across lanes
-    all_span_types = set()
-    main_llm_details: list[dict[str, Any]] = []
-    for lane in lanes:
-        for span in lane.get("spans", []):
-            all_span_types.add(span["type"])
-            if lane["agent_id"] == "claude_code_minimal" and span["type"] == "llm":
-                main_llm_details.append(span["detail"])
-    assert "llm" in all_span_types
-    assert "tool" in all_span_types
-    assert any(
-        detail.get("tool_calls_requested") == ['Read(file_path="/etc/hosts")']
-        for detail in main_llm_details
-    )
-
-
 # ─── Summary record ─────────────────────────────────────────────────────
 
 
@@ -644,297 +472,6 @@ def test_orphan_tool_use_is_drained_with_note(tmp_path: Path) -> None:
     assert "orphan tool_use" in orphan["data"].get("note", "")
 
 
-def test_multiple_parallel_tool_uses_in_one_assistant(tmp_path: Path) -> None:
-    """M4 (reviewer): assistant emits multiple tool_use blocks in parallel.
-
-    Claude Code supports calling multiple tools in one turn. Each
-    tool_use must get its own tool_exec action paired via tool_use_id.
-    """
-    session = tmp_path / "cc-parallel-tools.jsonl"
-    _write_synthetic_session(
-        session,
-        [
-            {
-                "type": "assistant",
-                "sessionId": "cc-parallel-tools",
-                "uuid": "a1",
-                "timestamp": "2026-04-08T10:00:00.000Z",
-                "cwd": "/tmp",
-                "gitBranch": "main",
-                "version": "2.1.92",
-                "isSidechain": False,
-                "message": {
-                    "id": "msg_parallel",
-                    "model": "claude-sonnet-4-6",
-                    "role": "assistant",
-                    "usage": {
-                        "input_tokens": 10,
-                        "output_tokens": 5,
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 0,
-                        "cache_creation": {},
-                    },
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_par_0001",
-                            "name": "Read",
-                            "input": {"file_path": "/a"},
-                        },
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_par_0002",
-                            "name": "Read",
-                            "input": {"file_path": "/b"},
-                        },
-                    ],
-                },
-            },
-            {
-                "type": "user",
-                "sessionId": "cc-parallel-tools",
-                "uuid": "u1",
-                "timestamp": "2026-04-08T10:00:00.500Z",
-                "cwd": "/tmp",
-                "gitBranch": "main",
-                "version": "2.1.92",
-                "isSidechain": False,
-                "message": {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "toolu_par_0001",
-                            "content": [{"type": "text", "text": "contents of /a"}],
-                            "is_error": False,
-                        },
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "toolu_par_0002",
-                            "content": [{"type": "text", "text": "contents of /b"}],
-                            "is_error": False,
-                        },
-                    ],
-                },
-                "toolUseResult": {
-                    "status": "completed",
-                    "totalDurationMs": 120.0,
-                    "totalToolUseCount": 2,
-                },
-            },
-        ],
-    )
-
-    result = import_claude_code_session(
-        session_path=session, output_dir=tmp_path / "out", include_sidechains=False
-    )
-    records = _load_records(result)
-    tool_actions = [r for r in records if r.get("action_type") == "tool_exec"]
-    assert len(tool_actions) == 2, (
-        f"expected 2 tool_exec actions (one per parallel tool_use); got {len(tool_actions)}"
-    )
-    # Both must have iteration 0 (same paired assistant)
-    assert all(t["iteration"] == 0 for t in tool_actions)
-    # Different tool_use_ids → different action_ids
-    action_ids = {t["action_id"] for t in tool_actions}
-    assert len(action_ids) == 2
-    # Both tool_name are Read
-    assert all(t["data"]["tool_name"] == "Read" for t in tool_actions)
-    # Different tool_args (one reads /a, the other /b)
-    args_paths = sorted(
-        json.loads(t["data"]["tool_args"])["file_path"] for t in tool_actions
-    )
-    assert args_paths == ["/a", "/b"]
-
-
-def test_empty_session_with_only_discardable_records(tmp_path: Path) -> None:
-    """M5 (reviewer): a session with zero assistant records still produces valid output.
-
-    The converter must not crash on sessions containing only
-    file-history-snapshot / system / permission-mode records. It should
-    produce a valid v5 trace with zero actions and the metadata header
-    still well-formed.
-    """
-    session = tmp_path / "cc-empty.jsonl"
-    _write_synthetic_session(
-        session,
-        [
-            {
-                "type": "file-history-snapshot",
-                "snapshot": {"timestamp": "2026-04-08T10:00:00.000Z"},
-            },
-            {
-                "type": "system",
-                "subtype": "local_command",
-                "content": "/help",
-                "timestamp": "2026-04-08T10:00:01.000Z",
-                "cwd": "/tmp",
-                "gitBranch": "main",
-                "version": "2.1.92",
-            },
-            {
-                "type": "permission-mode",
-                "timestamp": "2026-04-08T10:00:02.000Z",
-                "cwd": "/tmp",
-                "gitBranch": "main",
-                "version": "2.1.92",
-            },
-        ],
-    )
-
-    result = import_claude_code_session(
-        session_path=session, output_dir=tmp_path / "out", include_sidechains=False
-    )
-    records = _load_records(result)
-
-    # Metadata header present
-    assert records[0]["type"] == "trace_metadata"
-    assert records[0]["trace_format_version"] == 5
-    assert records[0]["scaffold"] == "claude-code"
-    # No actions
-    actions = [r for r in records if r.get("type") == "action"]
-    assert actions == []
-    # Summary still emitted per lane
-    summaries = [r for r in records if r.get("type") == "summary"]
-    assert len(summaries) == 1
-    assert summaries[0]["n_iterations"] == 0
-    assert summaries[0]["n_tool_actions"] == 0
-
-    # Loads via TraceData without ValueError
-    from trace_collect.trace_inspector import TraceData
-
-    data = TraceData.load(result)
-    assert data.metadata["trace_format_version"] == 5
-    assert data.actions == []
-
-
-# ─── FIX-1 + FIX-2: collector path convention + last-prompt discard ─────
-
-
-def test_collector_style_stem_falls_back_to_sessionId(tmp_path: Path) -> None:
-    """FIX-1: when the filename stem is not UUID-shaped, the converter must
-    fall back to the harvested ``sessionId`` for the canonical session UUID.
-
-    Real swe-rebench traces are copied out of containers as ``trace.jsonl``,
-    so naive ``session_path.stem`` would yield ``"trace"`` for every task —
-    causing every converted output to clobber every other task's output at
-    ``claude-code-import/trace/trace.jsonl``. The fix harvests sessionId
-    from the records and uses that instead.
-    """
-    session = tmp_path / "trace.jsonl"  # collector-style filename
-    real_uuid = "2a49ce6f-616e-4072-9a35-6934dcce7383"
-    _write_synthetic_session(
-        session,
-        [
-            {
-                "type": "assistant",
-                "sessionId": real_uuid,
-                "uuid": "a1",
-                "timestamp": "2026-04-08T11:27:19.036Z",
-                "cwd": "/testbed",
-                "gitBranch": "master",
-                "version": "2.1.96",
-                "isSidechain": False,
-                "message": {
-                    "id": "msg_collector_test",
-                    "model": "claude-sonnet-4-6",
-                    "role": "assistant",
-                    "usage": {
-                        "input_tokens": 2,
-                        "output_tokens": 8,
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 13610,
-                        "cache_creation": {},
-                    },
-                    "content": [{"type": "text", "text": "Reading the issue."}],
-                },
-            },
-        ],
-    )
-
-    out_dir = tmp_path / "out"
-    result = import_claude_code_session(
-        session_path=session, output_dir=out_dir, include_sidechains=False
-    )
-
-    # The output landed under the REAL UUID, not under "trace"
-    expected = out_dir / "claude-code-import" / real_uuid / f"{real_uuid}.jsonl"
-    assert result == expected, (
-        f"FIX-1 broken: expected {expected}, got {result}"
-    )
-    assert not (out_dir / "claude-code-import" / "trace" / "trace.jsonl").exists()
-
-    records = _load_records(result)
-    meta = records[0]
-    assert meta["instance_id"] == real_uuid
-    # Every action's agent_id is the real UUID, not "trace"
-    actions = [r for r in records if r.get("type") == "action"]
-    assert actions, "expected at least one action"
-    for action in actions:
-        assert action["agent_id"] == real_uuid, (
-            f"FIX-1 broken: action {action.get('action_id')} has "
-            f"agent_id={action['agent_id']!r} (should be the real UUID)"
-        )
-
-
-def test_last_prompt_record_is_discarded(tmp_path: Path) -> None:
-    """FIX-2: ``last-prompt`` records (CC CLI >= 2.1.96) must be explicitly
-    discarded, not silently consumed by fall-through.
-
-    A ``last-prompt`` record carries no timestamp and no content blocks,
-    just ``{type, lastPrompt, sessionId}``. It must produce zero v5 records
-    and must not interfere with surrounding assistant/user records.
-    """
-    session = tmp_path / "cc-last-prompt.jsonl"
-    _write_synthetic_session(
-        session,
-        [
-            {
-                "type": "assistant",
-                "sessionId": "cc-last-prompt-test",
-                "uuid": "a1",
-                "timestamp": "2026-04-08T10:00:00.000Z",
-                "cwd": "/tmp",
-                "gitBranch": "main",
-                "version": "2.1.96",
-                "isSidechain": False,
-                "message": {
-                    "id": "msg_lp_test",
-                    "model": "claude-sonnet-4-6",
-                    "role": "assistant",
-                    "usage": {
-                        "input_tokens": 5,
-                        "output_tokens": 3,
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 0,
-                        "cache_creation": {},
-                    },
-                    "content": [{"type": "text", "text": "done"}],
-                },
-            },
-            # The new CC 2.1.96 record type — must be discarded silently.
-            {
-                "type": "last-prompt",
-                "lastPrompt": "Fix this issue: ...",
-                "sessionId": "cc-last-prompt-test",
-            },
-        ],
-    )
-
-    result = import_claude_code_session(
-        session_path=session, output_dir=tmp_path / "out", include_sidechains=False
-    )
-    records = _load_records(result)
-
-    actions = [r for r in records if r.get("type") == "action"]
-    # Exactly one llm_call from the assistant, zero from last-prompt.
-    assert len(actions) == 1
-    assert actions[0]["action_type"] == "llm_call"
-    # Verify last-prompt is in the explicit discard set, not just fall-through.
-    from trace_collect.claude_code_import import _DISCARDABLE_TYPES
-    assert "last-prompt" in _DISCARDABLE_TYPES
-
-
 # ─── FIX-4: per-tool rich backfill (Bash/Edit/Read) ─────────────────────
 
 
@@ -1045,26 +582,6 @@ def test_bash_interrupted_marks_success_false(tmp_path: Path) -> None:
     assert tool_action["data"]["success"] is False, (
         "FIX-4 broken: interrupted Bash should be marked success=False"
     )
-
-
-def test_bash_stderr_preview_populated(tmp_path: Path) -> None:
-    """FIX-4: Bash stderr backfilled into data.stderr_preview, capped at 2000 chars."""
-    session = _make_synthetic_tool_session(
-        tmp_path,
-        tool_name="Bash",
-        tool_input={"command": "false"},
-        tool_use_result={
-            "interrupted": False,
-            "isImage": False,
-            "noOutputExpected": False,
-            "stderr": "E: segfault at 0x0",
-            "stdout": "",
-        },
-    )
-    tool_action = _convert_and_get_tool(session, tmp_path)
-    assert tool_action["data"].get("stderr_preview") == "E: segfault at 0x0"
-
-
 def test_edit_structured_patch_preserved(tmp_path: Path) -> None:
     """FIX-4: Edit.structuredPatch (a parsed diff) is preserved as
     data.structured_patch — far more useful than re-derivable from newString."""
@@ -1091,66 +608,6 @@ def test_edit_structured_patch_preserved(tmp_path: Path) -> None:
     )
     tool_action = _convert_and_get_tool(session, tmp_path)
     assert tool_action["data"].get("structured_patch") == patch
-
-
-def test_edit_user_modified_flag_preserved(tmp_path: Path) -> None:
-    """FIX-4: Edit.userModified=True flagged into backfill."""
-    session = _make_synthetic_tool_session(
-        tmp_path,
-        tool_name="Edit",
-        tool_input={"file_path": "/x", "old_string": "a", "new_string": "b"},
-        tool_use_result={
-            "filePath": "/x",
-            "oldString": "a",
-            "newString": "b",
-            "originalFile": "a",
-            "replaceAll": False,
-            "structuredPatch": [],
-            "userModified": True,
-        },
-    )
-    tool_action = _convert_and_get_tool(session, tmp_path)
-    assert tool_action["data"].get("user_modified") is True
-
-
-def test_read_file_meta_preserved(tmp_path: Path) -> None:
-    """FIX-4: Read.file dict is filtered down to relevant metadata keys."""
-    session = _make_synthetic_tool_session(
-        tmp_path,
-        tool_name="Read",
-        tool_input={"file_path": "/etc/hosts"},
-        tool_use_result={
-            "type": "text",
-            "file": {
-                "filePath": "/etc/hosts",
-                "numLines": 5,
-                "totalLines": 5,
-                "extraIgnoredKey": "should be filtered out",
-            },
-        },
-    )
-    tool_action = _convert_and_get_tool(session, tmp_path)
-    fm = tool_action["data"].get("file_meta")
-    assert fm == {"filePath": "/etc/hosts", "numLines": 5, "totalLines": 5}
-
-
-def test_unknown_tool_backfill_is_noop(tmp_path: Path) -> None:
-    """FIX-4: an unknown tool_name produces no per-tool backfill keys."""
-    session = _make_synthetic_tool_session(
-        tmp_path,
-        tool_name="MysteryFutureTool",
-        tool_input={"q": 1},
-        tool_use_result={"some_field": "some_value"},
-    )
-    tool_action = _convert_and_get_tool(session, tmp_path)
-    data = tool_action["data"]
-    # Per-tool backfill keys must NOT be present
-    for key in ("stderr_preview", "structured_patch", "user_modified", "file_meta"):
-        assert key not in data, (
-            f"FIX-4 broken: unknown tool produced unexpected backfill key {key!r}"
-        )
-
-
 # ─── FIX-5: requestId provenance backfill ───────────────────────────────
 
 
@@ -1215,29 +672,6 @@ def test_request_id_absent_is_empty_string(tmp_path: Path) -> None:
         "FIX-5 broken: request_id key should be present even when absent at source"
     )
     assert llm["data"]["request_id"] == ""
-
-
-def test_request_id_explicit_none_becomes_empty_string(tmp_path: Path) -> None:
-    """FIX-5 guard: requestId=None must coerce to empty string, not None.
-
-    The ``or ""`` guard in the converter handles the case where the
-    field is present but explicitly null (rare but legal in JSON).
-    Without it, ``data.request_id`` would carry the literal Python
-    ``None``, polluting the v5 schema with mixed types.
-    """
-    session = _make_assistant_only_session(
-        tmp_path, extra_top_level={"requestId": None}
-    )
-    result = import_claude_code_session(
-        session_path=session, output_dir=tmp_path / "out", include_sidechains=False
-    )
-    records = _load_records(result)
-    llm = next(r for r in records if r.get("action_type") == "llm_call")
-    assert llm["data"]["request_id"] == "", (
-        f"FIX-5 None-guard broken: got {llm['data']['request_id']!r}, expected ''"
-    )
-
-
 def test_is_error_takes_precedence_over_interrupted(tmp_path: Path) -> None:
     """FIX-4 precedence: tool_result.is_error wins over per-tool overrides.
 
