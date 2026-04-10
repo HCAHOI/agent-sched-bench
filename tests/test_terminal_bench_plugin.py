@@ -120,3 +120,24 @@ def test_terminal_bench_normalize_task_preserves_non_swe_shape(tb_stub) -> None:
     assert normalized["image_name"] is None
     assert normalized["docker_image"] is None
     assert normalized["repo"] is None
+
+
+def test_terminal_bench_build_runner_preserves_mcp_config() -> None:
+    plugin = get_benchmark_class("terminal-bench")(_make_config())
+    runner = plugin.build_runner(
+        scaffold="openclaw",
+        provider=types.SimpleNamespace(
+            api_base="https://openrouter.ai/api/v1",
+            api_key="test-key",
+        ),
+        workspace_base=Path("workspace"),
+        max_iterations=50,
+        context_window_tokens=256_000,
+        model="z-ai/glm-5.1",
+        provider_name="openrouter",
+        env_key="OPENROUTER_API_KEY",
+        api_base="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        mcp_config="configs/mcp/context7.yaml",
+    )
+    assert runner.mcp_config == str(Path("configs/mcp/context7.yaml").resolve())

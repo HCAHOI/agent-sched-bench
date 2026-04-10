@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from pathlib import Path
 
 from agents.terminal_bench.openclaw_agent import TerminalBenchOpenClawAgent
@@ -40,3 +41,30 @@ def test_run_command_uses_venv_openclaw_and_iteration_limit() -> None:
     command = commands[0].command
     assert command.startswith('/installed-agent/venv/bin/openclaw ')
     assert '--max-iterations 25' in command
+
+
+def test_run_command_forwards_mcp_config_to_container() -> None:
+    agent = StubAgent(
+        model_name='nvidia/nemotron-3-super-120b-a12b:free',
+        provider_name='openrouter',
+        api_base='https://openrouter.ai/api/v1',
+        api_key='test-key',
+        env_key='OPENROUTER_API_KEY',
+        max_iterations=25,
+        mcp_config_path='/tmp/context7.yaml',
+    )
+    command = agent._run_agent_commands('hello task')[0].command
+    assert '--mcp-config /installed-agent/context7.yaml --workspace .' in command
+
+
+def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'env-key')
+    agent = StubAgent(
+        model_name='nvidia/nemotron-3-super-120b-a12b:free',
+        provider_name='openrouter',
+        api_base='https://openrouter.ai/api/v1',
+        api_key=None,
+        env_key='OPENROUTER_API_KEY',
+        max_iterations=25,
+    )
+    assert agent._env == {'OPENROUTER_API_KEY': 'env-key'}

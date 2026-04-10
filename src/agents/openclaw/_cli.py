@@ -116,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Set this to override (e.g., for one-off experiments)."
         ),
     )
+    parser.add_argument(
+        "--mcp-config",
+        default=None,
+        help="Optional MCP config YAML passed through to the OpenClaw session runner.",
+    )
 
     parser.add_argument(
         "--async",
@@ -222,6 +227,7 @@ def _run_sync(args: argparse.Namespace) -> int:
     llm_config = _resolve_llm_config(args)
 
     from agents.openclaw._session_runner import SessionRunner
+    from trace_collect.collector import load_mcp_servers
 
     workspace = Path(args.workspace).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
@@ -259,6 +265,7 @@ def _run_sync(args: argparse.Namespace) -> int:
         model=llm_config.model,
         max_iterations=args.max_iterations,
         extra_hooks=[cli_hook],
+        mcp_servers=load_mcp_servers(args.mcp_config),
     )
 
     if is_daemon:
@@ -361,6 +368,8 @@ def _run_async(args: argparse.Namespace) -> int:
         "--trace-output",
         str(trace_file),
     ]
+    if args.mcp_config is not None:
+        cmd.extend(["--mcp-config", str(args.mcp_config)])
 
     pid = spawn_daemon(
         cmd,

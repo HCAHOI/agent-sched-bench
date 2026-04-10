@@ -583,6 +583,7 @@ async def collect_openclaw_traces(
             env_key=env_key,
             api_base=api_base,
             api_key=api_key,
+            mcp_config=mcp_config,
             mcp_servers=load_mcp_servers(mcp_config),
         )
 

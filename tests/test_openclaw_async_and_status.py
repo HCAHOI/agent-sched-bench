@@ -16,7 +16,7 @@ import pytest
 
 pytest.importorskip("agents.openclaw._cli", reason="requires openclaw")
 
-from agents.openclaw._cli import _run_async, build_parser
+from agents.openclaw._cli import _run_async, _run_sync, build_parser
 from agents.openclaw._daemon import (
     get_session_status,
     pid_file_for_session,
@@ -100,6 +100,75 @@ def test_run_async_default_trace_output_under_repo_root(tmp_path: Path) -> None:
     assert "traces" in forwarded.parts
     assert "openclaw_cli" in forwarded.parts
     assert forwarded.suffix == ".jsonl"
+
+
+def test_run_async_forwards_mcp_config(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    mcp_config = tmp_path / "context7.yaml"
+    mcp_config.write_text("mcpServers: {}\n", encoding="utf-8")
+    args = _make_async_args(workspace, mcp_config=str(mcp_config))
+
+    captured: dict[str, object] = {}
+
+    def _fake_spawn(cmd, pid_file, session_id, *, extra_env=None, trace_file=None):
+        captured["cmd"] = list(cmd)
+        return 34567
+
+    with patch("agents.openclaw._daemon.spawn_daemon", side_effect=_fake_spawn), \
+         patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}):
+        _run_async(args)
+
+    cmd = captured["cmd"]
+    assert "--mcp-config" in cmd
+    idx = cmd.index("--mcp-config")
+    assert cmd[idx + 1] == str(mcp_config)
+
+
+def test_run_sync_loads_mcp_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    trace_output = tmp_path / "out.jsonl"
+    mcp_config = tmp_path / "context7.yaml"
+    mcp_config.write_text("mcpServers: {}\n", encoding="utf-8")
+    args = build_parser().parse_args(
+        [
+            "--prompt",
+            "do something",
+            "--workspace",
+            str(workspace),
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+            "--trace-output",
+            str(trace_output),
+            "--mcp-config",
+            str(mcp_config),
+            "--quiet",
+        ]
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(self, provider, *, model, max_iterations, extra_hooks, mcp_servers):
+            captured["mcp_servers"] = mcp_servers
+
+        async def run(self, **kwargs):
+            return type("Result", (), {"content": "ok", "elapsed_s": 0.1})()
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        "trace_collect.collector.load_mcp_servers",
+        lambda path: {"context7": {"url": path}},
+    )
+    monkeypatch.setattr("agents.openclaw._session_runner.SessionRunner", FakeRunner)
+
+    rc = _run_sync(args)
+
+    assert rc == 0
+    assert captured["mcp_servers"] == {"context7": {"url": str(mcp_config)}}
 
 
 # ── get_session_status: canonical parsing + PID-based trace path lookup ────
