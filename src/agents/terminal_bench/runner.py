@@ -30,6 +30,7 @@ class TerminalBenchRunner:
         context_window_tokens: int,
         benchmark_slug: str,
         benchmark_extras: dict[str, Any],
+        mcp_config: str | None = None,
     ) -> None:
         self.provider_name = provider_name or "openai"
         self.env_key = env_key or "OPENAI_API_KEY"
@@ -41,6 +42,8 @@ class TerminalBenchRunner:
         self.context_window_tokens = context_window_tokens
         self.benchmark_slug = benchmark_slug
         self.benchmark_extras = dict(benchmark_extras)
+        self.mcp_config = self._resolve_mcp_config(mcp_config)
+        self.mcp_config_label = self._mcp_config_label(mcp_config)
 
     async def run_openclaw_task(
         self,
@@ -67,10 +70,16 @@ class TerminalBenchRunner:
         run_id = attempt_ctx.instance_id.replace("/", "_")
         run_root.mkdir(parents=True, exist_ok=True)
 
-        command = self._build_tb_command(task=task, run_root=run_root, run_id=run_id)
+        command = self._build_tb_command(
+            task=task,
+            run_root=run_root,
+            run_id=run_id,
+            prompt_template=prompt_template,
+        )
         env = os.environ.copy()
         repo_root = Path(__file__).resolve().parents[3]
         env["PYTHONPATH"] = f"{repo_root / 'src'}:{repo_root}:{env.get('PYTHONPATH', '')}".rstrip(":")
+        env[self.env_key] = self.api_key
         completed = subprocess.run(
             command,
             cwd=repo_root,
@@ -96,6 +105,8 @@ class TerminalBenchRunner:
             "agent_import_path": self.AGENT_IMPORT_PATH,
             "tb_run_path": str(tb_run_path),
         }
+        if self.mcp_config_label is not None:
+            summary["mcp_config"] = self.mcp_config_label
         if not trace_path.exists():
             raise RuntimeError(f"terminal-bench trace file not found under {tb_run_path}")
         normalized_trace = run_root / f"{attempt_ctx.instance_id}-terminal-bench-trace.jsonl"
@@ -138,10 +149,11 @@ class TerminalBenchRunner:
         task: dict[str, Any],
         run_root: Path,
         run_id: str,
+        prompt_template: str,
     ) -> list[str]:
         dataset_root = task["dataset_root"]
         task_id = task["task_id"]
-        return [
+        command = [
             "tb",
             "run",
             "--dataset-path",
@@ -163,12 +175,28 @@ class TerminalBenchRunner:
             "--agent-kwarg",
             f"api_base={self.api_base}",
             "--agent-kwarg",
-            f"api_key={self.api_key}",
-            "--agent-kwarg",
             f"env_key={self.env_key}",
             "--agent-kwarg",
             f"max_iterations={self.max_iterations}",
         ]
+        prompt_template_path = self._materialize_prompt_template(
+            prompt_template=prompt_template,
+            run_root=run_root,
+        )
+        command.extend(
+            [
+                "--agent-kwarg",
+                f"prompt_template={prompt_template_path}",
+            ]
+        )
+        if self.mcp_config is not None:
+            command.extend(
+                [
+                    "--agent-kwarg",
+                    f"mcp_config_path={self.mcp_config}",
+                ]
+            )
+        return command
 
     def _extract_success(self, tb_run_path: Path) -> bool:
         results_path = tb_run_path / "results.json"
@@ -238,6 +266,10 @@ class TerminalBenchRunner:
                 "agent_import_path": self.AGENT_IMPORT_PATH,
             }
         )
+        if self.mcp_config_label is not None:
+            run_config = merged.get("run_config") or {}
+            run_config["mcp_config"] = self.mcp_config_label
+            merged["run_config"] = run_config
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         with dst.open("w", encoding="utf-8") as handle:
@@ -249,3 +281,35 @@ class TerminalBenchRunner:
 
     def _trace_filename(self) -> str:
         return self.TRACE_FILENAME
+
+    def _materialize_prompt_template(
+        self,
+        *,
+        prompt_template: str,
+        run_root: Path,
+    ) -> Path:
+        from trace_collect.prompt_loader import load_prompt_template
+
+        run_root.mkdir(parents=True, exist_ok=True)
+        template_text = load_prompt_template(prompt_template).replace(
+            "{{task}}",
+            "{{ instruction }}",
+        )
+        safe_name = prompt_template.replace("/", "_")
+        template_path = run_root / f"prompt-template-{safe_name}.j2"
+        template_path.write_text(template_text, encoding="utf-8")
+        return template_path.resolve()
+
+    @staticmethod
+    def _resolve_mcp_config(mcp_config: str | None) -> str | None:
+        if mcp_config in {None, "none"}:
+            return None
+        return str(Path(mcp_config).expanduser().resolve())
+
+    @staticmethod
+    def _mcp_config_label(mcp_config: str | None) -> str | None:
+        if mcp_config is None:
+            return None
+        if mcp_config == "none":
+            return "none"
+        return Path(mcp_config).name

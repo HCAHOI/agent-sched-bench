@@ -32,9 +32,10 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         model_name: str,
         provider_name: str,
         api_base: str,
-        api_key: str,
+        api_key: str | None,
         env_key: str,
         max_iterations: int = 200,
+        mcp_config_path: str | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -42,9 +43,14 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         self._model_name = model_name
         self._provider_name = provider_name
         self._api_base = api_base
-        self._api_key = api_key
         self._env_key = env_key
+        self._api_key = api_key or os.environ.get(env_key, "")
+        if not self._api_key:
+            raise ValueError(
+                f"missing API key for TerminalBenchOpenClawAgent env_key={env_key!r}"
+            )
         self._max_iterations = int(max_iterations)
+        self._mcp_config_path = mcp_config_path
 
     @property
     def _env(self) -> dict[str, str]:
@@ -107,11 +113,18 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         trace_output = shlex.quote(
             f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.TRACE_FILENAME}"
         )
+        mcp_flag = ""
+        if self._mcp_config_path:
+            mcp_flag = (
+                f"--mcp-config "
+                f"{shlex.quote(self._container_mcp_config_path)} "
+            )
         command = (
             f"{self.VENV_PATH}/bin/openclaw "
             f"--provider {shlex.quote(self._provider_name)} "
             f"--model {shlex.quote(self._model_name)} "
             f"--api-base {shlex.quote(self._api_base)} "
+            f"{mcp_flag}"
             f"--workspace {workspace} "
             f"--trace-output {trace_output} "
             f"--max-iterations {self._max_iterations} "
@@ -154,10 +167,15 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
 
         install_script = self._install_agent_script_path
-        session.copy_to_container(
-            paths=[self._wheel_path, install_script],
-            container_dir="/installed-agent",
-        )
+        copy_paths = [self._wheel_path, install_script]
+        if self._mcp_config_path:
+            host_mcp_config = Path(self._mcp_config_path).expanduser().resolve()
+            if not host_mcp_config.exists():
+                raise FileNotFoundError(
+                    f"Terminal-Bench MCP config path does not exist: {host_mcp_config}"
+                )
+            copy_paths.append(host_mcp_config)
+        session.copy_to_container(paths=copy_paths, container_dir="/installed-agent")
 
         env_setup_content = self._create_env_setup_file()
         session.container.exec_run(
@@ -194,3 +212,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             marker_path = logging_dir / "openclaw-complete.marker"
             marker_path.write_text("completed", encoding="utf-8")
         return AgentResult(total_input_tokens=0, total_output_tokens=0)
+
+    @property
+    def _container_mcp_config_path(self) -> str:
+        if not self._mcp_config_path:
+            raise ValueError("mcp_config_path is not configured")
+        return f"/installed-agent/{Path(self._mcp_config_path).name}"

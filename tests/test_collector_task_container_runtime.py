@@ -13,6 +13,7 @@ from trace_collect.collector import (
     _run_openclaw_in_task_container,
 )
 from trace_collect.runtime.task_container import (
+    TaskContainerExecConfig,
     TaskContainerPreflightProof,
     TaskContainerRunResult,
 )
@@ -64,6 +65,8 @@ def test_run_miniswe_in_task_container_collects_runtime_proof(
     monkeypatch,
 ) -> None:
     seen: dict[str, object] = {}
+    preflight_seen: dict[str, object] = {}
+    bootstrap_seen: dict[str, object] = {}
     ctx = _make_relative_ctx(monkeypatch, tmp_path, scaffold="miniswe")
     runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "miniswe"
     stdout_path = runtime_dir / "stdout.txt"
@@ -86,16 +89,38 @@ def test_run_miniswe_in_task_container_collects_runtime_proof(
         lambda *args, **kwargs: "container logs",
     )
     monkeypatch.setattr(
-        "trace_collect.collector.preflight_task_container_runtime",
-        lambda **kwargs: TaskContainerPreflightProof(
-            container_id="cid-mini",
-            hostname="host-a",
-            cwd="/testbed",
-            python_executable="/opt/conda/envs/ML/bin/python",
-            project_root="/work/project",
-            python_prefix="/opt/conda/envs/ML",
-            sys_path=["/work/project/src"],
+        "trace_collect.collector.resolve_task_container_exec_config",
+        lambda **kwargs: TaskContainerExecConfig(
+            runtime="/opt/conda/envs/ML/bin/python",
+            pythonpath="/deps:/repo/src:/repo",
+            start_extra_args=("--platform", "linux/amd64"),
+            bootstrap=True,
+            bootstrap_site_dir=ctx.attempt_dir / "_task_container_runtime" / "bootstrap" / "pydeps",
+            image_platform="linux/amd64",
         ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.resolve_running_container_exec_config",
+        lambda **kwargs: kwargs["exec_config"],
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.bootstrap_task_container_python",
+        lambda **kwargs: bootstrap_seen.update(kwargs),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.preflight_task_container_runtime",
+        lambda **kwargs: (
+            preflight_seen.update(kwargs),
+            TaskContainerPreflightProof(
+                container_id="cid-mini",
+                hostname="host-a",
+                cwd="/testbed",
+                python_executable="/opt/conda/envs/ML/bin/python",
+                project_root="/work/project",
+                python_prefix="/opt/conda/envs/ML",
+                sys_path=["/work/project/src"],
+            ),
+        )[1],
     )
     monkeypatch.setattr(
         "trace_collect.collector.run_task_container_agent",
@@ -148,6 +173,9 @@ def test_run_miniswe_in_task_container_collects_runtime_proof(
     assert Path(str(seen["raw_stderr_path"])).is_absolute()
     assert Path(str(seen["result_path"])) == runtime_dir.resolve() / "run.result.json"
     assert seen["exec_working_dir"] == "/testbed"
+    assert preflight_seen["runtime"] == "/opt/conda/envs/ML/bin/python"
+    assert preflight_seen["pythonpath"] == "/deps:/repo/src:/repo"
+    assert bootstrap_seen["extra_requirements"] == ("mini-swe-agent>=2.0",)
     assert "mini stdout" in ctx.container_stdout
     assert "container logs" in ctx.container_stdout
 
@@ -171,6 +199,25 @@ def test_run_miniswe_in_task_container_keeps_raw_logs_on_failure(
     monkeypatch.setattr(
         "trace_collect.collector.stop_task_container",
         lambda *args, **kwargs: "container logs",
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.resolve_task_container_exec_config",
+        lambda **kwargs: TaskContainerExecConfig(
+            runtime="/opt/conda/envs/ML/bin/python",
+            pythonpath="/deps:/repo/src:/repo",
+            start_extra_args=(),
+            bootstrap=False,
+            bootstrap_site_dir=None,
+            image_platform="linux/amd64",
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.resolve_running_container_exec_config",
+        lambda **kwargs: kwargs["exec_config"],
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.bootstrap_task_container_python",
+        lambda **kwargs: None,
     )
     monkeypatch.setattr(
         "trace_collect.collector.preflight_task_container_runtime",
@@ -226,6 +273,8 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     monkeypatch,
 ) -> None:
     seen: dict[str, object] = {}
+    preflight_seen: dict[str, object] = {}
+    bootstrap_seen: dict[str, object] = {}
     ctx = _make_relative_ctx(monkeypatch, tmp_path, scaffold="openclaw")
     runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "openclaw"
     stdout_path = runtime_dir / "stdout.txt"
@@ -269,16 +318,38 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
         lambda *args, **kwargs: "container logs",
     )
     monkeypatch.setattr(
-        "trace_collect.collector.preflight_task_container_runtime",
-        lambda **kwargs: TaskContainerPreflightProof(
-            container_id="cid-openclaw",
-            hostname="host-b",
-            cwd="/testbed",
-            python_executable="/opt/conda/envs/ML/bin/python",
-            project_root="/work/project",
-            python_prefix="/opt/conda/envs/ML",
-            sys_path=["/work/project/src"],
+        "trace_collect.collector.resolve_task_container_exec_config",
+        lambda **kwargs: TaskContainerExecConfig(
+            runtime="/usr/bin/python3",
+            pythonpath="/deps:/repo/src:/repo",
+            start_extra_args=("--platform", "linux/amd64"),
+            bootstrap=True,
+            bootstrap_site_dir=ctx.attempt_dir / "_task_container_runtime" / "bootstrap" / "pydeps",
+            image_platform="linux/amd64",
         ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.resolve_running_container_exec_config",
+        lambda **kwargs: kwargs["exec_config"],
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.bootstrap_task_container_python",
+        lambda **kwargs: bootstrap_seen.update(kwargs),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.preflight_task_container_runtime",
+        lambda **kwargs: (
+            preflight_seen.update(kwargs),
+            TaskContainerPreflightProof(
+                container_id="cid-openclaw",
+                hostname="host-b",
+                cwd="/testbed",
+                python_executable="/opt/conda/envs/ML/bin/python",
+                project_root="/work/project",
+                python_prefix="/opt/conda/envs/ML",
+                sys_path=["/work/project/src"],
+            ),
+        )[1],
     )
     monkeypatch.setattr(
         "trace_collect.collector.run_task_container_agent",
@@ -334,7 +405,120 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     assert Path(str(seen["result_path"])) == runtime_dir.resolve() / "run.result.json"
     assert seen["tool_workspace"] == "/testbed"
     assert seen["exec_working_dir"] == "/testbed"
+    assert preflight_seen["runtime"] == "/usr/bin/python3"
+    assert preflight_seen["pythonpath"] == "/deps:/repo/src:/repo"
+    assert preflight_seen["imports"] == [
+        "trace_collect.runtime.entrypoint",
+        "agents.openclaw.eval.runner",
+        "harness.trace_logger",
+    ]
+    assert bootstrap_seen["extra_requirements"] == ()
     assert result.total_llm_ms == 12.0
     assert result.total_tool_ms == 6.0
     assert result.total_tokens == 99
     assert "openclaw stdout" in ctx.container_stdout
+
+
+def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    preflight_seen: dict[str, object] = {}
+    bootstrap_seen: dict[str, object] = {}
+    ctx = _make_relative_ctx(monkeypatch, tmp_path, scaffold="openclaw")
+    runtime_dir = ctx.attempt_dir / "_task_container_runtime" / "openclaw"
+    stdout_path = runtime_dir / "stdout.txt"
+    stderr_path = runtime_dir / "stderr.txt"
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path.write_text("openclaw stdout", encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+    raw_trace_path = runtime_dir / "trace.raw.jsonl"
+    raw_trace_path.write_text(
+        '{"type":"trace_metadata","scaffold":"openclaw","trace_format_version":5}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "trace_collect.collector.start_task_container",
+        lambda *args, **kwargs: "cid-openclaw",
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.stop_task_container",
+        lambda *args, **kwargs: "container logs",
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.resolve_task_container_exec_config",
+        lambda **kwargs: TaskContainerExecConfig(
+            runtime="/usr/bin/python3",
+            pythonpath="/deps:/repo/src:/repo",
+            start_extra_args=(),
+            bootstrap=True,
+            bootstrap_site_dir=ctx.attempt_dir / "_task_container_runtime" / "bootstrap" / "pydeps",
+            image_platform="linux/amd64",
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.resolve_running_container_exec_config",
+        lambda **kwargs: kwargs["exec_config"],
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.bootstrap_task_container_python",
+        lambda **kwargs: bootstrap_seen.update(kwargs),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.preflight_task_container_runtime",
+        lambda **kwargs: (
+            preflight_seen.update(kwargs),
+            TaskContainerPreflightProof(
+                container_id="cid-openclaw",
+                hostname="host-b",
+                cwd="/testbed",
+                python_executable="/usr/bin/python3",
+                project_root="/work/project",
+                python_prefix="/usr",
+                sys_path=["/work/project/src"],
+            ),
+        )[1],
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.run_task_container_agent",
+        lambda **kwargs: TaskContainerRunResult(
+            success=True,
+            trace_path=raw_trace_path,
+            model_patch="diff --git a/httpx.py b/httpx.py",
+            exit_status="completed",
+            error=None,
+            n_iterations=1,
+            total_llm_ms=1.0,
+            total_tool_ms=1.0,
+            total_tokens=1,
+            runtime_proof={"hostname": "container-b"},
+            raw_stdout_path=stdout_path,
+            raw_stderr_path=stderr_path,
+        ),
+    )
+
+    asyncio.run(
+        _run_openclaw_in_task_container(
+            ctx=ctx,
+            task=dict(ctx.task),
+            benchmark=SimpleNamespace(
+                config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
+            ),
+            provider_name="openrouter",
+            api_base="https://example.com",
+            api_key="test-key",
+            model="qwen-plus-latest",
+            max_iterations=10,
+            max_context_tokens=1024,
+            mcp_config="configs/mcp/context7.yaml",
+        )
+    )
+
+    assert bootstrap_seen["extra_requirements"] == ("mcp>=1.0",)
+    assert preflight_seen["imports"] == [
+        "trace_collect.runtime.entrypoint",
+        "agents.openclaw.eval.runner",
+        "harness.trace_logger",
+        "agents.openclaw.tools.mcp",
+    ]

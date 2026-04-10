@@ -110,6 +110,7 @@ class TerminalBenchBenchmark(Benchmark):
             context_window_tokens=context_window_tokens,
             benchmark_slug=self.config.slug,
             benchmark_extras=self.config.extras,
+            mcp_config=kwargs.get("mcp_config"),
         )
 
     def _load_dataset_paths(self) -> tuple[Path, list[Path]]:

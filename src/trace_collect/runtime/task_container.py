@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import subprocess
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +16,32 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOTNAME = "_task_container_runtime"
 REPO_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 _REDACTED_SECRET = "***REDACTED***"
+_DEFAULT_RUNTIME_PYTHONPATH = f"{REPO_ROOT / 'src'}:{REPO_ROOT}"
+_CONTAINER_SYSTEM_PYTHON = "/usr/bin/python3"
+_DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple"
+_BOOTSTRAP_REQUIREMENTS = (
+    "openai>=2.0,<3.0",
+    "PyYAML>=6.0,<7.0",
+    "json-repair>=0.30,<1.0",
+    "loguru>=0.7,<1.0",
+    "pydantic>=2.0,<3.0",
+    "httpx>=0.27,<1.0",
+    "tiktoken>=0.7,<1.0",
+)
+_ARCH_ALIASES = {
+    "amd64": "amd64",
+    "x86_64": "amd64",
+    "arm64": "arm64",
+    "aarch64": "arm64",
+}
+_CONTAINER_PYTHON_CANDIDATES = (
+    "/usr/bin/python3",
+    "/usr/bin/python",
+    "/opt/conda/bin/python",
+    "/opt/conda/envs/ML/bin/python",
+    "python3",
+    "python",
+)
 
 
 @dataclass(slots=True)
@@ -42,6 +71,64 @@ class TaskContainerRunResult:
     raw_stderr_path: Path
 
 
+@dataclass(slots=True, frozen=True)
+class TaskContainerExecConfig:
+    runtime: str
+    pythonpath: str
+    start_extra_args: tuple[str, ...]
+    bootstrap: bool = False
+    bootstrap_site_dir: Path | None = None
+    image_platform: str | None = None
+
+
+def _normalize_arch(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    return _ARCH_ALIASES.get(raw.lower(), raw.lower())
+
+
+def _host_linux_platform() -> str | None:
+    if platform.system() != "Linux":
+        return None
+    arch = _normalize_arch(platform.machine())
+    if arch is None:
+        return None
+    return f"linux/{arch}"
+
+
+def _inspect_image_platform(
+    image: str,
+    *,
+    executable: str = "podman",
+) -> str | None:
+    if not image:
+        return None
+    result = subprocess.run(
+        [
+            executable,
+            "image",
+            "inspect",
+            image,
+            "--format",
+            "{{.Architecture}} {{.Os}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return None
+    parts = result.stdout.strip().split()
+    if len(parts) != 2:
+        return None
+    arch, os_name = parts
+    norm_arch = _normalize_arch(arch)
+    if not norm_arch:
+        return None
+    return f"{os_name.lower()}/{norm_arch}"
+
+
 def current_container_python_runtime() -> str:
     """Return the Python interpreter path that the container should use."""
     return str(REPO_VENV_PYTHON)
@@ -51,7 +138,11 @@ def task_container_runtime_dir(attempt_dir: Path, scaffold: str) -> Path:
     return attempt_dir.resolve() / RUNTIME_ROOTNAME / scaffold
 
 
-def project_mount_args(attempt_dir: Path) -> list[str]:
+def project_mount_args(
+    attempt_dir: Path,
+    *,
+    include_host_system_mounts: bool | None = None,
+) -> list[str]:
     """Return extra `podman run` args for parity mode."""
 
     task_container_runtime_dir(attempt_dir, "bootstrap").mkdir(parents=True, exist_ok=True)
@@ -62,10 +153,13 @@ def project_mount_args(attempt_dir: Path) -> list[str]:
         (attempt_dir, False),
         (repo_root, False),
     ]
-    for raw in ("/usr", "/lib", "/lib64", "/etc", "/bin", "/sbin", "/tmp", "/var"):
-        path = Path(raw)
-        if path.exists():
-            mounts.append((path, raw not in {"/tmp", "/var"}))
+    if include_host_system_mounts is None:
+        include_host_system_mounts = platform.system() == "Linux"
+    if include_host_system_mounts:
+        for raw in ("/usr", "/lib", "/lib64", "/etc", "/bin", "/sbin", "/tmp", "/var"):
+            path = Path(raw)
+            if path.exists():
+                mounts.append((path, raw not in {"/tmp", "/var"}))
 
     seen: set[Path] = set()
     for path, read_only in mounts:
@@ -75,6 +169,108 @@ def project_mount_args(attempt_dir: Path) -> list[str]:
         suffix = ":ro" if read_only else ""
         args.extend(["-v", f"{path}:{path}{suffix}"])
     return args
+
+
+def resolve_task_container_exec_config(
+    *,
+    attempt_dir: Path,
+    image: str,
+    executable: str = "podman",
+) -> TaskContainerExecConfig:
+    image_platform = _inspect_image_platform(image, executable=executable)
+    host_platform = _host_linux_platform()
+    use_host_runtime = host_platform is not None and (
+        image_platform is None or image_platform == host_platform
+    )
+    start_args = list(
+        project_mount_args(
+            attempt_dir,
+            include_host_system_mounts=use_host_runtime,
+        )
+    )
+    if image_platform is not None:
+        start_args = ["--platform", image_platform, *start_args]
+
+    if use_host_runtime:
+        return TaskContainerExecConfig(
+            runtime=str(REPO_VENV_PYTHON),
+            pythonpath=_DEFAULT_RUNTIME_PYTHONPATH,
+            start_extra_args=tuple(start_args),
+            bootstrap=False,
+            bootstrap_site_dir=None,
+            image_platform=image_platform,
+        )
+
+    site_dir = task_container_runtime_dir(attempt_dir, "bootstrap") / "pydeps"
+    return TaskContainerExecConfig(
+        runtime=_CONTAINER_SYSTEM_PYTHON,
+        pythonpath=f"{site_dir}:{_DEFAULT_RUNTIME_PYTHONPATH}",
+        start_extra_args=tuple(start_args),
+        bootstrap=True,
+        bootstrap_site_dir=site_dir,
+        image_platform=image_platform,
+    )
+
+
+def resolve_running_container_exec_config(
+    *,
+    container_id: str,
+    exec_config: TaskContainerExecConfig,
+    executable: str = "podman",
+    cwd: str = "/testbed",
+) -> TaskContainerExecConfig:
+    if not exec_config.bootstrap:
+        return exec_config
+
+    probe_script = """
+set -eu
+for cand in "$@"; do
+  if [ -x "$cand" ] || command -v "$cand" >/dev/null 2>&1; then
+    if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+      "$cand" -c 'import sys; print(sys.executable)'
+      exit 0
+    fi
+  fi
+done
+exit 1
+"""
+    result = subprocess.run(
+        [
+            executable,
+            "exec",
+            "-i",
+            "-w",
+            cwd,
+            container_id,
+            "/bin/sh",
+            "-s",
+            "--",
+            *_CONTAINER_PYTHON_CANDIDATES,
+        ],
+        input=probe_script,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "task-container python probe failed: "
+            "no Python >=3.11 interpreter found in container"
+        )
+    runtime = result.stdout.strip()
+    if not runtime:
+        raise RuntimeError(
+            "task-container python probe failed: empty interpreter path"
+        )
+    return TaskContainerExecConfig(
+        runtime=runtime,
+        pythonpath=exec_config.pythonpath,
+        start_extra_args=exec_config.start_extra_args,
+        bootstrap=exec_config.bootstrap,
+        bootstrap_site_dir=exec_config.bootstrap_site_dir,
+        image_platform=exec_config.image_platform,
+    )
 
 
 def write_task_container_request(
@@ -112,6 +308,7 @@ def exec_task_container_entrypoint(
     request_path: Path,
     request_payload: dict[str, Any] | None = None,
     runtime: str,
+    pythonpath: str | None,
     timeout: float,
     executable: str = "podman",
     cwd: str = "/testbed",
@@ -129,7 +326,7 @@ def exec_task_container_entrypoint(
             "-w",
             cwd,
             "-e",
-            f"PYTHONPATH={REPO_ROOT / 'src'}:{REPO_ROOT}",
+            f"PYTHONPATH={pythonpath or _DEFAULT_RUNTIME_PYTHONPATH}",
             "-e",
             "PYTHONDONTWRITEBYTECODE=1",
             container_id,
@@ -155,19 +352,23 @@ def preflight_task_container_runtime(
     *,
     container_id: str,
     attempt_dir: Path,
+    imports: list[str] | None = None,
+    runtime: str | None = None,
+    pythonpath: str | None = None,
     executable: str = "podman",
 ) -> TaskContainerPreflightProof:
-    runtime = current_container_python_runtime()
+    effective_runtime = runtime or current_container_python_runtime()
     runtime_dir = task_container_runtime_dir(attempt_dir, "preflight")
+    import_list = imports or [
+        "trace_collect.runtime.entrypoint",
+        "agents.miniswe.agent",
+        "agents.openclaw.eval.runner",
+        "harness.trace_logger",
+    ]
     request_payload = {
         "kind": "preflight",
         "result_path": str(runtime_dir / "result.json"),
-        "imports": [
-            "trace_collect.runtime.entrypoint",
-            "agents.miniswe.agent",
-            "agents.openclaw.eval.runner",
-            "harness.trace_logger",
-        ],
+        "imports": import_list,
         "writable_probe": str(runtime_dir / "writable.probe"),
         "container_id": container_id,
     }
@@ -180,7 +381,8 @@ def preflight_task_container_runtime(
         container_id=container_id,
         request_path=request_path,
         request_payload=request_payload,
-        runtime=runtime,
+        runtime=effective_runtime,
+        pythonpath=pythonpath,
         timeout=120,
         executable=executable,
     )
@@ -199,9 +401,11 @@ def run_task_container_agent(
     container_id: str,
     request: dict[str, Any],
     timeout: float,
+    runtime: str | None = None,
+    pythonpath: str | None = None,
     executable: str = "podman",
 ) -> TaskContainerRunResult:
-    runtime = current_container_python_runtime()
+    effective_runtime = runtime or current_container_python_runtime()
     raw_stdout_path = Path(request["raw_stdout_path"])
     raw_stderr_path = Path(request["raw_stderr_path"])
     raw_stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +420,8 @@ def run_task_container_agent(
             container_id=container_id,
             request_path=request_path,
             request_payload=request,
-            runtime=runtime,
+            runtime=effective_runtime,
+            pythonpath=pythonpath,
             timeout=timeout,
             executable=executable,
         )
@@ -265,3 +470,111 @@ def run_task_container_agent(
         raw_stdout_path=raw_stdout_path,
         raw_stderr_path=raw_stderr_path,
     )
+
+
+def bootstrap_task_container_python(
+    *,
+    container_id: str,
+    exec_config: TaskContainerExecConfig,
+    extra_requirements: tuple[str, ...] = (),
+    executable: str = "podman",
+    cwd: str = "/testbed",
+) -> None:
+    if not exec_config.bootstrap or exec_config.bootstrap_site_dir is None:
+        return
+
+    marker = exec_config.bootstrap_site_dir / ".bootstrap-ready.json"
+    if marker.exists():
+        return
+
+    userbase = exec_config.bootstrap_site_dir.parent / ".pyuserbase"
+    userbase.mkdir(parents=True, exist_ok=True)
+    get_pip = userbase / "get-pip.py"
+    if not get_pip.exists():
+        with urllib.request.urlopen(
+            "https://bootstrap.pypa.io/get-pip.py",
+            timeout=120,
+        ) as response:
+            get_pip.write_bytes(response.read())
+
+    pip_index_url = (
+        os.environ.get("TASK_CONTAINER_PIP_INDEX_URL")
+        or os.environ.get("PIP_INDEX_URL")
+        or _DEFAULT_PIP_INDEX_URL
+    )
+    requirements = tuple(dict.fromkeys(_BOOTSTRAP_REQUIREMENTS + extra_requirements))
+    script = f"""
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+
+site_dir = pathlib.Path({str(exec_config.bootstrap_site_dir)!r})
+marker = pathlib.Path({str(marker)!r})
+userbase = pathlib.Path({str(userbase)!r})
+requirements = {list(requirements)!r}
+site_dir.mkdir(parents=True, exist_ok=True)
+userbase.mkdir(parents=True, exist_ok=True)
+
+if marker.exists():
+    print("bootstrap runtime: reuse existing site-packages")
+    raise SystemExit(0)
+
+env = dict(os.environ)
+env["PYTHONUSERBASE"] = str(userbase)
+get_pip = userbase / "get-pip.py"
+subprocess.check_call(
+    [sys.executable, str(get_pip), "--user", "--break-system-packages"],
+    env=env,
+)
+pip_bin = userbase / "bin" / "pip"
+if not pip_bin.exists():
+    pip_bin = userbase / "bin" / "pip3"
+if not pip_bin.exists():
+    raise RuntimeError("pip bootstrap succeeded but pip executable is missing")
+subprocess.check_call(
+    [
+        str(pip_bin),
+        "install",
+        "--disable-pip-version-check",
+        "--no-cache-dir",
+        "--only-binary=:all:",
+        "--break-system-packages",
+        "--target",
+        str(site_dir),
+        "-i",
+        {pip_index_url!r},
+        *requirements,
+    ],
+    env=env,
+)
+marker.write_text(
+    json.dumps({{"requirements": requirements, "python": sys.executable}}),
+    encoding="utf-8",
+)
+shutil.rmtree(userbase, ignore_errors=True)
+"""
+    result = subprocess.run(
+        [
+            executable,
+            "exec",
+            "-i",
+            "-w",
+            cwd,
+            container_id,
+            exec_config.runtime,
+            "-",
+        ],
+        input=script,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=1800,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "task-container python bootstrap failed: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
