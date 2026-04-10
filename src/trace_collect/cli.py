@@ -287,6 +287,7 @@ def _run_collect(args: argparse.Namespace) -> None:
         collect_traces(
             scaffold=args.scaffold,
             provider_name=provider_config.name,
+            env_key=provider_config.env_key,
             api_base=provider_config.api_base,
             api_key=provider_config.api_key,
             model=provider_config.model,

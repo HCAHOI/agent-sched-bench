@@ -221,6 +221,59 @@ def test_run_task_container_agent_preserves_existing_raw_logs(
     assert stderr_path.read_text(encoding="utf-8") == "container stderr"
 
 
+def test_run_task_container_agent_prefers_explicit_success_over_patch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
+    stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
+    stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
+    trace_path = tmp_path / "_task_container_runtime" / "openclaw" / "trace.jsonl"
+
+    def fake_exec(**kwargs):
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(
+                {
+                    "success": True,
+                    "trace_path": str(trace_path),
+                    "model_patch": "",
+                    "exit_status": "completed",
+                    "error": None,
+                    "runtime_proof": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.exec_task_container_entrypoint",
+        fake_exec,
+    )
+
+    result = run_task_container_agent(
+        container_id="cid-3",
+        timeout=10,
+        request={
+            "kind": "run_openclaw",
+            "scaffold": "openclaw",
+            "result_path": str(result_path),
+            "trace_file": str(trace_path),
+            "raw_stdout_path": str(stdout_path),
+            "raw_stderr_path": str(stderr_path),
+        },
+    )
+
+    assert result.success is True
+
+
 def test_run_task_container_agent_timeout_writes_partial_logs(
     tmp_path: Path,
     monkeypatch,
