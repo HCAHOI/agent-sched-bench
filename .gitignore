@@ -12,6 +12,8 @@ uv.lock
 .playwright-mcp/
 .omx/
 .playwright-cli/
+.codex
+tmp-review-trace.jsonl
 demo/gantt_viewer/frontend/node_modules/
 demo/gantt_viewer/frontend/dist/
 

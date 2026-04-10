@@ -23,7 +23,7 @@ import pytest
 # Skip the entire module if openclaw / minisweagent deps are unavailable.
 pytest.importorskip("agents.openclaw._session_runner")
 
-from agents.openclaw._session_runner import TraceCollectorHook
+from agents.openclaw._session_runner import TraceCollectorHook, _resolve_run_outcome
 
 
 class _StubResponse:
@@ -172,3 +172,28 @@ async def _drive_llm_only_iteration(tmp_path: Path) -> None:
     assert len(tool_execs) == 0
     # ts_end falls back to "now" when before_execute_tools was never called
     assert llm_calls[0]["ts_end"] >= llm_calls[0]["ts_start"]
+
+
+def test_resolve_run_outcome_uses_trace_llm_error_event(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    trace_file.write_text(
+        json.dumps(
+            {
+                "type": "event",
+                "event": "llm_error",
+                "category": "LLM",
+                "data": {"error_message": "credits exhausted"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stop_reason, error = _resolve_run_outcome(
+        outcome={},
+        content='Error: {"error":{"message":"This request requires more credits"}}',
+        trace_file=trace_file,
+    )
+
+    assert stop_reason == "error"
+    assert "requires more credits" in (error or "")
