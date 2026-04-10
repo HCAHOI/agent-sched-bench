@@ -26,8 +26,10 @@ from trace_collect.attempt_pipeline import (
     stop_task_container,
 )
 from trace_collect.runtime.task_container import (
+    bootstrap_task_container_python,
     preflight_task_container_runtime,
-    project_mount_args,
+    resolve_task_container_exec_config,
+    resolve_running_container_exec_config,
     run_task_container_agent,
 )
 
@@ -721,20 +723,37 @@ async def _run_miniswe_in_task_container(
     stderr_path = runtime_dir / "stderr.txt"
     proof = None
     runtime = None
+    exec_config = resolve_task_container_exec_config(
+        attempt_dir=ctx.attempt_dir,
+        image=fixed_image,
+    )
     container_id = start_task_container(
         fixed_image,
-        extra_args=project_mount_args(ctx.attempt_dir),
+        extra_args=list(exec_config.start_extra_args),
     )
     ctx.mark_container_ready(container_id)
     try:
+        exec_config = resolve_running_container_exec_config(
+            container_id=container_id,
+            exec_config=exec_config,
+        )
+        bootstrap_task_container_python(
+            container_id=container_id,
+            exec_config=exec_config,
+            extra_requirements=("mini-swe-agent>=2.0",),
+        )
         proof = preflight_task_container_runtime(
             container_id=container_id,
             attempt_dir=ctx.attempt_dir,
+            runtime=exec_config.runtime,
+            pythonpath=exec_config.pythonpath,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
         runtime = run_task_container_agent(
             container_id=container_id,
             timeout=task_timeout_s + 120,
+            runtime=exec_config.runtime,
+            pythonpath=exec_config.pythonpath,
             request={
                 "kind": "run_miniswe",
                 "scaffold": "miniswe",
@@ -818,20 +837,47 @@ async def _run_openclaw_in_task_container(
     proof = None
     runtime = None
     runtime_proof = None
+    exec_config = resolve_task_container_exec_config(
+        attempt_dir=ctx.attempt_dir,
+        image=fixed_image,
+    )
     container_id = start_task_container(
         fixed_image,
-        extra_args=project_mount_args(ctx.attempt_dir),
+        extra_args=list(exec_config.start_extra_args),
     )
     ctx.mark_container_ready(container_id)
     try:
+        exec_config = resolve_running_container_exec_config(
+            container_id=container_id,
+            exec_config=exec_config,
+        )
+        preflight_imports = [
+            "trace_collect.runtime.entrypoint",
+            "agents.openclaw.eval.runner",
+            "harness.trace_logger",
+        ]
+        bootstrap_requirements: tuple[str, ...] = ()
+        if mcp_config not in {None, "none"}:
+            preflight_imports.append("agents.openclaw.tools.mcp")
+            bootstrap_requirements = ("mcp>=1.0",)
+        bootstrap_task_container_python(
+            container_id=container_id,
+            exec_config=exec_config,
+            extra_requirements=bootstrap_requirements,
+        )
         proof = preflight_task_container_runtime(
             container_id=container_id,
             attempt_dir=ctx.attempt_dir,
+            imports=preflight_imports,
+            runtime=exec_config.runtime,
+            pythonpath=exec_config.pythonpath,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
         runtime = run_task_container_agent(
             container_id=container_id,
             timeout=(max_iterations * 120) + 300,
+            runtime=exec_config.runtime,
+            pythonpath=exec_config.pythonpath,
             request={
                 "kind": "run_openclaw",
                 "scaffold": "openclaw",

@@ -7,10 +7,14 @@ import os
 from pathlib import Path
 
 from trace_collect.runtime.task_container import (
+    TaskContainerExecConfig,
     TaskContainerRunResult,
+    bootstrap_task_container_python,
     current_container_python_runtime,
     preflight_task_container_runtime,
     project_mount_args,
+    resolve_task_container_exec_config,
+    resolve_running_container_exec_config,
     run_task_container_agent,
 )
 
@@ -23,6 +27,20 @@ def test_project_mount_args_include_attempt_dir_and_repo(
 
     assert str((tmp_path / "attempt").resolve()) in joined
     assert str((Path(__file__).resolve().parents[1]).resolve()) in joined
+
+
+def test_project_mount_args_skip_host_system_mounts_off_linux(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.platform.system",
+        lambda: "Darwin",
+    )
+
+    joined = " ".join(project_mount_args(tmp_path / "attempt"))
+    assert "/etc:/etc:ro" not in joined
+    assert "/usr:/usr:ro" not in joined
 
 
 def test_current_container_python_runtime_keeps_unresolved_venv_path(
@@ -46,6 +64,153 @@ def test_current_container_python_runtime_keeps_unresolved_venv_path(
     assert runtime.resolve() == real_python
 
 
+def test_resolve_task_container_exec_config_bootstraps_on_cross_platform(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.platform.system",
+        lambda: "Darwin",
+    )
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container._inspect_image_platform",
+        lambda image, executable="podman": "linux/amd64",
+    )
+
+    config = resolve_task_container_exec_config(
+        attempt_dir=tmp_path / "attempt",
+        image="localhost/example:latest",
+    )
+
+    assert isinstance(config, TaskContainerExecConfig)
+    assert config.bootstrap is True
+    assert config.runtime == "/usr/bin/python3"
+    assert config.image_platform == "linux/amd64"
+    assert config.start_extra_args[:2] == ("--platform", "linux/amd64")
+    assert all("/etc:/etc:ro" not in arg for arg in config.start_extra_args)
+    assert config.bootstrap_site_dir is not None
+    assert str(config.bootstrap_site_dir) in config.pythonpath
+
+
+def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath="/deps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=Path("/tmp/pydeps"),
+        image_platform="linux/amd64",
+    )
+
+    def fake_run(*args, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "/opt/conda/envs/ML/bin/python\n"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    resolved = resolve_running_container_exec_config(
+        container_id="cid-1",
+        exec_config=exec_config,
+    )
+
+    assert resolved.runtime == "/opt/conda/envs/ML/bin/python"
+    assert resolved.pythonpath == exec_config.pythonpath
+
+
+def test_resolve_running_container_exec_config_raises_without_python(
+    monkeypatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath="/deps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=Path("/tmp/pydeps"),
+        image_platform="linux/amd64",
+    )
+
+    def fake_run(*args, **kwargs):
+        class Result:
+            returncode = 1
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    try:
+        resolve_running_container_exec_config(
+            container_id="cid-1",
+            exec_config=exec_config,
+        )
+    except RuntimeError as exc:
+        assert "no Python >=3.11 interpreter found" in str(exc)
+    else:
+        raise AssertionError("expected probe failure")
+
+
+def test_bootstrap_task_container_python_uses_resolved_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/opt/conda/envs/ML/bin/python",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    seen: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"print('ok')\n"
+
+    def fake_urlopen(url: str, timeout: int):
+        seen["url"] = url
+        seen["timeout"] = timeout
+        return FakeResponse()
+
+    def fake_run(*args, **kwargs):
+        seen["cmd"] = args[0]
+        seen["input"] = kwargs["input"]
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    bootstrap_task_container_python(
+        container_id="cid-1",
+        exec_config=exec_config,
+        extra_requirements=("mcp>=1.0",),
+    )
+
+    assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+    assert "/opt/conda/envs/ML/bin/python" in seen["cmd"]
+    assert "mcp>=1.0" in str(seen["input"])
+
+
 def test_preflight_task_container_runtime_reads_runtime_proof(
     tmp_path: Path,
     monkeypatch,
@@ -58,6 +223,8 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
     def fake_exec(**kwargs):
         request = json.loads(Path(kwargs["request_path"]).read_text(encoding="utf-8"))
         seen.update(request)
+        seen["runtime"] = kwargs["runtime"]
+        seen["pythonpath"] = kwargs["pythonpath"]
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
             json.dumps(
@@ -92,6 +259,9 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
     proof = preflight_task_container_runtime(
         container_id="cid-1",
         attempt_dir=attempt_dir,
+        imports=["trace_collect.runtime.entrypoint", "agents.openclaw.eval.runner"],
+        runtime="/usr/bin/python3",
+        pythonpath="/tmp/site:/repo/src:/repo",
     )
 
     assert proof.container_id == "cid-1"
@@ -99,6 +269,12 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
     assert Path(str(seen["result_path"])).is_absolute()
     assert Path(str(seen["writable_probe"])).is_absolute()
     assert Path(str(seen["result_path"])) == result_path
+    assert seen["imports"] == [
+        "trace_collect.runtime.entrypoint",
+        "agents.openclaw.eval.runner",
+    ]
+    assert seen["runtime"] == "/usr/bin/python3"
+    assert seen["pythonpath"] == "/tmp/site:/repo/src:/repo"
 
 
 def test_run_task_container_agent_reads_result_and_writes_raw_logs(
@@ -111,6 +287,8 @@ def test_run_task_container_agent_reads_result_and_writes_raw_logs(
     trace_path = tmp_path / "_task_container_runtime" / "miniswe" / "trace.jsonl"
 
     def fake_exec(**kwargs):
+        assert kwargs["runtime"] == "/usr/bin/python3"
+        assert kwargs["pythonpath"] == "/tmp/site:/repo/src:/repo"
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
             json.dumps(
@@ -145,6 +323,8 @@ def test_run_task_container_agent_reads_result_and_writes_raw_logs(
     result = run_task_container_agent(
         container_id="cid-2",
         timeout=10,
+        runtime="/usr/bin/python3",
+        pythonpath="/tmp/site:/repo/src:/repo",
         request={
             "scaffold": "miniswe",
             "result_path": str(result_path),
@@ -207,6 +387,8 @@ def test_run_task_container_agent_preserves_existing_raw_logs(
     run_task_container_agent(
         container_id="cid-2",
         timeout=10,
+        runtime="/usr/bin/python3",
+        pythonpath="/tmp/site:/repo/src:/repo",
         request={
             "kind": "run_miniswe",
             "scaffold": "miniswe",
