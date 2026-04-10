@@ -206,6 +206,7 @@ class AgentLoop:
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
+        self._last_run_outcomes: dict[str, dict[str, str | None]] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
         self._event_callback = None
         self._mcp_event_callback = None
@@ -401,6 +402,11 @@ class AgentLoop:
             )
         )
         self._last_usage = result.usage
+        if session is not None:
+            self._last_run_outcomes[session.key] = {
+                "stop_reason": result.stop_reason,
+                "error": result.error,
+            }
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
         elif result.stop_reason == "error":
@@ -536,6 +542,10 @@ class AgentLoop:
                 logger.exception(
                     "Error processing message for session {}", msg.session_key
                 )
+                self._last_run_outcomes[msg.session_key] = {
+                    "stop_reason": "error",
+                    "error": "Sorry, I encountered an error.",
+                }
                 await self.bus.publish_outbound(
                     OutboundMessage(
                         channel=msg.channel,

@@ -1,54 +1,64 @@
-# OpenClaw Runtime Consolidation
+# OpenClaw Haiku SWE-rebench Top-10 Trace Bundle
 
 ## Goal
 
-- Remove the legacy OpenClaw host-controller container-backed path.
-- Make all supported SWE OpenClaw runs use `task_container_agent`.
-- Keep the earlier `/testbed` workspace-prompt fix intact while simplifying the
-  runtime surface before paying for a new Haiku trace.
+- Run OpenClaw with `anthropic/claude-haiku-4.5` on the remaining 9 SWE-rebench
+  tasks from the requested top-10 list.
+- Reuse the existing completed Kinto trace from
+  `traces/swe-rebench/anthropic-claude-haiku-4.5/20260409T142235Z-kinto384-openclaw-haiku-cc-aligned-100iter/`.
+- Produce one new archive containing exactly 10 task trace directories by
+  overlaying the existing Kinto trace with the new 9-task run.
 
-## Findings
+## Fixed Decisions
 
-1. The real Kinto divergence came from the prompt-visible workspace, not the
-   task repo's `python3`/`pytest` environment.
-2. That prompt bug is already fixed and pushed.
-3. The remaining architectural confusion comes from two OpenClaw SWE paths:
-   `task_container_agent` (real SWE-rebench path) and a legacy host-controller
-   container-backed path.
-4. The legacy path is no longer needed for current supported SWE OpenClaw
-   benchmarks if `swe-bench-verified` is migrated to `task_container_agent`.
+1. Match the existing Kinto run parameters exactly:
+   - provider: `openrouter`
+   - model: `anthropic/claude-haiku-4.5`
+   - scaffold: `openclaw`
+   - prompt template: `cc_aligned`
+   - max iterations: `100`
+   - MCP config: `none`
+2. Select tasks with explicit `--instance-ids`. Do not use `--sample`, because
+   the collector loads the full Hugging Face split directly and its native order
+   does not match the local `data/swe-rebench/tasks.json`.
+3. Keep the original Kinto run untouched. Build the final 10-trace tarball from
+   a temporary staging directory.
 
-## Work Items
+## Task Set
 
-1. Done: move `swe-bench-verified` OpenClaw onto `task_container_agent`.
-2. Done: remove the host-controller container-backed branch from
-   `collect_openclaw_traces()`.
-3. Done: delete the dead `container_workspace` / `container_backend`
-   OpenClaw code path and simplify runner/session/loop tool registration.
-4. Done: update tests so they cover the single remaining OpenClaw SWE runtime.
-5. Done: run the focused validation suite.
-6. Done: complete a strict independent review pass before finalizing.
-7. In progress: commit and push the cleanup.
-8. Pending: rerun the single-task Haiku collection for
-   `Kinto__kinto-http.py-384`.
+1. `Kinto__kinto-http.py-384` (reuse existing trace only)
+2. `beeware__briefcase-817`
+3. `devopshq__artifactory-255`
+4. `googleapis__python-firestore-280`
+5. `kobotoolbox__kobo-install-135`
+6. `mozilla__bleach-259`
+7. `python-graphblas__python-graphblas-217`
+8. `tobymao__sqlglot-3425`
+9. `tobymao__sqlglot-3848`
+10. `wemake-services__wemake-python-styleguide-2343`
+
+## Execution Steps
+
+1. Run the review gate on the existing collection/runtime path before producing
+   new experiment artifacts.
+2. Run focused validation tests for the task-container OpenClaw path.
+3. Launch one serial 9-task collection with a dedicated run directory under
+   `traces/swe-rebench/anthropic-claude-haiku-4.5/`.
+4. Verify the new run contains all 9 requested task directories and a
+   `results.jsonl`.
+5. Build a temporary 10-task staging directory by copying:
+   - the existing Kinto task directory from the completed Kinto run
+   - the 9 new task directories from the new run
+6. Write a merged `results.jsonl` in the exact requested top-10 order.
+7. Create a new `.tar.gz` from the staging directory and verify its contents.
 
 ## Acceptance Checks
 
-- Supported SWE OpenClaw benchmarks resolve to `task_container_agent`.
-- `collect_openclaw_traces()` has no host-controller container fallback.
-- OpenClaw no longer ships unused `container_backend` / `container_workspace`
-  code for SWE runs.
-- Tests cover the migrated runtime selection and the simplified runner/loop
-  behavior.
-- The cleanup is reviewed, committed, and pushed before any paid rerun.
-
-## Validation
-
-- `.venv/bin/pytest -q tests/test_openclaw_eval_runner.py
-  tests/test_openclaw_loop_tools.py tests/test_openclaw_runtime_selection.py
-  tests/test_collector_task_container_runtime.py
-  tests/test_task_container_entrypoint.py tests/test_collector_openclaw_metadata.py
-  tests/test_collector_runtime_mode.py tests/test_swe_rebench_plugin.py`
-  -> `30 passed`
-- `.venv/bin/pytest -q tests/test_task_container_runtime.py
-  tests/test_attempt_pipeline.py` -> `9 passed`
+- The reviewer finds no blocking issues in the experiment path, or all blocking
+  issues are resolved before collection.
+- Focused OpenClaw task-container tests pass.
+- The new run contains exactly the 9 requested non-Kinto instance IDs.
+- The final archive contains exactly 10 task directories plus one
+  top-level `results.jsonl`.
+- The final archive preserves the original Kinto trace and does not mutate the
+  source run directories.

@@ -165,6 +165,30 @@ def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> No
     assert "boom" in (manifest["result_summary"]["error"] or "")
 
 
+def test_run_attempt_noncompleted_exit_status_writes_error_manifest(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=False,
+            exit_status="max_iterations",
+            trace_path=trace_source,
+            error="I reached the maximum number of tool call iterations.",
+        )
+
+    result = asyncio.run(run_attempt(ctx, inner=inner, min_free_disk_gb=0.001))
+
+    assert result.success is False
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    assert manifest["status"] == "error"
+    assert manifest["result_summary"]["exit_code"] == 1
+    assert manifest["result_summary"]["error"] == (
+        "I reached the maximum number of tool call iterations."
+    )
+
+
 def test_run_attempt_disk_shortfall_aborts_early(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
 

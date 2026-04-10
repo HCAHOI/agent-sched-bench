@@ -48,6 +48,8 @@ def test_swebench_runner_extracts_patch_from_exec_working_dir(tmp_path: Path) ->
             trace_file=kwargs["trace_file"],
             session_key=kwargs["session_key"],
             session_manager=None,
+            stop_reason="completed",
+            error=None,
         )
 
     runner._session_runner.run = fake_run  # type: ignore[method-assign]
@@ -114,6 +116,8 @@ def test_swebench_runner_local_patch_extraction_includes_untracked_files(
             trace_file=kwargs["trace_file"],
             session_key=kwargs["session_key"],
             session_manager=None,
+            stop_reason="completed",
+            error=None,
         )
 
     runner._session_runner.run = fake_run  # type: ignore[method-assign]
@@ -140,6 +144,124 @@ def test_swebench_runner_local_patch_extraction_includes_untracked_files(
     assert "new_file.py" in result.model_patch
 
 
+def test_swebench_runner_prefers_patch_txt_and_excludes_submission_artifacts(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    tracked = repo / "tracked.py"
+    tracked.write_text("print('before')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    tracked.write_text("print('after')\n", encoding="utf-8")
+    (repo / "patch.txt").write_text(
+        "diff --git a/tracked.py b/tracked.py\n"
+        "--- a/tracked.py\n"
+        "+++ b/tracked.py\n"
+        "@@ -1 +1 @@\n"
+        "-print('before')\n"
+        "+print('after')\n",
+        encoding="utf-8",
+    )
+    (repo / "local.bin").write_text("chunk1chunk2chunk3", encoding="utf-8")
+
+    provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
+    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
+
+    async def fake_run(**kwargs):
+        return SimpleNamespace(
+            content="done",
+            elapsed_s=0.1,
+            trace_file=kwargs["trace_file"],
+            session_key=kwargs["session_key"],
+            session_manager=None,
+            stop_reason="completed",
+            error=None,
+        )
+
+    runner._session_runner.run = fake_run  # type: ignore[method-assign]
+
+    task = EvalTask(
+        instance_id="encode__httpx-2701",
+        problem_statement="fix bug",
+        workspace_dir=tmp_path / "runner-ws",
+        repo="encode/httpx",
+        base_commit="HEAD",
+        image_name="swerebench/example",
+    )
+
+    result = asyncio.run(
+        runner.run_task(
+            task,
+            prompt_template="cc_aligned",
+            exec_working_dir=str(repo),
+            trace_file=tmp_path / "trace.jsonl",
+        )
+    )
+
+    assert "tracked.py" in result.model_patch
+    assert "patch.txt" not in result.model_patch
+    assert "local.bin" not in result.model_patch
+
+
+def test_swebench_runner_propagates_noncompleted_stop_reason(
+    tmp_path: Path,
+) -> None:
+    provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
+    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
+
+    async def fake_run(**kwargs):
+        return SimpleNamespace(
+            content="I reached the maximum number of tool call iterations.",
+            elapsed_s=0.1,
+            trace_file=kwargs["trace_file"],
+            session_key=kwargs["session_key"],
+            session_manager=None,
+            stop_reason="max_iterations",
+            error="I reached the maximum number of tool call iterations.",
+        )
+
+    runner._session_runner.run = fake_run  # type: ignore[method-assign]
+
+    task = EvalTask(
+        instance_id="encode__httpx-2701",
+        problem_statement="fix bug",
+        workspace_dir=tmp_path / "runner-ws",
+        repo="encode/httpx",
+        base_commit="HEAD",
+        image_name="swerebench/example",
+    )
+
+    result = asyncio.run(
+        runner.run_task(
+            task,
+            prompt_template="cc_aligned",
+            trace_file=tmp_path / "trace.jsonl",
+        )
+    )
+
+    assert result.stop_reason == "max_iterations"
+    assert "maximum number of tool call iterations" in (result.error or "")
+
+
 def test_swebench_runner_passes_tool_workspace_as_project_workspace(
     tmp_path: Path,
 ) -> None:
@@ -155,6 +277,8 @@ def test_swebench_runner_passes_tool_workspace_as_project_workspace(
             trace_file=kwargs["trace_file"],
             session_key=kwargs["session_key"],
             session_manager=None,
+            stop_reason="completed",
+            error=None,
         )
 
     runner._session_runner.run = fake_run  # type: ignore[method-assign]

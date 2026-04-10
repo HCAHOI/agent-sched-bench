@@ -27,6 +27,39 @@ from agents.openclaw.eval.types import (
 from agents.openclaw.providers.base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
 
+
+def _trace_has_llm_error(trace_file: Path | None) -> bool:
+    if trace_file is None or not trace_file.exists():
+        return False
+    try:
+        with trace_file.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                record = json.loads(line)
+                if (
+                    record.get("type") == "event"
+                    and record.get("event") == "llm_error"
+                ):
+                    return True
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return False
+
+
+def _resolve_run_outcome(
+    *,
+    outcome: dict[str, Any],
+    content: str | None,
+    trace_file: Path | None,
+) -> tuple[str, str | None]:
+    stop_reason = str(outcome.get("stop_reason") or "completed")
+    error = outcome.get("error")
+    if stop_reason == "completed" and error is None and _trace_has_llm_error(trace_file):
+        return "error", content or "LLM returned error."
+    if error is None and stop_reason != "completed" and content:
+        error = content
+    return stop_reason, error
+
+
 class TraceCollectorHook(AgentHook):
     """Collect per-iteration actions, events, and summaries as JSONL."""
 
@@ -384,6 +417,8 @@ class SessionRunResult:
     trace_file: Path | None = None
     session_key: str = ""
     session_manager: SessionManager | None = None
+    stop_reason: str = "completed"
+    error: str | None = None
 
 class SessionRunner:
 
@@ -511,8 +546,16 @@ class SessionRunner:
         except (asyncio.TimeoutError, asyncio.CancelledError):
             pass
 
+        outcomes = getattr(agent, "_last_run_outcomes", {})
+        outcome = outcomes.get(session_key, {})
+        stop_reason, error = _resolve_run_outcome(
+            outcome=outcome,
+            content=content,
+            trace_file=trace_file,
+        )
+
         trace_hook.write_summary(
-            success=bool(content and content.strip()),
+            success=stop_reason == "completed",
             elapsed_s=elapsed_s,
             prepare_ms=prepare_ms,
         )
@@ -523,4 +566,6 @@ class SessionRunner:
             trace_file=trace_file,
             session_key=session_key,
             session_manager=session_manager,
+            stop_reason=stop_reason,
+            error=error,
         )

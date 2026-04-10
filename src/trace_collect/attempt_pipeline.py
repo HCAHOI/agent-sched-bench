@@ -20,6 +20,10 @@ from trace_collect import attempt_layout
 
 logger = logging.getLogger(__name__)
 
+_NONCOMPLETED_EXIT_STATUSES = frozenset(
+    {"error", "tool_error", "empty_final_response", "max_iterations", "timeout"}
+)
+
 
 def _utcnow_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "")
@@ -255,7 +259,15 @@ async def run_attempt(
 
         ctx.end_time = datetime.now(tz=timezone.utc)
 
-    status = "error" if inner_error is not None else "completed"
+    status = "completed"
+    if inner_error is not None:
+        status = "error"
+    elif (
+        result is not None
+        and result.exit_status is not None
+        and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
+    ):
+        status = "error"
     success = bool(result.success) if result is not None else False
 
     manifest = {

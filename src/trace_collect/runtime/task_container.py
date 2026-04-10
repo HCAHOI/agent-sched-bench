@@ -12,6 +12,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOTNAME = "_task_container_runtime"
 REPO_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+_REDACTED_SECRET = "***REDACTED***"
 
 
 @dataclass(slots=True)
@@ -85,22 +86,37 @@ def write_task_container_request(
     path = task_container_runtime_dir(attempt_dir, scaffold) / "request.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False),
+        json.dumps(_redact_request_payload(payload), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     return path
+
+
+def _redact_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    def _redact(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: (_REDACTED_SECRET if key == "api_key" else _redact(child))
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [_redact(item) for item in value]
+        return value
+
+    return _redact(payload)
 
 
 def exec_task_container_entrypoint(
     *,
     container_id: str,
     request_path: Path,
+    request_payload: dict[str, Any] | None = None,
     runtime: str,
     timeout: float,
     executable: str = "podman",
     cwd: str = "/testbed",
 ) -> subprocess.CompletedProcess[str]:
-    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request = request_payload or json.loads(request_path.read_text(encoding="utf-8"))
     kind = str(request.get("kind") or "")
     if not kind:
         raise ValueError(f"missing request kind in {request_path}")
@@ -162,6 +178,18 @@ def preflight_task_container_runtime(
     result = exec_task_container_entrypoint(
         container_id=container_id,
         request_path=request_path,
+        request_payload={
+            "kind": "preflight",
+            "result_path": str(runtime_dir / "result.json"),
+            "imports": [
+                "trace_collect.runtime.entrypoint",
+                "agents.miniswe.agent",
+                "agents.openclaw.eval.runner",
+                "harness.trace_logger",
+            ],
+            "writable_probe": str(runtime_dir / "writable.probe"),
+            "container_id": container_id,
+        },
         runtime=runtime,
         timeout=120,
         executable=executable,
@@ -197,6 +225,7 @@ def run_task_container_agent(
         result = exec_task_container_entrypoint(
             container_id=container_id,
             request_path=request_path,
+            request_payload=request,
             runtime=runtime,
             timeout=timeout,
             executable=executable,

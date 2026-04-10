@@ -54,6 +54,8 @@ class EvalResult:
         "MEMORY.md",
         "HISTORY.md",
         ".omc",
+        "patch.txt",
+        "local.bin",
     ]
 
     def _extract_patch_from_workspace(self) -> str:

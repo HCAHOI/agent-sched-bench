@@ -71,6 +71,76 @@ class SWEBenchRunner:
         )
 
     @staticmethod
+    def _read_submitted_patch(diff_cwd: str) -> str:
+        patch_path = Path(diff_cwd) / "patch.txt"
+        if not patch_path.exists():
+            return ""
+        try:
+            content = patch_path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        return content.strip() if content.lstrip().startswith("diff --git") else ""
+
+    @staticmethod
+    def _extract_container_patch(
+        diff_cwd: str,
+        *,
+        base_commit: str | None,
+    ) -> str | None:
+        submitted_patch = SWEBenchRunner._read_submitted_patch(diff_cwd)
+        if submitted_patch:
+            return submitted_patch
+
+        try:
+            subprocess.run(
+                ["git", "config", "--add", "safe.directory", diff_cwd],
+                cwd=diff_cwd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            add_cmd = ["git", "add", "-A", "--", "."]
+            for pat in EvalResult._EXCLUDE_PATTERNS:
+                add_cmd.append(f":(exclude){pat}")
+            subprocess.run(
+                add_cmd,
+                cwd=diff_cwd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            diff_target = base_commit or "HEAD"
+            diff_cmd = ["git", "diff", diff_target, "--", "."]
+            for pat in EvalResult._EXCLUDE_PATTERNS:
+                diff_cmd.append(f":(exclude){pat}")
+            diff_result = subprocess.run(
+                diff_cmd,
+                cwd=diff_cwd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if diff_result.returncode == 0:
+                return diff_result.stdout.strip() or None
+            logger.warning(
+                "Local patch extraction failed for cwd={cwd}: rc={rc} stderr={stderr}",
+                cwd=diff_cwd,
+                rc=diff_result.returncode,
+                stderr=diff_result.stderr[:200],
+            )
+            return None
+        except Exception as exc:
+            logger.warning(
+                "Local patch extraction raised for cwd={cwd}: {exc}",
+                cwd=diff_cwd,
+                exc=exc,
+            )
+            return None
+
+    @staticmethod
     def _build_swe_bench_prompt(
         problem_statement: str,
         *,
@@ -149,54 +219,18 @@ class SWEBenchRunner:
         container_patch: str | None = None
         diff_cwd = exec_working_dir or "/testbed"
         if exec_working_dir is not None:
-            try:
-                subprocess.run(
-                    ["git", "config", "--add", "safe.directory", diff_cwd],
-                    cwd=diff_cwd,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    check=False,
-                )
-                subprocess.run(
-                    ["git", "add", "-A"],
-                    cwd=diff_cwd,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    check=False,
-                )
-                diff_result = subprocess.run(
-                    ["git", "diff", "HEAD", "--", "."],
-                    cwd=diff_cwd,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    check=False,
-                )
-                if diff_result.returncode == 0:
-                    container_patch = diff_result.stdout.strip() or None
-                else:
-                    logger.warning(
-                        "Local patch extraction failed for {id}: rc={rc} stderr={stderr}",
-                        id=task.instance_id,
-                        rc=diff_result.returncode,
-                        stderr=diff_result.stderr[:200],
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Local patch extraction raised for {id}: {exc}",
-                    id=task.instance_id,
-                    exc=exc,
-                )
+            container_patch = self._extract_container_patch(
+                diff_cwd,
+                base_commit=task.base_commit,
+            )
 
         return EvalResult(
             instance_id=task.instance_id,
             content=content,
             tools_used=tools_used,
             usage=usage,
-            stop_reason="completed",
-            error=None,
+            stop_reason=result.stop_reason,
+            error=result.error,
             tool_events=tool_events,
             trace_file=effective_trace_file,
             prepare_ms=None,
