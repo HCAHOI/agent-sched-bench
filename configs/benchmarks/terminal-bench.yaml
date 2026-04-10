@@ -1,0 +1,14 @@
+slug: terminal-bench
+display_name: "Terminal-Bench"
+trace_root: traces/terminal-bench
+default_max_iterations: 50
+selection_n: 32
+selection_seed: 42
+default_prompt_template: default
+exclude_lite: false
+extras:
+  task_source_kind: terminal_bench_registry
+  dataset_name: terminal-bench-core
+  dataset_version: head
+  registry_url:
+  local_registry_path:

@@ -189,6 +189,64 @@ def test_run_attempt_noncompleted_exit_status_writes_error_manifest(tmp_path: Pa
     )
 
 
+def test_run_attempt_supports_non_image_success_without_patch(
+    tmp_path: Path,
+) -> None:
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="hello-world",
+        attempt=1,
+        task={
+            "instance_id": "hello-world",
+            "repo": None,
+            "task_source_kind": "terminal_bench_registry",
+            "task_source_id": "hello-world",
+            "task_source_path": "/tmp/tasks/hello-world",
+            "tb_version": "0.2.18",
+            "tb_dataset": "terminal-bench-core",
+            "tb_registry_source": "registry.json",
+            "adapter_kind": "terminal_bench_openclaw",
+            "agent_import_path": "agents.terminal_bench.openclaw_agent:TerminalBenchOpenClawAgent",
+        },
+        model="z-ai/glm-5.1",
+        scaffold="openclaw",
+        source_image=None,
+        prompt_template="default",
+    )
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+            model_patch="",
+            summary={
+                "tb_version": "0.2.18",
+                "tb_dataset": "terminal-bench-core",
+                "tb_registry_source": "registry.json",
+                "adapter_kind": "terminal_bench_openclaw",
+                "agent_import_path": "agents.terminal_bench.openclaw_agent:TerminalBenchOpenClawAgent",
+            },
+        )
+
+    result = asyncio.run(run_attempt(ctx, inner=inner, min_free_disk_gb=0.001))
+
+    assert result.success is True
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    assert manifest["task"]["docker_image"] is None
+    assert manifest["task"]["repo"] is None
+    assert manifest["replay"]["source_image"] is None
+    assert manifest["replay"]["fixed_image_name"] is None
+    results = json.loads((ctx.attempt_dir / "results.json").read_text())
+    assert results["success"] is True
+    assert results["docker_image"] is None
+    assert results["image"] is None
+    assert results["repo"] is None
+    assert results["tb_version"] == "0.2.18"
+
+
 def test_run_attempt_disk_shortfall_aborts_early(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
 

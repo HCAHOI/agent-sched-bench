@@ -8,6 +8,8 @@ from pathlib import Path
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from trace_collect.attempt_pipeline import AttemptResult
 from trace_collect.collector import (
     _cleanup_task_images,
@@ -15,6 +17,14 @@ from trace_collect.collector import (
     _run_scaffold_tasks,
     _select_tasks,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_fixed_image(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "trace_collect.attempt_pipeline.ensure_fixed_image",
+        lambda source_image, executable="podman": ((source_image or ""), 0.0),
+    )
 
 
 def _write_trace(path: Path) -> None:
@@ -231,6 +241,71 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
             "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
         ),
     }
+
+
+def test_run_scaffold_tasks_allows_non_image_tasks_and_uses_attempt_success(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    seen: list[str | None] = []
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, executable="podman": seen.append(source_image),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, executable="podman": False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda executable="podman": None,
+    )
+
+    benchmark = SimpleNamespace(
+        config=SimpleNamespace(
+            slug="terminal-bench",
+            harness_split=None,
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: None,
+    )
+
+    def make_inner(task: dict):
+        async def inner(ctx) -> AttemptResult:
+            return AttemptResult(
+                success=True,
+                exit_status="completed",
+                trace_path=trace_path,
+                model_patch="",
+            )
+
+        return inner
+
+    run_dir = asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "tb-1"}],
+            run_dir=tmp_path / "run",
+            model="z-ai/glm-5.1",
+            scaffold="openclaw",
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=make_inner,
+        )
+    )
+
+    assert seen == []
+    results_jsonl = (run_dir / "results.jsonl").read_text(encoding="utf-8")
+    assert '"success": true' in results_jsonl
 
 
 def test_select_tasks_preserves_explicit_instance_order() -> None:

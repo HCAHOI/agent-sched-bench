@@ -25,14 +25,14 @@ class BenchmarkConfig:
 
     slug: str
     display_name: str
-    harness_dataset: str
-    harness_split: str
-    data_root: Path
-    repos_root: Path | None
     trace_root: Path
     default_max_iterations: int
     selection_n: int
     selection_seed: int
+    harness_dataset: str | None = None
+    harness_split: str | None = None
+    data_root: Path | None = None
+    repos_root: Path | None = None
     default_prompt_template: str = "default"
     exclude_lite: bool = False
     extras: dict[str, Any] = field(default_factory=dict)
@@ -48,14 +48,18 @@ class BenchmarkConfig:
         raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
 
         repos_root_raw = raw.get("repos_root")
-        repos_root: Path | None = Path(repos_root_raw) if repos_root_raw is not None else None
+        repos_root: Path | None = (
+            Path(repos_root_raw) if repos_root_raw is not None else None
+        )
+        data_root_raw = raw.get("data_root")
+        data_root: Path | None = Path(data_root_raw) if data_root_raw is not None else None
 
         return cls(
             slug=raw["slug"],
             display_name=raw["display_name"],
-            harness_dataset=raw["harness_dataset"],
-            harness_split=raw["harness_split"],
-            data_root=Path(raw["data_root"]),
+            harness_dataset=raw.get("harness_dataset"),
+            harness_split=raw.get("harness_split"),
+            data_root=data_root,
             repos_root=repos_root,
             trace_root=Path(raw["trace_root"]),
             default_max_iterations=int(raw["default_max_iterations"]),
@@ -77,6 +81,7 @@ class Benchmark(ABC):
 
     def __init__(self, config: BenchmarkConfig) -> None:
         self.config = config
+        self.validate_config()
 
     # Abstract interface
 
@@ -101,6 +106,17 @@ class Benchmark(ABC):
         ...
 
     # Concrete defaults
+
+    def validate_config(self) -> None:
+        """Validate benchmark-specific configuration.
+
+        Subclasses can raise :class:`ValueError` for missing or invalid config.
+        """
+        return None
+
+    def validate_scaffold_support(self, scaffold: str) -> None:
+        """Raise when *scaffold* is unsupported for this benchmark."""
+        self.runtime_mode_for(scaffold)
 
     def derive_test_cmd(self, task: dict[str, Any]) -> str:
         """Derive a pytest command from ``task["FAIL_TO_PASS"]``.
