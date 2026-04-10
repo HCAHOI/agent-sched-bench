@@ -10,36 +10,13 @@ import os
 import sys
 from pathlib import Path
 
-from trace_collect.provider_presets import (
-    provider_choices,
-    resolve_provider_config,
-)
+from llm_call import add_llm_config_arguments, resolve_llm_config
 
 def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Collect SWE-Bench agent traces using an external LLM API.",
     )
-    parser.add_argument(
-        "--provider",
-        choices=provider_choices(),
-        default="openrouter",
-        help="LLM provider preset (default: openrouter). Sets api-base, api-key env var, and default model.",
-    )
-    parser.add_argument(
-        "--api-base",
-        default=None,
-        help="Override API base URL (default: from --provider).",
-    )
-    parser.add_argument(
-        "--api-key",
-        default=None,
-        help="Override API key (default: from provider's env var).",
-    )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help="Model name (default: from --provider).",
-    )
+    add_llm_config_arguments(parser)
     parser.add_argument(
         "--max-iterations",
         type=int,
@@ -138,16 +115,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         required=True,
         help="Path to the source API trace JSONL file.",
     )
-    parser.add_argument(
-        "--api-base",
-        default="http://localhost:8000/v1",
-        help="Local model OpenAI-compatible API base URL.",
-    )
-    parser.add_argument(
-        "--model",
-        required=True,
-        help="Local model name (e.g. Qwen/Qwen2.5-Coder-7B-Instruct).",
-    )
+    add_llm_config_arguments(parser)
     parser.add_argument(
         "--task-source",
         default="data/swebench_verified/tasks.json",
@@ -285,13 +253,17 @@ def _run_collect(args: argparse.Namespace) -> None:
         )
         sys.exit(2)
 
-    provider_config = resolve_provider_config(
-        provider=args.provider,
-        api_base=args.api_base,
-        api_key=args.api_key,
-        model=args.model,
-        environ=os.environ,
-    )
+    try:
+        provider_config = resolve_llm_config(
+            provider=args.provider,
+            api_base=args.api_base,
+            api_key=args.api_key,
+            model=args.model,
+            environ=os.environ,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
     if not provider_config.api_key:
         print(
             f"ERROR: Set {provider_config.env_key} or pass --api-key.",
@@ -342,9 +314,29 @@ def _run_simulate(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get(
-        "VLLM_API_KEY", "EMPTY"
-    )
+    if not args.api_base:
+        print(
+            "ERROR: simulate requires --api-base for the target OpenAI-compatible endpoint.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        llm_config = resolve_llm_config(
+            provider=args.provider,
+            api_base=args.api_base,
+            api_key=args.api_key,
+            model=args.model,
+            environ=os.environ,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+    if not llm_config.api_key:
+        print(
+            f"ERROR: Set {llm_config.env_key} or pass --api-key.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     from trace_collect.simulator import simulate
 
@@ -354,9 +346,9 @@ def _run_simulate(args: argparse.Namespace) -> None:
             task_source=Path(args.task_source),
             repos_root=Path(args.repos_root),
             output_dir=Path(args.output_dir),
-            api_base=args.api_base,
-            api_key=api_key,
-            model=args.model,
+            api_base=llm_config.api_base,
+            api_key=llm_config.api_key,
+            model=llm_config.model,
             command_timeout_s=args.command_timeout,
             task_timeout_s=args.task_timeout,
             metrics_url=args.metrics_url,

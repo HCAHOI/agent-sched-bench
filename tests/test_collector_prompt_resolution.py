@@ -9,7 +9,9 @@ from trace_collect.collector import _resolve_prompt_template
 
 
 def test_parse_collect_args_prompt_template_defaults_to_none() -> None:
-    args = parse_collect_args([])
+    args = parse_collect_args(
+        ["--provider", "openrouter", "--model", "z-ai/glm-5.1"]
+    )
     assert args.prompt_template is None
 
 

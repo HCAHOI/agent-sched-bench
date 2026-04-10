@@ -50,6 +50,7 @@ package-dir = {"" = "src", "demo" = "demo"}
 [tool.setuptools.packages.find]
 where = ["src", "."]
 include = [
+  "llm_call*",
   "trace_collect*",
   "agents*",
   "serving*",

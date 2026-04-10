@@ -54,12 +54,16 @@ Currently registered:
     make setup-swe-rebench-repos       # or setup-swebench-repos
     PYTHONPATH=src python -m trace_collect.cli \
         --provider dashscope \
+        --model qwen-plus-latest \
         --benchmark swe-rebench \
         --scaffold openclaw \
+        --mcp-config none \
         --sample 2
 
-Flags the collect CLI accepts: `--benchmark <slug>` (default
-`swe-bench-verified`), `--scaffold miniswe|openclaw`,
+The collect CLI now requires explicit `--provider` and `--model`; there are no
+provider presets and no default model. Other flags: `--benchmark <slug>`
+(default `swe-bench-verified`), `--scaffold miniswe|openclaw`, `--mcp-config`
+(required for `openclaw`; use a config path or `none`),
 `--sample N` (optional task cap), `--instance-ids a,b,c` (optional
 explicit list), `--run-id <path>` (resume an interrupted run),
 `--prompt-template <name>` (optional override; when omitted, the benchmark

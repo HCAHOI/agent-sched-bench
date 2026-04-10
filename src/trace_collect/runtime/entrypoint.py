@@ -13,6 +13,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from llm_call import UnifiedProvider, resolve_llm_config
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -87,7 +88,6 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
     from agents.benchmarks import get_benchmark_class
     from agents.benchmarks.base import BenchmarkConfig
     from agents.openclaw.eval.types import EvalTask
-    from agents.openclaw.unified_provider import UnifiedProvider
     from trace_collect.collector import load_mcp_servers
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -96,10 +96,17 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         repo_root / "configs" / "benchmarks" / f"{benchmark_slug}.yaml"
     )
     benchmark = get_benchmark_class(benchmark_slug)(config)
+    llm_config = resolve_llm_config(
+        provider=request.get("provider_name"),
+        api_base=request.get("api_base"),
+        api_key=request.get("api_key"),
+        model=request.get("model"),
+        environ={},
+    )
     provider = UnifiedProvider(
-        api_key=request["api_key"],
-        api_base=request["api_base"],
-        default_model=request["model"],
+        api_key=llm_config.api_key,
+        api_base=llm_config.api_base,
+        default_model=llm_config.model,
     )
     runner = benchmark.build_runner(
         scaffold="openclaw",
@@ -107,7 +114,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         workspace_base=Path(request["workspace_base"]),
         max_iterations=int(request["max_iterations"]),
         context_window_tokens=int(request["max_context_tokens"]),
-        model=request["model"],
+        model=llm_config.model,
         mcp_servers=load_mcp_servers(request.get("mcp_config")),
     )
     task_raw = dict(request["task"])
@@ -151,6 +158,13 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
     from agents.miniswe import MiniSWECodeAgent
     from harness.trace_logger import TraceLogger
 
+    llm_config = resolve_llm_config(
+        provider=request.get("provider_name"),
+        api_base=request.get("api_base"),
+        api_key=request.get("api_key"),
+        model=request.get("model"),
+        environ={},
+    )
     task_raw = dict(request["task"])
     trace_file = Path(request["trace_file"])
     trace_file.parent.mkdir(parents=True, exist_ok=True)
@@ -159,8 +173,8 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
         scaffold="miniswe",
         benchmark=request["benchmark"],
         benchmark_split=request["benchmark_split"],
-        model=request["model"],
-        api_base=request["api_base"],
+        model=llm_config.model,
+        api_base=llm_config.api_base,
         max_iterations=int(request["max_iterations"]),
         instance_id=task_raw["instance_id"],
         prompt_template=request["prompt_template"],
@@ -176,10 +190,10 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
 
     agent = MiniSWECodeAgent(
         agent_id=task_raw["instance_id"],
-        api_base=request["api_base"],
-        model=request["model"],
-        provider_name=request.get("provider_name"),
-        api_key=request["api_key"],
+        api_base=llm_config.api_base,
+        model=llm_config.model,
+        provider_name=llm_config.name,
+        api_key=llm_config.api_key,
         max_iterations=int(request["max_iterations"]),
         command_timeout_s=float(request["command_timeout_s"]),
         task_timeout_s=float(request["task_timeout_s"]),
@@ -189,7 +203,7 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
         exec_working_dir=request.get("exec_working_dir", "/testbed"),
     )
     agent._trace_logger = trace_logger
-    agent.run_metadata = {"model": request["model"]}
+    agent.run_metadata = {"model": llm_config.model}
     try:
         await agent.prepare(task_raw)
         success = await agent.run(task_raw)

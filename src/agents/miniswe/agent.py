@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents.base import AgentBase, TraceAction
+from llm_call import build_miniswe_litellm_model_name
 from minisweagent.agents.default import DefaultAgent
-from trace_collect.provider_presets import build_miniswe_litellm_model_name
 
 if TYPE_CHECKING:
     from trace_collect.attempt_pipeline import AttemptContext

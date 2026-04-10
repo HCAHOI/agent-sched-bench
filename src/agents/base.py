@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from harness.trace_logger import TraceLogger
 
-from openai import AsyncOpenAI
+from llm_call import create_async_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +107,8 @@ class AgentBase(ABC):
         self.task_error: str | None = None
         self._trace_logger: TraceLogger | None = None
         self.run_metadata: dict[str, Any] = {}
-        self._client = AsyncOpenAI(
-            base_url=api_base,
+        self._client = create_async_openai_client(
+            api_base=api_base,
             api_key=api_key,
             timeout=request_timeout_s,
         )

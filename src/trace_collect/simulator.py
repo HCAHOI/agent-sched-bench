@@ -8,13 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from openai import AsyncOpenAI
-
 import dataclasses
 
 from agents.base import TraceAction
 from harness.metrics_client import VLLMMetricsClient
 from harness.trace_logger import TraceLogger
+from llm_call import create_async_openai_client
 from trace_collect.scaffold_registry import (
     PreparedWorkspace,
     SimulatePrepareConfig,
@@ -27,7 +26,7 @@ class SimulateError(Exception):
     """Raised when simulation encounters a fatal issue."""
 
 async def _call_local_model_streaming(
-    client: AsyncOpenAI,
+    client: Any,
     model: str,
     messages: list[dict[str, Any]],
     n_tokens: int,
@@ -208,8 +207,8 @@ async def simulate(
         n_source_iterations=len(iterations),
     )
 
-    client = AsyncOpenAI(
-        base_url=api_base,
+    client = create_async_openai_client(
+        api_base=api_base,
         api_key=api_key,
         timeout=180.0,
     )

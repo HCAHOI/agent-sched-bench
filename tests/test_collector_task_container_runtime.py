@@ -308,6 +308,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
             benchmark=SimpleNamespace(
                 config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
             ),
+            provider_name="openrouter",
             api_base="https://example.com",
             api_key="test-key",
             model="qwen-plus-latest",
@@ -323,6 +324,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     assert metadata["agent_runtime_mode"] == "task_container_agent"
     assert metadata["runtime_proof"]["container_id"] == "cid-openclaw"
     assert seen["kind"] == "run_openclaw"
+    assert seen["provider_name"] == "openrouter"
     assert Path(str(seen["result_path"])).is_absolute()
     assert Path(str(seen["workspace_base"])).is_absolute()
     assert Path(str(seen["workspace_dir"])).is_absolute()

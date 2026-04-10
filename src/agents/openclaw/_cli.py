@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from llm_call import UnifiedProvider, add_llm_config_arguments, resolve_llm_config
+
 def _ts() -> str:
     return datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
 
@@ -97,23 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query status of an async session (requires --session-id).",
     )
 
-    parser.add_argument(
-        "--model",
-        default=None,
-        help=(
-            "Model identifier "
-            '(default: env OPENCLAW_MODEL or "qwen/qwen3.6-plus:free").'
-        ),
-    )
-    parser.add_argument(
-        "--api-base",
-        default=None,
-        help=(
-            "API base URL "
-            '(default: env OPENCLAW_API_BASE or "https://openrouter.ai/api/v1").'
-        ),
-    )
-    parser.add_argument("--api-key", default=None, help="API key (default: from env).")
+    add_llm_config_arguments(parser)
 
     parser.add_argument(
         "--workspace",
@@ -178,30 +164,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-def _resolve_api_key(args: argparse.Namespace) -> str:
-    key = (
-        args.api_key
-        or os.environ.get("OPENCLAW_API_KEY")
-        or os.environ.get("OPENROUTER_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("DASHSCOPE_API_KEY")
-    )
-    if not key:
-        print(
-            "ERROR: No API key found. Set OPENROUTER_API_KEY, OPENAI_API_KEY, "
-            "DASHSCOPE_API_KEY, or pass --api-key.",
-            file=sys.stderr,
+def _resolve_llm_config(args: argparse.Namespace):
+    try:
+        config = resolve_llm_config(
+            provider=args.provider,
+            api_base=args.api_base,
+            api_key=args.api_key,
+            model=args.model,
+            environ=os.environ,
         )
-        sys.exit(1)
-    return key
-
-def _resolve_model(args: argparse.Namespace) -> str:
-    return args.model or os.environ.get("OPENCLAW_MODEL", "qwen/qwen3.6-plus:free")
-
-def _resolve_api_base(args: argparse.Namespace) -> str:
-    return args.api_base or os.environ.get(
-        "OPENCLAW_API_BASE", "https://openrouter.ai/api/v1"
-    )
+        if not config.api_key:
+            print(
+                f"ERROR: Set {config.env_key} or pass --api-key.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return config
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
 
 def _resolve_repo_root() -> Path | None:
     """Walk up from this file to find the agent-sched-bench repo root.
@@ -218,7 +199,7 @@ def _resolve_repo_root() -> Path | None:
 def _slug_model(name: str) -> str:
     """Convert a model identifier to a filesystem-safe slug.
 
-    e.g., ``qwen/qwen3.6-plus:free`` -> ``qwen_qwen3.6-plus_free``.
+    e.g., ``z-ai/glm-5.1`` -> ``z-ai_glm-5.1``.
     """
     return name.replace("/", "_").replace(":", "_")
 
@@ -238,12 +219,9 @@ def _resolve_trace_output(
     return base / "traces" / "openclaw_cli" / _slug_model(model) / ts / f"{session_id}.jsonl"
 
 def _run_sync(args: argparse.Namespace) -> int:
-    api_key = _resolve_api_key(args)
-    api_base = _resolve_api_base(args)
-    model = _resolve_model(args)
+    llm_config = _resolve_llm_config(args)
 
     from agents.openclaw._session_runner import SessionRunner
-    from agents.openclaw.unified_provider import UnifiedProvider
 
     workspace = Path(args.workspace).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
@@ -258,26 +236,27 @@ def _run_sync(args: argparse.Namespace) -> int:
 
     if not is_daemon:
         print(
-            f"Session: {session_key} | Model: {model} | Workspace: {workspace}",
+            f"Session: {session_key} | Provider: {llm_config.name} | "
+            f"Model: {llm_config.model} | Workspace: {workspace}",
             file=sys.stderr,
         )
 
     provider = UnifiedProvider(
-        api_key=api_key,
-        api_base=api_base,
-        default_model=model,
+        api_key=llm_config.api_key,
+        api_base=llm_config.api_base,
+        default_model=llm_config.model,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
     )
 
-    trace_file = _resolve_trace_output(args, session_id, model)
+    trace_file = _resolve_trace_output(args, session_id, llm_config.model)
     trace_file.parent.mkdir(parents=True, exist_ok=True)
     if not is_daemon:
         print(f"Trace: {trace_file}", file=sys.stderr)
 
     runner = SessionRunner(
         provider,
-        model=model,
+        model=llm_config.model,
         max_iterations=args.max_iterations,
         extra_hooks=[cli_hook],
     )
@@ -342,6 +321,7 @@ def _install_daemon_signal_handlers(args: argparse.Namespace) -> None:
 def _run_async(args: argparse.Namespace) -> int:
     from agents.openclaw._daemon import spawn_daemon
 
+    llm_config = _resolve_llm_config(args)
     session_id = args.session_id or f"oc-{uuid.uuid4().hex[:8]}"
     workspace = Path(args.workspace).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
@@ -350,8 +330,7 @@ def _run_async(args: argparse.Namespace) -> int:
     pid_dir.mkdir(parents=True, exist_ok=True)
     pid_file = pid_dir / f"{session_id}.pid"
 
-    model = _resolve_model(args)
-    trace_file = _resolve_trace_output(args, session_id, model)
+    trace_file = _resolve_trace_output(args, session_id, llm_config.model)
     trace_file.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -365,10 +344,12 @@ def _run_async(args: argparse.Namespace) -> int:
         args.prompt,
         "--workspace",
         str(workspace),
+        "--provider",
+        llm_config.name,
         "--model",
-        model,
+        llm_config.model,
         "--api-base",
-        _resolve_api_base(args),
+        llm_config.api_base,
         "--max-iterations",
         str(args.max_iterations),
         "--max-tokens",
@@ -381,12 +362,11 @@ def _run_async(args: argparse.Namespace) -> int:
         str(trace_file),
     ]
 
-    api_key = _resolve_api_key(args)
     pid = spawn_daemon(
         cmd,
         pid_file,
         session_id,
-        extra_env={"OPENCLAW_API_KEY": api_key},
+        extra_env={llm_config.env_key: llm_config.api_key},
         trace_file=trace_file,
     )
 

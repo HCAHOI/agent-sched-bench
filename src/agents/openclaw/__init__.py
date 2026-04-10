@@ -3,7 +3,6 @@
 def __getattr__(name: str):  # noqa: ANN001
     """Lazy imports to avoid cascading dependency failures."""
     _imports = {
-        "UnifiedProvider": ("agents.openclaw.unified_provider", "UnifiedProvider"),
         "SWEBenchRunner": ("agents.openclaw.eval.runner", "SWEBenchRunner"),
         "EvalTask": ("agents.openclaw.eval.types", "EvalTask"),
         "EvalResult": ("agents.openclaw.eval.types", "EvalResult"),
@@ -31,7 +30,6 @@ def _register_openclaw_prepare() -> None:
 _register_openclaw_prepare()
 
 __all__ = [
-    "UnifiedProvider",
     "SWEBenchRunner",
     "EvalTask",
     "EvalResult",

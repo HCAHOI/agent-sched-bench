@@ -1,4 +1,4 @@
-"""UnifiedProvider: wraps openai.AsyncOpenAI to implement the LLMProvider interface.
+"""OpenClaw provider adapter built on the shared llm_call client layer.
 
 Supports any OpenAI-compatible endpoint (OpenRouter, local servers, etc.).
 No ProviderSpec dependency — configuration is passed directly to the constructor.
@@ -11,12 +11,11 @@ import hashlib
 import os
 import secrets
 import string
-import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import json_repair
-from openai import AsyncOpenAI
+from llm_call.openai_compat import create_async_openai_client
 
 from agents.openclaw.providers.base import (
     GenerationSettings,
@@ -38,11 +37,6 @@ _ALNUM = string.ascii_letters + string.digits
 
 _STANDARD_TC_KEYS = frozenset({"id", "type", "index", "function"})
 _STANDARD_FN_KEYS = frozenset({"name", "arguments"})
-_DEFAULT_OPENROUTER_HEADERS = {
-    "HTTP-Referer": "https://github.com/HKUDS/nanobot",
-    "X-OpenRouter-Title": "nanobot",
-    "X-OpenRouter-Categories": "cli-agent,personal-agent",
-}
 
 
 def _short_tool_id() -> str:
@@ -110,11 +104,6 @@ def _extract_tc_extras(
     return extra_content, prov, fn_prov
 
 
-def _uses_openrouter(api_base: str | None) -> bool:
-    """Return True when *api_base* points to OpenRouter."""
-    return bool(api_base and "openrouter" in api_base.lower())
-
-
 class UnifiedProvider(LLMProvider):
     """LLM provider for any OpenAI-compatible endpoint.
 
@@ -138,15 +127,10 @@ class UnifiedProvider(LLMProvider):
         self.generation = GenerationSettings(
             temperature=temperature, max_tokens=max_tokens
         )
-
-        default_headers: dict[str, str] = {"x-session-affinity": uuid.uuid4().hex}
-        if _uses_openrouter(api_base):
-            default_headers.update(_DEFAULT_OPENROUTER_HEADERS)
-
-        self._client = AsyncOpenAI(
-            api_key=api_key or "no-key",
-            base_url=api_base,
-            default_headers=default_headers,
+        self._client = create_async_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            include_session_affinity=True,
         )
 
     # ------------------------------------------------------------------

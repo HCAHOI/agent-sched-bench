@@ -29,7 +29,17 @@ from agents.openclaw._daemon import (
 
 def _make_async_args(workspace: Path, **overrides) -> object:
     args = build_parser().parse_args(
-        ["--prompt", "do something", "--workspace", str(workspace), "--async"]
+        [
+            "--prompt",
+            "do something",
+            "--workspace",
+            str(workspace),
+            "--async",
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+        ]
     )
     for k, v in overrides.items():
         setattr(args, k, v)
