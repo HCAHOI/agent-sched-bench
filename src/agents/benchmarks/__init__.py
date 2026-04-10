@@ -14,6 +14,7 @@ from __future__ import annotations
 from agents.benchmarks.base import Benchmark, BenchmarkConfig
 from agents.benchmarks.swe_bench_verified import SWEBenchVerified
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
+from agents.benchmarks.terminal_bench import TerminalBenchBenchmark
 
 __all__ = [
     "REGISTRY",
@@ -22,12 +23,14 @@ __all__ = [
     "BenchmarkConfig",
     "SWEBenchVerified",
     "SWERebenchBenchmark",
+    "TerminalBenchBenchmark",
 ]
 
 #: Maps benchmark slug → concrete :class:`~agents.benchmarks.base.Benchmark` subclass.
 REGISTRY: dict[str, type[Benchmark]] = {
     "swe-bench-verified": SWEBenchVerified,
     "swe-rebench": SWERebenchBenchmark,
+    "terminal-bench": TerminalBenchBenchmark,
 }
 
 

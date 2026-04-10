@@ -21,7 +21,7 @@ from trace_collect import attempt_layout
 logger = logging.getLogger(__name__)
 
 _NONCOMPLETED_EXIT_STATUSES = frozenset(
-    {"error", "tool_error", "empty_final_response", "max_iterations", "timeout"}
+    {"error", "tool_error", "empty_final_response", "max_iterations", "timeout", "failed"}
 )
 
 
@@ -39,7 +39,7 @@ class AttemptContext:
     task: dict[str, Any]
     model: str
     scaffold: str
-    source_image: str
+    source_image: str | None
     prompt_template: str = "default"
     agent_runtime_mode: str = "host_controller"
     fixed_image: str | None = None
@@ -214,21 +214,25 @@ async def run_attempt(
 
     attempt_layout.ensure_attempt_dir(ctx.attempt_dir)
 
-    try:
-        fixed_name, fix_elapsed = ensure_fixed_image(
-            ctx.source_image, executable=executable
-        )
-        ctx.fixed_image = fixed_name
-        ctx.permission_fix_time_s = fix_elapsed
-        logger.info(
-            "image prep: source=%s fixed=%s elapsed=%.2fs",
-            ctx.source_image,
-            fixed_name,
-            fix_elapsed,
-        )
-    except Exception as exc:
-        logger.error("image prep failed: %s", exc)
-        ctx.fixed_image = ctx.source_image
+    if ctx.source_image:
+        try:
+            fixed_name, fix_elapsed = ensure_fixed_image(
+                ctx.source_image, executable=executable
+            )
+            ctx.fixed_image = fixed_name
+            ctx.permission_fix_time_s = fix_elapsed
+            logger.info(
+                "image prep: source=%s fixed=%s elapsed=%.2fs",
+                ctx.source_image,
+                fixed_name,
+                fix_elapsed,
+            )
+        except Exception as exc:
+            logger.error("image prep failed: %s", exc)
+            ctx.fixed_image = ctx.source_image
+    else:
+        ctx.fixed_image = None
+        ctx.permission_fix_time_s = 0.0
 
     stop_watcher = threading.Event()
     watcher_task = asyncio.create_task(
@@ -264,19 +268,28 @@ async def run_attempt(
         status = "error"
     elif (
         result is not None
-        and result.exit_status is not None
-        and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
+        and (
+            not result.success
+            or (
+                result.exit_status is not None
+                and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
+            )
+        )
     ):
         status = "error"
     success = bool(result.success) if result is not None else False
+    task_payload: dict[str, Any] = {
+        "instance_id": ctx.instance_id,
+        "repo": ctx.task.get("repo"),
+        "docker_image": ctx.source_image,
+    }
+    for key in ("task_source_kind", "task_source_id", "task_source_path"):
+        if key in ctx.task:
+            task_payload[key] = ctx.task.get(key)
 
     manifest = {
         "status": status,
-        "task": {
-            "instance_id": ctx.instance_id,
-            "repo": ctx.task.get("repo", ""),
-            "docker_image": ctx.source_image,
-        },
+        "task": task_payload,
         "attempt": ctx.attempt_label,
         "model": {"name": ctx.model},
         "runtime": {
@@ -293,7 +306,7 @@ async def run_attempt(
         "replay": {
             "replay_ready": bool(ctx.fixed_image),
             "source_image": ctx.source_image,
-            "fixed_image_name": ctx.fixed_image or "",
+            "fixed_image_name": ctx.fixed_image,
         },
         "result_summary": {
             "exit_code": 0 if success else 1,
@@ -323,13 +336,27 @@ async def run_attempt(
         "tool_time": manifest["result_summary"]["tool_time"],
         "replay_ready": bool(ctx.fixed_image),
         "instance_id": ctx.instance_id,
-        "repo": ctx.task.get("repo", ""),
+        "repo": ctx.task.get("repo"),
         "docker_image": ctx.source_image,
         "success": success,
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
         "agent_runtime_mode": ctx.agent_runtime_mode,
     }
+    for key in (
+        "task_source_kind",
+        "task_source_id",
+        "task_source_path",
+        "tb_version",
+        "tb_dataset",
+        "tb_registry_source",
+        "adapter_kind",
+        "agent_import_path",
+    ):
+        if key in ctx.task:
+            results_payload[key] = ctx.task.get(key)
+        elif result is not None and key in result.summary:
+            results_payload[key] = result.summary.get(key)
     if result is not None and result.runtime_proof:
         results_payload["runtime_proof"] = result.runtime_proof
     if result is not None:

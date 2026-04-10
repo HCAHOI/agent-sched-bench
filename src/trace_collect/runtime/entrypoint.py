@@ -139,6 +139,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "trace_path": str(request["trace_file"]),
         "model_patch": result.model_patch,
+        "success": bool(result.model_patch),
         "exit_status": result.stop_reason,
         "error": result.error,
         "n_iterations": result.n_iterations,
@@ -169,24 +170,26 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
     trace_file = Path(request["trace_file"])
     trace_file.parent.mkdir(parents=True, exist_ok=True)
     trace_logger = TraceLogger(trace_file.parent, trace_file.stem)
-    trace_logger.log_metadata(
-        scaffold="miniswe",
-        benchmark=request["benchmark"],
-        benchmark_split=request["benchmark_split"],
-        model=llm_config.model,
-        api_base=llm_config.api_base,
-        max_iterations=int(request["max_iterations"]),
-        instance_id=task_raw["instance_id"],
-        prompt_template=request["prompt_template"],
-        agent_runtime_mode=request.get("agent_runtime_mode", "task_container_agent"),
-        runtime_proof=_runtime_proof(request.get("container_id")),
-        scaffold_capabilities={
+    metadata: dict[str, Any] = {
+        "scaffold": "miniswe",
+        "benchmark": request["benchmark"],
+        "model": llm_config.model,
+        "api_base": llm_config.api_base,
+        "max_iterations": int(request["max_iterations"]),
+        "instance_id": task_raw["instance_id"],
+        "prompt_template": request["prompt_template"],
+        "agent_runtime_mode": request.get("agent_runtime_mode", "task_container_agent"),
+        "runtime_proof": _runtime_proof(request.get("container_id")),
+        "scaffold_capabilities": {
             "tools": ["bash"],
             "memory": False,
             "skills": False,
             "file_ops": "bash_only",
         },
-    )
+    }
+    if request.get("benchmark_split") is not None:
+        metadata["benchmark_split"] = request["benchmark_split"]
+    trace_logger.log_metadata(**metadata)
 
     agent = MiniSWECodeAgent(
         agent_id=task_raw["instance_id"],

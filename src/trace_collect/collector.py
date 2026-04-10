@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from llm_call import UnifiedProvider
 from harness.container_image_prep import (
     drop_cached_fixed_image,
     ensure_source_image,
@@ -92,15 +93,12 @@ class CollectedTaskResult:
 
     instance_id: str
     attempt_dir: Path
-    model_patch: str
+    success: bool
+    model_patch: str = ""
     exit_status: str | None = None
     error: str | None = None
     elapsed_s: float | None = None
     n_iterations: int | None = None
-
-    @property
-    def success(self) -> bool:
-        return bool(self.model_patch)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -176,8 +174,13 @@ def _select_tasks(
     return selected
 
 
-def _task_source_image(benchmark: "Benchmark", task: dict[str, Any]) -> str:
-    return normalize_image_reference(str(benchmark.image_name_for(task) or ""))
+def _task_source_image(
+    benchmark: "Benchmark", task: dict[str, Any]
+) -> str | None:
+    image_name = benchmark.image_name_for(task)
+    if not image_name:
+        return None
+    return normalize_image_reference(str(image_name))
 
 
 def _next_pending_source_image(
@@ -200,7 +203,7 @@ def _next_pending_source_image(
 def _ensure_task_source_ready(
     *,
     instance_id: str,
-    source_image: str,
+    source_image: str | None,
     prefetched_source_image: str | None,
     prefetch_future: Future[None] | None,
     executable: str = "podman",
@@ -229,7 +232,7 @@ def _ensure_task_source_ready(
 def _cleanup_task_images(
     *,
     instance_id: str,
-    source_image: str,
+    source_image: str | None,
     fixed_image: str | None,
     keep_source_image: str | None,
     executable: str = "podman",
@@ -304,6 +307,10 @@ async def _run_scaffold_tasks(
     total = len(tasks)
     prefetched_source_image: str | None = None
     prefetch_future: Future[None] | None = None
+    resolved_prompt_template = _resolve_prompt_template(
+        benchmark=benchmark,
+        prompt_template=prompt_template,
+    )
 
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="image-prefetch") as executor:
         for i, task in enumerate(tasks):
@@ -334,10 +341,7 @@ async def _run_scaffold_tasks(
                 model=model,
                 scaffold=scaffold,
                 source_image=source_image,
-                prompt_template=_resolve_prompt_template(
-                    benchmark=benchmark,
-                    prompt_template=prompt_template,
-                ),
+                prompt_template=resolved_prompt_template,
                 agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
             )
 
@@ -376,6 +380,7 @@ async def _run_scaffold_tasks(
                     CollectedTaskResult(
                         instance_id=instance_id,
                         attempt_dir=attempt_ctx.attempt_dir,
+                        success=False,
                         model_patch="",
                         exit_status="error",
                         error=f"{type(exc).__name__}: {exc}",
@@ -387,6 +392,7 @@ async def _run_scaffold_tasks(
                     CollectedTaskResult(
                         instance_id=instance_id,
                         attempt_dir=attempt_ctx.attempt_dir,
+                        success=result.success,
                         model_patch=getattr(result, "model_patch", "") or "",
                         exit_status=result.exit_status,
                         error=result.error,
@@ -433,6 +439,7 @@ async def collect_miniswe_traces(
     min_free_disk_gb: float = 30.0,
 ) -> Path:
     """Collect miniswe traces inside the SWE-rebench task container."""
+    benchmark.validate_scaffold_support("miniswe")
     tasks = _select_tasks(
         benchmark.load_tasks(),
         instance_ids=instance_ids,
@@ -463,23 +470,25 @@ async def collect_miniswe_traces(
             from harness.trace_logger import TraceLogger
 
             trace_logger = TraceLogger(ctx.attempt_dir, "trace")
-            trace_logger.log_metadata(
-                scaffold="miniswe",
-                benchmark=benchmark.config.slug,
-                benchmark_split=benchmark.config.harness_split,
-                model=model,
-                api_base=api_base,
-                max_iterations=max_iterations,
-                instance_id=ctx.instance_id,
-                prompt_template=ctx.prompt_template,
-                agent_runtime_mode=ctx.agent_runtime_mode,
-                scaffold_capabilities={
+            metadata: dict[str, Any] = {
+                "scaffold": "miniswe",
+                "benchmark": benchmark.config.slug,
+                "model": model,
+                "api_base": api_base,
+                "max_iterations": max_iterations,
+                "instance_id": ctx.instance_id,
+                "prompt_template": ctx.prompt_template,
+                "agent_runtime_mode": ctx.agent_runtime_mode,
+                "scaffold_capabilities": {
                     "tools": ["bash"],
                     "memory": False,
                     "skills": False,
                     "file_ops": "bash_only",
                 },
-            )
+            }
+            if benchmark.config.harness_split is not None:
+                metadata["benchmark_split"] = benchmark.config.harness_split
+            trace_logger.log_metadata(**metadata)
 
             agent = MiniSWECodeAgent(
                 agent_id=ctx.instance_id,
@@ -534,6 +543,7 @@ async def collect_miniswe_traces(
 async def collect_openclaw_traces(
     *,
     provider_name: str | None = None,
+    env_key: str | None = None,
     api_base: str,
     api_key: str,
     model: str,
@@ -547,12 +557,33 @@ async def collect_openclaw_traces(
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
 ) -> Path:
-    """Collect OpenClaw traces via the task-container runtime."""
+    """Collect OpenClaw traces via the benchmark-selected runtime."""
+    benchmark.validate_scaffold_support("openclaw")
     runtime_mode = benchmark.runtime_mode_for("openclaw")
-    if runtime_mode != "task_container_agent":
+    if runtime_mode != "host_controller" and runtime_mode != "task_container_agent":
         raise NotImplementedError(
-            "OpenClaw SWE collection requires benchmark.runtime_mode_for("
-            "'openclaw') == 'task_container_agent'"
+            f"Unsupported benchmark.runtime_mode_for('openclaw'): {runtime_mode!r}"
+        )
+    run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
+
+    runner = None
+    if runtime_mode == "host_controller":
+        runner = benchmark.build_runner(
+            scaffold="openclaw",
+            provider=UnifiedProvider(
+                api_key=api_key,
+                api_base=api_base,
+                default_model=model,
+            ),
+            workspace_base=run_dir / "_workspace_base",
+            max_iterations=max_iterations,
+            context_window_tokens=max_context_tokens,
+            model=model,
+            provider_name=provider_name,
+            env_key=env_key,
+            api_base=api_base,
+            api_key=api_key,
+            mcp_servers=load_mcp_servers(mcp_config),
         )
 
     tasks = _select_tasks(
@@ -561,21 +592,26 @@ async def collect_openclaw_traces(
         sample=sample,
     )
 
-    run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
-
     def make_inner(task: dict):
         async def inner(ctx: AttemptContext) -> AttemptResult:
-            return await _run_openclaw_in_task_container(
-                ctx=ctx,
-                task=task,
-                benchmark=benchmark,
-                provider_name=provider_name,
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
-                max_iterations=max_iterations,
-                max_context_tokens=max_context_tokens,
-                mcp_config=mcp_config,
+            if ctx.agent_runtime_mode == "task_container_agent":
+                return await _run_openclaw_in_task_container(
+                    ctx=ctx,
+                    task=task,
+                    benchmark=benchmark,
+                    provider_name=provider_name,
+                    api_base=api_base,
+                    api_key=api_key,
+                    model=model,
+                    max_iterations=max_iterations,
+                    max_context_tokens=max_context_tokens,
+                    mcp_config=mcp_config,
+                )
+            assert runner is not None
+            return await runner.run_openclaw_task(
+                task,
+                attempt_ctx=ctx,
+                prompt_template=ctx.prompt_template,
             )
 
         return inner
@@ -659,7 +695,8 @@ def _normalize_openclaw_trace(
     if source_metadata is not None:
         merged.update(source_metadata)
     merged.setdefault("benchmark", benchmark.config.slug)
-    merged.setdefault("benchmark_split", benchmark.config.harness_split)
+    if benchmark.config.harness_split is not None:
+        merged.setdefault("benchmark_split", benchmark.config.harness_split)
     merged.setdefault("model", model)
     merged.setdefault("api_base", api_base)
     merged.setdefault("max_iterations", max_iterations)
@@ -749,34 +786,36 @@ async def _run_miniswe_in_task_container(
             pythonpath=exec_config.pythonpath,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "kind": "run_miniswe",
+            "scaffold": "miniswe",
+            "result_path": str(runtime_dir / "run.result.json"),
+            "container_id": container_id,
+            "benchmark": benchmark.config.slug,
+            "provider_name": provider_name,
+            "api_base": api_base,
+            "api_key": api_key,
+            "model": model,
+            "max_iterations": max_iterations,
+            "command_timeout_s": command_timeout_s,
+            "task_timeout_s": task_timeout_s,
+            "max_context_tokens": max_context_tokens,
+            "prompt_template": ctx.prompt_template,
+            "agent_runtime_mode": ctx.agent_runtime_mode,
+            "exec_working_dir": "/testbed",
+            "task": task,
+            "trace_file": str(runtime_dir / "trace.jsonl"),
+            "raw_stdout_path": str(stdout_path),
+            "raw_stderr_path": str(stderr_path),
+        }
+        if benchmark.config.harness_split is not None:
+            request["benchmark_split"] = benchmark.config.harness_split
         runtime = run_task_container_agent(
             container_id=container_id,
             timeout=task_timeout_s + 120,
             runtime=exec_config.runtime,
             pythonpath=exec_config.pythonpath,
-            request={
-                "kind": "run_miniswe",
-                "scaffold": "miniswe",
-                "result_path": str(runtime_dir / "run.result.json"),
-                "container_id": container_id,
-                "benchmark": benchmark.config.slug,
-                "benchmark_split": benchmark.config.harness_split,
-                "provider_name": provider_name,
-                "api_base": api_base,
-                "api_key": api_key,
-                "model": model,
-                "max_iterations": max_iterations,
-                "command_timeout_s": command_timeout_s,
-                "task_timeout_s": task_timeout_s,
-                "max_context_tokens": max_context_tokens,
-                "prompt_template": ctx.prompt_template,
-                "agent_runtime_mode": ctx.agent_runtime_mode,
-                "exec_working_dir": "/testbed",
-                "task": task,
-                "trace_file": str(runtime_dir / "trace.jsonl"),
-                "raw_stdout_path": str(stdout_path),
-                "raw_stderr_path": str(stderr_path),
-            },
+            request=request,
         )
     finally:
         container_logs = stop_task_container(container_id)
@@ -942,7 +981,7 @@ async def _run_openclaw_in_task_container(
     assert runtime is not None
     assert runtime_proof is not None
     return AttemptResult(
-        success=bool(runtime.model_patch),
+        success=runtime.success,
         exit_status=runtime.exit_status,
         trace_path=ctx.attempt_dir / "trace.jsonl",
         model_patch=runtime.model_patch,

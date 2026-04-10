@@ -365,27 +365,22 @@ def preflight_task_container_runtime(
         "agents.openclaw.eval.runner",
         "harness.trace_logger",
     ]
+    request_payload = {
+        "kind": "preflight",
+        "result_path": str(runtime_dir / "result.json"),
+        "imports": import_list,
+        "writable_probe": str(runtime_dir / "writable.probe"),
+        "container_id": container_id,
+    }
     request_path = write_task_container_request(
         attempt_dir=attempt_dir,
         scaffold="preflight",
-        payload={
-            "kind": "preflight",
-            "result_path": str(runtime_dir / "result.json"),
-            "imports": import_list,
-            "writable_probe": str(runtime_dir / "writable.probe"),
-            "container_id": container_id,
-        },
+        payload=request_payload,
     )
     result = exec_task_container_entrypoint(
         container_id=container_id,
         request_path=request_path,
-        request_payload={
-            "kind": "preflight",
-            "result_path": str(runtime_dir / "result.json"),
-            "imports": import_list,
-            "writable_probe": str(runtime_dir / "writable.probe"),
-            "container_id": container_id,
-        },
+        request_payload=request_payload,
         runtime=effective_runtime,
         pythonpath=pythonpath,
         timeout=120,
@@ -458,8 +453,11 @@ def run_task_container_agent(
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
     payload = read_task_container_result(Path(request["result_path"]))
+    success = payload.get("success")
+    if success is None:
+        success = bool(payload.get("model_patch"))
     return TaskContainerRunResult(
-        success=bool(payload.get("success", payload.get("model_patch"))),
+        success=bool(success),
         exit_status=payload.get("exit_status"),
         model_patch=payload.get("model_patch", "") or "",
         error=payload.get("error"),
