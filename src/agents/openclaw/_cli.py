@@ -136,8 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=200,
-        help="Max agent iterations (default: 200).",
+        default=100,
+        help="Max agent iterations (default: 100).",
     )
     parser.add_argument(
         "--max-tokens",

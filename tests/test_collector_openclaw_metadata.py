@@ -17,7 +17,7 @@ def _make_config() -> BenchmarkConfig:
         data_root=Path("data/swebench_verified"),
         repos_root=Path("data/swebench_repos"),
         trace_root=Path("traces/swebench_verified"),
-        default_max_iterations=50,
+        default_max_iterations=100,
         selection_n=32,
         selection_seed=42,
         default_prompt_template="default",
@@ -51,7 +51,7 @@ def test_normalize_openclaw_trace_writes_trace_metadata_with_benchmark(tmp_path:
         src=src, dst=dst,
         benchmark=plugin,
         model="test/model", api_base="https://x.y",
-        max_iterations=50, instance_id="test-1",
+        max_iterations=100, instance_id="test-1",
     )
 
     lines = dst.read_text(encoding="utf-8").strip().splitlines()
@@ -107,7 +107,7 @@ def test_normalize_openclaw_trace_preserves_runner_scaffold_capabilities(
         benchmark=plugin,
         model="test/model",
         api_base="https://x.y",
-        max_iterations=50,
+        max_iterations=100,
         instance_id="test-1",
     )
 
@@ -146,7 +146,7 @@ def test_normalize_openclaw_trace_marks_unknown_capabilities_without_metadata(
         benchmark=plugin,
         model="test/model",
         api_base="https://x.y",
-        max_iterations=50,
+        max_iterations=100,
         instance_id="test-1",
     )
 

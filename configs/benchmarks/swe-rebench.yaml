@@ -7,7 +7,7 @@ harness_split: filtered
 data_root: data/swe-rebench
 repos_root: data/swe-rebench/repos
 trace_root: traces/swe-rebench
-default_max_iterations: 50
+default_max_iterations: 100
 selection_n: 32
 selection_seed: 42
 default_prompt_template: cc_aligned

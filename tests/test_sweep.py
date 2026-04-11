@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.sweep import execute_sweep, expand_sweep_matrix
+from harness.sweep import execute_sweep, expand_sweep_matrix, extract_agent_kwargs
 
 minisweagent = pytest.importorskip("minisweagent", reason="requires mini-swe-agent")
 
@@ -94,3 +94,8 @@ task_source: """
     assert completed[0]["execution_config"]["sweep_config_path"].endswith(
         "default.yaml"
     )
+
+
+def test_extract_agent_kwargs_max_iterations_defaults_to_100() -> None:
+    kwargs = extract_agent_kwargs("code_agent", {"repos_root": "repos"})
+    assert kwargs["max_iterations"] == 100

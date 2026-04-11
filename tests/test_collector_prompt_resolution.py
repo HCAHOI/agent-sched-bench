@@ -28,6 +28,20 @@ def test_parse_collect_args_prompt_template_defaults_to_none() -> None:
     assert args.prompt_template is None
 
 
+def test_parse_collect_args_max_iterations_defaults_to_100() -> None:
+    args = parse_collect_args(
+        [
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+            "--container",
+            "docker",
+        ]
+    )
+    assert args.max_iterations == 100
+
+
 def test_parse_collect_args_requires_container_for_collect() -> None:
     with pytest.raises(SystemExit, match="2"):
         parse_collect_args(["--provider", "openrouter", "--model", "z-ai/glm-5.1"])

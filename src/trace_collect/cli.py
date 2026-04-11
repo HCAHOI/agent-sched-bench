@@ -20,7 +20,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=50,
+        default=100,
         help="Maximum agent iterations per task.",
     )
     parser.add_argument(

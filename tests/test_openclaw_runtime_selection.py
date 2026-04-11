@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ import pytest
 
 from agents.benchmarks import get_benchmark_class
 from agents.benchmarks.base import BenchmarkConfig
-from trace_collect.collector import collect_openclaw_traces
+from trace_collect.collector import collect_miniswe_traces, collect_openclaw_traces
 
 
 def _make_verified_config() -> BenchmarkConfig:
@@ -22,7 +23,7 @@ def _make_verified_config() -> BenchmarkConfig:
         data_root=Path("data/swebench_verified"),
         repos_root=Path("data/swebench_repos"),
         trace_root=Path("traces/swebench_verified"),
-        default_max_iterations=50,
+        default_max_iterations=100,
         selection_n=32,
         selection_seed=42,
         default_prompt_template="default",
@@ -174,3 +175,8 @@ def test_collect_openclaw_traces_requires_explicit_container_runtime(
                 min_free_disk_gb=0.001,
             )
         )
+
+
+def test_collectors_max_iterations_defaults_to_100() -> None:
+    assert inspect.signature(collect_openclaw_traces).parameters["max_iterations"].default == 100
+    assert inspect.signature(collect_miniswe_traces).parameters["max_iterations"].default == 100

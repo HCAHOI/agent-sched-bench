@@ -1,7 +1,7 @@
 slug: terminal-bench
 display_name: "Terminal-Bench"
 trace_root: traces/terminal-bench
-default_max_iterations: 50
+default_max_iterations: 100
 selection_n: 32
 selection_seed: 42
 default_prompt_template: default

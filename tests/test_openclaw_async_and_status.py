@@ -46,6 +46,22 @@ def _make_async_args(workspace: Path, **overrides) -> object:
     return args
 
 
+def test_build_parser_max_iterations_defaults_to_100() -> None:
+    args = build_parser().parse_args(
+        [
+            "--prompt",
+            "do something",
+            "--workspace",
+            "/tmp/workspace",
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+        ]
+    )
+    assert args.max_iterations == 100
+
+
 def test_run_async_forwards_explicit_trace_output(tmp_path: Path) -> None:
     """When ``--trace-output`` is given, the spawned daemon must receive it."""
     workspace = tmp_path / "ws"

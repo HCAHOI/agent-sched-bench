@@ -1,4 +1,4 @@
-max_iterations: 50
+max_iterations: 100
 command_timeout_s: 120
 task_timeout_s: 1200
 task_source: data/swebench_verified/tasks.json
