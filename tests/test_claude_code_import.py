@@ -265,6 +265,281 @@ def test_iteration_counter_per_agent_lane(converted_trace: Path) -> None:
     # Both start from 0 — counter is per-lane, not global
     assert main_iters == [0, 1]
     assert sub_iters == [0, 1]
+
+
+def _make_inline_sidechain_session(tmp_path: Path) -> Path:
+    """Build a synthetic main-lane session with an embedded inline sidechain."""
+    session = tmp_path / "cc-inline-sidechain.jsonl"
+    _write_synthetic_session(
+        session,
+        [
+            {
+                "type": "user",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "u0",
+                "timestamp": "2026-04-08T10:00:00.000Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": False,
+                "message": {"role": "user", "content": "Use Task to inspect the repo."},
+            },
+            {
+                "type": "assistant",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "a0",
+                "parentUuid": "u0",
+                "timestamp": "2026-04-08T10:00:01.000Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": False,
+                "message": {
+                    "id": "msg_main_task",
+                    "model": "claude-sonnet-4-6",
+                    "role": "assistant",
+                    "usage": {
+                        "input_tokens": 12,
+                        "output_tokens": 5,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {},
+                    },
+                    "content": [
+                        {"type": "text", "text": "I'll delegate this search."},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_task_0001",
+                            "name": "Task",
+                            "input": {
+                                "description": "Search the repo",
+                                "prompt": "Find parsing code paths.",
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "su0",
+                "timestamp": "2026-04-08T10:00:01.100Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": True,
+                "message": {"role": "user", "content": "Find parsing code paths."},
+            },
+            {
+                "type": "assistant",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "sa0",
+                "parentUuid": "su0",
+                "timestamp": "2026-04-08T10:00:01.500Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": True,
+                "message": {
+                    "id": "msg_side_0",
+                    "model": "claude-3-5-haiku-20241022",
+                    "role": "assistant",
+                    "usage": {
+                        "input_tokens": 8,
+                        "output_tokens": 4,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {},
+                    },
+                    "content": [{"type": "text", "text": "I'll inspect the repo."}],
+                },
+            },
+            {
+                "type": "assistant",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "sa1",
+                "parentUuid": "sa0",
+                "timestamp": "2026-04-08T10:00:02.000Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": True,
+                "message": {
+                    "id": "msg_side_1",
+                    "model": "claude-3-5-haiku-20241022",
+                    "role": "assistant",
+                    "usage": {
+                        "input_tokens": 9,
+                        "output_tokens": 6,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {},
+                    },
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_side_bash_0001",
+                            "name": "Bash",
+                            "input": {"command": "rg -n parser src"},
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "su1",
+                "parentUuid": "sa1",
+                "timestamp": "2026-04-08T10:00:02.200Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": True,
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_side_bash_0001",
+                            "content": [{"type": "text", "text": "src/parser.py:1:def parse()"}],
+                            "is_error": False,
+                        }
+                    ],
+                },
+                "toolUseResult": {
+                    "stdout": "src/parser.py:1:def parse()",
+                    "stderr": "",
+                    "interrupted": False,
+                },
+            },
+            {
+                "type": "assistant",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "sa2",
+                "parentUuid": "su1",
+                "timestamp": "2026-04-08T10:00:02.600Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": True,
+                "message": {
+                    "id": "msg_side_2",
+                    "model": "claude-3-5-haiku-20241022",
+                    "role": "assistant",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 7,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {},
+                    },
+                    "content": [{"type": "text", "text": "Parser code is in src/parser.py."}],
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "cc-inline-sidechain",
+                "uuid": "u1",
+                "parentUuid": "sa2",
+                "timestamp": "2026-04-08T10:00:03.500Z",
+                "cwd": "/tmp",
+                "gitBranch": "main",
+                "version": "2.1.96",
+                "isSidechain": False,
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_task_0001",
+                            "content": [{"type": "text", "text": "Parser code is in src/parser.py."}],
+                            "is_error": False,
+                        }
+                    ],
+                },
+                "toolUseResult": {
+                    "content": [
+                        {"type": "text", "text": "Parser code is in src/parser.py."}
+                    ],
+                    "totalDurationMs": 2400.0,
+                    "totalTokens": 17,
+                    "usage": {"input_tokens": 9, "output_tokens": 8},
+                    "totalToolUseCount": 1,
+                },
+            },
+        ],
+    )
+    return session
+
+
+def test_inline_sidechain_records_become_separate_lane(tmp_path: Path) -> None:
+    session = _make_inline_sidechain_session(tmp_path)
+    result = import_claude_code_session(
+        session_path=session,
+        output_dir=tmp_path / "out",
+        include_sidechains=False,
+    )
+    records = _load_records(result)
+
+    action_records = [r for r in records if r.get("type") == "action"]
+    agent_ids = sorted({r["agent_id"] for r in action_records})
+    assert "cc-inline-sidechain" in agent_ids
+    inline_agents = [
+        agent for agent in agent_ids if ":inline-sidechain-" in agent
+    ]
+    assert len(inline_agents) == 1, (
+        "expected one synthetic inline sidechain lane; "
+        f"got {agent_ids}"
+    )
+
+    main_llm = [
+        r for r in action_records
+        if r.get("action_type") == "llm_call"
+        and r["agent_id"] == "cc-inline-sidechain"
+    ]
+    main_tools = [
+        r for r in action_records
+        if r.get("action_type") == "tool_exec"
+        and r["agent_id"] == "cc-inline-sidechain"
+    ]
+    assert [r["iteration"] for r in main_llm] == [0]
+    assert len(main_tools) == 1
+    assert main_tools[0]["data"]["tool_name"] == "Task"
+    assert main_tools[0]["data"]["duration_ms"] == 2400.0
+
+    inline_llm = [
+        r for r in action_records
+        if r.get("action_type") == "llm_call"
+        and r["agent_id"] == inline_agents[0]
+    ]
+    inline_tools = [
+        r for r in action_records
+        if r.get("action_type") == "tool_exec"
+        and r["agent_id"] == inline_agents[0]
+    ]
+    assert [r["iteration"] for r in inline_llm] == [0, 1, 2]
+    assert len(inline_tools) == 1
+    assert inline_tools[0]["data"]["tool_name"] == "Bash"
+
+
+def test_inline_sidechain_payload_renders_multiple_lanes(tmp_path: Path) -> None:
+    session = _make_inline_sidechain_session(tmp_path)
+    result = import_claude_code_session(
+        session_path=session,
+        output_dir=tmp_path / "out",
+        include_sidechains=False,
+    )
+
+    from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
+    from trace_collect.trace_inspector import TraceData
+
+    data = TraceData.load(result)
+    payload = build_gantt_payload_multi([("inline-sidechain", data)])
+    lanes = payload["traces"][0]["lanes"]
+    assert len(lanes) == 2, f"expected 2 lanes after import, got {len(lanes)}"
+    lane_ids = {lane["agent_id"] for lane in lanes}
+    assert "cc-inline-sidechain" in lane_ids
+    assert any(":inline-sidechain-" in lane_id for lane_id in lane_ids)
 # ─── Summary record ─────────────────────────────────────────────────────
 
 

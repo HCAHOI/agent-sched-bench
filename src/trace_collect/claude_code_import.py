@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -206,23 +207,45 @@ def _backfill_per_tool(
 
     return backfill, success_override
 
+
+@dataclass(slots=True)
+class _LaneState:
+    pending_tool_uses: dict[str, dict[str, Any]] = field(default_factory=dict)
+    iteration: int = 0
+    last_lane_ts: float | None = None
+    n_tool_actions: int = 0
+    n_llm_actions: int = 0
+    total_llm_ms: float = 0.0
+    total_tool_ms: float = 0.0
+    total_tokens: int = 0
+    first_ts: float | None = None
+    last_ts: float | None = None
+
+
+def _get_lane_state(
+    lane_states: dict[str, _LaneState],
+    lane_id: str,
+    *,
+    default_start_ts: float | None,
+) -> _LaneState:
+    state = lane_states.get(lane_id)
+    if state is None:
+        state = _LaneState(last_lane_ts=default_start_ts)
+        lane_states[lane_id] = state
+    return state
+
 def _convert_session_records(
     *,
     session_path: Path,
     agent_id: str,
     session_start_ts: float | None = None,
 ) -> Iterator[dict[str, Any]]:
-    pending_tool_uses: dict[str, dict[str, Any]] = {}
-    iteration = 0
-    last_lane_ts: float | None = session_start_ts
-
-    n_tool_actions = 0
-    n_llm_actions = 0
-    total_llm_ms = 0.0
-    total_tool_ms = 0.0
-    total_tokens = 0
-    first_ts: float | None = None
-    last_ts: float | None = None
+    lane_states: dict[str, _LaneState] = {
+        agent_id: _LaneState(last_lane_ts=session_start_ts)
+    }
+    inline_sidechain_lane_id: str | None = None
+    inline_sidechain_count = 0
+    saw_non_sidechain_record = False
 
     with open(session_path, encoding="utf-8") as f:
         for line in f:
@@ -239,6 +262,26 @@ def _convert_session_records(
             if rtype in _DISCARDABLE_TYPES:
                 continue
 
+            is_sidechain = bool(record.get("isSidechain"))
+            if is_sidechain and saw_non_sidechain_record:
+                if inline_sidechain_lane_id is None:
+                    inline_sidechain_count += 1
+                    inline_sidechain_lane_id = (
+                        f"{agent_id}:inline-sidechain-{inline_sidechain_count}"
+                    )
+                lane_id = inline_sidechain_lane_id
+            else:
+                lane_id = agent_id
+                if not is_sidechain:
+                    saw_non_sidechain_record = True
+                inline_sidechain_lane_id = None
+
+            state = _get_lane_state(
+                lane_states,
+                lane_id,
+                default_start_ts=session_start_ts if lane_id == agent_id else None,
+            )
+
             if rtype == "assistant":
                 ts_end = _iso_to_unix(record.get("timestamp"))
                 if ts_end is None:
@@ -247,11 +290,11 @@ def _convert_session_records(
                         session_path,
                     )
                     continue
-                ts_start = last_lane_ts if last_lane_ts is not None else ts_end
-                last_lane_ts = ts_end
-                if first_ts is None:
-                    first_ts = ts_start
-                last_ts = ts_end
+                ts_start = state.last_lane_ts if state.last_lane_ts is not None else ts_end
+                state.last_lane_ts = ts_end
+                if state.first_ts is None:
+                    state.first_ts = ts_start
+                state.last_ts = ts_end
 
                 message = record.get("message") or {}
                 content = message.get("content")
@@ -269,8 +312,6 @@ def _convert_session_records(
                 cache_creation_obj = usage.get("cache_creation") or {}
 
                 llm_latency_ms = max(0.0, (ts_end - ts_start) * 1000)
-                total_llm_ms += llm_latency_ms
-                total_tokens += prompt_tokens + completion_tokens
 
                 llm_content_preview = text
                 if len(llm_content_preview) > 1000:
@@ -311,29 +352,31 @@ def _convert_session_records(
                 yield {
                     "type": "action",
                     "action_type": "llm_call",
-                    "action_id": f"llm_{iteration}",
-                    "agent_id": agent_id,
-                    "iteration": iteration,
+                    "action_id": f"llm_{state.iteration}",
+                    "agent_id": lane_id,
+                    "iteration": state.iteration,
                     "ts_start": ts_start,
                     "ts_end": ts_end,
                     "data": data,
                 }
-                n_llm_actions += 1
+                state.n_llm_actions += 1
+                state.total_llm_ms += llm_latency_ms
+                state.total_tokens += prompt_tokens + completion_tokens
 
                 for tu in tool_uses:
                     tu_id = tu.get("id") or ""
                     if not tu_id:
                         continue
-                    pending_tool_uses[tu_id] = {
+                    state.pending_tool_uses[tu_id] = {
                         "ts_start": ts_end,
                         "tool_name": tu.get("name", "unknown"),
                         "tool_args": json.dumps(
                             tu.get("input") or {}, ensure_ascii=False
                         ),
-                        "iteration": iteration,
+                        "iteration": state.iteration,
                     }
 
-                iteration += 1
+                state.iteration += 1
 
             elif rtype == "user":
                 message = record.get("message") or {}
@@ -341,7 +384,7 @@ def _convert_session_records(
                 user_ts = _iso_to_unix(record.get("timestamp"))
 
                 if user_ts is not None:
-                    last_lane_ts = max(last_lane_ts or 0.0, user_ts)
+                    state.last_lane_ts = max(state.last_lane_ts or 0.0, user_ts)
 
                 if not isinstance(content, list):
                     continue
@@ -357,7 +400,7 @@ def _convert_session_records(
                         continue
 
                     tu_id = block.get("tool_use_id") or ""
-                    pending = pending_tool_uses.pop(tu_id, None)
+                    pending = state.pending_tool_uses.pop(tu_id, None)
                     unpaired = pending is None
 
                     if pending is not None:
@@ -367,9 +410,9 @@ def _convert_session_records(
                         tool_args = pending["tool_args"]
                     else:
                         tool_ts_start = user_ts if user_ts is not None else (
-                            last_lane_ts or 0.0
+                            state.last_lane_ts or 0.0
                         )
-                        tool_iteration = max(0, iteration - 1)
+                        tool_iteration = max(0, state.iteration - 1)
                         tool_name = "unknown_tool"
                         tool_args = "{}"
 
@@ -381,7 +424,7 @@ def _convert_session_records(
                     else:
                         duration_ms = 0.0
                     tool_ts_end = tool_ts_start + (duration_ms / 1000.0)
-                    total_tool_ms += duration_ms
+                    state.total_tool_ms += duration_ms
 
                     per_tool_backfill, success_override = _backfill_per_tool(
                         tool_name, tool_use_result
@@ -433,9 +476,9 @@ def _convert_session_records(
                         ]
                     tool_data.update(per_tool_backfill)
 
-                    if first_ts is None:
-                        first_ts = tool_ts_start
-                    last_ts = tool_ts_end
+                    if state.first_ts is None:
+                        state.first_ts = tool_ts_start
+                    state.last_ts = tool_ts_end
 
                     tu_id_suffix = (tu_id or "noid")[-8:]
                     yield {
@@ -444,54 +487,58 @@ def _convert_session_records(
                         "action_id": (
                             f"tool_{tool_iteration}_{tool_name}_{tu_id_suffix}"
                         ),
-                        "agent_id": agent_id,
+                        "agent_id": lane_id,
                         "iteration": tool_iteration,
                         "ts_start": tool_ts_start,
                         "ts_end": tool_ts_end,
                         "data": tool_data,
                     }
-                    n_tool_actions += 1
+                    state.n_tool_actions += 1
 
-                    last_lane_ts = max(last_lane_ts or 0.0, tool_ts_end)
+                    state.last_lane_ts = max(state.last_lane_ts or 0.0, tool_ts_end)
 
-    for orphan_id, pending in pending_tool_uses.items():
-        orphan_ts = pending["ts_start"]
-        orphan_id_suffix = orphan_id[-8:] if orphan_id else "noid"
-        yield {
-            "type": "action",
-            "action_type": "tool_exec",
-            "action_id": (
-                f"tool_{pending['iteration']}_{pending['tool_name']}"
-                f"_{orphan_id_suffix}_orphan"
-            ),
-            "agent_id": agent_id,
-            "iteration": pending["iteration"],
-            "ts_start": orphan_ts,
-            "ts_end": orphan_ts,
-            "data": {
-                "tool_name": pending["tool_name"],
-                "tool_args": pending["tool_args"],
-                "tool_result": "",
-                "duration_ms": 0.0,
-                "success": False,
-                "note": (
-                    f"orphan tool_use: no tool_result received for id "
-                    f"{orphan_id[:12]}... (partial write or interrupted session)"
+    for lane_id, state in lane_states.items():
+        for orphan_id, pending in state.pending_tool_uses.items():
+            orphan_ts = pending["ts_start"]
+            orphan_id_suffix = orphan_id[-8:] if orphan_id else "noid"
+            if state.first_ts is None:
+                state.first_ts = orphan_ts
+            state.last_ts = max(state.last_ts or 0.0, orphan_ts)
+            yield {
+                "type": "action",
+                "action_type": "tool_exec",
+                "action_id": (
+                    f"tool_{pending['iteration']}_{pending['tool_name']}"
+                    f"_{orphan_id_suffix}_orphan"
                 ),
-            },
-        }
-        n_tool_actions += 1
+                "agent_id": lane_id,
+                "iteration": pending["iteration"],
+                "ts_start": orphan_ts,
+                "ts_end": orphan_ts,
+                "data": {
+                    "tool_name": pending["tool_name"],
+                    "tool_args": pending["tool_args"],
+                    "tool_result": "",
+                    "duration_ms": 0.0,
+                    "success": False,
+                    "note": (
+                        f"orphan tool_use: no tool_result received for id "
+                        f"{orphan_id[:12]}... (partial write or interrupted session)"
+                    ),
+                },
+            }
+            state.n_tool_actions += 1
 
-    yield {
-        "__summary__": True,
-        "agent_id": agent_id,
-        "n_iterations": n_llm_actions,
-        "n_tool_actions": n_tool_actions,
-        "total_llm_ms": round(total_llm_ms, 2),
-        "total_tool_ms": round(total_tool_ms, 2),
-        "total_tokens": total_tokens,
-        "elapsed_s": round((last_ts or 0.0) - (first_ts or 0.0), 3),
-    }
+        yield {
+            "__summary__": True,
+            "agent_id": lane_id,
+            "n_iterations": state.n_llm_actions,
+            "n_tool_actions": state.n_tool_actions,
+            "total_llm_ms": round(state.total_llm_ms, 2),
+            "total_tool_ms": round(state.total_tool_ms, 2),
+            "total_tokens": state.total_tokens,
+            "elapsed_s": round((state.last_ts or 0.0) - (state.first_ts or 0.0), 3),
+        }
 
 def import_claude_code_session(
     *,
