@@ -9,13 +9,20 @@ from typing import Any, Awaitable, Callable
 
 
 @dataclass
-class SimulatePrepareConfig:
-    """Union of inputs accepted by scaffold prepare adapters."""
+class SimulateLLMConfig:
+    """LLM settings needed by prepare adapters that instantiate agents."""
 
-    agent_id: str
     api_base: str
     model: str
     api_key: str
+
+
+@dataclass
+class SimulatePrepareConfig:
+    """Inputs accepted by scaffold prepare adapters."""
+
+    agent_id: str
+    llm: SimulateLLMConfig | None
     command_timeout_s: float
     task_timeout_s: float
     repos_root: Path | None

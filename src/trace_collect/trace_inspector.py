@@ -653,7 +653,10 @@ def cmd_timeline(data: TraceData) -> None:
 
     scaffold = data.metadata.get("scaffold", "")
     mode = data.metadata.get("mode", "collect")
-    model = data.metadata.get("model") or data.metadata.get("local_model", "")
+    simulate_mode = data.metadata.get("simulate_mode", "")
+    model = data.metadata.get("model", "")
+    if not model and not (mode == "simulate" and simulate_mode == "cloud_model"):
+        model = data.metadata.get("local_model", "")
 
     print(f"Trace: {data.path.name}")
     print(f"  Scaffold: {scaffold}  Mode: {mode}")
@@ -661,7 +664,10 @@ def cmd_timeline(data: TraceData) -> None:
         print(f"  Model: {model}")
     if mode == "simulate":
         src = data.metadata.get("source_model", "?")
-        local = data.metadata.get("local_model", "?")
+        if simulate_mode == "cloud_model":
+            local = "cloud replay"
+        else:
+            local = data.metadata.get("local_model", "?")
         print(f"  Simulate: {src} → {local}")
 
     for agent_id in data.agents:

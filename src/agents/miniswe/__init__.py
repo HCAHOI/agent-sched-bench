@@ -32,11 +32,14 @@ def _register_miniswe_prepare() -> None:
     ) -> PreparedWorkspace:
         from agents.miniswe.agent import MiniSWECodeAgent
 
+        if config.llm is None:
+            raise ValueError("MiniSWE prepare requires LLM settings")
+
         agent = MiniSWECodeAgent(
             agent_id=config.agent_id,
-            api_base=config.api_base,
-            model=config.model,
-            api_key=config.api_key,
+            api_base=config.llm.api_base,
+            model=config.llm.model,
+            api_key=config.llm.api_key,
             command_timeout_s=config.command_timeout_s,
             task_timeout_s=config.task_timeout_s,
             repos_root=str(config.repos_root) if config.repos_root else None,

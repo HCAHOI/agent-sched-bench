@@ -1,14 +1,14 @@
-
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import dataclasses
 
 from agents.base import TraceAction
 from harness.metrics_client import VLLMMetricsClient
@@ -17,13 +17,39 @@ from llm_call import create_async_openai_client
 from trace_collect.scaffold_registry import (
     PreparedWorkspace,
     SimulatePrepareConfig,
+    SimulateLLMConfig,
     get_prepare,
 )
 
 logger = logging.getLogger(__name__)
 
+
 class SimulateError(Exception):
     """Raised when simulation encounters a fatal issue."""
+
+
+@dataclass(slots=True)
+class LoadedTraceSession:
+    """Resolved replay inputs for one source trace."""
+
+    source_trace: Path
+    task_source: Path
+    agent_id: str
+    scaffold: str
+    metadata: dict[str, Any] | None
+    summary: dict[str, Any] | None
+    task: dict[str, Any]
+    actions: list[dict[str, Any]]
+    iterations: dict[int, dict[str, Any]]
+
+
+@dataclass(slots=True)
+class PreparedTraceSession:
+    """Prepared workspace plus the loaded source-trace context."""
+
+    loaded: LoadedTraceSession
+    prepared: PreparedWorkspace
+
 
 async def _call_local_model_streaming(
     client: Any,
@@ -58,6 +84,7 @@ async def _call_local_model_streaming(
     tpot_ms = gen_ms / max(1, n_tokens - 1) if n_tokens > 1 else 0.0
     return ttft_ms, tpot_ms, total_ms
 
+
 async def _exec_tool(
     agent_id: str,
     repo_dir: Path,
@@ -84,21 +111,33 @@ async def _exec_tool(
     duration_ms = (time.monotonic() - t0) * 1000
     return tool_result, duration_ms, tool_success
 
-def load_trace_actions(
+
+def _group_actions_by_iteration(
+    actions: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Group loaded trace actions into the local-model iteration shape."""
+
+    iterations: dict[int, dict[str, Any]] = {}
+    for action in actions:
+        it = int(action.get("iteration", 0))
+        if it not in iterations:
+            iterations[it] = {"llm": None, "tools": []}
+        if action.get("action_type") == "llm_call":
+            iterations[it]["llm"] = action
+        elif action.get("action_type") == "tool_exec":
+            iterations[it]["tools"].append(action)
+    return iterations
+
+
+def _parse_trace_session_file(
     trace_path: Path,
-    agent_id: str,
-) -> tuple[dict[int, dict[str, Any]], dict[str, Any] | None]:
-    """Load canonical trace actions grouped by iteration, plus optional summary.
+) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
+    """Read one canonical trace once and extract the primary replay lane."""
 
-    Returns:
-        (iterations dict {iteration_num: {"llm": action_dict, "tools": [action_dict, ...]}},
-         summary or None)
-
-    Raises:
-        SimulateError: if agent_id not found or no action records exist.
-    """
+    metadata: dict[str, Any] | None = None
+    first_agent_id: str | None = None
     actions: list[dict[str, Any]] = []
-    summary: dict[str, Any] | None = None
+    summaries: dict[str, dict[str, Any]] = {}
 
     with open(trace_path, encoding="utf-8") as f:
         for line in f:
@@ -109,27 +148,36 @@ def load_trace_actions(
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if record.get("agent_id") != agent_id:
+
+            record_type = record.get("type")
+            if record_type == "trace_metadata":
+                metadata = record
                 continue
-            rtype = record.get("type")
-            if rtype == "action":
-                actions.append(record)
-            elif rtype == "summary":
-                summary = record
 
-    if not actions:
-        raise SimulateError(f"No action records found for agent_id={agent_id!r}")
+            agent_id = record.get("agent_id")
+            if record_type == "action" and agent_id:
+                if first_agent_id is None:
+                    first_agent_id = agent_id
+                if agent_id == first_agent_id:
+                    actions.append(record)
+                continue
 
-    iterations: dict[int, dict[str, Any]] = {}
-    for a in actions:
-        it = a.get("iteration", 0)
-        if it not in iterations:
-            iterations[it] = {"llm": None, "tools": []}
-        if a.get("action_type") == "llm_call":
-            iterations[it]["llm"] = a
-        elif a.get("action_type") == "tool_exec":
-            iterations[it]["tools"].append(a)
-    return iterations, summary
+            if record_type == "summary" and agent_id:
+                summaries[agent_id] = record
+
+    if first_agent_id is None or not actions:
+        raise SimulateError(f"No action records with agent_id found in {trace_path}")
+
+    actions.sort(
+        key=lambda action: (
+            float(action.get("ts_start", 0.0)),
+            float(action.get("ts_end", 0.0)),
+            int(action.get("iteration", 0)),
+            str(action.get("action_id", "")),
+        )
+    )
+    return first_agent_id, metadata, actions, summaries.get(first_agent_id)
+
 
 def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
     tasks = json.loads(task_source.read_text(encoding="utf-8"))
@@ -138,73 +186,259 @@ def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
             return task
     raise SimulateError(f"Task {agent_id!r} not found in {task_source}")
 
-async def simulate(
-    *,
-    source_trace: Path,
-    task_source: Path,
-    repos_root: Path,
-    output_dir: Path,
-    api_base: str,
-    api_key: str,
-    model: str,
-    command_timeout_s: float = 120.0,
-    task_timeout_s: float = 1200.0,
-    max_context_tokens: int = 256_000,
-    metrics_url: str | None = None,
-    warmup_skip_iterations: int = 0,
-) -> Path:
-    metadata = _load_trace_metadata(source_trace)
-    _validate_simulation_source_trace(metadata)
-    first_agent_id = _detect_agent_id(source_trace)
-    iterations, summary = load_trace_actions(source_trace, first_agent_id)
-    agent_id = first_agent_id
-    scaffold = _detect_scaffold(source_trace)
 
+def _iteration_count(actions: list[dict[str, Any]]) -> int:
+    return len({int(action.get("iteration", 0)) for action in actions})
+
+
+def _sanitize_run_label(value: str) -> str:
+    return value.replace("/", "-").replace(":", "-").replace(" ", "-")
+
+
+def _build_run_id(*, mode: str, model: str | None) -> str:
+    label = model if model else mode
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    return f"simulate_{_sanitize_run_label(label)}_{ts}"
+
+
+def _coerce_timestamp(
+    value: Any,
+    *,
+    field: str,
+    source_trace: Path,
+    action_id: str,
+) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise SimulateError(
+            f"{source_trace} action {action_id!r} is missing a numeric {field}"
+        ) from exc
+
+
+def _load_trace_session(source_trace: Path, task_source: Path) -> LoadedTraceSession:
+    agent_id, metadata, actions, summary = _parse_trace_session_file(source_trace)
+    _validate_simulation_source_trace(metadata)
+    scaffold = metadata.get("scaffold", "unknown") if metadata else "unknown"
     task = _find_task(task_source, agent_id)
     _validate_simulation_task(scaffold, task)
-    source_model = (summary or {}).get("model", "unknown")
-    logger.info(
-        "Simulating %s [scaffold=%s]: %d iterations from %s, local model=%s",
-        agent_id,
-        scaffold,
-        len(iterations),
-        source_model,
-        model,
+    return LoadedTraceSession(
+        source_trace=source_trace,
+        task_source=task_source,
+        agent_id=agent_id,
+        scaffold=scaffold,
+        metadata=metadata,
+        summary=summary,
+        task=task,
+        actions=actions,
+        iterations=_group_actions_by_iteration(actions),
     )
 
-    prepare_callable = get_prepare(scaffold)
-    prepare_config = SimulatePrepareConfig(
+
+def _load_trace_manifest(
+    trace_manifest: Path,
+    *,
+    default_task_source: Path,
+) -> list[tuple[Path, Path]]:
+    try:
+        raw = json.loads(trace_manifest.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SimulateError(f"Invalid trace manifest JSON: {trace_manifest}") from exc
+    if not isinstance(raw, list) or not raw:
+        raise SimulateError("trace manifest must be a non-empty JSON array")
+
+    base_dir = trace_manifest.parent
+    entries: list[tuple[Path, Path]] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise SimulateError(
+                f"trace manifest entry {index} must be an object with source_trace"
+            )
+        source_value = entry.get("source_trace")
+        if not source_value:
+            raise SimulateError(f"trace manifest entry {index} is missing source_trace")
+        task_value = entry.get("task_source")
+        source_path = Path(source_value)
+        task_path = Path(task_value) if task_value else default_task_source
+        if not source_path.is_absolute():
+            source_path = (base_dir / source_path).resolve()
+        if task_value and not task_path.is_absolute():
+            task_path = (base_dir / task_path).resolve()
+        entries.append((source_path, task_path))
+    return entries
+
+
+def _validate_loaded_sessions(
+    sessions: list[LoadedTraceSession],
+    *,
+    mode: str,
+    replay_speed: float,
+) -> None:
+    if replay_speed <= 0:
+        raise ValueError("replay_speed must be > 0")
+    if not sessions:
+        raise SimulateError("No trace sessions were loaded")
+    if mode == "local_model" and len(sessions) != 1:
+        raise SimulateError("local_model mode supports exactly one source trace")
+    if mode == "cloud_model":
+        unsupported = sorted(
+            {session.scaffold for session in sessions if session.scaffold != "openclaw"}
+        )
+        if unsupported:
+            raise NotImplementedError(
+                "cloud_model replay currently supports only repo-backed "
+                f"OpenClaw traces, got: {unsupported}"
+            )
+
+    seen_agent_ids: set[str] = set()
+    for session in sessions:
+        if session.agent_id in seen_agent_ids:
+            raise SimulateError(
+                f"Duplicate agent_id across replay sessions: {session.agent_id!r}"
+            )
+        seen_agent_ids.add(session.agent_id)
+
+        for action in session.actions:
+            action_id = str(action.get("action_id", ""))
+            ts_start = _coerce_timestamp(
+                action.get("ts_start"),
+                field="ts_start",
+                source_trace=session.source_trace,
+                action_id=action_id,
+            )
+            ts_end = _coerce_timestamp(
+                action.get("ts_end"),
+                field="ts_end",
+                source_trace=session.source_trace,
+                action_id=action_id,
+            )
+            if ts_end < ts_start:
+                raise SimulateError(
+                    f"{session.source_trace} action {action_id!r} has ts_end < ts_start"
+                )
+
+
+def _build_prepare_config(
+    *,
+    agent_id: str,
+    api_base: str | None,
+    api_key: str | None,
+    model: str | None,
+    command_timeout_s: float,
+    task_timeout_s: float,
+    repos_root: Path,
+    max_context_tokens: int,
+) -> SimulatePrepareConfig:
+    llm = None
+    if api_base is not None or api_key is not None or model is not None:
+        if api_base is None or api_key is None or model is None:
+            raise ValueError("prepare LLM config must be all-set or all-None")
+        llm = SimulateLLMConfig(api_base=api_base, api_key=api_key, model=model)
+    return SimulatePrepareConfig(
         agent_id=agent_id,
-        api_base=api_base,
-        model=model,
-        api_key=api_key,
+        llm=llm,
         command_timeout_s=command_timeout_s,
         task_timeout_s=task_timeout_s,
         repos_root=Path(repos_root) if repos_root else None,
         max_context_tokens=max_context_tokens,
     )
-    prepared: PreparedWorkspace = await prepare_callable(task, prepare_config)
-    repo_dir = prepared.repo_dir
+
+
+async def _prepare_trace_session(
+    loaded: LoadedTraceSession,
+    *,
+    api_base: str | None,
+    api_key: str | None,
+    model: str | None,
+    command_timeout_s: float,
+    task_timeout_s: float,
+    repos_root: Path,
+    max_context_tokens: int,
+) -> PreparedTraceSession:
+    prepare_callable = get_prepare(loaded.scaffold)
+    prepare_config = _build_prepare_config(
+        agent_id=loaded.agent_id,
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        command_timeout_s=command_timeout_s,
+        task_timeout_s=task_timeout_s,
+        repos_root=repos_root,
+        max_context_tokens=max_context_tokens,
+    )
+    prepared = await prepare_callable(loaded.task, prepare_config)
+    return PreparedTraceSession(loaded=loaded, prepared=prepared)
+
+
+def _log_trace_metadata(
+    *,
+    trace_logger: TraceLogger,
+    mode: str,
+    sessions: list[LoadedTraceSession],
+    replay_speed: float,
+    source_trace: Path | None,
+    trace_manifest: Path | None,
+    api_base: str | None,
+    model: str | None,
+) -> None:
+    scaffolds = {session.scaffold for session in sessions}
+    source_models = [
+        (session.summary or {}).get("model", "unknown") for session in sessions
+    ]
+    metadata: dict[str, Any] = {
+        "scaffold": sessions[0].scaffold if len(scaffolds) == 1 else "mixed",
+        "mode": "simulate",
+        "simulate_mode": mode,
+        "replay_speed": replay_speed,
+        "source_trace_count": len(sessions),
+        "source_models": source_models,
+    }
+    if source_trace is not None:
+        metadata["source_trace"] = str(source_trace)
+    if trace_manifest is not None:
+        metadata["trace_manifest"] = str(trace_manifest)
+        metadata["source_traces"] = [str(session.source_trace) for session in sessions]
+    if mode == "local_model":
+        metadata["source_model"] = source_models[0]
+        metadata["local_model"] = model
+        metadata["local_api_base"] = api_base
+        metadata["n_source_iterations"] = _iteration_count(sessions[0].actions)
+    else:
+        metadata["source_model"] = (
+            source_models[0] if len(set(source_models)) == 1 else "multiple"
+        )
+        metadata["replay_target"] = "cloud_replay"
+    trace_logger.log_metadata(**metadata)
+
+
+async def _run_local_model_simulation(
+    prepared_session: PreparedTraceSession,
+    *,
+    trace_logger: TraceLogger,
+    api_base: str,
+    api_key: str,
+    model: str,
+    command_timeout_s: float,
+    metrics_url: str | None,
+    warmup_skip_iterations: int,
+) -> None:
+    loaded = prepared_session.loaded
+    iterations = loaded.iterations
+    source_model = (loaded.summary or {}).get("model", "unknown")
+    source_success = (loaded.summary or {}).get("success")
+    logger.info(
+        "Simulating %s [scaffold=%s]: %d iterations from %s, local model=%s",
+        loaded.agent_id,
+        loaded.scaffold,
+        len(iterations),
+        source_model,
+        model,
+    )
 
     metrics_client = VLLMMetricsClient(metrics_url=metrics_url)
     logger.info(
         "vLLM metrics client: %s",
         f"enabled (url={metrics_url})" if metrics_client.is_enabled else "disabled",
-    )
-
-    run_id = f"simulate_{model.replace('/', '-').replace(':', '-')}_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    trace_logger = TraceLogger(output_path, run_id)
-
-    trace_logger.log_metadata(
-        scaffold=_detect_scaffold(source_trace),
-        mode="simulate",
-        source_trace=str(source_trace),
-        source_model=source_model,
-        local_model=model,
-        local_api_base=api_base,
-        n_source_iterations=len(iterations),
     )
 
     client = create_async_openai_client(
@@ -237,7 +471,7 @@ async def simulate(
 
             try:
                 ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
-                    client, model, messages_in, n_tokens,
+                    client, model, messages_in, n_tokens
                 )
             except Exception as exc:
                 logger.error("Iteration %d: LLM call failed: %s", it_num, exc)
@@ -251,8 +485,8 @@ async def simulate(
             llm_record = TraceAction(
                 action_type="llm_call",
                 action_id=f"llm_{it_num}",
-                agent_id=agent_id,
-                program_id=agent_id,
+                agent_id=loaded.agent_id,
+                program_id=loaded.agent_id,
                 iteration=it_num,
                 ts_start=ts_start,
                 ts_end=ts_after_llm,
@@ -264,7 +498,7 @@ async def simulate(
                     "llm_latency_ms": llm_latency_ms,
                     "ttft_ms": ttft_ms,
                     "tpot_ms": tpot_ms,
-                    "simulate_source": str(source_trace),
+                    "simulate_source": str(loaded.source_trace),
                     "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
                     "sim_metrics": {
                         "timing": {
@@ -279,7 +513,7 @@ async def simulate(
                     },
                 },
             )
-            trace_logger.log_trace_action(agent_id, llm_record)
+            trace_logger.log_trace_action(loaded.agent_id, llm_record)
 
             from agents.openclaw.simulate_adapter import is_mcp_tool_call
 
@@ -300,7 +534,10 @@ async def simulate(
                     sim_provenance = "replayed_from_trace"
                 else:
                     tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                        agent_id, repo_dir, tool_name, tool_args,
+                        loaded.agent_id,
+                        prepared_session.prepared.repo_dir,
+                        tool_name,
+                        tool_args,
                         command_timeout_s,
                     )
                     tool_ts_end = time.time()
@@ -310,8 +547,8 @@ async def simulate(
                 tool_record = TraceAction(
                     action_type="tool_exec",
                     action_id=f"tool_{it_num}_{tool_name}",
-                    agent_id=agent_id,
-                    program_id=agent_id,
+                    agent_id=loaded.agent_id,
+                    program_id=loaded.agent_id,
                     iteration=it_num,
                     ts_start=tool_ts_start,
                     ts_end=tool_ts_end,
@@ -327,51 +564,371 @@ async def simulate(
                         },
                     },
                 )
-                trace_logger.log_trace_action(agent_id, tool_record)
+                trace_logger.log_trace_action(loaded.agent_id, tool_record)
 
             succeeded_iters += 1
 
             logger.info(
                 "[%d/%d] iter %d: ttft=%.1fms tpot=%.2fms llm=%.0fms tool=%.0fms",
-                i + 1, total_iters, it_num,
-                ttft_ms, tpot_ms, llm_latency_ms, total_tool_ms,
+                i + 1,
+                total_iters,
+                it_num,
+                ttft_ms,
+                tpot_ms,
+                llm_latency_ms,
+                total_tool_ms,
             )
-
     finally:
         wall_end = time.time()
 
         simulate_summary: dict[str, Any] = {
-            "agent_id": agent_id,
-            "task_id": agent_id,
+            "agent_id": loaded.agent_id,
+            "task_id": loaded.agent_id,
+            "success": failed_iters == 0 and succeeded_iters == total_iters,
+            "source_success": source_success,
             "n_iterations": total_iters,
             "elapsed_s": wall_end - wall_start,
-            "source_trace": str(source_trace),
+            "source_trace": str(loaded.source_trace),
             "source_model": source_model,
             "local_model": model,
             "local_api_base": api_base,
             "succeeded_iterations": succeeded_iters,
             "failed_iterations": failed_iters,
         }
-        trace_logger.log_summary(agent_id, simulate_summary)
-        trace_logger.close()
+        trace_logger.log_summary(loaded.agent_id, simulate_summary)
 
-        prepared.cleanup()
+
+async def _sleep_until_offset(
+    *,
+    replay_zero_monotonic: float,
+    target_offset_s: float,
+) -> None:
+    delay_s = target_offset_s - (time.monotonic() - replay_zero_monotonic)
+    if delay_s > 0:
+        await asyncio.sleep(delay_s)
+
+
+async def _run_cloud_model_replay(
+    prepared_sessions: list[PreparedTraceSession],
+    *,
+    trace_logger: TraceLogger,
+    replay_speed: float,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+) -> None:
+    replay_zero_monotonic = time.monotonic()
+    await asyncio.gather(
+        *[
+            _replay_cloud_model_session(
+                prepared_session,
+                trace_logger=trace_logger,
+                replay_zero_monotonic=replay_zero_monotonic,
+                replay_speed=replay_speed,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
+            for prepared_session in prepared_sessions
+        ]
+    )
+
+
+async def _replay_cloud_model_session(
+    prepared_session: PreparedTraceSession,
+    *,
+    trace_logger: TraceLogger,
+    replay_zero_monotonic: float,
+    replay_speed: float,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+) -> None:
+    from agents.openclaw.simulate_adapter import is_mcp_tool_call
+
+    loaded = prepared_session.loaded
+    source_model = (loaded.summary or {}).get("model", "unknown")
+    source_success = (loaded.summary or {}).get("success")
+    source_zero = _coerce_timestamp(
+        loaded.actions[0].get("ts_start"),
+        field="ts_start",
+        source_trace=loaded.source_trace,
+        action_id=str(loaded.actions[0].get("action_id", "")),
+    )
+
+    logger.info(
+        "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx",
+        loaded.agent_id,
+        loaded.scaffold,
+        len(loaded.actions),
+        source_model,
+        replay_speed,
+    )
+
+    wall_start = time.time()
+    succeeded_actions = 0
+    failed_actions = 0
+
+    for action in loaded.actions:
+        action_id = str(action.get("action_id", ""))
+        action_type = str(action.get("action_type", ""))
+        iteration = int(action.get("iteration", 0))
+        data = action.get("data", {})
+        action_ts_start = _coerce_timestamp(
+            action.get("ts_start"),
+            field="ts_start",
+            source_trace=loaded.source_trace,
+            action_id=action_id,
+        )
+        action_ts_end = _coerce_timestamp(
+            action.get("ts_end"),
+            field="ts_end",
+            source_trace=loaded.source_trace,
+            action_id=action_id,
+        )
+        source_duration_s = max(0.0, action_ts_end - action_ts_start)
+
+        await _sleep_until_offset(
+            replay_zero_monotonic=replay_zero_monotonic,
+            target_offset_s=(action_ts_start - source_zero) / replay_speed,
+        )
+
+        try:
+            if action_type == "llm_call":
+                record_ts_start = time.time()
+                if source_duration_s > 0:
+                    await asyncio.sleep(source_duration_s / replay_speed)
+                record_ts_end = time.time()
+                record = TraceAction(
+                    action_type="llm_call",
+                    action_id=action_id or f"llm_{iteration}",
+                    agent_id=loaded.agent_id,
+                    program_id=loaded.agent_id,
+                    iteration=iteration,
+                    ts_start=record_ts_start,
+                    ts_end=record_ts_end,
+                    data={
+                        "messages_in": data.get("messages_in"),
+                        "raw_response": data.get("raw_response", {}),
+                        "prompt_tokens": data.get("prompt_tokens", 0),
+                        "completion_tokens": data.get("completion_tokens", 0),
+                        "llm_latency_ms": (record_ts_end - record_ts_start) * 1000,
+                        "simulate_source": str(loaded.source_trace),
+                        "source_llm_latency_ms": data.get("llm_latency_ms"),
+                        "replay_mode": "cloud_model",
+                        "replay_speed": replay_speed,
+                        "sim_metrics": {
+                            "warmup": iteration < warmup_skip_iterations,
+                        },
+                    },
+                )
+                trace_logger.log_trace_action(loaded.agent_id, record)
+                succeeded_actions += 1
+                continue
+
+            if action_type != "tool_exec":
+                logger.warning(
+                    "Skipping unsupported action_type=%s in %s",
+                    action_type,
+                    loaded.source_trace,
+                )
+                continue
+
+            tool_name = data.get("tool_name")
+            tool_args = data.get("tool_args", "{}")
+            if not tool_name:
+                logger.warning(
+                    "Skipping tool action without tool_name in %s",
+                    loaded.source_trace,
+                )
+                continue
+
+            record_ts_start = time.time()
+            source_duration_ms = float(data.get("duration_ms") or 0.0)
+            if is_mcp_tool_call(tool_name):
+                if source_duration_ms > 0:
+                    await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
+                tool_result = data.get("tool_result", "")
+                tool_success = bool(data.get("success", True))
+                duration_ms = (time.time() - record_ts_start) * 1000
+                replay_source = "replayed_from_trace"
+            else:
+                tool_result, duration_ms, tool_success = await _exec_tool(
+                    loaded.agent_id,
+                    prepared_session.prepared.repo_dir,
+                    tool_name,
+                    tool_args,
+                    command_timeout_s,
+                )
+                replay_source = "executed_locally"
+            record_ts_end = time.time()
+            tool_record = TraceAction(
+                action_type="tool_exec",
+                action_id=action_id or f"tool_{iteration}_{tool_name}",
+                agent_id=loaded.agent_id,
+                program_id=loaded.agent_id,
+                iteration=iteration,
+                ts_start=record_ts_start,
+                ts_end=record_ts_end,
+                data={
+                    "tool_name": tool_name,
+                    "tool_args": tool_args,
+                    "tool_result": tool_result,
+                    "duration_ms": duration_ms,
+                    "success": tool_success,
+                    "simulate_source": str(loaded.source_trace),
+                    "source_duration_ms": source_duration_ms,
+                    "replay_mode": "cloud_model",
+                    "replay_speed": replay_speed,
+                    "replay_source": replay_source,
+                    "sim_metrics": {
+                        "warmup": iteration < warmup_skip_iterations,
+                        "source": replay_source,
+                    },
+                },
+            )
+            trace_logger.log_trace_action(loaded.agent_id, tool_record)
+            succeeded_actions += 1
+        except Exception as exc:
+            logger.error(
+                "Replay action failed for %s action=%s: %s",
+                loaded.agent_id,
+                action_id,
+                exc,
+            )
+            failed_actions += 1
+
+    wall_end = time.time()
+    trace_logger.log_summary(
+        loaded.agent_id,
+        {
+            "agent_id": loaded.agent_id,
+            "task_id": loaded.agent_id,
+            "success": failed_actions == 0,
+            "source_success": source_success,
+            "n_iterations": _iteration_count(loaded.actions),
+            "elapsed_s": wall_end - wall_start,
+            "source_trace": str(loaded.source_trace),
+            "source_model": source_model,
+            "replay_mode": "cloud_model",
+            "replay_speed": replay_speed,
+            "succeeded_actions": succeeded_actions,
+            "failed_actions": failed_actions,
+        },
+    )
+
+
+async def simulate(
+    *,
+    source_trace: Path | None = None,
+    trace_manifest: Path | None = None,
+    task_source: Path,
+    repos_root: Path,
+    output_dir: Path,
+    mode: str = "local_model",
+    api_base: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    command_timeout_s: float = 120.0,
+    task_timeout_s: float = 1200.0,
+    max_context_tokens: int = 256_000,
+    metrics_url: str | None = None,
+    warmup_skip_iterations: int = 0,
+    replay_speed: float = 1.0,
+) -> Path:
+    if source_trace is not None and trace_manifest is not None:
+        raise ValueError("source_trace and trace_manifest are mutually exclusive")
+    if source_trace is None and trace_manifest is None:
+        raise ValueError("simulate requires source_trace or trace_manifest")
+    if mode not in {"local_model", "cloud_model"}:
+        raise ValueError(f"Unsupported simulate mode: {mode}")
+
+    if trace_manifest is not None:
+        trace_inputs = _load_trace_manifest(
+            trace_manifest,
+            default_task_source=task_source.resolve(),
+        )
+    else:
+        assert source_trace is not None
+        trace_inputs = [(source_trace, task_source)]
+
+    loaded_sessions = [
+        _load_trace_session(source_path, task_path)
+        for source_path, task_path in trace_inputs
+    ]
+    _validate_loaded_sessions(
+        loaded_sessions,
+        mode=mode,
+        replay_speed=replay_speed,
+    )
+
+    prepared_sessions: list[PreparedTraceSession] = []
+    trace_logger: TraceLogger | None = None
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        for loaded in loaded_sessions:
+            prepared_sessions.append(
+                await _prepare_trace_session(
+                    loaded,
+                    api_base=api_base,
+                    api_key=api_key,
+                    model=model,
+                    command_timeout_s=command_timeout_s,
+                    task_timeout_s=task_timeout_s,
+                    repos_root=repos_root,
+                    max_context_tokens=max_context_tokens,
+                )
+            )
+
+        run_id = _build_run_id(mode=mode, model=model)
+        trace_logger = TraceLogger(output_path, run_id)
+        _log_trace_metadata(
+            trace_logger=trace_logger,
+            mode=mode,
+            sessions=loaded_sessions,
+            replay_speed=replay_speed,
+            source_trace=source_trace,
+            trace_manifest=trace_manifest,
+            api_base=api_base,
+            model=model,
+        )
+
+        if mode == "local_model":
+            assert trace_logger is not None
+            assert api_base is not None
+            assert api_key is not None
+            assert model is not None
+            await _run_local_model_simulation(
+                prepared_sessions[0],
+                trace_logger=trace_logger,
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                command_timeout_s=command_timeout_s,
+                metrics_url=metrics_url,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
+        else:
+            assert trace_logger is not None
+            await _run_cloud_model_replay(
+                prepared_sessions,
+                trace_logger=trace_logger,
+                replay_speed=replay_speed,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
+    finally:
+        if trace_logger is not None:
+            trace_logger.close()
+        for prepared in prepared_sessions:
+            prepared.prepared.cleanup()
 
     trace_file = output_path / f"{run_id}.jsonl"
-    logger.info(
-        "Simulate complete: %s iterations=%d/%d elapsed=%.1fs -> %s",
-        agent_id,
-        succeeded_iters,
-        total_iters,
-        wall_end - wall_start,
-        trace_file,
-    )
+    logger.info("Simulate complete [%s] -> %s", mode, trace_file)
     return trace_file
 
+
 def _validate_simulation_task(scaffold: str, task: dict[str, Any]) -> None:
-    if scaffold == "openclaw" and (
-        not task.get("repo") or not task.get("base_commit")
-    ):
+    if scaffold == "openclaw" and (not task.get("repo") or not task.get("base_commit")):
         raise NotImplementedError(
             "Simulate mode requires repo-backed OpenClaw tasks with repo and "
             "base_commit."
@@ -385,37 +942,3 @@ def _validate_simulation_source_trace(metadata: dict[str, Any] | None) -> None:
         raise NotImplementedError("Simulate mode requires repo-backed OpenClaw traces.")
     if metadata.get("task_shape") not in (None, "swe_patch"):
         raise NotImplementedError("Simulate mode requires repo-backed OpenClaw traces.")
-
-def _detect_scaffold(trace_path: Path) -> str:
-    metadata = _load_trace_metadata(trace_path)
-    return metadata.get("scaffold", "unknown") if metadata else "unknown"
-
-def _load_trace_metadata(trace_path: Path) -> dict[str, Any] | None:
-    with open(trace_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("type") == "trace_metadata":
-                return record
-            if record.get("type") in ("step", "summary", "action"):
-                break
-    return None
-
-def _detect_agent_id(trace_path: Path) -> str:
-    with open(trace_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("type") == "action" and record.get("agent_id"):
-                return record["agent_id"]
-    raise SimulateError(f"No action records with agent_id found in {trace_path}")

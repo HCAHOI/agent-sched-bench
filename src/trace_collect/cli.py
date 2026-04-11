@@ -116,12 +116,30 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Simulate a trace with local model timing (TTFT/TPOT).",
     )
-    parser.add_argument(
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
         "--source-trace",
-        required=True,
         help="Path to the source API trace JSONL file.",
     )
+    source_group.add_argument(
+        "--trace-manifest",
+        default=None,
+        help=(
+            "JSON manifest describing one or more replay traces. "
+            "Each entry must contain source_trace and may override task_source."
+        ),
+    )
     add_llm_config_arguments(parser)
+    parser.add_argument(
+        "--mode",
+        choices=["local_model", "cloud_model"],
+        default="local_model",
+        help=(
+            "Simulation mode. local_model replays one trace through a local "
+            "OpenAI-compatible model; cloud_model replays one or more traces "
+            "using source-trace timing without issuing any LLM requests."
+        ),
+    )
     parser.add_argument(
         "--task-source",
         default="data/swebench_verified/tasks.json",
@@ -170,6 +188,15 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "collection time; the flag controls analysis treatment only. "
             "Default 0 (no warmup tagging). Opt in only when first-iteration "
             "latency variance is empirically >20%% vs steady-state."
+        ),
+    )
+    parser.add_argument(
+        "--replay-speed",
+        type=float,
+        default=1.0,
+        help=(
+            "Wall-clock acceleration factor for cloud_model replay. "
+            "Example: --replay-speed 50 replays source timing at 50x."
         ),
     )
     parser.add_argument(
@@ -322,9 +349,41 @@ def _run_simulate(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    from trace_collect.simulator import simulate
+    simulate_kwargs = {
+        "source_trace": Path(args.source_trace) if args.source_trace else None,
+        "trace_manifest": Path(args.trace_manifest) if args.trace_manifest else None,
+        "task_source": Path(args.task_source),
+        "repos_root": Path(args.repos_root),
+        "output_dir": Path(args.output_dir),
+        "mode": args.mode,
+        "command_timeout_s": args.command_timeout,
+        "task_timeout_s": args.task_timeout,
+        "warmup_skip_iterations": args.warmup_skip_iterations,
+        "replay_speed": args.replay_speed,
+    }
+
+    if args.mode == "cloud_model":
+        if args.metrics_url:
+            print(
+                "ERROR: cloud_model replay does not support --metrics-url.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        trace_file = asyncio.run(simulate(**simulate_kwargs))
+        print(f"Simulate trace written to: {trace_file}")
+        return
+
+    if args.trace_manifest:
+        print(
+            "ERROR: local_model mode accepts only --source-trace, not --trace-manifest.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if not args.api_base:
         print(
-            "ERROR: simulate requires --api-base for the target OpenAI-compatible endpoint.",
+            "ERROR: local_model simulate requires --api-base for the target "
+            "OpenAI-compatible endpoint.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -346,21 +405,13 @@ def _run_simulate(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    from trace_collect.simulator import simulate
-
     trace_file = asyncio.run(
         simulate(
-            source_trace=Path(args.source_trace),
-            task_source=Path(args.task_source),
-            repos_root=Path(args.repos_root),
-            output_dir=Path(args.output_dir),
+            **simulate_kwargs,
             api_base=llm_config.api_base,
             api_key=llm_config.api_key,
             model=llm_config.model,
-            command_timeout_s=args.command_timeout,
-            task_timeout_s=args.task_timeout,
             metrics_url=args.metrics_url,
-            warmup_skip_iterations=args.warmup_skip_iterations,
         )
     )
     print(f"Simulate trace written to: {trace_file}")

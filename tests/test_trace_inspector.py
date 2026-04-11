@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from trace_collect.trace_inspector import TraceData, cmd_overview
+from trace_collect.trace_inspector import TraceData, cmd_overview, cmd_timeline
 
 
 def test_cmd_overview_counts_distinct_iterations(tmp_path: Path, capsys) -> None:
@@ -70,3 +70,55 @@ def test_cmd_overview_counts_distinct_iterations(tmp_path: Path, capsys) -> None
     cmd_overview(TraceData.load(trace_path), as_json=True)
     output = json.loads(capsys.readouterr().out)
     assert output["n_iterations"] == 2
+
+
+def test_cmd_timeline_renders_cloud_model_simulation_truthfully(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "scaffold": "openclaw",
+                        "trace_format_version": 5,
+                        "mode": "simulate",
+                        "simulate_mode": "cloud_model",
+                        "source_model": "claude-haiku",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0",
+                        "agent_id": "agent-1",
+                        "iteration": 0,
+                        "ts_start": 1.0,
+                        "ts_end": 2.0,
+                        "data": {"prompt_tokens": 10, "completion_tokens": 5},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "summary",
+                        "agent_id": "agent-1",
+                        "success": True,
+                        "n_iterations": 1,
+                        "elapsed_s": 1.0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cmd_timeline(TraceData.load(trace_path))
+    output = capsys.readouterr().out
+    assert "Simulate: claude-haiku → cloud replay" in output
+    assert "Model: cloud_model" not in output
+    assert "✓ success" in output
