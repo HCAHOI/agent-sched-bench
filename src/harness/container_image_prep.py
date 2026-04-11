@@ -10,6 +10,8 @@ import os
 import subprocess
 import time
 
+from harness.container_runtime import image_exists_command
+
 _IMAGE_CACHE: dict[str, tuple[str, float]] = {}
 
 def _image_slug(source_image: str) -> str:
@@ -17,14 +19,21 @@ def _image_slug(source_image: str) -> str:
 
 
 def normalize_image_reference(image: str) -> str:
-    """Return a Podman-safe fully qualified image reference when possible."""
+    """Return a fully qualified image reference when possible."""
     if not image:
         return ""
+    registry_prefix = os.environ.get("TASK_CONTAINER_IMAGE_REGISTRY_PREFIX", "").strip()
+    if registry_prefix:
+        registry_prefix = registry_prefix.rstrip("/")
     if "/" not in image:
+        if registry_prefix:
+            return f"{registry_prefix}/library/{image}"
         return f"docker.io/library/{image}"
     head = image.split("/", 1)[0]
     if "." in head or ":" in head or head == "localhost":
         return image
+    if registry_prefix:
+        return f"{registry_prefix}/{image}"
     return f"docker.io/{image}"
 
 
@@ -33,9 +42,10 @@ def fixed_image_name_for(source_image: str) -> str:
 
 def _image_exists(image: str, executable: str) -> bool:
     result = subprocess.run(
-        [executable, "image", "exists", image],
+        image_exists_command(image, container_executable=executable),
         capture_output=True,
         text=True,
+        check=False,
     )
     return result.returncode == 0
 
@@ -54,17 +64,17 @@ def _run(
 def ensure_source_image(
     source_image: str,
     *,
-    executable: str = "podman",
+    container_executable: str,
 ) -> None:
     """Ensure ``source_image`` exists locally, pulling when missing."""
     source_image = normalize_image_reference(source_image)
     if not source_image:
         return
-    if _image_exists(source_image, executable):
+    if _image_exists(source_image, container_executable):
         return
     try:
         _run(
-            [executable, "pull", source_image],
+            [container_executable, "pull", source_image],
             check=True,
             timeout=3600,
         )
@@ -77,7 +87,7 @@ def ensure_source_image(
 def remove_image(
     image: str,
     *,
-    executable: str = "podman",
+    container_executable: str,
     normalize: bool = False,
 ) -> bool:
     """Best-effort local image removal.
@@ -87,10 +97,10 @@ def remove_image(
     """
     if normalize:
         image = normalize_image_reference(image)
-    if not image or not _image_exists(image, executable):
+    if not image or not _image_exists(image, container_executable):
         return False
     result = _run(
-        [executable, "image", "rm", "-f", image],
+        [container_executable, "image", "rm", "-f", image],
         check=False,
         timeout=300,
     )
@@ -102,10 +112,10 @@ def remove_image(
     return True
 
 
-def prune_dangling_images(*, executable: str = "podman") -> None:
+def prune_dangling_images(*, container_executable: str) -> None:
     """Best-effort prune of dangling image layers."""
     result = _run(
-        [executable, "image", "prune", "-f"],
+        [container_executable, "image", "prune", "-f"],
         check=False,
         timeout=300,
     )
@@ -158,7 +168,7 @@ def _build_fixed_image(
 def ensure_fixed_image(
     source_image: str,
     *,
-    executable: str = "podman",
+    container_executable: str,
     host_uid: int | None = None,
     host_gid: int | None = None,
 ) -> tuple[str, float]:
@@ -166,10 +176,10 @@ def ensure_fixed_image(
 
     Reuses a cached derivative image for repeat calls within the same process
     and also skips the build step when the derivative already exists on the
-    host (checked via ``podman image exists``). The CC reference always
+    host (checked via the runtime-specific image existence probe). The CC
+    reference always
     builds the fixed image once per source — there is no probe-first path,
-    because the container is always launched with ``--userns=keep-id`` and
-    always needs the ``/testbed`` ownership fix.
+    because the container always needs the ``/testbed`` ownership fix.
     """
     source_image = normalize_image_reference(source_image)
     if source_image in _IMAGE_CACHE:
@@ -177,18 +187,27 @@ def ensure_fixed_image(
 
     fixed_name = fixed_image_name_for(source_image)
 
-    if _image_exists(fixed_name, executable):
+    if _image_exists(fixed_name, container_executable):
         _IMAGE_CACHE[source_image] = (fixed_name, 0.0)
         return _IMAGE_CACHE[source_image]
 
-    ensure_source_image(source_image, executable=executable)
+    ensure_source_image(
+        source_image,
+        container_executable=container_executable,
+    )
 
     uid = host_uid if host_uid is not None else os.getuid()
     gid = host_gid if host_gid is not None else os.getgid()
 
     t0 = time.time()
     try:
-        _build_fixed_image(source_image, fixed_name, executable, uid, gid)
+        _build_fixed_image(
+            source_image,
+            fixed_name,
+            container_executable,
+            uid,
+            gid,
+        )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         # Fall back to the source image rather than leave the caller hanging.
         _IMAGE_CACHE[source_image] = (source_image, 0.0)

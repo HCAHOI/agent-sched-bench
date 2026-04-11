@@ -206,7 +206,7 @@ def _ensure_task_source_ready(
     source_image: str | None,
     prefetched_source_image: str | None,
     prefetch_future: Future[None] | None,
-    executable: str = "podman",
+    container_executable: str,
 ) -> None:
     """Ensure the current task's source image is available locally."""
     if not source_image:
@@ -226,7 +226,10 @@ def _ensure_task_source_ready(
                 source_image,
                 exc,
             )
-    ensure_source_image(source_image, executable=executable)
+    ensure_source_image(
+        source_image,
+        container_executable=container_executable,
+    )
 
 
 def _cleanup_task_images(
@@ -235,13 +238,16 @@ def _cleanup_task_images(
     source_image: str | None,
     fixed_image: str | None,
     keep_source_image: str | None,
-    executable: str = "podman",
+    container_executable: str,
 ) -> None:
     """Best-effort cleanup that keeps only the current/next-image budget."""
     removed_any = False
     try:
         if fixed_image and fixed_image != source_image:
-            removed_fixed = remove_image(fixed_image, executable=executable)
+            removed_fixed = remove_image(
+                fixed_image,
+                container_executable=container_executable,
+            )
             removed_any = removed_fixed or removed_any
             if removed_fixed:
                 logger.info(
@@ -259,7 +265,10 @@ def _cleanup_task_images(
 
     try:
         if source_image and source_image != keep_source_image:
-            removed_source = remove_image(source_image, executable=executable)
+            removed_source = remove_image(
+                source_image,
+                container_executable=container_executable,
+            )
             removed_any = removed_source or removed_any
             if removed_source:
                 logger.info(
@@ -281,7 +290,9 @@ def _cleanup_task_images(
     if not removed_any:
         return
     try:
-        prune_dangling_images(executable=executable)
+        prune_dangling_images(
+            container_executable=container_executable,
+        )
     except Exception as exc:
         logger.warning("cleanup %s prune failed: %s", instance_id, exc)
 
@@ -293,6 +304,7 @@ async def _run_scaffold_tasks(
     run_dir: Path,
     model: str,
     scaffold: str,
+    container_executable: str,
     prompt_template: str | None,
     min_free_disk_gb: float,
     inner_factory,
@@ -353,6 +365,7 @@ async def _run_scaffold_tasks(
                     source_image=source_image,
                     prefetched_source_image=prefetched_source_image,
                     prefetch_future=prefetch_future,
+                    container_executable=container_executable,
                 )
                 prefetched_source_image = None
                 prefetch_future = None
@@ -367,12 +380,14 @@ async def _run_scaffold_tasks(
                     prefetch_future = executor.submit(
                         ensure_source_image,
                         next_source_image,
+                        container_executable=container_executable,
                     )
 
                 result = await run_attempt(
                     attempt_ctx,
                     inner=_inner,
                     min_free_disk_gb=min_free_disk_gb,
+                    container_executable=container_executable,
                 )
             except Exception as exc:
                 logger.exception("FAILED %s", instance_id)
@@ -414,6 +429,7 @@ async def _run_scaffold_tasks(
                     source_image=source_image,
                     fixed_image=attempt_ctx.fixed_image,
                     keep_source_image=next_source_image,
+                    container_executable=container_executable,
                 )
 
     write_results_jsonl(results, run_dir / "results.jsonl")
@@ -435,6 +451,7 @@ async def collect_miniswe_traces(
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
+    container_executable: str,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
 ) -> Path:
@@ -465,6 +482,7 @@ async def collect_miniswe_traces(
                     command_timeout_s=command_timeout_s,
                     task_timeout_s=task_timeout_s,
                     max_context_tokens=max_context_tokens,
+                    container_executable=container_executable,
                 )
 
             from harness.trace_logger import TraceLogger
@@ -501,6 +519,8 @@ async def collect_miniswe_traces(
                 task_timeout_s=task_timeout_s,
                 max_context_tokens=max_context_tokens,
                 prompt_template=ctx.prompt_template,
+                runtime_mode="docker_container",
+                container_executable=container_executable,
             )
             agent._trace_logger = trace_logger
             agent.run_metadata = {"model": model}
@@ -534,6 +554,7 @@ async def collect_miniswe_traces(
         run_dir=run_dir,
         model=model,
         scaffold="miniswe",
+        container_executable=container_executable,
         prompt_template=prompt_template,
         min_free_disk_gb=min_free_disk_gb,
         inner_factory=make_inner,
@@ -553,6 +574,7 @@ async def collect_openclaw_traces(
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
+    container_executable: str,
     mcp_config: str | None = None,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
@@ -607,6 +629,7 @@ async def collect_openclaw_traces(
                     max_iterations=max_iterations,
                     max_context_tokens=max_context_tokens,
                     mcp_config=mcp_config,
+                    container_executable=container_executable,
                 )
             assert runner is not None
             return await runner.run_openclaw_task(
@@ -623,6 +646,7 @@ async def collect_openclaw_traces(
         run_dir=run_dir,
         model=model,
         scaffold="openclaw",
+        container_executable=container_executable,
         prompt_template=prompt_template,
         min_free_disk_gb=min_free_disk_gb,
         inner_factory=make_inner,
@@ -633,6 +657,7 @@ async def collect_traces(
     *,
     scaffold: str,
     provider_name: str | None = None,
+    container_executable: str,
     **kwargs: Any,
 ) -> Path:
     """Dispatch to ``collect_miniswe_traces`` or ``collect_openclaw_traces``."""
@@ -640,6 +665,7 @@ async def collect_traces(
         kwargs.pop("mcp_config", None)
         return await collect_miniswe_traces(
             provider_name=provider_name,
+            container_executable=container_executable,
             **kwargs,
         )
     if scaffold == "openclaw":
@@ -647,6 +673,7 @@ async def collect_traces(
         kwargs.pop("task_timeout_s", None)
         return await collect_openclaw_traces(
             provider_name=provider_name,
+            container_executable=container_executable,
             **kwargs,
         )
     raise ValueError(f"Unknown scaffold: {scaffold!r}")
@@ -747,6 +774,7 @@ async def _run_miniswe_in_task_container(
     api_base: str,
     api_key: str,
     model: str,
+    container_executable: str,
     max_iterations: int,
     command_timeout_s: float,
     task_timeout_s: float,
@@ -764,9 +792,11 @@ async def _run_miniswe_in_task_container(
     exec_config = resolve_task_container_exec_config(
         attempt_dir=ctx.attempt_dir,
         image=fixed_image,
+        container_executable=container_executable,
     )
     container_id = start_task_container(
         fixed_image,
+        executable=container_executable,
         extra_args=list(exec_config.start_extra_args),
     )
     ctx.mark_container_ready(container_id)
@@ -774,17 +804,20 @@ async def _run_miniswe_in_task_container(
         exec_config = resolve_running_container_exec_config(
             container_id=container_id,
             exec_config=exec_config,
+            container_executable=container_executable,
         )
         bootstrap_task_container_python(
             container_id=container_id,
             exec_config=exec_config,
             extra_requirements=("mini-swe-agent>=2.0",),
+            container_executable=container_executable,
         )
         proof = preflight_task_container_runtime(
             container_id=container_id,
             attempt_dir=ctx.attempt_dir,
             runtime=exec_config.runtime,
             pythonpath=exec_config.pythonpath,
+            container_executable=container_executable,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
         request = {
@@ -808,6 +841,7 @@ async def _run_miniswe_in_task_container(
             "trace_file": str(runtime_dir / "trace.jsonl"),
             "raw_stdout_path": str(stdout_path),
             "raw_stderr_path": str(stderr_path),
+            "container_executable": container_executable,
         }
         if benchmark.config.harness_split is not None:
             request["benchmark_split"] = benchmark.config.harness_split
@@ -817,9 +851,13 @@ async def _run_miniswe_in_task_container(
             runtime=exec_config.runtime,
             pythonpath=exec_config.pythonpath,
             request=request,
+            container_executable=container_executable,
         )
     finally:
-        container_logs = stop_task_container(container_id)
+        container_logs = stop_task_container(
+            container_id,
+            executable=container_executable,
+        )
         ctx.container_stdout = "\n".join(
             part
             for part in [
@@ -863,6 +901,7 @@ async def _run_openclaw_in_task_container(
     api_base: str,
     api_key: str,
     model: str,
+    container_executable: str,
     max_iterations: int,
     max_context_tokens: int,
     mcp_config: str | None,
@@ -880,9 +919,11 @@ async def _run_openclaw_in_task_container(
     exec_config = resolve_task_container_exec_config(
         attempt_dir=ctx.attempt_dir,
         image=fixed_image,
+        container_executable=container_executable,
     )
     container_id = start_task_container(
         fixed_image,
+        executable=container_executable,
         extra_args=list(exec_config.start_extra_args),
     )
     ctx.mark_container_ready(container_id)
@@ -890,6 +931,7 @@ async def _run_openclaw_in_task_container(
         exec_config = resolve_running_container_exec_config(
             container_id=container_id,
             exec_config=exec_config,
+            container_executable=container_executable,
         )
         preflight_imports = [
             "trace_collect.runtime.entrypoint",
@@ -904,6 +946,7 @@ async def _run_openclaw_in_task_container(
             container_id=container_id,
             exec_config=exec_config,
             extra_requirements=bootstrap_requirements,
+            container_executable=container_executable,
         )
         proof = preflight_task_container_runtime(
             container_id=container_id,
@@ -911,6 +954,7 @@ async def _run_openclaw_in_task_container(
             imports=preflight_imports,
             runtime=exec_config.runtime,
             pythonpath=exec_config.pythonpath,
+            container_executable=container_executable,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
         runtime = run_task_container_agent(
@@ -945,7 +989,9 @@ async def _run_openclaw_in_task_container(
                 "trace_file": str(runtime_dir / "trace.raw.jsonl"),
                 "raw_stdout_path": str(stdout_path),
                 "raw_stderr_path": str(stderr_path),
+                "container_executable": container_executable,
             },
+            container_executable=container_executable,
         )
         runtime_proof = {
             **asdict(proof),
@@ -965,7 +1011,10 @@ async def _run_openclaw_in_task_container(
             runtime_proof=runtime_proof,
         )
     finally:
-        container_logs = stop_task_container(container_id)
+        container_logs = stop_task_container(
+            container_id,
+            executable=container_executable,
+        )
         ctx.container_stdout = "\n".join(
             part
             for part in [

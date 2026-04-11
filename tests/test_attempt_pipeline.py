@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from harness.disk_preflight import DiskSpaceError  # noqa: E402
 from trace_collect.attempt_pipeline import (  # noqa: E402
     AttemptContext,
     AttemptResult,
+    start_task_container,
     run_attempt,
 )
 
@@ -94,7 +96,12 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
         )
 
     result = asyncio.run(
-        run_attempt(ctx, inner=inner, min_free_disk_gb=0.001)
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
     )
 
     assert result.success is True
@@ -155,7 +162,14 @@ def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> No
         raise RuntimeError("boom")
 
     with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(run_attempt(ctx, inner=inner, min_free_disk_gb=0.001))
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=0.001,
+                container_executable="docker",
+            )
+        )
 
     # Even on failure, manifest + claude output files exist
     assert (ctx.attempt_dir / "run_manifest.json").exists()
@@ -178,7 +192,14 @@ def test_run_attempt_noncompleted_exit_status_writes_error_manifest(tmp_path: Pa
             error="I reached the maximum number of tool call iterations.",
         )
 
-    result = asyncio.run(run_attempt(ctx, inner=inner, min_free_disk_gb=0.001))
+    result = asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
 
     assert result.success is False
     manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
@@ -231,7 +252,14 @@ def test_run_attempt_supports_non_image_success_without_patch(
             },
         )
 
-    result = asyncio.run(run_attempt(ctx, inner=inner, min_free_disk_gb=0.001))
+    result = asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
 
     assert result.success is True
     manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
@@ -259,8 +287,91 @@ def test_run_attempt_disk_shortfall_aborts_early(tmp_path: Path) -> None:
         )
 
     with pytest.raises(DiskSpaceError):
-        asyncio.run(run_attempt(ctx, inner=inner, min_free_disk_gb=10**12))
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=10**12,
+                container_executable="docker",
+            )
+        )
 
     assert called["inner"] is False
     # attempt_dir should NOT have been created
     assert not ctx.attempt_dir.exists()
+
+
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_run_attempt_passes_container_executable_to_fixed_image(
+    tmp_path: Path,
+    container_executable: str,
+) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+    seen: dict[str, object] = {}
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="Submitted",
+            trace_path=trace_source,
+        )
+
+    with patch(
+        "trace_collect.attempt_pipeline.ensure_fixed_image",
+        side_effect=lambda source_image, *, container_executable: (
+            seen.update(
+                {
+                    "source_image": source_image,
+                    "container_executable": container_executable,
+                }
+            )
+            or ("fixed-image", 0.0)
+        ),
+    ):
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=0.001,
+                container_executable=container_executable,
+            )
+        )
+
+    assert seen == {
+        "source_image": "swerebench/img:latest",
+        "container_executable": container_executable,
+    }
+
+
+@pytest.mark.parametrize(
+    ("container_executable", "expected_user_args"),
+    [
+        ("docker", ["--user", f"{os.getuid()}:{os.getgid()}"]),
+        ("podman", ["--userns=keep-id"]),
+    ],
+)
+def test_start_task_container_uses_runtime_specific_user_args(
+    tmp_path: Path,
+    container_executable: str,
+    expected_user_args: list[str],
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        container_id = start_task_container(
+            "docker.io/swerebench/example:latest",
+            executable=container_executable,
+        )
+
+    assert container_id == "cid-1"
+    assert seen["cmd"][:3] == [container_executable, "run", "-d"]
+    for arg in expected_user_args:
+        assert arg in seen["cmd"]
+    if container_executable == "docker":
+        assert "--userns=keep-id" not in seen["cmd"]

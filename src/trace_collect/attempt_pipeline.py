@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from harness.container_image_prep import ensure_fixed_image
+from harness.container_runtime import container_run_user_args
 from harness.container_stats_sampler import (
     ContainerStatsSampler,
     summarize_samples,
@@ -80,7 +81,7 @@ class AttemptContext:
 def start_task_container(
     fixed_image: str,
     *,
-    executable: str = "podman",
+    executable: str,
     extra_args: list[str] | None = None,
 ) -> str:
     """Launch the task container and return its id."""
@@ -93,7 +94,6 @@ def start_task_container(
         "run",
         "-d",
         "--rm",
-        "--userns=keep-id",
         "--network=host",
         "-v",
         f"{home_dir}:{home_dir}",
@@ -104,6 +104,7 @@ def start_task_container(
         "-e",
         f"PATH={home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
     ]
+    cmd.extend(container_run_user_args(executable))
     if extra_args:
         cmd.extend(extra_args)
     cmd.extend([fixed_image, "sleep", "infinity"])
@@ -117,7 +118,7 @@ def start_task_container(
 
 
 def stop_task_container(
-    container_id: str, *, executable: str = "podman"
+    container_id: str, *, executable: str
 ) -> str:
     """Capture container logs then stop and remove it. Returns log text."""
     import subprocess
@@ -178,6 +179,8 @@ class AttemptResult:
 async def _watch_for_container_ready(
     ctx: AttemptContext,
     stop_event: threading.Event,
+    *,
+    container_executable: str,
 ) -> ContainerStatsSampler | None:
     """Wait for ``ctx.container_id`` and start sampling once it appears."""
     while not stop_event.is_set():
@@ -185,6 +188,7 @@ async def _watch_for_container_ready(
             sampler = ContainerStatsSampler(
                 container_id=ctx.container_id,
                 interval_s=1.0,
+                executable=container_executable,
             )
             sampler.start()
             return sampler
@@ -200,7 +204,7 @@ async def run_attempt(
     *,
     inner: Callable[[AttemptContext], Awaitable[AttemptResult]],
     min_free_disk_gb: float = 30.0,
-    executable: str = "podman",
+    container_executable: str,
 ) -> AttemptResult:
     """Execute one scaffold attempt and write its artifacts."""
     try:
@@ -217,7 +221,8 @@ async def run_attempt(
     if ctx.source_image:
         try:
             fixed_name, fix_elapsed = ensure_fixed_image(
-                ctx.source_image, executable=executable
+                ctx.source_image,
+                container_executable=container_executable,
             )
             ctx.fixed_image = fixed_name
             ctx.permission_fix_time_s = fix_elapsed
@@ -236,7 +241,11 @@ async def run_attempt(
 
     stop_watcher = threading.Event()
     watcher_task = asyncio.create_task(
-        _watch_for_container_ready(ctx, stop_watcher)
+        _watch_for_container_ready(
+            ctx,
+            stop_watcher,
+            container_executable=container_executable,
+        )
     )
 
     sampler: ContainerStatsSampler | None = None

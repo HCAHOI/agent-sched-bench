@@ -45,11 +45,11 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
 
     monkeypatch.setattr(
         "trace_collect.collector.ensure_source_image",
-        lambda source_image, executable="podman": None,
+        lambda source_image, *, container_executable: None,
     )
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
-        lambda image, executable="podman": False,
+        lambda image, *, container_executable: False,
     )
     monkeypatch.setattr(
         "trace_collect.collector.drop_cached_fixed_image",
@@ -57,7 +57,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
     )
     monkeypatch.setattr(
         "trace_collect.collector.prune_dangling_images",
-        lambda executable="podman": None,
+        lambda *, container_executable: None,
     )
 
     benchmark = SimpleNamespace(
@@ -90,6 +90,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
             scaffold="miniswe",
+            container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
             inner_factory=make_inner,
@@ -112,11 +113,11 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
 
     monkeypatch.setattr(
         "trace_collect.collector.ensure_source_image",
-        lambda source_image, executable="podman": None,
+        lambda source_image, *, container_executable: None,
     )
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
-        lambda image, executable="podman": False,
+        lambda image, *, container_executable: False,
     )
     monkeypatch.setattr(
         "trace_collect.collector.drop_cached_fixed_image",
@@ -124,7 +125,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
     )
     monkeypatch.setattr(
         "trace_collect.collector.prune_dangling_images",
-        lambda executable="podman": None,
+        lambda *, container_executable: None,
     )
 
     benchmark = SimpleNamespace(
@@ -157,6 +158,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
             scaffold="miniswe",
+            container_executable="docker",
             prompt_template="default",
             min_free_disk_gb=0.001,
             inner_factory=make_inner,
@@ -179,13 +181,13 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
 
     monkeypatch.setattr(
         "trace_collect.collector.ensure_source_image",
-        lambda source_image, executable="podman": seen.setdefault(
+        lambda source_image, *, container_executable: seen.setdefault(
             "ensure_source_image", source_image
         ),
     )
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
-        lambda image, executable="podman": False,
+        lambda image, *, container_executable: False,
     )
     monkeypatch.setattr(
         "trace_collect.collector.drop_cached_fixed_image",
@@ -193,7 +195,7 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
     )
     monkeypatch.setattr(
         "trace_collect.collector.prune_dangling_images",
-        lambda executable="podman": None,
+        lambda *, container_executable: None,
     )
 
     benchmark = SimpleNamespace(
@@ -227,6 +229,7 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
             scaffold="openclaw",
+            container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
             inner_factory=make_inner,
@@ -297,6 +300,7 @@ def test_run_scaffold_tasks_allows_non_image_tasks_and_uses_attempt_success(
             run_dir=tmp_path / "run",
             model="z-ai/glm-5.1",
             scaffold="openclaw",
+            container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
             inner_factory=make_inner,
@@ -337,7 +341,7 @@ def test_cleanup_task_images_keeps_next_source_image(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
-        lambda image, executable="podman": removed.append(image) or True,
+        lambda image, *, container_executable: removed.append(image) or True,
     )
     monkeypatch.setattr(
         "trace_collect.collector.drop_cached_fixed_image",
@@ -345,7 +349,7 @@ def test_cleanup_task_images_keeps_next_source_image(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "trace_collect.collector.prune_dangling_images",
-        lambda executable="podman": pruned.append("pruned"),
+        lambda *, container_executable: pruned.append("pruned"),
     )
 
     _cleanup_task_images(
@@ -353,6 +357,7 @@ def test_cleanup_task_images_keeps_next_source_image(monkeypatch) -> None:
         source_image="shared-image",
         fixed_image="fixed-shared-image",
         keep_source_image="shared-image",
+        container_executable="docker",
     )
 
     assert removed == ["fixed-shared-image"]
@@ -369,7 +374,7 @@ def test_ensure_task_source_ready_falls_back_after_prefetch_failure(
 
     monkeypatch.setattr(
         "trace_collect.collector.ensure_source_image",
-        lambda source_image, executable="podman": seen.append(source_image),
+        lambda source_image, *, container_executable: seen.append(source_image),
     )
 
     _ensure_task_source_ready(
@@ -377,6 +382,7 @@ def test_ensure_task_source_ready_falls_back_after_prefetch_failure(
         source_image="docker.io/library/img-a",
         prefetched_source_image="docker.io/library/img-a",
         prefetch_future=failed_prefetch,
+        container_executable="docker",
     )
 
     assert seen == ["docker.io/library/img-a"]
@@ -402,13 +408,19 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
     prefetch_started = threading.Event()
     allow_prefetch_finish = threading.Event()
 
-    def fake_ensure_source_image(image: str, executable: str = "podman") -> None:
+    def fake_ensure_source_image(image: str, *, container_executable: str) -> None:
         events.append(("ensure_source", image))
         if image == "docker.io/library/img-b":
             prefetch_started.set()
             assert allow_prefetch_finish.wait(timeout=1.0)
 
-    async def fake_run_attempt(ctx, *, inner, min_free_disk_gb, executable="podman"):
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ):
         events.append(("run_start", ctx.instance_id))
         if ctx.instance_id == "task-a":
             assert prefetch_started.wait(timeout=1.0)
@@ -432,7 +444,9 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
     )
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
-        lambda image, executable="podman": events.append(("remove_image", image)) or True,
+        lambda image, *, container_executable: (
+            events.append(("remove_image", image)) or True
+        ),
     )
     monkeypatch.setattr(
         "trace_collect.collector.drop_cached_fixed_image",
@@ -440,7 +454,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
     )
     monkeypatch.setattr(
         "trace_collect.collector.prune_dangling_images",
-        lambda executable="podman": events.append(("prune", "done")),
+        lambda *, container_executable: events.append(("prune", "done")),
     )
 
     asyncio.run(
@@ -454,6 +468,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
             scaffold="openclaw",
+            container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
             inner_factory=lambda task: (lambda ctx: None),
@@ -489,7 +504,13 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
     )
     events: list[tuple[str, str]] = []
 
-    async def fake_run_attempt(ctx, *, inner, min_free_disk_gb, executable="podman"):
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ):
         ctx.fixed_image = f"fixed-{ctx.instance_id}"
         events.append(("run_end", ctx.instance_id))
         return AttemptResult(
@@ -501,7 +522,9 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
 
     monkeypatch.setattr(
         "trace_collect.collector.ensure_source_image",
-        lambda source_image, executable="podman": events.append(("ensure_source", source_image)),
+        lambda source_image, *, container_executable: events.append(
+            ("ensure_source", source_image)
+        ),
     )
     monkeypatch.setattr(
         "trace_collect.collector.run_attempt",
@@ -509,7 +532,9 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
     )
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
-        lambda image, executable="podman": events.append(("remove_image", image)) or True,
+        lambda image, *, container_executable: (
+            events.append(("remove_image", image)) or True
+        ),
     )
     monkeypatch.setattr(
         "trace_collect.collector.drop_cached_fixed_image",
@@ -517,7 +542,7 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
     )
     monkeypatch.setattr(
         "trace_collect.collector.prune_dangling_images",
-        lambda executable="podman": events.append(("prune", "done")),
+        lambda *, container_executable: events.append(("prune", "done")),
     )
 
     asyncio.run(
@@ -530,6 +555,7 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
             scaffold="openclaw",
+            container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
             inner_factory=lambda task: (lambda ctx: None),
@@ -541,3 +567,88 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
     ]
     assert events.index(("run_end", "task-a")) < events.index(("remove_image", "fixed-task-a"))
     assert events.index(("remove_image", "fixed-task-a")) < events.index(("run_end", "task-b"))
+
+
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_run_scaffold_tasks_propagates_container_executable(
+    tmp_path: Path,
+    monkeypatch,
+    container_executable: str,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    seen: list[tuple[str, str]] = []
+
+    benchmark = SimpleNamespace(
+        config=SimpleNamespace(
+            slug="swe-rebench",
+            harness_split="filtered",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="cc_aligned",
+        ),
+        runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
+    )
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: seen.append(
+            ("ensure_source_image", container_executable)
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: (
+            seen.append(("remove_image", container_executable)) or True
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: seen.append(
+            ("prune_dangling_images", container_executable)
+        ),
+    )
+
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ):
+        seen.append(("run_attempt", container_executable))
+        ctx.fixed_image = f"fixed-{ctx.source_image}"
+        return AttemptResult(
+            success=True,
+            exit_status="ok",
+            trace_path=trace_path,
+            model_patch="diff --git a/x b/x",
+        )
+
+    monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
+
+    asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "task-a", "image_name": "img-a"}],
+            run_dir=tmp_path / "run",
+            model="qwen-plus-latest",
+            scaffold="openclaw",
+            container_executable=container_executable,
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=lambda task: (lambda ctx: None),
+        )
+    )
+
+    assert seen == [
+        ("ensure_source_image", container_executable),
+        ("run_attempt", container_executable),
+        ("remove_image", container_executable),
+        ("remove_image", container_executable),
+        ("prune_dangling_images", container_executable),
+    ]

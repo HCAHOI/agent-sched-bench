@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from trace_collect.runtime.task_container import (
     TaskContainerExecConfig,
     TaskContainerRunResult,
@@ -74,12 +76,13 @@ def test_resolve_task_container_exec_config_bootstraps_on_cross_platform(
     )
     monkeypatch.setattr(
         "trace_collect.runtime.task_container._inspect_image_platform",
-        lambda image, executable="podman": "linux/amd64",
+        lambda image, *, container_executable: "linux/amd64",
     )
 
     config = resolve_task_container_exec_config(
         attempt_dir=tmp_path / "attempt",
         image="localhost/example:latest",
+        container_executable="docker",
     )
 
     assert isinstance(config, TaskContainerExecConfig)
@@ -115,6 +118,7 @@ def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> Non
     resolved = resolve_running_container_exec_config(
         container_id="cid-1",
         exec_config=exec_config,
+        container_executable="docker",
     )
 
     assert resolved.runtime == "/opt/conda/envs/ML/bin/python"
@@ -147,6 +151,7 @@ def test_resolve_running_container_exec_config_raises_without_python(
         resolve_running_container_exec_config(
             container_id="cid-1",
             exec_config=exec_config,
+            container_executable="docker",
         )
     except RuntimeError as exc:
         assert "no Python >=3.11 interpreter found" in str(exc)
@@ -204,6 +209,7 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
         container_id="cid-1",
         exec_config=exec_config,
         extra_requirements=("mcp>=1.0",),
+        container_executable="docker",
     )
 
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
@@ -262,6 +268,7 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
         imports=["trace_collect.runtime.entrypoint", "agents.openclaw.eval.runner"],
         runtime="/usr/bin/python3",
         pythonpath="/tmp/site:/repo/src:/repo",
+        container_executable="docker",
     )
 
     assert proof.container_id == "cid-1"
@@ -325,6 +332,7 @@ def test_run_task_container_agent_reads_result_and_writes_raw_logs(
         timeout=10,
         runtime="/usr/bin/python3",
         pythonpath="/tmp/site:/repo/src:/repo",
+        container_executable="docker",
         request={
             "scaffold": "miniswe",
             "result_path": str(result_path),
@@ -389,6 +397,7 @@ def test_run_task_container_agent_preserves_existing_raw_logs(
         timeout=10,
         runtime="/usr/bin/python3",
         pythonpath="/tmp/site:/repo/src:/repo",
+        container_executable="docker",
         request={
             "kind": "run_miniswe",
             "scaffold": "miniswe",
@@ -443,6 +452,7 @@ def test_run_task_container_agent_prefers_explicit_success_over_patch(
     result = run_task_container_agent(
         container_id="cid-3",
         timeout=10,
+        container_executable="docker",
         request={
             "kind": "run_openclaw",
             "scaffold": "openclaw",
@@ -482,6 +492,7 @@ def test_run_task_container_agent_timeout_writes_partial_logs(
         run_task_container_agent(
             container_id="cid-2",
             timeout=10,
+            container_executable="docker",
             request={
                 "kind": "run_miniswe",
                 "scaffold": "miniswe",
@@ -498,3 +509,53 @@ def test_run_task_container_agent_timeout_writes_partial_logs(
 
     assert stdout_path.read_text(encoding="utf-8") == "partial stdout"
     assert stderr_path.read_text(encoding="utf-8") == "partial stderr"
+
+
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_preflight_task_container_runtime_passes_container_executable_to_exec(
+    tmp_path: Path,
+    monkeypatch,
+    container_executable: str,
+) -> None:
+    seen: dict[str, object] = {}
+    result_path = tmp_path / "attempt" / "_task_container_runtime" / "preflight" / "result.json"
+
+    def fake_exec(**kwargs):
+        seen["container_executable"] = kwargs["container_executable"]
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(
+                {
+                    "runtime_proof": {
+                        "container_id": "cid-1",
+                        "hostname": "host-a",
+                        "cwd": "/testbed",
+                        "python_executable": "/usr/bin/python3",
+                        "python_prefix": "/usr",
+                        "project_root": "/repo",
+                        "sys_path": ["/repo/src"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.exec_task_container_entrypoint",
+        fake_exec,
+    )
+
+    preflight_task_container_runtime(
+        container_id="cid-1",
+        attempt_dir=tmp_path / "attempt",
+        container_executable=container_executable,
+    )
+
+    assert seen["container_executable"] == container_executable

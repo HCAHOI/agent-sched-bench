@@ -38,6 +38,8 @@ def test_exec_task_container_entrypoint_uses_run_mode_for_scaffold_requests(
         container_id="cid-1",
         request_path=request_path,
         runtime="/repo/.venv/bin/python",
+        pythonpath=None,
+        container_executable="docker",
         timeout=10,
     )
 
@@ -71,6 +73,8 @@ def test_exec_task_container_entrypoint_uses_preflight_mode_for_preflight_reques
         container_id="cid-1",
         request_path=request_path,
         runtime="/repo/.venv/bin/python",
+        pythonpath=None,
+        container_executable="docker",
         timeout=10,
     )
 
@@ -130,6 +134,8 @@ def test_exec_task_container_entrypoint_uses_original_payload_for_stdin(
             "result_path": str(tmp_path / "r.json"),
         },
         runtime="/repo/.venv/bin/python",
+        pythonpath=None,
+        container_executable="docker",
         timeout=10,
     )
 

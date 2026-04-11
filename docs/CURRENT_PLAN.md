@@ -1,64 +1,41 @@
-# OpenClaw Haiku SWE-rebench Top-10 Trace Bundle
+# Explicit `--container` For Benchmark Collection
 
 ## Goal
+Make benchmark collection choose the container executable explicitly at the
+CLI boundary and propagate that choice through the full benchmark collection
+runtime path. Eliminate implicit `podman` defaults from the main collection
+chain and remove MiniSWE's env-var-based runtime selection.
 
-- Run OpenClaw with `anthropic/claude-haiku-4.5` on the remaining 9 SWE-rebench
-  tasks from the requested top-10 list.
-- Reuse the existing completed Kinto trace from
-  `traces/swe-rebench/anthropic-claude-haiku-4.5/20260409T142235Z-kinto384-openclaw-haiku-cc-aligned-100iter/`.
-- Produce one new archive containing exactly 10 task trace directories by
-  overlaying the existing Kinto trace with the new 9-task run.
+## Non-goals
+- Do not add `--container` to `agents.openclaw._cli.py`.
+- Do not require `--container` for `simulate` or `import-claude-code`.
+- Do not change success semantics, canonical artifact writing, or
+  Terminal-Bench non-image flows.
 
-## Fixed Decisions
+## Execution Plan
+1. Inspect and map the current propagation path across `trace_collect.cli`,
+   `trace_collect.collector`, `trace_collect.attempt_pipeline`,
+   `trace_collect.runtime.task_container`, `harness.container_image_prep`, and
+   `agents.miniswe.agent`.
+2. Lock behavior with focused tests where coverage is missing:
+   `collect` must fail fast without `--container`, and runtime selection must
+   be asserted as an explicit value rather than an implicit `podman` default.
+3. Update the collection CLI so `collect` requires `--container docker|podman`
+   and threads that value into `collect_traces(...)`.
+4. Propagate the explicit container executable through collector helpers,
+   attempt orchestration, task-container runtime helpers, and image-prep
+   helpers. Remove `podman` defaults from the benchmark collection main path.
+5. Change MiniSWE to consume only caller-provided container runtime settings.
+   Remove `MSWEA_DOCKER_EXECUTABLE` reads and ensure container-backed MiniSWE
+   paths require an explicit runtime.
+6. Update and extend tests so both `docker` and `podman` paths are covered,
+   while non-container entrypoints remain unaffected.
+7. Run targeted verification, then a fresh independent review sub-agent before
+   finalizing.
 
-1. Match the existing Kinto run parameters exactly:
-   - provider: `openrouter`
-   - model: `anthropic/claude-haiku-4.5`
-   - scaffold: `openclaw`
-   - prompt template: `cc_aligned`
-   - max iterations: `100`
-   - MCP config: `none`
-2. Select tasks with explicit `--instance-ids`. Do not use `--sample`, because
-   the collector loads the full Hugging Face split directly and its native order
-   does not match the local `data/swe-rebench/tasks.json`.
-3. Keep the original Kinto run untouched. Build the final 10-trace tarball from
-   a temporary staging directory.
-
-## Task Set
-
-1. `Kinto__kinto-http.py-384` (reuse existing trace only)
-2. `beeware__briefcase-817`
-3. `devopshq__artifactory-255`
-4. `googleapis__python-firestore-280`
-5. `kobotoolbox__kobo-install-135`
-6. `mozilla__bleach-259`
-7. `python-graphblas__python-graphblas-217`
-8. `tobymao__sqlglot-3425`
-9. `tobymao__sqlglot-3848`
-10. `wemake-services__wemake-python-styleguide-2343`
-
-## Execution Steps
-
-1. Run the review gate on the existing collection/runtime path before producing
-   new experiment artifacts.
-2. Run focused validation tests for the task-container OpenClaw path.
-3. Launch one serial 9-task collection with a dedicated run directory under
-   `traces/swe-rebench/anthropic-claude-haiku-4.5/`.
-4. Verify the new run contains all 9 requested task directories and a
-   `results.jsonl`.
-5. Build a temporary 10-task staging directory by copying:
-   - the existing Kinto task directory from the completed Kinto run
-   - the 9 new task directories from the new run
-6. Write a merged `results.jsonl` in the exact requested top-10 order.
-7. Create a new `.tar.gz` from the staging directory and verify its contents.
-
-## Acceptance Checks
-
-- The reviewer finds no blocking issues in the experiment path, or all blocking
-  issues are resolved before collection.
-- Focused OpenClaw task-container tests pass.
-- The new run contains exactly the 9 requested non-Kinto instance IDs.
-- The final archive contains exactly 10 task directories plus one
-  top-level `results.jsonl`.
-- The final archive preserves the original Kinto trace and does not mutate the
-  source run directories.
+## Checkpoints
+- After tests are updated, verify the required propagation contract is pinned.
+- After implementation, verify both runtime values travel from CLI to the
+  actual helper invocations.
+- Before finalizing, run an independent code review focused on correctness and
+  research-integrity regressions.

@@ -99,13 +99,13 @@ def _host_linux_platform() -> str | None:
 def _inspect_image_platform(
     image: str,
     *,
-    executable: str = "podman",
+    container_executable: str,
 ) -> str | None:
     if not image:
         return None
     result = subprocess.run(
         [
-            executable,
+            container_executable,
             "image",
             "inspect",
             image,
@@ -175,9 +175,12 @@ def resolve_task_container_exec_config(
     *,
     attempt_dir: Path,
     image: str,
-    executable: str = "podman",
+    container_executable: str,
 ) -> TaskContainerExecConfig:
-    image_platform = _inspect_image_platform(image, executable=executable)
+    image_platform = _inspect_image_platform(
+        image,
+        container_executable=container_executable,
+    )
     host_platform = _host_linux_platform()
     use_host_runtime = host_platform is not None and (
         image_platform is None or image_platform == host_platform
@@ -216,7 +219,7 @@ def resolve_running_container_exec_config(
     *,
     container_id: str,
     exec_config: TaskContainerExecConfig,
-    executable: str = "podman",
+    container_executable: str,
     cwd: str = "/testbed",
 ) -> TaskContainerExecConfig:
     if not exec_config.bootstrap:
@@ -236,7 +239,7 @@ exit 1
 """
     result = subprocess.run(
         [
-            executable,
+            container_executable,
             "exec",
             "-i",
             "-w",
@@ -310,7 +313,7 @@ def exec_task_container_entrypoint(
     runtime: str,
     pythonpath: str | None,
     timeout: float,
-    executable: str = "podman",
+    container_executable: str,
     cwd: str = "/testbed",
 ) -> subprocess.CompletedProcess[str]:
     request = request_payload or json.loads(request_path.read_text(encoding="utf-8"))
@@ -320,7 +323,7 @@ def exec_task_container_entrypoint(
     mode = "preflight" if kind == "preflight" else "run"
     return subprocess.run(
         [
-            executable,
+            container_executable,
             "exec",
             "-i",
             "-w",
@@ -355,7 +358,7 @@ def preflight_task_container_runtime(
     imports: list[str] | None = None,
     runtime: str | None = None,
     pythonpath: str | None = None,
-    executable: str = "podman",
+    container_executable: str,
 ) -> TaskContainerPreflightProof:
     effective_runtime = runtime or current_container_python_runtime()
     runtime_dir = task_container_runtime_dir(attempt_dir, "preflight")
@@ -384,7 +387,7 @@ def preflight_task_container_runtime(
         runtime=effective_runtime,
         pythonpath=pythonpath,
         timeout=120,
-        executable=executable,
+        container_executable=container_executable,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -403,7 +406,7 @@ def run_task_container_agent(
     timeout: float,
     runtime: str | None = None,
     pythonpath: str | None = None,
-    executable: str = "podman",
+    container_executable: str,
 ) -> TaskContainerRunResult:
     effective_runtime = runtime or current_container_python_runtime()
     raw_stdout_path = Path(request["raw_stdout_path"])
@@ -423,7 +426,7 @@ def run_task_container_agent(
             runtime=effective_runtime,
             pythonpath=pythonpath,
             timeout=timeout,
-            executable=executable,
+            container_executable=container_executable,
         )
     except subprocess.TimeoutExpired as exc:
         raw_stdout_path.write_text(
@@ -477,7 +480,7 @@ def bootstrap_task_container_python(
     container_id: str,
     exec_config: TaskContainerExecConfig,
     extra_requirements: tuple[str, ...] = (),
-    executable: str = "podman",
+    container_executable: str,
     cwd: str = "/testbed",
 ) -> None:
     if not exec_config.bootstrap or exec_config.bootstrap_site_dir is None:
@@ -558,7 +561,7 @@ shutil.rmtree(userbase, ignore_errors=True)
 """
     result = subprocess.run(
         [
-            executable,
+            container_executable,
             "exec",
             "-i",
             "-w",

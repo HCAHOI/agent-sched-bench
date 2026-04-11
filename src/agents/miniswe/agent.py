@@ -7,8 +7,8 @@ The agent runs inside the task's pre-built SWE-bench/SWE-rebench container
 (``task["image_name"]``) via mini-swe-agent's ``DockerEnvironment``. The
 container has the repo at ``/testbed`` with ``base_commit`` already checked
 out and dependencies pre-installed, so no host-side clone or pip install is
-required. The container runtime defaults to ``podman`` but can be overridden
-via the ``MSWEA_DOCKER_EXECUTABLE`` environment variable.
+required. The container runtime executable must be provided explicitly by the
+caller when the agent uses ``runtime_mode="docker_container"``.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents.base import AgentBase, TraceAction
+from harness.container_runtime import container_run_user_args
 from llm_call import build_miniswe_litellm_model_name
 from minisweagent.agents.default import DefaultAgent
 
@@ -139,6 +140,7 @@ class MiniSWECodeAgent(AgentBase):
         max_context_tokens: int = 256_000,
         prompt_template: str = "default",
         runtime_mode: str = "docker_container",
+        container_executable: str | None = None,
         exec_working_dir: str = "/testbed",
     ) -> None:
         super().__init__(
@@ -155,6 +157,7 @@ class MiniSWECodeAgent(AgentBase):
         self.max_context_tokens = max_context_tokens
         self.prompt_template = prompt_template
         self.runtime_mode = runtime_mode
+        self.container_executable = container_executable
         self.exec_working_dir = exec_working_dir
         self.provider_name = provider_name
         self._workdir: Path | None = None
@@ -243,7 +246,6 @@ class MiniSWECodeAgent(AgentBase):
             cost_tracking="ignore_errors",
         )
         home_dir = os.environ.get("HOME", "/root")
-        executable = os.getenv("MSWEA_DOCKER_EXECUTABLE", "podman")
         shared_env = {
             "HOME": home_dir,
             "PATH": f"{home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
@@ -259,17 +261,22 @@ class MiniSWECodeAgent(AgentBase):
                 env=shared_env,
             )
         else:
+            if not self.container_executable:
+                raise RuntimeError(
+                    "MiniSWE docker_container mode requires an explicit "
+                    "container executable from the caller"
+                )
             run_args = [
                 "--rm",
-                "--userns=keep-id",
                 "--network=host",
                 "-v", f"{home_dir}:{home_dir}",
             ]
+            run_args.extend(container_run_user_args(self.container_executable))
             env = DockerEnvironment(
                 image=image,
                 cwd=self.exec_working_dir,
                 timeout=int(self.command_timeout_s),
-                executable=executable,
+                executable=self.container_executable,
                 pull_timeout=300,
                 run_args=run_args,
                 env=shared_env,
@@ -315,7 +322,8 @@ class MiniSWECodeAgent(AgentBase):
                 container_id = getattr(env, "container_id", None)
                 if container_id:
                     attempt_ctx.container_stdout = _capture_container_logs(
-                        container_id, executable
+                        container_id,
+                        self.container_executable,
                     )
             if hasattr(env, "cleanup"):
                 env.cleanup()

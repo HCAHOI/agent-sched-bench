@@ -203,6 +203,7 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
         max_context_tokens=int(request["max_context_tokens"]),
         prompt_template=request["prompt_template"],
         runtime_mode="local_environment",
+        container_executable=request.get("container_executable"),
         exec_working_dir=request.get("exec_working_dir", "/testbed"),
     )
     agent._trace_logger = trace_logger

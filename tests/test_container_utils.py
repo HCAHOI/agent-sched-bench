@@ -55,13 +55,18 @@ def _reset_image_cache() -> None:
     clear_image_cache()
 
 
-def test_ensure_fixed_image_builds_when_derivative_missing() -> None:
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_ensure_fixed_image_builds_when_derivative_missing(
+    container_executable: str,
+) -> None:
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         # existence probe → missing (returncode=1)
-        if cmd[:3] == ["podman", "image", "exists"]:
+        if container_executable == "podman" and cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+        if container_executable == "docker" and cmd[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
         # run -d → container id
         if cmd[1:3] == ["run", "-d"]:
@@ -73,22 +78,31 @@ def test_ensure_fixed_image_builds_when_derivative_missing() -> None:
         side_effect=fake_run,
     ):
         fixed, elapsed = ensure_fixed_image(
-            "swerebench/foo:latest", host_uid=1000, host_gid=1000
+            "swerebench/foo:latest",
+            container_executable=container_executable,
+            host_uid=1000,
+            host_gid=1000,
         )
     assert fixed == "swebench-fixed-docker.io_swerebench_foo_latest"
     assert elapsed >= 0.0
     # Expect: fixed exists (miss), source exists (miss), pull, run -d, exec chown, commit, stop, rm
     verbs = [" ".join(c[1:3]) for c in calls]
-    assert verbs.count("image exists") == 2
+    expected_probe = "image exists" if container_executable == "podman" else "image inspect"
+    assert verbs.count(expected_probe) == 2
     assert "pull docker.io/swerebench/foo:latest" in [" ".join(c[1:4]) for c in calls]
     assert any("run -d" in v for v in verbs)
     assert any("exec cid_xyz" == " ".join(c[1:3]) for c in calls)
     assert any("commit cid_xyz" == " ".join(c[1:3]) for c in calls)
 
 
-def test_ensure_fixed_image_raises_on_build_failure() -> None:
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_ensure_fixed_image_raises_on_build_failure(
+    container_executable: str,
+) -> None:
     def boom(cmd, **kwargs):
-        if cmd[:3] == ["podman", "image", "exists"]:
+        if container_executable == "podman" and cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+        if container_executable == "docker" and cmd[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
         if cmd[1:3] == ["run", "-d"]:
             raise subprocess.CalledProcessError(1, cmd, stderr="kaboom")
@@ -99,15 +113,23 @@ def test_ensure_fixed_image_raises_on_build_failure() -> None:
         side_effect=boom,
     ):
         with pytest.raises(RuntimeError, match="Failed to build"):
-            ensure_fixed_image("swerebench/img")
+            ensure_fixed_image(
+                "swerebench/img",
+                container_executable=container_executable,
+            )
 
 
-def test_ensure_source_image_pulls_when_missing() -> None:
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_ensure_source_image_pulls_when_missing(
+    container_executable: str,
+) -> None:
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if cmd[:3] == ["podman", "image", "exists"]:
+        if container_executable == "podman" and cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+        if container_executable == "docker" and cmd[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -115,18 +137,34 @@ def test_ensure_source_image_pulls_when_missing() -> None:
         "harness.container_image_prep.subprocess.run",
         side_effect=fake_run,
     ):
-        ensure_source_image("swerebench/source:latest")
+        ensure_source_image(
+            "swerebench/source:latest",
+            container_executable=container_executable,
+        )
 
-    assert calls[0] == ["podman", "image", "exists", "docker.io/swerebench/source:latest"]
-    assert calls[1] == ["podman", "pull", "docker.io/swerebench/source:latest"]
+    assert calls[0] == (
+        [container_executable, "image", "exists", "docker.io/swerebench/source:latest"]
+        if container_executable == "podman"
+        else [container_executable, "image", "inspect", "docker.io/swerebench/source:latest"]
+    )
+    assert calls[1] == [
+        container_executable,
+        "pull",
+        "docker.io/swerebench/source:latest",
+    ]
 
 
-def test_drop_cached_fixed_image_forces_reprobe() -> None:
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_drop_cached_fixed_image_forces_reprobe(
+    container_executable: str,
+) -> None:
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if cmd[:3] == ["podman", "image", "exists"]:
+        if container_executable == "podman" and cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if container_executable == "docker" and cmd[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -134,20 +172,42 @@ def test_drop_cached_fixed_image_forces_reprobe() -> None:
         "harness.container_image_prep.subprocess.run",
         side_effect=fake_run,
     ):
-        ensure_fixed_image("swerebench/cached:latest")
+        ensure_fixed_image(
+            "swerebench/cached:latest",
+            container_executable=container_executable,
+        )
         drop_cached_fixed_image("swerebench/cached:latest")
-        ensure_fixed_image("swerebench/cached:latest")
+        ensure_fixed_image(
+            "swerebench/cached:latest",
+            container_executable=container_executable,
+        )
 
-    exists_calls = [cmd for cmd in calls if cmd[:3] == ["podman", "image", "exists"]]
+    exists_calls = [
+        cmd
+        for cmd in calls
+        if (
+            container_executable == "podman"
+            and cmd[:3] == ["podman", "image", "exists"]
+        )
+        or (
+            container_executable == "docker"
+            and cmd[:3] == ["docker", "image", "inspect"]
+        )
+    ]
     assert len(exists_calls) == 2
 
 
-def test_remove_image_and_prune_dangling_images() -> None:
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_remove_image_and_prune_dangling_images(
+    container_executable: str,
+) -> None:
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if cmd[:3] == ["podman", "image", "exists"]:
+        if container_executable == "podman" and cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if container_executable == "docker" and cmd[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -155,11 +215,23 @@ def test_remove_image_and_prune_dangling_images() -> None:
         "harness.container_image_prep.subprocess.run",
         side_effect=fake_run,
     ):
-        assert remove_image("docker.io/swerebench/source:latest") is True
-        prune_dangling_images()
+        assert (
+            remove_image(
+                "docker.io/swerebench/source:latest",
+                container_executable=container_executable,
+            )
+            is True
+        )
+        prune_dangling_images(container_executable=container_executable)
 
-    assert ["podman", "image", "rm", "-f", "docker.io/swerebench/source:latest"] in calls
-    assert ["podman", "image", "prune", "-f"] in calls
+    assert [
+        container_executable,
+        "image",
+        "rm",
+        "-f",
+        "docker.io/swerebench/source:latest",
+    ] in calls
+    assert [container_executable, "image", "prune", "-f"] in calls
 
 
 def test_normalize_image_reference_qualifies_short_names() -> None:
@@ -173,12 +245,36 @@ def test_normalize_image_reference_qualifies_short_names() -> None:
     assert normalize_image_reference("docker.io/swerebench/foo:latest") == "docker.io/swerebench/foo:latest"
 
 
-def test_remove_image_keeps_local_fixed_tags_unqualified() -> None:
+def test_normalize_image_reference_respects_registry_prefix_override(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TASK_CONTAINER_IMAGE_REGISTRY_PREFIX", "docker.1ms.run")
+
+    assert (
+        normalize_image_reference("hello-world")
+        == "docker.1ms.run/library/hello-world"
+    )
+    assert (
+        normalize_image_reference("swerebench/foo:latest")
+        == "docker.1ms.run/swerebench/foo:latest"
+    )
+    assert (
+        normalize_image_reference("docker.io/swerebench/foo:latest")
+        == "docker.io/swerebench/foo:latest"
+    )
+
+
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_remove_image_keeps_local_fixed_tags_unqualified(
+    container_executable: str,
+) -> None:
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if cmd[:3] == ["podman", "image", "exists"]:
+        if container_executable == "podman" and cmd[:3] == ["podman", "image", "exists"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if container_executable == "docker" and cmd[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -186,10 +282,26 @@ def test_remove_image_keeps_local_fixed_tags_unqualified() -> None:
         "harness.container_image_prep.subprocess.run",
         side_effect=fake_run,
     ):
-        assert remove_image("swebench-fixed-local_tag") is True
+        assert (
+            remove_image(
+                "swebench-fixed-local_tag",
+                container_executable=container_executable,
+            )
+            is True
+        )
 
-    assert calls[0] == ["podman", "image", "exists", "swebench-fixed-local_tag"]
-    assert calls[1] == ["podman", "image", "rm", "-f", "swebench-fixed-local_tag"]
+    assert calls[0] == (
+        [container_executable, "image", "exists", "swebench-fixed-local_tag"]
+        if container_executable == "podman"
+        else [container_executable, "image", "inspect", "swebench-fixed-local_tag"]
+    )
+    assert calls[1] == [
+        container_executable,
+        "image",
+        "rm",
+        "-f",
+        "swebench-fixed-local_tag",
+    ]
 
 
 # ---------------------------------------------------------------------------

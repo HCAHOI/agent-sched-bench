@@ -61,6 +61,12 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Agent scaffold to use: miniswe (bash-only) or openclaw (structured tools).",
     )
     parser.add_argument(
+        "--container",
+        choices=["docker", "podman"],
+        required=True,
+        help="Container CLI executable for benchmark collection runtime.",
+    )
+    parser.add_argument(
         "--mcp-config",
         default=None,
         help=(
@@ -286,6 +292,7 @@ def _run_collect(args: argparse.Namespace) -> None:
     run_dir = asyncio.run(
         collect_traces(
             scaffold=args.scaffold,
+            container_executable=args.container,
             provider_name=provider_config.name,
             env_key=provider_config.env_key,
             api_base=provider_config.api_base,
