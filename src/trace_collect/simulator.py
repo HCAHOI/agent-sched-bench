@@ -411,6 +411,50 @@ def _log_trace_metadata(
     trace_logger.log_metadata(**metadata)
 
 
+def _make_trace_action(
+    *,
+    loaded: LoadedTraceSession,
+    action_type: str,
+    action_id: str,
+    iteration: int,
+    ts_start: float,
+    ts_end: float,
+    data: dict[str, Any],
+) -> TraceAction:
+    return TraceAction(
+        action_type=action_type,
+        action_id=action_id,
+        agent_id=loaded.agent_id,
+        program_id=loaded.agent_id,
+        iteration=iteration,
+        ts_start=ts_start,
+        ts_end=ts_end,
+        data=data,
+    )
+
+
+def _make_trace_summary(
+    *,
+    loaded: LoadedTraceSession,
+    success: bool,
+    elapsed_s: float,
+    source_model: str,
+    extra: dict[str, Any],
+) -> dict[str, Any]:
+    summary = {
+        "agent_id": loaded.agent_id,
+        "task_id": loaded.agent_id,
+        "success": success,
+        "source_success": (loaded.summary or {}).get("success"),
+        "n_iterations": _iteration_count(loaded.actions),
+        "elapsed_s": elapsed_s,
+        "source_trace": str(loaded.source_trace),
+        "source_model": source_model,
+    }
+    summary.update(extra)
+    return summary
+
+
 async def _run_local_model_simulation(
     prepared_session: PreparedTraceSession,
     *,
@@ -425,7 +469,6 @@ async def _run_local_model_simulation(
     loaded = prepared_session.loaded
     iterations = loaded.iterations
     source_model = (loaded.summary or {}).get("model", "unknown")
-    source_success = (loaded.summary or {}).get("success")
     logger.info(
         "Simulating %s [scaffold=%s]: %d iterations from %s, local model=%s",
         loaded.agent_id,
@@ -482,11 +525,10 @@ async def _run_local_model_simulation(
 
             scheduler_snapshot = metrics_client.get_snapshot()
 
-            llm_record = TraceAction(
+            llm_record = _make_trace_action(
+                loaded=loaded,
                 action_type="llm_call",
                 action_id=f"llm_{it_num}",
-                agent_id=loaded.agent_id,
-                program_id=loaded.agent_id,
                 iteration=it_num,
                 ts_start=ts_start,
                 ts_end=ts_after_llm,
@@ -544,11 +586,10 @@ async def _run_local_model_simulation(
                     sim_provenance = "executed_locally"
                 total_tool_ms += tool_duration_ms
 
-                tool_record = TraceAction(
+                tool_record = _make_trace_action(
+                    loaded=loaded,
                     action_type="tool_exec",
                     action_id=f"tool_{it_num}_{tool_name}",
-                    agent_id=loaded.agent_id,
-                    program_id=loaded.agent_id,
                     iteration=it_num,
                     ts_start=tool_ts_start,
                     ts_end=tool_ts_end,
@@ -581,20 +622,18 @@ async def _run_local_model_simulation(
     finally:
         wall_end = time.time()
 
-        simulate_summary: dict[str, Any] = {
-            "agent_id": loaded.agent_id,
-            "task_id": loaded.agent_id,
-            "success": failed_iters == 0 and succeeded_iters == total_iters,
-            "source_success": source_success,
-            "n_iterations": total_iters,
-            "elapsed_s": wall_end - wall_start,
-            "source_trace": str(loaded.source_trace),
-            "source_model": source_model,
-            "local_model": model,
-            "local_api_base": api_base,
-            "succeeded_iterations": succeeded_iters,
-            "failed_iterations": failed_iters,
-        }
+        simulate_summary = _make_trace_summary(
+            loaded=loaded,
+            success=failed_iters == 0 and succeeded_iters == total_iters,
+            elapsed_s=wall_end - wall_start,
+            source_model=source_model,
+            extra={
+                "local_model": model,
+                "local_api_base": api_base,
+                "succeeded_iterations": succeeded_iters,
+                "failed_iterations": failed_iters,
+            },
+        )
         trace_logger.log_summary(loaded.agent_id, simulate_summary)
 
 
@@ -645,7 +684,6 @@ async def _replay_cloud_model_session(
 
     loaded = prepared_session.loaded
     source_model = (loaded.summary or {}).get("model", "unknown")
-    source_success = (loaded.summary or {}).get("success")
     source_zero = _coerce_timestamp(
         loaded.actions[0].get("ts_start"),
         field="ts_start",
@@ -696,11 +734,10 @@ async def _replay_cloud_model_session(
                 if source_duration_s > 0:
                     await asyncio.sleep(source_duration_s / replay_speed)
                 record_ts_end = time.time()
-                record = TraceAction(
+                record = _make_trace_action(
+                    loaded=loaded,
                     action_type="llm_call",
                     action_id=action_id or f"llm_{iteration}",
-                    agent_id=loaded.agent_id,
-                    program_id=loaded.agent_id,
                     iteration=iteration,
                     ts_start=record_ts_start,
                     ts_end=record_ts_end,
@@ -759,11 +796,10 @@ async def _replay_cloud_model_session(
                 )
                 replay_source = "executed_locally"
             record_ts_end = time.time()
-            tool_record = TraceAction(
+            tool_record = _make_trace_action(
+                loaded=loaded,
                 action_type="tool_exec",
                 action_id=action_id or f"tool_{iteration}_{tool_name}",
-                agent_id=loaded.agent_id,
-                program_id=loaded.agent_id,
                 iteration=iteration,
                 ts_start=record_ts_start,
                 ts_end=record_ts_end,
@@ -798,20 +834,18 @@ async def _replay_cloud_model_session(
     wall_end = time.time()
     trace_logger.log_summary(
         loaded.agent_id,
-        {
-            "agent_id": loaded.agent_id,
-            "task_id": loaded.agent_id,
-            "success": failed_actions == 0,
-            "source_success": source_success,
-            "n_iterations": _iteration_count(loaded.actions),
-            "elapsed_s": wall_end - wall_start,
-            "source_trace": str(loaded.source_trace),
-            "source_model": source_model,
-            "replay_mode": "cloud_model",
-            "replay_speed": replay_speed,
-            "succeeded_actions": succeeded_actions,
-            "failed_actions": failed_actions,
-        },
+        _make_trace_summary(
+            loaded=loaded,
+            success=failed_actions == 0,
+            elapsed_s=wall_end - wall_start,
+            source_model=source_model,
+            extra={
+                "replay_mode": "cloud_model",
+                "replay_speed": replay_speed,
+                "succeeded_actions": succeeded_actions,
+                "failed_actions": failed_actions,
+            },
+        ),
     )
 
 
