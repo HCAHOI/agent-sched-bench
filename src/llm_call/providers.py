@@ -30,6 +30,11 @@ PROVIDERS: dict[str, ProviderDefinition] = {
         env_key="OPENAI_API_KEY",
         miniswe_litellm_prefix="openai",
     ),
+    "siliconflow": ProviderDefinition(
+        api_base="https://api.siliconflow.com/v1",
+        env_key="SILICONFLOW_API_KEY",
+        miniswe_litellm_prefix="openai",
+    ),
 }
 
 

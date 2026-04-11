@@ -62,6 +62,22 @@ def test_resolve_llm_config_honors_explicit_overrides() -> None:
     assert resolved.model == "override-model"
 
 
+def test_resolve_llm_config_supports_siliconflow() -> None:
+    resolved = resolve_llm_config(
+        provider="siliconflow",
+        api_base=None,
+        api_key=None,
+        model="Pro/zai-org/GLM-5.1",
+        environ={"SILICONFLOW_API_KEY": "sf-test-key"},
+    )
+
+    assert resolved.name == "siliconflow"
+    assert resolved.api_base == "https://api.siliconflow.com/v1"
+    assert resolved.api_key == "sf-test-key"
+    assert resolved.model == "Pro/zai-org/GLM-5.1"
+    assert resolved.env_key == "SILICONFLOW_API_KEY"
+
+
 def test_build_miniswe_litellm_model_name_for_openrouter() -> None:
     assert (
         build_miniswe_litellm_model_name(
@@ -81,6 +97,17 @@ def test_build_miniswe_litellm_model_name_for_openai_compatible_provider() -> No
             api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
         )
         == "openai/qwen-plus-latest"
+    )
+
+
+def test_build_miniswe_litellm_model_name_for_siliconflow() -> None:
+    assert (
+        build_miniswe_litellm_model_name(
+            model="Pro/zai-org/GLM-5.1",
+            provider_name="siliconflow",
+            api_base="https://api.siliconflow.com/v1",
+        )
+        == "openai/Pro/zai-org/GLM-5.1"
     )
 
 
