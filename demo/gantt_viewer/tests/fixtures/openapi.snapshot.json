@@ -15,6 +15,18 @@
         "title": "Body_upload_trace_endpoint_api_traces_upload_post",
         "type": "object"
       },
+      "ExportHtmlRequest": {
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/SnapshotPayload"
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "title": "ExportHtmlRequest",
+        "type": "object"
+      },
       "GanttPayload": {
         "properties": {
           "errors": {
@@ -266,6 +278,34 @@
           "markers"
         ],
         "title": "Registries",
+        "type": "object"
+      },
+      "SnapshotPayload": {
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/PayloadError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "registries": {
+            "$ref": "#/components/schemas/Registries"
+          },
+          "traces": {
+            "items": {
+              "$ref": "#/components/schemas/TracePayload-Input"
+            },
+            "minItems": 1,
+            "title": "Traces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "registries",
+          "traces"
+        ],
+        "title": "SnapshotPayload",
         "type": "object"
       },
       "Span": {
@@ -639,6 +679,44 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/export/html": {
+      "post": {
+        "operationId": "export_html_endpoint_api_export_html_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportHtmlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Html Endpoint"
+      }
+    },
     "/api/health": {
       "get": {
         "operationId": "health_endpoint_api_health_get",
