@@ -27,6 +27,7 @@ from agents.openclaw.eval.types import (
 )
 from agents.openclaw.providers.base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
+from trace_collect.latency_metrics import summarize_llm_latencies
 
 
 def _trace_has_llm_error(trace_file: Path | None) -> bool:
@@ -88,12 +89,32 @@ class TraceCollectorHook(AgentHook):
         self._iter_start_wall: float = 0.0
         self._iter_messages_snapshot: list[dict[str, Any]] | None = None
         self._before_exec_wall: float = 0.0
+        self._records: list[dict[str, Any]] = []
         self._actions: list[dict[str, Any]] = []
-        self._fh = open(trace_file, "a", encoding="utf-8")  # noqa: SIM115
+        self._pending_llm_records: list[dict[str, Any]] = []
+        self._flushed = False
+        self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
 
     def close(self) -> None:
+        if self._flushed:
+            return
         if not self._fh.closed:
             self._fh.close()
+        tmp_trace_file = self.trace_file.with_suffix(f"{self.trace_file.suffix}.tmp")
+        tmp_trace_file.write_text(
+            "".join(
+                json.dumps(record, ensure_ascii=False) + "\n"
+                for record in self._records
+            ),
+            encoding="utf-8",
+        )
+        tmp_trace_file.replace(self.trace_file)
+        self._flushed = True
+
+    def add_record(self, record: dict[str, Any]) -> None:
+        self._records.append(record)
+        self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._fh.flush()
 
     def emit_event(
         self,
@@ -113,8 +134,7 @@ class TraceCollectorHook(AgentHook):
             ts=time.time(),
             iteration=iteration,
         )
-        self._fh.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
-        self._fh.flush()
+        self.add_record(entry.to_dict())
 
     async def before_iteration(self, context: AgentHookContext) -> None:
         self._iter_start_wall = time.time()
@@ -153,24 +173,57 @@ class TraceCollectorHook(AgentHook):
         completion_tokens = usage.get("completion_tokens", 0)
         self._total_tokens += prompt_tokens + completion_tokens
 
-        llm_ts_end = self._before_exec_wall or ts_now
-        llm_latency_ms = (llm_ts_end - self._iter_start_wall) * 1000
+        llm_ts_end = (
+            self._resolve_llm_ts_end(context.response)
+            or self._before_exec_wall
+            or ts_now
+        )
+        llm_wall_latency_ms = max(0.0, (llm_ts_end - self._iter_start_wall) * 1000)
+        llm_call_time_ms = self._resolve_llm_call_time_ms(
+            context.response,
+            llm_wall_latency_ms,
+        )
+        llm_timing_source = self._resolve_llm_timing_source(context.response)
         resp_dict = self._build_raw_response(
             context=context,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        llm_event_data = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "llm_latency_ms": round(llm_call_time_ms, 2),
+            "llm_call_time_ms": round(llm_call_time_ms, 2),
+            "llm_wall_latency_ms": round(llm_wall_latency_ms, 2),
+            "llm_timing_source": llm_timing_source,
+            "finish_reason": context.response.finish_reason
+            if context.response
+            else None,
+        }
+        llm_action_data: dict[str, Any] = {
+            "messages_in": self._iter_messages_snapshot,
+            "raw_response": resp_dict,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "llm_latency_ms": round(llm_call_time_ms, 2),
+            "llm_call_time_ms": round(llm_call_time_ms, 2),
+            "llm_wall_latency_ms": round(llm_wall_latency_ms, 2),
+            "llm_timing_source": llm_timing_source,
+        }
+        trace_llm_fields = self._extract_trace_llm_fields(context.response)
+        if trace_llm_fields:
+            llm_event_data.update(
+                {
+                    key: value
+                    for key, value in trace_llm_fields.items()
+                    if key != "openrouter_metadata"
+                }
+            )
+            llm_action_data.update(trace_llm_fields)
         self.emit_event(
             LLM,
             "llm_call_end",
-            {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "llm_latency_ms": round(llm_latency_ms, 2),
-                "finish_reason": context.response.finish_reason
-                if context.response
-                else None,
-            },
+            llm_event_data,
             iteration=context.iteration,
         )
         llm_action = TraceAction(
@@ -182,15 +235,19 @@ class TraceCollectorHook(AgentHook):
             iteration=context.iteration,
             ts_start=self._iter_start_wall,
             ts_end=llm_ts_end,
-            data={
-                "messages_in": self._iter_messages_snapshot,
-                "raw_response": resp_dict,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "llm_latency_ms": round(llm_latency_ms, 2),
-            },
+            data=llm_action_data,
         )
         self._write_action(llm_action)
+        if context.response and getattr(context.response, "extra", None):
+            if context.response.extra.get("_openrouter_metadata_task") is not None:
+                self._pending_llm_records.append(
+                    {
+                        "response": context.response,
+                        "event_data": llm_event_data,
+                        "action_data": llm_action_data,
+                        "raw_response": resp_dict,
+                    }
+                )
         self._before_exec_wall = 0.0
         self._iter_messages_snapshot = None
 
@@ -271,7 +328,13 @@ class TraceCollectorHook(AgentHook):
                     "finish_reason": finish_reason,
                 }
                 if context.response.extra:
-                    error_data.update(context.response.extra)
+                    error_data.update(
+                        {
+                            key: value
+                            for key, value in context.response.extra.items()
+                            if key != "llm_wall_ts_end" and not key.startswith("_")
+                        }
+                    )
                 self.emit_event(
                     LLM,
                     "llm_error",
@@ -303,14 +366,128 @@ class TraceCollectorHook(AgentHook):
     def _write_action(self, action: TraceAction) -> None:
         d = action.to_dict()
         self._actions.append(d)
-        self._fh.write(json.dumps(d, ensure_ascii=False) + "\n")
-        self._fh.flush()
+        self.add_record(d)
+
+    async def _resolve_pending_llm_records(self) -> None:
+        for pending in self._pending_llm_records:
+            response = pending["response"]
+            if response is None or not getattr(response, "extra", None):
+                continue
+            task = response.extra.get("_openrouter_metadata_task")
+            if task is not None:
+                try:
+                    await task
+                except Exception:
+                    pass
+            response.extra.pop("_openrouter_metadata_task", None)
+            response.extra["openrouter_metadata_task_pending"] = False
+            llm_wall_latency_ms = float(pending["action_data"]["llm_wall_latency_ms"])
+            llm_call_time_ms = self._resolve_llm_call_time_ms(
+                response,
+                llm_wall_latency_ms,
+            )
+            llm_timing_source = self._resolve_llm_timing_source(response)
+            pending["event_data"]["llm_latency_ms"] = round(llm_call_time_ms, 2)
+            pending["event_data"]["llm_call_time_ms"] = round(llm_call_time_ms, 2)
+            pending["event_data"]["llm_timing_source"] = llm_timing_source
+            pending["action_data"]["llm_latency_ms"] = round(llm_call_time_ms, 2)
+            pending["action_data"]["llm_call_time_ms"] = round(llm_call_time_ms, 2)
+            pending["action_data"]["llm_timing_source"] = llm_timing_source
+            trace_llm_fields = self._extract_trace_llm_fields(response)
+            pending["event_data"].update(
+                {
+                    key: value
+                    for key, value in trace_llm_fields.items()
+                    if key != "openrouter_metadata"
+                }
+            )
+            pending["action_data"].update(trace_llm_fields)
+            raw_response = pending["raw_response"]
+            openrouter_metadata = response.extra.get("openrouter_metadata")
+            if openrouter_metadata is not None:
+                raw_response["openrouter_metadata"] = openrouter_metadata
+            generation_id = response.extra.get("openrouter_generation_id")
+            if generation_id is not None:
+                raw_response["openrouter_generation_id"] = generation_id
+        self._pending_llm_records.clear()
 
     @staticmethod
     def _clone_messages(messages: list[dict] | None) -> list[dict[str, Any]] | None:
         if not messages:
             return None
         return json.loads(json.dumps(messages, ensure_ascii=False, default=str))
+
+    @staticmethod
+    def _resolve_llm_ts_end(response: Any | None) -> float | None:
+        if response is None or not getattr(response, "extra", None):
+            return None
+        value = response.extra.get("llm_wall_ts_end")
+        try:
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _resolve_llm_call_time_ms(
+        response: Any | None,
+        llm_wall_latency_ms: float,
+    ) -> float:
+        if response is None or not getattr(response, "extra", None):
+            return llm_wall_latency_ms
+        for key in (
+            "llm_call_time_ms",
+            "openrouter_generation_time_ms",
+            "llm_latency_ms",
+        ):
+            value = response.extra.get(key)
+            try:
+                if value is not None:
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+        return llm_wall_latency_ms
+
+    @staticmethod
+    def _resolve_llm_timing_source(response: Any | None) -> str:
+        if response is None or not getattr(response, "extra", None):
+            return "wall_clock_ms"
+        source = response.extra.get("llm_timing_source")
+        if isinstance(source, str) and source:
+            return source
+        if response.extra.get("openrouter_generation_time_ms") is not None:
+            return "openrouter_generation_time_ms"
+        return "wall_clock_ms"
+
+    @staticmethod
+    def _extract_trace_llm_fields(response: Any | None) -> dict[str, Any]:
+        if response is None or not getattr(response, "extra", None):
+            return {}
+        extra = response.extra
+        result = {}
+        for key in (
+            "llm_call_time_ms",
+            "llm_timing_source",
+            "openrouter_generation_id",
+            "openrouter_request_id",
+            "openrouter_latency_ms",
+            "openrouter_generation_time_ms",
+            "openrouter_moderation_latency_ms",
+            "openrouter_provider_latency_ms",
+            "openrouter_provider_name",
+            "openrouter_upstream_id",
+            "openrouter_created_at",
+            "openrouter_api_type",
+            "openrouter_metadata_capture_enabled",
+            "openrouter_metadata_task_pending",
+            "openrouter_metadata_retry_delays_s",
+            "openrouter_metadata_timeout_s",
+            "openrouter_metadata_fetch_ms",
+            "openrouter_metadata_fetch_status",
+            "openrouter_metadata",
+        ):
+            if key in extra:
+                result[key] = extra[key]
+        return result
 
     def _build_raw_response(
         self,
@@ -343,7 +520,7 @@ class TraceCollectorHook(AgentHook):
                     }
                 )
             message["tool_calls"] = tool_calls
-        return {
+        raw_response = {
             "choices": [
                 {
                     "message": message,
@@ -355,25 +532,37 @@ class TraceCollectorHook(AgentHook):
                 "completion_tokens": completion_tokens,
             },
         }
+        if resp and resp.extra:
+            openrouter_metadata = resp.extra.get("openrouter_metadata")
+            if openrouter_metadata is not None:
+                raw_response["openrouter_metadata"] = openrouter_metadata
+            generation_id = resp.extra.get("openrouter_generation_id")
+            if generation_id is not None:
+                raw_response["openrouter_generation_id"] = generation_id
+        return raw_response
 
-    def write_summary(
+    async def write_summary(
         self,
         *,
         success: bool | None = None,
         elapsed_s: float = 0.0,
         prepare_ms: float | None = None,
     ) -> None:
+        await self._resolve_pending_llm_records()
+        llm_summary = summarize_llm_latencies(
+            a.get("data") for a in self._actions if a.get("action_type") == "llm_call"
+        )
         summary = EvalTraceSummary(
             agent_id=self.agent_id,
             program_id=self.program_id,
             task_id=self.task_id,
             instance_id=self.instance_id,
             n_iterations=self._n_iterations,
-            total_llm_ms=sum(
-                a.get("data", {}).get("llm_latency_ms", 0)
-                for a in self._actions
-                if a.get("action_type") == "llm_call"
-            ),
+            total_llm_ms=float(llm_summary["total_llm_ms"]),
+            total_llm_wall_ms=float(llm_summary["total_llm_wall_ms"]),
+            total_llm_call_time_ms=float(llm_summary["total_llm_call_time_ms"]),
+            llm_call_time_count=int(llm_summary["llm_call_time_count"]),
+            llm_timing_source=str(llm_summary["llm_timing_source"]),
             total_tool_ms=sum(self._tool_times.values()),
             total_tokens=self._total_tokens,
             tool_ms_by_name=self._tool_times,
@@ -382,8 +571,7 @@ class TraceCollectorHook(AgentHook):
             elapsed_s=elapsed_s,
             prepare_ms=prepare_ms,
         )
-        self._fh.write(json.dumps(summary.to_dict(), ensure_ascii=False) + "\n")
-        self._fh.flush()
+        self.add_record(summary.to_dict())
         self.close()
 
 
@@ -482,8 +670,6 @@ class SessionRunner:
 
         trace_hook = TraceCollectorHook(trace_file, iid, agent_id=iid, task_id=iid)
 
-        import json as _json
-
         metadata = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
@@ -500,8 +686,7 @@ class SessionRunner:
                 "file_ops": "structured",
             },
         }
-        trace_hook._fh.write(_json.dumps(metadata, ensure_ascii=False) + "\n")
-        trace_hook._fh.flush()
+        trace_hook.add_record(metadata)
 
         bus = MessageBus()
         collector = ResultCollector(bus)
@@ -564,7 +749,7 @@ class SessionRunner:
             trace_file=trace_file,
         )
 
-        trace_hook.write_summary(
+        await trace_hook.write_summary(
             success=stop_reason == "completed",
             elapsed_s=elapsed_s,
             prepare_ms=prepare_ms,

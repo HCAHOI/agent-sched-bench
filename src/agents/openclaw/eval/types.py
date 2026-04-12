@@ -1,9 +1,9 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
 
 @dataclass
 class EvalTask:
@@ -14,9 +14,10 @@ class EvalTask:
     repo: str | None = None
     base_commit: str | None = None
     image_name: str | None = None
+
+
 @dataclass
 class EvalResult:
-
     instance_id: str
     content: str | None
     tools_used: list[str] = field(default_factory=list)
@@ -105,6 +106,7 @@ class EvalResult:
                 return "\n".join(lines[i:]).strip()
         return ""
 
+
 @dataclass
 class EvalTraceSummary:
     type: str = "summary"
@@ -114,6 +116,10 @@ class EvalTraceSummary:
     instance_id: str = ""
     n_iterations: int = 0
     total_llm_ms: float = 0.0
+    total_llm_wall_ms: float = 0.0
+    total_llm_call_time_ms: float = 0.0
+    llm_call_time_count: int = 0
+    llm_timing_source: str = "wall_clock_ms"
     total_tool_ms: float = 0.0
     total_tokens: int = 0
     tool_ms_by_name: dict[str, float] = field(default_factory=dict)
@@ -131,6 +137,10 @@ class EvalTraceSummary:
             "instance_id": self.instance_id,
             "n_iterations": self.n_iterations,
             "total_llm_ms": self.total_llm_ms,
+            "total_llm_wall_ms": self.total_llm_wall_ms,
+            "total_llm_call_time_ms": self.total_llm_call_time_ms,
+            "llm_call_time_count": self.llm_call_time_count,
+            "llm_timing_source": self.llm_timing_source,
             "total_tool_ms": self.total_tool_ms,
             "total_tokens": self.total_tokens,
             "tool_ms_by_name": self.tool_ms_by_name,
@@ -139,6 +149,7 @@ class EvalTraceSummary:
             "elapsed_s": self.elapsed_s,
             "prepare_ms": self.prepare_ms,
         }
+
 
 SCHEDULING = "SCHEDULING"
 SESSION = "SESSION"
@@ -161,6 +172,7 @@ ALL_CATEGORIES = frozenset(
         SUBAGENT,
     ]
 )
+
 
 @dataclass
 class EvalTraceEvent:

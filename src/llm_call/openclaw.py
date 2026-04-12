@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import os
 import secrets
 import string
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+import httpx
 import json_repair
-from llm_call.openai_compat import create_async_openai_client
+from llm_call.openai_compat import create_async_openai_client, uses_openrouter
 
 from agents.openclaw.providers.base import (
     GenerationSettings,
@@ -37,6 +40,9 @@ _ALNUM = string.ascii_letters + string.digits
 
 _STANDARD_TC_KEYS = frozenset({"id", "type", "index", "function"})
 _STANDARD_FN_KEYS = frozenset({"name", "arguments"})
+_OPENROUTER_GENERATION_ID_HEADER = "x-generation-id"
+_DEFAULT_OPENROUTER_METADATA_RETRY_DELAYS_S = (0.0, 0.2, 0.5)
+_DEFAULT_OPENROUTER_METADATA_TIMEOUT_S = 5.0
 
 
 def _short_tool_id() -> str:
@@ -63,6 +69,58 @@ def _coerce_dict(value: Any) -> dict[str, Any] | None:
         if isinstance(dumped, dict) and dumped:
             return dumped
     return None
+
+
+def _coerce_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return str(value)
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_openrouter_metadata_retry_delays_s() -> tuple[float, ...]:
+    raw_value = os.environ.get("NANOBOT_OPENROUTER_METADATA_RETRY_DELAYS_S")
+    if not raw_value:
+        return _DEFAULT_OPENROUTER_METADATA_RETRY_DELAYS_S
+    delays: list[float] = []
+    for piece in raw_value.split(","):
+        value = _coerce_float(piece.strip())
+        if value is not None and value >= 0.0:
+            delays.append(value)
+    return tuple(delays) or _DEFAULT_OPENROUTER_METADATA_RETRY_DELAYS_S
+
+
+def _get_openrouter_metadata_timeout_s() -> float:
+    raw_value = os.environ.get("NANOBOT_OPENROUTER_METADATA_TIMEOUT_S")
+    value = _coerce_float(raw_value)
+    if value is None or value <= 0.0:
+        return _DEFAULT_OPENROUTER_METADATA_TIMEOUT_S
+    return value
+
+
+def _get_openrouter_metadata_policy() -> dict[str, Any]:
+    return {
+        "retry_delays_s": list(_get_openrouter_metadata_retry_delays_s()),
+        "timeout_s": _get_openrouter_metadata_timeout_s(),
+    }
+
+
+def _should_capture_openrouter_metadata() -> bool:
+    raw_value = os.environ.get("NANOBOT_OPENROUTER_CAPTURE_GENERATION_METADATA")
+    if raw_value is None:
+        return False
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _extract_tc_extras(
@@ -196,6 +254,223 @@ class UnifiedProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
         return kwargs
+
+    @staticmethod
+    async def _maybe_await(value: Any) -> Any:
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    @staticmethod
+    def _normalize_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
+        if not headers:
+            return {}
+        return {str(k).lower(): str(v) for k, v in headers.items()}
+
+    @classmethod
+    def _select_openrouter_provider_response(
+        cls,
+        provider_responses: list[dict[str, Any]],
+        provider_name: str | None,
+    ) -> dict[str, Any] | None:
+        if provider_name:
+            served = [
+                item
+                for item in provider_responses
+                if item.get("provider_name") == provider_name
+            ]
+            ok = [item for item in served if item.get("status") == 200]
+            if ok:
+                return ok[-1]
+            if served:
+                return served[-1]
+        ok = [item for item in provider_responses if item.get("status") == 200]
+        if ok:
+            return ok[-1]
+        return provider_responses[-1] if provider_responses else None
+
+    @classmethod
+    def _normalize_openrouter_generation_metadata(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        generation_id: str,
+    ) -> dict[str, Any]:
+        provider_name = _coerce_str(payload.get("provider_name"))
+        provider_responses_raw = payload.get("provider_responses")
+        provider_responses: list[dict[str, Any]] = []
+        if isinstance(provider_responses_raw, list):
+            for item in provider_responses_raw:
+                item_map = cls._maybe_mapping(item) or {}
+                provider_responses.append(
+                    {
+                        "endpoint_id": _coerce_str(item_map.get("endpoint_id")),
+                        "id": _coerce_str(item_map.get("id")),
+                        "is_byok": item_map.get("is_byok"),
+                        "latency_ms": _coerce_float(item_map.get("latency")),
+                        "model_permaslug": _coerce_str(item_map.get("model_permaslug")),
+                        "provider_name": _coerce_str(item_map.get("provider_name")),
+                        "status": item_map.get("status"),
+                    }
+                )
+        selected_provider = cls._select_openrouter_provider_response(
+            provider_responses,
+            provider_name,
+        )
+        normalized = {
+            "generation_id": _coerce_str(payload.get("id")) or generation_id,
+            "request_id": _coerce_str(payload.get("request_id")),
+            "provider_name": provider_name,
+            "latency_ms": _coerce_float(payload.get("latency")),
+            "generation_time_ms": _coerce_float(payload.get("generation_time")),
+            "moderation_latency_ms": _coerce_float(payload.get("moderation_latency")),
+            "provider_latency_ms": None
+            if selected_provider is None
+            else selected_provider.get("latency_ms"),
+            "upstream_id": _coerce_str(payload.get("upstream_id")),
+            "created_at": _coerce_str(payload.get("created_at")),
+            "api_type": _coerce_str(payload.get("api_type")),
+            "model": _coerce_str(payload.get("model")),
+            "streamed": payload.get("streamed"),
+            "provider_responses": provider_responses,
+        }
+        return normalized
+
+    async def _fetch_openrouter_generation_metadata(
+        self,
+        generation_id: str,
+    ) -> dict[str, Any]:
+        if not generation_id or not self.api_base or not self.api_key:
+            return {}
+
+        url = f"{self.api_base.rstrip('/')}/generation"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        timeout = httpx.Timeout(_get_openrouter_metadata_timeout_s())
+        retry_delays_s = _get_openrouter_metadata_retry_delays_s()
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for delay_s in retry_delays_s:
+                if delay_s:
+                    await asyncio.sleep(delay_s)
+                try:
+                    response = await client.get(
+                        url,
+                        params={"id": generation_id},
+                        headers=headers,
+                    )
+                except httpx.HTTPError:
+                    return {}
+
+                if response.status_code == 404:
+                    continue
+                if response.is_error:
+                    return {}
+
+                try:
+                    payload = response.json()
+                except ValueError:
+                    return {}
+
+                data = payload.get("data") if isinstance(payload, dict) else None
+                if isinstance(data, Mapping):
+                    return self._normalize_openrouter_generation_metadata(
+                        data,
+                        generation_id=generation_id,
+                    )
+        return {}
+
+    async def _fetch_openrouter_extra_fields(
+        self, generation_id: str
+    ) -> dict[str, Any]:
+        metadata_fetch_started_at = time.time()
+        metadata = await self._fetch_openrouter_generation_metadata(generation_id)
+        extra_fields: dict[str, Any] = {
+            "openrouter_metadata_fetch_ms": (time.time() - metadata_fetch_started_at)
+            * 1000.0,
+            "openrouter_metadata_fetch_status": (
+                "success" if metadata else "unavailable"
+            ),
+        }
+        if not metadata:
+            return extra_fields
+
+        llm_call_time_ms = metadata.get("generation_time_ms")
+        llm_timing_source = "openrouter_generation_time_ms"
+        if llm_call_time_ms is None:
+            llm_call_time_ms = metadata.get("latency_ms")
+            llm_timing_source = "openrouter_latency_ms"
+
+        extra_fields.update(
+            {
+                "openrouter_metadata": metadata,
+                "openrouter_request_id": metadata.get("request_id"),
+                "openrouter_latency_ms": metadata.get("latency_ms"),
+                "openrouter_generation_time_ms": metadata.get("generation_time_ms"),
+                "openrouter_moderation_latency_ms": metadata.get(
+                    "moderation_latency_ms"
+                ),
+                "openrouter_provider_latency_ms": metadata.get("provider_latency_ms"),
+                "openrouter_provider_name": metadata.get("provider_name"),
+                "openrouter_upstream_id": metadata.get("upstream_id"),
+                "openrouter_created_at": metadata.get("created_at"),
+                "openrouter_api_type": metadata.get("api_type"),
+            }
+        )
+        if llm_call_time_ms is not None:
+            extra_fields["llm_call_time_ms"] = llm_call_time_ms
+            extra_fields["llm_timing_source"] = llm_timing_source
+        return extra_fields
+
+    async def _augment_response_extra(
+        self,
+        response: LLMResponse,
+        *,
+        response_headers: Mapping[str, str] | None,
+    ) -> LLMResponse:
+        extra = dict(response.extra)
+        extra["llm_wall_ts_end"] = time.time()
+        if not uses_openrouter(self.api_base):
+            response.extra = extra
+            return response
+
+        headers = self._normalize_headers(response_headers)
+        generation_id = headers.get(_OPENROUTER_GENERATION_ID_HEADER)
+        if generation_id:
+            extra["openrouter_generation_id"] = generation_id
+        if not generation_id:
+            response.extra = extra
+            return response
+
+        if not _should_capture_openrouter_metadata():
+            extra["openrouter_metadata_fetch_status"] = "disabled"
+            response.extra = extra
+            return response
+
+        metadata_policy = _get_openrouter_metadata_policy()
+        extra["openrouter_metadata_fetch_status"] = "pending"
+        extra["openrouter_metadata_capture_enabled"] = True
+        extra["openrouter_metadata_retry_delays_s"] = metadata_policy["retry_delays_s"]
+        extra["openrouter_metadata_timeout_s"] = metadata_policy["timeout_s"]
+        extra["openrouter_metadata_task_pending"] = True
+        metadata_task = asyncio.create_task(
+            self._fetch_openrouter_extra_fields(generation_id)
+        )
+        extra["_openrouter_metadata_task"] = metadata_task
+        response.extra = extra
+
+        def _apply_openrouter_metadata(task: asyncio.Task[dict[str, Any]]) -> None:
+            updated_extra = dict(response.extra)
+            updated_extra["openrouter_metadata_task_pending"] = False
+            updated_extra.pop("_openrouter_metadata_task", None)
+            try:
+                updated_extra.update(task.result())
+            except Exception as exc:  # pragma: no cover - defensive guard
+                updated_extra["openrouter_metadata_fetch_status"] = "task_error"
+                updated_extra["openrouter_metadata_fetch_error"] = str(exc)
+            response.extra = updated_extra
+
+        metadata_task.add_done_callback(_apply_openrouter_metadata)
+        return response
 
     # ------------------------------------------------------------------
     # Response parsing
@@ -554,7 +829,15 @@ class UnifiedProvider(LLMProvider):
             tool_choice,
         )
         try:
-            return self._parse(await self._client.chat.completions.create(**kwargs))
+            raw_response = await self._client.chat.completions.with_raw_response.create(
+                **kwargs
+            )
+            parsed = await self._maybe_await(raw_response.parse())
+            response = self._parse(parsed)
+            return await self._augment_response_extra(
+                response,
+                response_headers=raw_response.headers,
+            )
         except Exception as e:
             return self._handle_error(e)
 
@@ -582,23 +865,30 @@ class UnifiedProvider(LLMProvider):
         kwargs["stream_options"] = {"include_usage": True}
         idle_timeout_s = int(os.environ.get("NANOBOT_STREAM_IDLE_TIMEOUT_S", "90"))
         try:
-            stream = await self._client.chat.completions.create(**kwargs)
-            chunks: list[Any] = []
-            stream_iter = stream.__aiter__()
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(
-                        stream_iter.__anext__(),
-                        timeout=idle_timeout_s,
-                    )
-                except StopAsyncIteration:
-                    break
-                chunks.append(chunk)
-                if on_content_delta and chunk.choices:
-                    text = getattr(chunk.choices[0].delta, "content", None)
-                    if text:
-                        await on_content_delta(text)
-            return self._parse_chunks(chunks)
+            async with self._client.chat.completions.with_streaming_response.create(
+                **kwargs
+            ) as raw_response:
+                stream = await raw_response.parse()
+                chunks: list[Any] = []
+                stream_iter = stream.__aiter__()
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            stream_iter.__anext__(),
+                            timeout=idle_timeout_s,
+                        )
+                    except StopAsyncIteration:
+                        break
+                    chunks.append(chunk)
+                    if on_content_delta and chunk.choices:
+                        text = getattr(chunk.choices[0].delta, "content", None)
+                        if text:
+                            await on_content_delta(text)
+                response = self._parse_chunks(chunks)
+                return await self._augment_response_extra(
+                    response,
+                    response_headers=raw_response.headers,
+                )
         except asyncio.TimeoutError:
             return LLMResponse(
                 content=(

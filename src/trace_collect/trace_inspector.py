@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -7,17 +6,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from trace_collect.latency_metrics import (
+    get_llm_wall_latency_ms,
+    get_openrouter_latency_ms,
+    get_preferred_llm_latency_ms,
+    summarize_llm_latencies,
+)
+
 CURRENT_TRACE_FORMAT_VERSION = 5
+
 
 def _truncate(text: str, limit: int) -> str:
     if limit <= 0 or len(text) <= limit:
         return text
     return text[:limit] + f"... ({len(text) - limit} chars truncated)"
 
+
 def _to_str(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False)
+
 
 def _action_get(action: dict[str, Any] | None, key: str, default: Any = None) -> Any:
     if not action:
@@ -26,6 +35,7 @@ def _action_get(action: dict[str, Any] | None, key: str, default: Any = None) ->
     if key in data and data[key] is not None:
         return data[key]
     return action.get(key, default)
+
 
 def _raw_response_text(raw_response: dict[str, Any]) -> str:
     choices = raw_response.get("choices") or []
@@ -47,6 +57,7 @@ def _raw_response_text(raw_response: dict[str, Any]) -> str:
         if isinstance(block, dict) and block.get("type") == "text"
     ]
     return "\n".join(part for part in text_parts if part)
+
 
 @dataclass
 class TraceData:
@@ -132,13 +143,16 @@ class TraceData:
             agents=list(seen_agents.keys()),
         )
 
+
 def cmd_overview(data: TraceData, as_json: bool = False) -> None:
     total_prompt = sum(_action_get(s, "prompt_tokens", 0) for s in data.actions)
-    total_completion = sum(
-        _action_get(s, "completion_tokens", 0) for s in data.actions
-    )
+    total_completion = sum(_action_get(s, "completion_tokens", 0) for s in data.actions)
     total_tokens = total_prompt + total_completion
-    total_llm_ms = sum(_action_get(s, "llm_latency_ms", 0) for s in data.actions)
+    llm_summary = summarize_llm_latencies(
+        s.get("data") for s in data.actions if s.get("action_type") == "llm_call"
+    )
+    total_llm_ms = float(llm_summary["total_llm_ms"])
+    total_llm_wall_ms = float(llm_summary["total_llm_wall_ms"])
     total_tool_ms = sum(
         _action_get(s, "tool_duration_ms", 0) or _action_get(s, "duration_ms", 0)
         for s in data.actions
@@ -158,9 +172,7 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         if tool:
             tool_counts[tool] = tool_counts.get(tool, 0) + 1
     distinct_iterations = {
-        act.get("iteration")
-        for act in data.actions
-        if act.get("iteration") is not None
+        act.get("iteration") for act in data.actions if act.get("iteration") is not None
     }
 
     info: dict[str, Any] = {
@@ -176,6 +188,10 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         "prompt_tokens": total_prompt,
         "completion_tokens": total_completion,
         "total_llm_ms": total_llm_ms,
+        "total_llm_wall_ms": total_llm_wall_ms,
+        "total_llm_call_time_ms": llm_summary["total_llm_call_time_ms"],
+        "llm_call_time_count": llm_summary["llm_call_time_count"],
+        "llm_timing_source": llm_summary["llm_timing_source"],
         "total_tool_ms": total_tool_ms,
         "elapsed_s": elapsed_s,
         "success": success,
@@ -201,11 +217,15 @@ def cmd_overview(data: TraceData, as_json: bool = False) -> None:
         f"  Tokens    : {total_tokens} (prompt={total_prompt}, completion={total_completion})"
     )
     print(f"  LLM time  : {total_llm_ms:.0f} ms")
+    if abs(total_llm_wall_ms - total_llm_ms) > 0.5:
+        print(f"  LLM wall  : {total_llm_wall_ms:.0f} ms")
+    print(f"  LLM source: {llm_summary['llm_timing_source']}")
     print(f"  Tool time : {total_tool_ms:.0f} ms")
     if elapsed_s is not None:
         print(f"  Elapsed   : {elapsed_s:.1f} s")
     if success is not None:
         print(f"  Success   : {success}")
+
 
 def cmd_step(
     data: TraceData,
@@ -216,7 +236,9 @@ def cmd_step(
 ) -> None:
     matching = [s for s in data.actions if s.get("iteration") == step_idx]
     if not matching:
-        avail = sorted({s.get("iteration") for s in data.actions if s.get("iteration") is not None})
+        avail = sorted(
+            {s.get("iteration") for s in data.actions if s.get("iteration") is not None}
+        )
         msg = f"step {step_idx} not found (available: {avail})"
         if as_json:
             print(json.dumps({"error": msg}))
@@ -240,7 +262,34 @@ def cmd_step(
     print(f"  phase           : {step.get('phase')}")
     print(f"  prompt_tokens   : {_action_get(llm_step or step, 'prompt_tokens')}")
     print(f"  completion_tokens: {_action_get(llm_step or step, 'completion_tokens')}")
-    print(f"  llm_latency_ms  : {_action_get(llm_step or step, 'llm_latency_ms')}")
+    llm_data = (llm_step or step).get("data") or {}
+    print(f"  llm_latency_ms  : {get_preferred_llm_latency_ms(llm_data)}")
+    print(f"  llm_wall_latency_ms: {get_llm_wall_latency_ms(llm_data)}")
+    print(f"  openrouter_latency_ms: {get_openrouter_latency_ms(llm_data)}")
+    print(
+        "  openrouter_generation_time_ms: "
+        f"{_action_get(llm_step or step, 'openrouter_generation_time_ms')}"
+    )
+    print(
+        "  openrouter_provider_latency_ms: "
+        f"{_action_get(llm_step or step, 'openrouter_provider_latency_ms')}"
+    )
+    print(
+        f"  openrouter_generation_id: "
+        f"{_action_get(llm_step or step, 'openrouter_generation_id')}"
+    )
+    print(
+        f"  openrouter_request_id: "
+        f"{_action_get(llm_step or step, 'openrouter_request_id')}"
+    )
+    print(
+        f"  openrouter_provider_name: "
+        f"{_action_get(llm_step or step, 'openrouter_provider_name')}"
+    )
+    print(
+        f"  openrouter_upstream_id: "
+        f"{_action_get(llm_step or step, 'openrouter_upstream_id')}"
+    )
     print(f"  ttft_ms         : {_action_get(llm_step or step, 'ttft_ms')}")
     print(f"  tpot_ms         : {_action_get(llm_step or step, 'tpot_ms')}")
     print(f"  ts_start        : {step.get('ts_start')}")
@@ -266,6 +315,7 @@ def cmd_step(
     if "llm_output" in step:
         print(f"  llm_output      : {_truncate(_to_str(step['llm_output']), truncate)}")
 
+
 def cmd_messages(
     data: TraceData,
     step_idx: int,
@@ -275,8 +325,11 @@ def cmd_messages(
     as_json: bool = False,
 ) -> None:
     step = next(
-        (s for s in data.actions
-         if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"),
+        (
+            s
+            for s in data.actions
+            if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"
+        ),
         None,
     )
     if step is None:
@@ -286,7 +339,9 @@ def cmd_messages(
             print(f"ERROR: step {step_idx} not found")
         return
 
-    messages: list[dict[str, Any]] = (step.get("data") or {}).get("messages_in", []) or []
+    messages: list[dict[str, Any]] = (step.get("data") or {}).get(
+        "messages_in", []
+    ) or []
     if role_filter:
         messages = [m for m in messages if m.get("role") == role_filter]
 
@@ -311,6 +366,7 @@ def cmd_messages(
         content = _truncate(_to_str(msg.get("content", "")), truncate)
         print(f"  [{i}] {role}: {content}")
 
+
 def cmd_response(
     data: TraceData,
     step_idx: int,
@@ -319,8 +375,11 @@ def cmd_response(
     as_json: bool = False,
 ) -> None:
     step = next(
-        (s for s in data.actions
-         if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"),
+        (
+            s
+            for s in data.actions
+            if s.get("iteration") == step_idx and s.get("action_type") == "llm_call"
+        ),
         None,
     )
     if step is None:
@@ -354,6 +413,7 @@ def cmd_response(
     print(f"--- raw_response for step {step_idx} ---")
     print(text)
 
+
 def cmd_events(
     data: TraceData,
     *,
@@ -365,13 +425,9 @@ def cmd_events(
 
     if category is not None:
         cat_upper = category.upper()
-        events = [
-            e for e in events if e.get("category", "").upper() == cat_upper
-        ]
+        events = [e for e in events if e.get("category", "").upper() == cat_upper]
     if iteration is not None:
-        events = [
-            e for e in events if e.get("iteration") == iteration
-        ]
+        events = [e for e in events if e.get("iteration") == iteration]
 
     if as_json:
         print(json.dumps(events, indent=2, ensure_ascii=False))
@@ -398,6 +454,7 @@ def cmd_events(
                 items.append(f"{k}={v}")
             data_str = " | " + ", ".join(items)
         print(f"  ts={ts:<12} event={name:<20} cat={cat:<8} step={itr}{data_str}")
+
 
 def cmd_tools(
     data: TraceData,
@@ -461,6 +518,7 @@ def cmd_tools(
             f"{row['total_duration_ms']:>10.0f} {row['success_rate'] * 100:>9.1f}%"
         )
 
+
 def cmd_search(
     data: TraceData,
     pattern: str,
@@ -516,48 +574,88 @@ def cmd_search(
     for r in results:
         print(f"  iter {r['iteration']}: ...{r['context']}...")
 
+
 _TIMELINE_ICONS: dict[str, str] = {
-    "skill_load": "📦", "skill_load_failed": "❌📦",
-    "skills_summary_build": "📋", "memory_context_load": "🧠",
-    "system_prompt_build": "📐", "message_list_build": "📬",
-    "consolidation_trigger": "🧹", "consolidation_llm_call": "🧠⚡",
-    "memory_write": "💾", "history_append": "📝",
-    "consolidation_failure": "⚠️🧠", "raw_archive": "📦⚠️",
+    "skill_load": "📦",
+    "skill_load_failed": "❌📦",
+    "skills_summary_build": "📋",
+    "memory_context_load": "🧠",
+    "system_prompt_build": "📐",
+    "message_list_build": "📬",
+    "consolidation_trigger": "🧹",
+    "consolidation_llm_call": "🧠⚡",
+    "memory_write": "💾",
+    "history_append": "📝",
+    "consolidation_failure": "⚠️🧠",
+    "raw_archive": "📦⚠️",
     "consolidation_complete": "✅🧠",
     "background_consolidation_scheduled": "🔄🧠",
-    "mcp_connect_start": "🔌", "mcp_server_connect": "🔗",
-    "mcp_server_connected": "✅🔌", "mcp_server_failed": "❌🔌",
-    "mcp_tool_register": "📝🔧", "mcp_tool_call": "⚡🔧",
-    "mcp_tool_timeout": "⏰🔧", "mcp_disconnect": "🔌❌",
-    "session_create": "🆕", "session_load": "📂",
-    "session_save": "💾", "session_turn_save": "💾↩️",
-    "llm_request": "▶️🤖", "llm_response": "◀️🤖",
-    "llm_retry": "🔄🤖", "llm_error": "❌🤖",
-    "finalization_retry": "🔄📝", "max_iterations": "⏹️",
-    "llm_call_start": "▶️🤖", "llm_call_end": "◀️🤖",
+    "mcp_connect_start": "🔌",
+    "mcp_server_connect": "🔗",
+    "mcp_server_connected": "✅🔌",
+    "mcp_server_failed": "❌🔌",
+    "mcp_tool_register": "📝🔧",
+    "mcp_tool_call": "⚡🔧",
+    "mcp_tool_timeout": "⏰🔧",
+    "mcp_disconnect": "🔌❌",
+    "session_create": "🆕",
+    "session_load": "📂",
+    "session_save": "💾",
+    "session_turn_save": "💾↩️",
+    "llm_request": "▶️🤖",
+    "llm_response": "◀️🤖",
+    "llm_retry": "🔄🤖",
+    "llm_error": "❌🤖",
+    "finalization_retry": "🔄📝",
+    "max_iterations": "⏹️",
+    "llm_call_start": "▶️🤖",
+    "llm_call_end": "◀️🤖",
     "llm_action": "▶️🤖",
-    "tool_exec_start": "⚙️", "tool_exec_end": "✅",
-    "tool_prepare": "🔧", "tool_prepare_error": "❌🔧",
-    "tool_execute": "⚙️", "tool_complete": "✅",
-    "tool_error": "❌", "tool_timeout": "⏰", "tool_cancelled": "🚫",
+    "tool_exec_start": "⚙️",
+    "tool_exec_end": "✅",
+    "tool_prepare": "🔧",
+    "tool_prepare_error": "❌🔧",
+    "tool_execute": "⚙️",
+    "tool_complete": "✅",
+    "tool_error": "❌",
+    "tool_timeout": "⏰",
+    "tool_cancelled": "🚫",
     "external_lookup_blocked": "🚫🔍",
-    "read_file": "📖", "write_file": "📝", "edit_file": "✏️",
-    "list_dir": "📁", "exec": "⚙️💻", "exec_safety_block": "🛡️",
-    "web_search": "🔍", "web_fetch": "🌐", "message": "📨",
-    "subagent_spawn": "🌱", "subagent_start": "🏃🌱",
-    "subagent_tool_execute": "⚙️🌱", "subagent_complete": "✅🌱",
-    "subagent_error": "❌🌱", "subagent_cancel": "🚫🌱",
+    "read_file": "📖",
+    "write_file": "📝",
+    "edit_file": "✏️",
+    "list_dir": "📁",
+    "exec": "⚙️💻",
+    "exec_safety_block": "🛡️",
+    "web_search": "🔍",
+    "web_fetch": "🌐",
+    "message": "📨",
+    "subagent_spawn": "🌱",
+    "subagent_start": "🏃🌱",
+    "subagent_tool_execute": "⚙️🌱",
+    "subagent_complete": "✅🌱",
+    "subagent_error": "❌🌱",
+    "subagent_cancel": "🚫🌱",
     "subagent_announcement": "📢🌱",
-    "message_dispatch": "📤", "session_lock_acquire": "🔒",
-    "session_lock_release": "🔓", "concurrency_gate_acquire": "🚦",
-    "task_complete": "🏁", "priority_command_bypass": "⚡",
+    "message_dispatch": "📤",
+    "session_lock_acquire": "🔒",
+    "session_lock_release": "🔓",
+    "concurrency_gate_acquire": "🚦",
+    "task_complete": "🏁",
+    "priority_command_bypass": "⚡",
 }
 
 _CATEGORY_SHORT: dict[str, str] = {
-    "SCHEDULING": "sched", "SESSION": "session", "CONTEXT": "context",
-    "LLM": "llm", "TOOL": "tool", "MCP": "mcp",
-    "MEMORY": "memory", "SUBAGENT": "subagent",
+    "SCHEDULING": "sched",
+    "SESSION": "session",
+    "CONTEXT": "context",
+    "LLM": "llm",
+    "TOOL": "tool",
+    "MCP": "mcp",
+    "MEMORY": "memory",
+    "SUBAGENT": "subagent",
 }
+
 
 def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
     event_name = rec.get("event", "unknown")
@@ -572,17 +670,37 @@ def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
 
     parts: list[str] = []
     for key in (
-        "skill_name", "source", "server_name", "tool_name", "transport",
-        "tools_registered", "session_key", "task_id", "label",
-        "command_preview", "path", "query",
-        "error_message", "error_type", "request_id",
+        "skill_name",
+        "source",
+        "server_name",
+        "tool_name",
+        "transport",
+        "tools_registered",
+        "session_key",
+        "task_id",
+        "label",
+        "command_preview",
+        "path",
+        "query",
+        "error_message",
+        "error_type",
+        "request_id",
+        "openrouter_request_id",
+        "openrouter_generation_id",
+        "openrouter_provider_name",
     ):
         if key in data:
             parts.append(f"{key}={data[key]}")
     for key in (
-        "http_status", "wait_ms", "dispatch_duration_ms",
-        "history_messages", "total_messages", "memory_size_chars",
-        "messages_count", "duration_ms", "consecutive_failures",
+        "http_status",
+        "wait_ms",
+        "dispatch_duration_ms",
+        "history_messages",
+        "total_messages",
+        "memory_size_chars",
+        "messages_count",
+        "duration_ms",
+        "consecutive_failures",
         "result_count",
     ):
         if key in data:
@@ -592,6 +710,7 @@ def _fmt_tl_event(rec: dict[str, Any], t0: float = 0.0) -> str:
 
     detail = "  ".join(parts)
     return f"  +{rel:7.1f}s {icon} [{cat:>7}] {event_name:<30} iter={itr:<3} {detail}"
+
 
 def _fmt_tl_action(rec: dict[str, Any], t0: float = 0.0) -> str:
     action_type = rec.get("action_type", "?")
@@ -603,10 +722,12 @@ def _fmt_tl_action(rec: dict[str, Any], t0: float = 0.0) -> str:
     if action_type == "llm_call":
         pt = data.get("prompt_tokens", 0)
         ct = data.get("completion_tokens", 0)
-        lat = (data.get("llm_latency_ms") or 0) / 1000
+        lat = get_preferred_llm_latency_ms(data) / 1000
+        wall = get_llm_wall_latency_ms(data) / 1000
+        wall_suffix = f"  wall={wall:.1f}s" if abs(wall - lat) > 0.05 else ""
         return (
             f"  +{rel:7.1f}s iter={iteration:<3}  ◀ LLM  {pt}+{ct}tok  "
-            f"lat={lat:.1f}s"
+            f"lat={lat:.1f}s{wall_suffix}"
         )
     elif action_type == "tool_exec":
         tool_name = data.get("tool_name", "?")
@@ -621,8 +742,10 @@ def _fmt_tl_action(rec: dict[str, Any], t0: float = 0.0) -> str:
         )
     return f"  +{rel:7.1f}s iter={iteration:<3}  {action_type}"
 
+
 def _print_tl_summary(summary: dict[str, Any]) -> None:
     llm_s = summary.get("total_llm_ms", 0) / 1000
+    llm_wall_s = summary.get("total_llm_wall_ms", summary.get("total_llm_ms", 0)) / 1000
     tool_s = summary.get("total_tool_ms", 0) / 1000
     elapsed = summary.get("elapsed_s", 0)
     n = summary.get("n_iterations", 0)
@@ -630,11 +753,12 @@ def _print_tl_summary(summary: dict[str, Any]) -> None:
     ok = "✓ success" if summary.get("success") else "✗ failed"
     prepare_ms = summary.get("prepare_ms")
     prepare_str = f"  prepare={prepare_ms:.0f}ms" if prepare_ms else ""
+    wall_str = f"  wall={llm_wall_s:.1f}s" if abs(llm_wall_s - llm_s) > 0.05 else ""
 
     print("─" * 80)
     print(
         f"  {ok}  {n} steps  "
-        f"elapsed={elapsed:.0f}s  LLM={llm_s:.1f}s  tool={tool_s:.1f}s  "
+        f"elapsed={elapsed:.0f}s  LLM={llm_s:.1f}s{wall_str}  tool={tool_s:.1f}s  "
         f"tokens={tokens}{prepare_str}"
     )
     tool_ms = summary.get("tool_ms_by_name", {})
@@ -648,6 +772,7 @@ def _print_tl_summary(summary: dict[str, Any]) -> None:
         print("  Tool timeouts:")
         for name, count in sorted(timeouts.items()):
             print(f"    {name:20s}: {count}")
+
 
 def cmd_timeline(data: TraceData) -> None:
 

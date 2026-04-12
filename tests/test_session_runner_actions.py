@@ -27,11 +27,17 @@ from agents.openclaw._session_runner import TraceCollectorHook, _resolve_run_out
 
 
 class _StubResponse:
-    def __init__(self, content: str = "", finish_reason: str = "stop") -> None:
+    def __init__(
+        self,
+        content: str = "",
+        finish_reason: str = "stop",
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         self.content = content
         self.finish_reason = finish_reason
         self.reasoning_content: str | None = None
-        self.extra: dict[str, Any] | None = None
+        self.extra: dict[str, Any] | None = extra
 
 
 class _StubToolCall:
@@ -60,6 +66,7 @@ class _StubContext:
 
 def test_trace_collector_emits_llm_call_action(tmp_path: Path) -> None:
     import asyncio
+
     asyncio.run(_drive_emits_llm_call_action(tmp_path))
 
 
@@ -79,10 +86,17 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
 
     # Simulate LLM response producing a tool call
     msgs_after_llm = msgs_in + [
-        {"role": "assistant", "content": None, "tool_calls": [
-            {"id": "c1", "type": "function",
-             "function": {"name": "write_file", "arguments": "{\"path\":\"a.py\"}"}}
-        ]}
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": '{"path":"a.py"}'},
+                }
+            ],
+        }
     ]
     ctx_before_tools = _StubContext(
         iteration=0,
@@ -121,10 +135,16 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
     assert len(tool_execs) == 1, f"Expected 1 tool_exec, got {len(tool_execs)}"
 
     # Order: llm_call must come BEFORE tool_exec in the file
-    llm_idx = next(i for i, r in enumerate(records)
-                   if r.get("type") == "action" and r.get("action_type") == "llm_call")
-    tool_idx = next(i for i, r in enumerate(records)
-                    if r.get("type") == "action" and r.get("action_type") == "tool_exec")
+    llm_idx = next(
+        i
+        for i, r in enumerate(records)
+        if r.get("type") == "action" and r.get("action_type") == "llm_call"
+    )
+    tool_idx = next(
+        i
+        for i, r in enumerate(records)
+        if r.get("type") == "action" and r.get("action_type") == "tool_exec"
+    )
     assert llm_idx < tool_idx, "llm_call action must precede tool_exec in trace"
 
     # Verify llm_call action carries the snapshotted messages_in (NOT the
@@ -139,6 +159,7 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
 
 def test_trace_collector_llm_only_iteration(tmp_path: Path) -> None:
     import asyncio
+
     asyncio.run(_drive_llm_only_iteration(tmp_path))
 
 
@@ -163,15 +184,113 @@ async def _drive_llm_only_iteration(tmp_path: Path) -> None:
     hook.close()
 
     records = [json.loads(line) for line in trace_file.read_text().strip().splitlines()]
-    llm_calls = [r for r in records
-                 if r.get("type") == "action" and r.get("action_type") == "llm_call"]
-    tool_execs = [r for r in records
-                  if r.get("type") == "action" and r.get("action_type") == "tool_exec"]
+    llm_calls = [
+        r
+        for r in records
+        if r.get("type") == "action" and r.get("action_type") == "llm_call"
+    ]
+    tool_execs = [
+        r
+        for r in records
+        if r.get("type") == "action" and r.get("action_type") == "tool_exec"
+    ]
 
     assert len(llm_calls) == 1
     assert len(tool_execs) == 0
     # ts_end falls back to "now" when before_execute_tools was never called
     assert llm_calls[0]["ts_end"] >= llm_calls[0]["ts_start"]
+
+
+def test_trace_collector_records_openrouter_latency_fields(tmp_path: Path) -> None:
+    import asyncio
+
+    asyncio.run(_drive_openrouter_latency_fields(tmp_path))
+
+
+async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-openrouter")
+
+    await hook.before_iteration(
+        _StubContext(iteration=0, messages=[{"role": "user", "content": "Ping"}])
+    )
+    hook._iter_start_wall = 100.0
+    hook._before_exec_wall = 0.0
+
+    openrouter_metadata = {
+        "generation_id": "gen-123",
+        "request_id": "req-123",
+        "provider_name": "Z.AI",
+        "latency_ms": 7000.0,
+        "generation_time_ms": 6500.0,
+        "provider_latency_ms": 6800.0,
+        "upstream_id": "up-123",
+        "provider_responses": [
+            {"provider_name": "Z.AI", "latency_ms": 6800.0, "status": 200}
+        ],
+    }
+    response = _StubResponse(
+        content="pong",
+        finish_reason="stop",
+        extra={
+            "llm_wall_ts_end": 115.0,
+            "llm_call_time_ms": 6500.0,
+            "llm_timing_source": "openrouter_generation_time_ms",
+            "openrouter_generation_id": "gen-123",
+            "openrouter_request_id": "req-123",
+            "openrouter_latency_ms": 7000.0,
+            "openrouter_generation_time_ms": 6500.0,
+            "openrouter_provider_latency_ms": 6800.0,
+            "openrouter_provider_name": "Z.AI",
+            "openrouter_upstream_id": "up-123",
+            "openrouter_metadata": openrouter_metadata,
+        },
+    )
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=[
+                {"role": "user", "content": "Ping"},
+                {"role": "assistant", "content": "pong"},
+            ],
+            usage={"prompt_tokens": 12, "completion_tokens": 3},
+            response=response,
+        )
+    )
+    await hook.write_summary(success=True, elapsed_s=15.0)
+
+    records = [json.loads(line) for line in trace_file.read_text().strip().splitlines()]
+    llm_call = next(
+        r
+        for r in records
+        if r.get("type") == "action" and r.get("action_type") == "llm_call"
+    )
+    llm_event = next(
+        r
+        for r in records
+        if r.get("type") == "event" and r.get("event") == "llm_call_end"
+    )
+    summary = next(r for r in records if r.get("type") == "summary")
+
+    assert llm_call["data"]["llm_latency_ms"] == 6500.0
+    assert llm_call["data"]["llm_call_time_ms"] == 6500.0
+    assert llm_call["data"]["llm_wall_latency_ms"] == 15000.0
+    assert llm_call["data"]["llm_timing_source"] == "openrouter_generation_time_ms"
+    assert llm_call["data"]["openrouter_latency_ms"] == 7000.0
+    assert llm_call["data"]["openrouter_generation_time_ms"] == 6500.0
+    assert llm_call["data"]["openrouter_provider_latency_ms"] == 6800.0
+    assert llm_call["data"]["openrouter_generation_id"] == "gen-123"
+    assert (
+        llm_call["data"]["raw_response"]["openrouter_metadata"] == openrouter_metadata
+    )
+    assert llm_event["data"]["llm_latency_ms"] == 6500.0
+    assert llm_event["data"]["openrouter_request_id"] == "req-123"
+    assert "openrouter_metadata" not in llm_event["data"]
+    assert summary["total_llm_ms"] == 6500.0
+    assert summary["total_llm_call_time_ms"] == 6500.0
+    assert summary["llm_call_time_count"] == 1
+    assert summary["llm_timing_source"] == "openrouter_generation_time_ms"
+    assert summary["total_llm_wall_ms"] == 15000.0
 
 
 def test_resolve_run_outcome_uses_trace_llm_error_event(tmp_path: Path) -> None:

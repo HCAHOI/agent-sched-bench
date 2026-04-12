@@ -10,8 +10,12 @@ if TYPE_CHECKING:
     from harness.trace_logger import TraceLogger
 
 from llm_call import create_async_openai_client
+from trace_collect.latency_metrics import (
+    summarize_llm_latencies,
+)
 
 logger = logging.getLogger(__name__)
+
 
 def _message_content_to_text(content: Any) -> str:
     if content is None:
@@ -28,12 +32,13 @@ def _message_content_to_text(content: Any) -> str:
         return "\n".join(part for part in parts if part)
     return str(content)
 
+
 @dataclass(slots=True)
 class ToolCallResult:
-
     id: str
     name: str
     arguments: str
+
 
 @dataclass(slots=True)
 class TraceAction:
@@ -72,9 +77,9 @@ class TraceAction:
             "data": self.data,
         }
 
+
 @dataclass(slots=True)
 class LLMCallResult:
-
     content: str
     prompt_tokens: int
     completion_tokens: int
@@ -82,8 +87,8 @@ class LLMCallResult:
     raw_response: dict[str, Any]
     tool_calls: list[ToolCallResult] = field(default_factory=list)
 
-class AgentBase(ABC):
 
+class AgentBase(ABC):
     def __init__(
         self,
         agent_id: str,
@@ -242,8 +247,12 @@ class AgentBase(ABC):
     ) -> None:
         if self._trace_logger is not None:
             self._trace_logger.log_event(
-                self.agent_id, category, event, data,
-                iteration=iteration, ts=ts,
+                self.agent_id,
+                category,
+                event,
+                data,
+                iteration=iteration,
+                ts=ts,
             )
 
     def _emit_action(self, action: TraceAction) -> None:
@@ -266,17 +275,17 @@ class AgentBase(ABC):
         # to a numeric default. mini-swe-agent's _convert_trajectory can
         # store ``duration_ms=None`` when the last tool result lacks a
         # timestamp; without this guard sum() explodes with TypeError.
-        total_llm_ms = sum(
-            (a.data.get("llm_latency_ms") or 0) for a in self.actions
-            if a.action_type == "llm_call"
-        )
+        llm_records = [a.data for a in self.actions if a.action_type == "llm_call"]
+        llm_summary = summarize_llm_latencies(llm_records)
         total_tool_ms = sum(
-            (a.data.get("duration_ms") or 0) for a in self.actions
+            (a.data.get("duration_ms") or 0)
+            for a in self.actions
             if a.action_type == "tool_exec"
         )
         total_tokens = sum(
             (a.data.get("prompt_tokens") or 0) + (a.data.get("completion_tokens") or 0)
-            for a in self.actions if a.action_type == "llm_call"
+            for a in self.actions
+            if a.action_type == "llm_call"
         )
         tool_ms_by_name: dict[str, float] = {}
         tool_timeouts: dict[str, int] = {}
@@ -286,20 +295,22 @@ class AgentBase(ABC):
             tool_name = a.data.get("tool_name")
             if tool_name is None:
                 continue
-            tool_ms_by_name[tool_name] = tool_ms_by_name.get(
-                tool_name, 0.0
-            ) + (a.data.get("duration_ms") or 0.0)
+            tool_ms_by_name[tool_name] = tool_ms_by_name.get(tool_name, 0.0) + (
+                a.data.get("duration_ms") or 0.0
+            )
             if a.data.get("timeout"):
-                tool_timeouts[tool_name] = (
-                    tool_timeouts.get(tool_name, 0) + 1
-                )
+                tool_timeouts[tool_name] = tool_timeouts.get(tool_name, 0) + 1
         n_iterations = len({a.iteration for a in self.actions})
         return {
             "agent_id": self.agent_id,
             "program_id": self.agent_id,
             "task_id": self.task_id,
             "n_iterations": n_iterations,
-            "total_llm_ms": total_llm_ms,
+            "total_llm_ms": llm_summary["total_llm_ms"],
+            "total_llm_wall_ms": llm_summary["total_llm_wall_ms"],
+            "total_llm_call_time_ms": llm_summary["total_llm_call_time_ms"],
+            "llm_call_time_count": llm_summary["llm_call_time_count"],
+            "llm_timing_source": llm_summary["llm_timing_source"],
             "total_tool_ms": total_tool_ms,
             "total_tokens": total_tokens,
             "tool_ms_by_name": tool_ms_by_name,
