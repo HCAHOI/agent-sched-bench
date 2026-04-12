@@ -359,7 +359,13 @@ async def _prepare_container_session(
     )
 
     agent = ContainerAgent(container_id, container_executable)
-    await agent.start()
+    try:
+        await agent.start()
+    except Exception:
+        await asyncio.to_thread(
+            stop_task_container, container_id, executable=container_executable,
+        )
+        raise
 
     container = PreparedContainer(
         container_id=container_id,
