@@ -34,7 +34,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         api_base: str,
         api_key: str | None,
         env_key: str,
-        max_iterations: int = 100,
+        max_iterations: int = 200,
         mcp_config_path: str | None = None,
         *args,
         **kwargs,

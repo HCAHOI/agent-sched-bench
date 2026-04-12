@@ -300,7 +300,6 @@ def test_run_scaffold_tasks_allows_non_image_tasks_and_uses_attempt_success(
             run_dir=tmp_path / "run",
             model="z-ai/glm-5.1",
             scaffold="openclaw",
-            container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
             inner_factory=make_inner,

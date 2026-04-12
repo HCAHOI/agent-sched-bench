@@ -258,14 +258,7 @@ def test_run_attempt_supports_non_image_success_without_patch(
             },
         )
 
-    result = asyncio.run(
-        run_attempt(
-            ctx,
-            inner=inner,
-            min_free_disk_gb=0.001,
-            container_executable="docker",
-        )
-    )
+    result = asyncio.run(run_attempt(ctx, inner=inner, min_free_disk_gb=0.001))
 
     assert result.success is True
     manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())

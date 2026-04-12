@@ -17,7 +17,7 @@ def _make_runner(**overrides) -> TerminalBenchRunner:
         "api_key": "test-key",
         "model": "z-ai/glm-5.1",
         "workspace_base": Path("workspace"),
-        "max_iterations": 100,
+        "max_iterations": 50,
         "context_window_tokens": 256_000,
         "benchmark_slug": "terminal-bench",
         "benchmark_extras": {
@@ -65,7 +65,7 @@ def test_build_tb_command_uses_agent_import_path() -> None:
     assert TerminalBenchRunner.AGENT_IMPORT_PATH in joined
     assert "--dataset-path /tmp/dataset" in joined
     assert "--task-id hello-world" in joined
-    assert "max_iterations=100" in joined
+    assert "max_iterations=50" in joined
     assert "api_key=test-key" not in joined
 
 

@@ -88,11 +88,11 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
 
     monkeypatch.setattr(
         "trace_collect.collector.ensure_source_image",
-        lambda source_image, *, container_executable: None,
+        lambda source_image, executable="podman": None,
     )
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
-        lambda image, *, container_executable: False,
+        lambda image, executable="podman": False,
     )
     monkeypatch.setattr(
         "trace_collect.collector.drop_cached_fixed_image",
@@ -100,7 +100,7 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
     )
     monkeypatch.setattr(
         "trace_collect.collector.prune_dangling_images",
-        lambda *, container_executable: None,
+        lambda executable="podman": None,
     )
 
     class FakeRunner:
@@ -137,46 +137,9 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
             benchmark=benchmark,
             sample=1,
             min_free_disk_gb=0.001,
-            container_executable="docker",
         )
     )
 
     results_path = run_dir / "results.jsonl"
     payload = results_path.read_text(encoding="utf-8")
     assert '"success": true' in payload
-
-
-def test_collect_openclaw_traces_requires_explicit_container_runtime(
-    tmp_path: Path,
-) -> None:
-    benchmark = SimpleNamespace(
-        validate_scaffold_support=lambda scaffold: None,
-        runtime_mode_for=lambda scaffold: "host_controller",
-        load_tasks=lambda: [],
-        build_runner=lambda **kwargs: None,
-        config=SimpleNamespace(
-            slug="terminal-bench",
-            default_prompt_template="default",
-            trace_root=tmp_path / "traces",
-            harness_split=None,
-        ),
-        image_name_for=lambda task: None,
-    )
-
-    with pytest.raises(TypeError, match="container_executable"):
-        asyncio.run(
-            collect_openclaw_traces(
-                provider_name="openrouter",
-                api_base="https://example.com/v1",
-                api_key="test-key",
-                model="z-ai/glm-5.1",
-                benchmark=benchmark,
-                sample=1,
-                min_free_disk_gb=0.001,
-            )
-        )
-
-
-def test_collectors_max_iterations_defaults_to_100() -> None:
-    assert inspect.signature(collect_openclaw_traces).parameters["max_iterations"].default == 100
-    assert inspect.signature(collect_miniswe_traces).parameters["max_iterations"].default == 100

@@ -22,27 +22,7 @@ from trace_collect import attempt_layout
 logger = logging.getLogger(__name__)
 
 _NONCOMPLETED_EXIT_STATUSES = frozenset(
-    {
-        "error",
-        "tool_error",
-        "empty_final_response",
-        "max_iterations",
-        "timeout",
-        "failed",
-    }
-)
-
-_TASK_CONTAINER_ENV_PASSTHROUGH = (
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "NO_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "no_proxy",
-    "PIP_INDEX_URL",
-    "TASK_CONTAINER_PIP_INDEX_URL",
+    {"error", "tool_error", "empty_final_response", "max_iterations", "timeout", "failed"}
 )
 
 
@@ -239,8 +219,7 @@ async def run_attempt(
     if ctx.source_image:
         try:
             fixed_name, fix_elapsed = ensure_fixed_image(
-                ctx.source_image,
-                container_executable=container_executable,
+                ctx.source_image, executable=executable
             )
             ctx.fixed_image = fixed_name
             ctx.permission_fix_time_s = fix_elapsed
@@ -293,11 +272,14 @@ async def run_attempt(
     status = "completed"
     if inner_error is not None:
         status = "error"
-    elif result is not None and (
-        not result.success
-        or (
-            result.exit_status is not None
-            and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
+    elif (
+        result is not None
+        and (
+            not result.success
+            or (
+                result.exit_status is not None
+                and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
+            )
         )
     ):
         status = "error"
