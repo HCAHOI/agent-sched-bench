@@ -2,21 +2,14 @@ import { createEffect } from "solid-js";
 
 import { themeMode, viewMode } from "./signals";
 
-let started = false;
+let persistenceStarted = false;
+let displaySyncStarted = false;
 
-export function enablePersistence(): void {
-  if (started || typeof window === "undefined") {
+export function enableDisplaySync(): void {
+  if (displaySyncStarted || typeof window === "undefined") {
     return;
   }
-  started = true;
-
-  createEffect(() => {
-    window.localStorage.setItem("gantt.viewMode", viewMode());
-  });
-
-  createEffect(() => {
-    window.localStorage.setItem("gantt.themeMode", themeMode());
-  });
+  displaySyncStarted = true;
 
   // Global CSS hooks for viewMode — lets .sidebar and canvas share lane
   // height through a single CSS variable instead of threading a prop.
@@ -33,6 +26,26 @@ export function enablePersistence(): void {
   });
 }
 
+export function enablePersistence(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  enableDisplaySync();
+  if (persistenceStarted) {
+    return;
+  }
+  persistenceStarted = true;
+
+  createEffect(() => {
+    window.localStorage.setItem("gantt.viewMode", viewMode());
+  });
+
+  createEffect(() => {
+    window.localStorage.setItem("gantt.themeMode", themeMode());
+  });
+}
+
 export function __resetPersistenceForTests(): void {
-  started = false;
+  persistenceStarted = false;
+  displaySyncStarted = false;
 }

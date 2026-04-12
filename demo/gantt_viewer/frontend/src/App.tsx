@@ -1,6 +1,7 @@
-import { Match, Show, Switch, createMemo, onMount } from "solid-js";
+import { Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import {
+  exportSnapshotHtml,
   getPayload,
   getTraces,
   uploadTrace,
@@ -16,8 +17,14 @@ import Sidebar from "./components/Sidebar";
 import Tooltip from "./components/Tooltip";
 import TraceChipBar from "./components/TraceChipBar";
 import { selectInitialTraceIds } from "./bootstrap/autoload";
+import {
+  SNAPSHOT_DEFAULTS,
+  readSnapshotBootstrap,
+  snapshotDescriptorsFromTraces,
+  visibilityFromTraceIds,
+} from "./bootstrap/snapshot";
 import { sameHit } from "./canvas/hit";
-import { enablePersistence } from "./state/persist";
+import { enableDisplaySync, enablePersistence } from "./state/persist";
 import {
   appError,
   descriptors,
@@ -47,47 +54,77 @@ import {
   zoom,
 } from "./state/signals";
 
-function mergeTraces(existing: TracePayload[], incoming: TracePayload[]): TracePayload[] {
-  const byId = new Map(existing.map((trace) => [trace.id, trace]));
-  incoming.forEach((trace) => byId.set(trace.id, trace));
+function mergeById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
+  const byId = new Map(existing.map((item) => [item.id, item]));
+  incoming.forEach((item) => byId.set(item.id, item));
   return [...byId.values()];
 }
 
+function mergeTraces(existing: TracePayload[], incoming: TracePayload[]): TracePayload[] {
+  return mergeById(existing, incoming);
+}
+
 function mergeDescriptors(existing: TraceDescriptor[], incoming: TraceDescriptor[]): TraceDescriptor[] {
-  const byId = new Map(existing.map((trace) => [trace.id, trace]));
-  incoming.forEach((trace) => byId.set(trace.id, trace));
-  return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
+  return mergeById(existing, incoming).sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function mapIds(ids: string[], value: boolean): Record<string, boolean> {
+  return Object.fromEntries(ids.map((id) => [id, value]));
+}
+
+function removeIdFlag(flags: Record<string, boolean>, id: string): Record<string, boolean> {
+  const next = { ...flags };
+  delete next[id];
+  return next;
+}
+
+function applySnapshotBootstrap(snapshotBootstrap: NonNullable<ReturnType<typeof readSnapshotBootstrap>>): void {
+  setThemeMode(SNAPSHOT_DEFAULTS.themeMode);
+  setTimeMode(SNAPSHOT_DEFAULTS.timeMode);
+  setViewMode(SNAPSHOT_DEFAULTS.viewMode);
+  setZoom(SNAPSHOT_DEFAULTS.zoom);
+  setDescriptors(snapshotDescriptorsFromTraces(snapshotBootstrap.payload.traces));
+  setRegistries(snapshotBootstrap.payload.registries);
+  setLoadedTraces(snapshotBootstrap.payload.traces);
+  setVisibility(
+    visibilityFromTraceIds(snapshotBootstrap.trace_ids, snapshotBootstrap.visible_trace_ids),
+  );
+  setLoadingIds({});
+  setAppError(null);
 }
 
 export default function App() {
-  enablePersistence();
+  const snapshotBootstrap = readSnapshotBootstrap();
+  const snapshotMode = snapshotBootstrap !== null;
+  if (snapshotBootstrap) {
+    enableDisplaySync();
+    applySnapshotBootstrap(snapshotBootstrap);
+  } else {
+    enablePersistence();
+  }
+  const [exporting, setExporting] = createSignal(false);
 
-  const payload = createMemo<GanttPayload | null>(() =>
-    registries()
-      ? {
-          registries: registries()!,
-          traces: loadedTraces(),
-        }
-      : null,
-  );
-
-  const loadedIds = createMemo(() => loadedTraces().map((trace) => trace.id));
-  const headerSummary = createMemo(() => {
-    const traces = loadedTraces();
-    if (traces.length === 0) {
-      return "no traces loaded";
+  const payload = createMemo<GanttPayload | null>(() => {
+    const currentRegistries = registries();
+    if (!currentRegistries) {
+      return null;
     }
-    if (traces.length === 1) {
-      const t = traces[0];
-      const m = t.metadata;
-      return `${t.label} · ${m.scaffold}${m.model ? " · " + m.model : ""} · ${m.n_actions} actions · ${(m.elapsed_s ?? 0).toFixed(1)}s`;
-    }
-    const totalActions = traces.reduce((acc, t) => acc + t.metadata.n_actions, 0);
-    const scaffolds = new Set(traces.map((t) => t.metadata.scaffold));
-    return `${traces.length} traces · ${[...scaffolds].join("/")} · ${totalActions} actions total`;
+    return {
+      registries: currentRegistries,
+      traces: loadedTraces(),
+    };
   });
 
+  const loadedIds = createMemo(() => loadedTraces().map((trace) => trace.id));
+  const exportDisabled = createMemo(
+    () => exporting() || loadedTraces().length === 0 || registries() === null,
+  );
+
   async function initialize(): Promise<void> {
+    if (snapshotBootstrap) {
+      return;
+    }
+
     try {
       const traceList = await getTraces();
       setDescriptors(traceList.traces);
@@ -111,7 +148,7 @@ export default function App() {
 
     setLoadingIds((current) => ({
       ...current,
-      ...Object.fromEntries(nextIds.map((id) => [id, true])),
+      ...mapIds(nextIds, true),
     }));
 
     try {
@@ -120,27 +157,22 @@ export default function App() {
       setLoadedTraces((current) => mergeTraces(current, nextPayload.traces));
       setVisibility((current) => ({
         ...current,
-        ...Object.fromEntries(nextPayload.traces.map((trace) => [trace.id, true])),
+        ...mapIds(
+          nextPayload.traces.map((trace) => trace.id),
+          true,
+        ),
       }));
       setAppError(null);
     } catch (error) {
       setAppError(String(error));
     } finally {
-      setLoadingIds((current) => {
-        const next = { ...current };
-        nextIds.forEach((id) => delete next[id]);
-        return next;
-      });
+      setLoadingIds((current) => nextIds.reduce(removeIdFlag, current));
     }
   }
 
   function removeTrace(id: string): void {
     setLoadedTraces((current) => current.filter((trace) => trace.id !== id));
-    setVisibility((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
+    setVisibility((current) => removeIdFlag(current, id));
     if (pinnedCard()?.hit.traceId === id) {
       setPinnedCard(null);
     }
@@ -159,12 +191,12 @@ export default function App() {
   async function handleUpload(files: File[]): Promise<void> {
     for (const file of files) {
       try {
-        const response = await uploadTrace(file);
-        setDescriptors((current) => mergeDescriptors(current, [response.descriptor]));
-        setLoadedTraces((current) => mergeTraces(current, [response.payload_fragment]));
+        const { descriptor, payload_fragment } = await uploadTrace(file);
+        setDescriptors((current) => mergeDescriptors(current, [descriptor]));
+        setLoadedTraces((current) => mergeTraces(current, [payload_fragment]));
         setVisibility((current) => ({
           ...current,
-          [response.descriptor.id]: true,
+          [descriptor.id]: true,
         }));
         setAppError(null);
       } catch (error) {
@@ -173,25 +205,56 @@ export default function App() {
     }
   }
 
+  async function handleExport(): Promise<void> {
+    const currentRegistries = registries();
+    const currentTraces = loadedTraces();
+    if (exporting() || currentRegistries === null || currentTraces.length === 0) {
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const html = await exportSnapshotHtml({
+        registries: currentRegistries,
+        traces: currentTraces,
+      });
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "trace-gantt-export.html";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to export gantt snapshot", error);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   onMount(() => {
-    void initialize();
-    document.addEventListener("keydown", (event) => {
+    const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setPinnedCard(null);
       }
-    });
+    };
+
+    void initialize();
+    document.addEventListener("keydown", onKeyDown);
+    onCleanup(() => document.removeEventListener("keydown", onKeyDown));
   });
 
   return (
     <main class="app-shell">
       <Header
-        loadedCount={() => loadedTraces().length}
-        summary={headerSummary}
+        exportDisabled={exportDisabled}
+        onExport={handleExport}
         onThemeModeChange={setThemeMode}
         onTimeModeChange={setTimeMode}
         onViewModeChange={setViewMode}
         themeMode={themeMode}
         onZoomChange={setZoom}
+        snapshotMode={snapshotMode}
         timeMode={timeMode}
         viewMode={viewMode}
         zoom={zoom}
@@ -207,6 +270,7 @@ export default function App() {
         onUpload={handleUpload}
         onRemove={removeTrace}
         onToggleVisibility={toggleVisibility}
+        snapshotMode={snapshotMode}
         visibility={visibility()}
       />
 
@@ -256,7 +320,7 @@ export default function App() {
         />
       </section>
 
-      <DropZone onUpload={handleUpload} />
+      <DropZone enabled={!snapshotMode} onUpload={handleUpload} />
 
       <Switch>
         <Match when={pinnedCard()}>

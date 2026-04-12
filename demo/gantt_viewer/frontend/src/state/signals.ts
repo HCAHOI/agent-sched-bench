@@ -7,26 +7,40 @@ export type TimeMode = "sync" | "abs";
 export type ViewMode = "layered" | "concise";
 export type ThemeMode = "dark" | "light";
 
-function initialViewMode(): ViewMode {
+export const DEFAULT_TIME_MODE: TimeMode = "sync";
+export const DEFAULT_VIEW_MODE: ViewMode = "layered";
+export const DEFAULT_THEME_MODE: ThemeMode = "dark";
+export const DEFAULT_ZOOM = 1;
+
+const STORAGE_KEYS = {
+  themeMode: "gantt.themeMode",
+  viewMode: "gantt.viewMode",
+} as const;
+
+function readStoredMode<TMode extends string>(
+  key: string,
+  expectedValue: TMode,
+  fallback: TMode,
+): TMode {
   if (typeof window === "undefined") {
-    return "layered";
+    return fallback;
   }
-  const persisted = window.localStorage.getItem("gantt.viewMode");
-  return persisted === "concise" ? "concise" : "layered";
+
+  return window.localStorage.getItem(key) === expectedValue ? expectedValue : fallback;
+}
+
+function initialViewMode(): ViewMode {
+  return readStoredMode(STORAGE_KEYS.viewMode, "concise", DEFAULT_VIEW_MODE);
 }
 
 export function initialThemeMode(): ThemeMode {
-  if (typeof window === "undefined") {
-    return "dark";
-  }
-  const persisted = window.localStorage.getItem("gantt.themeMode");
-  return persisted === "light" ? "light" : "dark";
+  return readStoredMode(STORAGE_KEYS.themeMode, "light", DEFAULT_THEME_MODE);
 }
 
-export const [timeMode, setTimeMode] = createSignal<TimeMode>("sync");
+export const [timeMode, setTimeMode] = createSignal<TimeMode>(DEFAULT_TIME_MODE);
 export const [viewMode, setViewMode] = createSignal<ViewMode>(initialViewMode());
 export const [themeMode, setThemeMode] = createSignal<ThemeMode>(initialThemeMode());
-export const [zoom, setZoom] = createSignal(1);
+export const [zoom, setZoom] = createSignal(DEFAULT_ZOOM);
 export const [descriptors, setDescriptors] = createSignal<TraceDescriptor[]>([]);
 export const [registries, setRegistries] = createSignal<Registries | null>(null);
 export const [loadedTraces, setLoadedTraces] = createSignal<TracePayload[]>([]);
@@ -36,3 +50,19 @@ export const [hoverCard, setHoverCard] = createSignal<HitCard | null>(null);
 export const [pinnedCard, setPinnedCard] = createSignal<HitCard | null>(null);
 export const [scrollTop, setScrollTop] = createSignal(0);
 export const [appError, setAppError] = createSignal<string | null>(null);
+
+export function __resetSignalsForTests(): void {
+  setTimeMode(DEFAULT_TIME_MODE);
+  setViewMode(DEFAULT_VIEW_MODE);
+  setThemeMode(DEFAULT_THEME_MODE);
+  setZoom(DEFAULT_ZOOM);
+  setDescriptors([]);
+  setRegistries(null);
+  setLoadedTraces([]);
+  setVisibility({});
+  setLoadingIds({});
+  setHoverCard(null);
+  setPinnedCard(null);
+  setScrollTop(0);
+  setAppError(null);
+}
