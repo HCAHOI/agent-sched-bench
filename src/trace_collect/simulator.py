@@ -127,9 +127,9 @@ def _group_actions_by_iteration(
     for action in actions:
         it = int(action.get("iteration", 0))
         if it not in iterations:
-            iterations[it] = {"llm": None, "tools": []}
+            iterations[it] = {"llms": [], "tools": []}
         if action.get("action_type") == "llm_call":
-            iterations[it]["llm"] = action
+            iterations[it]["llms"].append(action)
         elif action.get("action_type") == "tool_exec":
             iterations[it]["tools"].append(action)
     return iterations
@@ -500,63 +500,73 @@ async def _run_local_model_simulation(
     try:
         for i, it_num in enumerate(sorted_iters):
             it_group = iterations[it_num]
-            llm_action = it_group.get("llm") or {}
-            llm_data = llm_action.get("data", {})
+            llm_actions = it_group.get("llms", [])
             tool_actions = it_group.get("tools", [])
 
-            messages_in = llm_data.get("messages_in")
-            n_tokens = llm_data.get("completion_tokens", 1) or 1
-
-            if not messages_in:
-                logger.warning("Iteration %d: no messages_in, skipping", it_num)
+            if not llm_actions:
+                logger.warning("Iteration %d: no LLM actions, skipping", it_num)
                 continue
 
-            ts_start = time.time()
+            iter_failed = False
+            for llm_idx, llm_action in enumerate(llm_actions):
+                llm_data = llm_action.get("data", {})
+                messages_in = llm_data.get("messages_in")
+                n_tokens = llm_data.get("completion_tokens", 1) or 1
 
-            try:
-                ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
-                    client, model, messages_in, n_tokens
+                if not messages_in:
+                    logger.warning("Iteration %d llm %d: no messages_in, skipping", it_num, llm_idx)
+                    continue
+
+                ts_start = time.time()
+
+                try:
+                    ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
+                        client, model, messages_in, n_tokens
+                    )
+                except Exception as exc:
+                    logger.error("Iteration %d llm %d: LLM call failed: %s", it_num, llm_idx, exc)
+                    iter_failed = True
+                    continue
+
+                ts_after_llm = time.time()
+
+                scheduler_snapshot = metrics_client.get_snapshot()
+
+                llm_record = _make_trace_action(
+                    loaded=loaded,
+                    action_type="llm_call",
+                    action_id=f"llm_{it_num}_{llm_idx}",
+                    iteration=it_num,
+                    ts_start=ts_start,
+                    ts_end=ts_after_llm,
+                    data={
+                        "messages_in": messages_in,
+                        "raw_response": llm_data.get("raw_response", {}),
+                        "prompt_tokens": llm_data.get("prompt_tokens", 0),
+                        "completion_tokens": llm_data.get("completion_tokens", 0),
+                        "llm_latency_ms": llm_latency_ms,
+                        "ttft_ms": ttft_ms,
+                        "tpot_ms": tpot_ms,
+                        "simulate_source": str(loaded.source_trace),
+                        "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
+                        "sim_metrics": {
+                            "timing": {
+                                "ttft_ms": ttft_ms,
+                                "tpot_ms": tpot_ms,
+                                "total_ms": llm_latency_ms,
+                            },
+                            "vllm_scheduler_snapshot": dataclasses.asdict(
+                                scheduler_snapshot
+                            ),
+                            "warmup": i < warmup_skip_iterations,
+                        },
+                    },
                 )
-            except Exception as exc:
-                logger.error("Iteration %d: LLM call failed: %s", it_num, exc)
+                trace_logger.log_trace_action(loaded.agent_id, llm_record)
+
+            if iter_failed:
                 failed_iters += 1
                 continue
-
-            ts_after_llm = time.time()
-
-            scheduler_snapshot = metrics_client.get_snapshot()
-
-            llm_record = _make_trace_action(
-                loaded=loaded,
-                action_type="llm_call",
-                action_id=f"llm_{it_num}",
-                iteration=it_num,
-                ts_start=ts_start,
-                ts_end=ts_after_llm,
-                data={
-                    "messages_in": messages_in,
-                    "raw_response": llm_data.get("raw_response", {}),
-                    "prompt_tokens": llm_data.get("prompt_tokens", 0),
-                    "completion_tokens": llm_data.get("completion_tokens", 0),
-                    "llm_latency_ms": llm_latency_ms,
-                    "ttft_ms": ttft_ms,
-                    "tpot_ms": tpot_ms,
-                    "simulate_source": str(loaded.source_trace),
-                    "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
-                    "sim_metrics": {
-                        "timing": {
-                            "ttft_ms": ttft_ms,
-                            "tpot_ms": tpot_ms,
-                            "total_ms": llm_latency_ms,
-                        },
-                        "vllm_scheduler_snapshot": dataclasses.asdict(
-                            scheduler_snapshot
-                        ),
-                        "warmup": i < warmup_skip_iterations,
-                    },
-                },
-            )
-            trace_logger.log_trace_action(loaded.agent_id, llm_record)
 
             ctr = prepared_session.container
             total_tool_ms = 0.0
@@ -611,13 +621,11 @@ async def _run_local_model_simulation(
             succeeded_iters += 1
 
             logger.info(
-                "[%d/%d] iter %d: ttft=%.1fms tpot=%.2fms llm=%.0fms tool=%.0fms",
+                "[%d/%d] iter %d: %d llm calls, tool=%.0fms",
                 i + 1,
                 total_iters,
                 it_num,
-                ttft_ms,
-                tpot_ms,
-                llm_latency_ms,
+                len(llm_actions),
                 total_tool_ms,
             )
     finally:
