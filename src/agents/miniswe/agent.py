@@ -507,7 +507,7 @@ class MiniSWECodeAgent(AgentBase):
                     data={
                         "tool_name": "bash",
                         "tool_args": tool_args,
-                        "tool_result": self._truncate(tool_output),
+                        "tool_result": tool_output,
                         "duration_ms": tool_duration_ms,
                         "success": returncode == 0,
                         "timeout": False,

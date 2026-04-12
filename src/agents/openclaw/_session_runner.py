@@ -150,7 +150,7 @@ class TraceCollectorHook(AgentHook):
         self._before_exec_wall = time.time()
         if context.tool_calls:
             for tc in context.tool_calls:
-                self._tool_start_ts[tc.name] = time.monotonic()
+                self._tool_start_ts[tc.id] = time.monotonic()
                 is_mcp = tc.name.startswith("mcp_")
                 self.emit_event(
                     MCP if is_mcp else TOOL,
@@ -253,15 +253,17 @@ class TraceCollectorHook(AgentHook):
 
         tool_results_from_messages = self._extract_tool_results(context.messages)
         if tool_results_from_messages:
-            tool_args_map: dict[str, str] = {}
+            tool_args_by_id: dict[str, str] = {}
+            tool_name_by_id: dict[str, str] = {}
             if context.tool_calls:
                 for tc in context.tool_calls:
-                    tool_args_map[tc.name] = json.dumps(
+                    tool_args_by_id[tc.id] = json.dumps(
                         tc.arguments, ensure_ascii=False
-                    )[:2000]
+                    )
+                    tool_name_by_id[tc.id] = tc.name
 
-            for tool_name, tool_content, tool_ok in tool_results_from_messages:
-                tool_start_mono = self._tool_start_ts.pop(tool_name, None)
+            for tc_id, tool_name, tool_content, tool_ok in tool_results_from_messages:
+                tool_start_mono = self._tool_start_ts.pop(tc_id, None)
                 duration_ms = (
                     (time.monotonic() - tool_start_mono) * 1000
                     if tool_start_mono
@@ -299,9 +301,10 @@ class TraceCollectorHook(AgentHook):
                 tool_ts_start = (
                     tool_ts_end - duration_ms / 1000 if duration_ms else tool_ts_end
                 )
+                action_id_suffix = tc_id if tc_id else tool_name
                 tool_action = TraceAction(
                     action_type="tool_exec",
-                    action_id=f"tool_{context.iteration}_{tool_name}",
+                    action_id=f"tool_{context.iteration}_{action_id_suffix}",
                     agent_id=self.agent_id,
                     program_id=self.program_id,
                     instance_id=self.instance_id,
@@ -310,8 +313,9 @@ class TraceCollectorHook(AgentHook):
                     ts_end=tool_ts_end,
                     data={
                         "tool_name": tool_name,
-                        "tool_args": tool_args_map.get(tool_name, ""),
-                        "tool_result": tool_content[:4000],
+                        "tool_call_id": tc_id,
+                        "tool_args": tool_args_by_id.get(tc_id, ""),
+                        "tool_result": tool_content,
                         "duration_ms": round(duration_ms, 1),
                         "success": tool_ok,
                     },
@@ -350,15 +354,19 @@ class TraceCollectorHook(AgentHook):
                 )
 
     @staticmethod
-    def _extract_tool_results(messages: list[dict]) -> list[tuple[str, str, bool]]:
-        results: list[tuple[str, str, bool]] = []
+    def _extract_tool_results(
+        messages: list[dict],
+    ) -> list[tuple[str, str, str, bool]]:
+        """Extract (tool_call_id, tool_name, content, ok) from trailing tool messages."""
+        results: list[tuple[str, str, str, bool]] = []
         i = len(messages) - 1
         while i >= 0 and messages[i].get("role") == "tool":
             m = messages[i]
+            tool_call_id = m.get("tool_call_id", "")
             name = m.get("name", "unknown")
             content = str(m.get("content", ""))
             ok = not content.startswith("Error")
-            results.append((name, content, ok))
+            results.append((tool_call_id, name, content, ok))
             i -= 1
         results.reverse()
         return results

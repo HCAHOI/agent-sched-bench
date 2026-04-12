@@ -41,7 +41,11 @@ class _StubResponse:
 
 
 class _StubToolCall:
+    _counter = 0
+
     def __init__(self, name: str, arguments: dict[str, Any]) -> None:
+        _StubToolCall._counter += 1
+        self.id = f"call_{_StubToolCall._counter}"
         self.name = name
         self.arguments = arguments
 
@@ -98,22 +102,23 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
             ],
         }
     ]
+    stub_tc = _StubToolCall("write_file", {"path": "a.py"})
     ctx_before_tools = _StubContext(
         iteration=0,
         messages=msgs_after_llm,
-        tool_calls=[_StubToolCall("write_file", {"path": "a.py"})],
+        tool_calls=[stub_tc],
         usage={"prompt_tokens": 100, "completion_tokens": 20},
     )
     await hook.before_execute_tools(ctx_before_tools)
 
     # Simulate tool result appended to messages
     msgs_after_tool = msgs_after_llm + [
-        {"role": "tool", "name": "write_file", "content": "wrote a.py"}
+        {"role": "tool", "tool_call_id": stub_tc.id, "name": "write_file", "content": "wrote a.py"}
     ]
     ctx_after = _StubContext(
         iteration=0,
         messages=msgs_after_tool,
-        tool_calls=[_StubToolCall("write_file", {"path": "a.py"})],
+        tool_calls=[stub_tc],
         usage={"prompt_tokens": 100, "completion_tokens": 20},
         response=_StubResponse(content="", finish_reason="tool_calls"),
     )

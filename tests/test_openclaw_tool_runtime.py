@@ -2,112 +2,151 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
-from trace_collect.openclaw_tools import execute_trace_tool
-from trace_collect.simulator import _exec_tool
+from trace_collect.openclaw_tools import ContainerAgent, execute_trace_tool
 
 
 def _nested(tool_name: str, payload: dict) -> str:
     return json.dumps({tool_name: payload}, ensure_ascii=False)
 
 
-def test_execute_trace_tool_supports_openclaw_read_and_list(tmp_path: Path) -> None:
-    repo_dir = tmp_path / "repo"
-    (repo_dir / "pkg").mkdir(parents=True)
-    (repo_dir / "pkg" / "sample.py").write_text("alpha\nbeta\n", encoding="utf-8")
+class FakeAgent:
+    """Minimal ContainerAgent stub that records requests and returns canned responses."""
 
-    list_result, list_success = asyncio.run(
-        execute_trace_tool(
-            agent_id="task-1",
-            tool_name="list_dir",
-            tool_args_json=_nested("list_dir", {"path": "/tmp/source/task-1"}),
-            repo_dir=repo_dir,
-            command_timeout_s=5.0,
-        )
-    )
-    assert list_success is True
-    assert "📁 pkg" in list_result
+    def __init__(self, responses: dict[str, dict] | None = None) -> None:
+        self.requests: list[dict] = []
+        self._responses = responses or {}
+        self._default = {"ok": True, "result": "ok", "returncode": 0}
 
-    read_result, read_success = asyncio.run(
-        execute_trace_tool(
-            agent_id="task-1",
-            tool_name="read_file",
-            tool_args_json=_nested(
-                "read_file",
-                {"path": "/tmp/source/task-1/pkg/sample.py"},
-            ),
-            repo_dir=repo_dir,
-            command_timeout_s=5.0,
-        )
-    )
-    assert read_success is True
-    assert "1| alpha" in read_result
-    assert "2| beta" in read_result
+    async def execute(self, request: dict, *, timeout_s: float = 600.0) -> dict:
+        self.requests.append(request)
+        tool = request.get("tool", "")
+        return self._responses.get(tool, self._default)
 
 
-def test_execute_trace_tool_supports_replay_observation_style_for_nested_exec(
-    tmp_path: Path,
-) -> None:
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir(parents=True)
-    (repo_dir / "notes.txt").write_text("hello\n", encoding="utf-8")
-
+def test_exec_command_sends_correct_request() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "hello\n", "returncode": 0}})
     result, success = asyncio.run(
         execute_trace_tool(
-            agent_id="task-1",
+            agent=agent,
             tool_name="exec",
-            tool_args_json=_nested(
-                "exec",
-                {"command": "cd /tmp/source/task-1 && cat notes.txt"},
-            ),
-            repo_dir=repo_dir,
-            command_timeout_s=5.0,
-            command_output_style="replay_observation",
+            tool_args_json=_nested("exec", {"command": "echo hello"}),
+            command_timeout_s=10.0,
         )
     )
-
     assert success is True
-    assert "<returncode>0</returncode>" in result
     assert "hello" in result
+    assert agent.requests[0]["tool"] == "exec"
+    assert agent.requests[0]["args"]["command"] == "echo hello"
+    assert agent.requests[0]["args"]["timeout"] == 10.0
 
 
-def test_simulator_exec_tool_supports_openclaw_write_file(tmp_path: Path) -> None:
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir(parents=True)
-
-    tool_result, duration_ms, tool_success = asyncio.run(
-        _exec_tool(
-            "task-1",
-            repo_dir,
-            "write_file",
-            _nested(
-                "write_file",
-                {"path": "/tmp/source/task-1/out.txt", "content": "payload\n"},
-            ),
-            5.0,
-        )
-    )
-
-    assert tool_success is True
-    assert duration_ms >= 0.0
-    assert "Successfully wrote" in tool_result
-    assert (repo_dir / "out.txt").read_text(encoding="utf-8") == "payload\n"
-
-
-def test_execute_trace_tool_rejects_unsupported_tool(tmp_path: Path) -> None:
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir(parents=True)
-
+def test_read_file_sends_correct_request() -> None:
+    agent = FakeAgent({"read_file": {"ok": True, "result": "file content\n"}})
     result, success = asyncio.run(
         execute_trace_tool(
-            agent_id="task-1",
+            agent=agent,
+            tool_name="read_file",
+            tool_args_json=_nested("read_file", {"path": "/testbed/foo.py"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert "file content" in result
+    assert agent.requests[0]["tool"] == "read_file"
+    assert agent.requests[0]["args"]["path"] == "/testbed/foo.py"
+
+
+def test_write_file_sends_correct_request() -> None:
+    agent = FakeAgent({"write_file": {"ok": True, "result": "Successfully wrote /testbed/out.txt"}})
+    result, success = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="write_file",
+            tool_args_json=_nested("write_file", {"path": "/testbed/out.txt", "content": "payload"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert "Successfully wrote" in result
+    assert agent.requests[0]["args"]["content"] == "payload"
+
+
+def test_edit_file_sends_correct_request() -> None:
+    agent = FakeAgent({"edit_file": {"ok": True, "result": "Successfully edited /testbed/x.py"}})
+    result, success = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="edit_file",
+            tool_args_json=_nested("edit_file", {
+                "path": "/testbed/x.py",
+                "old_text": "foo",
+                "new_text": "bar",
+            }),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert "Successfully edited" in result
+    req = agent.requests[0]
+    assert req["tool"] == "edit_file"
+    assert req["args"]["old_text"] == "foo"
+    assert req["args"]["new_text"] == "bar"
+    assert req["args"]["replace_all"] is False
+
+
+def test_list_dir_sends_correct_request() -> None:
+    agent = FakeAgent({"list_dir": {"ok": True, "result": "foo.py\nbar.py"}})
+    result, success = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="list_dir",
+            tool_args_json=_nested("list_dir", {"path": "/testbed"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert "foo.py" in result
+
+
+def test_exec_appends_exit_code() -> None:
+    agent = FakeAgent({"exec": {"ok": False, "result": "error msg", "returncode": 1}})
+    result, success = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "false"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is False
+    assert "Exit code: 1" in result
+
+
+def test_unsupported_tool_returns_error() -> None:
+    agent = FakeAgent()
+    result, success = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
             tool_name="nope_tool",
             tool_args_json="{}",
-            repo_dir=repo_dir,
             command_timeout_s=5.0,
         )
     )
-
     assert success is False
     assert "Unsupported replay tool" in result
+
+
+def test_commands_sends_list() -> None:
+    agent = FakeAgent({"commands": {"ok": True, "result": "done", "returncode": 0}})
+    result, success = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"commands": ["echo a", "echo b"]}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert agent.requests[0]["tool"] == "commands"
+    assert agent.requests[0]["args"]["commands"] == ["echo a", "echo b"]

@@ -142,13 +142,8 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--task-source",
-        default="data/swebench_verified/tasks.json",
+        default="data/swe-rebench/tasks.json",
         help="Path to tasks JSON file.",
-    )
-    parser.add_argument(
-        "--repos-root",
-        default="data/swebench_repos",
-        help="Path to pre-cloned repos directory.",
     )
     parser.add_argument(
         "--output-dir",
@@ -156,16 +151,16 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Output directory for the simulate trace.",
     )
     parser.add_argument(
-        "--command-timeout",
-        type=float,
-        default=120.0,
-        help="Timeout in seconds per bash command.",
+        "--container",
+        default="docker",
+        choices=["docker", "podman"],
+        help="Container executable (default: docker).",
     )
     parser.add_argument(
-        "--task-timeout",
+        "--command-timeout",
         type=float,
-        default=1200.0,
-        help="Timeout for the entire simulation.",
+        default=600.0,
+        help="Timeout in seconds per bash command (default 600s for replay).",
     )
     parser.add_argument(
         "--metrics-url",
@@ -354,11 +349,10 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "source_trace": Path(args.source_trace) if args.source_trace else None,
         "trace_manifest": Path(args.trace_manifest) if args.trace_manifest else None,
         "task_source": Path(args.task_source),
-        "repos_root": Path(args.repos_root),
         "output_dir": Path(args.output_dir),
         "mode": args.mode,
+        "container_executable": args.container,
         "command_timeout_s": args.command_timeout,
-        "task_timeout_s": args.task_timeout,
         "warmup_skip_iterations": args.warmup_skip_iterations,
         "replay_speed": args.replay_speed,
     }

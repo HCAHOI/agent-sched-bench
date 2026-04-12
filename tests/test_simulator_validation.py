@@ -2,27 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-
-def _evict(*names: str) -> None:
-    for name in names:
-        sys.modules.pop(name, None)
+from trace_collect.simulator import simulate, SimulateError
 
 
-@pytest.fixture(autouse=True)
-def _isolate_modules():
-    _evict("trace_collect.scaffold_registry", "agents.openclaw", "agents.miniswe")
-    yield
-    _evict("trace_collect.scaffold_registry", "agents.openclaw", "agents.miniswe")
-
-
-def test_simulator_rejects_openclaw_trace_without_repo_fields(
-    tmp_path: Path,
-) -> None:
+def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
     trace_path.write_text(
         "\n".join(
@@ -60,17 +47,11 @@ def test_simulator_rejects_openclaw_trace_without_repo_fields(
         encoding="utf-8",
     )
 
-    from trace_collect.simulator import simulate
-
-    with pytest.raises(
-        NotImplementedError,
-        match="Simulate mode requires repo-backed OpenClaw tasks",
-    ):
+    with pytest.raises(SimulateError, match="no resolvable docker_image"):
         asyncio.run(
             simulate(
                 source_trace=trace_path,
                 task_source=task_source,
-                repos_root=tmp_path / "repos",
                 output_dir=tmp_path / "out",
                 api_base="http://localhost:8000/v1",
                 api_key="EMPTY",
@@ -78,12 +59,12 @@ def test_simulator_rejects_openclaw_trace_without_repo_fields(
             )
         )
 
-    assert "agents.openclaw" not in sys.modules
 
-
-def test_simulator_rejects_openclaw_trace_marked_non_prepareable(
+def test_simulator_accepts_task_with_image_name(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Task with image_name passes validation (prepare is mocked)."""
     trace_path = tmp_path / "trace.jsonl"
     trace_path.write_text(
         "\n".join(
@@ -93,10 +74,9 @@ def test_simulator_rejects_openclaw_trace_marked_non_prepareable(
                         "type": "trace_metadata",
                         "trace_format_version": 5,
                         "scaffold": "openclaw",
-                        "instance_id": "fc_test_001",
+                        "instance_id": "fc_test_002",
                         "model": "dummy",
                         "mode": "collect",
-                        "needs_prepare": False,
                     }
                 ),
                 json.dumps(
@@ -104,7 +84,7 @@ def test_simulator_rejects_openclaw_trace_marked_non_prepareable(
                         "type": "action",
                         "action_type": "llm_call",
                         "action_id": "llm_0",
-                        "agent_id": "fc_test_001",
+                        "agent_id": "fc_test_002",
                         "iteration": 0,
                         "ts_start": 1.0,
                         "ts_end": 2.0,
@@ -121,10 +101,9 @@ def test_simulator_rejects_openclaw_trace_marked_non_prepareable(
         json.dumps(
             [
                 {
-                    "instance_id": "fc_test_001",
+                    "instance_id": "fc_test_002",
                     "problem_statement": "x",
-                    "repo": "django/django",
-                    "base_commit": "deadbeef",
+                    "image_name": "swebench/test-image",
                 }
             ]
         )
@@ -132,22 +111,97 @@ def test_simulator_rejects_openclaw_trace_marked_non_prepareable(
         encoding="utf-8",
     )
 
-    from trace_collect.simulator import simulate
+    from trace_collect.simulator import PreparedContainer, PreparedTraceSession
 
-    with pytest.raises(
-        NotImplementedError,
-        match="Simulate mode requires repo-backed OpenClaw traces",
-    ):
-        asyncio.run(
-            simulate(
-                source_trace=trace_path,
-                task_source=task_source,
-                repos_root=tmp_path / "repos",
-                output_dir=tmp_path / "out",
-                api_base="http://localhost:8000/v1",
-                api_key="EMPTY",
-                model="dummy",
-            )
+    class _FakeAgent:
+        async def stop(self): pass
+
+    async def fake_prepare(loaded, *, container_executable):
+        return PreparedTraceSession(
+            loaded=loaded,
+            container=PreparedContainer(
+                container_id="fake",
+                container_executable=container_executable,
+                docker_image="fake",
+                agent=_FakeAgent(),
+            ),
         )
 
-    assert "agents.openclaw" not in sys.modules
+    monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare)
+    async def _fake_exec(*a, **kw):
+        return ("ok", 1.0, True)
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", _fake_exec)
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_: (_ for _ in ()).throw(AssertionError("no llm")),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+        )
+    )
+    assert trace_file.exists()
+
+
+def test_simulator_rejects_duplicate_agent_ids(tmp_path: Path) -> None:
+    trace_a = tmp_path / "trace-a.jsonl"
+    trace_b = tmp_path / "trace-b.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.json"
+
+    for trace_path in (trace_a, trace_b):
+        trace_path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "trace_metadata",
+                            "scaffold": "openclaw",
+                            "instance_id": "same-id",
+                            "model": "dummy",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "action",
+                            "action_type": "llm_call",
+                            "action_id": "llm_0",
+                            "agent_id": "same-id",
+                            "iteration": 0,
+                            "ts_start": 1.0,
+                            "ts_end": 2.0,
+                            "data": {"messages_in": [], "completion_tokens": 1},
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    task_source.write_text(
+        json.dumps([{"instance_id": "same-id", "image_name": "img"}]) + "\n",
+        encoding="utf-8",
+    )
+    manifest.write_text(
+        json.dumps([
+            {"source_trace": trace_a.name},
+            {"source_trace": trace_b.name},
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SimulateError, match="Duplicate agent_id"):
+        asyncio.run(
+            simulate(
+                trace_manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+            )
+        )
