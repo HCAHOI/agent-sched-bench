@@ -1,12 +1,14 @@
-"""Execute tool calls inside Docker/Podman containers during trace replay."""
+"""Execute tool calls inside Docker/Podman containers via a persistent agent."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+import logging
 import textwrap
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _unwrap_tool_args(
@@ -33,10 +35,16 @@ def _unwrap_tool_args(
     return tool_name, parsed, False
 
 
-# Self-contained edit script piped into `docker exec -i {cid} python3`.
-# Reads JSON request from stdin, performs find-match-replace, writes result.
-_EDIT_SCRIPT = textwrap.dedent(r'''
-import json, sys, difflib
+# ---------------------------------------------------------------------------
+# In-container replay agent script.
+#
+# Runs as a single persistent python3 process inside the Docker container.
+# Reads JSON-line requests from stdin, dispatches to tool handlers,
+# writes JSON-line responses to stdout.  All subprocess.run calls use
+# capture_output=True to prevent stdout pollution of the protocol.
+# ---------------------------------------------------------------------------
+_REPLAY_AGENT_SCRIPT = textwrap.dedent(r'''
+import json, os, sys, subprocess, difflib, signal
 
 def _find_match(content, old_text):
     if old_text in content:
@@ -69,273 +77,286 @@ def _not_found_msg(old_text, content, path):
             old_lines, lines[best_start:best_start+window],
             fromfile="old_text (provided)",
             tofile=f"{path} (actual, line {best_start+1})", lineterm=""))
-        return f"Error: old_text not found in {path}.\nBest match ({best_ratio:.0%} similar) at line {best_start+1}:\n{diff}"
+        return f"Error: old_text not found in {path}.\nBest match ({best_ratio:.0%}) at line {best_start+1}:\n{diff}"
     return f"Error: old_text not found in {path}. No similar text found."
 
-req = json.loads(sys.stdin.read())
-path, old_text, new_text = req["path"], req["old_text"], req["new_text"]
-replace_all = req.get("replace_all", False)
-try:
-    raw = open(path, "rb").read()
-    uses_crlf = b"\r\n" in raw
-    content = raw.decode("utf-8").replace("\r\n", "\n")
-    match, count = _find_match(content, old_text.replace("\r\n", "\n"))
-    if match is None:
-        print(json.dumps({"ok": False, "msg": _not_found_msg(old_text, content, path)}))
-        sys.exit(0)
-    if count > 1 and not replace_all:
-        print(json.dumps({"ok": False, "msg": f"Warning: old_text appears {count} times. Provide more context or set replace_all=true."}))
-        sys.exit(0)
-    norm_new = new_text.replace("\r\n", "\n")
-    new_content = content.replace(match, norm_new) if replace_all else content.replace(match, norm_new, 1)
-    if uses_crlf:
-        new_content = new_content.replace("\n", "\r\n")
-    open(path, "wb").write(new_content.encode("utf-8"))
-    print(json.dumps({"ok": True, "msg": f"Successfully edited {path}"}))
-except Exception as e:
-    print(json.dumps({"ok": False, "msg": f"Error editing file: {e}"}))
-''').strip()
-
-
-async def _docker_exec(
-    container_id: str,
-    container_executable: str,
-    cmd_args: list[str],
-    *,
-    timeout_s: float,
-    stdin_data: str | None = None,
-) -> tuple[str, int]:
-    """Run a command inside the container via ``docker exec``.
-
-    Returns (combined_output, returncode).
-    """
-    full_cmd = [container_executable, "exec"]
-    if stdin_data is not None:
-        full_cmd.append("-i")
-    full_cmd.extend(cmd_args)
-
+def handle_exec(args):
+    cmd = args.get("command", "")
+    timeout = args.get("timeout", 600)
+    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            full_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            input=stdin_data,
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        return output, result.returncode
+        r = subprocess.run(cmd, shell=True, cwd="/testbed",
+                           capture_output=True, text=True, timeout=timeout, env=env)
+        output = (r.stdout or "") + (r.stderr or "")
+        return {"ok": r.returncode == 0, "result": output, "returncode": r.returncode}
     except subprocess.TimeoutExpired:
-        return "[timeout]", 124
+        return {"ok": False, "result": "[timeout]", "returncode": 124}
 
-
-async def _run_container_command(
-    container_id: str,
-    container_executable: str,
-    command: str,
-    *,
-    timeout_s: float,
-) -> tuple[str, int]:
-    """Execute a shell command inside the container."""
-    return await _docker_exec(
-        container_id,
-        container_executable,
-        ["-w", "/testbed", container_id, "bash", "-c", command],
-        timeout_s=timeout_s,
-    )
-
-
-async def _run_shell_commands(
-    commands: list[str],
-    *,
-    container_id: str,
-    container_executable: str,
-    command_timeout_s: float,
-) -> tuple[str, bool]:
-    all_output: list[str] = []
-    last_returncode = 0
-
-    for raw_cmd in commands:
-        output, returncode = await _run_container_command(
-            container_id, container_executable, raw_cmd, timeout_s=command_timeout_s,
-        )
-        all_output.append(output)
-        last_returncode = returncode
-
-    if len(commands) > 1:
+def handle_commands(args):
+    cmds = args.get("commands", [])
+    timeout = args.get("timeout", 600)
+    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
+    all_output = []
+    last_rc = 0
+    for i, cmd in enumerate(cmds):
+        try:
+            r = subprocess.run(cmd, shell=True, cwd="/testbed",
+                               capture_output=True, text=True, timeout=timeout, env=env)
+            all_output.append(r.stdout + r.stderr)
+            last_rc = r.returncode
+        except subprocess.TimeoutExpired:
+            all_output.append("[timeout]")
+            last_rc = 124
+    if len(cmds) > 1:
         combined = "\n".join(f"[call {k}]\n{out}" for k, out in enumerate(all_output))
     else:
         combined = all_output[0] if all_output else ""
+    return {"ok": last_rc == 0, "result": combined, "returncode": last_rc}
 
-    return f"{combined}\n\nExit code: {last_returncode}".strip(), last_returncode == 0
-
-
-async def _read_file(
-    container_id: str,
-    container_executable: str,
-    path: str,
-    *,
-    timeout_s: float,
-) -> tuple[str, bool]:
-    output, rc = await _docker_exec(
-        container_id, container_executable,
-        ["-w", "/testbed", container_id, "cat", path],
-        timeout_s=timeout_s,
-    )
-    if rc != 0:
-        return f"Error: Failed to read {path}: {output.strip()}", False
-    return output, True
-
-
-async def _write_file(
-    container_id: str,
-    container_executable: str,
-    path: str,
-    content: str,
-    *,
-    timeout_s: float,
-) -> tuple[str, bool]:
-    quoted = json.dumps(path)
-    output, rc = await _docker_exec(
-        container_id, container_executable,
-        [container_id, "bash", "-c", f'mkdir -p "$(dirname {quoted})" && cat > {quoted}'],
-        timeout_s=timeout_s,
-        stdin_data=content,
-    )
-    if rc != 0:
-        return f"Error: Failed to write {path}: {output.strip()}", False
-    return f"Successfully wrote {path}", True
-
-
-async def _edit_file(
-    container_id: str,
-    container_executable: str,
-    path: str,
-    old_text: str,
-    new_text: str,
-    replace_all: bool,
-    *,
-    timeout_s: float,
-) -> tuple[str, bool]:
-    request_json = json.dumps({
-        "path": path,
-        "old_text": old_text,
-        "new_text": new_text,
-        "replace_all": replace_all,
-    })
-    output, rc = await _docker_exec(
-        container_id, container_executable,
-        [container_id, "python3", "-c", _EDIT_SCRIPT],
-        timeout_s=timeout_s,
-        stdin_data=request_json,
-    )
-    if rc != 0:
-        return f"Error: edit_file failed: {output.strip()}", False
+def handle_read_file(args):
+    path = args.get("path", "")
     try:
-        result = json.loads(output.strip().splitlines()[-1])
-        return result["msg"], result.get("ok", False)
-    except (json.JSONDecodeError, KeyError, IndexError):
-        return output.strip() or "Error: unexpected edit_file output", False
+        return {"ok": True, "result": open(path).read()}
+    except Exception as e:
+        return {"ok": False, "result": f"Error: {e}"}
+
+def handle_write_file(args):
+    path = args.get("path", "")
+    content = args.get("content", "")
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        return {"ok": True, "result": f"Successfully wrote {path}"}
+    except Exception as e:
+        return {"ok": False, "result": f"Error: {e}"}
+
+def handle_edit_file(args):
+    path = args.get("path", "")
+    old_text = args.get("old_text", "")
+    new_text = args.get("new_text", "")
+    replace_all = args.get("replace_all", False)
+    try:
+        raw = open(path, "rb").read()
+        uses_crlf = b"\r\n" in raw
+        content = raw.decode("utf-8").replace("\r\n", "\n")
+        match, count = _find_match(content, old_text.replace("\r\n", "\n"))
+        if match is None:
+            return {"ok": False, "result": _not_found_msg(old_text, content, path)}
+        if count > 1 and not replace_all:
+            return {"ok": False, "result": f"Warning: old_text appears {count} times. Provide more context or set replace_all=true."}
+        norm_new = new_text.replace("\r\n", "\n")
+        new_content = content.replace(match, norm_new) if replace_all else content.replace(match, norm_new, 1)
+        if uses_crlf:
+            new_content = new_content.replace("\n", "\r\n")
+        open(path, "wb").write(new_content.encode("utf-8"))
+        return {"ok": True, "result": f"Successfully edited {path}"}
+    except Exception as e:
+        return {"ok": False, "result": f"Error editing file: {e}"}
+
+def handle_list_dir(args):
+    path = args.get("path", ".")
+    try:
+        entries = sorted(os.listdir(path))
+        return {"ok": True, "result": "\n".join(entries)}
+    except Exception as e:
+        return {"ok": False, "result": f"Error: {e}"}
+
+HANDLERS = {
+    "exec": handle_exec,
+    "commands": handle_commands,
+    "read_file": handle_read_file,
+    "write_file": handle_write_file,
+    "edit_file": handle_edit_file,
+    "list_dir": handle_list_dir,
+}
+
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+        tool = req.get("tool", "")
+        args = req.get("args", {})
+        handler = HANDLERS.get(tool)
+        if handler:
+            resp = handler(args)
+        else:
+            resp = {"ok": False, "result": f"Error: Unsupported tool {tool!r}"}
+    except Exception as e:
+        resp = {"ok": False, "result": f"Error: agent dispatch failed: {e}"}
+    sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+''').strip()
 
 
-async def _list_dir(
-    container_id: str,
-    container_executable: str,
-    path: str,
-    *,
-    timeout_s: float,
-) -> tuple[str, bool]:
-    output, rc = await _docker_exec(
-        container_id, container_executable,
-        ["-w", "/testbed", container_id, "ls", "-1a", path],
-        timeout_s=timeout_s,
-    )
-    if rc != 0:
-        return f"Error: Failed to list {path}: {output.strip()}", False
-    return output, True
+# Idempotent tools safe to retry after agent restart.
+_IDEMPOTENT_TOOLS = frozenset({"read_file", "list_dir"})
+
+
+class ContainerAgent:
+    """Persistent in-container agent communicating via JSON-line stdin/stdout."""
+
+    def __init__(self, container_id: str, container_executable: str) -> None:
+        self._container_id = container_id
+        self._executable = container_executable
+        self._process: asyncio.subprocess.Process | None = None
+
+    async def start(self) -> None:
+        self._process = await asyncio.create_subprocess_exec(
+            self._executable, "exec", "-i", "-w", "/testbed",
+            self._container_id, "python3", "-u", "-c", _REPLAY_AGENT_SCRIPT,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        logger.info(
+            "ContainerAgent started: cid=%s pid=%s",
+            self._container_id[:12], self._process.pid,
+        )
+
+    async def stop(self) -> None:
+        if self._process is None:
+            return
+        try:
+            if self._process.stdin and not self._process.stdin.is_closing():
+                self._process.stdin.close()
+            await asyncio.wait_for(self._process.wait(), timeout=5)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            self._process.kill()
+            await self._process.wait()
+        self._process = None
+
+    @property
+    def alive(self) -> bool:
+        return self._process is not None and self._process.returncode is None
+
+    async def _restart(self) -> None:
+        logger.warning("ContainerAgent restarting: cid=%s", self._container_id[:12])
+        await self.stop()
+        await self.start()
+
+    async def execute(
+        self,
+        request: dict[str, Any],
+        *,
+        timeout_s: float = 600.0,
+    ) -> dict[str, Any]:
+        """Send a request and return the response. Restarts on crash."""
+        tool_name = request.get("tool", "")
+        for attempt in range(2):
+            if not self.alive:
+                if attempt == 0:
+                    await self._restart()
+                else:
+                    return {"ok": False, "result": "Error: agent process dead"}
+
+            proc = self._process
+            assert proc is not None and proc.stdin is not None and proc.stdout is not None
+
+            line = json.dumps(request, ensure_ascii=False) + "\n"
+            try:
+                proc.stdin.write(line.encode())
+                await proc.stdin.drain()
+                raw = await asyncio.wait_for(
+                    proc.stdout.readline(),
+                    timeout=timeout_s + 5.0,
+                )
+            except (asyncio.TimeoutError, BrokenPipeError, ConnectionResetError):
+                await self._restart()
+                if tool_name in _IDEMPOTENT_TOOLS:
+                    continue
+                return {"ok": False, "result": "[timeout]", "returncode": 124}
+
+            if not raw:
+                # EOF — agent crashed
+                await self._restart()
+                if tool_name in _IDEMPOTENT_TOOLS:
+                    continue
+                return {"ok": False, "result": "Error: agent process crashed"}
+
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return {"ok": False, "result": f"Error: invalid agent response: {raw[:200]}"}
+
+        return {"ok": False, "result": "Error: agent restart failed"}
+
+
+def _resolve_tool_request(
+    tool_name: str | None,
+    params: dict[str, Any],
+    command_timeout_s: float,
+) -> dict[str, Any]:
+    """Build a JSON-line request for the in-container agent."""
+
+    # Shell commands
+    if "command" in params:
+        return {"tool": "exec", "args": {"command": params["command"], "timeout": command_timeout_s}}
+    if "commands" in params:
+        return {"tool": "commands", "args": {"commands": list(params["commands"]), "timeout": command_timeout_s}}
+
+    if tool_name == "exec":
+        command = params.get("command")
+        commands = params.get("commands")
+        if command:
+            return {"tool": "exec", "args": {"command": command, "timeout": command_timeout_s}}
+        if commands:
+            return {"tool": "commands", "args": {"commands": list(commands), "timeout": command_timeout_s}}
+        return {"tool": "exec", "args": {"command": "echo 'Error: no command'", "timeout": 5}}
+
+    if tool_name == "read_file":
+        return {"tool": "read_file", "args": {"path": params.get("path", "")}}
+
+    if tool_name == "write_file":
+        return {"tool": "write_file", "args": {"path": params.get("path", ""), "content": params.get("content", "")}}
+
+    if tool_name == "edit_file":
+        return {"tool": "edit_file", "args": {
+            "path": params.get("path", ""),
+            "old_text": params.get("old_text", ""),
+            "new_text": params.get("new_text", ""),
+            "replace_all": bool(params.get("replace_all", False)),
+        }}
+
+    if tool_name == "list_dir":
+        return {"tool": "list_dir", "args": {"path": params.get("path", ".")}}
+
+    return None  # unsupported tool
+
+
+_KNOWN_TOOLS = frozenset({"exec", "commands", "read_file", "write_file", "edit_file", "list_dir"})
 
 
 async def execute_trace_tool(
     *,
-    container_id: str,
-    container_executable: str,
+    agent: ContainerAgent,
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
 ) -> tuple[str, bool]:
-    """Execute one trace tool call inside a Docker/Podman container."""
+    """Execute one trace tool call via the persistent in-container agent."""
 
     resolved_name, params, _nested = _unwrap_tool_args(
         tool_name=tool_name,
         tool_args_json=tool_args_json,
     )
 
-    # Shell commands (exec / command / commands)
-    if "command" in params:
-        return await _run_shell_commands(
-            [params["command"]],
-            container_id=container_id,
-            container_executable=container_executable,
-            command_timeout_s=command_timeout_s,
-        )
-    if "commands" in params:
-        return await _run_shell_commands(
-            list(params["commands"]),
-            container_id=container_id,
-            container_executable=container_executable,
-            command_timeout_s=command_timeout_s,
-        )
+    request = _resolve_tool_request(resolved_name, params, command_timeout_s)
 
-    if resolved_name == "exec":
-        command = params.get("command")
-        commands = params.get("commands")
-        if command:
-            return await _run_shell_commands(
-                [command],
-                container_id=container_id,
-                container_executable=container_executable,
-                command_timeout_s=command_timeout_s,
-            )
-        if commands:
-            return await _run_shell_commands(
-                list(commands),
-                container_id=container_id,
-                container_executable=container_executable,
-                command_timeout_s=command_timeout_s,
-            )
-        return "Error: exec requires 'command' or 'commands'.", False
+    if request is None:
+        return f"Error: Unsupported replay tool {resolved_name!r}", False
 
-    # Filesystem tools
-    if resolved_name == "read_file":
-        path = params.get("path", "")
-        return await _read_file(
-            container_id, container_executable, path,
-            timeout_s=command_timeout_s,
-        )
+    resp = await agent.execute(request, timeout_s=command_timeout_s)
+    result = resp.get("result", "")
+    ok = resp.get("ok", False)
 
-    if resolved_name == "write_file":
-        path = params.get("path", "")
-        content = params.get("content", "")
-        return await _write_file(
-            container_id, container_executable, path, content,
-            timeout_s=command_timeout_s,
-        )
+    # Append exit code for exec-style commands
+    if request["tool"] in ("exec", "commands"):
+        rc = resp.get("returncode", -1)
+        result = f"{result}\n\nExit code: {rc}".strip()
 
-    if resolved_name == "edit_file":
-        path = params.get("path", "")
-        old_text = params.get("old_text", "")
-        new_text = params.get("new_text", "")
-        replace_all = bool(params.get("replace_all", False))
-        return await _edit_file(
-            container_id, container_executable, path, old_text, new_text,
-            replace_all, timeout_s=command_timeout_s,
-        )
-
-    if resolved_name == "list_dir":
-        path = params.get("path", ".")
-        return await _list_dir(
-            container_id, container_executable, path,
-            timeout_s=command_timeout_s,
-        )
-
-    return f"Error: Unsupported replay tool {resolved_name!r}", False
+    return result, ok

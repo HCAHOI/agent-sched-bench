@@ -47,6 +47,7 @@ class PreparedContainer:
     container_id: str
     container_executable: str
     docker_image: str
+    agent: Any  # ContainerAgent
     cleanup: Any  # Callable[[], None]
 
 
@@ -93,13 +94,12 @@ async def _call_local_model_streaming(
 
 
 async def _exec_tool(
-    container_id: str,
-    container_executable: str,
+    agent: Any,
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
 ) -> tuple[str, float, bool]:
-    """Execute one source-trace tool call inside a container.
+    """Execute one source-trace tool call via the persistent container agent.
 
     Returns:
         (tool_result, tool_duration_ms, tool_success)
@@ -108,8 +108,7 @@ async def _exec_tool(
 
     t0 = time.monotonic()
     tool_result, tool_success = await execute_trace_tool(
-        container_id=container_id,
-        container_executable=container_executable,
+        agent=agent,
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         command_timeout_s=command_timeout_s,
@@ -340,7 +339,9 @@ async def _prepare_container_session(
     *,
     container_executable: str,
 ) -> PreparedTraceSession:
-    """Prepare a Docker/Podman container for trace replay."""
+    """Prepare a Docker/Podman container and start a persistent replay agent."""
+    from trace_collect.openclaw_tools import ContainerAgent
+
     docker_image = _resolve_docker_image(loaded)
     if not docker_image:
         raise SimulateError(
@@ -358,14 +359,27 @@ async def _prepare_container_session(
         executable=container_executable,
     )
 
+    agent = ContainerAgent(container_id, container_executable)
+    await agent.start()
+
+    async def _cleanup_async() -> None:
+        await agent.stop()
+        await asyncio.to_thread(
+            stop_task_container, container_id, executable=container_executable,
+        )
+
     def _cleanup() -> None:
-        if container_id:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_cleanup_async())
+        except RuntimeError:
             stop_task_container(container_id, executable=container_executable)
 
     container = PreparedContainer(
         container_id=container_id,
         container_executable=container_executable,
         docker_image=normalized,
+        agent=agent,
         cleanup=_cleanup,
     )
     return PreparedTraceSession(loaded=loaded, container=container)
@@ -586,8 +600,7 @@ async def _run_local_model_simulation(
                     sim_provenance = "replayed_from_trace"
                 else:
                     tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                        ctr.container_id,
-                        ctr.container_executable,
+                        ctr.agent,
                         tool_name,
                         tool_args,
                         command_timeout_s,
@@ -796,8 +809,7 @@ async def _replay_cloud_model_session(
                 replay_source = "replayed_from_trace"
             else:
                 tool_result, duration_ms, tool_success = await _exec_tool(
-                    ctr.container_id,
-                    ctr.container_executable,
+                    ctr.agent,
                     tool_name,
                     tool_args,
                     command_timeout_s,
@@ -955,7 +967,14 @@ async def simulate(
         if trace_logger is not None:
             trace_logger.close()
         for prepared in prepared_sessions:
-            prepared.container.cleanup()
+            ctr = prepared.container
+            if ctr.agent is not None:
+                await ctr.agent.stop()
+            await asyncio.to_thread(
+                stop_task_container,
+                ctr.container_id,
+                executable=ctr.container_executable,
+            )
 
     trace_file = output_path / f"{run_id}.jsonl"
     logger.info("Simulate complete [%s] -> %s", mode, trace_file)

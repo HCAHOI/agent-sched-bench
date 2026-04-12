@@ -113,6 +113,9 @@ def test_simulator_accepts_task_with_image_name(
 
     from trace_collect.simulator import PreparedContainer, PreparedTraceSession
 
+    class _FakeAgent:
+        async def stop(self): pass
+
     async def fake_prepare(loaded, *, container_executable):
         return PreparedTraceSession(
             loaded=loaded,
@@ -120,6 +123,7 @@ def test_simulator_accepts_task_with_image_name(
                 container_id="fake",
                 container_executable=container_executable,
                 docker_image="fake",
+                agent=_FakeAgent(),
                 cleanup=lambda: None,
             ),
         )

@@ -154,17 +154,21 @@ def _patch_simulator_runtime(
     tool_result_prefix: str = "executed",
     llm_client_mode: str = "forbid",
 ) -> None:
+    class _FakeAgent:
+        async def stop(self): pass
+
     async def fake_prepare_container(loaded, *, container_executable):
         from trace_collect.simulator import PreparedContainer, PreparedTraceSession
         container = PreparedContainer(
             container_id="fake-cid",
             container_executable=container_executable,
             docker_image="fake-image",
+            agent=_FakeAgent(),
             cleanup=lambda: None,
         )
         return PreparedTraceSession(loaded=loaded, container=container)
 
-    async def fake_exec_tool(container_id, container_executable, tool_name, tool_args_json, command_timeout_s):
+    async def fake_exec_tool(agent, tool_name, tool_args_json, command_timeout_s):
         if tool_delay_s > 0:
             await asyncio.sleep(tool_delay_s)
         return f"{tool_result_prefix}-{tool_name}", tool_duration_ms, True
@@ -554,6 +558,9 @@ def test_cloud_model_manifest_with_docker_image_override(
 
     prepared_images: list[str] = []
 
+    class _FakeAgent2:
+        async def stop(self): pass
+
     async def capture_prepare(loaded, *, container_executable):
         from trace_collect.simulator import PreparedContainer, PreparedTraceSession, _resolve_docker_image
         img = _resolve_docker_image(loaded)
@@ -562,6 +569,7 @@ def test_cloud_model_manifest_with_docker_image_override(
             container_id="fake-cid",
             container_executable=container_executable,
             docker_image=img or "",
+            agent=_FakeAgent2(),
             cleanup=lambda: None,
         )
         return PreparedTraceSession(loaded=loaded, container=container)
