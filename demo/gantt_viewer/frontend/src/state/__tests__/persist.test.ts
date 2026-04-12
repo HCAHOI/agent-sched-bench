@@ -1,11 +1,12 @@
 import { createRoot } from "solid-js";
 
 import { __resetPersistenceForTests, enablePersistence } from "../persist";
-import { initialThemeMode, setThemeMode, setViewMode } from "../signals";
+import { initialClockMode, initialThemeMode, setClockMode, setThemeMode, setViewMode } from "../signals";
 
 describe("persist", () => {
   beforeEach(() => {
     __resetPersistenceForTests();
+    setClockMode("wall");
     setViewMode("layered");
     setThemeMode("dark");
     window.localStorage.clear();
@@ -23,6 +24,17 @@ describe("persist", () => {
     expect(window.localStorage.getItem("gantt.viewMode")).toBe("concise");
   });
 
+  it("writes the clock mode into localStorage", async () => {
+    createRoot((dispose) => {
+      enablePersistence();
+      setClockMode("real");
+      queueMicrotask(dispose);
+    });
+
+    await Promise.resolve();
+    expect(window.localStorage.getItem("gantt.clockMode")).toBe("real");
+  });
+
   it("writes the theme mode into localStorage and toggles the root class", async () => {
     createRoot((dispose) => {
       enablePersistence();
@@ -38,5 +50,10 @@ describe("persist", () => {
   it("restores light mode from localStorage", () => {
     window.localStorage.setItem("gantt.themeMode", "light");
     expect(initialThemeMode()).toBe("light");
+  });
+
+  it("restores real mode from localStorage", () => {
+    window.localStorage.setItem("gantt.clockMode", "real");
+    expect(initialClockMode()).toBe("real");
   });
 });

@@ -8,6 +8,7 @@ import {
   loadedTraces,
   setLoadedTraces,
   setRegistries,
+  setClockMode,
   setThemeMode,
   setTimeMode,
   setViewMode,
@@ -237,6 +238,7 @@ describe("App export flow", () => {
     const snapshotTraceB = createSnapshotTrace("trace-b", "Trace B", "instance-b");
     setSnapshotBootstrap(createSnapshotBootstrap([snapshotTraceB, baseTrace]));
     setThemeMode("light");
+    setClockMode("real");
     setTimeMode("abs");
     setViewMode("concise");
     setZoom(2);
@@ -244,7 +246,7 @@ describe("App export flow", () => {
     const { dispose, host } = mountApp();
     try {
       const activeButtons = Array.from(host.querySelectorAll(".toggle-group button.active"));
-      expect(activeButtons.map((button) => button.textContent)).toEqual(["DARK", "SYNC", "LAYER"]);
+      expect(activeButtons.map((button) => button.textContent)).toEqual(["DARK", "SYNC", "WALL", "LAYER"]);
 
       await flush();
 

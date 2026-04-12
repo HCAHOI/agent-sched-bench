@@ -6,6 +6,7 @@ import { formatTimeLabel, niceStep } from "./time";
 
 type TimeMode = "sync" | "abs";
 type ViewMode = "layered" | "concise";
+type ClockMode = "wall" | "real";
 
 interface RenderHitBox {
   h: number;
@@ -36,6 +37,7 @@ export class CanvasRenderer extends EventTarget {
   private rafId: number | null = null;
   private resizeRafId: number | null = null;
   private resizeObserver: ResizeObserver;
+  private clockMode: ClockMode = "wall";
   private timeMode: TimeMode = "sync";
   private viewMode: ViewMode = "layered";
   private visibility: Record<string, boolean> = {};
@@ -103,6 +105,14 @@ export class CanvasRenderer extends EventTarget {
       return;
     }
     this.timeMode = mode;
+    this.queueRender();
+  }
+
+  setClockMode(mode: ClockMode): void {
+    if (this.clockMode === mode) {
+      return;
+    }
+    this.clockMode = mode;
     this.queueRender();
   }
 
@@ -328,15 +338,15 @@ export class CanvasRenderer extends EventTarget {
     let maxTime = Number.NEGATIVE_INFINITY;
 
     for (const trace of traces) {
-      for (const lane of trace.lanes) {
-        for (const span of lane.spans) {
-          const start = this.timeMode === "sync" ? span.start : span.start_abs;
-          const end = this.timeMode === "sync" ? span.end : span.end_abs;
+        for (const lane of trace.lanes) {
+          for (const span of lane.spans) {
+          const start = this.selectSpanStart(span);
+          const end = this.selectSpanEnd(span);
           minTime = Math.min(minTime, start);
           maxTime = Math.max(maxTime, end);
         }
         for (const marker of lane.markers) {
-          const point = this.timeMode === "sync" ? marker.t : marker.t_abs;
+          const point = this.selectMarkerTime(marker);
           minTime = Math.min(minTime, point);
           maxTime = Math.max(maxTime, point);
         }
@@ -415,8 +425,8 @@ export class CanvasRenderer extends EventTarget {
           });
 
           spans.forEach((span, index) => {
-            const start = this.timeMode === "sync" ? span.start : span.start_abs;
-            const end = this.timeMode === "sync" ? span.end : span.end_abs;
+            const start = this.selectSpanStart(span);
+            const end = this.selectSpanEnd(span);
             const x0 = timeToX(start);
             const x1 = timeToX(end);
             const widthPx = Math.max(x1 - x0, 3);
@@ -457,7 +467,7 @@ export class CanvasRenderer extends EventTarget {
         }
 
         for (const marker of lane.markers) {
-          const point = this.timeMode === "sync" ? marker.t : marker.t_abs;
+          const point = this.selectMarkerTime(marker);
           const x = timeToX(point);
           const markerReg =
             this.payload?.registries.markers[marker.event] ??
@@ -507,5 +517,35 @@ export class CanvasRenderer extends EventTarget {
     }
 
     this.dispatchEvent(new CustomEvent("render"));
+  }
+
+  private selectSpanStart(span: GanttPayload["traces"][number]["lanes"][number]["spans"][number]): number {
+    if (this.clockMode === "real") {
+      const realStart = this.timeMode === "sync" ? span.start_real : span.start_real_abs;
+      if (typeof realStart === "number" && Number.isFinite(realStart)) {
+        return realStart;
+      }
+    }
+    return this.timeMode === "sync" ? span.start : span.start_abs;
+  }
+
+  private selectSpanEnd(span: GanttPayload["traces"][number]["lanes"][number]["spans"][number]): number {
+    if (this.clockMode === "real") {
+      const realEnd = this.timeMode === "sync" ? span.end_real : span.end_real_abs;
+      if (typeof realEnd === "number" && Number.isFinite(realEnd)) {
+        return realEnd;
+      }
+    }
+    return this.timeMode === "sync" ? span.end : span.end_abs;
+  }
+
+  private selectMarkerTime(marker: GanttPayload["traces"][number]["lanes"][number]["markers"][number]): number {
+    if (this.clockMode === "real") {
+      const realPoint = this.timeMode === "sync" ? marker.t_real : marker.t_real_abs;
+      if (typeof realPoint === "number" && Number.isFinite(realPoint)) {
+        return realPoint;
+      }
+    }
+    return this.timeMode === "sync" ? marker.t : marker.t_abs;
   }
 }

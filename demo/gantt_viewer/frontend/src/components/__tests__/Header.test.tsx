@@ -10,7 +10,9 @@ function mountHeader(options?: { exportDisabled?: boolean; snapshotMode?: boolea
   const dispose = render(
     () => (
       <Header
+        clockMode={() => "wall"}
         exportDisabled={() => options?.exportDisabled ?? false}
+        onClockModeChange={() => undefined}
         onExport={onExport}
         onThemeModeChange={() => undefined}
         onTimeModeChange={() => undefined}
@@ -51,6 +53,8 @@ describe("Header", () => {
       expect(headerText(host)).toContain("LIGHT");
       expect(headerText(host)).toContain("SYNC");
       expect(headerText(host)).toContain("ABS");
+      expect(headerText(host)).toContain("WALL");
+      expect(headerText(host)).toContain("REAL");
       expect(headerText(host)).toContain("LAYER");
       expect(headerText(host)).toContain("CONCISE");
       expect(exportButton?.previousElementSibling?.className).toContain("zoom-select-wrap");
@@ -78,6 +82,7 @@ describe("Header", () => {
       expect(host.querySelector("button.toolbar-export-btn")).toBeNull();
       expect(headerText(host)).toContain("DARK");
       expect(headerText(host)).toContain("SYNC");
+      expect(headerText(host)).toContain("WALL");
     } finally {
       dispose();
     }

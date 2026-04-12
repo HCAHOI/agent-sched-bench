@@ -28,6 +28,7 @@ import { sameHit } from "./canvas/hit";
 import { enableDisplaySync, enablePersistence } from "./state/persist";
 import {
   appError,
+  clockMode,
   descriptors,
   hoverCard,
   loadedTraces,
@@ -36,6 +37,7 @@ import {
   registries,
   scrollTop,
   setAppError,
+  setClockMode,
   setDescriptors,
   setHoverCard,
   setLoadedTraces,
@@ -80,6 +82,7 @@ function removeIdFlag(flags: Record<string, boolean>, id: string): Record<string
 }
 
 function applySnapshotBootstrap(snapshotBootstrap: NonNullable<ReturnType<typeof readSnapshotBootstrap>>): void {
+  setClockMode(SNAPSHOT_DEFAULTS.clockMode);
   setThemeMode(SNAPSHOT_DEFAULTS.themeMode);
   setTimeMode(SNAPSHOT_DEFAULTS.timeMode);
   setViewMode(SNAPSHOT_DEFAULTS.viewMode);
@@ -256,7 +259,9 @@ export default function App() {
   return (
     <main class="app-shell">
       <Header
+        clockMode={clockMode}
         exportDisabled={exportDisabled}
+        onClockModeChange={setClockMode}
         onExport={handleExport}
         onThemeModeChange={setThemeMode}
         onTimeModeChange={setTimeMode}
@@ -319,6 +324,7 @@ export default function App() {
           }
           onScroll={setScrollTop}
           onZoom={setZoom}
+          clockMode={clockMode()}
           payload={payload()}
           pinnedHit={pinnedCard()?.hit ?? null}
           themeMode={themeMode()}

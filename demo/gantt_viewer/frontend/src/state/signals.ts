@@ -6,13 +6,16 @@ import type { HitCard } from "../canvas/hit";
 export type TimeMode = "sync" | "abs";
 export type ViewMode = "layered" | "concise";
 export type ThemeMode = "dark" | "light";
+export type ClockMode = "wall" | "real";
 
 export const DEFAULT_TIME_MODE: TimeMode = "sync";
 export const DEFAULT_VIEW_MODE: ViewMode = "layered";
 export const DEFAULT_THEME_MODE: ThemeMode = "dark";
+export const DEFAULT_CLOCK_MODE: ClockMode = "wall";
 export const DEFAULT_ZOOM = 1;
 
 const STORAGE_KEYS = {
+  clockMode: "gantt.clockMode",
   themeMode: "gantt.themeMode",
   viewMode: "gantt.viewMode",
 } as const;
@@ -33,6 +36,10 @@ function initialViewMode(): ViewMode {
   return readStoredMode(STORAGE_KEYS.viewMode, "concise", DEFAULT_VIEW_MODE);
 }
 
+export function initialClockMode(): ClockMode {
+  return readStoredMode(STORAGE_KEYS.clockMode, "real", DEFAULT_CLOCK_MODE);
+}
+
 export function initialThemeMode(): ThemeMode {
   return readStoredMode(STORAGE_KEYS.themeMode, "light", DEFAULT_THEME_MODE);
 }
@@ -40,6 +47,7 @@ export function initialThemeMode(): ThemeMode {
 export const [timeMode, setTimeMode] = createSignal<TimeMode>(DEFAULT_TIME_MODE);
 export const [viewMode, setViewMode] = createSignal<ViewMode>(initialViewMode());
 export const [themeMode, setThemeMode] = createSignal<ThemeMode>(initialThemeMode());
+export const [clockMode, setClockMode] = createSignal<ClockMode>(initialClockMode());
 export const [zoom, setZoom] = createSignal(DEFAULT_ZOOM);
 export const [descriptors, setDescriptors] = createSignal<TraceDescriptor[]>([]);
 export const [registries, setRegistries] = createSignal<Registries | null>(null);
@@ -55,6 +63,7 @@ export function __resetSignalsForTests(): void {
   setTimeMode(DEFAULT_TIME_MODE);
   setViewMode(DEFAULT_VIEW_MODE);
   setThemeMode(DEFAULT_THEME_MODE);
+  setClockMode(DEFAULT_CLOCK_MODE);
   setZoom(DEFAULT_ZOOM);
   setDescriptors([]);
   setRegistries(null);

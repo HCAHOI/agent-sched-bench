@@ -30,6 +30,10 @@ class Span(BaseModel):
     end: float
     start_abs: float
     end_abs: float
+    start_real: float | None = None
+    end_real: float | None = None
+    start_real_abs: float | None = None
+    end_real_abs: float | None = None
     iteration: int
     detail: dict[str, Any]
 
@@ -39,6 +43,8 @@ class Marker(BaseModel):
     event: str
     t: float
     t_abs: float
+    t_real: float | None = None
+    t_real_abs: float | None = None
     iteration: int
     detail: dict[str, Any]
 

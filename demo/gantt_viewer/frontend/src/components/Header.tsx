@@ -1,10 +1,12 @@
 import { For, Show, type Accessor } from "solid-js";
 
 import { ZOOM_PRESETS } from "../canvas/CanvasRenderer";
-import type { ThemeMode, TimeMode, ViewMode } from "../state/signals";
+import type { ClockMode, ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface HeaderProps {
+  clockMode: Accessor<ClockMode>;
   exportDisabled: Accessor<boolean>;
+  onClockModeChange: (mode: ClockMode) => void;
   onExport: () => Promise<void> | void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onTimeModeChange: (mode: TimeMode) => void;
@@ -94,6 +96,22 @@ export default function Header(props: HeaderProps) {
           type="button"
         >
           ABS
+        </button>
+      </div>
+      <div class="toggle-group">
+        <button
+          classList={{ active: props.clockMode() === "wall" }}
+          onClick={() => props.onClockModeChange("wall")}
+          type="button"
+        >
+          WALL
+        </button>
+        <button
+          classList={{ active: props.clockMode() === "real" }}
+          onClick={() => props.onClockModeChange("real")}
+          type="button"
+        >
+          REAL
         </button>
       </div>
       <div class="toggle-group">

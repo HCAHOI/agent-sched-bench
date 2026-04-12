@@ -1,9 +1,11 @@
 import type { SnapshotBootstrapData, TraceDescriptor, TracePayload } from "../api/client";
 import {
+  DEFAULT_CLOCK_MODE,
   DEFAULT_THEME_MODE,
   DEFAULT_TIME_MODE,
   DEFAULT_VIEW_MODE,
   DEFAULT_ZOOM,
+  type ClockMode,
   type ThemeMode,
   type TimeMode,
   type ViewMode,
@@ -12,11 +14,13 @@ import {
 const SNAPSHOT_BOOTSTRAP_ELEMENT_ID = "gantt-viewer-snapshot-bootstrap";
 
 export const SNAPSHOT_DEFAULTS: {
+  clockMode: ClockMode;
   themeMode: ThemeMode;
   timeMode: TimeMode;
   viewMode: ViewMode;
   zoom: number;
 } = {
+  clockMode: DEFAULT_CLOCK_MODE,
   themeMode: DEFAULT_THEME_MODE,
   timeMode: DEFAULT_TIME_MODE,
   viewMode: DEFAULT_VIEW_MODE,

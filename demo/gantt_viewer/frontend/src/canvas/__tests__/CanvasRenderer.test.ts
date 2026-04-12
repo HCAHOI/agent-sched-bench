@@ -63,6 +63,8 @@ function payloadFixture(): GanttPayload {
                 iteration: 0,
                 t: 0.8,
                 t_abs: 1000.8,
+                t_real: 0.3,
+                t_real_abs: 1000.3,
                 type: "scheduling",
               },
             ],
@@ -71,18 +73,26 @@ function payloadFixture(): GanttPayload {
                 detail: { llm_content: "hello" },
                 end: 0.4,
                 end_abs: 1000.4,
+                end_real: 0.2,
+                end_real_abs: 1000.2,
                 iteration: 0,
                 start: 0,
                 start_abs: 1000,
+                start_real: 0,
+                start_real_abs: 1000,
                 type: "llm",
               },
               {
                 detail: { tool_name: "bash" },
                 end: 1.0,
                 end_abs: 1001.0,
+                end_real: 0.7,
+                end_real_abs: 1000.7,
                 iteration: 0,
                 start: 0.5,
                 start_abs: 1000.5,
+                start_real: 0.2,
+                start_real_abs: 1000.2,
                 type: "tool",
               },
             ],
@@ -200,6 +210,117 @@ describe("CanvasRenderer", () => {
     expect(layered).not.toBeNull();
     expect(concise).not.toBeNull();
     expect(concise!.y).toBeLessThan(layered!.y);
+    renderer.destroy();
+  });
+
+  it("uses compacted coordinates in real mode", () => {
+    const canvas = document.createElement("canvas");
+    const wrap = document.createElement("div");
+    const context = createMockContext();
+    vi.spyOn(canvas, "getContext").mockImplementation(() => context);
+    vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: 360,
+      height: 320,
+      left: 0,
+      right: 640,
+      top: 0,
+      width: 640,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    setElementBox(canvas, 640, 320);
+    setElementBox(wrap, 640, 320);
+
+    const renderer = new CanvasRenderer(canvas, wrap);
+    renderer.setPayload(payloadFixture());
+    (renderer as unknown as { render: () => void }).render();
+    const wallHit = renderer.hitTest(340, 58);
+    renderer.setClockMode("real");
+    (renderer as unknown as { render: () => void }).render();
+    const realHit = renderer.hitTest(260, 58);
+
+    expect(wallHit?.kind).toBe("span");
+    expect(realHit?.kind).toBe("span");
+    renderer.destroy();
+  });
+
+  it("falls back to wall coordinates when real fields are missing", () => {
+    const canvas = document.createElement("canvas");
+    const wrap = document.createElement("div");
+    const context = createMockContext();
+    vi.spyOn(canvas, "getContext").mockImplementation(() => context);
+    vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: 360,
+      height: 320,
+      left: 0,
+      right: 640,
+      top: 0,
+      width: 640,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    setElementBox(canvas, 640, 320);
+    setElementBox(wrap, 640, 320);
+
+    const payload = payloadFixture();
+    const span = payload.traces[0].lanes[0].spans[1] as Record<string, unknown>;
+    delete span.start_real;
+    delete span.end_real;
+    delete span.start_real_abs;
+    delete span.end_real_abs;
+
+    const renderer = new CanvasRenderer(canvas, wrap);
+    renderer.setPayload(payload);
+    renderer.setClockMode("real");
+    (renderer as unknown as { render: () => void }).render();
+
+    expect(renderer.hitTest(340, 58)?.kind).toBe("span");
+    renderer.destroy();
+  });
+
+  it("falls back to wall marker coordinates when real marker fields are missing", () => {
+    const canvas = document.createElement("canvas");
+    const wrap = document.createElement("div");
+    const context = createMockContext();
+    vi.spyOn(canvas, "getContext").mockImplementation(() => context);
+    vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: 360,
+      height: 320,
+      left: 0,
+      right: 640,
+      top: 0,
+      width: 640,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    setElementBox(canvas, 640, 320);
+    setElementBox(wrap, 640, 320);
+
+    const payload = payloadFixture();
+    const marker = payload.traces[0].lanes[0].markers[0] as Record<string, unknown>;
+    delete marker.t_real;
+    delete marker.t_real_abs;
+
+    const renderer = new CanvasRenderer(canvas, wrap);
+    renderer.setPayload(payload);
+    renderer.setClockMode("real");
+    (renderer as unknown as { render: () => void }).render();
+    const markerBox = (
+      renderer as unknown as {
+        hitBoxes: Array<{ hit: { kind: string }; x: number; y: number; w: number; h: number }>;
+      }
+    ).hitBoxes.find((box) => box.hit.kind === "marker");
+
+    expect(markerBox).toBeDefined();
+    expect(
+      renderer.hitTest(
+        markerBox!.x + markerBox!.w / 2,
+        markerBox!.y + markerBox!.h / 2,
+      )?.kind,
+    ).toBe("marker");
     renderer.destroy();
   });
 });

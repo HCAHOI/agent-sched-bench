@@ -35,29 +35,60 @@ ACTION_TYPE_MAP: dict[str, str] = {
 }
 
 DEFAULT_SPAN_REGISTRY: dict[str, dict[str, Any]] = {
-    "llm":        {"color": "#00E5FF", "label": "LLM Call",   "order": 0},
-    "tool":       {"color": "#FF6D00", "label": "Tool Exec",  "order": 1},
+    "llm": {"color": "#00E5FF", "label": "LLM Call", "order": 0},
+    "tool": {"color": "#FF6D00", "label": "Tool Exec", "order": 1},
     "scheduling": {"color": "#76FF03", "label": "Scheduling", "order": 2},
-    "mcp":        {"color": "#AB47BC", "label": "MCP Call",   "order": 3},
+    "mcp": {"color": "#AB47BC", "label": "MCP Call", "order": 3},
 }
 
 DEFAULT_MARKER_REGISTRY: dict[str, dict[str, str]] = {
-    "message_dispatch":     {"symbol": "diamond", "color": "#76FF03", "label": "Message Dispatch"},
-    "session_lock_acquire": {"symbol": "diamond", "color": "#76FF03", "label": "Session Lock Acquire"},
-    "session_load":         {"symbol": "dot",     "color": "#76FF03", "label": "Session Load"},
-    "message_list_build":   {"symbol": "dot",     "color": "#4FC3F7", "label": "Message List Build"},
-    "session_turn_save":    {"symbol": "dot",     "color": "#76FF03", "label": "Session Turn Save"},
-    "task_complete":        {"symbol": "flag",    "color": "#FF6D00", "label": "Task Complete"},
-    "llm_error":            {"symbol": "cross",   "color": "#FF1744", "label": "Llm Error"},
-    "max_iterations":       {"symbol": "cross",   "color": "#FF1744", "label": "Max Iterations"},
-    "_default":             {"symbol": "dot",     "color": "#6b7280", "label": "Default"},
+    "message_dispatch": {
+        "symbol": "diamond",
+        "color": "#76FF03",
+        "label": "Message Dispatch",
+    },
+    "session_lock_acquire": {
+        "symbol": "diamond",
+        "color": "#76FF03",
+        "label": "Session Lock Acquire",
+    },
+    "session_load": {"symbol": "dot", "color": "#76FF03", "label": "Session Load"},
+    "message_list_build": {
+        "symbol": "dot",
+        "color": "#4FC3F7",
+        "label": "Message List Build",
+    },
+    "session_turn_save": {
+        "symbol": "dot",
+        "color": "#76FF03",
+        "label": "Session Turn Save",
+    },
+    "task_complete": {"symbol": "flag", "color": "#FF6D00", "label": "Task Complete"},
+    "llm_error": {"symbol": "cross", "color": "#FF1744", "label": "Llm Error"},
+    "max_iterations": {
+        "symbol": "cross",
+        "color": "#FF1744",
+        "label": "Max Iterations",
+    },
+    "_default": {"symbol": "dot", "color": "#6b7280", "label": "Default"},
 }
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 
 def _raw_response_message(raw_response: dict[str, Any]) -> dict[str, Any]:
     choices = raw_response.get("choices") or []
     if choices:
         return choices[0].get("message") or {}
     return raw_response.get("message") or {}
+
 
 def _raw_response_text(raw_response: dict[str, Any]) -> str:
     message = _raw_response_message(raw_response)
@@ -72,6 +103,7 @@ def _raw_response_text(raw_response: dict[str, Any]) -> str:
         if isinstance(block, dict) and block.get("type") == "text"
     ]
     return "\n".join(part for part in text_parts if part)
+
 
 def _raw_response_tool_calls(raw_response: dict[str, Any]) -> list[dict[str, Any]]:
     message = _raw_response_message(raw_response)
@@ -95,6 +127,7 @@ def _raw_response_tool_calls(raw_response: dict[str, Any]) -> list[dict[str, Any
         )
     return calls
 
+
 def _extract_detail(event: dict[str, Any]) -> dict[str, Any]:
     """Extract lightweight event detail for tooltips."""
     data = dict(event.get("data") or {})
@@ -111,6 +144,7 @@ def _extract_detail(event: dict[str, Any]) -> dict[str, Any]:
         if key in data and isinstance(data[key], str) and len(data[key]) > 100:
             data[key] = data[key][:100] + "..."
     return data
+
 
 def build_gantt_payload(
     data: TraceData,
@@ -135,11 +169,15 @@ def build_gantt_payload(
 
         spans, markers = _build_spans_and_markers(agent_actions, agent_events, t0)
 
-        lanes.append({
-            "agent_id": agent_id,
-            "spans": spans,
-            "markers": markers,
-        })
+        lanes.append(
+            {
+                "agent_id": agent_id,
+                "spans": spans,
+                "markers": markers,
+            }
+        )
+
+    _apply_real_timeline_to_lanes(lanes, t0)
 
     distinct_iters = {a.get("iteration", 0) for a in data.actions}
 
@@ -160,6 +198,7 @@ def build_gantt_payload(
         "lanes": lanes,
     }
 
+
 def build_gantt_payload_multi(
     traces: list[tuple[str, TraceData]],
     *,
@@ -172,10 +211,9 @@ def build_gantt_payload_multi(
             "spans": span_registry or DEFAULT_SPAN_REGISTRY,
             "markers": marker_registry or DEFAULT_MARKER_REGISTRY,
         },
-        "traces": [
-            build_gantt_payload(td, label=lbl) for lbl, td in traces
-        ],
+        "traces": [build_gantt_payload(td, label=lbl) for lbl, td in traces],
     }
+
 
 def _compute_t0(data: TraceData) -> float:
     t0 = float("inf")
@@ -189,11 +227,13 @@ def _compute_t0(data: TraceData) -> float:
             t0 = ts
     return t0 if t0 != float("inf") else 0.0
 
+
 def _get_elapsed(data: TraceData) -> float | None:
     for s in data.summaries:
         if "elapsed_s" in s:
             return s["elapsed_s"]
     return None
+
 
 def _build_spans_and_markers(
     actions: list[dict[str, Any]],
@@ -209,15 +249,21 @@ def _build_spans_and_markers(
         if action_type not in ACTION_TYPE_MAP:
             continue
         span_type = ACTION_TYPE_MAP[action_type]
-        spans.append({
-            "type": span_type,
-            "start": act.get("ts_start", 0) - t0,
-            "end": act.get("ts_end", 0) - t0,
-            "start_abs": act.get("ts_start", 0),
-            "end_abs": act.get("ts_end", 0),
-            "iteration": act.get("iteration", 0),
-            "detail": _extract_detail_from_action(act),
-        })
+        spans.append(
+            {
+                "type": span_type,
+                "start": act.get("ts_start", 0) - t0,
+                "end": act.get("ts_end", 0) - t0,
+                "start_abs": act.get("ts_start", 0),
+                "end_abs": act.get("ts_end", 0),
+                "start_real": act.get("ts_start", 0) - t0,
+                "end_real": act.get("ts_end", 0) - t0,
+                "start_real_abs": act.get("ts_start", 0),
+                "end_real_abs": act.get("ts_end", 0),
+                "iteration": act.get("iteration", 0),
+                "detail": _extract_detail_from_action(act),
+            }
+        )
 
     if spans and events:
         sorted_spans = sorted(spans, key=lambda s: s["start_abs"])
@@ -227,40 +273,180 @@ def _build_spans_and_markers(
             if gap_end <= gap_start:
                 continue
             events_in_gap = [
-                e for e in events
+                e
+                for e in events
                 if e.get("category") in _MARKER_CATEGORIES
                 and gap_start < (e.get("ts") or 0) < gap_end
             ]
             if not events_in_gap:
                 continue
-            spans.append({
-                "type": "scheduling",
-                "start": gap_start - t0,
-                "end": gap_end - t0,
-                "start_abs": gap_start,
-                "end_abs": gap_end,
-                "iteration": sorted_spans[i + 1].get("iteration", 0),
-                "detail": {
-                    "gap_ms": round((gap_end - gap_start) * 1000, 1),
-                    "events": [e.get("event", "?") for e in events_in_gap],
-                },
-            })
+            spans.append(
+                {
+                    "type": "scheduling",
+                    "start": gap_start - t0,
+                    "end": gap_end - t0,
+                    "start_abs": gap_start,
+                    "end_abs": gap_end,
+                    "start_real": gap_start - t0,
+                    "end_real": gap_end - t0,
+                    "start_real_abs": gap_start,
+                    "end_real_abs": gap_end,
+                    "iteration": sorted_spans[i + 1].get("iteration", 0),
+                    "detail": {
+                        "gap_ms": round((gap_end - gap_start) * 1000, 1),
+                        "events": [e.get("event", "?") for e in events_in_gap],
+                    },
+                }
+            )
 
     for ev in events:
         category = ev.get("category", "")
         if category in _MARKER_CATEGORIES:
-            markers.append({
-                "type": category.lower(),
-                "event": ev.get("event", "unknown"),
-                "t": ev.get("ts", 0) - t0,
-                "t_abs": ev.get("ts", 0),
-                "iteration": ev.get("iteration", 0),
-                "detail": _extract_detail_from_event(ev),
-            })
+            markers.append(
+                {
+                    "type": category.lower(),
+                    "event": ev.get("event", "unknown"),
+                    "t": ev.get("ts", 0) - t0,
+                    "t_abs": ev.get("ts", 0),
+                    "t_real": ev.get("ts", 0) - t0,
+                    "t_real_abs": ev.get("ts", 0),
+                    "iteration": ev.get("iteration", 0),
+                    "detail": _extract_detail_from_event(ev),
+                }
+            )
 
     spans.sort(key=lambda s: s["start"])
     markers.sort(key=lambda m: m["t"])
     return spans, markers
+
+
+def _apply_real_timeline_to_lanes(
+    lanes: list[dict[str, Any]],
+    trace_t0: float,
+) -> None:
+    spans = [span for lane in lanes for span in lane.get("spans") or []]
+    markers = [marker for lane in lanes for marker in lane.get("markers") or []]
+    _apply_real_timeline(spans, markers, trace_t0)
+
+
+def _apply_real_timeline(
+    spans: list[dict[str, Any]],
+    markers: list[dict[str, Any]],
+    trace_t0: float,
+) -> None:
+    if not spans and not markers:
+        return
+
+    sorted_spans = sorted(
+        spans,
+        key=lambda span: (
+            float(span.get("start_abs", 0.0)),
+            float(span.get("end_abs", 0.0)),
+            str(span.get("type", "")),
+        ),
+    )
+    removed_gap_s = 0.0
+    prev_real_end_abs: float | None = None
+
+    for span in sorted_spans:
+        wall_start_abs = float(span.get("start_abs", 0.0))
+        natural_start_abs = wall_start_abs - removed_gap_s
+        if prev_real_end_abs is not None and natural_start_abs > prev_real_end_abs:
+            removed_gap_s += natural_start_abs - prev_real_end_abs
+            natural_start_abs = prev_real_end_abs
+
+        real_duration_s = _real_span_duration_s(span)
+        real_end_abs = natural_start_abs + real_duration_s
+        span["_real_removed_gap_s"] = removed_gap_s
+        span["start_real_abs"] = natural_start_abs
+        span["end_real_abs"] = real_end_abs
+        prev_real_end_abs = max(prev_real_end_abs or real_end_abs, real_end_abs)
+
+    for marker in markers:
+        marker_abs = float(marker.get("t_abs", 0.0))
+        marker["t_real_abs"] = _map_time_to_real_abs(marker_abs, sorted_spans)
+
+    real_t0_abs = min(
+        [float(span.get("start_real_abs", trace_t0)) for span in spans]
+        + [float(marker.get("t_real_abs", trace_t0)) for marker in markers]
+        + [trace_t0]
+    )
+
+    for span in spans:
+        span["start_real"] = (
+            float(span.get("start_real_abs", real_t0_abs)) - real_t0_abs
+        )
+        span["end_real"] = float(span.get("end_real_abs", real_t0_abs)) - real_t0_abs
+        span.pop("_real_removed_gap_s", None)
+
+    for marker in markers:
+        marker["t_real"] = float(marker.get("t_real_abs", real_t0_abs)) - real_t0_abs
+
+
+def _real_span_duration_s(span: dict[str, Any]) -> float:
+    wall_duration_s = max(
+        0.0,
+        float(span.get("end_abs", 0.0)) - float(span.get("start_abs", 0.0)),
+    )
+    if span.get("type") != "llm":
+        return wall_duration_s
+
+    detail = span.get("detail") or {}
+    for key in ("llm_call_time_ms", "openrouter_generation_time_ms"):
+        value = _coerce_optional_float(detail.get(key))
+        if value is not None and value >= 0.0:
+            return value / 1000.0
+
+    timing_source = detail.get("llm_timing_source")
+    llm_latency_ms = _coerce_optional_float(detail.get("llm_latency_ms"))
+    if (
+        llm_latency_ms is not None
+        and llm_latency_ms >= 0.0
+        and isinstance(timing_source, str)
+        and timing_source != "wall_clock_ms"
+    ):
+        return llm_latency_ms / 1000.0
+    return wall_duration_s
+
+
+def _map_time_to_real_abs(timestamp_abs: float, spans: list[dict[str, Any]]) -> float:
+    if not spans:
+        return timestamp_abs
+
+    first_span = spans[0]
+    first_shift_s = float(first_span.get("start_abs", 0.0)) - float(
+        first_span.get("start_real_abs", 0.0)
+    )
+    if timestamp_abs <= float(first_span.get("start_abs", 0.0)):
+        return timestamp_abs - first_shift_s
+
+    for index, span in enumerate(spans):
+        wall_start_abs = float(span.get("start_abs", 0.0))
+        wall_end_abs = float(span.get("end_abs", wall_start_abs))
+        real_start_abs = float(span.get("start_real_abs", wall_start_abs))
+        real_end_abs = float(span.get("end_real_abs", real_start_abs))
+
+        if wall_start_abs <= timestamp_abs <= wall_end_abs:
+            wall_duration_s = wall_end_abs - wall_start_abs
+            if wall_duration_s <= 0.0:
+                return real_start_abs
+            fraction = (timestamp_abs - wall_start_abs) / wall_duration_s
+            return real_start_abs + fraction * (real_end_abs - real_start_abs)
+
+        next_start_abs = (
+            float(spans[index + 1].get("start_abs", 0.0))
+            if index + 1 < len(spans)
+            else None
+        )
+        if next_start_abs is not None and timestamp_abs < next_start_abs:
+            return real_end_abs
+
+    last_span = spans[-1]
+    last_shift_s = float(last_span.get("end_abs", 0.0)) - float(
+        last_span.get("end_real_abs", 0.0)
+    )
+    return timestamp_abs - last_shift_s
+
 
 def _summarize_tool_call(tc: dict[str, Any]) -> str | None:
     """Summarize one raw tool call for tooltip display."""
@@ -286,7 +472,7 @@ def _summarize_tool_call(tc: dict[str, Any]) -> str | None:
             if field in parsed and parsed[field] is not None:
                 value = str(parsed[field])
                 if len(value) > _TOOL_ARGS_MAX:
-                    value = value[: _TOOL_ARGS_MAX] + "..."
+                    value = value[:_TOOL_ARGS_MAX] + "..."
                 return f'{name}({field}="{value}")'
 
     if isinstance(raw_args, (dict, list)):
@@ -297,6 +483,7 @@ def _summarize_tool_call(tc: dict[str, Any]) -> str | None:
     if len(args_str) > _TOOL_ARGS_MAX:
         preview += "..."
     return f"{name}({preview})"
+
 
 def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
     """Extract action detail while preserving silent tool-call decisions."""
@@ -312,7 +499,8 @@ def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
         tool_calls = _raw_response_tool_calls(raw_resp)
         if tool_calls:
             summaries = [
-                s for s in (_summarize_tool_call(tc) for tc in tool_calls)
+                s
+                for s in (_summarize_tool_call(tc) for tc in tool_calls)
                 if s is not None
             ]
             if summaries:
@@ -320,6 +508,7 @@ def _extract_detail_from_action(act: dict[str, Any]) -> dict[str, Any]:
 
     data.pop("messages_in", None)
     return data
+
 
 def _extract_detail_from_event(ev: dict[str, Any]) -> dict[str, Any]:
     data = dict(ev.get("data") or {})

@@ -146,10 +146,7 @@ export interface components {
     schemas: {
         /** Body_upload_trace_endpoint_api_traces_upload_post */
         Body_upload_trace_endpoint_api_traces_upload_post: {
-            /**
-             * File
-             * Format: binary
-             */
+            /** File */
             file: string;
         };
         /** ExportHtmlRequest */
@@ -199,6 +196,10 @@ export interface components {
             t: number;
             /** T Abs */
             t_abs: number;
+            /** T Real */
+            t_real?: number | null;
+            /** T Real Abs */
+            t_real_abs?: number | null;
             /** Type */
             type: string;
         };
@@ -268,12 +269,20 @@ export interface components {
             end: number;
             /** End Abs */
             end_abs: number;
+            /** End Real */
+            end_real?: number | null;
+            /** End Real Abs */
+            end_real_abs?: number | null;
             /** Iteration */
             iteration: number;
             /** Start */
             start: number;
             /** Start Abs */
             start_abs: number;
+            /** Start Real */
+            start_real?: number | null;
+            /** Start Real Abs */
+            start_real_abs?: number | null;
             /** Type */
             type: string;
         };
@@ -377,6 +386,10 @@ export interface components {
         };
         /** ValidationError */
         ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */

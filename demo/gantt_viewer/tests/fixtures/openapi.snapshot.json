@@ -4,7 +4,7 @@
       "Body_upload_trace_endpoint_api_traces_upload_post": {
         "properties": {
           "file": {
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           }
@@ -136,6 +136,28 @@
           "t_abs": {
             "title": "T Abs",
             "type": "number"
+          },
+          "t_real": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Real"
+          },
+          "t_real_abs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Real Abs"
           },
           "type": {
             "title": "Type",
@@ -323,6 +345,28 @@
             "title": "End Abs",
             "type": "number"
           },
+          "end_real": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Real"
+          },
+          "end_real_abs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Real Abs"
+          },
           "iteration": {
             "title": "Iteration",
             "type": "integer"
@@ -334,6 +378,28 @@
           "start_abs": {
             "title": "Start Abs",
             "type": "number"
+          },
+          "start_real": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Real"
+          },
+          "start_real_abs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Real Abs"
           },
           "type": {
             "title": "Type",
@@ -640,6 +706,13 @@
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
@@ -925,3 +998,4 @@
     }
   }
 }
+

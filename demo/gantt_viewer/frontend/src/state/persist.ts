@@ -1,6 +1,6 @@
 import { createEffect } from "solid-js";
 
-import { themeMode, viewMode } from "./signals";
+import { clockMode, themeMode, viewMode } from "./signals";
 
 let persistenceStarted = false;
 let displaySyncStarted = false;
@@ -38,6 +38,10 @@ export function enablePersistence(): void {
 
   createEffect(() => {
     window.localStorage.setItem("gantt.viewMode", viewMode());
+  });
+
+  createEffect(() => {
+    window.localStorage.setItem("gantt.clockMode", clockMode());
   });
 
   createEffect(() => {

@@ -3,9 +3,10 @@ import { createEffect, onCleanup, onMount } from "solid-js";
 import type { GanttPayload } from "../api/client";
 import { CanvasRenderer } from "../canvas/CanvasRenderer";
 import type { Hit, HitCard } from "../canvas/hit";
-import type { ThemeMode, TimeMode, ViewMode } from "../state/signals";
+import type { ClockMode, ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface CanvasStageProps {
+  clockMode: ClockMode;
   onClick: (card: HitCard | null) => void;
   onHover: (card: HitCard | null) => void;
   onPinnedReanchor: (card: HitCard | null) => void;
@@ -52,6 +53,10 @@ export default function CanvasStage(props: CanvasStageProps) {
 
   createEffect(() => {
     renderer?.setPayload(props.payload);
+  });
+
+  createEffect(() => {
+    renderer?.setClockMode(props.clockMode);
   });
 
   createEffect(() => {

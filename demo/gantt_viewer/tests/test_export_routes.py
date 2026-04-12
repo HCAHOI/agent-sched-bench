@@ -106,6 +106,10 @@ def _snapshot_request() -> dict[str, object]:
                                 "end": 1.0,
                                 "start_abs": 1000.0,
                                 "end_abs": 1001.0,
+                                "start_real": 0.0,
+                                "end_real": 1.0,
+                                "start_real_abs": 1000.0,
+                                "end_real_abs": 1001.0,
                                 "iteration": 0,
                                 "detail": {},
                             }
@@ -139,6 +143,10 @@ def _snapshot_request() -> dict[str, object]:
                                 "end": 1.5,
                                 "start_abs": 2000.0,
                                 "end_abs": 2001.5,
+                                "start_real": 0.0,
+                                "end_real": 1.5,
+                                "start_real_abs": 2000.0,
+                                "end_real_abs": 2001.5,
                                 "iteration": 0,
                                 "detail": {},
                             }
@@ -157,6 +165,27 @@ def _snapshot_request_with_duplicate_ids() -> dict[str, object]:
     traces = snapshot["traces"]
     assert isinstance(traces, list)
     traces[1] = {**traces[1], "id": "client-imported-2"}
+    return snapshot
+
+
+def _legacy_snapshot_request() -> dict[str, object]:
+    snapshot = _snapshot_request()
+    traces = snapshot["traces"]
+    assert isinstance(traces, list)
+    for trace in traces:
+        lanes = trace["lanes"]
+        assert isinstance(lanes, list)
+        for lane in lanes:
+            spans = lane["spans"]
+            assert isinstance(spans, list)
+            for span in spans:
+                for key in (
+                    "start_real",
+                    "end_real",
+                    "start_real_abs",
+                    "end_real_abs",
+                ):
+                    span.pop(key, None)
     return snapshot
 
 
@@ -198,6 +227,21 @@ def test_export_html_accepts_client_loaded_snapshot_and_inlines_assets(
         "client-imported-2",
         "client-imported-1",
     ]
+
+
+def test_export_html_accepts_legacy_snapshot_without_real_coordinates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_dist_bundle(tmp_path / "dist")
+    _set_dist_path(monkeypatch, tmp_path / "dist")
+    client = _make_client(tmp_path)
+
+    response = client.post(
+        "/api/export/html", json={"snapshot": _legacy_snapshot_request()}
+    )
+
+    assert response.status_code == 200
 
 
 def test_export_html_rejects_empty_snapshot_payload(

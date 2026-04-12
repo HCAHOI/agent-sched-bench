@@ -23,6 +23,7 @@ from trace_collect.trace_inspector import TraceData
 
 # ── Fixture builders ───────────────────────────────────────────────
 
+
 def _llm_action(
     iteration: int,
     ts_start: float,
@@ -44,6 +45,7 @@ def _llm_action(
             "llm_latency_ms": (ts_end - ts_start) * 1000,
         },
     }
+
 
 def _tool_action(
     iteration: int,
@@ -68,6 +70,7 @@ def _tool_action(
         },
     }
 
+
 def _event(
     category: str,
     event_name: str,
@@ -86,6 +89,7 @@ def _event(
         "data": {},
     }
 
+
 def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
     trace = tmp_path / "trace.jsonl"
     head = {
@@ -101,9 +105,11 @@ def _write_trace(tmp_path: Path, records: list[dict[str, Any]]) -> Path:
             fh.write(json.dumps(r) + "\n")
     return trace
 
+
 def _build(tmp_path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
     data = TraceData.load(_write_trace(tmp_path, records))
     return build_gantt_payload(data, label="test")
+
 
 def test_llm_action_becomes_span(tmp_path: Path) -> None:
     payload = _build(tmp_path, [_llm_action(0, 1000.0, 1001.0)])
@@ -112,8 +118,108 @@ def test_llm_action_becomes_span(tmp_path: Path) -> None:
     assert len(llm_spans) == 1
     assert llm_spans[0]["start"] == pytest.approx(0.0)
     assert llm_spans[0]["end"] == pytest.approx(1.0)
+    assert llm_spans[0]["start_real"] == pytest.approx(0.0)
+    assert llm_spans[0]["end_real"] == pytest.approx(1.0)
     assert llm_spans[0]["iteration"] == 0
     assert DEFAULT_SPAN_REGISTRY["llm"]["color"] == "#00E5FF"
+
+
+def test_real_timeline_prefers_llm_call_time_when_present(tmp_path: Path) -> None:
+    llm = _llm_action(0, 1000.0, 1005.0)
+    llm["data"]["llm_call_time_ms"] = 1200.0
+    llm["data"]["llm_timing_source"] = "openrouter_generation_time_ms"
+
+    payload = _build(tmp_path, [llm])
+    span = next(s for s in payload["lanes"][0]["spans"] if s["type"] == "llm")
+
+    assert span["end"] - span["start"] == pytest.approx(5.0)
+    assert span["end_real"] - span["start_real"] == pytest.approx(1.2)
+
+
+def test_real_timeline_compacts_positive_gaps_between_spans(tmp_path: Path) -> None:
+    records = [
+        _llm_action(0, 1000.0, 1004.0),
+        _tool_action(0, 1006.0, 1007.0, "bash"),
+    ]
+    records[0]["data"]["llm_call_time_ms"] = 500.0
+    records[0]["data"]["llm_timing_source"] = "openrouter_generation_time_ms"
+
+    payload = _build(tmp_path, records)
+    spans = [s for s in payload["lanes"][0]["spans"] if s["type"] != "scheduling"]
+    spans.sort(key=lambda span: span["start_real_abs"])
+
+    assert spans[0]["end_real_abs"] == pytest.approx(spans[1]["start_real_abs"])
+    assert spans[1]["start_abs"] - spans[0]["end_abs"] == pytest.approx(2.0)
+    assert spans[1]["start_real_abs"] - spans[0]["end_real_abs"] == pytest.approx(0.0)
+
+
+def test_real_timeline_shifts_markers_with_compacted_spans(tmp_path: Path) -> None:
+    records = [
+        _llm_action(0, 1000.0, 1004.0),
+        _event("SCHEDULING", "message_dispatch", 0, 1004.5),
+        _tool_action(0, 1006.0, 1007.0, "bash"),
+    ]
+    records[0]["data"]["llm_call_time_ms"] = 1000.0
+    records[0]["data"]["llm_timing_source"] = "openrouter_generation_time_ms"
+
+    payload = _build(tmp_path, records)
+    marker = payload["lanes"][0]["markers"][0]
+    llm_span = next(s for s in payload["lanes"][0]["spans"] if s["type"] == "llm")
+
+    assert marker["t"] == pytest.approx(4.5)
+    assert marker["t_real"] == pytest.approx(1.5)
+    assert marker["t_real_abs"] > llm_span["end_real_abs"]
+
+
+def test_real_timeline_compresses_markers_inside_llm_spans(tmp_path: Path) -> None:
+    records = [
+        _llm_action(0, 1000.0, 1004.0),
+        _event("CONTEXT", "session_load", 0, 1002.0),
+    ]
+    records[0]["data"]["llm_call_time_ms"] = 1000.0
+    records[0]["data"]["llm_timing_source"] = "openrouter_generation_time_ms"
+
+    payload = _build(tmp_path, records)
+    marker = payload["lanes"][0]["markers"][0]
+
+    assert marker["t"] == pytest.approx(2.0)
+    assert marker["t_real"] == pytest.approx(0.5)
+
+
+def test_real_timeline_shifts_markers_after_final_compacted_span(
+    tmp_path: Path,
+) -> None:
+    records = [
+        _llm_action(0, 1000.0, 1004.0),
+        _event("MCP", "task_complete", 0, 1004.5),
+    ]
+    records[0]["data"]["llm_call_time_ms"] = 1000.0
+    records[0]["data"]["llm_timing_source"] = "openrouter_generation_time_ms"
+
+    payload = _build(tmp_path, records)
+    marker = payload["lanes"][0]["markers"][0]
+
+    assert marker["t"] == pytest.approx(4.5)
+    assert marker["t_real"] == pytest.approx(1.5)
+
+
+def test_real_timeline_uses_trace_level_compaction_across_lanes(tmp_path: Path) -> None:
+    records = [
+        _llm_action(0, 1000.0, 1004.0, agent_id="agent-a"),
+        _tool_action(0, 1005.0, 1006.0, "bash", agent_id="agent-b"),
+    ]
+    records[0]["data"]["llm_call_time_ms"] = 1000.0
+    records[0]["data"]["llm_timing_source"] = "openrouter_generation_time_ms"
+
+    payload = _build(tmp_path, records)
+    lane_a = next(lane for lane in payload["lanes"] if lane["agent_id"] == "agent-a")
+    lane_b = next(lane for lane in payload["lanes"] if lane["agent_id"] == "agent-b")
+    llm_span = lane_a["spans"][0]
+    tool_span = lane_b["spans"][0]
+
+    assert llm_span["end_real_abs"] == pytest.approx(1001.0)
+    assert tool_span["start_real_abs"] == pytest.approx(1001.0)
+
 
 def test_tool_action_becomes_span(tmp_path: Path) -> None:
     payload = _build(tmp_path, [_tool_action(0, 1000.0, 1000.5, "bash")])
@@ -121,6 +227,7 @@ def test_tool_action_becomes_span(tmp_path: Path) -> None:
     tool_spans = [s for s in spans if s["type"] == "tool"]
     assert len(tool_spans) == 1
     assert tool_spans[0]["detail"]["tool_name"] == "bash"
+
 
 def test_scheduling_span_requires_event_in_gap(tmp_path: Path) -> None:
     """A gap between two actions IS rendered as a scheduling span when
@@ -135,6 +242,7 @@ def test_scheduling_span_requires_event_in_gap(tmp_path: Path) -> None:
     assert len(sched) == 1
     # Hover detail must surface the underlying event for traceability.
     assert sched[0]["detail"]["events"] == ["message_dispatch"]
+
 
 def test_scheduling_span_suppressed_without_event(tmp_path: Path) -> None:
     """A gap with NO framework event inside → no scheduling span.
@@ -153,6 +261,7 @@ def test_scheduling_span_suppressed_without_event(tmp_path: Path) -> None:
     sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
     assert len(sched) == 0
 
+
 def test_scheduling_span_has_no_duration_threshold(tmp_path: Path) -> None:
     """A tiny 2ms gap with an event STILL produces a span — the rendering
     is gated purely on event presence, not on gap duration. This pins the
@@ -167,6 +276,7 @@ def test_scheduling_span_has_no_duration_threshold(tmp_path: Path) -> None:
     assert len(sched) == 1
     assert sched[0]["detail"]["events"] == ["session_lock_acquire"]
     assert sched[0]["detail"]["gap_ms"] == pytest.approx(2.0, abs=0.1)
+
 
 def test_parallel_tools_share_iteration(tmp_path: Path) -> None:
     """Three tool_exec actions all in iteration=5 → all rendered, no
@@ -184,6 +294,7 @@ def test_parallel_tools_share_iteration(tmp_path: Path) -> None:
     sched = [s for s in payload["lanes"][0]["spans"] if s["type"] == "scheduling"]
     assert len(sched) == 0
 
+
 def test_event_becomes_marker(tmp_path: Path) -> None:
     records = [
         _llm_action(0, 1000.0, 1001.0),
@@ -194,6 +305,7 @@ def test_event_becomes_marker(tmp_path: Path) -> None:
     assert len(markers) == 1
     assert markers[0]["event"] == "message_dispatch"
     assert markers[0]["type"] == "scheduling"
+
 
 def test_unknown_action_type_skipped(tmp_path: Path) -> None:
     """An unknown action_type is silently skipped, not crashed on."""
@@ -212,6 +324,7 @@ def test_unknown_action_type_skipped(tmp_path: Path) -> None:
     assert len(spans) == 1
     assert spans[0]["type"] == "llm"
 
+
 def test_payload_carries_registries(tmp_path: Path) -> None:
     data = TraceData.load(_write_trace(tmp_path, [_llm_action(0, 1.0, 2.0)]))
     payload = build_gantt_payload_multi([("a", data)])
@@ -221,15 +334,15 @@ def test_payload_carries_registries(tmp_path: Path) -> None:
     assert payload["registries"]["spans"] == DEFAULT_SPAN_REGISTRY
     assert payload["registries"]["markers"] == DEFAULT_MARKER_REGISTRY
 
+
 def test_payload_registries_can_be_overridden(tmp_path: Path) -> None:
     """Caller-supplied registries replace the defaults."""
     custom_spans = {"llm": {"color": "#FF0000", "label": "Custom", "order": 0}}
     data = TraceData.load(_write_trace(tmp_path, [_llm_action(0, 1.0, 2.0)]))
-    payload = build_gantt_payload_multi(
-        [("a", data)], span_registry=custom_spans
-    )
+    payload = build_gantt_payload_multi([("a", data)], span_registry=custom_spans)
     assert payload["registries"]["spans"] == custom_spans
     assert payload["registries"]["markers"] == DEFAULT_MARKER_REGISTRY
+
 
 def test_metadata_uses_canonical_keys(tmp_path: Path) -> None:
     records = [
@@ -246,6 +359,7 @@ def test_metadata_uses_canonical_keys(tmp_path: Path) -> None:
     assert meta["n_actions"] == 3
     assert meta["n_iterations"] == 2  # iterations 0 and 1
     assert meta["max_iterations"] == 80  # from trace_metadata
+
 
 def test_llm_span_detail_surfaces_silent_tool_calls(tmp_path: Path) -> None:
     """An llm_call action whose raw_response has ``content: null`` but
@@ -295,6 +409,7 @@ def test_llm_span_detail_surfaces_silent_tool_calls(tmp_path: Path) -> None:
     assert "llm_content" not in detail, "content was null, should not be set"
     assert detail["tool_calls_requested"] == ['write_file(path="src/main.ts")']
 
+
 def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) -> None:
     """When the LLM produces narrative text AND tool calls, both are
     reported so the user sees the reasoning alongside the action."""
@@ -334,6 +449,7 @@ def test_llm_span_detail_surfaces_both_content_and_tool_calls(tmp_path: Path) ->
     assert "Let me write" in detail["llm_content"]
     assert detail["tool_calls_requested"] == ['write_file(path="main.ts")']
 
+
 def test_llm_span_detail_supports_anthropic_raw_response(tmp_path: Path) -> None:
     act = {
         "type": "action",
@@ -366,6 +482,7 @@ def test_llm_span_detail_supports_anthropic_raw_response(tmp_path: Path) -> None
     assert "I'll read the config first." in detail["llm_content"]
     assert detail["tool_calls_requested"] == ['Read(file_path="config.yaml")']
 
+
 def test_tool_calls_primary_field_path(tmp_path: Path) -> None:
     """A tool call with a JSON ``path`` argument renders as
     ``tool_name(path=\"...\")`` so users immediately see what file the
@@ -381,22 +498,29 @@ def test_tool_calls_primary_field_path(tmp_path: Path) -> None:
         "ts_end": 2.0,
         "data": {
             "raw_response": {
-                "choices": [{"message": {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{
-                        "function": {
-                            "name": "write_file",
-                            "arguments": '{"path": "src/main.ts", "content": "console.log(1)"}',
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "function": {
+                                        "name": "write_file",
+                                        "arguments": '{"path": "src/main.ts", "content": "console.log(1)"}',
+                                    }
+                                }
+                            ],
                         }
-                    }],
-                }}]
+                    }
+                ]
             }
         },
     }
     payload = _build(tmp_path, [act])
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert detail["tool_calls_requested"] == ['write_file(path="src/main.ts")']
+
 
 def test_tool_calls_primary_field_command(tmp_path: Path) -> None:
     """A shell-style tool call uses the ``command`` field as primary."""
@@ -410,21 +534,28 @@ def test_tool_calls_primary_field_command(tmp_path: Path) -> None:
         "ts_end": 2.0,
         "data": {
             "raw_response": {
-                "choices": [{"message": {
-                    "content": None,
-                    "tool_calls": [{
-                        "function": {
-                            "name": "bash",
-                            "arguments": '{"command": "ls -la src/", "timeout": 30}',
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "function": {
+                                        "name": "bash",
+                                        "arguments": '{"command": "ls -la src/", "timeout": 30}',
+                                    }
+                                }
+                            ],
                         }
-                    }],
-                }}]
+                    }
+                ]
             }
         },
     }
     payload = _build(tmp_path, [act])
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert detail["tool_calls_requested"] == ['bash(command="ls -la src/")']
+
 
 def test_tool_calls_no_primary_field_falls_back(tmp_path: Path) -> None:
     """When no known primary field is present, fall back to the
@@ -439,15 +570,21 @@ def test_tool_calls_no_primary_field_falls_back(tmp_path: Path) -> None:
         "ts_end": 2.0,
         "data": {
             "raw_response": {
-                "choices": [{"message": {
-                    "content": None,
-                    "tool_calls": [{
-                        "function": {
-                            "name": "mystery_tool",
-                            "arguments": '{"foo": "bar", "baz": 42}',
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "function": {
+                                        "name": "mystery_tool",
+                                        "arguments": '{"foo": "bar", "baz": 42}',
+                                    }
+                                }
+                            ],
                         }
-                    }],
-                }}]
+                    }
+                ]
             }
         },
     }
@@ -455,8 +592,9 @@ def test_tool_calls_no_primary_field_falls_back(tmp_path: Path) -> None:
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert len(detail["tool_calls_requested"]) == 1
     summary = detail["tool_calls_requested"][0]
-    assert summary.startswith('mystery_tool(')
+    assert summary.startswith("mystery_tool(")
     assert '"foo": "bar"' in summary
+
 
 def test_llm_content_truncation_at_1000_chars(tmp_path: Path) -> None:
     """Long llm_content is truncated to 1000 chars + ellipsis (was 200)."""
@@ -469,15 +607,12 @@ def test_llm_content_truncation_at_1000_chars(tmp_path: Path) -> None:
         "iteration": 0,
         "ts_start": 1.0,
         "ts_end": 2.0,
-        "data": {
-            "raw_response": {
-                "choices": [{"message": {"content": long_text}}]
-            }
-        },
+        "data": {"raw_response": {"choices": [{"message": {"content": long_text}}]}},
     }
     payload = _build(tmp_path, [act])
     detail = payload["lanes"][0]["spans"][0]["detail"]
     assert detail["llm_content"] == "A" * 1000 + "..."
+
 
 def test_llm_content_short_is_not_truncated(tmp_path: Path) -> None:
     """Content shorter than the cap passes through unchanged (no ...)."""
@@ -489,18 +624,16 @@ def test_llm_content_short_is_not_truncated(tmp_path: Path) -> None:
         "iteration": 0,
         "ts_start": 1.0,
         "ts_end": 2.0,
-        "data": {
-            "raw_response": {
-                "choices": [{"message": {"content": "hello"}}]
-            }
-        },
+        "data": {"raw_response": {"choices": [{"message": {"content": "hello"}}]}},
     }
     payload = _build(tmp_path, [act])
     assert payload["lanes"][0]["spans"][0]["detail"]["llm_content"] == "hello"
 
+
 def test_action_type_map_module_constant() -> None:
     assert ACTION_TYPE_MAP["llm_call"] == "llm"
     assert ACTION_TYPE_MAP["tool_exec"] == "tool"
+
 
 def test_action_detail_preserves_full_tool_fields(tmp_path: Path) -> None:
     """Action detail should preserve full tool payloads.
@@ -510,10 +643,12 @@ def test_action_detail_preserves_full_tool_fields(tmp_path: Path) -> None:
     cap. Truncating to 100 at the data layer makes the pinned tooltip
     useless for inspecting real Bash / pytest output.
     """
-    long_args = json.dumps({
-        "command": "python3 -m pytest tests/ -x -q --ignore=tests/test_main.py 2>&1 | tail -30",
-        "description": "Run focused regression subset with clean output",
-    })
+    long_args = json.dumps(
+        {
+            "command": "python3 -m pytest tests/ -x -q --ignore=tests/test_main.py 2>&1 | tail -30",
+            "description": "Run focused regression subset with clean output",
+        }
+    )
     long_result = (
         "........................................ [  8%]\n"
         "........................................ [ 16%]\n"
@@ -541,6 +676,7 @@ def test_action_detail_preserves_full_tool_fields(tmp_path: Path) -> None:
     )
     assert not detail["tool_args"].endswith("...")
     assert not detail["tool_result"].endswith("...")
+
 
 def test_event_detail_still_truncates_at_100_chars(tmp_path: Path) -> None:
     """Event detail keeps the shorter hover-only truncation cap."""

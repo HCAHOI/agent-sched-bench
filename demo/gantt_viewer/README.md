@@ -18,6 +18,7 @@ Implemented:
 - `POST /api/traces/upload`
 - Solid/Vite frontend with:
   - `SYNC` / `ABS` time mode
+  - `WALL` / `REAL` timing mode
   - `LAYERED` / `CONCISE` layout mode
   - `Load all` and per-trace load/toggle/remove controls
   - tooltip hover + pin
