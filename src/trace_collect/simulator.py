@@ -525,7 +525,7 @@ async def _run_local_model_simulation(
                 except Exception as exc:
                     logger.error("Iteration %d llm %d: LLM call failed: %s", it_num, llm_idx, exc)
                     iter_failed = True
-                    continue
+                    break
 
                 ts_after_llm = time.time()
 

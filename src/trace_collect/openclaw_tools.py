@@ -280,9 +280,10 @@ class ContainerAgent:
 
             # Skip stray non-JSON lines (e.g. Python warnings, sitecustomize output)
             decoded = raw.decode(errors="replace").strip()
-            if not decoded.startswith("{"):
+            for _skip in range(50):
+                if decoded.startswith("{"):
+                    break
                 logger.debug("Skipping non-JSON agent output: %s", decoded[:120])
-                # Read one more line for the actual response
                 try:
                     raw = await asyncio.wait_for(
                         proc.stdout.readline(), timeout=timeout_s + 5.0,
@@ -290,6 +291,8 @@ class ContainerAgent:
                     decoded = raw.decode(errors="replace").strip()
                 except (asyncio.TimeoutError, BrokenPipeError):
                     return {"ok": False, "result": "[timeout]", "returncode": 124}
+            else:
+                return {"ok": False, "result": "Error: agent emitted no JSON response"}
 
             try:
                 return json.loads(decoded)
@@ -319,7 +322,7 @@ def _resolve_tool_request(
             return {"tool": "exec", "args": {"command": command, "timeout": command_timeout_s}}
         if commands:
             return {"tool": "commands", "args": {"commands": list(commands), "timeout": command_timeout_s}}
-        return {"tool": "exec", "args": {"command": "echo 'Error: no command'", "timeout": 5}}
+        return None  # missing command/commands
 
     if tool_name == "read_file":
         return {"tool": "read_file", "args": {"path": params.get("path", "")}}

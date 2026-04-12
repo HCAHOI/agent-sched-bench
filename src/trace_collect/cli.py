@@ -142,7 +142,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--task-source",
-        default="data/swebench_verified/tasks.json",
+        default="data/swe-rebench/tasks.json",
         help="Path to tasks JSON file.",
     )
     parser.add_argument(
