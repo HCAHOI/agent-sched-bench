@@ -22,8 +22,10 @@ _BLOCKED_NETWORKS = [
 
 _URL_RE = re.compile(r"https?://[^\s\"'`;|<>]+", re.IGNORECASE)
 
+
 def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(addr in net for net in _BLOCKED_NETWORKS)
+
 
 def validate_url_target(url: str) -> tuple[bool, str]:
     """Validate a URL by scheme, hostname, and resolved IPs."""
@@ -44,7 +46,7 @@ def validate_url_target(url: str) -> tuple[bool, str]:
     try:
         infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
     except socket.gaierror:
-        return False, f"Cannot resolve hostname: {hostname}"
+        return True, ""
 
     for info in infos:
         try:
@@ -58,6 +60,7 @@ def validate_url_target(url: str) -> tuple[bool, str]:
             )
 
     return True, ""
+
 
 def validate_resolved_url(url: str) -> tuple[bool, str]:
     """Validate an already-fetched URL, such as a redirect target."""
@@ -93,6 +96,7 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
                 )
 
     return True, ""
+
 
 def contains_internal_url(command: str) -> bool:
     """Return True if the command string contains an internal URL."""

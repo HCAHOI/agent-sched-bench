@@ -1,15 +1,14 @@
-
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-class Base(BaseModel):
 
+class Base(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
-class AgentDefaults(Base):
 
+class AgentDefaults(Base):
     workspace: str = "~/.nanobot/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
@@ -25,21 +24,21 @@ class AgentDefaults(Base):
     )
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
 
-class WebSearchConfig(Base):
 
+class WebSearchConfig(Base):
     provider: str = "brave"  # brave, tavily, duckduckgo, searxng, jina
     api_key: str = ""
     base_url: str = ""  # SearXNG base URL
     max_results: int = 5
 
-class ExecToolConfig(Base):
 
+class ExecToolConfig(Base):
     enable: bool = True
-    timeout: int = 60
+    timeout: int = 300
     path_append: str = ""
 
-class MCPServerConfig(Base):
 
+class MCPServerConfig(Base):
     type: Literal["stdio", "sse", "streamableHttp"] | None = (
         None  # auto-detected if omitted
     )

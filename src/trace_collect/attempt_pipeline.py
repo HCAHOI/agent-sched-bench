@@ -22,7 +22,27 @@ from trace_collect import attempt_layout
 logger = logging.getLogger(__name__)
 
 _NONCOMPLETED_EXIT_STATUSES = frozenset(
-    {"error", "tool_error", "empty_final_response", "max_iterations", "timeout", "failed"}
+    {
+        "error",
+        "tool_error",
+        "empty_final_response",
+        "max_iterations",
+        "timeout",
+        "failed",
+    }
+)
+
+_TASK_CONTAINER_ENV_PASSTHROUGH = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "PIP_INDEX_URL",
+    "TASK_CONTAINER_PIP_INDEX_URL",
 )
 
 
@@ -52,9 +72,7 @@ class AttemptContext:
     permission_fix_time_s: float = 0.0
 
     def __post_init__(self) -> None:
-        self.attempt_dir = (
-            self.run_dir / self.instance_id / f"attempt_{self.attempt}"
-        )
+        self.attempt_dir = self.run_dir / self.instance_id / f"attempt_{self.attempt}"
 
     def mark_container_ready(self, container_id: str) -> None:
         """Publish the task container id so sampling can start."""
@@ -104,6 +122,10 @@ def start_task_container(
         "-e",
         f"PATH={home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
     ]
+    for env_name in _TASK_CONTAINER_ENV_PASSTHROUGH:
+        value = os.environ.get(env_name)
+        if value:
+            cmd.extend(["-e", f"{env_name}={value}"])
     cmd.extend(container_run_user_args(executable))
     if extra_args:
         cmd.extend(extra_args)
@@ -117,9 +139,7 @@ def start_task_container(
     return result.stdout.strip()
 
 
-def stop_task_container(
-    container_id: str, *, executable: str
-) -> str:
+def stop_task_container(container_id: str, *, executable: str) -> str:
     """Capture container logs then stop and remove it. Returns log text."""
     import subprocess
 
@@ -209,9 +229,7 @@ async def run_attempt(
     """Execute one scaffold attempt and write its artifacts."""
     try:
         free_gb = preflight_disk(ctx.run_dir, min_free_disk_gb)
-        logger.info(
-            "disk preflight ok: %.2f GB free at %s", free_gb, ctx.run_dir
-        )
+        logger.info("disk preflight ok: %.2f GB free at %s", free_gb, ctx.run_dir)
     except DiskSpaceError as exc:
         logger.error("disk preflight failed: %s", exc)
         raise
@@ -275,14 +293,11 @@ async def run_attempt(
     status = "completed"
     if inner_error is not None:
         status = "error"
-    elif (
-        result is not None
-        and (
-            not result.success
-            or (
-                result.exit_status is not None
-                and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
-            )
+    elif result is not None and (
+        not result.success
+        or (
+            result.exit_status is not None
+            and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
         )
     ):
         status = "error"
@@ -319,9 +334,9 @@ async def run_attempt(
         },
         "result_summary": {
             "exit_code": 0 if success else 1,
-            "error": str(inner_error) if inner_error is not None else (
-                result.error if result is not None else None
-            ),
+            "error": str(inner_error)
+            if inner_error is not None
+            else (result.error if result is not None else None),
             "total_time": ctx.elapsed_seconds(),
             "active_time": (result.total_llm_ms or 0.0) / 1000.0 if result else 0.0,
             "tool_time": (result.total_tool_ms or 0.0) / 1000.0 if result else 0.0,

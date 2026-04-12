@@ -128,7 +128,9 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert manifest["prompt_template"] == "default"
     assert manifest["agent_runtime_mode"] == "task_container_agent"
     assert manifest["runtime"]["agent_runtime_mode"] == "task_container_agent"
-    assert manifest["runtime"]["runtime_proof"]["container_id"] == "fake_container_id_xyz"
+    assert (
+        manifest["runtime"]["runtime_proof"]["container_id"] == "fake_container_id_xyz"
+    )
     assert "tool_call_count" not in manifest["replay"]
 
     results = json.loads((ctx.attempt_dir / "results.json").read_text())
@@ -136,7 +138,9 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert results["success"] is True
     assert results["model"] == "qwen-plus-latest"
     assert results["agent_runtime_mode"] == "task_container_agent"
-    assert results["runtime_proof"]["python_executable"] == "/opt/conda/envs/ML/bin/python"
+    assert (
+        results["runtime_proof"]["python_executable"] == "/opt/conda/envs/ML/bin/python"
+    )
     assert "container_stdout" not in results
     assert "resource_samples" not in results
 
@@ -179,7 +183,9 @@ def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> No
     assert "boom" in (manifest["result_summary"]["error"] or "")
 
 
-def test_run_attempt_noncompleted_exit_status_writes_error_manifest(tmp_path: Path) -> None:
+def test_run_attempt_noncompleted_exit_status_writes_error_manifest(
+    tmp_path: Path,
+) -> None:
     ctx = _make_ctx(tmp_path)
     trace_source = tmp_path / "scratch" / "trace.jsonl"
     _write_trace(trace_source)
@@ -371,7 +377,64 @@ def test_start_task_container_uses_runtime_specific_user_args(
 
     assert container_id == "cid-1"
     assert seen["cmd"][:3] == [container_executable, "run", "-d"]
+    assert "-e" in seen["cmd"]
+    assert f"HOME={os.environ.get('HOME', '/root')}" in seen["cmd"]
     for arg in expected_user_args:
         assert arg in seen["cmd"]
     if container_executable == "docker":
         assert "--userns=keep-id" not in seen["cmd"]
+
+
+def test_start_task_container_passes_through_network_env_when_present() -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+
+    env = {
+        "HTTP_PROXY": "http://127.0.0.1:7890",
+        "HTTPS_PROXY": "http://127.0.0.1:7890",
+        "ALL_PROXY": "socks5://127.0.0.1:7890",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
+        "TASK_CONTAINER_PIP_INDEX_URL": "https://mirror.example/simple",
+    }
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        patch.dict(os.environ, env, clear=False),
+    ):
+        start_task_container("docker.io/swerebench/example:latest", executable="docker")
+
+    cmd = seen["cmd"]
+    for name, value in env.items():
+        assert "-e" in cmd
+        assert f"{name}={value}" in cmd
+
+
+def test_start_task_container_skips_empty_network_env() -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+
+    env = {
+        "HTTP_PROXY": "",
+        "HTTPS_PROXY": "",
+        "ALL_PROXY": "",
+        "NO_PROXY": "",
+        "PIP_INDEX_URL": "",
+        "TASK_CONTAINER_PIP_INDEX_URL": "",
+    }
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        patch.dict(os.environ, env, clear=False),
+    ):
+        start_task_container("docker.io/swerebench/example:latest", executable="docker")
+
+    cmd = seen["cmd"]
+    for name in env:
+        assert not any(
+            isinstance(part, str) and part.startswith(f"{name}=") for part in cmd
+        )

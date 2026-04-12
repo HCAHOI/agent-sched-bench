@@ -12,6 +12,7 @@ from typing import Any
 
 from agents.openclaw._hook import AgentHook, AgentHookContext
 from agents.openclaw._loop import AgentLoop
+from agents.openclaw.config.schema import ExecToolConfig
 from agents.openclaw.bus.events import InboundMessage
 from agents.openclaw.bus.queue import MessageBus
 from agents.openclaw.eval.collector import ResultCollector
@@ -35,10 +36,7 @@ def _trace_has_llm_error(trace_file: Path | None) -> bool:
         with trace_file.open("r", encoding="utf-8") as fh:
             for line in fh:
                 record = json.loads(line)
-                if (
-                    record.get("type") == "event"
-                    and record.get("event") == "llm_error"
-                ):
+                if record.get("type") == "event" and record.get("event") == "llm_error":
                     return True
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return False
@@ -53,7 +51,11 @@ def _resolve_run_outcome(
 ) -> tuple[str, str | None]:
     stop_reason = str(outcome.get("stop_reason") or "completed")
     error = outcome.get("error")
-    if stop_reason == "completed" and error is None and _trace_has_llm_error(trace_file):
+    if (
+        stop_reason == "completed"
+        and error is None
+        and _trace_has_llm_error(trace_file)
+    ):
         return "error", content or "LLM returned error."
     if error is None and stop_reason != "completed" and content:
         error = content
@@ -118,7 +120,8 @@ class TraceCollectorHook(AgentHook):
         self._iter_start_wall = time.time()
         self._iter_messages_snapshot = self._clone_messages(context.messages)
         self.emit_event(
-            LLM, "llm_call_start",
+            LLM,
+            "llm_call_start",
             {"messages_in": self._iter_messages_snapshot},
             iteration=context.iteration,
         )
@@ -134,9 +137,9 @@ class TraceCollectorHook(AgentHook):
                     "tool_exec_start",
                     {
                         "tool_name": tc.name,
-                        "args_preview": json.dumps(
-                            tc.arguments, ensure_ascii=False
-                        )[:200],
+                        "args_preview": json.dumps(tc.arguments, ensure_ascii=False)[
+                            :200
+                        ],
                     },
                     iteration=context.iteration,
                 )
@@ -158,12 +161,15 @@ class TraceCollectorHook(AgentHook):
             completion_tokens=completion_tokens,
         )
         self.emit_event(
-            LLM, "llm_call_end",
+            LLM,
+            "llm_call_end",
             {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "llm_latency_ms": round(llm_latency_ms, 2),
-                "finish_reason": context.response.finish_reason if context.response else None,
+                "finish_reason": context.response.finish_reason
+                if context.response
+                else None,
             },
             iteration=context.iteration,
         )
@@ -380,6 +386,7 @@ class TraceCollectorHook(AgentHook):
         self._fh.flush()
         self.close()
 
+
 def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
     def emit(category: str, event: str, data: dict, iteration: int = 0) -> None:
         hook.emit_event(category, event, data, iteration=iteration)
@@ -409,9 +416,9 @@ def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
     if hasattr(agent, "_event_callback"):
         agent._event_callback = lambda cat, evt, d: emit(cat, evt, d)
 
+
 @dataclass
 class SessionRunResult:
-
     content: str | None
     elapsed_s: float
     trace_file: Path | None = None
@@ -420,8 +427,8 @@ class SessionRunResult:
     stop_reason: str = "completed"
     error: str | None = None
 
-class SessionRunner:
 
+class SessionRunner:
     def __init__(
         self,
         provider: LLMProvider,
@@ -432,6 +439,7 @@ class SessionRunner:
         max_tool_result_chars: int | None = None,
         mcp_servers: dict | None = None,
         extra_hooks: list[AgentHook] | None = None,
+        exec_config: ExecToolConfig | None = None,
     ) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
@@ -440,6 +448,7 @@ class SessionRunner:
         self.max_tool_result_chars = max_tool_result_chars
         self.mcp_servers = mcp_servers or {}
         self.extra_hooks = extra_hooks or []
+        self.exec_config = exec_config or ExecToolConfig()
 
     @staticmethod
     def _scaffold_tools() -> list[str]:
@@ -509,6 +518,7 @@ class SessionRunner:
             max_iterations=self.max_iterations,
             context_window_tokens=self.context_window_tokens,
             max_tool_result_chars=self.max_tool_result_chars,
+            exec_config=self.exec_config,
             mcp_servers=self.mcp_servers,
             session_manager=session_manager,
             hooks=all_hooks,

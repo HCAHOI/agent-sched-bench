@@ -146,9 +146,7 @@ def load_completed_ids(run_dir: Path) -> set[str]:
     return completed
 
 
-def write_results_jsonl(
-    results: list[CollectedTaskResult], results_path: Path
-) -> None:
+def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) -> None:
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with open(results_path, "w", encoding="utf-8") as f:
         for result in results:
@@ -165,7 +163,9 @@ def _select_tasks(
     selected = list(tasks)
     if instance_ids is not None:
         by_id = {task["instance_id"]: task for task in tasks}
-        missing = [instance_id for instance_id in instance_ids if instance_id not in by_id]
+        missing = [
+            instance_id for instance_id in instance_ids if instance_id not in by_id
+        ]
         if missing:
             raise ValueError(f"No tasks matched instance_ids: {missing}")
         selected = [by_id[instance_id] for instance_id in instance_ids]
@@ -174,9 +174,7 @@ def _select_tasks(
     return selected
 
 
-def _task_source_image(
-    benchmark: "Benchmark", task: dict[str, Any]
-) -> str | None:
+def _task_source_image(benchmark: "Benchmark", task: dict[str, Any]) -> str | None:
     image_name = benchmark.image_name_for(task)
     if not image_name:
         return None
@@ -211,10 +209,7 @@ def _ensure_task_source_ready(
     """Ensure the current task's source image is available locally."""
     if not source_image:
         return
-    if (
-        prefetch_future is not None
-        and prefetched_source_image == source_image
-    ):
+    if prefetch_future is not None and prefetched_source_image == source_image:
         try:
             prefetch_future.result()
             logger.info("prefetch ready for %s image=%s", instance_id, source_image)
@@ -324,7 +319,9 @@ async def _run_scaffold_tasks(
         prompt_template=prompt_template,
     )
 
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="image-prefetch") as executor:
+    with ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="image-prefetch"
+    ) as executor:
         for i, task in enumerate(tasks):
             instance_id = task["instance_id"]
             if instance_id in completed:
@@ -333,9 +330,7 @@ async def _run_scaffold_tasks(
                 )
                 continue
 
-            logger.info(
-                "[%d/%d] START %s (%s)", i + 1, total, instance_id, scaffold
-            )
+            logger.info("[%d/%d] START %s (%s)", i + 1, total, instance_id, scaffold)
             t0 = time.monotonic()
             source_image = _task_source_image(benchmark, task)
             next_source_image = _next_pending_source_image(
@@ -861,12 +856,8 @@ async def _run_miniswe_in_task_container(
         ctx.container_stdout = "\n".join(
             part
             for part in [
-                stdout_path.read_text(encoding="utf-8")
-                if stdout_path.exists()
-                else "",
-                stderr_path.read_text(encoding="utf-8")
-                if stderr_path.exists()
-                else "",
+                stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else "",
+                stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else "",
                 container_logs,
             ]
             if part
@@ -985,6 +976,12 @@ async def _run_openclaw_in_task_container(
                 "workspace_base": str(runtime_dir / "workspace_base"),
                 "workspace_dir": str(runtime_dir / "workspace_base" / ctx.instance_id),
                 "tool_workspace": "/testbed",
+                "exec_path_append": ":".join(
+                    [
+                        str(runtime_dir / "bootstrap" / ".pyuserbase" / "bin"),
+                        str(runtime_dir / "bootstrap" / "pydeps" / "bin"),
+                    ]
+                ),
                 "exec_working_dir": "/testbed",
                 "trace_file": str(runtime_dir / "trace.raw.jsonl"),
                 "raw_stdout_path": str(stdout_path),
@@ -1018,12 +1015,8 @@ async def _run_openclaw_in_task_container(
         ctx.container_stdout = "\n".join(
             part
             for part in [
-                stdout_path.read_text(encoding="utf-8")
-                if stdout_path.exists()
-                else "",
-                stderr_path.read_text(encoding="utf-8")
-                if stderr_path.exists()
-                else "",
+                stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else "",
+                stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else "",
                 container_logs,
             ]
             if part

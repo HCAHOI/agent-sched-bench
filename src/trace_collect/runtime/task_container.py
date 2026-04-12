@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+import ssl
 import subprocess
+import shutil
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,13 +23,18 @@ _REDACTED_SECRET = "***REDACTED***"
 _DEFAULT_RUNTIME_PYTHONPATH = f"{REPO_ROOT / 'src'}:{REPO_ROOT}"
 _CONTAINER_SYSTEM_PYTHON = "/usr/bin/python3"
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple"
+_GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+_GET_PIP_FETCH_ATTEMPTS = 3
+_GET_PIP_FETCH_BACKOFF_SECONDS = 1.0
 _BOOTSTRAP_REQUIREMENTS = (
     "openai>=2.0,<3.0",
+    "anyio>=4.0,<5.0",
     "PyYAML>=6.0,<7.0",
     "json-repair>=0.30,<1.0",
     "loguru>=0.7,<1.0",
     "pydantic>=2.0,<3.0",
     "httpx>=0.27,<1.0",
+    "socksio>=1.0,<2.0",
     "tiktoken>=0.7,<1.0",
 )
 _ARCH_ALIASES = {
@@ -42,6 +51,78 @@ _CONTAINER_PYTHON_CANDIDATES = (
     "python3",
     "python",
 )
+
+
+def _format_probe_failure_details(result: subprocess.CompletedProcess[str]) -> str:
+    parts: list[str] = []
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    if stdout:
+        parts.append(f"stdout: {stdout}")
+    if stderr:
+        parts.append(f"stderr: {stderr}")
+    return "; ".join(parts)
+
+
+def _bootstrap_marker_matches(
+    marker: Path,
+    *,
+    requirements: tuple[str, ...],
+    runtime: str,
+) -> bool:
+    if not marker.exists():
+        return False
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return payload == {"requirements": list(requirements), "python": runtime}
+
+
+def _is_retryable_get_pip_error(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return isinstance(
+            reason,
+            (
+                ssl.SSLError,
+                TimeoutError,
+                ConnectionResetError,
+                OSError,
+            ),
+        )
+    return isinstance(
+        exc,
+        (
+            ssl.SSLError,
+            TimeoutError,
+            ConnectionResetError,
+            OSError,
+        ),
+    )
+
+
+def _download_get_pip(get_pip: Path) -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, _GET_PIP_FETCH_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(_GET_PIP_URL, timeout=120) as response:
+                payload = response.read()
+            tmp_path = get_pip.with_suffix(".tmp")
+            tmp_path.write_bytes(payload)
+            tmp_path.replace(get_pip)
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt >= _GET_PIP_FETCH_ATTEMPTS or not _is_retryable_get_pip_error(
+                exc
+            ):
+                raise
+            time.sleep(_GET_PIP_FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+    if last_error is not None:
+        raise last_error
 
 
 @dataclass(slots=True)
@@ -145,7 +226,9 @@ def project_mount_args(
 ) -> list[str]:
     """Return extra `podman run` args for parity mode."""
 
-    task_container_runtime_dir(attempt_dir, "bootstrap").mkdir(parents=True, exist_ok=True)
+    task_container_runtime_dir(attempt_dir, "bootstrap").mkdir(
+        parents=True, exist_ok=True
+    )
     repo_root = REPO_ROOT.resolve()
     attempt_dir = attempt_dir.resolve()
     args: list[str] = []
@@ -257,15 +340,15 @@ exit 1
         timeout=120,
     )
     if result.returncode != 0:
+        details = _format_probe_failure_details(result)
         raise RuntimeError(
             "task-container python probe failed: "
             "no Python >=3.11 interpreter found in container"
+            + (f" ({details})" if details else "")
         )
     runtime = result.stdout.strip()
     if not runtime:
-        raise RuntimeError(
-            "task-container python probe failed: empty interpreter path"
-        )
+        raise RuntimeError("task-container python probe failed: empty interpreter path")
     return TaskContainerExecConfig(
         runtime=runtime,
         pythonpath=exec_config.pythonpath,
@@ -430,17 +513,18 @@ def run_task_container_agent(
         )
     except subprocess.TimeoutExpired as exc:
         raw_stdout_path.write_text(
-            (exc.stdout or exc.output or "") if isinstance((exc.stdout or exc.output or ""), str)
+            (exc.stdout or exc.output or "")
+            if isinstance((exc.stdout or exc.output or ""), str)
             else ((exc.stdout or exc.output or b"").decode("utf-8", errors="replace")),
             encoding="utf-8",
         )
         raw_stderr_path.write_text(
-            exc.stderr if isinstance(exc.stderr or "", str) else (exc.stderr or b"").decode("utf-8", errors="replace"),
+            exc.stderr
+            if isinstance(exc.stderr or "", str)
+            else (exc.stderr or b"").decode("utf-8", errors="replace"),
             encoding="utf-8",
         )
-        raise RuntimeError(
-            f"task-container run timed out after {timeout}s"
-        ) from exc
+        raise RuntimeError(f"task-container run timed out after {timeout}s") from exc
     except Exception as exc:
         if not raw_stdout_path.exists():
             raw_stdout_path.write_text("", encoding="utf-8")
@@ -487,25 +571,28 @@ def bootstrap_task_container_python(
         return
 
     marker = exec_config.bootstrap_site_dir / ".bootstrap-ready.json"
-    if marker.exists():
+    requirements = tuple(dict.fromkeys(_BOOTSTRAP_REQUIREMENTS + extra_requirements))
+    if _bootstrap_marker_matches(
+        marker,
+        requirements=requirements,
+        runtime=exec_config.runtime,
+    ):
         return
+    if marker.exists():
+        marker.unlink(missing_ok=True)
+        shutil.rmtree(exec_config.bootstrap_site_dir, ignore_errors=True)
 
     userbase = exec_config.bootstrap_site_dir.parent / ".pyuserbase"
     userbase.mkdir(parents=True, exist_ok=True)
     get_pip = userbase / "get-pip.py"
     if not get_pip.exists():
-        with urllib.request.urlopen(
-            "https://bootstrap.pypa.io/get-pip.py",
-            timeout=120,
-        ) as response:
-            get_pip.write_bytes(response.read())
+        _download_get_pip(get_pip)
 
     pip_index_url = (
         os.environ.get("TASK_CONTAINER_PIP_INDEX_URL")
         or os.environ.get("PIP_INDEX_URL")
         or _DEFAULT_PIP_INDEX_URL
     )
-    requirements = tuple(dict.fromkeys(_BOOTSTRAP_REQUIREMENTS + extra_requirements))
     script = f"""
 import json
 import os

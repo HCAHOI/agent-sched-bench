@@ -3,7 +3,7 @@ UV ?= uv
 TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
 GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
-.PHONY: help pull sync test lint serve-vllm run-smoke smoke-code run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull sync test lint serve-vllm run-smoke smoke-code run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
@@ -22,6 +22,7 @@ help:
 	@printf "  download-swe-rebench        Download SWE-rebench (nebius/SWE-rebench) filtered split\n"
 	@printf "  setup-swe-rebench-repos     Clone repos referenced by SWE-rebench tasks\n"
 	@printf "  setup-swe-rebench           Shortcut: download-swe-rebench + setup-swe-rebench-repos\n"
+	@printf "  setup-arm-host              Enable amd64 container execution on ARM Docker hosts (uses sudo if needed)\n"
 	@printf "  smoke-swe-rebench-miniswe   Run $(SMOKE_N) SWE-rebench tasks through mini-swe-agent\n"
 	@printf "  smoke-swe-rebench-openclaw  Run $(SMOKE_N) SWE-rebench tasks through openclaw\n"
 	@printf "  gantt-viewer-install        Install frontend dependencies with npm\n"
@@ -75,6 +76,13 @@ setup-swe-rebench-repos:
 	./scripts/setup/clone_repos.sh data/swe-rebench/tasks.json data/swe-rebench/repos
 
 setup-swe-rebench: download-swe-rebench setup-swe-rebench-repos
+
+setup-arm-host:
+	@if [ "$$(id -u)" -eq 0 ]; then \
+		./scripts/setup/arm_setup.sh install; \
+	else \
+		sudo ./scripts/setup/arm_setup.sh install; \
+	fi
 
 # ── SWE-rebench smoke runs ─────────────────────────────────────────────
 # Override PROVIDER (default: dashscope) and SMOKE_N (default: 2).

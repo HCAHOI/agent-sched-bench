@@ -1,4 +1,3 @@
-
 import asyncio
 import os
 import re
@@ -10,11 +9,13 @@ from loguru import logger
 
 from agents.openclaw.tools.base import Tool
 
+
 class ExecTool(Tool):
+    _DEFAULT_TIMEOUT = 300
 
     def __init__(
         self,
-        timeout: int = 60,
+        timeout: int = _DEFAULT_TIMEOUT,
         working_dir: str | None = None,
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
@@ -70,7 +71,7 @@ class ExecTool(Tool):
                     "type": "integer",
                     "description": (
                         "Timeout in seconds. Increase for long-running commands "
-                        "like compilation or installation (default 60, max 600)."
+                        "like compilation or installation (default 300, max 600)."
                     ),
                     "minimum": 1,
                     "maximum": 600,

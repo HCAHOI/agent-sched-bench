@@ -15,6 +15,7 @@ from typing import Any
 
 from llm_call import UnifiedProvider, resolve_llm_config
 
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m trace_collect.runtime.entrypoint",
@@ -46,7 +47,9 @@ def _write_result(result_path: str, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _trace_summary_totals(trace_file: Path) -> tuple[float | None, float | None, int | None]:
+def _trace_summary_totals(
+    trace_file: Path,
+) -> tuple[float | None, float | None, int | None]:
     total_llm_ms: float | None = None
     total_tool_ms: float | None = None
     total_tokens: int | None = None
@@ -96,6 +99,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         repo_root / "configs" / "benchmarks" / f"{benchmark_slug}.yaml"
     )
     benchmark = get_benchmark_class(benchmark_slug)(config)
+    exec_path_append = request.get("exec_path_append", "")
     llm_config = resolve_llm_config(
         provider=request.get("provider_name"),
         api_base=request.get("api_base"),
@@ -116,6 +120,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         context_window_tokens=int(request["max_context_tokens"]),
         model=llm_config.model,
         mcp_servers=load_mcp_servers(request.get("mcp_config")),
+        exec_path_append=exec_path_append,
     )
     task_raw = dict(request["task"])
     eval_task = EvalTask(
@@ -148,7 +153,9 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         "total_tokens": total_tokens,
         "runtime_proof": {
             **_runtime_proof(request.get("container_id")),
-            "agent_runtime_mode": request.get("agent_runtime_mode", "task_container_agent"),
+            "agent_runtime_mode": request.get(
+                "agent_runtime_mode", "task_container_agent"
+            ),
         },
     }
     _write_result(request["result_path"], payload)
@@ -227,7 +234,9 @@ async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
         "total_tokens": summary.get("total_tokens"),
         "runtime_proof": {
             **_runtime_proof(request.get("container_id")),
-            "agent_runtime_mode": request.get("agent_runtime_mode", "task_container_agent"),
+            "agent_runtime_mode": request.get(
+                "agent_runtime_mode", "task_container_agent"
+            ),
         },
         "success": bool(success),
     }

@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from agents.openclaw.config.schema import ExecToolConfig
 from agents.openclaw._session_runner import (
     SessionRunner,
     TraceCollectorHook,
@@ -22,6 +23,7 @@ __all__ = [
     "TraceCollectorHook",
     "inject_event_callbacks",
 ]
+
 
 def _count_trace_iterations(trace_file: Path) -> int:
     if not trace_file.exists():
@@ -40,6 +42,7 @@ def _count_trace_iterations(trace_file: Path) -> int:
                 iterations.add(it)
     return len(iterations)
 
+
 class SWEBenchRunner:
     """Run one repo-backed SWE task through the containerized OpenClaw loop."""
 
@@ -52,6 +55,7 @@ class SWEBenchRunner:
         context_window_tokens: int | None = None,
         max_tool_result_chars: int | None = None,
         model: str | None = None,
+        exec_path_append: str = "",
     ) -> None:
         self.provider = provider
         self.workspace_base = Path(workspace_base).resolve()
@@ -60,6 +64,7 @@ class SWEBenchRunner:
         self.context_window_tokens = context_window_tokens
         self.max_tool_result_chars = max_tool_result_chars
         self.model = model or provider.get_default_model()
+        self.exec_path_append = exec_path_append
 
         self._session_runner = SessionRunner(
             provider,
@@ -68,6 +73,7 @@ class SWEBenchRunner:
             context_window_tokens=self.context_window_tokens,
             max_tool_result_chars=self.max_tool_result_chars,
             mcp_servers=self.mcp_servers,
+            exec_config=ExecToolConfig(path_append=self.exec_path_append),
         )
 
     @staticmethod
