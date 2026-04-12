@@ -164,7 +164,6 @@ def _patch_simulator_runtime(
             container_executable=container_executable,
             docker_image="fake-image",
             agent=_FakeAgent(),
-            cleanup=lambda: None,
         )
         return PreparedTraceSession(loaded=loaded, container=container)
 
@@ -570,7 +569,6 @@ def test_cloud_model_manifest_with_docker_image_override(
             container_executable=container_executable,
             docker_image=img or "",
             agent=_FakeAgent2(),
-            cleanup=lambda: None,
         )
         return PreparedTraceSession(loaded=loaded, container=container)
 

@@ -124,7 +124,6 @@ def test_simulator_accepts_task_with_image_name(
                 container_executable=container_executable,
                 docker_image="fake",
                 agent=_FakeAgent(),
-                cleanup=lambda: None,
             ),
         )
 

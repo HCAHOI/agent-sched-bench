@@ -48,7 +48,6 @@ class PreparedContainer:
     container_executable: str
     docker_image: str
     agent: Any  # ContainerAgent
-    cleanup: Any  # Callable[[], None]
 
 
 @dataclass(slots=True)
@@ -362,25 +361,11 @@ async def _prepare_container_session(
     agent = ContainerAgent(container_id, container_executable)
     await agent.start()
 
-    async def _cleanup_async() -> None:
-        await agent.stop()
-        await asyncio.to_thread(
-            stop_task_container, container_id, executable=container_executable,
-        )
-
-    def _cleanup() -> None:
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_cleanup_async())
-        except RuntimeError:
-            stop_task_container(container_id, executable=container_executable)
-
     container = PreparedContainer(
         container_id=container_id,
         container_executable=container_executable,
         docker_image=normalized,
         agent=agent,
-        cleanup=_cleanup,
     )
     return PreparedTraceSession(loaded=loaded, container=container)
 

@@ -102,7 +102,7 @@ def handle_commands(args):
         try:
             r = subprocess.run(cmd, shell=True, cwd="/testbed",
                                capture_output=True, text=True, timeout=timeout, env=env)
-            all_output.append(r.stdout + r.stderr)
+            all_output.append((r.stdout or "") + (r.stderr or ""))
             last_rc = r.returncode
         except subprocess.TimeoutExpired:
             all_output.append("[timeout]")
@@ -171,7 +171,7 @@ HANDLERS = {
     "list_dir": handle_list_dir,
 }
 
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
 
 for line in sys.stdin:
     line = line.strip()
@@ -278,10 +278,23 @@ class ContainerAgent:
                     continue
                 return {"ok": False, "result": "Error: agent process crashed"}
 
+            # Skip stray non-JSON lines (e.g. Python warnings, sitecustomize output)
+            decoded = raw.decode(errors="replace").strip()
+            if not decoded.startswith("{"):
+                logger.debug("Skipping non-JSON agent output: %s", decoded[:120])
+                # Read one more line for the actual response
+                try:
+                    raw = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=timeout_s + 5.0,
+                    )
+                    decoded = raw.decode(errors="replace").strip()
+                except (asyncio.TimeoutError, BrokenPipeError):
+                    return {"ok": False, "result": "[timeout]", "returncode": 124}
+
             try:
-                return json.loads(raw)
+                return json.loads(decoded)
             except json.JSONDecodeError:
-                return {"ok": False, "result": f"Error: invalid agent response: {raw[:200]}"}
+                return {"ok": False, "result": f"Error: invalid agent response: {decoded[:200]}"}
 
         return {"ok": False, "result": "Error: agent restart failed"}
 
@@ -290,7 +303,7 @@ def _resolve_tool_request(
     tool_name: str | None,
     params: dict[str, Any],
     command_timeout_s: float,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Build a JSON-line request for the in-container agent."""
 
     # Shell commands
@@ -326,9 +339,6 @@ def _resolve_tool_request(
         return {"tool": "list_dir", "args": {"path": params.get("path", ".")}}
 
     return None  # unsupported tool
-
-
-_KNOWN_TOOLS = frozenset({"exec", "commands", "read_file", "write_file", "edit_file", "list_dir"})
 
 
 async def execute_trace_tool(
