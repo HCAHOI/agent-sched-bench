@@ -2,112 +2,206 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
+import subprocess
+from unittest.mock import patch
 
 from trace_collect.openclaw_tools import execute_trace_tool
-from trace_collect.simulator import _exec_tool
 
 
 def _nested(tool_name: str, payload: dict) -> str:
     return json.dumps({tool_name: payload}, ensure_ascii=False)
 
 
-def test_execute_trace_tool_supports_openclaw_read_and_list(tmp_path: Path) -> None:
-    repo_dir = tmp_path / "repo"
-    (repo_dir / "pkg").mkdir(parents=True)
-    (repo_dir / "pkg" / "sample.py").write_text("alpha\nbeta\n", encoding="utf-8")
-
-    list_result, list_success = asyncio.run(
-        execute_trace_tool(
-            agent_id="task-1",
-            tool_name="list_dir",
-            tool_args_json=_nested("list_dir", {"path": "/tmp/source/task-1"}),
-            repo_dir=repo_dir,
-            command_timeout_s=5.0,
-        )
+def _make_result(stdout: str = "", stderr: str = "", returncode: int = 0):
+    return subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout=stdout, stderr=stderr,
     )
-    assert list_success is True
-    assert "📁 pkg" in list_result
 
-    read_result, read_success = asyncio.run(
-        execute_trace_tool(
-            agent_id="task-1",
-            tool_name="read_file",
-            tool_args_json=_nested(
-                "read_file",
-                {"path": "/tmp/source/task-1/pkg/sample.py"},
-            ),
-            repo_dir=repo_dir,
-            command_timeout_s=5.0,
+
+def test_exec_command_builds_correct_docker_exec() -> None:
+    calls: list[list] = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(list(args[0]) if args else [])
+        return _make_result(stdout="hello\n")
+
+    with patch("trace_collect.openclaw_tools.subprocess.run", side_effect=fake_run):
+        result, success = asyncio.run(
+            execute_trace_tool(
+                container_id="cid-123",
+                container_executable="docker",
+                tool_name="exec",
+                tool_args_json=_nested("exec", {"command": "echo hello"}),
+                command_timeout_s=10.0,
+            )
         )
-    )
-    assert read_success is True
-    assert "1| alpha" in read_result
-    assert "2| beta" in read_result
-
-
-def test_execute_trace_tool_supports_replay_observation_style_for_nested_exec(
-    tmp_path: Path,
-) -> None:
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir(parents=True)
-    (repo_dir / "notes.txt").write_text("hello\n", encoding="utf-8")
-
-    result, success = asyncio.run(
-        execute_trace_tool(
-            agent_id="task-1",
-            tool_name="exec",
-            tool_args_json=_nested(
-                "exec",
-                {"command": "cd /tmp/source/task-1 && cat notes.txt"},
-            ),
-            repo_dir=repo_dir,
-            command_timeout_s=5.0,
-            command_output_style="replay_observation",
-        )
-    )
 
     assert success is True
-    assert "<returncode>0</returncode>" in result
     assert "hello" in result
+    cmd = calls[0]
+    assert cmd[:2] == ["docker", "exec"]
+    assert "-w" in cmd
+    assert "/testbed" in cmd
+    assert "cid-123" in cmd
+    assert "bash" in cmd
+    assert "echo hello" in cmd
 
 
-def test_simulator_exec_tool_supports_openclaw_write_file(tmp_path: Path) -> None:
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir(parents=True)
+def test_read_file_uses_cat() -> None:
+    def fake_run(*args, **kwargs):
+        return _make_result(stdout="file content\n")
 
-    tool_result, duration_ms, tool_success = asyncio.run(
-        _exec_tool(
-            "task-1",
-            repo_dir,
-            "write_file",
-            _nested(
-                "write_file",
-                {"path": "/tmp/source/task-1/out.txt", "content": "payload\n"},
-            ),
-            5.0,
+    with patch("trace_collect.openclaw_tools.subprocess.run", side_effect=fake_run):
+        result, success = asyncio.run(
+            execute_trace_tool(
+                container_id="cid-123",
+                container_executable="docker",
+                tool_name="read_file",
+                tool_args_json=_nested("read_file", {"path": "/testbed/foo.py"}),
+                command_timeout_s=10.0,
+            )
         )
-    )
 
-    assert tool_success is True
-    assert duration_ms >= 0.0
-    assert "Successfully wrote" in tool_result
-    assert (repo_dir / "out.txt").read_text(encoding="utf-8") == "payload\n"
+    assert success is True
+    assert "file content" in result
 
 
-def test_execute_trace_tool_rejects_unsupported_tool(tmp_path: Path) -> None:
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir(parents=True)
+def test_write_file_uses_stdin_pipe() -> None:
+    calls: list[dict] = []
 
+    def fake_run(*args, **kwargs):
+        calls.append({"cmd": list(args[0]) if args else [], "input": kwargs.get("input")})
+        return _make_result()
+
+    with patch("trace_collect.openclaw_tools.subprocess.run", side_effect=fake_run):
+        result, success = asyncio.run(
+            execute_trace_tool(
+                container_id="cid-123",
+                container_executable="docker",
+                tool_name="write_file",
+                tool_args_json=_nested("write_file", {"path": "/testbed/out.txt", "content": "payload"}),
+                command_timeout_s=10.0,
+            )
+        )
+
+    assert success is True
+    assert "Successfully wrote" in result
+    # The write call should have stdin_data
+    write_call = [c for c in calls if c.get("input") is not None]
+    assert len(write_call) >= 1
+    assert "payload" in write_call[-1]["input"]
+
+
+def test_edit_file_pipes_python_script() -> None:
+    calls: list[dict] = []
+
+    def fake_run(*args, **kwargs):
+        cmd = list(args[0]) if args else []
+        calls.append({"cmd": cmd, "input": kwargs.get("input")})
+        if "python3" in cmd:
+            return _make_result(stdout=json.dumps({"ok": True, "msg": "Successfully edited /testbed/x.py"}))
+        return _make_result()
+
+    with patch("trace_collect.openclaw_tools.subprocess.run", side_effect=fake_run):
+        result, success = asyncio.run(
+            execute_trace_tool(
+                container_id="cid-123",
+                container_executable="docker",
+                tool_name="edit_file",
+                tool_args_json=_nested("edit_file", {
+                    "path": "/testbed/x.py",
+                    "old_text": "foo",
+                    "new_text": "bar",
+                }),
+                command_timeout_s=10.0,
+            )
+        )
+
+    assert success is True
+    assert "Successfully edited" in result
+    # Verify python3 was invoked with the edit script
+    python_calls = [c for c in calls if "python3" in c["cmd"]]
+    assert len(python_calls) == 1
+    # The stdin should contain the edit request JSON
+    stdin = python_calls[0]["input"]
+    req = json.loads(stdin)
+    assert req["path"] == "/testbed/x.py"
+    assert req["old_text"] == "foo"
+    assert req["new_text"] == "bar"
+
+
+def test_list_dir_uses_ls() -> None:
+    def fake_run(*args, **kwargs):
+        cmd = list(args[0]) if args else []
+        if "ls" in cmd:
+            return _make_result(stdout=".\n..\nfoo.py\nbar.py\n")
+        return _make_result()
+
+    with patch("trace_collect.openclaw_tools.subprocess.run", side_effect=fake_run):
+        result, success = asyncio.run(
+            execute_trace_tool(
+                container_id="cid-123",
+                container_executable="docker",
+                tool_name="list_dir",
+                tool_args_json=_nested("list_dir", {"path": "/testbed"}),
+                command_timeout_s=10.0,
+            )
+        )
+
+    assert success is True
+    assert "foo.py" in result
+
+
+def test_timeout_returns_timeout_marker() -> None:
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0)
+
+    with patch("trace_collect.openclaw_tools.subprocess.run", side_effect=fake_run):
+        result, success = asyncio.run(
+            execute_trace_tool(
+                container_id="cid-123",
+                container_executable="docker",
+                tool_name="exec",
+                tool_args_json=_nested("exec", {"command": "sleep 999"}),
+                command_timeout_s=1.0,
+            )
+        )
+
+    assert success is False
+    assert "[timeout]" in result
+
+
+def test_unsupported_tool_returns_error() -> None:
     result, success = asyncio.run(
         execute_trace_tool(
-            agent_id="task-1",
+            container_id="cid-123",
+            container_executable="docker",
             tool_name="nope_tool",
             tool_args_json="{}",
-            repo_dir=repo_dir,
             command_timeout_s=5.0,
         )
     )
 
     assert success is False
     assert "Unsupported replay tool" in result
+
+
+def test_podman_executable_used_in_commands() -> None:
+    calls: list[list] = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(list(args[0]) if args else [])
+        return _make_result(stdout="ok\n")
+
+    with patch("trace_collect.openclaw_tools.subprocess.run", side_effect=fake_run):
+        asyncio.run(
+            execute_trace_tool(
+                container_id="cid-456",
+                container_executable="podman",
+                tool_name="exec",
+                tool_args_json=_nested("exec", {"command": "whoami"}),
+                command_timeout_s=10.0,
+            )
+        )
+
+    assert calls[0][0] == "podman"

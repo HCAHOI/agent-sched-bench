@@ -11,15 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from agents.base import TraceAction
+from harness.container_image_prep import ensure_fixed_image, normalize_image_reference
 from harness.metrics_client import VLLMMetricsClient
 from harness.trace_logger import TraceLogger
 from llm_call import create_async_openai_client
-from trace_collect.scaffold_registry import (
-    PreparedWorkspace,
-    SimulatePrepareConfig,
-    SimulateLLMConfig,
-    get_prepare,
-)
+from trace_collect.attempt_pipeline import start_task_container, stop_task_container
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +37,25 @@ class LoadedTraceSession:
     task: dict[str, Any]
     actions: list[dict[str, Any]]
     iterations: dict[int, dict[str, Any]]
+    docker_image_override: str | None = None
+
+
+@dataclass(slots=True)
+class PreparedContainer:
+    """Container prepared for trace replay."""
+
+    container_id: str
+    container_executable: str
+    docker_image: str
+    cleanup: Any  # Callable[[], None]
 
 
 @dataclass(slots=True)
 class PreparedTraceSession:
-    """Prepared workspace plus the loaded source-trace context."""
+    """Container plus the loaded source-trace context."""
 
     loaded: LoadedTraceSession
-    prepared: PreparedWorkspace
+    container: PreparedContainer
 
 
 async def _call_local_model_streaming(
@@ -86,13 +93,13 @@ async def _call_local_model_streaming(
 
 
 async def _exec_tool(
-    agent_id: str,
-    repo_dir: Path,
+    container_id: str,
+    container_executable: str,
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
 ) -> tuple[str, float, bool]:
-    """Execute one source-trace tool call in *repo_dir*.
+    """Execute one source-trace tool call inside a container.
 
     Returns:
         (tool_result, tool_duration_ms, tool_success)
@@ -101,12 +108,11 @@ async def _exec_tool(
 
     t0 = time.monotonic()
     tool_result, tool_success = await execute_trace_tool(
-        agent_id=agent_id,
+        container_id=container_id,
+        container_executable=container_executable,
         tool_name=tool_name,
         tool_args_json=tool_args_json,
-        repo_dir=repo_dir,
         command_timeout_s=command_timeout_s,
-        command_output_style="raw",
     )
     duration_ms = (time.monotonic() - t0) * 1000
     return tool_result, duration_ms, tool_success
@@ -216,12 +222,14 @@ def _coerce_timestamp(
         ) from exc
 
 
-def _load_trace_session(source_trace: Path, task_source: Path) -> LoadedTraceSession:
+def _load_trace_session(
+    source_trace: Path,
+    task_source: Path,
+    docker_image_override: str | None = None,
+) -> LoadedTraceSession:
     agent_id, metadata, actions, summary = _parse_trace_session_file(source_trace)
-    _validate_simulation_source_trace(metadata)
     scaffold = metadata.get("scaffold", "unknown") if metadata else "unknown"
     task = _find_task(task_source, agent_id)
-    _validate_simulation_task(scaffold, task)
     return LoadedTraceSession(
         source_trace=source_trace,
         task_source=task_source,
@@ -232,6 +240,7 @@ def _load_trace_session(source_trace: Path, task_source: Path) -> LoadedTraceSes
         task=task,
         actions=actions,
         iterations=_group_actions_by_iteration(actions),
+        docker_image_override=docker_image_override,
     )
 
 
@@ -239,7 +248,7 @@ def _load_trace_manifest(
     trace_manifest: Path,
     *,
     default_task_source: Path,
-) -> list[tuple[Path, Path]]:
+) -> list[tuple[Path, Path, str | None]]:
     try:
         raw = json.loads(trace_manifest.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -248,7 +257,7 @@ def _load_trace_manifest(
         raise SimulateError("trace manifest must be a non-empty JSON array")
 
     base_dir = trace_manifest.parent
-    entries: list[tuple[Path, Path]] = []
+    entries: list[tuple[Path, Path, str | None]] = []
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
             raise SimulateError(
@@ -258,14 +267,24 @@ def _load_trace_manifest(
         if not source_value:
             raise SimulateError(f"trace manifest entry {index} is missing source_trace")
         task_value = entry.get("task_source")
+        docker_image = entry.get("docker_image")
         source_path = Path(source_value)
         task_path = Path(task_value) if task_value else default_task_source
         if not source_path.is_absolute():
             source_path = (base_dir / source_path).resolve()
         if task_value and not task_path.is_absolute():
             task_path = (base_dir / task_path).resolve()
-        entries.append((source_path, task_path))
+        entries.append((source_path, task_path, docker_image))
     return entries
+
+
+def _resolve_docker_image(loaded: LoadedTraceSession) -> str | None:
+    """Resolve docker image: manifest override > task[image_name] > task[docker_image]."""
+    return (
+        loaded.docker_image_override
+        or loaded.task.get("image_name")
+        or loaded.task.get("docker_image")
+    )
 
 
 def _validate_loaded_sessions(
@@ -280,14 +299,12 @@ def _validate_loaded_sessions(
         raise SimulateError("No trace sessions were loaded")
     if mode == "local_model" and len(sessions) != 1:
         raise SimulateError("local_model mode supports exactly one source trace")
-    if mode == "cloud_model":
-        unsupported = sorted(
-            {session.scaffold for session in sessions if session.scaffold != "openclaw"}
-        )
-        if unsupported:
-            raise NotImplementedError(
-                "cloud_model replay currently supports only repo-backed "
-                f"OpenClaw traces, got: {unsupported}"
+    for session in sessions:
+        docker_image = _resolve_docker_image(session)
+        if not docker_image:
+            raise SimulateError(
+                f"Task {session.agent_id!r} has no resolvable docker_image "
+                "(set docker_image in manifest or ensure task has image_name)"
             )
 
     seen_agent_ids: set[str] = set()
@@ -318,56 +335,40 @@ def _validate_loaded_sessions(
                 )
 
 
-def _build_prepare_config(
-    *,
-    agent_id: str,
-    api_base: str | None,
-    api_key: str | None,
-    model: str | None,
-    command_timeout_s: float,
-    task_timeout_s: float,
-    repos_root: Path,
-    max_context_tokens: int,
-) -> SimulatePrepareConfig:
-    llm = None
-    if api_base is not None or api_key is not None or model is not None:
-        if api_base is None or api_key is None or model is None:
-            raise ValueError("prepare LLM config must be all-set or all-None")
-        llm = SimulateLLMConfig(api_base=api_base, api_key=api_key, model=model)
-    return SimulatePrepareConfig(
-        agent_id=agent_id,
-        llm=llm,
-        command_timeout_s=command_timeout_s,
-        task_timeout_s=task_timeout_s,
-        repos_root=Path(repos_root) if repos_root else None,
-        max_context_tokens=max_context_tokens,
-    )
-
-
-async def _prepare_trace_session(
+async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
-    api_base: str | None,
-    api_key: str | None,
-    model: str | None,
-    command_timeout_s: float,
-    task_timeout_s: float,
-    repos_root: Path,
-    max_context_tokens: int,
+    container_executable: str,
 ) -> PreparedTraceSession:
-    prepare_callable = get_prepare(loaded.scaffold)
-    prepare_config = _build_prepare_config(
-        agent_id=loaded.agent_id,
-        api_base=api_base,
-        api_key=api_key,
-        model=model,
-        command_timeout_s=command_timeout_s,
-        task_timeout_s=task_timeout_s,
-        repos_root=repos_root,
-        max_context_tokens=max_context_tokens,
+    """Prepare a Docker/Podman container for trace replay."""
+    docker_image = _resolve_docker_image(loaded)
+    if not docker_image:
+        raise SimulateError(
+            f"Task {loaded.agent_id!r} has no resolvable docker_image"
+        )
+    normalized = normalize_image_reference(docker_image)
+    fixed_name, _elapsed = await asyncio.to_thread(
+        ensure_fixed_image,
+        normalized,
+        container_executable=container_executable,
     )
-    prepared = await prepare_callable(loaded.task, prepare_config)
-    return PreparedTraceSession(loaded=loaded, prepared=prepared)
+    container_id = await asyncio.to_thread(
+        start_task_container,
+        fixed_name,
+        executable=container_executable,
+    )
+
+    def _cleanup() -> None:
+        if container_id:
+            stop_task_container(container_id, executable=container_executable)
+
+    container = PreparedContainer(
+        container_id=container_id,
+        container_executable=container_executable,
+        docker_image=normalized,
+        cleanup=_cleanup,
+    )
+    return PreparedTraceSession(loaded=loaded, container=container)
 
 
 def _log_trace_metadata(
@@ -557,8 +558,7 @@ async def _run_local_model_simulation(
             )
             trace_logger.log_trace_action(loaded.agent_id, llm_record)
 
-            from agents.openclaw.simulate_adapter import is_mcp_tool_call
-
+            ctr = prepared_session.container
             total_tool_ms = 0.0
             for tool_act in tool_actions:
                 td = tool_act.get("data", {})
@@ -568,7 +568,7 @@ async def _run_local_model_simulation(
                     continue
 
                 tool_ts_start = time.time()
-                if is_mcp_tool_call(tool_name):
+                if tool_name is not None and tool_name.startswith("mcp_"):
                     tool_result = td.get("tool_result", "")
                     tool_duration_ms = float(td.get("duration_ms") or 0.0)
                     tool_success = bool(td.get("success", True))
@@ -576,14 +576,14 @@ async def _run_local_model_simulation(
                     sim_provenance = "replayed_from_trace"
                 else:
                     tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                        loaded.agent_id,
-                        prepared_session.prepared.repo_dir,
+                        ctr.container_id,
+                        ctr.container_executable,
                         tool_name,
                         tool_args,
                         command_timeout_s,
                     )
                     tool_ts_end = time.time()
-                    sim_provenance = "executed_locally"
+                    sim_provenance = "executed_in_container"
                 total_tool_ms += tool_duration_ms
 
                 tool_record = _make_trace_action(
@@ -601,6 +601,7 @@ async def _run_local_model_simulation(
                         "success": tool_success,
                         "sim_metrics": {
                             "source": sim_provenance,
+                            "sim_tool_format": "container_exec",
                             "warmup": i < warmup_skip_iterations,
                         },
                     },
@@ -680,9 +681,8 @@ async def _replay_cloud_model_session(
     command_timeout_s: float,
     warmup_skip_iterations: int,
 ) -> None:
-    from agents.openclaw.simulate_adapter import is_mcp_tool_call
-
     loaded = prepared_session.loaded
+    ctr = prepared_session.container
     source_model = (loaded.summary or {}).get("model", "unknown")
     source_zero = _coerce_timestamp(
         loaded.actions[0].get("ts_start"),
@@ -779,7 +779,7 @@ async def _replay_cloud_model_session(
 
             record_ts_start = time.time()
             source_duration_ms = float(data.get("duration_ms") or 0.0)
-            if is_mcp_tool_call(tool_name):
+            if tool_name is not None and tool_name.startswith("mcp_"):
                 if source_duration_ms > 0:
                     await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
                 tool_result = data.get("tool_result", "")
@@ -788,13 +788,13 @@ async def _replay_cloud_model_session(
                 replay_source = "replayed_from_trace"
             else:
                 tool_result, duration_ms, tool_success = await _exec_tool(
-                    loaded.agent_id,
-                    prepared_session.prepared.repo_dir,
+                    ctr.container_id,
+                    ctr.container_executable,
                     tool_name,
                     tool_args,
                     command_timeout_s,
                 )
-                replay_source = "executed_locally"
+                replay_source = "executed_in_container"
             record_ts_end = time.time()
             tool_record = _make_trace_action(
                 loaded=loaded,
@@ -817,6 +817,7 @@ async def _replay_cloud_model_session(
                     "sim_metrics": {
                         "warmup": iteration < warmup_skip_iterations,
                         "source": replay_source,
+                        "sim_tool_format": "container_exec",
                     },
                 },
             )
@@ -854,15 +855,13 @@ async def simulate(
     source_trace: Path | None = None,
     trace_manifest: Path | None = None,
     task_source: Path,
-    repos_root: Path,
     output_dir: Path,
     mode: str = "local_model",
+    container_executable: str = "docker",
     api_base: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
     command_timeout_s: float = 120.0,
-    task_timeout_s: float = 1200.0,
-    max_context_tokens: int = 256_000,
     metrics_url: str | None = None,
     warmup_skip_iterations: int = 0,
     replay_speed: float = 1.0,
@@ -881,11 +880,11 @@ async def simulate(
         )
     else:
         assert source_trace is not None
-        trace_inputs = [(source_trace, task_source)]
+        trace_inputs = [(source_trace, task_source, None)]
 
     loaded_sessions = [
-        _load_trace_session(source_path, task_path)
-        for source_path, task_path in trace_inputs
+        _load_trace_session(source_path, task_path, docker_image_override=img)
+        for source_path, task_path, img in trace_inputs
     ]
     _validate_loaded_sessions(
         loaded_sessions,
@@ -901,15 +900,9 @@ async def simulate(
     try:
         for loaded in loaded_sessions:
             prepared_sessions.append(
-                await _prepare_trace_session(
+                await _prepare_container_session(
                     loaded,
-                    api_base=api_base,
-                    api_key=api_key,
-                    model=model,
-                    command_timeout_s=command_timeout_s,
-                    task_timeout_s=task_timeout_s,
-                    repos_root=repos_root,
-                    max_context_tokens=max_context_tokens,
+                    container_executable=container_executable,
                 )
             )
 
@@ -954,25 +947,8 @@ async def simulate(
         if trace_logger is not None:
             trace_logger.close()
         for prepared in prepared_sessions:
-            prepared.prepared.cleanup()
+            prepared.container.cleanup()
 
     trace_file = output_path / f"{run_id}.jsonl"
     logger.info("Simulate complete [%s] -> %s", mode, trace_file)
     return trace_file
-
-
-def _validate_simulation_task(scaffold: str, task: dict[str, Any]) -> None:
-    if scaffold == "openclaw" and (not task.get("repo") or not task.get("base_commit")):
-        raise NotImplementedError(
-            "Simulate mode requires repo-backed OpenClaw tasks with repo and "
-            "base_commit."
-        )
-
-
-def _validate_simulation_source_trace(metadata: dict[str, Any] | None) -> None:
-    if metadata is None or metadata.get("scaffold") != "openclaw":
-        return
-    if metadata.get("needs_prepare") is False:
-        raise NotImplementedError("Simulate mode requires repo-backed OpenClaw traces.")
-    if metadata.get("task_shape") not in (None, "swe_patch"):
-        raise NotImplementedError("Simulate mode requires repo-backed OpenClaw traces.")
