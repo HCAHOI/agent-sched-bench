@@ -24,6 +24,7 @@ const apiClient = vi.hoisted(() => ({
   exportSnapshotHtml: vi.fn(),
   getPayload: vi.fn(),
   getTraces: vi.fn(),
+  unregisterTraces: vi.fn(),
   uploadTrace: vi.fn(),
 }));
 
@@ -44,6 +45,7 @@ vi.mock("../api/client", async () => {
     exportSnapshotHtml: apiClient.exportSnapshotHtml,
     getPayload: apiClient.getPayload,
     getTraces: apiClient.getTraces,
+    unregisterTraces: apiClient.unregisterTraces,
     uploadTrace: apiClient.uploadTrace,
   };
 });
@@ -167,12 +169,14 @@ beforeEach(() => {
   apiClient.getPayload.mockReset();
   apiClient.uploadTrace.mockReset();
   apiClient.exportSnapshotHtml.mockReset();
+  apiClient.unregisterTraces.mockReset();
   persist.enableDisplaySync.mockReset();
   persist.enablePersistence.mockReset();
   apiClient.getTraces.mockResolvedValue({ traces: descriptors, registries: baseRegistries });
   apiClient.getPayload.mockResolvedValue({ traces: [], registries: baseRegistries });
   apiClient.uploadTrace.mockResolvedValue(undefined);
   apiClient.exportSnapshotHtml.mockResolvedValue("<html>snapshot</html>");
+  apiClient.unregisterTraces.mockResolvedValue({ missing_ids: [], removed_ids: [baseTrace.id] });
   vi.stubGlobal("URL", {
     ...URL,
     createObjectURL: urlMocks.createObjectURL,
@@ -327,6 +331,29 @@ describe("App export flow", () => {
       expect(clickSpy).not.toHaveBeenCalled();
       expect(consoleSpy).toHaveBeenCalledOnce();
       expect(exportButton.disabled).toBe(false);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("unregisters traces when remove is clicked and clears the chip", async () => {
+    setRegistries(baseRegistries);
+    setLoadedTraces([baseTrace]);
+    setVisibility({ [baseTrace.id]: true });
+
+    const { dispose, host } = mountApp();
+    try {
+      await flush();
+
+      const removeButton = host.querySelector("button.trace-remove") as HTMLButtonElement;
+      expect(removeButton).not.toBeNull();
+
+      removeButton.click();
+      await flush();
+
+      expect(apiClient.unregisterTraces).toHaveBeenCalledWith([baseTrace.id]);
+      expect(traceChipLabels(host)).toEqual([]);
+      expect(host.textContent).not.toContain(baseTrace.label);
     } finally {
       dispose();
     }
