@@ -78,12 +78,13 @@ def test_resolve_task_container_exec_config_bootstraps_on_cross_platform(
     )
     monkeypatch.setattr(
         "trace_collect.runtime.task_container._inspect_image_platform",
-        lambda image, executable="podman": "linux/amd64",
+        lambda image, *, container_executable: "linux/amd64",
     )
 
     config = resolve_task_container_exec_config(
         attempt_dir=tmp_path / "attempt",
         image="localhost/example:latest",
+        container_executable="docker",
     )
 
     assert isinstance(config, TaskContainerExecConfig)
@@ -119,6 +120,7 @@ def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> Non
     resolved = resolve_running_container_exec_config(
         container_id="cid-1",
         exec_config=exec_config,
+        container_executable="docker",
     )
 
     assert resolved.runtime == "/opt/conda/envs/ML/bin/python"
@@ -140,8 +142,8 @@ def test_resolve_running_container_exec_config_raises_without_python(
     def fake_run(*args, **kwargs):
         class Result:
             returncode = 1
-            stdout = ""
-            stderr = ""
+            stdout = "probe stdout\n"
+            stderr = "probe stderr\n"
 
         return Result()
 
@@ -151,9 +153,12 @@ def test_resolve_running_container_exec_config_raises_without_python(
         resolve_running_container_exec_config(
             container_id="cid-1",
             exec_config=exec_config,
+            container_executable="docker",
         )
     except RuntimeError as exc:
         assert "no Python >=3.11 interpreter found" in str(exc)
+        assert "stdout: probe stdout" in str(exc)
+        assert "stderr: probe stderr" in str(exc)
     else:
         raise AssertionError("expected probe failure")
 
@@ -208,11 +213,188 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
         container_id="cid-1",
         exec_config=exec_config,
         extra_requirements=("mcp>=1.0",),
+        container_executable="docker",
     )
 
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
     assert "/opt/conda/envs/ML/bin/python" in seen["cmd"]
+    assert "anyio>=4.0,<5.0" in str(seen["input"])
     assert "mcp>=1.0" in str(seen["input"])
+    assert "socksio>=1.0,<2.0" in str(seen["input"])
+
+
+def test_bootstrap_task_container_python_retries_transient_get_pip_failures(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    seen: dict[str, object] = {"attempts": 0, "sleeps": []}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"print('ok')\n"
+
+    def fake_urlopen(url: str, timeout: int):
+        seen["attempts"] = int(seen["attempts"]) + 1
+        if int(seen["attempts"]) < 3:
+            raise urllib.error.URLError(ssl.SSLEOFError("eof"))
+        seen["url"] = url
+        seen["timeout"] = timeout
+        return FakeResponse()
+
+    def fake_sleep(delay: float) -> None:
+        sleeps = seen["sleeps"]
+        assert isinstance(sleeps, list)
+        sleeps.append(delay)
+
+    def fake_run(*args, **kwargs):
+        del args, kwargs
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr("trace_collect.runtime.task_container.time.sleep", fake_sleep)
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    bootstrap_task_container_python(
+        container_id="cid-1",
+        exec_config=exec_config,
+        extra_requirements=(),
+        container_executable="docker",
+    )
+
+    assert seen["attempts"] == 3
+    assert seen["sleeps"] == [1.0, 2.0]
+    assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+
+
+def test_bootstrap_task_container_python_does_not_retry_http_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    seen = {"attempts": 0}
+
+    def fake_urlopen(url: str, timeout: int):
+        del url, timeout
+        seen["attempts"] += 1
+        raise urllib.error.HTTPError(
+            "https://bootstrap.pypa.io/get-pip.py",
+            404,
+            "not found",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.time.sleep", lambda *_: None
+    )
+
+    with pytest.raises(urllib.error.HTTPError):
+        bootstrap_task_container_python(
+            container_id="cid-1",
+            exec_config=exec_config,
+            extra_requirements=(),
+            container_executable="docker",
+        )
+
+    assert seen["attempts"] == 1
+
+
+def test_bootstrap_task_container_python_rebuilds_when_marker_requirements_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    exec_config.bootstrap_site_dir.mkdir(parents=True, exist_ok=True)
+    marker = exec_config.bootstrap_site_dir / ".bootstrap-ready.json"
+    marker.write_text(
+        '{"requirements": ["openai>=2.0,<3.0"], "python": "/usr/bin/python3"}',
+        encoding="utf-8",
+    )
+    stale_file = exec_config.bootstrap_site_dir / "stale.txt"
+    stale_file.write_text("stale", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"print('ok')\n"
+
+    def fake_urlopen(url: str, timeout: int):
+        seen["url"] = url
+        return FakeResponse()
+
+    def fake_run(*args, **kwargs):
+        seen["cmd"] = args[0]
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    bootstrap_task_container_python(
+        container_id="cid-1",
+        exec_config=exec_config,
+        extra_requirements=(),
+        container_executable="docker",
+    )
+
+    assert not stale_file.exists()
+    assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+    assert marker.exists() is False
 
 
 def test_preflight_task_container_runtime_reads_runtime_proof(
@@ -272,6 +454,7 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
         imports=["trace_collect.runtime.entrypoint", "agents.openclaw.eval.runner"],
         runtime="/usr/bin/python3",
         pythonpath="/tmp/site:/repo/src:/repo",
+        container_executable="docker",
     )
 
     assert proof.container_id == "cid-1"
@@ -335,6 +518,7 @@ def test_run_task_container_agent_reads_result_and_writes_raw_logs(
         timeout=10,
         runtime="/usr/bin/python3",
         pythonpath="/tmp/site:/repo/src:/repo",
+        container_executable="docker",
         request={
             "scaffold": "miniswe",
             "result_path": str(result_path),
@@ -399,6 +583,7 @@ def test_run_task_container_agent_preserves_existing_raw_logs(
         timeout=10,
         runtime="/usr/bin/python3",
         pythonpath="/tmp/site:/repo/src:/repo",
+        container_executable="docker",
         request={
             "kind": "run_miniswe",
             "scaffold": "miniswe",
@@ -453,6 +638,7 @@ def test_run_task_container_agent_prefers_explicit_success_over_patch(
     result = run_task_container_agent(
         container_id="cid-3",
         timeout=10,
+        container_executable="docker",
         request={
             "kind": "run_openclaw",
             "scaffold": "openclaw",

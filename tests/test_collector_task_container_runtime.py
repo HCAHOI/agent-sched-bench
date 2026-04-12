@@ -177,6 +177,8 @@ def test_run_miniswe_in_task_container_collects_runtime_proof(
     assert seen["exec_working_dir"] == "/testbed"
     assert preflight_seen["runtime"] == "/opt/conda/envs/ML/bin/python"
     assert preflight_seen["pythonpath"] == "/deps:/repo/src:/repo"
+    assert preflight_seen["container_executable"] == "docker"
+    assert bootstrap_seen["container_executable"] == "docker"
     assert bootstrap_seen["extra_requirements"] == ("mini-swe-agent>=2.0",)
     assert "mini stdout" in ctx.container_stdout
     assert "container logs" in ctx.container_stdout
@@ -412,11 +414,13 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     assert seen["exec_working_dir"] == "/testbed"
     assert preflight_seen["runtime"] == "/usr/bin/python3"
     assert preflight_seen["pythonpath"] == "/deps:/repo/src:/repo"
+    assert preflight_seen["container_executable"] == "docker"
     assert preflight_seen["imports"] == [
         "trace_collect.runtime.entrypoint",
         "agents.openclaw.eval.runner",
         "harness.trace_logger",
     ]
+    assert bootstrap_seen["container_executable"] == "docker"
     assert bootstrap_seen["extra_requirements"] == ()
     assert result.total_llm_ms == 12.0
     assert result.total_tool_ms == 6.0
@@ -510,6 +514,7 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
             benchmark=SimpleNamespace(
                 config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
             ),
+            container_executable="docker",
             provider_name="openrouter",
             api_base="https://example.com",
             api_key="test-key",

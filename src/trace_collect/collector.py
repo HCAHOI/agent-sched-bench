@@ -194,9 +194,7 @@ def _select_tasks(
     return selected
 
 
-def _task_source_image(
-    benchmark: "Benchmark", task: dict[str, Any]
-) -> str | None:
+def _task_source_image(benchmark: "Benchmark", task: dict[str, Any]) -> str | None:
     image_name = benchmark.image_name_for(task)
     if not image_name:
         return None
@@ -646,6 +644,7 @@ async def collect_openclaw_traces(
                     max_iterations=max_iterations,
                     max_context_tokens=max_context_tokens,
                     mcp_config=mcp_config,
+                    container_executable=container_executable,
                 )
             assert runner is not None
             return await runner.run_openclaw_task(
@@ -808,9 +807,11 @@ async def _run_miniswe_in_task_container(
     exec_config = resolve_task_container_exec_config(
         attempt_dir=ctx.attempt_dir,
         image=fixed_image,
+        container_executable=container_executable,
     )
     container_id = start_task_container(
         fixed_image,
+        executable=container_executable,
         extra_args=list(exec_config.start_extra_args),
     )
     ctx.mark_container_ready(container_id)
@@ -818,17 +819,20 @@ async def _run_miniswe_in_task_container(
         exec_config = resolve_running_container_exec_config(
             container_id=container_id,
             exec_config=exec_config,
+            container_executable=container_executable,
         )
         bootstrap_task_container_python(
             container_id=container_id,
             exec_config=exec_config,
             extra_requirements=("mini-swe-agent>=2.0",),
+            container_executable=container_executable,
         )
         proof = preflight_task_container_runtime(
             container_id=container_id,
             attempt_dir=ctx.attempt_dir,
             runtime=exec_config.runtime,
             pythonpath=exec_config.pythonpath,
+            container_executable=container_executable,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
         request = {
@@ -852,6 +856,7 @@ async def _run_miniswe_in_task_container(
             "trace_file": str(runtime_dir / "trace.jsonl"),
             "raw_stdout_path": str(stdout_path),
             "raw_stderr_path": str(stderr_path),
+            "container_executable": container_executable,
         }
         if benchmark.config.harness_split is not None:
             request["benchmark_split"] = benchmark.config.harness_split
@@ -861,6 +866,7 @@ async def _run_miniswe_in_task_container(
             runtime=exec_config.runtime,
             pythonpath=exec_config.pythonpath,
             request=request,
+            container_executable=container_executable,
         )
     finally:
         container_logs = stop_task_container(
@@ -924,9 +930,11 @@ async def _run_openclaw_in_task_container(
     exec_config = resolve_task_container_exec_config(
         attempt_dir=ctx.attempt_dir,
         image=fixed_image,
+        container_executable=container_executable,
     )
     container_id = start_task_container(
         fixed_image,
+        executable=container_executable,
         extra_args=list(exec_config.start_extra_args),
     )
     ctx.mark_container_ready(container_id)
@@ -934,6 +942,7 @@ async def _run_openclaw_in_task_container(
         exec_config = resolve_running_container_exec_config(
             container_id=container_id,
             exec_config=exec_config,
+            container_executable=container_executable,
         )
         preflight_imports = [
             "trace_collect.runtime.entrypoint",
@@ -948,6 +957,7 @@ async def _run_openclaw_in_task_container(
             container_id=container_id,
             exec_config=exec_config,
             extra_requirements=bootstrap_requirements,
+            container_executable=container_executable,
         )
         proof = preflight_task_container_runtime(
             container_id=container_id,
@@ -955,6 +965,7 @@ async def _run_openclaw_in_task_container(
             imports=preflight_imports,
             runtime=exec_config.runtime,
             pythonpath=exec_config.pythonpath,
+            container_executable=container_executable,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
         runtime = run_task_container_agent(
