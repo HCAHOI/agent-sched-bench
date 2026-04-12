@@ -11,13 +11,24 @@ interface TraceChipBarProps {
   onUpload: (files: File[]) => Promise<void> | void;
   onRemove: (id: string) => void;
   onToggleVisibility: (id: string) => void;
+  snapshotMode: boolean;
   visibility: Record<string, boolean>;
 }
 
 export default function TraceChipBar(props: TraceChipBarProps) {
   const loadedSet = createMemo(() => new Set(props.loadedIds));
+  const allDescriptorIds = createMemo(() => props.descriptors.map((descriptor) => descriptor.id));
   let fileInputEl!: HTMLInputElement;
   let chipGridEl!: HTMLDivElement;
+
+  function handleFileInputChange(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    if (files.length > 0) {
+      void props.onUpload(files);
+    }
+    input.value = "";
+  }
 
   return (
     <section class="trace-strip">
@@ -76,36 +87,32 @@ export default function TraceChipBar(props: TraceChipBarProps) {
           }}
         </For>
       </div>
-      <div class="trace-actions">
-        <button
-          class="secondary-btn"
-          onClick={() => fileInputEl.click()}
-          type="button"
-        >
-          + JSONL
-        </button>
-        <button
-          class="primary-btn"
-          onClick={() => props.onLoad(props.descriptors.map((d) => d.id))}
-          type="button"
-        >
-          Load all
-        </button>
-      </div>
-      <input
-        accept=".jsonl"
-        class="visually-hidden"
-        multiple
-        onChange={(event) => {
-          const files = Array.from(event.currentTarget.files ?? []);
-          if (files.length > 0) {
-            void props.onUpload(files);
-          }
-          event.currentTarget.value = "";
-        }}
-        ref={fileInputEl}
-        type="file"
-      />
+      <Show when={!props.snapshotMode}>
+        <div class="trace-actions">
+          <button
+            class="secondary-btn"
+            onClick={() => fileInputEl.click()}
+            type="button"
+          >
+            + JSONL
+          </button>
+          <button
+            class="primary-btn"
+            onClick={() => props.onLoad(allDescriptorIds())}
+            type="button"
+          >
+            Load all
+          </button>
+        </div>
+        <input
+          accept=".jsonl"
+          class="visually-hidden"
+          multiple
+          onChange={handleFileInputChange}
+          ref={fileInputEl}
+          type="file"
+        />
+      </Show>
     </section>
   );
 }

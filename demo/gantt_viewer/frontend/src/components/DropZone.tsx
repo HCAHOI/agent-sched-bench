@@ -1,6 +1,7 @@
 import { Show, createSignal, onCleanup, onMount } from "solid-js";
 
 interface DropZoneProps {
+  enabled: boolean;
   onUpload: (files: File[]) => Promise<void>;
 }
 
@@ -8,13 +9,21 @@ export default function DropZone(props: DropZoneProps) {
   const [active, setActive] = createSignal(false);
   let dragDepth = 0;
 
-  async function onDrop(event: DragEvent) {
-    event.preventDefault();
+  function resetDragState(): void {
     dragDepth = 0;
     setActive(false);
-    const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
+  }
+
+  function jsonlFilesFromDrop(event: DragEvent): File[] {
+    return Array.from(event.dataTransfer?.files ?? []).filter((file) =>
       file.name.toLowerCase().endsWith(".jsonl"),
     );
+  }
+
+  async function onDrop(event: DragEvent) {
+    event.preventDefault();
+    resetDragState();
+    const files = jsonlFilesFromDrop(event);
     if (files.length > 0) {
       await props.onUpload(files);
     }
@@ -40,6 +49,9 @@ export default function DropZone(props: DropZoneProps) {
   }
 
   onMount(() => {
+    if (!props.enabled) {
+      return;
+    }
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragleave", onDragLeave);
     window.addEventListener("dragover", onDragOver);
@@ -47,6 +59,9 @@ export default function DropZone(props: DropZoneProps) {
   });
 
   onCleanup(() => {
+    if (!props.enabled) {
+      return;
+    }
     window.removeEventListener("dragenter", onDragEnter);
     window.removeEventListener("dragleave", onDragLeave);
     window.removeEventListener("dragover", onDragOver);
@@ -54,7 +69,7 @@ export default function DropZone(props: DropZoneProps) {
   });
 
   return (
-    <Show when={active()}>
+    <Show when={props.enabled && active()}>
       <div class="dropzone-overlay">
         <div class="dropzone-card">
           <p class="eyebrow">Drop JSONL</p>
