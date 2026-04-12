@@ -258,7 +258,7 @@ class TraceCollectorHook(AgentHook):
                 for tc in context.tool_calls:
                     tool_args_map[tc.name] = json.dumps(
                         tc.arguments, ensure_ascii=False
-                    )[:2000]
+                    )
 
             for tool_name, tool_content, tool_ok in tool_results_from_messages:
                 tool_start_mono = self._tool_start_ts.pop(tool_name, None)
@@ -311,7 +311,7 @@ class TraceCollectorHook(AgentHook):
                     data={
                         "tool_name": tool_name,
                         "tool_args": tool_args_map.get(tool_name, ""),
-                        "tool_result": tool_content[:4000],
+                        "tool_result": tool_content,
                         "duration_ms": round(duration_ms, 1),
                         "success": tool_ok,
                     },
