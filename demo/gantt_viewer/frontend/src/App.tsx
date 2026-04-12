@@ -1,7 +1,6 @@
-import { Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { Match, Show, Switch, createMemo, onCleanup, onMount } from "solid-js";
 
 import {
-  exportSnapshotHtml,
   getPayload,
   getTraces,
   unregisterTraces,
@@ -106,7 +105,6 @@ export default function App() {
   } else {
     enablePersistence();
   }
-  const [exporting, setExporting] = createSignal(false);
 
   const payload = createMemo<GanttPayload | null>(() => {
     const currentRegistries = registries();
@@ -120,9 +118,6 @@ export default function App() {
   });
 
   const loadedIds = createMemo(() => loadedTraces().map((trace) => trace.id));
-  const exportDisabled = createMemo(
-    () => exporting() || loadedTraces().length === 0 || registries() === null,
-  );
 
   async function initialize(): Promise<void> {
     if (snapshotBootstrap) {
@@ -217,33 +212,6 @@ export default function App() {
     }
   }
 
-  async function handleExport(): Promise<void> {
-    const currentRegistries = registries();
-    const currentTraces = loadedTraces();
-    if (exporting() || currentRegistries === null || currentTraces.length === 0) {
-      return;
-    }
-
-    setExporting(true);
-    try {
-      const html = await exportSnapshotHtml({
-        registries: currentRegistries,
-        traces: currentTraces,
-      });
-      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "trace-gantt-export.html";
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error("Failed to export gantt snapshot", error);
-    } finally {
-      setExporting(false);
-    }
-  }
-
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -260,15 +228,12 @@ export default function App() {
     <main class="app-shell">
       <Header
         clockMode={clockMode}
-        exportDisabled={exportDisabled}
         onClockModeChange={setClockMode}
-        onExport={handleExport}
         onThemeModeChange={setThemeMode}
         onTimeModeChange={setTimeMode}
         onViewModeChange={setViewMode}
         themeMode={themeMode}
         onZoomChange={setZoom}
-        snapshotMode={snapshotMode}
         timeMode={timeMode}
         viewMode={viewMode}
         zoom={zoom}

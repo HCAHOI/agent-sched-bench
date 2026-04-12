@@ -260,15 +260,10 @@ body.view-concise {
 }
 
 .primary-btn:disabled,
-.secondary-btn:disabled,
-.toolbar-export-btn:disabled {
+.secondary-btn:disabled {
   color: var(--text-dim);
   border-color: var(--border);
   cursor: not-allowed;
-}
-
-.toolbar-export-btn {
-  flex-shrink: 0;
 }
 
 .secondary-btn:hover {

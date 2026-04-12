@@ -4,23 +4,6 @@
  */
 
 export interface paths {
-    "/api/export/html": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Export Html Endpoint */
-        post: operations["export_html_endpoint_api_export_html_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -149,10 +132,6 @@ export interface components {
             /** File */
             file: string;
         };
-        /** ExportHtmlRequest */
-        ExportHtmlRequest: {
-            snapshot: components["schemas"]["SnapshotPayload"];
-        };
         /** GanttPayload */
         GanttPayload: {
             /** Errors */
@@ -250,14 +229,6 @@ export interface components {
             spans: {
                 [key: string]: components["schemas"]["SpanDef"];
             };
-        };
-        /** SnapshotPayload */
-        SnapshotPayload: {
-            /** Errors */
-            errors?: components["schemas"]["PayloadError"][];
-            registries: components["schemas"]["Registries"];
-            /** Traces */
-            traces: components["schemas"]["TracePayload-Input"][];
         };
         /** Span */
         Span: {
@@ -406,39 +377,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    export_html_endpoint_api_export_html_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExportHtmlRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     health_endpoint_api_health_get: {
         parameters: {
             query?: never;

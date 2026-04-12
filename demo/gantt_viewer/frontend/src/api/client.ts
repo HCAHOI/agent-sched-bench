@@ -9,16 +9,6 @@ export type TracePayload = components["schemas"]["TracePayload-Output"];
 export type PayloadError = components["schemas"]["PayloadError"];
 export type UnregisterTracesResponse = components["schemas"]["UnregisterTracesResponse"];
 export type UploadTraceResponse = components["schemas"]["UploadTraceResponse"];
-export interface SnapshotBootstrapData {
-  mode: "snapshot";
-  payload: GanttPayload;
-  trace_ids: string[];
-  visible_trace_ids: string[];
-}
-export interface ExportSnapshotRequest {
-  registries: Registries;
-  traces: TracePayload[];
-}
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -72,16 +62,4 @@ export async function unregisterTraces(ids: string[]): Promise<UnregisterTracesR
     { ids },
     "POST /api/traces/unregister failed",
   );
-}
-
-export async function exportSnapshotHtml(snapshot: ExportSnapshotRequest): Promise<string> {
-  const response = await fetch("/api/export/html", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ snapshot }),
-  });
-  if (!response.ok) {
-    throw new Error(`POST /api/export/html failed: ${response.status}`);
-  }
-  return response.text();
 }

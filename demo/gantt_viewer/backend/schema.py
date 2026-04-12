@@ -87,23 +87,6 @@ class GanttPayload(BaseModel):
     errors: list[PayloadError] = Field(default_factory=list)
 
 
-class SnapshotPayload(BaseModel):
-    registries: Registries
-    traces: list[TracePayload] = Field(min_length=1)
-    errors: list[PayloadError] = Field(default_factory=list)
-
-
-class SnapshotBootstrapData(BaseModel):
-    mode: Literal["snapshot"] = "snapshot"
-    payload: SnapshotPayload
-    trace_ids: list[str] = Field(min_length=1)
-    visible_trace_ids: list[str] = Field(min_length=1)
-
-
-class ExportHtmlRequest(BaseModel):
-    snapshot: SnapshotPayload
-
-
 class TraceDescriptor(BaseModel):
     id: str
     label: str

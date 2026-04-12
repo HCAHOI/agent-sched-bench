@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from copy import deepcopy
-import json
 from pathlib import Path
-import re
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
 
-from demo.gantt_viewer.backend.discovery import REPO_ROOT
 from demo.gantt_viewer.backend.payload import (
     DEFAULT_MARKER_REGISTRY,
     DEFAULT_SPAN_REGISTRY,
@@ -26,7 +21,6 @@ from demo.gantt_viewer.backend.runtime_registry import (
     RuntimeTraceRegistry,
 )
 from demo.gantt_viewer.backend.schema import (
-    ExportHtmlRequest,
     GanttPayload,
     HealthResponse,
     PayloadError,
@@ -34,8 +28,6 @@ from demo.gantt_viewer.backend.schema import (
     RegisterTracesRequest,
     RegisterTracesResponse,
     Registries,
-    SnapshotBootstrapData,
-    SnapshotPayload,
     TraceDescriptor,
     TraceListResponse,
     TracePayload,
@@ -58,15 +50,6 @@ class _TracePayloadError(Exception):
 
 
 router = APIRouter(prefix="/api")
-FRONTEND_DIST_PATH = REPO_ROOT / "demo" / "gantt_viewer" / "frontend" / "dist"
-_ASSET_LINK_RE = re.compile(
-    r'<link(?P<attrs>[^>]+)href="(?P<href>/assets/[^"]+)"(?P<rest>[^>]*)>'
-)
-_ASSET_SCRIPT_RE = re.compile(
-    r'<script(?P<attrs>[^>]*)src="(?P<src>/assets/[^"]+\.js)"(?P<rest>[^>]*)></script>'
-)
-_FONT_LINK_RE = re.compile(r"\s*<link[^>]+fonts\.googleapis\.com[^>]*>\s*")
-_PRECONNECT_LINK_RE = re.compile(r'\s*<link[^>]+rel="preconnect"[^>]*>\s*')
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -181,13 +164,6 @@ async def payload_endpoint(
     )
 
 
-@router.post("/export/html", response_class=HTMLResponse)
-def export_html_endpoint(export_request: ExportHtmlRequest) -> HTMLResponse:
-    snapshot_bootstrap = _build_snapshot_bootstrap(export_request.snapshot)
-    document = _build_export_document(snapshot_bootstrap)
-    return HTMLResponse(content=document, media_type="text/html")
-
-
 def _get_trace_registry(request: Request) -> RuntimeTraceRegistry:
     return request.app.state.trace_registry
 
@@ -263,115 +239,3 @@ def _build_registries() -> Registries:
         spans=deepcopy(DEFAULT_SPAN_REGISTRY),
         markers=deepcopy(DEFAULT_MARKER_REGISTRY),
     )
-
-
-def _build_snapshot_bootstrap(
-    snapshot_payload: SnapshotPayload,
-) -> SnapshotBootstrapData:
-    trace_ids = [trace.id for trace in snapshot_payload.traces]
-    duplicate_ids = sorted(
-        trace_id for trace_id, count in Counter(trace_ids).items() if count > 1
-    )
-    if duplicate_ids:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "snapshot traces must have unique ids",
-                "trace_ids": duplicate_ids,
-            },
-        )
-    return SnapshotBootstrapData(
-        payload=snapshot_payload,
-        trace_ids=trace_ids,
-        visible_trace_ids=trace_ids,
-    )
-
-
-def _build_export_document(snapshot_bootstrap: SnapshotBootstrapData) -> str:
-    index_path = FRONTEND_DIST_PATH / "index.html"
-    if not index_path.exists():
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "frontend build index is missing",
-                "path": str(index_path),
-            },
-        )
-
-    index_html = index_path.read_text(encoding="utf-8")
-    inlined_html = _inline_frontend_assets(index_html)
-    snapshot_json = _escape_script_text(
-        json.dumps(
-            snapshot_bootstrap.model_dump(mode="json"),
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    )
-    bootstrap_block = (
-        '<script id="gantt-viewer-snapshot-bootstrap" type="application/json">'
-        f"{snapshot_json}</script>"
-        "<script>"
-        'window.__GANTT_VIEWER_BOOTSTRAP__=JSON.parse(document.getElementById("gantt-viewer-snapshot-bootstrap").textContent);'
-        "</script>"
-    )
-    if "</body>" in inlined_html:
-        return inlined_html.replace("</body>", f"{bootstrap_block}</body>", 1)
-    return f"{inlined_html}{bootstrap_block}"
-
-
-def _inline_frontend_assets(index_html: str) -> str:
-    css_inlined = False
-    js_inlined = False
-
-    def replace_link(match: re.Match[str]) -> str:
-        nonlocal css_inlined
-        href = match.group("href")
-        if not href.endswith(".css"):
-            return ""
-        css_inlined = True
-        css_text = _read_dist_asset(href)
-        return f"<style>\n{css_text}\n</style>"
-
-    def replace_script(match: re.Match[str]) -> str:
-        nonlocal js_inlined
-        js_inlined = True
-        script_text = _escape_script_text(_read_dist_asset(match.group("src")))
-        return f'<script type="module">\n{script_text}\n</script>'
-
-    inlined_html = _ASSET_LINK_RE.sub(replace_link, index_html)
-    inlined_html = _ASSET_SCRIPT_RE.sub(replace_script, inlined_html)
-    inlined_html = _FONT_LINK_RE.sub("", inlined_html)
-    inlined_html = _PRECONNECT_LINK_RE.sub("", inlined_html)
-
-    if not css_inlined or not js_inlined:
-        missing = []
-        if not css_inlined:
-            missing.append("css")
-        if not js_inlined:
-            missing.append("js")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "frontend build assets missing from index.html",
-                "missing": missing,
-                "path": str(FRONTEND_DIST_PATH / "index.html"),
-            },
-        )
-    return inlined_html
-
-
-def _read_dist_asset(asset_href: str) -> str:
-    asset_path = FRONTEND_DIST_PATH / asset_href.removeprefix("/")
-    if not asset_path.exists():
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "frontend build asset is missing",
-                "path": str(asset_path),
-            },
-        )
-    return asset_path.read_text(encoding="utf-8")
-
-
-def _escape_script_text(value: str) -> str:
-    return value.replace("</", "<\\/")

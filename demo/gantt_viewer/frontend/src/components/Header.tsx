@@ -1,13 +1,11 @@
-import { For, Show, type Accessor } from "solid-js";
+import { For, type Accessor } from "solid-js";
 
 import { ZOOM_PRESETS } from "../canvas/CanvasRenderer";
 import type { ClockMode, ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface HeaderProps {
   clockMode: Accessor<ClockMode>;
-  exportDisabled: Accessor<boolean>;
   onClockModeChange: (mode: ClockMode) => void;
-  onExport: () => Promise<void> | void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onTimeModeChange: (mode: TimeMode) => void;
   onViewModeChange: (mode: ViewMode) => void;
@@ -16,7 +14,6 @@ interface HeaderProps {
   timeMode: Accessor<TimeMode>;
   viewMode: Accessor<ViewMode>;
   zoom: Accessor<number>;
-  snapshotMode: boolean;
 }
 
 function getPresetValue(zoom: number): string {
@@ -56,16 +53,6 @@ export default function Header(props: HeaderProps) {
           </For>
         </select>
       </label>
-      <Show when={!props.snapshotMode}>
-        <button
-          class="primary-btn toolbar-export-btn"
-          disabled={props.exportDisabled()}
-          onClick={() => void props.onExport()}
-          type="button"
-        >
-          Export
-        </button>
-      </Show>
       <div class="toggle-group">
         <button
           classList={{ active: props.themeMode() === "dark" }}

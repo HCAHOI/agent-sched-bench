@@ -6,9 +6,9 @@ import {
   __resetSignalsForTests,
   descriptors as descriptorState,
   loadedTraces,
+  setClockMode,
   setLoadedTraces,
   setRegistries,
-  setClockMode,
   setThemeMode,
   setTimeMode,
   setViewMode,
@@ -22,16 +22,10 @@ import {
 } from "../state/signals";
 
 const apiClient = vi.hoisted(() => ({
-  exportSnapshotHtml: vi.fn(),
   getPayload: vi.fn(),
   getTraces: vi.fn(),
   unregisterTraces: vi.fn(),
   uploadTrace: vi.fn(),
-}));
-
-const urlMocks = vi.hoisted(() => ({
-  createObjectURL: vi.fn(() => "blob:download"),
-  revokeObjectURL: vi.fn(),
 }));
 
 const persist = vi.hoisted(() => ({
@@ -43,7 +37,6 @@ vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
   return {
     ...actual,
-    exportSnapshotHtml: apiClient.exportSnapshotHtml,
     getPayload: apiClient.getPayload,
     getTraces: apiClient.getTraces,
     unregisterTraces: apiClient.unregisterTraces,
@@ -169,72 +162,41 @@ beforeEach(() => {
   apiClient.getTraces.mockReset();
   apiClient.getPayload.mockReset();
   apiClient.uploadTrace.mockReset();
-  apiClient.exportSnapshotHtml.mockReset();
   apiClient.unregisterTraces.mockReset();
   persist.enableDisplaySync.mockReset();
   persist.enablePersistence.mockReset();
   apiClient.getTraces.mockResolvedValue({ traces: descriptors, registries: baseRegistries });
   apiClient.getPayload.mockResolvedValue({ traces: [], registries: baseRegistries });
   apiClient.uploadTrace.mockResolvedValue(undefined);
-  apiClient.exportSnapshotHtml.mockResolvedValue("<html>snapshot</html>");
   apiClient.unregisterTraces.mockResolvedValue({ missing_ids: [], removed_ids: [baseTrace.id] });
-  vi.stubGlobal("URL", {
-    ...URL,
-    createObjectURL: urlMocks.createObjectURL,
-    revokeObjectURL: urlMocks.revokeObjectURL,
-  });
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
-describe("App export flow", () => {
-  it("keeps live toolbar controls and downloads one html snapshot", async () => {
-    setRegistries(baseRegistries);
-    setLoadedTraces([baseTrace]);
-    setVisibility({ [baseTrace.id]: true });
-    const clickedLinks: HTMLAnchorElement[] = [];
-    const clickSpy = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        clickedLinks.push(this);
-      });
-
+describe("App", () => {
+  it("boots live mode with upload controls and persistence", async () => {
     const { dispose, host } = mountApp();
     try {
       await flush();
-      const exportButton = host.querySelector("button.toolbar-export-btn") as HTMLButtonElement;
 
+      expect(apiClient.getTraces).toHaveBeenCalledOnce();
       expect(host.textContent).toContain("+ JSONL");
       expect(host.textContent).toContain("Load all");
       expect(traceChipLabels(host)).toEqual([baseTrace.label]);
-      expect(exportButton.disabled).toBe(false);
       expect(persist.enableDisplaySync).not.toHaveBeenCalled();
       expect(persist.enablePersistence).toHaveBeenCalledOnce();
 
       window.dispatchEvent(new Event("dragenter", { bubbles: true }));
       await flush();
       expect(host.textContent).toContain("Drop JSONL");
-
-      exportButton.click();
-      await flush();
-
-      expect(apiClient.exportSnapshotHtml).toHaveBeenCalledWith({
-        registries: baseRegistries,
-        traces: [baseTrace],
-      });
-      expect(clickSpy).toHaveBeenCalledTimes(1);
-      expect(urlMocks.createObjectURL).toHaveBeenCalledTimes(1);
-      const link = clickedLinks[0];
-      expect(link.download).toBe("trace-gantt-export.html");
     } finally {
       dispose();
     }
   });
 
-  it("hides live-only controls in snapshot mode and preserves exported trace order", async () => {
+  it("boots snapshot mode without live-only controls and preserves trace order", async () => {
     const snapshotTraceB = createSnapshotTrace("trace-b", "Trace B", "instance-b");
     setSnapshotBootstrap(createSnapshotBootstrap([snapshotTraceB, baseTrace]));
     setThemeMode("light");
@@ -253,7 +215,6 @@ describe("App export flow", () => {
       expect(traceChipLabels(host)).toEqual(["Trace B", "Trace A"]);
       expect(host.textContent).not.toContain("+ JSONL");
       expect(host.textContent).not.toContain("Load all");
-      expect(host.querySelector("button.toolbar-export-btn")).toBeNull();
 
       window.dispatchEvent(new Event("dragenter", { bubbles: true }));
       await flush();
@@ -292,47 +253,6 @@ describe("App export flow", () => {
         mode: "snapshot",
         trace_ids: ["trace-b", "trace-a"],
       });
-    } finally {
-      dispose();
-    }
-  });
-
-  it("disables Export with zero loaded traces", async () => {
-    setRegistries(baseRegistries);
-    const { dispose, host } = mountApp();
-    try {
-      await flush();
-      const exportButton = host.querySelector("button.toolbar-export-btn") as HTMLButtonElement;
-      expect(exportButton.disabled).toBe(true);
-      exportButton.click();
-      await flush();
-      expect(apiClient.exportSnapshotHtml).not.toHaveBeenCalled();
-    } finally {
-      dispose();
-    }
-  });
-
-  it("logs export failures and re-enables the button without downloading", async () => {
-    setRegistries(baseRegistries);
-    setLoadedTraces([baseTrace]);
-    setVisibility({ [baseTrace.id]: true });
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    apiClient.exportSnapshotHtml.mockRejectedValue(new Error("boom"));
-
-    const { dispose, host } = mountApp();
-    try {
-      await flush();
-      const exportButton = host.querySelector("button.toolbar-export-btn") as HTMLButtonElement;
-
-      exportButton.click();
-      expect(exportButton.disabled).toBe(true);
-
-      await flush();
-
-      expect(clickSpy).not.toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledOnce();
-      expect(exportButton.disabled).toBe(false);
     } finally {
       dispose();
     }

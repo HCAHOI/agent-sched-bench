@@ -1,4 +1,4 @@
-import type { SnapshotBootstrapData, TraceDescriptor, TracePayload } from "../api/client";
+import type { GanttPayload, TraceDescriptor, TracePayload } from "../api/client";
 import {
   DEFAULT_CLOCK_MODE,
   DEFAULT_THEME_MODE,
@@ -12,6 +12,13 @@ import {
 } from "../state/signals";
 
 const SNAPSHOT_BOOTSTRAP_ELEMENT_ID = "gantt-viewer-snapshot-bootstrap";
+
+export interface SnapshotBootstrapData {
+  mode: "snapshot";
+  payload: GanttPayload;
+  trace_ids: string[];
+  visible_trace_ids: string[];
+}
 
 export const SNAPSHOT_DEFAULTS: {
   clockMode: ClockMode;
