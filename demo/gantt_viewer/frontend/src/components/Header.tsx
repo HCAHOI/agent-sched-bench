@@ -1,12 +1,11 @@
-import { For } from "solid-js";
-import type { Accessor } from "solid-js";
+import { For, Show, type Accessor } from "solid-js";
 
 import { ZOOM_PRESETS } from "../canvas/CanvasRenderer";
 import type { ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface HeaderProps {
-  loadedCount: Accessor<number>;
-  summary: Accessor<string>;
+  exportDisabled: Accessor<boolean>;
+  onExport: () => Promise<void> | void;
   onThemeModeChange: (mode: ThemeMode) => void;
   onTimeModeChange: (mode: TimeMode) => void;
   onViewModeChange: (mode: ViewMode) => void;
@@ -15,48 +14,56 @@ interface HeaderProps {
   timeMode: Accessor<TimeMode>;
   viewMode: Accessor<ViewMode>;
   zoom: Accessor<number>;
+  snapshotMode: boolean;
 }
 
-function formatZoom(factor: number): string {
-  return factor >= 1 ? `${factor}x` : `${factor}x`;
+function getPresetValue(zoom: number): string {
+  const matchingPreset = ZOOM_PRESETS.find((preset) => Math.abs(preset - zoom) < 0.001);
+  return matchingPreset === undefined ? "" : String(matchingPreset);
 }
 
 export default function Header(props: HeaderProps) {
-  const currentPresetValue = () => {
-    const z = props.zoom();
-    const match = ZOOM_PRESETS.find((p) => Math.abs(p - z) < 0.001);
-    return match !== undefined ? String(match) : "";
-  };
+  const currentPresetValue = () => getPresetValue(props.zoom());
+  const currentZoomLabel = () => `${Math.round(props.zoom() * 100)}%`;
+
+  function handleZoomChange(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (value !== "") {
+      props.onZoomChange(Number(value));
+    }
+  }
 
   return (
     <header class="toolbar-card">
       <span class="toolbar-title">TRACE GANTT</span>
-      <span class="toolbar-meta-inline" title={props.summary()}>
-        {props.summary()}
-      </span>
+      <div class="toolbar-spacer" />
       <label class="zoom-select-wrap" title="Zoom presets (Ctrl+wheel for free zoom)">
         <span class="zoom-select-label">zoom</span>
         <select
           class="zoom-select"
           value={currentPresetValue()}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            if (value) props.onZoomChange(Number(value));
-          }}
+          onChange={handleZoomChange}
         >
           {currentPresetValue() === "" && (
             <option value="" disabled>
-              {Math.round(props.zoom() * 100)}%
+              {currentZoomLabel()}
             </option>
           )}
           <For each={ZOOM_PRESETS}>
-            {(preset) => <option value={String(preset)}>{formatZoom(preset)}</option>}
+            {(preset) => <option value={String(preset)}>{`${preset}x`}</option>}
           </For>
         </select>
       </label>
-      <span class="toolbar-zoom">
-        loaded {props.loadedCount()}
-      </span>
+      <Show when={!props.snapshotMode}>
+        <button
+          class="primary-btn toolbar-export-btn"
+          disabled={props.exportDisabled()}
+          onClick={() => void props.onExport()}
+          type="button"
+        >
+          Export
+        </button>
+      </Show>
       <div class="toggle-group">
         <button
           classList={{ active: props.themeMode() === "dark" }}

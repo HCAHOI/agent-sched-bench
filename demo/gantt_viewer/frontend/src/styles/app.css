@@ -94,21 +94,8 @@ body.view-concise {
   flex-shrink: 0;
 }
 
-.toolbar-meta-inline {
-  color: var(--text-dim);
-  font-size: 11px;
+.toolbar-spacer {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.toolbar-zoom {
-  color: var(--text-dim);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
 }
 
 .zoom-select-wrap {
@@ -270,6 +257,18 @@ body.view-concise {
 .primary-btn:hover {
   color: var(--cyan);
   border-color: var(--cyan);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.toolbar-export-btn:disabled {
+  color: var(--text-dim);
+  border-color: var(--border);
+  cursor: not-allowed;
+}
+
+.toolbar-export-btn {
+  flex-shrink: 0;
 }
 
 .secondary-btn:hover {

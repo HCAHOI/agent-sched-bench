@@ -8,12 +8,37 @@ export type TraceListResponse = components["schemas"]["TraceListResponse"];
 export type TracePayload = components["schemas"]["TracePayload-Output"];
 export type PayloadError = components["schemas"]["PayloadError"];
 export type UploadTraceResponse = components["schemas"]["UploadTraceResponse"];
+export interface SnapshotBootstrapData {
+  mode: "snapshot";
+  payload: GanttPayload;
+  trace_ids: string[];
+  visible_trace_ids: string[];
+}
+export interface ExportSnapshotRequest {
+  registries: Registries;
+  traces: TracePayload[];
+}
+
+const JSON_HEADERS = {
+  "Content-Type": "application/json",
+} as const;
 
 async function parseJson<T>(response: Response, message: string): Promise<T> {
   if (!response.ok) {
     throw new Error(`${message}: ${response.status}`);
   }
   return (await response.json()) as T;
+}
+
+async function postJson<T>(path: string, body: unknown, message: string): Promise<T> {
+  return parseJson<T>(
+    await fetch(path, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }),
+    message,
+  );
 }
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -25,16 +50,7 @@ export async function getTraces(): Promise<TraceListResponse> {
 }
 
 export async function getPayload(ids: string[]): Promise<GanttPayload> {
-  return parseJson<GanttPayload>(
-    await fetch("/api/payload", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ids }),
-    }),
-    "POST /api/payload failed",
-  );
+  return postJson<GanttPayload>("/api/payload", { ids }, "POST /api/payload failed");
 }
 
 export async function uploadTrace(file: File): Promise<UploadTraceResponse> {
@@ -47,4 +63,16 @@ export async function uploadTrace(file: File): Promise<UploadTraceResponse> {
     }),
     "POST /api/traces/upload failed",
   );
+}
+
+export async function exportSnapshotHtml(snapshot: ExportSnapshotRequest): Promise<string> {
+  const response = await fetch("/api/export/html", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ snapshot }),
+  });
+  if (!response.ok) {
+    throw new Error(`POST /api/export/html failed: ${response.status}`);
+  }
+  return response.text();
 }
