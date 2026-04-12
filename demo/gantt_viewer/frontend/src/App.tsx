@@ -4,6 +4,7 @@ import {
   exportSnapshotHtml,
   getPayload,
   getTraces,
+  unregisterTraces,
   uploadTrace,
   type GanttPayload,
   type TraceDescriptor,
@@ -170,14 +171,22 @@ export default function App() {
     }
   }
 
-  function removeTrace(id: string): void {
+  async function removeTrace(id: string): Promise<void> {
     setLoadedTraces((current) => current.filter((trace) => trace.id !== id));
     setVisibility((current) => removeIdFlag(current, id));
+    setDescriptors((current) => current.filter((descriptor) => descriptor.id !== id));
     if (pinnedCard()?.hit.traceId === id) {
       setPinnedCard(null);
     }
     if (hoverCard()?.hit.traceId === id) {
       setHoverCard(null);
+    }
+    try {
+      await unregisterTraces([id]);
+      setAppError(null);
+    } catch (error) {
+      console.error("Failed to unregister gantt trace", id, error);
+      setAppError(String(error));
     }
   }
 

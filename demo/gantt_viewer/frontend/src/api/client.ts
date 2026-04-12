@@ -7,6 +7,7 @@ export type TraceDescriptor = components["schemas"]["TraceDescriptor"];
 export type TraceListResponse = components["schemas"]["TraceListResponse"];
 export type TracePayload = components["schemas"]["TracePayload-Output"];
 export type PayloadError = components["schemas"]["PayloadError"];
+export type UnregisterTracesResponse = components["schemas"]["UnregisterTracesResponse"];
 export type UploadTraceResponse = components["schemas"]["UploadTraceResponse"];
 export interface SnapshotBootstrapData {
   mode: "snapshot";
@@ -62,6 +63,14 @@ export async function uploadTrace(file: File): Promise<UploadTraceResponse> {
       body: form,
     }),
     "POST /api/traces/upload failed",
+  );
+}
+
+export async function unregisterTraces(ids: string[]): Promise<UnregisterTracesResponse> {
+  return postJson<UnregisterTracesResponse>(
+    "/api/traces/unregister",
+    { ids },
+    "POST /api/traces/unregister failed",
   );
 }
 
