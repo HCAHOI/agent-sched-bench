@@ -103,6 +103,155 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
     }
 
 
+@pytest.mark.parametrize(
+    ("existing_attempt_dirs", "expected_attempt_dir"),
+    [([], "attempt_1"), (["attempt_1"], "attempt_2")],
+)
+def test_run_scaffold_tasks_allocates_next_attempt_dir(
+    tmp_path: Path,
+    monkeypatch,
+    existing_attempt_dirs: list[str],
+    expected_attempt_dir: str,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    instance_dir = tmp_path / "run" / "encode__httpx-2701"
+    for attempt_dir in existing_attempt_dirs:
+        (instance_dir / attempt_dir).mkdir(parents=True, exist_ok=True)
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: None,
+    )
+
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ) -> AttemptResult:
+        seen["attempt"] = ctx.attempt
+        seen["attempt_dir_name"] = ctx.attempt_dir.name
+        return AttemptResult(success=True, exit_status="ok", trace_path=trace_path)
+
+    monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
+
+    benchmark = SimpleNamespace(
+        config=SimpleNamespace(
+            slug="swe-rebench",
+            harness_split="filtered",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="cc_aligned",
+        ),
+        runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
+    )
+
+    asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "encode__httpx-2701", "image_name": "img"}],
+            run_dir=tmp_path / "run",
+            model="qwen-plus-latest",
+            scaffold="miniswe",
+            container_executable="docker",
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=lambda task: lambda ctx: None,
+        )
+    )
+
+    assert seen == {
+        "attempt": int(expected_attempt_dir.removeprefix("attempt_")),
+        "attempt_dir_name": expected_attempt_dir,
+    }
+
+
+def test_run_scaffold_tasks_uses_max_sparse_attempt_dir(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    instance_dir = tmp_path / "run" / "encode__httpx-2701"
+    (instance_dir / "attempt_1").mkdir(parents=True)
+    (instance_dir / "attempt_3").mkdir()
+    (instance_dir / "attempt_bad").mkdir()
+    (instance_dir / "not_an_attempt").mkdir()
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: None,
+    )
+
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ) -> AttemptResult:
+        seen["attempt"] = ctx.attempt
+        seen["attempt_dir_name"] = ctx.attempt_dir.name
+        return AttemptResult(success=True, exit_status="ok", trace_path=trace_path)
+
+    monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
+
+    benchmark = SimpleNamespace(
+        config=SimpleNamespace(
+            slug="swe-rebench",
+            harness_split="filtered",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="cc_aligned",
+        ),
+        runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
+    )
+
+    asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "encode__httpx-2701", "image_name": "img"}],
+            run_dir=tmp_path / "run",
+            model="qwen-plus-latest",
+            scaffold="miniswe",
+            container_executable="docker",
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=lambda task: lambda ctx: None,
+        )
+    )
+
+    assert seen == {"attempt": 4, "attempt_dir_name": "attempt_4"}
+
+
 def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
     tmp_path: Path,
     monkeypatch,
@@ -300,6 +449,7 @@ def test_run_scaffold_tasks_allows_non_image_tasks_and_uses_attempt_success(
             run_dir=tmp_path / "run",
             model="z-ai/glm-5.1",
             scaffold="openclaw",
+            container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
             inner_factory=make_inner,
@@ -470,7 +620,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
             container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
-            inner_factory=lambda task: (lambda ctx: None),
+            inner_factory=lambda task: lambda ctx: None,
         )
     )
 
@@ -479,10 +629,18 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
         ("ensure_source", "docker.io/library/img-b"),
         ("ensure_source", "docker.io/library/img-c"),
     ]
-    assert events.index(("ensure_source", "docker.io/library/img-b")) < events.index(("run_end", "task-a"))
-    assert events.index(("run_end", "task-a")) < events.index(("remove_image", "fixed-docker.io/library/img-a"))
-    assert events.index(("run_end", "task-b")) < events.index(("remove_image", "fixed-docker.io/library/img-b"))
-    assert events.index(("run_end", "task-c")) < events.index(("remove_image", "fixed-docker.io/library/img-c"))
+    assert events.index(("ensure_source", "docker.io/library/img-b")) < events.index(
+        ("run_end", "task-a")
+    )
+    assert events.index(("run_end", "task-a")) < events.index(
+        ("remove_image", "fixed-docker.io/library/img-a")
+    )
+    assert events.index(("run_end", "task-b")) < events.index(
+        ("remove_image", "fixed-docker.io/library/img-b")
+    )
+    assert events.index(("run_end", "task-c")) < events.index(
+        ("remove_image", "fixed-docker.io/library/img-c")
+    )
 
 
 def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
@@ -557,15 +715,21 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
             container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
-            inner_factory=lambda task: (lambda ctx: None),
+            inner_factory=lambda task: lambda ctx: None,
         )
     )
 
-    assert [event for event in events if event == ("remove_image", "docker.io/library/shared-image")] == [
-        ("remove_image", "docker.io/library/shared-image")
-    ]
-    assert events.index(("run_end", "task-a")) < events.index(("remove_image", "fixed-task-a"))
-    assert events.index(("remove_image", "fixed-task-a")) < events.index(("run_end", "task-b"))
+    assert [
+        event
+        for event in events
+        if event == ("remove_image", "docker.io/library/shared-image")
+    ] == [("remove_image", "docker.io/library/shared-image")]
+    assert events.index(("run_end", "task-a")) < events.index(
+        ("remove_image", "fixed-task-a")
+    )
+    assert events.index(("remove_image", "fixed-task-a")) < events.index(
+        ("run_end", "task-b")
+    )
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
@@ -640,7 +804,7 @@ def test_run_scaffold_tasks_propagates_container_executable(
             container_executable=container_executable,
             prompt_template=None,
             min_free_disk_gb=0.001,
-            inner_factory=lambda task: (lambda ctx: None),
+            inner_factory=lambda task: lambda ctx: None,
         )
     )
 

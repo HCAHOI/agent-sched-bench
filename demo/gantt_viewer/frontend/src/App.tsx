@@ -15,6 +15,7 @@ import Legend from "./components/Legend";
 import Sidebar from "./components/Sidebar";
 import Tooltip from "./components/Tooltip";
 import TraceChipBar from "./components/TraceChipBar";
+import { selectInitialTraceIds } from "./bootstrap/autoload";
 import { sameHit } from "./canvas/hit";
 import { enablePersistence } from "./state/persist";
 import {
@@ -91,9 +92,9 @@ export default function App() {
       const traceList = await getTraces();
       setDescriptors(traceList.traces);
       setRegistries(traceList.registries);
-      const firstTrace = traceList.traces[0];
-      if (firstTrace) {
-        await loadTraceIds([firstTrace.id]);
+      const initialIds = selectInitialTraceIds(traceList.traces, window.location.search);
+      if (initialIds.length > 0) {
+        await loadTraceIds(initialIds);
       }
     } catch (error) {
       setAppError(String(error));

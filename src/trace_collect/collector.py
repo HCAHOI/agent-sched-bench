@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
 
 logger = logging.getLogger(__name__)
+
+_ATTEMPT_DIR_NAME_RE = re.compile(r"^attempt_(\d+)$")
 
 
 def _mcp_config_label(mcp_config: str | None) -> str | None:
@@ -144,6 +147,23 @@ def load_completed_ids(run_dir: Path) -> set[str]:
                 completed.add(instance_dir.name)
                 break
     return completed
+
+
+def next_attempt_number(run_dir: Path, instance_id: str) -> int:
+    """Return the next attempt index for ``run_dir/instance_id``."""
+    instance_dir = run_dir / instance_id
+    if not instance_dir.exists():
+        return 1
+
+    max_attempt = 0
+    for child in instance_dir.iterdir():
+        if not child.is_dir():
+            continue
+        match = _ATTEMPT_DIR_NAME_RE.fullmatch(child.name)
+        if match is None:
+            continue
+        max_attempt = max(max_attempt, int(match.group(1)))
+    return max_attempt + 1
 
 
 def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) -> None:
@@ -345,7 +365,7 @@ async def _run_scaffold_tasks(
             attempt_ctx = AttemptContext(
                 run_dir=run_dir,
                 instance_id=instance_id,
-                attempt=1,
+                attempt=next_attempt_number(run_dir, instance_id),
                 task=task,
                 model=model,
                 scaffold=scaffold,
