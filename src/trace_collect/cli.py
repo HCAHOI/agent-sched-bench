@@ -157,6 +157,11 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Container executable (default: docker).",
     )
     parser.add_argument(
+        "--network-mode",
+        default="host",
+        help="Container network mode (default: host). Use 'none' for isolated replay.",
+    )
+    parser.add_argument(
         "--command-timeout",
         type=float,
         default=600.0,
@@ -352,6 +357,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "output_dir": Path(args.output_dir),
         "mode": args.mode,
         "container_executable": args.container,
+        "network_mode": args.network_mode,
         "command_timeout_s": args.command_timeout,
         "warmup_skip_iterations": args.warmup_skip_iterations,
         "replay_speed": args.replay_speed,

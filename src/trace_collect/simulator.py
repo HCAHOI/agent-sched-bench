@@ -337,6 +337,7 @@ async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
     container_executable: str,
+    network_mode: str = "host",
 ) -> PreparedTraceSession:
     """Prepare a Docker/Podman container and start a persistent replay agent."""
     from trace_collect.openclaw_tools import ContainerAgent
@@ -356,6 +357,7 @@ async def _prepare_container_session(
         start_task_container,
         fixed_name,
         executable=container_executable,
+        network_mode=network_mode,
     )
 
     agent = ContainerAgent(container_id, container_executable)
@@ -386,6 +388,7 @@ def _log_trace_metadata(
     trace_manifest: Path | None,
     api_base: str | None,
     model: str | None,
+    network_mode: str = "host",
 ) -> None:
     scaffolds = {session.scaffold for session in sessions}
     source_models = [
@@ -398,6 +401,7 @@ def _log_trace_metadata(
         "replay_speed": replay_speed,
         "source_trace_count": len(sessions),
         "source_models": source_models,
+        "network_mode": network_mode,
     }
     if source_trace is not None:
         metadata["source_trace"] = str(source_trace)
@@ -869,6 +873,7 @@ async def simulate(
     output_dir: Path,
     mode: str = "local_model",
     container_executable: str = "docker",
+    network_mode: str = "host",
     api_base: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
@@ -914,6 +919,7 @@ async def simulate(
                 await _prepare_container_session(
                     loaded,
                     container_executable=container_executable,
+                    network_mode=network_mode,
                 )
             )
 
@@ -928,6 +934,7 @@ async def simulate(
             trace_manifest=trace_manifest,
             api_base=api_base,
             model=model,
+            network_mode=network_mode,
         )
 
         if mode == "local_model":

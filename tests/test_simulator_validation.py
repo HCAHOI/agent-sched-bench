@@ -116,7 +116,7 @@ def test_simulator_accepts_task_with_image_name(
     class _FakeAgent:
         async def stop(self): pass
 
-    async def fake_prepare(loaded, *, container_executable):
+    async def fake_prepare(loaded, *, container_executable, network_mode="host"):
         return PreparedTraceSession(
             loaded=loaded,
             container=PreparedContainer(
