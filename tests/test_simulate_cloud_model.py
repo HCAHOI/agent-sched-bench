@@ -157,7 +157,7 @@ def _patch_simulator_runtime(
     class _FakeAgent:
         async def stop(self): pass
 
-    async def fake_prepare_container(loaded, *, container_executable):
+    async def fake_prepare_container(loaded, *, container_executable, network_mode="host"):
         from trace_collect.simulator import PreparedContainer, PreparedTraceSession
         container = PreparedContainer(
             container_id="fake-cid",
@@ -560,7 +560,7 @@ def test_cloud_model_manifest_with_docker_image_override(
     class _FakeAgent2:
         async def stop(self): pass
 
-    async def capture_prepare(loaded, *, container_executable):
+    async def capture_prepare(loaded, *, container_executable, network_mode="host"):
         from trace_collect.simulator import PreparedContainer, PreparedTraceSession, _resolve_docker_image
         img = _resolve_docker_image(loaded)
         prepared_images.append(img)

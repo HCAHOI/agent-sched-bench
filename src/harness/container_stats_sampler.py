@@ -1,31 +1,247 @@
-"""Background sampler for container CPU and memory statistics.
+"""Background sampler for container CPU, memory, I/O, and network statistics.
 
-The summary format matches the harness resources.json schema.
+The summary format extends the harness resources.json schema with disk I/O,
+network I/O, and context switch metrics alongside the original CPU/memory fields.
+
+Disk I/O is read from the container's cgroup io.stat (cgroup v2), which
+correctly aggregates across ALL processes in the container — including
+those spawned via ``docker exec``.
 """
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-# The CC harness format — pipe-delimited, three fields.
-_PODMAN_FORMAT = "{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}"
+logger = logging.getLogger(__name__)
+
+# 4-field pipe-delimited format: mem_usage | mem% | cpu% | net_io
+_STATS_FORMAT = "{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}|{{.NetIO}}"
+
+
+def _resolve_container_pid(
+    container_id: str, *, executable: str,
+) -> int | None:
+    """Get the host-visible init PID of a running container."""
+    try:
+        result = subprocess.run(
+            [executable, "inspect", "--format", "{{.State.Pid}}", container_id],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if result.returncode == 0:
+            pid = int(result.stdout.strip())
+            return pid if pid > 0 else None
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+    return None
+
+
+def _resolve_cgroup_path(pid: int) -> Path | None:
+    """Resolve the cgroup v2 filesystem path for a container's init PID.
+
+    Reads /proc/<pid>/cgroup which on cgroup v2 has a single line::
+
+        0::<relative-path>
+
+    Returns the absolute cgroup filesystem path, or None if unavailable.
+    """
+    try:
+        text = Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8")
+    except (PermissionError, FileNotFoundError, OSError):
+        return None
+    for line in text.strip().splitlines():
+        parts = line.split(":", 2)
+        if len(parts) == 3 and parts[0] == "0":
+            relative = parts[2].strip()
+            if relative:
+                cgroup_path = Path(f"/sys/fs/cgroup{relative}")
+                if cgroup_path.exists():
+                    return cgroup_path
+    return None
+
+
+def _read_cgroup_io_stat(cgroup_path: Path) -> dict[str, int] | None:
+    """Read io.stat from a cgroup v2 path, aggregating across all devices.
+
+    Format per line: ``<major>:<minor> rbytes=N wbytes=N rios=N wios=N ...``
+    Returns total read_bytes and write_bytes summed across all devices.
+    """
+    io_stat = cgroup_path / "io.stat"
+    try:
+        text = io_stat.read_text(encoding="utf-8")
+    except (PermissionError, FileNotFoundError, OSError):
+        return None
+    total_read = 0
+    total_write = 0
+    found = False
+    for line in text.strip().splitlines():
+        for field in line.split():
+            if field.startswith("rbytes="):
+                try:
+                    total_read += int(field.split("=", 1)[1])
+                    found = True
+                except ValueError:
+                    pass
+            elif field.startswith("wbytes="):
+                try:
+                    total_write += int(field.split("=", 1)[1])
+                    found = True
+                except ValueError:
+                    pass
+    return {"read_bytes": total_read, "write_bytes": total_write} if found else None
+
+
+def _read_cgroup_pids(cgroup_path: Path) -> list[int]:
+    """Read all PIDs from a cgroup's cgroup.procs file."""
+    procs = cgroup_path / "cgroup.procs"
+    try:
+        text = procs.read_text(encoding="utf-8")
+    except (PermissionError, FileNotFoundError, OSError):
+        return []
+    pids: list[int] = []
+    for line in text.strip().splitlines():
+        try:
+            pids.append(int(line.strip()))
+        except ValueError:
+            pass
+    return pids
+
+
+def _read_pid_context_switches(pid: int) -> int | None:
+    """Read total (voluntary + nonvoluntary) context switches for one PID."""
+    try:
+        text = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+    except (PermissionError, FileNotFoundError, OSError):
+        return None
+    total = 0
+    found = False
+    for line in text.splitlines():
+        parts = line.split(":", 1)
+        if len(parts) == 2:
+            key = parts[0].strip()
+            if key in ("voluntary_ctxt_switches", "nonvoluntary_ctxt_switches"):
+                try:
+                    total += int(parts[1].strip())
+                    found = True
+                except ValueError:
+                    pass
+    return total if found else None
+
+
+def _aggregate_context_switches(pids: list[int]) -> int | None:
+    """Sum voluntary + nonvoluntary context switches across all PIDs."""
+    total = 0
+    found = False
+    for pid in pids:
+        ctxt = _read_pid_context_switches(pid)
+        if ctxt is not None:
+            total += ctxt
+            found = True
+    return total if found else None
+
+
+def _read_io_via_exec(
+    container_id: str, *, executable: str, timeout_s: float = 5.0,
+) -> dict[str, int] | None:
+    """Fallback: read container I/O from inside the container.
+
+    Tries cgroup io.stat inside the container namespace first (monotonic,
+    includes exited processes). Falls back to summing /proc/*/io (non-
+    monotonic but better than nothing).
+    """
+    # Prefer cgroup io.stat inside container (monotonic)
+    script = (
+        "import os\n"
+        "r=w=0;found=False\n"
+        "try:\n"
+        "  for l in open('/sys/fs/cgroup/io.stat'):\n"
+        "    for f in l.split():\n"
+        "      if f.startswith('rbytes='): r+=int(f.split('=')[1]);found=True\n"
+        "      elif f.startswith('wbytes='): w+=int(f.split('=')[1]);found=True\n"
+        "except: pass\n"
+        "if found: print(r,w)\n"
+        "else:\n"
+        "  import glob\n"
+        "  for p in glob.glob('/proc/[0-9]*/io'):\n"
+        "    try:\n"
+        "      d={}\n"
+        "      for l in open(p):\n"
+        "        k,v=l.split(':',1)\n"
+        "        d[k.strip()]=int(v.strip())\n"
+        "      r+=d.get('read_bytes',0);w+=d.get('write_bytes',0)\n"
+        "    except: pass\n"
+        "  print(r,w)\n"
+    )
+    try:
+        result = subprocess.run(
+            [executable, "exec", container_id, "python3", "-c", script],
+            capture_output=True, text=True, timeout=timeout_s, check=False,
+        )
+        if result.returncode != 0:
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    parts = result.stdout.strip().split()
+    if len(parts) == 2:
+        try:
+            return {"read_bytes": int(parts[0]), "write_bytes": int(parts[1])}
+        except ValueError:
+            pass
+    return None
+
+
+def _read_ctxt_via_exec(
+    container_id: str, *, executable: str, timeout_s: float = 5.0,
+) -> int | None:
+    """Fallback: sum context switches from all processes inside the container."""
+    script = (
+        "import glob\n"
+        "t=0\n"
+        "for p in glob.glob('/proc/[0-9]*/status'):\n"
+        "  try:\n"
+        "    for l in open(p):\n"
+        "      if 'ctxt_switches' in l:\n"
+        "        t+=int(l.split(':')[1].strip())\n"
+        "  except: pass\n"
+        "print(t)\n"
+    )
+    try:
+        result = subprocess.run(
+            [executable, "exec", container_id, "python3", "-c", script],
+            capture_output=True, text=True, timeout=timeout_s, check=False,
+        )
+        if result.returncode != 0:
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
 
 def _parse_pipe_stats(raw: str) -> dict[str, Any] | None:
+    """Parse pipe-delimited stats output (3-field legacy or 4-field with NetIO)."""
     parts = (raw or "").strip().split("|")
     if len(parts) < 3:
         return None
     now = datetime.now(tz=timezone.utc)
-    return {
+    sample: dict[str, Any] = {
         "timestamp": now.isoformat().replace("+00:00", ""),
         "epoch": now.timestamp(),
         "mem_usage": parts[0],
         "mem_percent": parts[1],
         "cpu_percent": parts[2],
     }
+    if len(parts) >= 4:
+        sample["net_io"] = parts[3]
+    return sample
+
 
 def _parse_memory_mb(mem_usage: str) -> float | None:
     if not mem_usage:
@@ -52,18 +268,54 @@ def _parse_memory_mb(mem_usage: str) -> float | None:
         return None
     return None
 
+
 def _parse_percent(value: str) -> float | None:
     try:
         return float(value.replace("%", "").strip())
     except (ValueError, AttributeError):
         return None
 
-def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute CC-compatible resources.json summary from a sample list.
 
-    Matches ``ResourceMonitor.get_summary()`` in the agentcgroup reference
-    repo byte-for-byte: {sample_count, duration_seconds, memory_mb, cpu_percent}
-    where memory_mb/cpu_percent each contain min/max/avg.
+def _parse_net_io_bytes(net_io: str) -> tuple[float | None, float | None]:
+    """Parse NetIO string like '1.5kB / 2.3MB' into (rx_bytes, tx_bytes)."""
+    if not net_io or "/" not in net_io:
+        return None, None
+    parts = net_io.split("/", 1)
+    return _parse_size_bytes(parts[0].strip()), _parse_size_bytes(parts[1].strip())
+
+
+def _parse_size_bytes(s: str) -> float | None:
+    """Parse a human-readable size string to bytes."""
+    s = s.strip()
+    try:
+        if s.endswith("GB"):
+            return float(s[:-2]) * 1e9
+        if s.endswith("MB"):
+            return float(s[:-2]) * 1e6
+        if s.endswith("kB"):
+            return float(s[:-2]) * 1e3
+        if s.endswith("B"):
+            return float(s[:-1])
+    except ValueError:
+        return None
+    return None
+
+
+def _minmaxavg(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"min": 0, "max": 0, "avg": 0}
+    return {
+        "min": min(values),
+        "max": max(values),
+        "avg": sum(values) / len(values),
+    }
+
+
+def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute resources.json summary from a sample list.
+
+    Extends the AgentCGroup-compatible format with disk I/O, network I/O,
+    and context switch fields.
     """
     if not samples:
         return {
@@ -71,10 +323,21 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "duration_seconds": 0,
             "memory_mb": {"min": 0, "max": 0, "avg": 0},
             "cpu_percent": {"min": 0, "max": 0, "avg": 0},
+            "disk_read_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
+            "disk_write_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
+            "net_rx_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
+            "net_tx_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
+            "context_switches": {"min": 0, "max": 0, "avg": 0, "delta": 0},
         }
 
     mem_values: list[float] = []
     cpu_values: list[float] = []
+    disk_read_values: list[float] = []
+    disk_write_values: list[float] = []
+    net_rx_values: list[float] = []
+    net_tx_values: list[float] = []
+    ctxt_values: list[float] = []
+
     for sample in samples:
         mem_mb = _parse_memory_mb(sample.get("mem_usage", ""))
         if mem_mb is not None:
@@ -83,27 +346,55 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         if cpu_val is not None:
             cpu_values.append(cpu_val)
 
+        # Disk I/O (from cgroup io.stat, stored as bytes in sample)
+        rb = sample.get("disk_read_bytes")
+        if rb is not None:
+            disk_read_values.append(rb / (1024 * 1024))
+        wb = sample.get("disk_write_bytes")
+        if wb is not None:
+            disk_write_values.append(wb / (1024 * 1024))
+
+        # Network I/O (from stats, stored as bytes in sample)
+        net_rx = sample.get("net_rx_bytes")
+        if net_rx is not None:
+            net_rx_values.append(net_rx / (1024 * 1024))
+        net_tx = sample.get("net_tx_bytes")
+        if net_tx is not None:
+            net_tx_values.append(net_tx / (1024 * 1024))
+
+        # Context switches (from cgroup pids aggregate)
+        ctxt = sample.get("context_switches")
+        if ctxt is not None:
+            ctxt_values.append(float(ctxt))
+
     duration = 0.0
     if len(samples) > 1:
         duration = float(samples[-1]["epoch"]) - float(samples[0]["epoch"])
 
+    def _delta(values: list[float]) -> float:
+        if len(values) < 2:
+            return 0
+        return values[-1] - values[0]
+
     return {
         "sample_count": len(samples),
         "duration_seconds": duration,
-        "memory_mb": {
-            "min": min(mem_values) if mem_values else 0,
-            "max": max(mem_values) if mem_values else 0,
-            "avg": sum(mem_values) / len(mem_values) if mem_values else 0,
-        },
-        "cpu_percent": {
-            "min": min(cpu_values) if cpu_values else 0,
-            "max": max(cpu_values) if cpu_values else 0,
-            "avg": sum(cpu_values) / len(cpu_values) if cpu_values else 0,
-        },
+        "memory_mb": _minmaxavg(mem_values),
+        "cpu_percent": _minmaxavg(cpu_values),
+        "disk_read_mb": {**_minmaxavg(disk_read_values), "delta": _delta(disk_read_values)},
+        "disk_write_mb": {**_minmaxavg(disk_write_values), "delta": _delta(disk_write_values)},
+        "net_rx_mb": {**_minmaxavg(net_rx_values), "delta": _delta(net_rx_values)},
+        "net_tx_mb": {**_minmaxavg(net_tx_values), "delta": _delta(net_tx_values)},
+        "context_switches": {**_minmaxavg(ctxt_values), "delta": _delta(ctxt_values)},
     }
 
+
 class ContainerStatsSampler(threading.Thread):
-    """Background thread that samples ``podman stats`` for one container.
+    """Background thread that samples container stats + cgroup I/O metrics.
+
+    Disk I/O is read from cgroup v2 ``io.stat`` which aggregates ALL
+    processes in the container (including ``docker exec`` workers).
+    Context switches are summed across all PIDs in the cgroup.
 
     Usage::
 
@@ -112,8 +403,6 @@ class ContainerStatsSampler(threading.Thread):
         # ... agent runs ...
         samples = sampler.stop()
         summary = summarize_samples(samples)
-
-    ``stop()`` is idempotent and safe to call multiple times.
     """
 
     def __init__(
@@ -131,6 +420,82 @@ class ContainerStatsSampler(threading.Thread):
         self.subprocess_timeout_s = subprocess_timeout_s
         self._stop_event = threading.Event()
         self._samples: list[dict[str, Any]] = []
+        self._cgroup_path: Path | None = None
+        self._io_mode: str | None = None  # "cgroup", "exec", or None
+        # Track per-PID context switches to handle process exits monotonically
+        self._pid_ctxt: dict[int, int] = {}
+
+    def _ensure_io_source(self) -> None:
+        """Resolve and cache the I/O data source on first call.
+
+        Tries cgroup v2 io.stat first (host-side, zero overhead).
+        Falls back to exec-based aggregation if cgroup unavailable.
+        """
+        if self._io_mode is not None:
+            return
+        pid = _resolve_container_pid(self.container_id, executable=self.executable)
+        if pid is None:
+            logger.debug("Could not resolve host PID for %s", self.container_id[:12])
+            self._io_mode = "exec"
+            return
+        cgroup_path = _resolve_cgroup_path(pid)
+        if cgroup_path is not None:
+            io_data = _read_cgroup_io_stat(cgroup_path)
+            if io_data is not None:
+                self._cgroup_path = cgroup_path
+                self._io_mode = "cgroup"
+                return
+        logger.info(
+            "Cgroup I/O unavailable for %s; falling back to exec-based aggregation",
+            self.container_id[:12],
+        )
+        self._io_mode = "exec"
+
+    def _sample_io(self, sample: dict[str, Any]) -> None:
+        """Attach disk I/O and context switch data to a sample dict."""
+        self._ensure_io_source()
+
+        io_data: dict[str, int] | None = None
+        if self._io_mode == "cgroup" and self._cgroup_path is not None:
+            io_data = _read_cgroup_io_stat(self._cgroup_path)
+            # Context switches: update per-PID high-water marks so exited
+            # processes keep their last-known counts in the total.
+            pids = _read_cgroup_pids(self._cgroup_path)
+            if pids:
+                for pid in pids:
+                    ctxt = _read_pid_context_switches(pid)
+                    if ctxt is not None:
+                        self._pid_ctxt[pid] = ctxt
+                if self._pid_ctxt:
+                    sample["context_switches"] = sum(self._pid_ctxt.values())
+        elif self._io_mode == "exec":
+            io_data = _read_io_via_exec(
+                self.container_id,
+                executable=self.executable,
+                timeout_s=self.subprocess_timeout_s,
+            )
+            ctxt = _read_ctxt_via_exec(
+                self.container_id,
+                executable=self.executable,
+                timeout_s=self.subprocess_timeout_s,
+            )
+            if ctxt is not None:
+                # Use high-water mark: exec-based ctxt is non-monotonic
+                self._pid_ctxt[0] = max(self._pid_ctxt.get(0, 0), ctxt)
+                sample["context_switches"] = sum(self._pid_ctxt.values())
+
+        if io_data:
+            sample["disk_read_bytes"] = io_data.get("read_bytes", 0)
+            sample["disk_write_bytes"] = io_data.get("write_bytes", 0)
+
+        # Network I/O from stats output
+        net_io = sample.get("net_io")
+        if net_io:
+            rx, tx = _parse_net_io_bytes(net_io)
+            if rx is not None:
+                sample["net_rx_bytes"] = rx
+            if tx is not None:
+                sample["net_tx_bytes"] = tx
 
     def run(self) -> None:
         while not self._stop_event.is_set():
@@ -142,7 +507,7 @@ class ContainerStatsSampler(threading.Thread):
                         "stats",
                         "--no-stream",
                         "--format",
-                        _PODMAN_FORMAT,
+                        _STATS_FORMAT,
                         self.container_id,
                     ],
                     capture_output=True,
@@ -156,6 +521,7 @@ class ContainerStatsSampler(threading.Thread):
                 break
             sample = _parse_pipe_stats(result.stdout)
             if sample is not None:
+                self._sample_io(sample)
                 self._samples.append(sample)
             elapsed = time.monotonic() - tick_start
             remainder = max(0.0, self.interval_s - elapsed)

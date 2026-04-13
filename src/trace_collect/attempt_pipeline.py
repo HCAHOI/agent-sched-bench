@@ -101,6 +101,7 @@ def start_task_container(
     *,
     executable: str,
     extra_args: list[str] | None = None,
+    network_mode: str = "host",
 ) -> str:
     """Launch the task container and return its id."""
     import os
@@ -112,7 +113,7 @@ def start_task_container(
         "run",
         "-d",
         "--rm",
-        "--network=host",
+        f"--network={network_mode}",
         "-v",
         f"{home_dir}:{home_dir}",
         "-w",
