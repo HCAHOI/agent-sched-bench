@@ -423,8 +423,9 @@ class ContainerStatsSampler(threading.Thread):
         self._samples: list[dict[str, Any]] = []
         self._cgroup_path: Path | None = None
         self._io_mode: str | None = None  # "cgroup", "exec", or None
-        # Track per-PID context switches to handle process exits monotonically
+        # Per-PID context switch tracking; retired counter holds exited PIDs' totals
         self._pid_ctxt: dict[int, int] = {}
+        self._retired_ctxt: int = 0
         # High-water marks for exec-mode disk I/O (non-monotonic source)
         self._io_hwm_read: int = 0
         self._io_hwm_write: int = 0
@@ -443,10 +444,14 @@ class ContainerStatsSampler(threading.Thread):
             self._io_mode = "exec"
             return
         cgroup_path = _resolve_cgroup_path(pid)
-        if cgroup_path is not None and (cgroup_path / "io.stat").exists():
-            self._cgroup_path = cgroup_path
-            self._io_mode = "cgroup"
-            return
+        if cgroup_path is not None:
+            try:
+                (cgroup_path / "io.stat").read_text(encoding="utf-8")
+                self._cgroup_path = cgroup_path
+                self._io_mode = "cgroup"
+                return
+            except (PermissionError, FileNotFoundError, OSError):
+                pass
         logger.info(
             "Cgroup I/O unavailable for %s; falling back to exec-based aggregation",
             self.container_id[:12],
@@ -467,9 +472,13 @@ class ContainerStatsSampler(threading.Thread):
                 for pid in pids:
                     ctxt = _read_pid_context_switches(pid)
                     if ctxt is not None:
-                        self._pid_ctxt[pid] = max(self._pid_ctxt.get(pid, 0), ctxt)
-                if self._pid_ctxt:
-                    sample["context_switches"] = sum(self._pid_ctxt.values())
+                        old = self._pid_ctxt.get(pid, 0)
+                        if ctxt < old:
+                            # PID recycled — retire old count
+                            self._retired_ctxt += old
+                        self._pid_ctxt[pid] = ctxt
+                if self._pid_ctxt or self._retired_ctxt:
+                    sample["context_switches"] = self._retired_ctxt + sum(self._pid_ctxt.values())
         elif self._io_mode == "exec":
             # Halve timeout per call so total stays within stop() budget
             half_timeout = self.subprocess_timeout_s / 2

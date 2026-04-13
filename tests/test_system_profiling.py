@@ -215,17 +215,32 @@ def test_aggregate_context_switches_partial_failure() -> None:
 
 
 def test_sampler_cumulative_context_switches() -> None:
-    """Sampler high-water tracking: exited PIDs keep their last-known counts."""
+    """Exited PIDs keep their last-known counts in the dict."""
     sampler = ContainerStatsSampler(
         container_id="test", interval_s=1.0, executable="docker",
     )
-    # Simulate: PID 42 has 100 ctxt, PID 43 has 200 ctxt
     sampler._pid_ctxt = {42: 100, 43: 200}
-    # PID 43 exits but its count stays in _pid_ctxt
-    # New PID 44 appears with 50 ctxt
     sampler._pid_ctxt[44] = 50
-    # Total should be 100 + 200 + 50 = 350 (PID 43's count preserved)
-    assert sum(sampler._pid_ctxt.values()) == 350
+    # PID 43 exited but stays in dict → total = 100 + 200 + 50
+    assert sampler._retired_ctxt + sum(sampler._pid_ctxt.values()) == 350
+
+
+def test_sampler_pid_reuse_retires_old_count() -> None:
+    """PID recycled: old count moves to retired, new process tracked fresh."""
+    sampler = ContainerStatsSampler(
+        container_id="test", interval_s=1.0, executable="docker",
+    )
+    # PID 42 accumulated 1000 ctxt switches
+    sampler._pid_ctxt = {42: 1000}
+    sampler._retired_ctxt = 0
+    # PID 42 recycled — new process has 5 ctxt switches
+    new_ctxt = 5
+    old = sampler._pid_ctxt.get(42, 0)
+    if new_ctxt < old:
+        sampler._retired_ctxt += old
+    sampler._pid_ctxt[42] = new_ctxt
+    # Total = retired(1000) + current(5) = 1005
+    assert sampler._retired_ctxt + sum(sampler._pid_ctxt.values()) == 1005
 
 
 # ---------------------------------------------------------------------------
