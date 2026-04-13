@@ -1,12 +1,13 @@
-import type { GanttPayload } from "../api/client";
+import type { GanttPayload, ResourceSample } from "../api/client";
 import { displayColor } from "../theme/displayColor";
 import { sameHit, type Hit, type HitCard } from "./hit";
-import { computeTotalContentHeight, effectiveLaneH, MARKER_H, SPAN_H, SPAN_PAD, TIME_AXIS_H } from "./layout";
+import { computeTotalContentHeight, effectiveLaneH, MARKER_H, resourceChartH, SPAN_H, SPAN_PAD, TIME_AXIS_H } from "./layout";
 import { formatTimeLabel, niceStep } from "./time";
 
 type TimeMode = "sync" | "abs";
 type ViewMode = "layered" | "concise";
 type ClockMode = "wall" | "real";
+type ResourceMetric = "cpu" | "memory" | "disk_io" | "net_io";
 
 interface RenderHitBox {
   h: number;
@@ -38,6 +39,8 @@ export class CanvasRenderer extends EventTarget {
   private resizeRafId: number | null = null;
   private resizeObserver: ResizeObserver;
   private clockMode: ClockMode = "wall";
+  private resourceMetric: ResourceMetric = "cpu";
+  private showResourceChart = true;
   private timeMode: TimeMode = "sync";
   private viewMode: ViewMode = "layered";
   private visibility: Record<string, boolean> = {};
@@ -158,6 +161,18 @@ export class CanvasRenderer extends EventTarget {
 
   setVisibility(map: Record<string, boolean>): void {
     this.visibility = map;
+    this.scheduleResize();
+  }
+
+  setResourceMetric(metric: ResourceMetric): void {
+    if (this.resourceMetric === metric) return;
+    this.resourceMetric = metric;
+    this.queueRender();
+  }
+
+  setShowResourceChart(show: boolean): void {
+    if (this.showResourceChart === show) return;
+    this.showResourceChart = show;
     this.scheduleResize();
   }
 
@@ -291,6 +306,7 @@ export class CanvasRenderer extends EventTarget {
       this.visibility,
       this.viewMode,
       this.wrap.clientHeight || 320,
+      this.showResourceChart,
     );
 
     // canvas.width/height reset the backing buffer (and clear it) even on a
@@ -350,6 +366,12 @@ export class CanvasRenderer extends EventTarget {
           minTime = Math.min(minTime, point);
           maxTime = Math.max(maxTime, point);
         }
+      }
+      if (this.showResourceChart && trace.resource_timeline?.length) {
+        const first = this.selectResourceTime(trace.resource_timeline[0]);
+        const last = this.selectResourceTime(trace.resource_timeline[trace.resource_timeline.length - 1]);
+        minTime = Math.min(minTime, first);
+        maxTime = Math.max(maxTime, last);
       }
     }
 
@@ -514,6 +536,106 @@ export class CanvasRenderer extends EventTarget {
 
         laneY += laneHeight;
       }
+
+      // Resource utilization chart for this trace
+      const timeline = trace.resource_timeline;
+      if (this.showResourceChart && timeline?.length) {
+        const chartH = resourceChartH(this.viewMode);
+        const chartPad = 3;
+
+        // Background
+        this.ctx.fillStyle = laneBackground;
+        this.ctx.fillRect(0, laneY, width, chartH);
+        this.ctx.strokeStyle = laneBorder;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, laneY + chartH);
+        this.ctx.lineTo(width, laneY + chartH);
+        this.ctx.stroke();
+
+        // Extract values for selected metric
+        const values = timeline.map((s) => this.extractMetricValue(s));
+        let vMin = Number.POSITIVE_INFINITY;
+        let vMax = Number.NEGATIVE_INFINITY;
+        for (const v of values) {
+          if (v < vMin) vMin = v;
+          if (v > vMax) vMax = v;
+        }
+        if (vMin === vMax) { vMax = vMin + 1; }
+        const vRange = vMax - vMin;
+        const innerH = chartH - chartPad * 2;
+
+        const valToY = (v: number) =>
+          laneY + chartPad + innerH - ((v - vMin) / vRange) * innerH;
+
+        // Area fill
+        const metricColor = this.resourceMetricColor();
+        this.ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < timeline.length; i++) {
+          const x = timeToX(this.selectResourceTime(timeline[i]));
+          const y = valToY(values[i]);
+          if (!started) { this.ctx.moveTo(x, y); started = true; }
+          else { this.ctx.lineTo(x, y); }
+        }
+        // Close path to bottom for fill
+        if (started && timeline.length > 0) {
+          const xLast = timeToX(this.selectResourceTime(timeline[timeline.length - 1]));
+          const xFirst = timeToX(this.selectResourceTime(timeline[0]));
+          this.ctx.lineTo(xLast, laneY + chartPad + innerH);
+          this.ctx.lineTo(xFirst, laneY + chartPad + innerH);
+          this.ctx.closePath();
+          this.ctx.fillStyle = metricColor;
+          this.ctx.globalAlpha = 0.25;
+          this.ctx.fill();
+          this.ctx.globalAlpha = 1;
+        }
+
+        // Top stroke line
+        this.ctx.beginPath();
+        started = false;
+        for (let i = 0; i < timeline.length; i++) {
+          const x = timeToX(this.selectResourceTime(timeline[i]));
+          const y = valToY(values[i]);
+          if (!started) { this.ctx.moveTo(x, y); started = true; }
+          else { this.ctx.lineTo(x, y); }
+        }
+        this.ctx.strokeStyle = metricColor;
+        this.ctx.lineWidth = 1.5;
+        this.ctx.globalAlpha = 0.8;
+        this.ctx.stroke();
+        this.ctx.globalAlpha = 1;
+        this.ctx.lineWidth = 1;
+
+        // Y-axis labels (min/max)
+        this.ctx.fillStyle = axisTextColor;
+        this.ctx.font = '9px "JetBrains Mono", monospace';
+        this.ctx.textAlign = "left";
+        const unit = this.resourceMetricUnit();
+        this.ctx.fillText(`${vMax.toFixed(1)}${unit}`, 4, laneY + chartPad + 8);
+        this.ctx.fillText(`${vMin.toFixed(1)}${unit}`, 4, laneY + chartH - chartPad - 2);
+
+        // Hit box for the entire resource chart area
+        this.hitBoxes.push({
+          h: chartH,
+          hit: {
+            kind: "resource",
+            traceId: trace.id,
+            traceLabel: trace.label,
+            timeline,
+            metric: this.resourceMetric,
+            chartY: laneY,
+            chartH,
+            chartPad,
+            vMin,
+            vMax,
+          } as Hit,
+          w: width,
+          x: 0,
+          y: laneY,
+        });
+
+        laneY += chartH;
+      }
     }
 
     this.dispatchEvent(new CustomEvent("render"));
@@ -547,5 +669,42 @@ export class CanvasRenderer extends EventTarget {
       }
     }
     return this.timeMode === "sync" ? marker.t : marker.t_abs;
+  }
+
+  private selectResourceTime(sample: ResourceSample): number {
+    if (this.clockMode === "real") {
+      const realT = this.timeMode === "sync" ? sample.t_real : sample.t_real_abs;
+      if (typeof realT === "number" && Number.isFinite(realT)) {
+        return realT;
+      }
+    }
+    return this.timeMode === "sync" ? sample.t : sample.t_abs;
+  }
+
+  private extractMetricValue(sample: ResourceSample): number {
+    switch (this.resourceMetric) {
+      case "cpu": return sample.cpu_percent;
+      case "memory": return sample.memory_mb;
+      case "disk_io": return (sample.disk_read_mb ?? 0) + (sample.disk_write_mb ?? 0);
+      case "net_io": return (sample.net_rx_mb ?? 0) + (sample.net_tx_mb ?? 0);
+    }
+  }
+
+  private resourceMetricColor(): string {
+    switch (this.resourceMetric) {
+      case "cpu": return "#00E5FF";
+      case "memory": return "#76FF03";
+      case "disk_io": return "#FF6D00";
+      case "net_io": return "#AB47BC";
+    }
+  }
+
+  private resourceMetricUnit(): string {
+    switch (this.resourceMetric) {
+      case "cpu": return "%";
+      case "memory": return "MB";
+      case "disk_io": return "MB";
+      case "net_io": return "MB";
+    }
   }
 }

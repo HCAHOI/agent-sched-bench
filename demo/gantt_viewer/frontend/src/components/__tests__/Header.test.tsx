@@ -19,6 +19,10 @@ function mountHeader() {
         timeMode={() => "sync"}
         viewMode={() => "layered"}
         zoom={() => 1}
+        resourceMetric={() => "cpu"}
+        onResourceMetricChange={() => undefined}
+        showResourceChart={() => true}
+        onShowResourceChartChange={() => undefined}
       />
     ),
     host,

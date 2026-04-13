@@ -67,12 +67,27 @@ class TraceMetadata(BaseModel):
     elapsed_s: float | None = None
 
 
+class ResourceSample(BaseModel):
+    t: float
+    t_abs: float
+    t_real: float | None = None
+    t_real_abs: float | None = None
+    cpu_percent: float
+    memory_mb: float
+    disk_read_mb: float | None = None
+    disk_write_mb: float | None = None
+    net_rx_mb: float | None = None
+    net_tx_mb: float | None = None
+    context_switches: int | None = None
+
+
 class TracePayload(BaseModel):
     id: str
     label: str
     metadata: TraceMetadata
     t0: float
     lanes: list[Lane]
+    resource_timeline: list[ResourceSample] | None = None
 
 
 class PayloadError(BaseModel):

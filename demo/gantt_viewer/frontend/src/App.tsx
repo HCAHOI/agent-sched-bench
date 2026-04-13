@@ -54,6 +54,10 @@ import {
   viewMode,
   visibility,
   zoom,
+  resourceMetric,
+  setResourceMetric,
+  showResourceChart,
+  setShowResourceChart,
 } from "./state/signals";
 
 function mergeById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
@@ -237,6 +241,10 @@ export default function App() {
         timeMode={timeMode}
         viewMode={viewMode}
         zoom={zoom}
+        resourceMetric={resourceMetric}
+        onResourceMetricChange={setResourceMetric}
+        showResourceChart={showResourceChart}
+        onShowResourceChartChange={setShowResourceChart}
       />
 
       <Legend registries={registries()} />
@@ -292,6 +300,8 @@ export default function App() {
           clockMode={clockMode()}
           payload={payload()}
           pinnedHit={pinnedCard()?.hit ?? null}
+          resourceMetric={resourceMetric()}
+          showResourceChart={showResourceChart()}
           themeMode={themeMode()}
           timeMode={timeMode()}
           viewMode={viewMode()}

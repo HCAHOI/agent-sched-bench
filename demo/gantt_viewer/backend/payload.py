@@ -7,9 +7,14 @@ renderers can extend span and marker types without hard-coded frontend logic.
 from __future__ import annotations
 
 import json
+import logging
+import re
+from pathlib import Path
 from typing import Any
 
 from trace_collect.trace_inspector import TraceData
+
+logger = logging.getLogger(__name__)
 
 _MARKER_CATEGORIES = frozenset({"SCHEDULING", "SESSION", "CONTEXT", "MCP"})
 
@@ -146,6 +151,84 @@ def _extract_detail(event: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+_MEM_RE = re.compile(r"^([\d.]+)\s*(B|[kKMGT]i?B)", re.ASCII)
+
+_MEM_MULTIPLIERS: dict[str, float] = {
+    "B": 1 / (1024 * 1024),
+    "kB": 1 / 1024,
+    "KB": 1 / 1024,
+    "KiB": 1 / 1024,
+    "MB": 1.0,
+    "MiB": 1.0,
+    "GB": 1024.0,
+    "GiB": 1024.0,
+    "TB": 1024 * 1024.0,
+    "TiB": 1024 * 1024.0,
+}
+
+
+def _parse_mem_usage_mb(raw: str) -> float:
+    """Parse '40.42MB / 52.93GB' → 40.42 (left side, in MB)."""
+    left = raw.split("/")[0].strip()
+    m = _MEM_RE.match(left)
+    if not m:
+        return 0.0
+    return float(m.group(1)) * _MEM_MULTIPLIERS.get(m.group(2), 1.0)
+
+
+def _parse_percent(raw: str) -> float:
+    """Parse '1.20%' → 1.20."""
+    return float(raw.rstrip("% "))
+
+
+def _load_resource_timeline(
+    trace_dir: Path, t0: float,
+) -> list[dict[str, Any]] | None:
+    """Load resources.json and build timeline aligned to trace t0."""
+    resources_path = trace_dir / "resources.json"
+    if not resources_path.exists():
+        return None
+    try:
+        with resources_path.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to load %s: %s", resources_path, exc)
+        return None
+
+    samples = data.get("samples")
+    if not samples:
+        return None
+
+    timeline: list[dict[str, Any]] = []
+    for s in samples:
+        epoch = s.get("epoch")
+        if epoch is None:
+            continue
+        epoch = float(epoch)
+        entry: dict[str, Any] = {
+            "t": epoch - t0,
+            "t_abs": epoch,
+            "cpu_percent": _parse_percent(s["cpu_percent"]) if isinstance(s.get("cpu_percent"), str) else float(s.get("cpu_percent", 0)),
+            "memory_mb": _parse_mem_usage_mb(s["mem_usage"]) if isinstance(s.get("mem_usage"), str) else float(s.get("memory_mb", 0)),
+        }
+        # Per-sample records store raw bytes; convert to MB.
+        # Disk uses binary (1 MiB = 1048576), network uses decimal (1 MB = 1e6).
+        for raw_field, out_field, divisor in (
+            ("disk_read_bytes", "disk_read_mb", 1024 * 1024),
+            ("disk_write_bytes", "disk_write_mb", 1024 * 1024),
+            ("net_rx_bytes", "net_rx_mb", 1_000_000),
+            ("net_tx_bytes", "net_tx_mb", 1_000_000),
+        ):
+            val = s.get(raw_field)
+            if val is not None:
+                entry[out_field] = float(val) / divisor
+        if "context_switches" in s and s["context_switches"] is not None:
+            entry["context_switches"] = int(s["context_switches"])
+        timeline.append(entry)
+
+    return timeline if timeline else None
+
+
 def build_gantt_payload(
     data: TraceData,
     *,
@@ -180,6 +263,9 @@ def build_gantt_payload(
     _apply_real_timeline_to_lanes(lanes, t0)
 
     distinct_iters = {a.get("iteration", 0) for a in data.actions}
+    resource_timeline = _load_resource_timeline(data.path.parent, t0)
+    if resource_timeline:
+        _apply_real_timeline_to_resources(resource_timeline, lanes)
 
     return {
         "id": trace_id,
@@ -196,6 +282,7 @@ def build_gantt_payload(
         },
         "t0": t0,
         "lanes": lanes,
+        "resource_timeline": resource_timeline,
     }
 
 
@@ -327,6 +414,30 @@ def _apply_real_timeline_to_lanes(
     spans = [span for lane in lanes for span in lane.get("spans") or []]
     markers = [marker for lane in lanes for marker in lane.get("markers") or []]
     _apply_real_timeline(spans, markers, trace_t0)
+
+
+def _apply_real_timeline_to_resources(
+    timeline: list[dict[str, Any]],
+    lanes: list[dict[str, Any]],
+) -> None:
+    """Map resource sample timestamps to real (gap-compressed) timeline."""
+    all_spans = sorted(
+        (span for lane in lanes for span in lane.get("spans") or []),
+        key=lambda s: float(s.get("start_abs", 0)),
+    )
+    if not all_spans:
+        return
+
+    real_t0_abs = min(
+        float(s.get("start_real_abs", float("inf"))) for s in all_spans
+    )
+    if real_t0_abs == float("inf"):
+        return
+
+    for sample in timeline:
+        t_real_abs = _map_time_to_real_abs(float(sample["t_abs"]), all_spans)
+        sample["t_real_abs"] = t_real_abs
+        sample["t_real"] = t_real_abs - real_t0_abs
 
 
 def _apply_real_timeline(

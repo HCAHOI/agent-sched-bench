@@ -191,6 +191,31 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
+        /** ResourceSample */
+        ResourceSample: {
+            /** T */
+            t: number;
+            /** T Abs */
+            t_abs: number;
+            /** T Real */
+            t_real?: number | null;
+            /** T Real Abs */
+            t_real_abs?: number | null;
+            /** Cpu Percent */
+            cpu_percent: number;
+            /** Memory Mb */
+            memory_mb: number;
+            /** Disk Read Mb */
+            disk_read_mb?: number | null;
+            /** Disk Write Mb */
+            disk_write_mb?: number | null;
+            /** Net Rx Mb */
+            net_rx_mb?: number | null;
+            /** Net Tx Mb */
+            net_tx_mb?: number | null;
+            /** Context Switches */
+            context_switches?: number | null;
+        };
         /** PayloadError */
         PayloadError: {
             /** Error */
@@ -325,6 +350,8 @@ export interface components {
             metadata: components["schemas"]["TraceMetadata"];
             /** T0 */
             t0: number;
+            /** Resource Timeline */
+            resource_timeline?: components["schemas"]["ResourceSample"][] | null;
         };
         /** TracePayload */
         "TracePayload-Output": {
@@ -337,6 +364,8 @@ export interface components {
             metadata: components["schemas"]["TraceMetadata"];
             /** T0 */
             t0: number;
+            /** Resource Timeline */
+            resource_timeline?: components["schemas"]["ResourceSample"][] | null;
         };
         /** UnregisterTracesRequest */
         UnregisterTracesRequest: {

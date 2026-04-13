@@ -1,7 +1,7 @@
 import { For, type Accessor } from "solid-js";
 
 import { ZOOM_PRESETS } from "../canvas/CanvasRenderer";
-import type { ClockMode, ThemeMode, TimeMode, ViewMode } from "../state/signals";
+import type { ClockMode, ResourceMetric, ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface HeaderProps {
   clockMode: Accessor<ClockMode>;
@@ -14,6 +14,10 @@ interface HeaderProps {
   timeMode: Accessor<TimeMode>;
   viewMode: Accessor<ViewMode>;
   zoom: Accessor<number>;
+  resourceMetric: Accessor<ResourceMetric>;
+  onResourceMetricChange: (metric: ResourceMetric) => void;
+  showResourceChart: Accessor<boolean>;
+  onShowResourceChartChange: (show: boolean) => void;
 }
 
 function getPresetValue(zoom: number): string {
@@ -115,6 +119,32 @@ export default function Header(props: HeaderProps) {
           type="button"
         >
           CONCISE
+        </button>
+      </div>
+      <label class="zoom-select-wrap" title="Resource metric">
+        <span class="zoom-select-label">res</span>
+        <select
+          class="zoom-select"
+          value={props.resourceMetric()}
+          onChange={(e) =>
+            props.onResourceMetricChange(
+              (e.currentTarget as HTMLSelectElement).value as ResourceMetric,
+            )
+          }
+        >
+          <option value="cpu">CPU %</option>
+          <option value="memory">Memory</option>
+          <option value="disk_io">Disk I/O</option>
+          <option value="net_io">Net I/O</option>
+        </select>
+      </label>
+      <div class="toggle-group">
+        <button
+          classList={{ active: props.showResourceChart() }}
+          onClick={() => props.onShowResourceChartChange(!props.showResourceChart())}
+          type="button"
+        >
+          RES
         </button>
       </div>
     </header>
