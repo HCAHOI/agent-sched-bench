@@ -28,6 +28,7 @@ from harness.container_stats_sampler import (  # noqa: E402
     _read_ctxt_via_exec,
     _read_io_via_exec,
     _read_pid_context_switches,
+    _read_pid_starttime,
     _resolve_cgroup_path,
     _resolve_container_pid,
     summarize_samples,
@@ -172,6 +173,20 @@ def test_read_cgroup_pids() -> None:
     assert pids == [42, 43, 100]
 
 
+def test_read_pid_starttime() -> None:
+    """Extracts starttime (field 22) from /proc/<pid>/stat."""
+    stat_content = "42 (python3) S 1 42 42 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5000 0 0\n"
+    with patch.object(Path, "read_text", return_value=stat_content):
+        assert _read_pid_starttime(42) == 5000
+
+
+def test_read_pid_starttime_comm_with_spaces() -> None:
+    """Handles comm field containing spaces and parentheses."""
+    stat_content = "42 (my (weird) app) S 1 42 42 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 9999 0 0\n"
+    with patch.object(Path, "read_text", return_value=stat_content):
+        assert _read_pid_starttime(42) == 9999
+
+
 def test_read_pid_context_switches() -> None:
     """Reads voluntary + nonvoluntary context switches for one PID."""
     status = "Name:\tpython3\nvoluntary_ctxt_switches:\t500\nnonvoluntary_ctxt_switches:\t80\n"
@@ -215,32 +230,27 @@ def test_aggregate_context_switches_partial_failure() -> None:
 
 
 def test_sampler_cumulative_context_switches() -> None:
-    """Exited PIDs keep their last-known counts in the dict."""
+    """Exited PIDs keep their last-known counts keyed by (pid, starttime)."""
     sampler = ContainerStatsSampler(
         container_id="test", interval_s=1.0, executable="docker",
     )
-    sampler._pid_ctxt = {42: 100, 43: 200}
-    sampler._pid_ctxt[44] = 50
+    sampler._pid_ctxt = {(42, 1000): 100, (43, 1001): 200}
+    sampler._pid_ctxt[(44, 1002)] = 50
     # PID 43 exited but stays in dict → total = 100 + 200 + 50
-    assert sampler._retired_ctxt + sum(sampler._pid_ctxt.values()) == 350
+    assert sum(sampler._pid_ctxt.values()) == 350
 
 
-def test_sampler_pid_reuse_retires_old_count() -> None:
-    """PID recycled: old count moves to retired, new process tracked fresh."""
+def test_sampler_pid_reuse_separate_identity() -> None:
+    """Recycled PID gets separate (pid, starttime) key — both lifetimes counted."""
     sampler = ContainerStatsSampler(
         container_id="test", interval_s=1.0, executable="docker",
     )
-    # PID 42 accumulated 1000 ctxt switches
-    sampler._pid_ctxt = {42: 1000}
-    sampler._retired_ctxt = 0
-    # PID 42 recycled — new process has 5 ctxt switches
-    new_ctxt = 5
-    old = sampler._pid_ctxt.get(42, 0)
-    if new_ctxt < old:
-        sampler._retired_ctxt += old
-    sampler._pid_ctxt[42] = new_ctxt
-    # Total = retired(1000) + current(5) = 1005
-    assert sampler._retired_ctxt + sum(sampler._pid_ctxt.values()) == 1005
+    # PID 42 first lifetime: started at tick 1000, accumulated 1000 ctxt
+    sampler._pid_ctxt[(42, 1000)] = 1000
+    # PID 42 recycled: started at tick 2000, new process has 5 ctxt
+    sampler._pid_ctxt[(42, 2000)] = 5
+    # Total = 1000 + 5 = 1005 (both lifetimes counted independently)
+    assert sum(sampler._pid_ctxt.values()) == 1005
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +451,11 @@ def test_sampler_collects_io_via_cgroup() -> None:
     procs_content = "42\n43\n"
     status_42 = "voluntary_ctxt_switches:\t10\nnonvoluntary_ctxt_switches:\t5\n"
     status_43 = "voluntary_ctxt_switches:\t20\nnonvoluntary_ctxt_switches:\t3\n"
+    # /proc/<pid>/stat: fields after (comm): state ppid pgrp session tty_nr tpgid flags
+    # minflt cminflt majflt cmajflt utime stime cutime cstime priority nice
+    # num_threads itrealvalue starttime ...
+    stat_42 = "42 (sleep) S 1 42 42 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1000 0 0\n"
+    stat_43 = "43 (python3) S 1 43 43 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1001 0 0\n"
 
     def fake_subprocess_run(cmd, **kwargs):
         if "inspect" in cmd:
@@ -461,6 +476,10 @@ def test_sampler_collects_io_via_cgroup() -> None:
             return status_42
         if path_str == "/proc/43/status":
             return status_43
+        if path_str == "/proc/42/stat":
+            return stat_42
+        if path_str == "/proc/43/stat":
+            return stat_43
         raise FileNotFoundError(path_str)
 
     def fake_exists(self):

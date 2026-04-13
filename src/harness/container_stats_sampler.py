@@ -112,6 +112,26 @@ def _read_cgroup_pids(cgroup_path: Path) -> list[int]:
     return pids
 
 
+def _read_pid_starttime(pid: int) -> int | None:
+    """Read process start time (clock ticks since boot) from /proc/<pid>/stat."""
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except (PermissionError, FileNotFoundError, OSError):
+        return None
+    # Field 22 (1-indexed) is starttime. comm (field 2) can contain ')'.
+    close_paren = text.rfind(")")
+    if close_paren < 0:
+        return None
+    fields = text[close_paren + 1:].split()
+    # After comm: fields[0]=state, fields[1]=ppid, ..., fields[19]=starttime
+    if len(fields) > 19:
+        try:
+            return int(fields[19])
+        except ValueError:
+            pass
+    return None
+
+
 def _read_pid_context_switches(pid: int) -> int | None:
     """Read total (voluntary + nonvoluntary) context switches for one PID."""
     try:
@@ -423,9 +443,8 @@ class ContainerStatsSampler(threading.Thread):
         self._samples: list[dict[str, Any]] = []
         self._cgroup_path: Path | None = None
         self._io_mode: str | None = None  # "cgroup", "exec", or None
-        # Per-PID context switch tracking; retired counter holds exited PIDs' totals
-        self._pid_ctxt: dict[int, int] = {}
-        self._retired_ctxt: int = 0
+        # Context switches keyed by (pid, starttime) for stable identity across PID reuse
+        self._pid_ctxt: dict[tuple[int, int], int] = {}
         # High-water marks for exec-mode disk I/O (non-monotonic source)
         self._io_hwm_read: int = 0
         self._io_hwm_write: int = 0
@@ -470,15 +489,12 @@ class ContainerStatsSampler(threading.Thread):
             pids = _read_cgroup_pids(self._cgroup_path)
             if pids:
                 for pid in pids:
+                    starttime = _read_pid_starttime(pid)
                     ctxt = _read_pid_context_switches(pid)
-                    if ctxt is not None:
-                        old = self._pid_ctxt.get(pid, 0)
-                        if ctxt < old:
-                            # PID recycled — retire old count
-                            self._retired_ctxt += old
-                        self._pid_ctxt[pid] = ctxt
-                if self._pid_ctxt or self._retired_ctxt:
-                    sample["context_switches"] = self._retired_ctxt + sum(self._pid_ctxt.values())
+                    if ctxt is not None and starttime is not None:
+                        self._pid_ctxt[(pid, starttime)] = ctxt
+                if self._pid_ctxt:
+                    sample["context_switches"] = sum(self._pid_ctxt.values())
         elif self._io_mode == "exec":
             # Halve timeout per call so total stays within stop() budget
             half_timeout = self.subprocess_timeout_s / 2
@@ -493,7 +509,8 @@ class ContainerStatsSampler(threading.Thread):
                 timeout_s=half_timeout,
             )
             if ctxt is not None:
-                self._pid_ctxt[0] = max(self._pid_ctxt.get(0, 0), ctxt)
+                # Exec-mode: aggregate count, use high-water mark (non-monotonic source)
+                self._pid_ctxt[(0, 0)] = max(self._pid_ctxt.get((0, 0), 0), ctxt)
                 sample["context_switches"] = sum(self._pid_ctxt.values())
 
         if io_data:
