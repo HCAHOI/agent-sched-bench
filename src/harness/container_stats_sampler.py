@@ -425,6 +425,9 @@ class ContainerStatsSampler(threading.Thread):
         self._io_mode: str | None = None  # "cgroup", "exec", or None
         # Track per-PID context switches to handle process exits monotonically
         self._pid_ctxt: dict[int, int] = {}
+        # High-water marks for exec-mode disk I/O (non-monotonic source)
+        self._io_hwm_read: int = 0
+        self._io_hwm_write: int = 0
 
     def _ensure_io_source(self) -> None:
         """Resolve and cache the I/O data source on first call.
@@ -468,24 +471,33 @@ class ContainerStatsSampler(threading.Thread):
                 if self._pid_ctxt:
                     sample["context_switches"] = sum(self._pid_ctxt.values())
         elif self._io_mode == "exec":
+            # Halve timeout per call so total stays within stop() budget
+            half_timeout = self.subprocess_timeout_s / 2
             io_data = _read_io_via_exec(
                 self.container_id,
                 executable=self.executable,
-                timeout_s=self.subprocess_timeout_s,
+                timeout_s=half_timeout,
             )
             ctxt = _read_ctxt_via_exec(
                 self.container_id,
                 executable=self.executable,
-                timeout_s=self.subprocess_timeout_s,
+                timeout_s=half_timeout,
             )
             if ctxt is not None:
-                # Use high-water mark: exec-based ctxt is non-monotonic
                 self._pid_ctxt[0] = max(self._pid_ctxt.get(0, 0), ctxt)
                 sample["context_switches"] = sum(self._pid_ctxt.values())
 
         if io_data:
-            sample["disk_read_bytes"] = io_data.get("read_bytes", 0)
-            sample["disk_write_bytes"] = io_data.get("write_bytes", 0)
+            rb = io_data.get("read_bytes", 0)
+            wb = io_data.get("write_bytes", 0)
+            if self._io_mode == "exec":
+                # High-water mark: exec-based I/O is non-monotonic
+                self._io_hwm_read = max(self._io_hwm_read, rb)
+                self._io_hwm_write = max(self._io_hwm_write, wb)
+                rb = self._io_hwm_read
+                wb = self._io_hwm_write
+            sample["disk_read_bytes"] = rb
+            sample["disk_write_bytes"] = wb
 
         # Network I/O from stats output
         net_io = sample.get("net_io")
