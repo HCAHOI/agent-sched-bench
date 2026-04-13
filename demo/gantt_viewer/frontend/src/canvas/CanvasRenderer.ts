@@ -1,6 +1,6 @@
 import type { GanttPayload, ResourceSample } from "../api/client";
 import { displayColor } from "../theme/displayColor";
-import { sameHit, type Hit, type HitCard } from "./hit";
+import { RESOURCE_METRIC_COLORS, sameHit, type Hit, type HitCard } from "./hit";
 import { computeTotalContentHeight, effectiveLaneH, MARKER_H, resourceChartH, SPAN_H, SPAN_PAD, TIME_AXIS_H } from "./layout";
 import { formatTimeLabel, niceStep } from "./time";
 
@@ -552,7 +552,7 @@ export class CanvasRenderer extends EventTarget {
         this.ctx.lineTo(width, laneY + chartH);
         this.ctx.stroke();
 
-        // Extract values for selected metric
+        // Extract values and pre-calculate points
         const values = timeline.map((s) => this.extractMetricValue(s));
         let vMin = Number.POSITIVE_INFINITY;
         let vMax = Number.NEGATIVE_INFINITY;
@@ -563,48 +563,48 @@ export class CanvasRenderer extends EventTarget {
         if (vMin === vMax) { vMax = vMin + 1; }
         const vRange = vMax - vMin;
         const innerH = chartH - chartPad * 2;
+        const baselineY = laneY + chartPad + innerH;
 
-        const valToY = (v: number) =>
-          laneY + chartPad + innerH - ((v - vMin) / vRange) * innerH;
-
-        // Area fill
-        const metricColor = this.resourceMetricColor();
-        this.ctx.beginPath();
-        let started = false;
+        const points: Array<{ x: number; y: number }> = [];
         for (let i = 0; i < timeline.length; i++) {
-          const x = timeToX(this.selectResourceTime(timeline[i]));
-          const y = valToY(values[i]);
-          if (!started) { this.ctx.moveTo(x, y); started = true; }
-          else { this.ctx.lineTo(x, y); }
+          points.push({
+            x: timeToX(this.selectResourceTime(timeline[i])),
+            y: laneY + chartPad + innerH - ((values[i] - vMin) / vRange) * innerH,
+          });
         }
-        // Close path to bottom for fill
-        if (started && timeline.length > 0) {
-          const xLast = timeToX(this.selectResourceTime(timeline[timeline.length - 1]));
-          const xFirst = timeToX(this.selectResourceTime(timeline[0]));
-          this.ctx.lineTo(xLast, laneY + chartPad + innerH);
-          this.ctx.lineTo(xFirst, laneY + chartPad + innerH);
+
+        if (points.length > 0) {
+          const metricColor = displayColor(
+            RESOURCE_METRIC_COLORS[this.resourceMetric] ?? "#94A3B8",
+          );
+
+          // Area fill
+          this.ctx.beginPath();
+          this.ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) {
+            this.ctx.lineTo(points[i].x, points[i].y);
+          }
+          this.ctx.lineTo(points[points.length - 1].x, baselineY);
+          this.ctx.lineTo(points[0].x, baselineY);
           this.ctx.closePath();
           this.ctx.fillStyle = metricColor;
           this.ctx.globalAlpha = 0.25;
           this.ctx.fill();
           this.ctx.globalAlpha = 1;
-        }
 
-        // Top stroke line
-        this.ctx.beginPath();
-        started = false;
-        for (let i = 0; i < timeline.length; i++) {
-          const x = timeToX(this.selectResourceTime(timeline[i]));
-          const y = valToY(values[i]);
-          if (!started) { this.ctx.moveTo(x, y); started = true; }
-          else { this.ctx.lineTo(x, y); }
+          // Top stroke line
+          this.ctx.beginPath();
+          this.ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) {
+            this.ctx.lineTo(points[i].x, points[i].y);
+          }
+          this.ctx.strokeStyle = metricColor;
+          this.ctx.lineWidth = 1.5;
+          this.ctx.globalAlpha = 0.8;
+          this.ctx.stroke();
+          this.ctx.globalAlpha = 1;
+          this.ctx.lineWidth = 1;
         }
-        this.ctx.strokeStyle = metricColor;
-        this.ctx.lineWidth = 1.5;
-        this.ctx.globalAlpha = 0.8;
-        this.ctx.stroke();
-        this.ctx.globalAlpha = 1;
-        this.ctx.lineWidth = 1;
 
         // Y-axis labels (min/max)
         this.ctx.fillStyle = axisTextColor;
@@ -687,15 +687,6 @@ export class CanvasRenderer extends EventTarget {
       case "memory": return sample.memory_mb;
       case "disk_io": return (sample.disk_read_mb ?? 0) + (sample.disk_write_mb ?? 0);
       case "net_io": return (sample.net_rx_mb ?? 0) + (sample.net_tx_mb ?? 0);
-    }
-  }
-
-  private resourceMetricColor(): string {
-    switch (this.resourceMetric) {
-      case "cpu": return "#00E5FF";
-      case "memory": return "#76FF03";
-      case "disk_io": return "#FF6D00";
-      case "net_io": return "#AB47BC";
     }
   }
 

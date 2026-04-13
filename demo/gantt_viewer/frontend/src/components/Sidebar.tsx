@@ -2,7 +2,12 @@ import { For, Show, createEffect, createMemo } from "solid-js";
 
 import type { TracePayload } from "../api/client";
 import type { HitCard } from "../canvas/hit";
-import { flattenVisibleLanes } from "../canvas/layout";
+import { flattenVisibleLanes, resourceChartH, type LaneRow } from "../canvas/layout";
+import type { ViewMode } from "../state/signals";
+
+type SidebarEntry =
+  | { kind: "lane"; row: LaneRow }
+  | { kind: "spacer"; height: number; traceId: string };
 
 interface SidebarProps {
   onPinLane: (card: HitCard) => void;
@@ -10,10 +15,35 @@ interface SidebarProps {
   scrollTop: number;
   traces: TracePayload[];
   visibility: Record<string, boolean>;
+  showResourceChart: boolean;
+  viewMode: ViewMode;
 }
 
 export default function Sidebar(props: SidebarProps) {
   const rows = createMemo(() => flattenVisibleLanes(props.traces, props.visibility));
+
+  const entries = createMemo<SidebarEntry[]>(() => {
+    const laneRows = rows();
+    const result: SidebarEntry[] = [];
+    for (let i = 0; i < laneRows.length; i++) {
+      result.push({ kind: "lane", row: laneRows[i] });
+      const isLastOfTrace =
+        i === laneRows.length - 1 || laneRows[i + 1].traceId !== laneRows[i].traceId;
+      if (
+        isLastOfTrace &&
+        props.showResourceChart &&
+        laneRows[i].trace.resource_timeline?.length
+      ) {
+        result.push({
+          kind: "spacer",
+          height: resourceChartH(props.viewMode),
+          traceId: laneRows[i].traceId,
+        });
+      }
+    }
+    return result;
+  });
+
   let shellEl!: HTMLElement;
   let suppressNextScroll = false;
 
@@ -40,32 +70,39 @@ export default function Sidebar(props: SidebarProps) {
         <div class="sidebar-time">TIME</div>
         <Show
           fallback={<div class="sidebar-empty">Load traces from the bar above.</div>}
-          when={rows().length > 0}
+          when={entries().length > 0}
         >
-          <For each={rows()}>
-            {(row) => (
-              <button
-                class="lane-label"
-                onClick={(event) =>
-                  props.onPinLane({
-                    hit: {
-                      kind: "lane",
-                      laneAgentId: row.laneAgentId,
-                      trace: row.trace,
-                      traceId: row.traceId,
-                      traceLabel: row.traceLabel,
-                    },
-                    x: event.clientX,
-                    y: event.clientY,
-                  })
-                }
-                type="button"
-              >
-                <strong>{row.traceLabel}</strong>
-                <span>{row.trace.metadata.scaffold}</span>
-                <span>{row.laneAgentId}</span>
-              </button>
-            )}
+          <For each={entries()}>
+            {(entry) =>
+              entry.kind === "lane" ? (
+                <button
+                  class="lane-label"
+                  onClick={(event) =>
+                    props.onPinLane({
+                      hit: {
+                        kind: "lane",
+                        laneAgentId: entry.row.laneAgentId,
+                        trace: entry.row.trace,
+                        traceId: entry.row.traceId,
+                        traceLabel: entry.row.traceLabel,
+                      },
+                      x: event.clientX,
+                      y: event.clientY,
+                    })
+                  }
+                  type="button"
+                >
+                  <strong>{entry.row.traceLabel}</strong>
+                  <span>{entry.row.trace.metadata.scaffold}</span>
+                  <span>{entry.row.laneAgentId}</span>
+                </button>
+              ) : (
+                <div
+                  class="sidebar-resource-spacer"
+                  style={{ height: `${entry.height}px` }}
+                />
+              )
+            }
           </For>
         </Show>
       </div>

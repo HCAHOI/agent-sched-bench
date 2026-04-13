@@ -77,7 +77,7 @@ export function sameHit(a: Hit | null, b: Hit | null): boolean {
   return false;
 }
 
-const RESOURCE_METRIC_COLORS: Record<string, string> = {
+export const RESOURCE_METRIC_COLORS: Record<string, string> = {
   cpu: "#00E5FF",
   memory: "#76FF03",
   disk_io: "#FF6D00",

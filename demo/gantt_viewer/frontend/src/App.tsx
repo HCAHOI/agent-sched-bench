@@ -272,6 +272,8 @@ export default function App() {
           scrollTop={scrollTop()}
           traces={loadedTraces()}
           visibility={visibility()}
+          showResourceChart={showResourceChart()}
+          viewMode={viewMode()}
         />
         <CanvasStage
           onClick={(card) =>

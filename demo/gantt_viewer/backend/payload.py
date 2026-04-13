@@ -178,7 +178,10 @@ def _parse_mem_usage_mb(raw: str) -> float:
 
 def _parse_percent(raw: str) -> float:
     """Parse '1.20%' → 1.20."""
-    return float(raw.rstrip("% "))
+    try:
+        return float(raw.rstrip("% "))
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def _load_resource_timeline(
@@ -208,8 +211,8 @@ def _load_resource_timeline(
         entry: dict[str, Any] = {
             "t": epoch - t0,
             "t_abs": epoch,
-            "cpu_percent": _parse_percent(s["cpu_percent"]) if isinstance(s.get("cpu_percent"), str) else float(s.get("cpu_percent", 0)),
-            "memory_mb": _parse_mem_usage_mb(s["mem_usage"]) if isinstance(s.get("mem_usage"), str) else float(s.get("memory_mb", 0)),
+            "cpu_percent": _parse_percent(s["cpu_percent"]) if isinstance(s.get("cpu_percent"), str) else float(s.get("cpu_percent") or 0),
+            "memory_mb": _parse_mem_usage_mb(s["mem_usage"]) if isinstance(s.get("mem_usage"), str) else float(s.get("memory_mb") or 0),
         }
         # Per-sample records store raw bytes; convert to MB.
         # Disk uses binary (1 MiB = 1048576), network uses decimal (1 MB = 1e6).
@@ -420,24 +423,93 @@ def _apply_real_timeline_to_resources(
     timeline: list[dict[str, Any]],
     lanes: list[dict[str, Any]],
 ) -> None:
-    """Map resource sample timestamps to real (gap-compressed) timeline."""
+    """Map resource sample timestamps to real (gap-compressed) timeline.
+
+    Uses the same real_t0_abs origin as _apply_real_timeline (spans + markers
+    + trace_t0) so the resource chart aligns with lane content.  Samples and
+    spans are both sorted chronologically, so a pointer walk gives O(M+N).
+    """
     all_spans = sorted(
         (span for lane in lanes for span in lane.get("spans") or []),
         key=lambda s: float(s.get("start_abs", 0)),
     )
+    all_markers = [
+        marker for lane in lanes for marker in lane.get("markers") or []
+    ]
     if not all_spans:
         return
 
+    # Match _apply_real_timeline: real_t0_abs = min(span_real_abs, marker_real_abs)
     real_t0_abs = min(
-        float(s.get("start_real_abs", float("inf"))) for s in all_spans
+        [float(s.get("start_real_abs", float("inf"))) for s in all_spans]
+        + [float(m.get("t_real_abs", float("inf"))) for m in all_markers]
     )
     if real_t0_abs == float("inf"):
         return
 
+    # O(M+N) pointer walk: both timeline and all_spans are sorted by abs time
+    span_idx = 0
+    n_spans = len(all_spans)
     for sample in timeline:
-        t_real_abs = _map_time_to_real_abs(float(sample["t_abs"]), all_spans)
+        t_abs = float(sample["t_abs"])
+        # Advance span pointer past spans that end before this sample
+        while (
+            span_idx < n_spans - 1
+            and float(all_spans[span_idx + 1].get("start_abs", 0)) <= t_abs
+        ):
+            span_idx += 1
+        t_real_abs = _map_time_to_real_abs_from(t_abs, all_spans, span_idx)
         sample["t_real_abs"] = t_real_abs
         sample["t_real"] = t_real_abs - real_t0_abs
+
+
+def _map_time_to_real_abs_from(
+    timestamp_abs: float,
+    spans: list[dict[str, Any]],
+    hint: int,
+) -> float:
+    """Map wall-clock timestamp to real-abs, starting search at *hint*.
+
+    Same logic as ``_map_time_to_real_abs`` but begins scanning from *hint*
+    to amortise the linear walk when both callers and spans are sorted.
+    """
+    if not spans:
+        return timestamp_abs
+
+    # Before first span — apply the same shift as _map_time_to_real_abs
+    first = spans[0]
+    first_start = float(first.get("start_abs", 0))
+    if timestamp_abs <= first_start:
+        shift = first_start - float(first.get("start_real_abs", 0))
+        return timestamp_abs - shift
+
+    for index in range(max(0, hint), len(spans)):
+        span = spans[index]
+        wall_start = float(span.get("start_abs", 0))
+        wall_end = float(span.get("end_abs", wall_start))
+        real_start = float(span.get("start_real_abs", wall_start))
+        real_end = float(span.get("end_real_abs", real_start))
+
+        # Timestamp before this span → in the gap before it, clamp to prev end
+        if timestamp_abs < wall_start:
+            if index > 0:
+                prev = spans[index - 1]
+                return float(prev.get("end_real_abs", 0))
+            shift = wall_start - real_start
+            return timestamp_abs - shift
+
+        # Inside this span
+        if timestamp_abs <= wall_end:
+            wall_dur = wall_end - wall_start
+            if wall_dur <= 0:
+                return real_start
+            frac = (timestamp_abs - wall_start) / wall_dur
+            return real_start + frac * (real_end - real_start)
+
+    # After last span
+    last = spans[-1]
+    shift = float(last.get("end_abs", 0)) - float(last.get("end_real_abs", 0))
+    return timestamp_abs - shift
 
 
 def _apply_real_timeline(
