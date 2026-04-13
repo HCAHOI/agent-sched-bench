@@ -285,19 +285,20 @@ def _parse_net_io_bytes(net_io: str) -> tuple[float | None, float | None]:
 
 
 def _parse_size_bytes(s: str) -> float | None:
-    """Parse a human-readable size string to bytes."""
+    """Parse a human-readable size string to bytes (SI and binary units)."""
     s = s.strip()
-    try:
-        if s.endswith("GB"):
-            return float(s[:-2]) * 1e9
-        if s.endswith("MB"):
-            return float(s[:-2]) * 1e6
-        if s.endswith("kB"):
-            return float(s[:-2]) * 1e3
-        if s.endswith("B"):
-            return float(s[:-1])
-    except ValueError:
+    if not s:
         return None
+    _units = {
+        "TiB": 1024**4, "GiB": 1024**3, "MiB": 1024**2, "KiB": 1024,
+        "TB": 1e12, "GB": 1e9, "MB": 1e6, "KB": 1e3, "kB": 1e3, "B": 1,
+    }
+    for unit, multiplier in _units.items():
+        if s.endswith(unit):
+            try:
+                return float(s[:-len(unit)].strip()) * multiplier
+            except ValueError:
+                return None
     return None
 
 
@@ -354,13 +355,13 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         if wb is not None:
             disk_write_values.append(wb / (1024 * 1024))
 
-        # Network I/O (from stats, stored as bytes in sample)
+        # Network I/O (from stats — decimal units, so divide by 1e6)
         net_rx = sample.get("net_rx_bytes")
         if net_rx is not None:
-            net_rx_values.append(net_rx / (1024 * 1024))
+            net_rx_values.append(net_rx / 1_000_000)
         net_tx = sample.get("net_tx_bytes")
         if net_tx is not None:
-            net_tx_values.append(net_tx / (1024 * 1024))
+            net_tx_values.append(net_tx / 1_000_000)
 
         # Context switches (from cgroup pids aggregate)
         ctxt = sample.get("context_switches")
@@ -439,12 +440,10 @@ class ContainerStatsSampler(threading.Thread):
             self._io_mode = "exec"
             return
         cgroup_path = _resolve_cgroup_path(pid)
-        if cgroup_path is not None:
-            io_data = _read_cgroup_io_stat(cgroup_path)
-            if io_data is not None:
-                self._cgroup_path = cgroup_path
-                self._io_mode = "cgroup"
-                return
+        if cgroup_path is not None and (cgroup_path / "io.stat").exists():
+            self._cgroup_path = cgroup_path
+            self._io_mode = "cgroup"
+            return
         logger.info(
             "Cgroup I/O unavailable for %s; falling back to exec-based aggregation",
             self.container_id[:12],
@@ -465,7 +464,7 @@ class ContainerStatsSampler(threading.Thread):
                 for pid in pids:
                     ctxt = _read_pid_context_switches(pid)
                     if ctxt is not None:
-                        self._pid_ctxt[pid] = ctxt
+                        self._pid_ctxt[pid] = max(self._pid_ctxt.get(pid, 0), ctxt)
                 if self._pid_ctxt:
                     sample["context_switches"] = sum(self._pid_ctxt.values())
         elif self._io_mode == "exec":

@@ -59,6 +59,39 @@
 
 ---
 
+## TODO 2.5 [P1] — Resource Utilization Timeline in Gantt Viewer
+
+**Hypothesis**: Interactive visualization of system metrics aligned with agent actions enables faster identification of I/O bottleneck patterns than static figures.
+
+**Motivation**: TODO 3 (phase-resource analysis) produces data that needs visual exploration. The Gantt viewer already renders LLM/tool spans on a shared time axis — adding a resource chart below agent lanes gives researchers an interactive way to correlate agent phases with CPU/memory/disk/network spikes.
+
+**Implementation**:
+- **Backend** (`demo/gantt_viewer/backend/`):
+  - Add `ResourceSample` Pydantic model to `schema.py` (t, t_abs, cpu_percent, memory_mb, disk_read_mb, disk_write_mb, net_rx_mb, net_tx_mb, context_switches)
+  - Add `resource_timeline: list[ResourceSample] | None` to `TracePayload`
+  - In `payload.py`: load `resources.json` from the same attempt directory as `trace.jsonl`, align sample timestamps with trace t0, build timeline
+- **Frontend** (`demo/gantt_viewer/frontend/src/`):
+  - Add `showResourceTimeline` + `resourceMetric` signals to `state/signals.ts`
+  - In `canvas/layout.ts`: add `RESOURCE_CHART_H = 80` constant, update total content height
+  - In `canvas/CanvasRenderer.ts`: render resource area chart below agent lanes, using the same `timeToX` mapping for alignment
+  - In `canvas/hit.ts`: add resource chart hit detection for tooltip
+  - In `components/Header.tsx`: add metric selector dropdown (CPU / Memory / Disk IO / Net IO) + visibility toggle
+
+**Files**: `demo/gantt_viewer/backend/schema.py`, `demo/gantt_viewer/backend/payload.py`, `demo/gantt_viewer/frontend/src/canvas/CanvasRenderer.ts`, `demo/gantt_viewer/frontend/src/canvas/layout.ts`, `demo/gantt_viewer/frontend/src/state/signals.ts`, `demo/gantt_viewer/frontend/src/components/Header.tsx`
+
+**Depends on**: TODO 1 (resources.json must contain I/O fields)
+
+**Acceptance**:
+- Gantt viewer displays resource utilization chart below agent lanes
+- Chart is time-aligned with spans (same zoom/scroll)
+- User can switch between CPU%, memory, disk I/O, network I/O metrics
+- Hovering shows resource values at the cursor time in tooltip
+- Existing Gantt functionality unchanged (no regression)
+
+**Effort**: 1.5-2 days
+
+---
+
 ## TODO 3 [P1] — Agent Phase × Resource Time-Aligned Analysis
 
 **Hypothesis**: Resource demand varies ≥3x (peak vs trough) across tool_exec vs llm_call phases.
@@ -69,10 +102,11 @@
   - Level 2: optional fine-grained (needs command string parsing)
 - Analysis path: direct from raw trace actions + resources.json (NOT through Gantt payload)
 - Output: timeline chart (x=time, y=CPU%/disk_io_rate/mem, background=phase)
+- **Interactive exploration**: use TODO 2.5's Gantt resource timeline to visually validate phase boundaries before committing to automated analysis
 
 **Files**: New `scripts/figures/plot_resource_phase_alignment.py`
 
-**Depends on**: TODO 1
+**Depends on**: TODO 1, TODO 2.5 (for visual validation)
 
 **Acceptance**: 10-trace charts with reported peak/trough ratios for tool vs LLM phases
 
@@ -157,15 +191,16 @@
 
 ```
 Week 1:
-  Day 1-2: TODO 1 (I/O profiling) + TODO 2 pre-step audit (parallel)
+  Day 1-2: TODO 1 (I/O profiling) ✅ DONE + TODO 2 pre-step audit (parallel)
   Day 2-3: TODO 2 (network fix) + TODO 5 (container lifecycle, parallel)
 
 Week 2:
-  Day 4-5: TODO 3 (phase-resource alignment)
-  Day 5-7: TODO 4 (concurrent scheduling experiment)
+  Day 4-5: TODO 2.5 (Gantt resource visualization)
+  Day 5-6: TODO 3 (phase-resource alignment, use 2.5 for visual validation)
+  Day 6-8: TODO 4 (concurrent scheduling experiment)
 
 Week 3:
-  Day 8-12: TODO 6 (resource pooling prototype)
+  Day 9-13: TODO 6 (resource pooling prototype)
 
 Optional: x86 validation on VastAI (1-2 days)
 ```

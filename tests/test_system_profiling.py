@@ -292,6 +292,12 @@ def test_parse_size_bytes_variants() -> None:
     assert _parse_size_bytes("1.5kB") == pytest.approx(1500.0)
     assert _parse_size_bytes("2MB") == pytest.approx(2e6)
     assert _parse_size_bytes("1GB") == pytest.approx(1e9)
+    assert _parse_size_bytes("1TB") == pytest.approx(1e12)
+    # Binary units
+    assert _parse_size_bytes("1KiB") == pytest.approx(1024.0)
+    assert _parse_size_bytes("1MiB") == pytest.approx(1024**2)
+    assert _parse_size_bytes("1GiB") == pytest.approx(1024**3)
+    assert _parse_size_bytes("1TiB") == pytest.approx(1024**4)
     assert _parse_size_bytes("") is None
 
 
@@ -359,12 +365,12 @@ def test_summarize_samples_with_io() -> None:
     assert summary["disk_write_mb"]["max"] == pytest.approx(2.0)
     assert summary["disk_write_mb"]["delta"] == pytest.approx(1.5)
 
-    # Network I/O (bytes → MB)
+    # Network I/O (bytes → MB, decimal division)
     assert summary["net_rx_mb"]["delta"] == pytest.approx(
-        (20000.0 - 1000.0) / (1024 * 1024)
+        (20000.0 - 1000.0) / 1_000_000
     )
     assert summary["net_tx_mb"]["delta"] == pytest.approx(
-        (50000.0 - 2000.0) / (1024 * 1024)
+        (50000.0 - 2000.0) / 1_000_000
     )
 
     # Context switches
@@ -443,7 +449,11 @@ def test_sampler_collects_io_via_cgroup() -> None:
         raise FileNotFoundError(path_str)
 
     def fake_exists(self):
-        return str(self) == "/sys/fs/cgroup/system.slice/docker-test.scope"
+        s = str(self)
+        return s in (
+            "/sys/fs/cgroup/system.slice/docker-test.scope",
+            "/sys/fs/cgroup/system.slice/docker-test.scope/io.stat",
+        )
 
     sampler = ContainerStatsSampler(
         container_id="test123",
