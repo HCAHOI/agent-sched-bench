@@ -1,13 +1,14 @@
 import type { GanttPayload, ResourceSample } from "../api/client";
 import { displayColor } from "../theme/displayColor";
-import { RESOURCE_METRIC_COLORS, sameHit, type Hit, type HitCard } from "./hit";
+import { RESOURCE_METRIC_COLORS, findNearestSample, sameHit, type Hit, type HitCard } from "./hit";
 import { computeTotalContentHeight, effectiveLaneH, MARKER_H, resourceChartH, SPAN_H, SPAN_PAD, TIME_AXIS_H } from "./layout";
+import { setCanvasTimeRange } from "../state/signals";
 import { formatTimeLabel, niceStep } from "./time";
 
 type TimeMode = "sync" | "abs";
 type ViewMode = "layered" | "concise";
 type ClockMode = "wall" | "real";
-type ResourceMetric = "cpu" | "memory" | "disk_io" | "net_io";
+type ResourceMetric = "cpu" | "memory" | "disk_io" | "net_io" | "none";
 
 interface RenderHitBox {
   h: number;
@@ -40,6 +41,7 @@ export class CanvasRenderer extends EventTarget {
   private resizeObserver: ResizeObserver;
   private clockMode: ClockMode = "wall";
   private resourceMetric: ResourceMetric = "cpu";
+  private resourceMetricSecondary: ResourceMetric = "memory";
   private showResourceChart = true;
   private timeMode: TimeMode = "sync";
   private viewMode: ViewMode = "layered";
@@ -166,8 +168,18 @@ export class CanvasRenderer extends EventTarget {
 
   setResourceMetric(metric: ResourceMetric): void {
     if (this.resourceMetric === metric) return;
+    const wasNone = this.resourceMetric === "none";
     this.resourceMetric = metric;
-    this.queueRender();
+    if (wasNone || metric === "none") this.scheduleResize();
+    else this.queueRender();
+  }
+
+  setResourceMetricSecondary(metric: ResourceMetric): void {
+    if (this.resourceMetricSecondary === metric) return;
+    const wasNone = this.resourceMetricSecondary === "none";
+    this.resourceMetricSecondary = metric;
+    if (wasNone || metric === "none") this.scheduleResize();
+    else this.queueRender();
   }
 
   setShowResourceChart(show: boolean): void {
@@ -209,11 +221,13 @@ export class CanvasRenderer extends EventTarget {
 
   private onClick(event: MouseEvent): void {
     const hit = this.hitFromEvent(event);
+    // Resource charts are hover-only, not clickable
+    const effective = hit?.kind === "resource" ? null : hit;
     this.dispatchEvent(
       new CustomEvent("click", {
-        detail: hit
+        detail: effective
           ? {
-              hit,
+              hit: effective,
               x: event.clientX,
               y: event.clientY,
             }
@@ -241,6 +255,13 @@ export class CanvasRenderer extends EventTarget {
 
   private onMouseMove(event: MouseEvent): void {
     const hit = this.hitFromEvent(event);
+    if (hit?.kind === "resource") {
+      const rect = this.canvas.getBoundingClientRect();
+      const mx = event.clientX - rect.left;
+      const time = hit.timeMin + (mx / hit.canvasWidth) * hit.timeRange;
+      hit.hoveredTime = time;
+      hit.hoveredSample = findNearestSample(hit.timeline, time, this.timeMode, this.clockMode);
+    }
     this.emitHover(
       hit
         ? {
@@ -301,12 +322,14 @@ export class CanvasRenderer extends EventTarget {
   private resizeCanvasImmediate(): void {
     const dpr = window.devicePixelRatio || 1;
     const logicalWidth = Math.max(this.wrap.clientWidth * this.zoomFactor, this.wrap.clientWidth || 1);
+    const effectiveShowResource = this.showResourceChart &&
+      (this.resourceMetric !== "none" || this.resourceMetricSecondary !== "none");
     const logicalHeight = computeTotalContentHeight(
       this.payload?.traces ?? [],
       this.visibility,
       this.viewMode,
       this.wrap.clientHeight || 320,
-      this.showResourceChart,
+      effectiveShowResource,
     );
 
     // canvas.width/height reset the backing buffer (and clear it) even on a
@@ -391,6 +414,7 @@ export class CanvasRenderer extends EventTarget {
     }
     maxTime += margin;
     const totalRange = maxTime - minTime || 1;
+    setCanvasTimeRange({ minTime, totalRange });
     const laneHeight = effectiveLaneH(this.viewMode);
     const gridStep = niceStep(totalRange, width / 80);
     const timeToX = (value: number) => ((value - minTime) / totalRange) * width;
@@ -537,9 +561,22 @@ export class CanvasRenderer extends EventTarget {
         laneY += laneHeight;
       }
 
-      // Resource utilization chart for this trace
-      const timeline = trace.resource_timeline;
-      if (this.showResourceChart && timeline?.length) {
+      // Resource utilization chart for this trace (dual-metric overlay)
+      // Clip resource timeline to end of last action
+      let timeline = trace.resource_timeline;
+      const hasAnyMetric = this.resourceMetric !== "none" || this.resourceMetricSecondary !== "none";
+      if (this.showResourceChart && hasAnyMetric && timeline?.length) {
+        let lastActionEnd = -Infinity;
+        for (const lane of trace.lanes) {
+          for (const span of lane.spans) {
+            lastActionEnd = Math.max(lastActionEnd, this.selectSpanEnd(span));
+          }
+        }
+        if (Number.isFinite(lastActionEnd)) {
+          const cutoff = lastActionEnd + 60;
+          timeline = timeline.filter((s) => this.selectResourceTime(s) <= cutoff);
+        }
+        if (!timeline.length) { laneY += resourceChartH(this.viewMode); continue; }
         const chartH = resourceChartH(this.viewMode);
         const chartPad = 3;
 
@@ -552,67 +589,21 @@ export class CanvasRenderer extends EventTarget {
         this.ctx.lineTo(width, laneY + chartH);
         this.ctx.stroke();
 
-        // Extract values and pre-calculate points
-        const values = timeline.map((s) => this.extractMetricValue(s));
-        let vMin = Number.POSITIVE_INFINITY;
-        let vMax = Number.NEGATIVE_INFINITY;
-        for (const v of values) {
-          if (v < vMin) vMin = v;
-          if (v > vMax) vMax = v;
-        }
-        if (vMin === vMax) { vMax = vMin + 1; }
-        const vRange = vMax - vMin;
-        const innerH = chartH - chartPad * 2;
-        const baselineY = laneY + chartPad + innerH;
-
-        const points: Array<{ x: number; y: number }> = [];
-        for (let i = 0; i < timeline.length; i++) {
-          points.push({
-            x: timeToX(this.selectResourceTime(timeline[i])),
-            y: laneY + chartPad + innerH - ((values[i] - vMin) / vRange) * innerH,
-          });
-        }
-
-        if (points.length > 0) {
-          const metricColor = displayColor(
-            RESOURCE_METRIC_COLORS[this.resourceMetric] ?? "#94A3B8",
+        // Primary metric (left Y-axis labels) — skip if "none"
+        let primaryRange: { vMin: number; vMax: number } = { vMin: 0, vMax: 1 };
+        if (this.resourceMetric !== "none") {
+          primaryRange = this.renderMetricOverlay(
+            timeline, this.resourceMetric, timeToX, laneY, chartH, chartPad, "left",
           );
-
-          // Area fill
-          this.ctx.beginPath();
-          this.ctx.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length; i++) {
-            this.ctx.lineTo(points[i].x, points[i].y);
-          }
-          this.ctx.lineTo(points[points.length - 1].x, baselineY);
-          this.ctx.lineTo(points[0].x, baselineY);
-          this.ctx.closePath();
-          this.ctx.fillStyle = metricColor;
-          this.ctx.globalAlpha = 0.25;
-          this.ctx.fill();
-          this.ctx.globalAlpha = 1;
-
-          // Top stroke line
-          this.ctx.beginPath();
-          this.ctx.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length; i++) {
-            this.ctx.lineTo(points[i].x, points[i].y);
-          }
-          this.ctx.strokeStyle = metricColor;
-          this.ctx.lineWidth = 1.5;
-          this.ctx.globalAlpha = 0.8;
-          this.ctx.stroke();
-          this.ctx.globalAlpha = 1;
-          this.ctx.lineWidth = 1;
         }
 
-        // Y-axis labels (min/max)
-        this.ctx.fillStyle = axisTextColor;
-        this.ctx.font = '9px "JetBrains Mono", monospace';
-        this.ctx.textAlign = "left";
-        const unit = this.resourceMetricUnit();
-        this.ctx.fillText(`${vMax.toFixed(1)}${unit}`, 4, laneY + chartPad + 8);
-        this.ctx.fillText(`${vMin.toFixed(1)}${unit}`, 4, laneY + chartH - chartPad - 2);
+        // Secondary metric (right Y-axis labels) — skip if "none" or same as primary
+        let secondaryRange: { vMin: number; vMax: number } | undefined;
+        if (this.resourceMetricSecondary !== "none" && this.resourceMetricSecondary !== this.resourceMetric) {
+          secondaryRange = this.renderMetricOverlay(
+            timeline, this.resourceMetricSecondary, timeToX, laneY, chartH, chartPad, "right",
+          );
+        }
 
         // Hit box for the entire resource chart area
         this.hitBoxes.push({
@@ -623,11 +614,17 @@ export class CanvasRenderer extends EventTarget {
             traceLabel: trace.label,
             timeline,
             metric: this.resourceMetric,
+            metricSecondary: this.resourceMetricSecondary !== this.resourceMetric ? this.resourceMetricSecondary : undefined,
             chartY: laneY,
             chartH,
             chartPad,
-            vMin,
-            vMax,
+            vMin: primaryRange.vMin,
+            vMax: primaryRange.vMax,
+            vMinSecondary: secondaryRange?.vMin,
+            vMaxSecondary: secondaryRange?.vMax,
+            timeMin: minTime,
+            timeRange: totalRange,
+            canvasWidth: width,
           } as Hit,
           w: width,
           x: 0,
@@ -681,21 +678,112 @@ export class CanvasRenderer extends EventTarget {
     return this.timeMode === "sync" ? sample.t : sample.t_abs;
   }
 
-  private extractMetricValue(sample: ResourceSample): number {
-    switch (this.resourceMetric) {
+  private extractMetricValueFor(sample: ResourceSample, metric: ResourceMetric): number {
+    switch (metric) {
       case "cpu": return sample.cpu_percent;
       case "memory": return sample.memory_mb;
       case "disk_io": return (sample.disk_read_mb ?? 0) + (sample.disk_write_mb ?? 0);
       case "net_io": return (sample.net_rx_mb ?? 0) + (sample.net_tx_mb ?? 0);
+      case "none": return 0;
     }
   }
 
-  private resourceMetricUnit(): string {
-    switch (this.resourceMetric) {
+  private extractMetricValue(sample: ResourceSample): number {
+    return this.extractMetricValueFor(sample, this.resourceMetric);
+  }
+
+  private resourceMetricUnitFor(metric: ResourceMetric): string {
+    switch (metric) {
       case "cpu": return "%";
       case "memory": return "MB";
       case "disk_io": return "MB";
       case "net_io": return "MB";
+      case "none": return "";
     }
+  }
+
+  private resourceMetricUnit(): string {
+    return this.resourceMetricUnitFor(this.resourceMetric);
+  }
+
+  private renderMetricOverlay(
+    timeline: ResourceSample[],
+    metric: ResourceMetric,
+    timeToX: (t: number) => number,
+    laneY: number,
+    chartH: number,
+    chartPad: number,
+    labelSide: "left" | "right",
+  ): { vMin: number; vMax: number } {
+    const values = timeline.map((s) => this.extractMetricValueFor(s, metric));
+    let vMin = Number.POSITIVE_INFINITY;
+    let vMax = Number.NEGATIVE_INFINITY;
+    for (const v of values) {
+      if (v < vMin) vMin = v;
+      if (v > vMax) vMax = v;
+    }
+    if (vMin === vMax) { vMax = vMin + 1; }
+    const vRange = vMax - vMin;
+    const innerH = chartH - chartPad * 2;
+    const baselineY = laneY + chartPad + innerH;
+
+    const points: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < timeline.length; i++) {
+      points.push({
+        x: timeToX(this.selectResourceTime(timeline[i])),
+        y: laneY + chartPad + innerH - ((values[i] - vMin) / vRange) * innerH,
+      });
+    }
+
+    if (points.length > 0) {
+      const metricColor = displayColor(
+        RESOURCE_METRIC_COLORS[metric] ?? "#94A3B8",
+      );
+
+      // Area fill
+      this.ctx.beginPath();
+      this.ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        this.ctx.lineTo(points[i].x, points[i].y);
+      }
+      this.ctx.lineTo(points[points.length - 1].x, baselineY);
+      this.ctx.lineTo(points[0].x, baselineY);
+      this.ctx.closePath();
+      this.ctx.fillStyle = metricColor;
+      this.ctx.globalAlpha = labelSide === "left" ? 0.25 : 0.18;
+      this.ctx.fill();
+      this.ctx.globalAlpha = 1;
+
+      // Top stroke line
+      this.ctx.beginPath();
+      this.ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        this.ctx.lineTo(points[i].x, points[i].y);
+      }
+      this.ctx.strokeStyle = metricColor;
+      this.ctx.lineWidth = 1.5;
+      this.ctx.globalAlpha = 0.8;
+      this.ctx.stroke();
+      this.ctx.globalAlpha = 1;
+      this.ctx.lineWidth = 1;
+    }
+
+    // Y-axis labels colored by metric
+    const canvasW = this.canvas.width / (window.devicePixelRatio || 1);
+    const metricLabelColor = displayColor(RESOURCE_METRIC_COLORS[metric] ?? "#94A3B8");
+    this.ctx.fillStyle = metricLabelColor;
+    this.ctx.font = '9px "JetBrains Mono", monospace';
+    const unit = this.resourceMetricUnitFor(metric);
+    if (labelSide === "left") {
+      this.ctx.textAlign = "left";
+      this.ctx.fillText(`${vMax.toFixed(1)}${unit}`, 4, laneY + chartPad + 8);
+      this.ctx.fillText(`${vMin.toFixed(1)}${unit}`, 4, laneY + chartH - chartPad - 2);
+    } else {
+      this.ctx.textAlign = "right";
+      this.ctx.fillText(`${vMax.toFixed(1)}${unit}`, canvasW - 4, laneY + chartPad + 8);
+      this.ctx.fillText(`${vMin.toFixed(1)}${unit}`, canvasW - 4, laneY + chartH - chartPad - 2);
+    }
+
+    return { vMin, vMax };
   }
 }

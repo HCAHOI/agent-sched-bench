@@ -17,10 +17,29 @@ Assume the server is already running at `http://127.0.0.1:8765`.
 
 ## Endpoints
 
+### Health check
+
+```bash
+curl -s http://127.0.0.1:8765/api/health
+```
+
+Response: `{"status": "ok", "n_discovered": <int>}`
+
 ### List currently tracked traces
 
 ```bash
 curl -s http://127.0.0.1:8765/api/traces
+```
+
+Response:
+
+```json
+{
+  "traces": [
+    {"id": "ac1-...", "label": "...", "source_format": "trace", "path": "/abs/path/trace.jsonl", "size_bytes": 12345, "mtime": 1712345678.0}
+  ],
+  "registries": {"spans": {...}, "markers": {...}}
+}
 ```
 
 ### Register one or more existing trace files
@@ -66,6 +85,15 @@ curl -s http://127.0.0.1:8765/api/traces/upload \
   -F 'file=@/abs/path/to/trace.jsonl'
 ```
 
+Response includes the descriptor and a pre-built Gantt payload fragment:
+
+```json
+{
+  "descriptor": {"id": "...", "label": "...", "source_format": "trace", "path": "...", "size_bytes": 0, "mtime": 0.0},
+  "payload_fragment": {"id": "...", "label": "...", "metadata": {...}, "t0": 0.0, "lanes": [...], "resource_timeline": [...]}
+}
+```
+
 ### Stop tracking one or more traces
 
 This only unregisters ids from the runtime registry.
@@ -97,6 +125,31 @@ curl -s http://127.0.0.1:8765/api/payload \
     ]
   }'
 ```
+
+Response:
+
+```json
+{
+  "registries": {
+    "spans": {"llm": {"color": "...", "label": "...", "order": 0}, ...},
+    "markers": {"scheduling": {"symbol": "...", "color": "...", "label": "..."}, ...}
+  },
+  "traces": [
+    {
+      "id": "ac1-...",
+      "label": "...",
+      "metadata": {"scaffold": "openclaw", "model": "...", "n_actions": 42, "n_iterations": 10, "n_events": 15, "elapsed_s": 120.0},
+      "t0": 1712345678.0,
+      "lanes": [{"agent_id": "...", "spans": [...], "markers": [...]}],
+      "resource_timeline": [{"t": 0.0, "t_abs": 0.0, "cpu_percent": 45.0, "memory_mb": 1024.0, ...}]
+    }
+  ],
+  "errors": []
+}
+```
+
+Partial failures return mixed `traces` + `errors`; each error is
+`{"trace_id": "...", "stage": "trace_load|payload_build", "error": "..."}`.
 
 ## Recommended Agent Sequence
 

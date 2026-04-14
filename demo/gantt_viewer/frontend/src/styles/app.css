@@ -407,7 +407,7 @@ body.view-concise {
   justify-content: center;
   padding: 0 12px;
   border: 0;
-  border-bottom: 1px solid var(--grid);
+  border-top: 1px solid var(--grid);
   background: transparent;
   color: inherit;
   text-align: left;
@@ -469,6 +469,7 @@ body.view-concise .lane-label strong {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding-bottom: 80px;
 }
 
 .canvas-wrap::-webkit-scrollbar {
@@ -484,6 +485,69 @@ body.view-concise .lane-label strong {
 .canvas-wrap canvas {
   display: block;
   cursor: crosshair;
+}
+
+/* ─── Aggregate Resource Bar (fixed bottom) ──────────────────── */
+
+.aggregate-resource-bar {
+  position: fixed;
+  bottom: 0;
+  left: var(--sidebar-w);
+  right: 0;
+  height: 80px;
+  background: var(--bg-header);
+  border-top: 1px solid var(--border);
+  z-index: 50;
+}
+
+.aggregate-resource-bar canvas {
+  display: block;
+}
+
+.aggregate-resource-toggle {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  z-index: 51;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-header);
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  transition: background 120ms ease;
+}
+
+.aggregate-resource-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--cyan);
+}
+
+.aggregate-hover-tooltip {
+  position: fixed;
+  z-index: 60;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  white-space: nowrap;
+}
+
+.aggregate-hover-tooltip strong {
+  color: var(--cyan);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 /* ─── Tooltip ─────────────────────────────────────────────────── */

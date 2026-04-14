@@ -21,6 +21,8 @@ function mountHeader() {
         zoom={() => 1}
         resourceMetric={() => "cpu"}
         onResourceMetricChange={() => undefined}
+        resourceMetricSecondary={() => "memory" as const}
+        onResourceMetricSecondaryChange={() => undefined}
         showResourceChart={() => true}
         onShowResourceChartChange={() => undefined}
       />

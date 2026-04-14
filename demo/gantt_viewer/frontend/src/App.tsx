@@ -15,6 +15,7 @@ import Header from "./components/Header";
 import Legend from "./components/Legend";
 import Sidebar from "./components/Sidebar";
 import Tooltip from "./components/Tooltip";
+import AggregateResourceBar from "./components/AggregateResourceBar";
 import TraceChipBar from "./components/TraceChipBar";
 import { selectInitialTraceIds } from "./bootstrap/autoload";
 import {
@@ -56,6 +57,8 @@ import {
   zoom,
   resourceMetric,
   setResourceMetric,
+  resourceMetricSecondary,
+  setResourceMetricSecondary,
   showResourceChart,
   setShowResourceChart,
 } from "./state/signals";
@@ -243,6 +246,8 @@ export default function App() {
         zoom={zoom}
         resourceMetric={resourceMetric}
         onResourceMetricChange={setResourceMetric}
+        resourceMetricSecondary={resourceMetricSecondary}
+        onResourceMetricSecondaryChange={setResourceMetricSecondary}
         showResourceChart={showResourceChart}
         onShowResourceChartChange={setShowResourceChart}
       />
@@ -273,6 +278,8 @@ export default function App() {
           traces={loadedTraces()}
           visibility={visibility()}
           showResourceChart={showResourceChart()}
+          resourceMetric={resourceMetric()}
+          resourceMetricSecondary={resourceMetricSecondary()}
           viewMode={viewMode()}
         />
         <CanvasStage
@@ -303,6 +310,7 @@ export default function App() {
           payload={payload()}
           pinnedHit={pinnedCard()?.hit ?? null}
           resourceMetric={resourceMetric()}
+          resourceMetricSecondary={resourceMetricSecondary()}
           showResourceChart={showResourceChart()}
           themeMode={themeMode()}
           timeMode={timeMode()}
@@ -311,6 +319,17 @@ export default function App() {
           zoom={zoom()}
         />
       </section>
+
+      <AggregateResourceBar
+        traces={loadedTraces()}
+        visibility={visibility()}
+        resourceMetric={resourceMetric()}
+        resourceMetricSecondary={resourceMetricSecondary()}
+        showResourceChart={showResourceChart()}
+        timeMode={timeMode()}
+        clockMode={clockMode()}
+        themeMode={themeMode()}
+      />
 
       <DropZone enabled={!snapshotMode} onUpload={handleUpload} />
 

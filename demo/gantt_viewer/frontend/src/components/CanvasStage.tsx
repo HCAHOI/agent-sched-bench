@@ -15,6 +15,7 @@ interface CanvasStageProps {
   payload: GanttPayload | null;
   pinnedHit: Hit | null;
   resourceMetric: ResourceMetric;
+  resourceMetricSecondary: ResourceMetric;
   showResourceChart: boolean;
   themeMode: ThemeMode;
   timeMode: TimeMode;
@@ -79,6 +80,10 @@ export default function CanvasStage(props: CanvasStageProps) {
 
   createEffect(() => {
     renderer?.setResourceMetric(props.resourceMetric);
+  });
+
+  createEffect(() => {
+    renderer?.setResourceMetricSecondary(props.resourceMetricSecondary);
   });
 
   createEffect(() => {

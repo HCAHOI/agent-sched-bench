@@ -16,6 +16,8 @@ interface HeaderProps {
   zoom: Accessor<number>;
   resourceMetric: Accessor<ResourceMetric>;
   onResourceMetricChange: (metric: ResourceMetric) => void;
+  resourceMetricSecondary: Accessor<ResourceMetric>;
+  onResourceMetricSecondaryChange: (metric: ResourceMetric) => void;
   showResourceChart: Accessor<boolean>;
   onShowResourceChartChange: (show: boolean) => void;
 }
@@ -121,8 +123,8 @@ export default function Header(props: HeaderProps) {
           CONCISE
         </button>
       </div>
-      <label class="zoom-select-wrap" title="Resource metric">
-        <span class="zoom-select-label">res</span>
+      <label class="zoom-select-wrap" title="Primary resource metric">
+        <span class="zoom-select-label" style={{ color: "#00E5FF" }}>res1</span>
         <select
           class="zoom-select"
           value={props.resourceMetric()}
@@ -132,6 +134,25 @@ export default function Header(props: HeaderProps) {
             )
           }
         >
+          <option value="none">None</option>
+          <option value="cpu">CPU %</option>
+          <option value="memory">Memory</option>
+          <option value="disk_io">Disk I/O</option>
+          <option value="net_io">Net I/O</option>
+        </select>
+      </label>
+      <label class="zoom-select-wrap" title="Secondary resource metric">
+        <span class="zoom-select-label" style={{ color: "#76FF03" }}>res2</span>
+        <select
+          class="zoom-select"
+          value={props.resourceMetricSecondary()}
+          onChange={(e) =>
+            props.onResourceMetricSecondaryChange(
+              (e.currentTarget as HTMLSelectElement).value as ResourceMetric,
+            )
+          }
+        >
+          <option value="none">None</option>
           <option value="cpu">CPU %</option>
           <option value="memory">Memory</option>
           <option value="disk_io">Disk I/O</option>
