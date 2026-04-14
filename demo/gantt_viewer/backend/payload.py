@@ -425,13 +425,16 @@ def _apply_real_timeline_to_resources(
 ) -> None:
     """Map resource sample timestamps to real (gap-compressed) timeline.
 
-    Uses the same real_t0_abs origin as _apply_real_timeline (spans + markers
-    + trace_t0) so the resource chart aligns with lane content.  Samples and
-    spans are both sorted chronologically, so a pointer walk gives O(M+N).
+    Uses the same real_t0_abs origin and span sort order as
+    _apply_real_timeline so the resource chart aligns with lane content.
     """
     all_spans = sorted(
         (span for lane in lanes for span in lane.get("spans") or []),
-        key=lambda s: float(s.get("start_abs", 0)),
+        key=lambda s: (
+            float(s.get("start_abs", 0)),
+            float(s.get("end_abs", 0)),
+            str(s.get("type", "")),
+        ),
     )
     all_markers = [
         marker for lane in lanes for marker in lane.get("markers") or []
