@@ -44,7 +44,7 @@ def _unwrap_tool_args(
 # capture_output=True to prevent stdout pollution of the protocol.
 # ---------------------------------------------------------------------------
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r'''
-import json, os, sys, subprocess, difflib, signal
+import json, os, sys, subprocess, difflib, signal, time
 
 def _find_match(content, old_text):
     if old_text in content:
@@ -80,6 +80,14 @@ def _not_found_msg(old_text, content, path):
         return f"Error: old_text not found in {path}.\nBest match ({best_ratio:.0%}) at line {best_start+1}:\n{diff}"
     return f"Error: old_text not found in {path}. No similar text found."
 
+_MAX_OUTPUT = 10_000
+
+def _truncate_output(text, limit=_MAX_OUTPUT):
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + f"\n\n... ({len(text) - limit} chars truncated) ...\n\n" + text[-half:]
+
 def handle_exec(args):
     cmd = args.get("command", "")
     timeout = args.get("timeout", 600)
@@ -88,7 +96,7 @@ def handle_exec(args):
         r = subprocess.run(cmd, shell=True, cwd="/testbed",
                            capture_output=True, text=True, timeout=timeout, env=env)
         output = (r.stdout or "") + (r.stderr or "")
-        return {"ok": r.returncode == 0, "result": output, "returncode": r.returncode}
+        return {"ok": r.returncode == 0, "result": _truncate_output(output), "returncode": r.returncode}
     except subprocess.TimeoutExpired:
         return {"ok": False, "result": "[timeout]", "returncode": 124}
 
@@ -113,10 +121,23 @@ def handle_commands(args):
         combined = all_output[0] if all_output else ""
     return {"ok": last_rc == 0, "result": combined, "returncode": last_rc}
 
+_READ_MAX_CHARS = 128_000
+_READ_DEFAULT_LIMIT = 2000
+
 def handle_read_file(args):
     path = args.get("path", "")
+    offset = int(args.get("offset", 0))
+    limit = int(args.get("limit", _READ_DEFAULT_LIMIT))
     try:
-        return {"ok": True, "result": open(path).read()}
+        content = open(path).read()
+        if not content:
+            return {"ok": True, "result": f"(Empty file: {path})"}
+        lines = content.splitlines()
+        selected = lines[offset:offset + limit]
+        numbered = "\n".join(f"{offset + i + 1}| {ln}" for i, ln in enumerate(selected))
+        if len(numbered) > _READ_MAX_CHARS:
+            numbered = numbered[:_READ_MAX_CHARS] + f"\n\n... (truncated at {_READ_MAX_CHARS} chars)"
+        return {"ok": True, "result": numbered}
     except Exception as e:
         return {"ok": False, "result": f"Error: {e}"}
 
@@ -154,10 +175,16 @@ def handle_edit_file(args):
     except Exception as e:
         return {"ok": False, "result": f"Error editing file: {e}"}
 
+_LIST_IGNORE = {".git", "node_modules", "__pycache__", ".venv", ".tox", ".mypy_cache", ".pytest_cache"}
+_LIST_MAX = 200
+
 def handle_list_dir(args):
     path = args.get("path", ".")
     try:
-        entries = sorted(os.listdir(path))
+        entries = sorted(e for e in os.listdir(path) if e not in _LIST_IGNORE)
+        if len(entries) > _LIST_MAX:
+            entries = entries[:_LIST_MAX]
+            entries.append(f"... ({len(os.listdir(path)) - _LIST_MAX} more entries)")
         return {"ok": True, "result": "\n".join(entries)}
     except Exception as e:
         return {"ok": False, "result": f"Error: {e}"}
@@ -183,7 +210,9 @@ for line in sys.stdin:
         args = req.get("args", {})
         handler = HANDLERS.get(tool)
         if handler:
+            t0 = time.monotonic()
             resp = handler(args)
+            resp["inner_duration_ms"] = (time.monotonic() - t0) * 1000
         else:
             resp = {"ok": False, "result": f"Error: Unsupported tool {tool!r}"}
     except Exception as e:
@@ -198,7 +227,6 @@ _IDEMPOTENT_TOOLS = frozenset({"read_file", "list_dir"})
 
 
 class ContainerAgent:
-    """Persistent in-container agent communicating via JSON-line stdin/stdout."""
 
     def __init__(self, container_id: str, container_executable: str) -> None:
         self._container_id = container_id
@@ -361,15 +389,16 @@ async def execute_trace_tool(
     request = _resolve_tool_request(resolved_name, params, command_timeout_s)
 
     if request is None:
-        return f"Error: Unsupported replay tool {resolved_name!r}", False
+        return f"Error: Unsupported replay tool {resolved_name!r}", False, None
 
     resp = await agent.execute(request, timeout_s=command_timeout_s)
     result = resp.get("result", "")
     ok = resp.get("ok", False)
+    inner_duration_ms = resp.get("inner_duration_ms")
 
     # Append exit code for exec-style commands
     if request["tool"] in ("exec", "commands"):
         rc = resp.get("returncode", -1)
         result = f"{result}\n\nExit code: {rc}".strip()
 
-    return result, ok
+    return result, ok, inner_duration_ms

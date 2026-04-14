@@ -110,13 +110,15 @@ async def _exec_tool(
     from trace_collect.openclaw_tools import execute_trace_tool
 
     t0 = time.monotonic()
-    tool_result, tool_success = await execute_trace_tool(
+    tool_result, tool_success, inner_duration_ms = await execute_trace_tool(
         agent=agent,
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         command_timeout_s=command_timeout_s,
     )
-    duration_ms = (time.monotonic() - t0) * 1000
+    wall_duration_ms = (time.monotonic() - t0) * 1000
+    # Prefer agent-side timing to exclude pipe transfer overhead
+    duration_ms = inner_duration_ms if inner_duration_ms is not None else wall_duration_ms
     return tool_result, duration_ms, tool_success
 
 

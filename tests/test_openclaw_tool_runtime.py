@@ -26,7 +26,7 @@ class FakeAgent:
 
 def test_exec_command_sends_correct_request() -> None:
     agent = FakeAgent({"exec": {"ok": True, "result": "hello\n", "returncode": 0}})
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="exec",
@@ -43,7 +43,7 @@ def test_exec_command_sends_correct_request() -> None:
 
 def test_read_file_sends_correct_request() -> None:
     agent = FakeAgent({"read_file": {"ok": True, "result": "file content\n"}})
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="read_file",
@@ -59,7 +59,7 @@ def test_read_file_sends_correct_request() -> None:
 
 def test_write_file_sends_correct_request() -> None:
     agent = FakeAgent({"write_file": {"ok": True, "result": "Successfully wrote /testbed/out.txt"}})
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="write_file",
@@ -74,7 +74,7 @@ def test_write_file_sends_correct_request() -> None:
 
 def test_edit_file_sends_correct_request() -> None:
     agent = FakeAgent({"edit_file": {"ok": True, "result": "Successfully edited /testbed/x.py"}})
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="edit_file",
@@ -97,7 +97,7 @@ def test_edit_file_sends_correct_request() -> None:
 
 def test_list_dir_sends_correct_request() -> None:
     agent = FakeAgent({"list_dir": {"ok": True, "result": "foo.py\nbar.py"}})
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="list_dir",
@@ -111,7 +111,7 @@ def test_list_dir_sends_correct_request() -> None:
 
 def test_exec_appends_exit_code() -> None:
     agent = FakeAgent({"exec": {"ok": False, "result": "error msg", "returncode": 1}})
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="exec",
@@ -125,7 +125,7 @@ def test_exec_appends_exit_code() -> None:
 
 def test_unsupported_tool_returns_error() -> None:
     agent = FakeAgent()
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="nope_tool",
@@ -139,7 +139,7 @@ def test_unsupported_tool_returns_error() -> None:
 
 def test_commands_sends_list() -> None:
     agent = FakeAgent({"commands": {"ok": True, "result": "done", "returncode": 0}})
-    result, success = asyncio.run(
+    result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
             tool_name="exec",
