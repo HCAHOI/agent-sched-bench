@@ -7,7 +7,7 @@ export type TimeMode = "sync" | "abs";
 export type ViewMode = "layered" | "concise";
 export type ThemeMode = "dark" | "light";
 export type ClockMode = "wall" | "real";
-export type ResourceMetric = "cpu" | "memory" | "disk_io" | "net_io";
+export type ResourceMetric = "cpu" | "memory" | "disk_io" | "net_io" | "none";
 
 export const DEFAULT_TIME_MODE: TimeMode = "sync";
 export const DEFAULT_VIEW_MODE: ViewMode = "layered";
@@ -59,7 +59,9 @@ export const [hoverCard, setHoverCard] = createSignal<HitCard | null>(null);
 export const [pinnedCard, setPinnedCard] = createSignal<HitCard | null>(null);
 export const [scrollTop, setScrollTop] = createSignal(0);
 export const [appError, setAppError] = createSignal<string | null>(null);
+export const [canvasTimeRange, setCanvasTimeRange] = createSignal<{ minTime: number; totalRange: number } | null>(null);
 export const [resourceMetric, setResourceMetric] = createSignal<ResourceMetric>("cpu");
+export const [resourceMetricSecondary, setResourceMetricSecondary] = createSignal<ResourceMetric>("memory");
 export const [showResourceChart, setShowResourceChart] = createSignal(true);
 
 export function __resetSignalsForTests(): void {
@@ -77,6 +79,8 @@ export function __resetSignalsForTests(): void {
   setPinnedCard(null);
   setScrollTop(0);
   setAppError(null);
+  setCanvasTimeRange(null);
   setResourceMetric("cpu");
+  setResourceMetricSecondary("memory");
   setShowResourceChart(true);
 }

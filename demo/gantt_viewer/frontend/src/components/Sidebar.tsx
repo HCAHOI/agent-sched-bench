@@ -3,7 +3,7 @@ import { For, Show, createEffect, createMemo } from "solid-js";
 import type { TracePayload } from "../api/client";
 import type { HitCard } from "../canvas/hit";
 import { flattenVisibleLanes, resourceChartH, type LaneRow } from "../canvas/layout";
-import type { ViewMode } from "../state/signals";
+import type { ResourceMetric, ViewMode } from "../state/signals";
 
 type SidebarEntry =
   | { kind: "lane"; row: LaneRow }
@@ -16,6 +16,8 @@ interface SidebarProps {
   traces: TracePayload[];
   visibility: Record<string, boolean>;
   showResourceChart: boolean;
+  resourceMetric: ResourceMetric;
+  resourceMetricSecondary: ResourceMetric;
   viewMode: ViewMode;
 }
 
@@ -29,9 +31,11 @@ export default function Sidebar(props: SidebarProps) {
       result.push({ kind: "lane", row: laneRows[i] });
       const isLastOfTrace =
         i === laneRows.length - 1 || laneRows[i + 1].traceId !== laneRows[i].traceId;
+      const hasAnyMetric = props.resourceMetric !== "none" || props.resourceMetricSecondary !== "none";
       if (
         isLastOfTrace &&
         props.showResourceChart &&
+        hasAnyMetric &&
         laneRows[i].trace.resource_timeline?.length
       ) {
         result.push({
