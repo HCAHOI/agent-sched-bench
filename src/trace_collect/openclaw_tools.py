@@ -240,6 +240,7 @@ class ContainerAgent:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,  # 1MB — agent responses can exceed default 64KB
         )
         logger.info(
             "ContainerAgent started: cid=%s pid=%s",
