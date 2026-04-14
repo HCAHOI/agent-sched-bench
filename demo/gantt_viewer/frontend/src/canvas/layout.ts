@@ -15,8 +15,15 @@ export interface LaneRow {
   trace: TracePayload;
 }
 
+export const RESOURCE_CHART_H_CONCISE = 60;
+export const RESOURCE_CHART_H_LAYERED = 40;
+
 export function effectiveLaneH(viewMode: ViewMode): number {
   return viewMode === "concise" ? LANE_H_CONCISE : LANE_H;
+}
+
+export function resourceChartH(viewMode: ViewMode): number {
+  return viewMode === "concise" ? RESOURCE_CHART_H_CONCISE : RESOURCE_CHART_H_LAYERED;
 }
 
 export function flattenVisibleLanes(
@@ -41,9 +48,18 @@ export function computeTotalContentHeight(
   visible: Record<string, boolean>,
   viewMode: ViewMode,
   minHeight: number,
+  showResource = false,
 ): number {
+  const laneCount = flattenVisibleLanes(traces, visible).length;
+  let resourceH = 0;
+  if (showResource) {
+    const visibleWithResources = traces.filter(
+      (t) => visible[t.id] !== false && t.resource_timeline?.length,
+    );
+    resourceH = visibleWithResources.length * resourceChartH(viewMode);
+  }
   return Math.max(
-    TIME_AXIS_H + flattenVisibleLanes(traces, visible).length * effectiveLaneH(viewMode),
+    TIME_AXIS_H + laneCount * effectiveLaneH(viewMode) + resourceH,
     minHeight,
   );
 }

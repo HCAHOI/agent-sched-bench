@@ -3,7 +3,7 @@ import { createEffect, onCleanup, onMount } from "solid-js";
 import type { GanttPayload } from "../api/client";
 import { CanvasRenderer } from "../canvas/CanvasRenderer";
 import type { Hit, HitCard } from "../canvas/hit";
-import type { ClockMode, ThemeMode, TimeMode, ViewMode } from "../state/signals";
+import type { ClockMode, ResourceMetric, ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface CanvasStageProps {
   clockMode: ClockMode;
@@ -14,6 +14,8 @@ interface CanvasStageProps {
   onZoom: (factor: number) => void;
   payload: GanttPayload | null;
   pinnedHit: Hit | null;
+  resourceMetric: ResourceMetric;
+  showResourceChart: boolean;
   themeMode: ThemeMode;
   timeMode: TimeMode;
   viewMode: ViewMode;
@@ -73,6 +75,14 @@ export default function CanvasStage(props: CanvasStageProps) {
 
   createEffect(() => {
     renderer?.setZoom(props.zoom);
+  });
+
+  createEffect(() => {
+    renderer?.setResourceMetric(props.resourceMetric);
+  });
+
+  createEffect(() => {
+    renderer?.setShowResourceChart(props.showResourceChart);
   });
 
   createEffect(() => {

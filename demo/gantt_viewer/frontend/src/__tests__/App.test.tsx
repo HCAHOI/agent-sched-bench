@@ -208,7 +208,7 @@ describe("App", () => {
     const { dispose, host } = mountApp();
     try {
       const activeButtons = Array.from(host.querySelectorAll(".toggle-group button.active"));
-      expect(activeButtons.map((button) => button.textContent)).toEqual(["DARK", "SYNC", "WALL", "LAYER"]);
+      expect(activeButtons.map((button) => button.textContent)).toEqual(["DARK", "SYNC", "WALL", "LAYER", "RES"]);
 
       await flush();
 

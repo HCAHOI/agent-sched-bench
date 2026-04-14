@@ -6,6 +6,7 @@ export type Registries = components["schemas"]["Registries"];
 export type TraceDescriptor = components["schemas"]["TraceDescriptor"];
 export type TraceListResponse = components["schemas"]["TraceListResponse"];
 export type TracePayload = components["schemas"]["TracePayload-Output"];
+export type ResourceSample = components["schemas"]["ResourceSample"];
 export type PayloadError = components["schemas"]["PayloadError"];
 export type UnregisterTracesResponse = components["schemas"]["UnregisterTracesResponse"];
 export type UploadTraceResponse = components["schemas"]["UploadTraceResponse"];

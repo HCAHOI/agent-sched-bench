@@ -1,4 +1,4 @@
-import type { Registries, TracePayload } from "../api/client";
+import type { Registries, ResourceSample, TracePayload } from "../api/client";
 import { displayColor } from "../theme/displayColor";
 import { formatAbsTime } from "./time";
 
@@ -26,7 +26,20 @@ export interface LaneHit {
   traceLabel: string;
 }
 
-export type Hit = LaneHit | MarkerHit | SpanHit;
+export interface ResourceHit {
+  kind: "resource";
+  traceId: string;
+  traceLabel: string;
+  timeline: ResourceSample[];
+  metric: string;
+  chartY: number;
+  chartH: number;
+  chartPad: number;
+  vMin: number;
+  vMax: number;
+}
+
+export type Hit = LaneHit | MarkerHit | ResourceHit | SpanHit;
 
 export interface HitCard {
   hit: Hit;
@@ -40,6 +53,9 @@ export function sameHit(a: Hit | null, b: Hit | null): boolean {
   }
   if (a.kind === "lane" && b.kind === "lane") {
     return a.laneAgentId === b.laneAgentId;
+  }
+  if (a.kind === "resource" && b.kind === "resource") {
+    return a.traceId === b.traceId && a.metric === b.metric;
   }
   if (a.kind === "span" && b.kind === "span") {
     return (
@@ -61,9 +77,26 @@ export function sameHit(a: Hit | null, b: Hit | null): boolean {
   return false;
 }
 
+export const RESOURCE_METRIC_COLORS: Record<string, string> = {
+  cpu: "#00E5FF",
+  memory: "#76FF03",
+  disk_io: "#FF6D00",
+  net_io: "#AB47BC",
+};
+
+const RESOURCE_METRIC_LABELS: Record<string, string> = {
+  cpu: "CPU %",
+  memory: "Memory MB",
+  disk_io: "Disk I/O MB",
+  net_io: "Network I/O MB",
+};
+
 export function hitAccent(hit: Hit, registries: Registries | null): string {
   if (hit.kind === "lane") {
     return displayColor("#00E5FF");
+  }
+  if (hit.kind === "resource") {
+    return displayColor(RESOURCE_METRIC_COLORS[hit.metric] ?? "#94A3B8");
   }
   if (hit.kind === "span") {
     return displayColor(registries?.spans[hit.item.type]?.color ?? "#94A3B8");
@@ -76,6 +109,9 @@ export function hitTitle(hit: Hit, registries: Registries | null): string {
   if (hit.kind === "lane") {
     return `Trace ${hit.traceLabel}`;
   }
+  if (hit.kind === "resource") {
+    return `Resource · ${RESOURCE_METRIC_LABELS[hit.metric] ?? hit.metric}`;
+  }
   if (hit.kind === "span") {
     const label = registries?.spans[hit.item.type]?.label ?? hit.item.type;
     return `${label} · Iter ${hit.item.iteration}`;
@@ -84,6 +120,14 @@ export function hitTitle(hit: Hit, registries: Registries | null): string {
 }
 
 export function hitRows(hit: Hit): Array<[string, string]> {
+  if (hit.kind === "resource") {
+    return [
+      ["trace", hit.traceLabel],
+      ["metric", RESOURCE_METRIC_LABELS[hit.metric] ?? hit.metric],
+      ["range", `${hit.vMin.toFixed(1)} – ${hit.vMax.toFixed(1)}`],
+      ["samples", String(hit.timeline.length)],
+    ];
+  }
   if (hit.kind === "lane") {
     const metadata = hit.trace.metadata;
     const rows: Array<[string, string]> = [
