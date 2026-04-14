@@ -869,6 +869,51 @@ async def _replay_cloud_model_session(
     )
 
 
+def _split_trace_by_agent(
+    combined_path: Path,
+    sessions: list[PreparedTraceSession],
+) -> None:
+    """Write per-task trace.jsonl from the combined JSONL, filtered by agent_id."""
+    agent_dirs = {
+        s.loaded.agent_id: s.task_output_dir
+        for s in sessions
+        if s.task_output_dir is not None
+    }
+    if not agent_dirs:
+        return
+
+    per_agent: dict[str, list[str]] = {aid: [] for aid in agent_dirs}
+    metadata_line: str | None = None
+
+    try:
+        with combined_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                record = json.loads(stripped)
+                rtype = record.get("type")
+                if rtype == "trace_metadata":
+                    metadata_line = stripped
+                    continue
+                agent_id = record.get("agent_id")
+                if agent_id in per_agent:
+                    per_agent[agent_id].append(stripped)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to split trace %s: %s", combined_path, exc)
+        return
+
+    for agent_id, lines in per_agent.items():
+        out_dir = agent_dirs[agent_id]
+        out_path = out_dir / "trace.jsonl"
+        with out_path.open("w", encoding="utf-8") as fh:
+            if metadata_line:
+                fh.write(metadata_line + "\n")
+            for ln in lines:
+                fh.write(ln + "\n")
+        logger.info("Wrote per-task trace (%d records) → %s", len(lines), out_path)
+
+
 async def simulate(
     *,
     source_trace: Path | None = None,
@@ -980,6 +1025,7 @@ async def simulate(
     finally:
         if trace_logger is not None:
             trace_logger.close()
+            _split_trace_by_agent(trace_logger.path, prepared_sessions)
         for prepared in prepared_sessions:
             if prepared.sampler is not None:
                 samples = prepared.sampler.stop()
