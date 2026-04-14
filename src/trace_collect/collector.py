@@ -5,7 +5,9 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import logging
+import os
 import re
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -254,8 +256,27 @@ def _cleanup_task_images(
     fixed_image: str | None,
     keep_source_image: str | None,
     container_executable: str,
+    run_dir: Path | None = None,
 ) -> None:
-    """Best-effort cleanup that keeps only the current/next-image budget."""
+    """Best-effort cleanup that keeps only the current/next-image budget.
+
+    Set env ``KEEP_IMAGES_ABOVE_GB`` (e.g. ``30``) to skip image removal
+    when free disk exceeds the threshold.  Default: always clean up.
+    """
+    keep_gb_str = os.environ.get("KEEP_IMAGES_ABOVE_GB", "")
+    if keep_gb_str and run_dir is not None:
+        try:
+            keep_gb = float(keep_gb_str)
+            free_gb = shutil.disk_usage(run_dir).free / (1024**3)
+            if free_gb > keep_gb:
+                logger.info(
+                    "cleanup %s skipped: %.1f GB free > %.1f GB threshold",
+                    instance_id, free_gb, keep_gb,
+                )
+                return
+        except (ValueError, OSError):
+            pass
+
     removed_any = False
     try:
         if fixed_image and fixed_image != source_image:
@@ -445,6 +466,7 @@ async def _run_scaffold_tasks(
                     fixed_image=attempt_ctx.fixed_image,
                     keep_source_image=next_source_image,
                     container_executable=container_executable,
+                    run_dir=run_dir,
                 )
 
     write_results_jsonl(results, run_dir / "results.jsonl")
