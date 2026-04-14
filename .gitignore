@@ -17,15 +17,12 @@ tmp-review-trace.jsonl
 demo/gantt_viewer/frontend/node_modules/
 demo/gantt_viewer/frontend/dist/
 
-data/swebench_repos/
-data/swebench_verified/tasks.json
-data/swe-rebench/
+data/
 tmp/
 results/
-traces/swebench/*.jsonl
-traces/swebench_verified/
-traces/swe-rebench/
-traces/openclaw_cli/
+traces/
+output/
+.claude/
 
 # Generated visualization artifacts
 gantt_*.html
@@ -35,4 +32,4 @@ models/
 .omc/
 .trae/
 .kilo/
-.sisyphus/
+.sisyphus/data/swe-rebench/tasks.json
