@@ -12,9 +12,11 @@ from typing import Any
 
 from agents.base import TraceAction
 from harness.container_image_prep import ensure_fixed_image, normalize_image_reference
+from harness.container_stats_sampler import ContainerStatsSampler, summarize_samples
 from harness.metrics_client import VLLMMetricsClient
 from harness.trace_logger import TraceLogger
 from llm_call import create_async_openai_client
+from trace_collect import attempt_layout
 from trace_collect.attempt_pipeline import start_task_container, stop_task_container
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,8 @@ class PreparedTraceSession:
 
     loaded: LoadedTraceSession
     container: PreparedContainer
+    sampler: ContainerStatsSampler | None = None
+    task_output_dir: Path | None = None
 
 
 async def _call_local_model_streaming(
@@ -923,6 +927,18 @@ async def simulate(
                 )
             )
 
+        for prepared in prepared_sessions:
+            task_dir = output_path / prepared.loaded.agent_id / "attempt_1"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            prepared.task_output_dir = task_dir
+            sampler = ContainerStatsSampler(
+                container_id=prepared.container.container_id,
+                interval_s=1.0,
+                executable=container_executable,
+            )
+            sampler.start()
+            prepared.sampler = sampler
+
         run_id = _build_run_id(mode=mode, model=model)
         trace_logger = TraceLogger(output_path, run_id)
         _log_trace_metadata(
@@ -965,6 +981,18 @@ async def simulate(
         if trace_logger is not None:
             trace_logger.close()
         for prepared in prepared_sessions:
+            if prepared.sampler is not None:
+                samples = prepared.sampler.stop()
+                if prepared.task_output_dir is not None:
+                    summary = summarize_samples(samples)
+                    attempt_layout.write_resources_json(
+                        prepared.task_output_dir, samples, summary,
+                    )
+                    logger.info(
+                        "Wrote %d resource samples → %s",
+                        len(samples),
+                        prepared.task_output_dir / "resources.json",
+                    )
             ctr = prepared.container
             if ctr.agent is not None:
                 await ctr.agent.stop()
