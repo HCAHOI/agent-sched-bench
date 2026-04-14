@@ -200,6 +200,24 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--arrival-mode",
+        default="closed_loop",
+        choices=["closed_loop", "poisson"],
+        help="Task arrival pattern for cloud_model replay (default: closed_loop).",
+    )
+    parser.add_argument(
+        "--arrival-rate-per-s",
+        type=float,
+        default=None,
+        help="Poisson arrival rate (tasks/sec). Required when --arrival-mode=poisson.",
+    )
+    parser.add_argument(
+        "--arrival-seed",
+        type=int,
+        default=None,
+        help="RNG seed for Poisson arrival offsets (for reproducibility).",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -361,6 +379,9 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "command_timeout_s": args.command_timeout,
         "warmup_skip_iterations": args.warmup_skip_iterations,
         "replay_speed": args.replay_speed,
+        "arrival_mode": args.arrival_mode,
+        "arrival_rate_per_s": args.arrival_rate_per_s,
+        "arrival_seed": args.arrival_seed,
     }
 
     if args.mode == "cloud_model":

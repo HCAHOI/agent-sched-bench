@@ -13,6 +13,7 @@ from typing import Any
 from agents.base import TraceAction
 from harness.container_image_prep import ensure_fixed_image, normalize_image_reference
 from harness.container_stats_sampler import ContainerStatsSampler, summarize_samples
+from harness.runner import build_arrival_offsets
 from harness.metrics_client import VLLMMetricsClient
 from harness.trace_logger import TraceLogger
 from llm_call import create_async_openai_client
@@ -670,6 +671,21 @@ async def _sleep_until_offset(
         await asyncio.sleep(delay_s)
 
 
+async def _delayed_replay(
+    delay_s: float,
+    prepared_session: PreparedTraceSession,
+    **kwargs: Any,
+) -> None:
+    """Wait *delay_s* then run a single cloud-model session replay."""
+    if delay_s > 0:
+        logger.info(
+            "Poisson delay %.1fs for %s",
+            delay_s, prepared_session.loaded.agent_id,
+        )
+        await asyncio.sleep(delay_s)
+    await _replay_cloud_model_session(prepared_session, **kwargs)
+
+
 async def _run_cloud_model_replay(
     prepared_sessions: list[PreparedTraceSession],
     *,
@@ -677,19 +693,22 @@ async def _run_cloud_model_replay(
     replay_speed: float,
     command_timeout_s: float,
     warmup_skip_iterations: int,
+    arrival_offsets: list[float] | None = None,
 ) -> None:
     replay_zero_monotonic = time.monotonic()
+    offsets = arrival_offsets or [0.0] * len(prepared_sessions)
     await asyncio.gather(
         *[
-            _replay_cloud_model_session(
-                prepared_session,
+            _delayed_replay(
+                offsets[i],
+                prepared_sessions[i],
                 trace_logger=trace_logger,
                 replay_zero_monotonic=replay_zero_monotonic,
                 replay_speed=replay_speed,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
             )
-            for prepared_session in prepared_sessions
+            for i in range(len(prepared_sessions))
         ]
     )
 
@@ -932,6 +951,9 @@ async def simulate(
     metrics_url: str | None = None,
     warmup_skip_iterations: int = 0,
     replay_speed: float = 1.0,
+    arrival_mode: str = "closed_loop",
+    arrival_rate_per_s: float | None = None,
+    arrival_seed: int | None = None,
 ) -> Path:
     if source_trace is not None and trace_manifest is not None:
         raise ValueError("source_trace and trace_manifest are mutually exclusive")
@@ -1017,12 +1039,19 @@ async def simulate(
             )
         else:
             assert trace_logger is not None
+            offsets = build_arrival_offsets(
+                len(prepared_sessions),
+                arrival_mode=arrival_mode,
+                arrival_rate_per_s=arrival_rate_per_s,
+                arrival_seed=arrival_seed,
+            )
             await _run_cloud_model_replay(
                 prepared_sessions,
                 trace_logger=trace_logger,
                 replay_speed=replay_speed,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
+                arrival_offsets=offsets,
             )
     finally:
         if trace_logger is not None:
