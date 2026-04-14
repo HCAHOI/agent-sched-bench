@@ -378,7 +378,7 @@ async def execute_trace_tool(
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, float | None]:
     """Execute one trace tool call via the persistent in-container agent."""
 
     resolved_name, params, _nested = _unwrap_tool_args(
