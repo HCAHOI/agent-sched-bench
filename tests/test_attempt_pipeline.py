@@ -239,6 +239,7 @@ def test_run_attempt_supports_non_image_success_without_patch(
         scaffold="openclaw",
         source_image=None,
         prompt_template="default",
+        execution_environment="host",
     )
     trace_source = tmp_path / "scratch" / "trace.jsonl"
     _write_trace(trace_source)
@@ -279,6 +280,9 @@ def test_run_attempt_supports_non_image_success_without_patch(
     assert results["image"] is None
     assert results["repo"] is None
     assert results["tb_version"] == "0.2.18"
+    resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
+    assert resources["samples"]
+    assert resources["summary"]["sample_count"] >= 1
 
 
 def test_run_attempt_disk_shortfall_aborts_early(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from harness.container_stats_sampler import (
     ContainerStatsSampler,
     summarize_samples,
 )
+from harness.process_stats_sampler import ProcessStatsSampler
 from harness.disk_preflight import DiskSpaceError, preflight_disk
 from trace_collect import attempt_layout
 
@@ -63,6 +65,7 @@ class AttemptContext:
     source_image: str | None
     prompt_template: str = "default"
     agent_runtime_mode: str = "host_controller"
+    execution_environment: str = "container"
     fixed_image: str | None = None
     container_id: str | None = None
     attempt_dir: Path = field(init=False)
@@ -271,7 +274,12 @@ async def run_attempt(
             )
         )
 
-    sampler: ContainerStatsSampler | None = None
+    process_sampler: ProcessStatsSampler | None = None
+    if ctx.execution_environment == "host":
+        process_sampler = ProcessStatsSampler(pid=os.getpid(), interval_s=1.0)
+        process_sampler.start()
+
+    sampler: ContainerStatsSampler | ProcessStatsSampler | None = None
     samples: list[dict[str, Any]] = []
     result: AttemptResult | None = None
     inner_error: BaseException | None = None
@@ -293,6 +301,10 @@ async def run_attempt(
                 sampler = None
         if sampler is not None:
             samples = sampler.stop()
+        if process_sampler is not None:
+            process_samples = process_sampler.stop()
+            if not samples:
+                samples = process_samples
 
         ctx.end_time = datetime.now(tz=timezone.utc)
 
@@ -350,6 +362,7 @@ async def run_attempt(
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
         "agent_runtime_mode": ctx.agent_runtime_mode,
+        "execution_environment": ctx.execution_environment,
     }
 
     results_payload: dict[str, Any] = {

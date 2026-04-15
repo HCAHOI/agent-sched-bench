@@ -247,3 +247,10 @@ def test_collect_traces_dispatches_qwen_runner(
     ]
     assert records[0]["scaffold"] == "qwen-deep-research"
     assert any(record.get("action_type") == "llm_call" for record in records)
+    resources = json.loads(
+        (run_dir / "research-1" / "attempt_1" / "resources.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert resources["samples"]
+    assert resources["summary"]["sample_count"] >= 1

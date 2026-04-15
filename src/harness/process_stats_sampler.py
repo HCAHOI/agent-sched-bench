@@ -1,0 +1,172 @@
+"""Background sampler for host-process CPU, memory, and optional I/O stats."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+def _now_sample() -> dict[str, Any]:
+    now = datetime.now(tz=timezone.utc)
+    return {
+        "timestamp": now.isoformat().replace("+00:00", ""),
+        "epoch": now.timestamp(),
+    }
+
+
+def _read_proc_io(pid: int) -> dict[str, int] | None:
+    try:
+        text = Path(f"/proc/{pid}/io").read_text(encoding="utf-8")
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        try:
+            values[key.strip()] = int(value.strip())
+        except ValueError:
+            continue
+    read_bytes = values.get("read_bytes")
+    write_bytes = values.get("write_bytes")
+    if read_bytes is None and write_bytes is None:
+        return None
+    return {
+        "read_bytes": read_bytes or 0,
+        "write_bytes": write_bytes or 0,
+    }
+
+
+def _read_proc_context_switches(pid: int) -> int | None:
+    try:
+        text = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    total = 0
+    found = False
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if not sep or key not in {
+            "voluntary_ctxt_switches",
+            "nonvoluntary_ctxt_switches",
+        }:
+            continue
+        try:
+            total += int(value.strip())
+            found = True
+        except ValueError:
+            continue
+    return total if found else None
+
+
+def _sample_with_ps(pid: int) -> dict[str, Any] | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "%cpu=", "-o", "rss=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    parts = result.stdout.strip().split()
+    if len(parts) < 2:
+        return None
+    try:
+        cpu_percent = float(parts[0])
+        rss_kb = float(parts[1])
+    except ValueError:
+        return None
+    sample = _now_sample()
+    sample.update(
+        {
+            "mem_usage": f"{rss_kb / 1024:.3f}MiB",
+            "mem_percent": "0%",
+            "cpu_percent": f"{cpu_percent:.3f}%",
+        }
+    )
+    return sample
+
+
+def _sample_with_psutil(pid: int) -> dict[str, Any] | None:
+    try:
+        import psutil  # type: ignore[import]
+    except ImportError:
+        return None
+    try:
+        process = psutil.Process(pid)
+        memory = process.memory_info()
+        cpu = process.cpu_percent(interval=None)
+    except Exception:
+        return None
+    sample = _now_sample()
+    sample.update(
+        {
+            "mem_usage": f"{memory.rss / (1024 * 1024):.3f}MiB",
+            "mem_percent": "0%",
+            "cpu_percent": f"{cpu:.3f}%",
+        }
+    )
+    try:
+        io_counters = process.io_counters()
+        sample["disk_read_bytes"] = int(getattr(io_counters, "read_bytes", 0))
+        sample["disk_write_bytes"] = int(getattr(io_counters, "write_bytes", 0))
+    except Exception:
+        pass
+    try:
+        ctxt = process.num_ctx_switches()
+        sample["context_switches"] = int(ctxt.voluntary + ctxt.involuntary)
+    except Exception:
+        pass
+    return sample
+
+
+class ProcessStatsSampler(threading.Thread):
+    """Sample host-process stats with the ContainerStatsSampler-like interface."""
+
+    def __init__(self, pid: int | None = None, *, interval_s: float = 1.0) -> None:
+        target_pid = os.getpid() if pid is None else pid
+        super().__init__(daemon=True, name=f"proc-stats-{target_pid}")
+        self.pid = target_pid
+        self.interval_s = interval_s
+        self._stop_event = threading.Event()
+        self._samples: list[dict[str, Any]] = []
+
+    def _collect_sample(self) -> dict[str, Any] | None:
+        sample = _sample_with_psutil(self.pid) or _sample_with_ps(self.pid)
+        if sample is None:
+            return None
+        proc_io = _read_proc_io(self.pid)
+        if proc_io is not None:
+            sample["disk_read_bytes"] = proc_io["read_bytes"]
+            sample["disk_write_bytes"] = proc_io["write_bytes"]
+        ctxt = _read_proc_context_switches(self.pid)
+        if ctxt is not None:
+            sample["context_switches"] = ctxt
+        return sample
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            sample = self._collect_sample()
+            if sample is not None:
+                self._samples.append(sample)
+            if self._stop_event.wait(self.interval_s):
+                break
+
+    def stop(self) -> list[dict[str, Any]]:
+        self._stop_event.set()
+        if self.is_alive():
+            self.join(timeout=self.interval_s + 6.0)
+        if not self._samples:
+            sample = self._collect_sample()
+            if sample is not None:
+                self._samples.append(sample)
+        return list(self._samples)

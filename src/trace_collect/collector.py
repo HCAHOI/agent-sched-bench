@@ -398,6 +398,11 @@ async def _run_scaffold_tasks(
                 source_image=source_image,
                 prompt_template=resolved_prompt_template,
                 agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
+                execution_environment=getattr(
+                    benchmark,
+                    "execution_environment",
+                    "container",
+                ),
             )
 
             _inner = inner_factory(task)

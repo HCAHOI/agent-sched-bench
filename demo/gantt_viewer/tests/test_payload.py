@@ -124,6 +124,52 @@ def test_llm_action_becomes_span(tmp_path: Path) -> None:
     assert DEFAULT_SPAN_REGISTRY["llm"]["color"] == "#00E5FF"
 
 
+def test_research_style_llm_only_trace_renders(tmp_path: Path) -> None:
+    trace = tmp_path / "research-trace.jsonl"
+    head = {
+        "type": "trace_metadata",
+        "scaffold": "qwen-deep-research",
+        "execution_environment": "host",
+        "benchmark": "deep-research-bench",
+        "trace_format_version": 5,
+        "max_iterations": 1,
+    }
+    llm = _llm_action(0, 1000.0, 1002.0, agent_id="research-1")
+    llm["data"]["llm_call_time_ms"] = 1500.0
+    with trace.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps(head) + "\n")
+        fh.write(json.dumps(llm) + "\n")
+    (tmp_path / "resources.json").write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {
+                        "epoch": 1000.5,
+                        "cpu_percent": "12.5%",
+                        "mem_usage": "64MiB",
+                        "disk_read_bytes": 1048576,
+                        "context_switches": 7,
+                    }
+                ],
+                "summary": {"sample_count": 1},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = build_gantt_payload(TraceData.load(trace), label="research")
+    spans = payload["lanes"][0]["spans"]
+
+    assert payload["metadata"]["scaffold"] == "qwen-deep-research"
+    assert [span["type"] for span in spans] == ["llm"]
+    assert spans[0]["detail"]["prompt_tokens"] == 100
+    assert payload["resource_timeline"][0]["cpu_percent"] == pytest.approx(12.5)
+    assert payload["resource_timeline"][0]["memory_mb"] == pytest.approx(64.0)
+    assert payload["resource_timeline"][0]["disk_read_mb"] == pytest.approx(1.0)
+    assert payload["resource_timeline"][0]["context_switches"] == 7
+
+
 def test_real_timeline_prefers_llm_call_time_when_present(tmp_path: Path) -> None:
     llm = _llm_action(0, 1000.0, 1005.0)
     llm["data"]["llm_call_time_ms"] = 1200.0
