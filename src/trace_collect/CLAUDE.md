@@ -34,8 +34,8 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 |------|----------|---------|-------|
 | `--provider` | yes | — | `openrouter`, `dashscope`, `openai`, `siliconflow` |
 | `--model` | yes | — | Full model ID (e.g. `anthropic/claude-sonnet-4-20250514`) |
-| `--container` | yes | — | `docker` or `podman` |
-| `--scaffold` | no | `miniswe` | `miniswe` (bash-only) or `openclaw` (structured tools) |
+| `--container` | container benchmarks only | — | `docker` or `podman` |
+| `--scaffold` | no | `openclaw` | `openclaw` (structured tools) |
 | `--benchmark` | no | `swe-bench-verified` | Slug from `configs/benchmarks/<slug>.yaml` |
 | `--mcp-config` | **yes for openclaw** | `None` | YAML path or literal `none` |
 | `--max-iterations` | no | `100` | Max agent loop iterations per task |
@@ -65,7 +65,6 @@ Defined in `src/llm_call/providers.py`. Resolution: CLI `--api-key` > env var > 
 
 | Scaffold | Description | MCP | Tools |
 |----------|-------------|-----|-------|
-| `miniswe` | Bash-only agent (mini-swe-agent lib) | no | bash |
 | `openclaw` | Structured tools agent (nanobot) | **mandatory** | filesystem, shell, web, MCP, memory, skills |
 
 For openclaw, `--mcp-config` is enforced: pass a YAML path or the literal `none`.

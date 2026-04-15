@@ -94,7 +94,7 @@ def _write_trace(
                         "ts_end": tool_end,
                         "data": {
                             "tool_name": tool_name,
-                            "tool_args": json.dumps({"path": f"/testbed/x.txt"}),
+                            "tool_args": json.dumps({"path": "/testbed/x.txt"}),
                             "tool_result": "source-result",
                             "duration_ms": (tool_end - tool_start) * 1000,
                             "success": True,

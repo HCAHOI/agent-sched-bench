@@ -447,7 +447,6 @@ def preflight_task_container_runtime(
     runtime_dir = task_container_runtime_dir(attempt_dir, "preflight")
     import_list = imports or [
         "trace_collect.runtime.entrypoint",
-        "agents.miniswe.agent",
         "agents.openclaw.eval.runner",
         "harness.trace_logger",
     ]

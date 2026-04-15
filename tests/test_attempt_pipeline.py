@@ -31,7 +31,7 @@ def _make_ctx(tmp_path: Path) -> AttemptContext:
         attempt=1,
         task={"instance_id": "mozilla__bleach-259", "repo": "mozilla/bleach"},
         model="qwen-plus-latest",
-        scaffold="miniswe",
+        scaffold="openclaw",
         source_image="swerebench/img:latest",
         prompt_template="default",
     )
@@ -63,7 +63,7 @@ def _mock_image_exists() -> None:
 def _write_trace(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        '{"type":"trace_metadata","scaffold":"miniswe","trace_format_version":5}\n'
+        '{"type":"trace_metadata","scaffold":"openclaw","trace_format_version":5}\n'
         '{"type":"summary","agent_id":"mozilla__bleach-259","success":true}\n',
         encoding="utf-8",
     )
@@ -124,7 +124,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert manifest["model"]["name"] == "qwen-plus-latest"
     assert manifest["result_summary"]["exit_code"] == 0
     assert manifest["result_summary"]["total_time"] >= 0.0
-    assert manifest["scaffold"] == "miniswe"
+    assert manifest["scaffold"] == "openclaw"
     assert manifest["prompt_template"] == "default"
     assert manifest["agent_runtime_mode"] == "task_container_agent"
     assert manifest["runtime"]["agent_runtime_mode"] == "task_container_agent"

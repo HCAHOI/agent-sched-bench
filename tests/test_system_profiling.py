@@ -526,7 +526,6 @@ def test_sampler_falls_back_to_exec_when_cgroup_unavailable() -> None:
             return subprocess.CompletedProcess(cmd, 0, stdout=pipe_output, stderr="")
         if "python3" in cmd:
             exec_call_count += 1
-            script = kwargs.get("input", "") or (cmd[-1] if cmd else "")
             # I/O script returns "read write", ctxt script returns count
             if "rbytes" in str(cmd) or "read_bytes" in str(cmd) or exec_call_count % 2 == 1:
                 return subprocess.CompletedProcess(cmd, 0, stdout="2048 1024\n", stderr="")

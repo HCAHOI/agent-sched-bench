@@ -23,14 +23,14 @@ from trace_collect.collector import (
 def _mock_fixed_image(monkeypatch) -> None:
     monkeypatch.setattr(
         "trace_collect.attempt_pipeline.ensure_fixed_image",
-        lambda source_image, executable="podman": ((source_image or ""), 0.0),
+        lambda source_image, *, container_executable: ((source_image or ""), 0.0),
     )
 
 
 def _write_trace(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        '{"type":"trace_metadata","scaffold":"miniswe","trace_format_version":5}\n',
+        '{"type":"trace_metadata","scaffold":"openclaw","trace_format_version":5}\n',
         encoding="utf-8",
     )
 
@@ -89,7 +89,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
             tasks=[{"instance_id": "encode__httpx-2701", "image_name": "img"}],
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
-            scaffold="miniswe",
+            scaffold="openclaw",
             container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
@@ -167,7 +167,7 @@ def test_run_scaffold_tasks_allocates_next_attempt_dir(
             tasks=[{"instance_id": "encode__httpx-2701", "image_name": "img"}],
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
-            scaffold="miniswe",
+            scaffold="openclaw",
             container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
@@ -241,7 +241,7 @@ def test_run_scaffold_tasks_uses_max_sparse_attempt_dir(
             tasks=[{"instance_id": "encode__httpx-2701", "image_name": "img"}],
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
-            scaffold="miniswe",
+            scaffold="openclaw",
             container_executable="docker",
             prompt_template=None,
             min_free_disk_gb=0.001,
@@ -306,7 +306,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
             tasks=[{"instance_id": "encode__httpx-2701", "image_name": "img"}],
             run_dir=tmp_path / "run",
             model="qwen-plus-latest",
-            scaffold="miniswe",
+            scaffold="openclaw",
             container_executable="docker",
             prompt_template="default",
             min_free_disk_gb=0.001,

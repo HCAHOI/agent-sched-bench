@@ -226,11 +226,13 @@ def _ensure_task_source_ready(
     source_image: str | None,
     prefetched_source_image: str | None,
     prefetch_future: Future[None] | None,
-    container_executable: str,
+    container_executable: str | None,
 ) -> None:
     """Ensure the current task's source image is available locally."""
     if not source_image:
         return
+    if container_executable is None:
+        raise ValueError("container_executable is required when source_image is set")
     if prefetch_future is not None and prefetched_source_image == source_image:
         try:
             prefetch_future.result()
@@ -255,7 +257,7 @@ def _cleanup_task_images(
     source_image: str | None,
     fixed_image: str | None,
     keep_source_image: str | None,
-    container_executable: str,
+    container_executable: str | None,
     run_dir: Path | None = None,
 ) -> None:
     """Best-effort cleanup that keeps only the current/next-image budget.
@@ -263,6 +265,11 @@ def _cleanup_task_images(
     Set env ``KEEP_IMAGES_ABOVE_GB`` (e.g. ``30``) to skip image removal
     when free disk exceeds the threshold.  Default: always clean up.
     """
+    if not source_image and not fixed_image:
+        return
+    if container_executable is None:
+        raise ValueError("container_executable is required for image cleanup")
+
     keep_gb_str = os.environ.get("KEEP_IMAGES_ABOVE_GB", "")
     if keep_gb_str and run_dir is not None:
         try:
@@ -340,7 +347,7 @@ async def _run_scaffold_tasks(
     run_dir: Path,
     model: str,
     scaffold: str,
-    container_executable: str,
+    container_executable: str | None,
     prompt_template: str | None,
     min_free_disk_gb: float,
     inner_factory,
@@ -406,7 +413,11 @@ async def _run_scaffold_tasks(
                 prefetched_source_image = None
                 prefetch_future = None
 
-                if next_source_image and next_source_image != source_image:
+                if (
+                    next_source_image
+                    and next_source_image != source_image
+                    and container_executable is not None
+                ):
                     logger.info(
                         "prefetch start for next task after %s image=%s",
                         instance_id,
@@ -474,13 +485,15 @@ async def _run_scaffold_tasks(
     return run_dir
 
 
-async def collect_miniswe_traces(
+async def collect_traces(
     *,
-    provider_name: str | None = None,
+    scaffold: str,
     api_base: str,
     api_key: str,
     model: str,
     benchmark: "Benchmark",
+    provider_name: str | None = None,
+    env_key: str | None = None,
     max_iterations: int = 100,
     command_timeout_s: float = 120.0,
     task_timeout_s: float = 1200.0,
@@ -488,147 +501,34 @@ async def collect_miniswe_traces(
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
-    container_executable: str,
-    prompt_template: str | None = None,
-    min_free_disk_gb: float = 30.0,
-) -> Path:
-    """Collect miniswe traces inside the SWE-rebench task container."""
-    benchmark.validate_scaffold_support("miniswe")
-    tasks = _select_tasks(
-        benchmark.load_tasks(),
-        instance_ids=instance_ids,
-        sample=sample,
-    )
-
-    run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
-
-    from agents.miniswe import MiniSWECodeAgent
-
-    def make_inner(task: dict):
-        async def inner(ctx: AttemptContext) -> AttemptResult:
-            if ctx.agent_runtime_mode == "task_container_agent":
-                return await _run_miniswe_in_task_container(
-                    ctx=ctx,
-                    task=task,
-                    benchmark=benchmark,
-                    provider_name=provider_name,
-                    api_base=api_base,
-                    api_key=api_key,
-                    model=model,
-                    max_iterations=max_iterations,
-                    command_timeout_s=command_timeout_s,
-                    task_timeout_s=task_timeout_s,
-                    max_context_tokens=max_context_tokens,
-                    container_executable=container_executable,
-                )
-
-            from harness.trace_logger import TraceLogger
-
-            trace_logger = TraceLogger(ctx.attempt_dir, "trace")
-            metadata: dict[str, Any] = {
-                "scaffold": "miniswe",
-                "benchmark": benchmark.config.slug,
-                "model": model,
-                "api_base": api_base,
-                "max_iterations": max_iterations,
-                "instance_id": ctx.instance_id,
-                "prompt_template": ctx.prompt_template,
-                "agent_runtime_mode": ctx.agent_runtime_mode,
-                "scaffold_capabilities": {
-                    "tools": ["bash"],
-                    "memory": False,
-                    "skills": False,
-                    "file_ops": "bash_only",
-                },
-            }
-            if benchmark.config.harness_split is not None:
-                metadata["benchmark_split"] = benchmark.config.harness_split
-            trace_logger.log_metadata(**metadata)
-
-            agent = MiniSWECodeAgent(
-                agent_id=ctx.instance_id,
-                api_base=api_base,
-                model=model,
-                provider_name=provider_name,
-                api_key=api_key,
-                max_iterations=max_iterations,
-                command_timeout_s=command_timeout_s,
-                task_timeout_s=task_timeout_s,
-                max_context_tokens=max_context_tokens,
-                prompt_template=ctx.prompt_template,
-                runtime_mode="docker_container",
-                container_executable=container_executable,
-            )
-            agent._trace_logger = trace_logger
-            agent.run_metadata = {"model": model}
-
-            try:
-                await agent.prepare(task)
-                success = await agent.run(task, attempt_ctx=ctx)
-            finally:
-                summary = agent.summary()
-                trace_logger.log_summary(agent.agent_id, summary)
-                trace_logger.close()
-
-            return AttemptResult(
-                success=bool(success),
-                exit_status=agent.task_exit_status,
-                trace_path=trace_logger.path,
-                model_patch=(agent.task_submission or "").strip(),
-                n_iterations=summary.get("n_iterations") or len(agent.trace),
-                total_llm_ms=summary.get("total_llm_ms"),
-                total_tool_ms=summary.get("total_tool_ms"),
-                total_tokens=summary.get("total_tokens"),
-                error=agent.task_error,
-                runtime_proof={},
-            )
-
-        return inner
-
-    return await _run_scaffold_tasks(
-        benchmark=benchmark,
-        tasks=tasks,
-        run_dir=run_dir,
-        model=model,
-        scaffold="miniswe",
-        container_executable=container_executable,
-        prompt_template=prompt_template,
-        min_free_disk_gb=min_free_disk_gb,
-        inner_factory=make_inner,
-    )
-
-
-async def collect_openclaw_traces(
-    *,
-    provider_name: str | None = None,
-    env_key: str | None = None,
-    api_base: str,
-    api_key: str,
-    model: str,
-    benchmark: "Benchmark",
-    max_iterations: int = 100,
-    sample: int | None = None,
-    instance_ids: list[str] | None = None,
-    run_id: str | None = None,
-    max_context_tokens: int = 256_000,
-    container_executable: str,
+    container_executable: str | None = None,
     mcp_config: str | None = None,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
 ) -> Path:
-    """Collect OpenClaw traces via the benchmark-selected runtime."""
-    benchmark.validate_scaffold_support("openclaw")
-    runtime_mode = benchmark.runtime_mode_for("openclaw")
-    if runtime_mode != "host_controller" and runtime_mode != "task_container_agent":
-        raise NotImplementedError(
-            f"Unsupported benchmark.runtime_mode_for('openclaw'): {runtime_mode!r}"
+    """Collect traces for any scaffold supported by the benchmark plugin."""
+    benchmark.validate_scaffold_support(scaffold)
+    execution_environment = benchmark.execution_environment
+    if execution_environment not in {"container", "host"}:
+        raise ValueError(
+            f"Unsupported benchmark.execution_environment: {execution_environment!r}"
         )
-    run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
 
+    runtime_mode = benchmark.runtime_mode_for(scaffold)
+    if runtime_mode not in {"host_controller", "task_container_agent"}:
+        raise NotImplementedError(
+            f"Unsupported benchmark.runtime_mode_for({scaffold!r}): {runtime_mode!r}"
+        )
+    if (
+        execution_environment == "container" or runtime_mode == "task_container_agent"
+    ) and container_executable is None:
+        raise ValueError("--container required for container-mode benchmarks")
+
+    run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
     runner = None
     if runtime_mode == "host_controller":
         runner = benchmark.build_runner(
-            scaffold="openclaw",
+            scaffold=scaffold,
             provider=UnifiedProvider(
                 api_key=api_key,
                 api_base=api_base,
@@ -652,9 +552,18 @@ async def collect_openclaw_traces(
         sample=sample,
     )
 
-    def make_inner(task: dict):
+    def make_inner(task: dict[str, Any]):
         async def inner(ctx: AttemptContext) -> AttemptResult:
             if ctx.agent_runtime_mode == "task_container_agent":
+                if scaffold != "openclaw":
+                    raise NotImplementedError(
+                        "task-container collection currently supports "
+                        f"scaffold='openclaw', got {scaffold!r}"
+                    )
+                if container_executable is None:
+                    raise ValueError(
+                        "container_executable is required for task-container runs"
+                    )
                 return await _run_openclaw_in_task_container(
                     ctx=ctx,
                     task=task,
@@ -668,52 +577,34 @@ async def collect_openclaw_traces(
                     mcp_config=mcp_config,
                     container_executable=container_executable,
                 )
+
             assert runner is not None
-            return await runner.run_openclaw_task(
+            result = await runner.run_task(
                 task,
                 attempt_ctx=ctx,
                 prompt_template=ctx.prompt_template,
             )
+            if not isinstance(result, AttemptResult):
+                raise TypeError(
+                    "benchmark runner returned "
+                    f"{type(result).__name__}, expected AttemptResult"
+                )
+            return result
 
         return inner
 
+    _ = command_timeout_s, task_timeout_s
     return await _run_scaffold_tasks(
         benchmark=benchmark,
         tasks=tasks,
         run_dir=run_dir,
         model=model,
-        scaffold="openclaw",
+        scaffold=scaffold,
         container_executable=container_executable,
         prompt_template=prompt_template,
         min_free_disk_gb=min_free_disk_gb,
         inner_factory=make_inner,
     )
-
-
-async def collect_traces(
-    *,
-    scaffold: str,
-    provider_name: str | None = None,
-    container_executable: str,
-    **kwargs: Any,
-) -> Path:
-    """Dispatch to ``collect_miniswe_traces`` or ``collect_openclaw_traces``."""
-    if scaffold == "miniswe":
-        kwargs.pop("mcp_config", None)
-        return await collect_miniswe_traces(
-            provider_name=provider_name,
-            container_executable=container_executable,
-            **kwargs,
-        )
-    if scaffold == "openclaw":
-        kwargs.pop("command_timeout_s", None)
-        kwargs.pop("task_timeout_s", None)
-        return await collect_openclaw_traces(
-            provider_name=provider_name,
-            container_executable=container_executable,
-            **kwargs,
-        )
-    raise ValueError(f"Unknown scaffold: {scaffold!r}")
 
 
 def _normalize_openclaw_trace(
@@ -750,10 +641,12 @@ def _normalize_openclaw_trace(
             body_start = idx
         break
 
+    execution_environment = getattr(benchmark, "execution_environment", "container")
     merged: dict[str, Any] = {
         "type": "trace_metadata",
         "scaffold": "openclaw",
         "trace_format_version": 5,
+        "execution_environment": execution_environment,
         "mode": "collect",
         "scaffold_capabilities": {"unknown": True},
     }
@@ -774,6 +667,7 @@ def _normalize_openclaw_trace(
         merged["runtime_proof"] = runtime_proof
     merged["type"] = "trace_metadata"
     merged["trace_format_version"] = 5
+    merged["execution_environment"] = execution_environment
     if mcp_config_label is not None:
         run_config = merged.get("run_config") or {}
         run_config["mcp_config"] = mcp_config_label
@@ -800,129 +694,6 @@ def _resolve_prompt_template(
     prompt_template: str | None,
 ) -> str:
     return prompt_template or benchmark.config.default_prompt_template
-
-
-async def _run_miniswe_in_task_container(
-    *,
-    ctx: AttemptContext,
-    task: dict[str, Any],
-    benchmark: "Benchmark",
-    provider_name: str | None = None,
-    api_base: str,
-    api_key: str,
-    model: str,
-    container_executable: str,
-    max_iterations: int,
-    command_timeout_s: float,
-    task_timeout_s: float,
-    max_context_tokens: int,
-) -> AttemptResult:
-    fixed_image = ctx.fixed_image or task.get("image_name") or ""
-    if not fixed_image:
-        raise RuntimeError(f"Task {ctx.instance_id!r} has no image_name")
-
-    runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "miniswe"
-    stdout_path = runtime_dir / "stdout.txt"
-    stderr_path = runtime_dir / "stderr.txt"
-    proof = None
-    runtime = None
-    exec_config = resolve_task_container_exec_config(
-        attempt_dir=ctx.attempt_dir,
-        image=fixed_image,
-        container_executable=container_executable,
-    )
-    container_id = start_task_container(
-        fixed_image,
-        executable=container_executable,
-        extra_args=list(exec_config.start_extra_args),
-    )
-    ctx.mark_container_ready(container_id)
-    try:
-        exec_config = resolve_running_container_exec_config(
-            container_id=container_id,
-            exec_config=exec_config,
-            container_executable=container_executable,
-        )
-        bootstrap_task_container_python(
-            container_id=container_id,
-            exec_config=exec_config,
-            extra_requirements=("mini-swe-agent>=2.0",),
-            container_executable=container_executable,
-        )
-        proof = preflight_task_container_runtime(
-            container_id=container_id,
-            attempt_dir=ctx.attempt_dir,
-            runtime=exec_config.runtime,
-            pythonpath=exec_config.pythonpath,
-            container_executable=container_executable,
-        )
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        request = {
-            "kind": "run_miniswe",
-            "scaffold": "miniswe",
-            "result_path": str(runtime_dir / "run.result.json"),
-            "container_id": container_id,
-            "benchmark": benchmark.config.slug,
-            "provider_name": provider_name,
-            "api_base": api_base,
-            "api_key": api_key,
-            "model": model,
-            "max_iterations": max_iterations,
-            "command_timeout_s": command_timeout_s,
-            "task_timeout_s": task_timeout_s,
-            "max_context_tokens": max_context_tokens,
-            "prompt_template": ctx.prompt_template,
-            "agent_runtime_mode": ctx.agent_runtime_mode,
-            "exec_working_dir": "/testbed",
-            "task": task,
-            "trace_file": str(runtime_dir / "trace.jsonl"),
-            "raw_stdout_path": str(stdout_path),
-            "raw_stderr_path": str(stderr_path),
-            "container_executable": container_executable,
-        }
-        if benchmark.config.harness_split is not None:
-            request["benchmark_split"] = benchmark.config.harness_split
-        runtime = run_task_container_agent(
-            container_id=container_id,
-            timeout=task_timeout_s + 120,
-            runtime=exec_config.runtime,
-            pythonpath=exec_config.pythonpath,
-            request=request,
-            container_executable=container_executable,
-        )
-    finally:
-        container_logs = stop_task_container(
-            container_id,
-            executable=container_executable,
-        )
-        ctx.container_stdout = "\n".join(
-            part
-            for part in [
-                stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else "",
-                stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else "",
-                container_logs,
-            ]
-            if part
-        )
-
-    assert proof is not None
-    assert runtime is not None
-    runtime_proof = {
-        **asdict(proof),
-        **runtime.runtime_proof,
-    }
-    return AttemptResult(
-        success=runtime.success,
-        exit_status=runtime.exit_status,
-        trace_path=runtime.trace_path,
-        model_patch=runtime.model_patch,
-        n_iterations=runtime.n_iterations,
-        total_llm_ms=runtime.total_llm_ms,
-        total_tool_ms=runtime.total_tool_ms,
-        total_tokens=runtime.total_tokens,
-        error=runtime.error,
-        runtime_proof=runtime_proof,
-    )
 
 
 async def _run_openclaw_in_task_container(

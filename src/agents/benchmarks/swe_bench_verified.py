@@ -143,8 +143,6 @@ class SWEBenchVerified(Benchmark):
     def runtime_mode_for(self, scaffold: str) -> str:
         if scaffold == "openclaw":
             return "task_container_agent"
-        if scaffold == "miniswe":
-            return "host_controller"
         raise NotImplementedError(
             f"SWE-bench Verified does not support scaffold={scaffold!r}"
         )

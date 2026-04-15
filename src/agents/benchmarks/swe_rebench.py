@@ -111,7 +111,7 @@ class SWERebenchBenchmark(Benchmark):
         )
 
     def runtime_mode_for(self, scaffold: str) -> str:
-        if scaffold not in {"openclaw", "miniswe"}:
+        if scaffold != "openclaw":
             raise NotImplementedError(
                 f"SWE-rebench does not support scaffold={scaffold!r}"
             )

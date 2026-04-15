@@ -2,8 +2,6 @@
 
 Handles git clone, checkout at base_commit, and pip install -e .
 to produce a ready-to-edit codebase in the task workspace.
-
-Mirrors the prepare() phase in agent-sched-bench's MiniSWECodeAgent.
 """
 
 from __future__ import annotations

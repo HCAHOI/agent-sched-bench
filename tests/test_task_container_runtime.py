@@ -474,10 +474,10 @@ def test_run_task_container_agent_reads_result_and_writes_raw_logs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    result_path = tmp_path / "_task_container_runtime" / "miniswe" / "run.result.json"
-    stdout_path = tmp_path / "_task_container_runtime" / "miniswe" / "stdout.txt"
-    stderr_path = tmp_path / "_task_container_runtime" / "miniswe" / "stderr.txt"
-    trace_path = tmp_path / "_task_container_runtime" / "miniswe" / "trace.jsonl"
+    result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
+    stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
+    stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
+    trace_path = tmp_path / "_task_container_runtime" / "openclaw" / "trace.jsonl"
 
     def fake_exec(**kwargs):
         assert kwargs["runtime"] == "/usr/bin/python3"
@@ -520,7 +520,7 @@ def test_run_task_container_agent_reads_result_and_writes_raw_logs(
         pythonpath="/tmp/site:/repo/src:/repo",
         container_executable="docker",
         request={
-            "scaffold": "miniswe",
+            "scaffold": "openclaw",
             "result_path": str(result_path),
             "trace_file": str(trace_path),
             "raw_stdout_path": str(stdout_path),
@@ -538,10 +538,10 @@ def test_run_task_container_agent_preserves_existing_raw_logs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    result_path = tmp_path / "_task_container_runtime" / "miniswe" / "run.result.json"
-    stdout_path = tmp_path / "_task_container_runtime" / "miniswe" / "stdout.txt"
-    stderr_path = tmp_path / "_task_container_runtime" / "miniswe" / "stderr.txt"
-    trace_path = tmp_path / "_task_container_runtime" / "miniswe" / "trace.jsonl"
+    result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
+    stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
+    stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
+    trace_path = tmp_path / "_task_container_runtime" / "openclaw" / "trace.jsonl"
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.write_text("container stdout", encoding="utf-8")
     stderr_path.write_text("container stderr", encoding="utf-8")
@@ -585,8 +585,8 @@ def test_run_task_container_agent_preserves_existing_raw_logs(
         pythonpath="/tmp/site:/repo/src:/repo",
         container_executable="docker",
         request={
-            "kind": "run_miniswe",
-            "scaffold": "miniswe",
+            "kind": "run_openclaw",
+            "scaffold": "openclaw",
             "result_path": str(result_path),
             "trace_file": str(trace_path),
             "raw_stdout_path": str(stdout_path),
@@ -656,10 +656,10 @@ def test_run_task_container_agent_timeout_writes_partial_logs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    result_path = tmp_path / "_task_container_runtime" / "miniswe" / "run.result.json"
-    stdout_path = tmp_path / "_task_container_runtime" / "miniswe" / "stdout.txt"
-    stderr_path = tmp_path / "_task_container_runtime" / "miniswe" / "stderr.txt"
-    trace_path = tmp_path / "_task_container_runtime" / "miniswe" / "trace.jsonl"
+    result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
+    stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
+    stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
+    trace_path = tmp_path / "_task_container_runtime" / "openclaw" / "trace.jsonl"
 
     def fake_exec(**kwargs):
         raise __import__("subprocess").TimeoutExpired(
@@ -680,8 +680,8 @@ def test_run_task_container_agent_timeout_writes_partial_logs(
             timeout=10,
             container_executable="docker",
             request={
-                "kind": "run_miniswe",
-                "scaffold": "miniswe",
+                "kind": "run_openclaw",
+                "scaffold": "openclaw",
                 "result_path": str(result_path),
                 "trace_file": str(trace_path),
                 "raw_stdout_path": str(stdout_path),

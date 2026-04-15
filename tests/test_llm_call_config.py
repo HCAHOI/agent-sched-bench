@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from llm_call.config import resolve_llm_config
-from llm_call.miniswe import build_miniswe_litellm_model_name
 from llm_call.openai_compat import uses_openrouter
 
 
@@ -76,39 +75,6 @@ def test_resolve_llm_config_supports_siliconflow() -> None:
     assert resolved.api_key == "sf-test-key"
     assert resolved.model == "Pro/zai-org/GLM-5.1"
     assert resolved.env_key == "SILICONFLOW_API_KEY"
-
-
-def test_build_miniswe_litellm_model_name_for_openrouter() -> None:
-    assert (
-        build_miniswe_litellm_model_name(
-            model="z-ai/glm-5.1",
-            provider_name="openrouter",
-            api_base="https://openrouter.ai/api/v1",
-        )
-        == "openrouter/z-ai/glm-5.1"
-    )
-
-
-def test_build_miniswe_litellm_model_name_for_openai_compatible_provider() -> None:
-    assert (
-        build_miniswe_litellm_model_name(
-            model="qwen-plus-latest",
-            provider_name="dashscope",
-            api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
-        == "openai/qwen-plus-latest"
-    )
-
-
-def test_build_miniswe_litellm_model_name_for_siliconflow() -> None:
-    assert (
-        build_miniswe_litellm_model_name(
-            model="Pro/zai-org/GLM-5.1",
-            provider_name="siliconflow",
-            api_base="https://api.siliconflow.com/v1",
-        )
-        == "openai/Pro/zai-org/GLM-5.1"
-    )
 
 
 def test_uses_openrouter_matches_base_url() -> None:

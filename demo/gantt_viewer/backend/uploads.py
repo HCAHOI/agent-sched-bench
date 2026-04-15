@@ -8,18 +8,24 @@ import re
 from pathlib import Path
 
 
-UPLOAD_ROOT = (
-    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    / "agent-sched-bench"
-    / "gantt-uploads"
-)
+def default_upload_root() -> Path:
+    return (
+        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        / "agent-sched-bench"
+        / "gantt-uploads"
+    )
 
 
-def persist_upload(filename: str, content: bytes) -> Path:
+def persist_upload(
+    filename: str,
+    content: bytes,
+    *,
+    upload_root: Path | None = None,
+) -> Path:
     """Persist an uploaded trace file and return its path."""
     suffix = Path(filename).suffix or ".jsonl"
     digest = hashlib.sha256(content).hexdigest()
-    target = UPLOAD_ROOT / f"{digest}{suffix}"
+    target = (upload_root or default_upload_root()) / f"{digest}{suffix}"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content)
     return target

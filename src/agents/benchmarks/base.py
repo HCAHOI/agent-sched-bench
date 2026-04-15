@@ -14,7 +14,22 @@ import yaml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Runner(Protocol):
+    """Minimal benchmark runner interface used by host-mode collection."""
+
+    async def run_task(
+        self,
+        task: dict[str, Any],
+        *,
+        attempt_ctx: Any,
+        prompt_template: str,
+    ) -> Any:
+        """Run one normalized benchmark task."""
+        ...
 
 @dataclass
 class BenchmarkConfig:
@@ -113,6 +128,11 @@ class Benchmark(ABC):
         Subclasses can raise :class:`ValueError` for missing or invalid config.
         """
         return None
+
+    @property
+    def execution_environment(self) -> str:
+        """Return the required task execution environment."""
+        return "container"
 
     def validate_scaffold_support(self, scaffold: str) -> None:
         """Raise when *scaffold* is unsupported for this benchmark."""

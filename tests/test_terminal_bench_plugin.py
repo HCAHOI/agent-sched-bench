@@ -104,7 +104,8 @@ def test_terminal_bench_runtime_mode_and_scaffold_gating() -> None:
     plugin = get_benchmark_class("terminal-bench")(_make_config())
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
     with pytest.raises(NotImplementedError, match="openclaw"):
-        plugin.validate_scaffold_support("miniswe")
+        plugin.validate_scaffold_support("unsupported")
+    assert plugin.execution_environment == "host"
 
 
 def test_terminal_bench_normalize_task_preserves_non_swe_shape(tb_stub) -> None:

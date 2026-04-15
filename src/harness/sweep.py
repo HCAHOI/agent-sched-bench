@@ -136,12 +136,10 @@ def extract_agent_kwargs(
 ) -> dict[str, Any]:
     """Project workload config into the agent constructor kwargs we actually support."""
     if workload_name == "code_agent":
-        return {
-            "max_iterations": workload_config.get("max_iterations", 100),
-            "command_timeout_s": workload_config.get("command_timeout_s", 120.0),
-            "task_timeout_s": workload_config.get("task_timeout_s", 1200.0),
-            "repos_root": workload_config.get("repos_root"),
-        }
+        raise ValueError(
+            "code_agent was removed with its legacy scaffold; "
+            "use trace_collect.cli benchmark collection instead."
+        )
     raise ValueError(f"Unsupported workload config: {workload_name}")
 
 
@@ -174,6 +172,7 @@ async def execute_sweep(
         workload_config = load_config(
             configs_root / "workloads" / f"{run.workload}.yaml"
         )
+        agent_kwargs = extract_agent_kwargs(run.workload, workload_config)
         task_timeout_s = workload_config.get("task_timeout_s")
         all_tasks = load_tasks(Path(run.tasks_file))
         # Fixed concurrency: run exactly N tasks simultaneously (matching Continuum protocol)
@@ -184,28 +183,30 @@ async def execute_sweep(
         metrics_url = system_config.get("metrics_url", "")
         trace_logger = TraceLogger(output_path.parent, run_id)
         try:
-            runner = BenchmarkRunner(
-                agent_factory=build_agent_factory(
-                    workload_key,
-                    agent_kwargs=extract_agent_kwargs(run.workload, workload_config),
-                ),
-                api_base=api_base,
-                model=model,
-                concurrency=run.concurrency,
-                tasks=tasks,
-                arrival_mode=arrival_mode,
-                arrival_rate_per_s=arrival_rate_per_s,
-                arrival_seed=arrival_seed,
-                task_timeout_s=task_timeout_s,
-                trace_logger=trace_logger,
-            )
+            results = []
             metrics_task = None
             collector = None
-            if metrics_url:
+            if tasks and metrics_url:
                 collector = VLLMMetricsCollector(metrics_url=metrics_url)
                 metrics_task = asyncio.create_task(collector.poll(interval_s=1.0))
             try:
-                results = await runner.run()
+                if tasks:
+                    runner = BenchmarkRunner(
+                        agent_factory=build_agent_factory(
+                            workload_key,
+                            agent_kwargs=agent_kwargs,
+                        ),
+                        api_base=api_base,
+                        model=model,
+                        concurrency=run.concurrency,
+                        tasks=tasks,
+                        arrival_mode=arrival_mode,
+                        arrival_rate_per_s=arrival_rate_per_s,
+                        arrival_seed=arrival_seed,
+                        task_timeout_s=task_timeout_s,
+                        trace_logger=trace_logger,
+                    )
+                    results = await runner.run()
             finally:
                 if metrics_task is not None:
                     metrics_task.cancel()

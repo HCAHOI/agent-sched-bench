@@ -162,94 +162,10 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-async def _run_miniswe(request: dict[str, Any]) -> dict[str, Any]:
-    from agents.miniswe import MiniSWECodeAgent
-    from harness.trace_logger import TraceLogger
-
-    llm_config = resolve_llm_config(
-        provider=request.get("provider_name"),
-        api_base=request.get("api_base"),
-        api_key=request.get("api_key"),
-        model=request.get("model"),
-        environ={},
-    )
-    task_raw = dict(request["task"])
-    trace_file = Path(request["trace_file"])
-    trace_file.parent.mkdir(parents=True, exist_ok=True)
-    trace_logger = TraceLogger(trace_file.parent, trace_file.stem)
-    metadata: dict[str, Any] = {
-        "scaffold": "miniswe",
-        "benchmark": request["benchmark"],
-        "model": llm_config.model,
-        "api_base": llm_config.api_base,
-        "max_iterations": int(request["max_iterations"]),
-        "instance_id": task_raw["instance_id"],
-        "prompt_template": request["prompt_template"],
-        "agent_runtime_mode": request.get("agent_runtime_mode", "task_container_agent"),
-        "runtime_proof": _runtime_proof(request.get("container_id")),
-        "scaffold_capabilities": {
-            "tools": ["bash"],
-            "memory": False,
-            "skills": False,
-            "file_ops": "bash_only",
-        },
-    }
-    if request.get("benchmark_split") is not None:
-        metadata["benchmark_split"] = request["benchmark_split"]
-    trace_logger.log_metadata(**metadata)
-
-    agent = MiniSWECodeAgent(
-        agent_id=task_raw["instance_id"],
-        api_base=llm_config.api_base,
-        model=llm_config.model,
-        provider_name=llm_config.name,
-        api_key=llm_config.api_key,
-        max_iterations=int(request["max_iterations"]),
-        command_timeout_s=float(request["command_timeout_s"]),
-        task_timeout_s=float(request["task_timeout_s"]),
-        max_context_tokens=int(request["max_context_tokens"]),
-        prompt_template=request["prompt_template"],
-        runtime_mode="local_environment",
-        container_executable=request.get("container_executable"),
-        exec_working_dir=request.get("exec_working_dir", "/testbed"),
-    )
-    agent._trace_logger = trace_logger
-    agent.run_metadata = {"model": llm_config.model}
-    try:
-        await agent.prepare(task_raw)
-        success = await agent.run(task_raw)
-    finally:
-        summary = agent.summary()
-        trace_logger.log_summary(agent.agent_id, summary)
-        trace_logger.close()
-
-    payload = {
-        "trace_path": str(trace_logger.path),
-        "model_patch": (agent.task_submission or "").strip(),
-        "exit_status": agent.task_exit_status,
-        "error": agent.task_error,
-        "n_iterations": summary.get("n_iterations") or len(agent.trace),
-        "total_llm_ms": summary.get("total_llm_ms"),
-        "total_tool_ms": summary.get("total_tool_ms"),
-        "total_tokens": summary.get("total_tokens"),
-        "runtime_proof": {
-            **_runtime_proof(request.get("container_id")),
-            "agent_runtime_mode": request.get(
-                "agent_runtime_mode", "task_container_agent"
-            ),
-        },
-        "success": bool(success),
-    }
-    _write_result(request["result_path"], payload)
-    return payload
-
-
 async def _run_request(request: dict[str, Any]) -> dict[str, Any]:
     kind = request["kind"]
     if kind == "run_openclaw":
         return await _run_openclaw(request)
-    if kind == "run_miniswe":
-        return await _run_miniswe(request)
     raise ValueError(f"unsupported runtime request kind: {kind!r}")
 
 

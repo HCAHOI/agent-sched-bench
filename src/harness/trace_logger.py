@@ -32,7 +32,12 @@ class TraceLogger:
         # collector.py deduplicates via load_completed_ids().
         self._handle = self.path.open("a", encoding="utf-8")
 
-    def log_metadata(self, scaffold: str, **kwargs: Any) -> None:
+    def log_metadata(
+        self,
+        scaffold: str,
+        execution_environment: str = "container",
+        **kwargs: Any,
+    ) -> None:
         """Write a trace_metadata header record declaring the scaffold and run context.
 
         This must be the first record in the trace so downstream tools
@@ -42,6 +47,7 @@ class TraceLogger:
             "type": "trace_metadata",
             "scaffold": scaffold,
             "trace_format_version": 5,
+            "execution_environment": execution_environment,
             **kwargs,
         }
         self._handle.write(json.dumps(entry) + "\n")

@@ -46,13 +46,13 @@ class RunnerTaskResult:
 def build_agent_factory(
     agent_name: str, agent_kwargs: dict[str, Any] | None = None
 ) -> AgentFactory:
-    from agents.miniswe import MiniSWECodeAgent as CodeAgent
-
-    mapping: dict[str, type[AgentBase]] = {
-        "code": CodeAgent,
-    }
+    mapping: dict[str, type[AgentBase]] = {}
     if agent_name not in mapping:
-        raise ValueError(f"Unsupported agent name: {agent_name}")
+        raise ValueError(
+            f"Unsupported agent name: {agent_name}. "
+            "The legacy code agent was removed with its scaffold; "
+            "use trace_collect.cli with benchmark plugins instead."
+        )
 
     agent_cls = mapping[agent_name]
     agent_kwargs = agent_kwargs or {}
@@ -247,7 +247,7 @@ def install_signal_handlers(runner: BenchmarkRunner) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Concurrent benchmark runner.")
-    parser.add_argument("--agent", required=True, choices=["code"])
+    parser.add_argument("--agent", required=True)
     parser.add_argument("--api-base", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--concurrency", type=int, required=True)

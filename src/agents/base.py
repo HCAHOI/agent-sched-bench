@@ -139,10 +139,9 @@ class AgentBase(ABC):
     ) -> LLMCallResult:
         """Call the OpenAI-compatible endpoint with retry on transient errors.
 
-        Note: MiniSWECodeAgent uses mini-swe-agent's DefaultAgent which has its
-        own LLM client and does NOT call this method. OpenClaw uses nanobot's
-        LLMProvider._run_with_retry() for retry. This retry logic covers any
-        future AgentBase subclass that calls _call_llm() directly.
+        OpenClaw uses nanobot's LLMProvider._run_with_retry() for retry. This
+        retry logic covers any future AgentBase subclass that calls
+        _call_llm() directly.
         """
         import asyncio as _asyncio
         from openai import APIStatusError, APIConnectionError, APITimeoutError
@@ -272,9 +271,7 @@ class AgentBase(ABC):
     def summary(self) -> dict[str, Any]:
         # ``.get(key, 0)`` returns None (not 0) when the key exists with a
         # None value, so use ``(... or 0)`` to coerce missing-or-None fields
-        # to a numeric default. mini-swe-agent's _convert_trajectory can
-        # store ``duration_ms=None`` when the last tool result lacks a
-        # timestamp; without this guard sum() explodes with TypeError.
+        # to a numeric default.
         llm_records = [a.data for a in self.actions if a.action_type == "llm_call"]
         llm_summary = summarize_llm_latencies(llm_records)
         total_tool_ms = sum(

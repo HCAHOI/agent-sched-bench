@@ -19,7 +19,6 @@ class ResolvedLLMConfig:
     api_key: str
     model: str
     env_key: str
-    miniswe_litellm_prefix: str
 
 
 def add_llm_config_arguments(parser: argparse.ArgumentParser) -> None:
@@ -83,5 +82,4 @@ def resolve_llm_config(
         api_key=resolved_api_key,
         model=model,
         env_key=definition.env_key,
-        miniswe_litellm_prefix=definition.miniswe_litellm_prefix,
     )

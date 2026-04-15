@@ -11,7 +11,7 @@ import pytest
 
 from agents.benchmarks import get_benchmark_class
 from agents.benchmarks.base import BenchmarkConfig
-from trace_collect.collector import collect_miniswe_traces, collect_openclaw_traces
+from trace_collect.collector import collect_traces
 
 
 def _make_verified_config() -> BenchmarkConfig:
@@ -36,10 +36,11 @@ def test_swe_bench_verified_openclaw_uses_task_container_agent() -> None:
     assert plugin.runtime_mode_for("openclaw") == "task_container_agent"
 
 
-def test_swe_bench_verified_miniswe_stays_on_host_controller() -> None:
+def test_swe_bench_verified_rejects_unsupported_scaffold() -> None:
     plugin = get_benchmark_class("swe-bench-verified")(_make_verified_config())
 
-    assert plugin.runtime_mode_for("miniswe") == "host_controller"
+    with pytest.raises(NotImplementedError):
+        plugin.runtime_mode_for("unsupported")
 
 
 def test_swe_bench_verified_normalize_task_derives_image_name() -> None:
@@ -57,17 +58,19 @@ def test_swe_bench_verified_normalize_task_derives_image_name() -> None:
     )
 
 
-def test_collect_openclaw_traces_rejects_non_task_container_runtime() -> None:
+def test_collect_traces_rejects_non_task_container_runtime() -> None:
     benchmark = SimpleNamespace(
         validate_scaffold_support=lambda scaffold: None,
         runtime_mode_for=lambda scaffold: "unsupported",
         load_tasks=lambda: (_ for _ in ()).throw(AssertionError("should not load")),
+        execution_environment="container",
         config=SimpleNamespace(default_prompt_template="default"),
     )
 
     with pytest.raises(NotImplementedError, match="Unsupported benchmark.runtime_mode_for"):
         asyncio.run(
-            collect_openclaw_traces(
+            collect_traces(
+                scaffold="openclaw",
                 provider_name="openrouter",
                 api_base="https://example.com",
                 api_key="test-key",
@@ -78,7 +81,7 @@ def test_collect_openclaw_traces_rejects_non_task_container_runtime() -> None:
         )
 
 
-def test_collect_openclaw_traces_supports_host_controller_runner(
+def test_collect_traces_supports_host_controller_runner(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -104,7 +107,7 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
     )
 
     class FakeRunner:
-        async def run_openclaw_task(self, task, *, attempt_ctx, prompt_template):
+        async def run_task(self, task, *, attempt_ctx, prompt_template):
             from trace_collect.attempt_pipeline import AttemptResult
 
             return AttemptResult(
@@ -119,6 +122,7 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
         runtime_mode_for=lambda scaffold: "host_controller",
         load_tasks=lambda: [{"instance_id": "tb-1"}],
         build_runner=lambda **kwargs: FakeRunner(),
+        execution_environment="host",
         config=SimpleNamespace(
             slug="terminal-bench",
             default_prompt_template="default",
@@ -129,7 +133,8 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
     )
 
     run_dir = asyncio.run(
-        collect_openclaw_traces(
+        collect_traces(
+            scaffold="openclaw",
             provider_name="openrouter",
             api_base="https://example.com/v1",
             api_key="test-key",
@@ -137,7 +142,7 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
             benchmark=benchmark,
             sample=1,
             min_free_disk_gb=0.001,
-            container_executable="docker",
+            container_executable=None,
         )
     )
 
@@ -146,7 +151,7 @@ def test_collect_openclaw_traces_supports_host_controller_runner(
     assert '"success": true' in payload
 
 
-def test_collect_openclaw_traces_requires_explicit_container_runtime(
+def test_collect_traces_requires_explicit_container_runtime(
     tmp_path: Path,
 ) -> None:
     benchmark = SimpleNamespace(
@@ -154,6 +159,7 @@ def test_collect_openclaw_traces_requires_explicit_container_runtime(
         runtime_mode_for=lambda scaffold: "host_controller",
         load_tasks=lambda: [],
         build_runner=lambda **kwargs: None,
+        execution_environment="container",
         config=SimpleNamespace(
             slug="terminal-bench",
             default_prompt_template="default",
@@ -163,9 +169,10 @@ def test_collect_openclaw_traces_requires_explicit_container_runtime(
         image_name_for=lambda task: None,
     )
 
-    with pytest.raises(TypeError, match="container_executable"):
+    with pytest.raises(ValueError, match="--container required"):
         asyncio.run(
-            collect_openclaw_traces(
+            collect_traces(
+                scaffold="openclaw",
                 provider_name="openrouter",
                 api_base="https://example.com/v1",
                 api_key="test-key",
@@ -178,5 +185,4 @@ def test_collect_openclaw_traces_requires_explicit_container_runtime(
 
 
 def test_collectors_max_iterations_defaults_to_100() -> None:
-    assert inspect.signature(collect_openclaw_traces).parameters["max_iterations"].default == 100
-    assert inspect.signature(collect_miniswe_traces).parameters["max_iterations"].default == 100
+    assert inspect.signature(collect_traces).parameters["max_iterations"].default == 100

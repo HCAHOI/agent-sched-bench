@@ -3,7 +3,7 @@ UV ?= uv
 TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
 GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
-.PHONY: help pull sync test lint serve-vllm run-smoke smoke-code run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-miniswe smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull sync test lint serve-vllm run-smoke run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
@@ -13,7 +13,6 @@ help:
 	@printf "  lint              Run ruff\n"
 	@printf "  serve-vllm        Run the raw vLLM launcher\n"
 	@printf "  run-smoke         Run the current infrastructure smoke suite\n"
-	@printf "  smoke-code        Run mini-swe-agent code agent smoke test\n"
 	@printf "  run-sweep         Run the harness sweep when HARNESS-1 is available\n"
 	@printf "  collect-results   Pull result artifacts back via rsync\n"
 	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
@@ -23,7 +22,6 @@ help:
 	@printf "  setup-swe-rebench-repos     Clone repos referenced by SWE-rebench tasks\n"
 	@printf "  setup-swe-rebench           Shortcut: download-swe-rebench + setup-swe-rebench-repos\n"
 	@printf "  setup-arm-host              Enable amd64 container execution on ARM Docker hosts (uses sudo if needed)\n"
-	@printf "  smoke-swe-rebench-miniswe   Run $(SMOKE_N) SWE-rebench tasks through mini-swe-agent\n"
 	@printf "  smoke-swe-rebench-openclaw  Run $(SMOKE_N) SWE-rebench tasks through openclaw\n"
 	@printf "  gantt-viewer-install        Install frontend dependencies with npm\n"
 	@printf "  gantt-viewer-dev            Launch the dynamic Gantt viewer in dev mode\n"
@@ -50,9 +48,6 @@ serve-vllm:
 
 run-smoke:
 	./scripts/run_smoke.sh
-
-smoke-code:
-	$(PYTHON) -m pytest tests/test_code_agent.py
 
 run-sweep:
 	./scripts/run_sweep.sh
@@ -88,13 +83,6 @@ setup-arm-host:
 # Override PROVIDER (default: dashscope) and SMOKE_N (default: 2).
 PROVIDER ?= dashscope
 SMOKE_N ?= 2
-
-smoke-swe-rebench-miniswe:
-	$(TRACE_COLLECT) \
-	    --benchmark swe-rebench \
-	    --scaffold mini-swe-agent \
-	    --sample $(SMOKE_N) \
-	    --verbose
 
 smoke-swe-rebench-openclaw:
 	$(TRACE_COLLECT) \

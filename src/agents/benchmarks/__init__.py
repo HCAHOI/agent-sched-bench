@@ -11,7 +11,7 @@ New benchmarks register here by adding an entry to :data:`REGISTRY`.
 
 from __future__ import annotations
 
-from agents.benchmarks.base import Benchmark, BenchmarkConfig
+from agents.benchmarks.base import Benchmark, BenchmarkConfig, Runner
 from agents.benchmarks.swe_bench_verified import SWEBenchVerified
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
 from agents.benchmarks.terminal_bench import TerminalBenchBenchmark
@@ -21,6 +21,7 @@ __all__ = [
     "get_benchmark_class",
     "Benchmark",
     "BenchmarkConfig",
+    "Runner",
     "SWEBenchVerified",
     "SWERebenchBenchmark",
     "TerminalBenchBenchmark",

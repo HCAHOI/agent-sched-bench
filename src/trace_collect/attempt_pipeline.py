@@ -225,7 +225,7 @@ async def run_attempt(
     *,
     inner: Callable[[AttemptContext], Awaitable[AttemptResult]],
     min_free_disk_gb: float = 30.0,
-    container_executable: str,
+    container_executable: str | None,
 ) -> AttemptResult:
     """Execute one scaffold attempt and write its artifacts."""
     try:
@@ -238,6 +238,8 @@ async def run_attempt(
     attempt_layout.ensure_attempt_dir(ctx.attempt_dir)
 
     if ctx.source_image:
+        if container_executable is None:
+            raise ValueError("container_executable is required for container tasks")
         try:
             fixed_name, fix_elapsed = ensure_fixed_image(
                 ctx.source_image,
@@ -259,13 +261,15 @@ async def run_attempt(
         ctx.permission_fix_time_s = 0.0
 
     stop_watcher = threading.Event()
-    watcher_task = asyncio.create_task(
-        _watch_for_container_ready(
-            ctx,
-            stop_watcher,
-            container_executable=container_executable,
+    watcher_task: asyncio.Task[ContainerStatsSampler | None] | None = None
+    if container_executable is not None:
+        watcher_task = asyncio.create_task(
+            _watch_for_container_ready(
+                ctx,
+                stop_watcher,
+                container_executable=container_executable,
+            )
         )
-    )
 
     sampler: ContainerStatsSampler | None = None
     samples: list[dict[str, Any]] = []
@@ -279,13 +283,14 @@ async def run_attempt(
         logger.exception("scaffold inner raised: %s", exc)
     finally:
         stop_watcher.set()
-        try:
-            sampler = await asyncio.wait_for(watcher_task, timeout=2.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            watcher_task.cancel()
-            sampler = None
-        except Exception:
-            sampler = None
+        if watcher_task is not None:
+            try:
+                sampler = await asyncio.wait_for(watcher_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                watcher_task.cancel()
+                sampler = None
+            except Exception:
+                sampler = None
         if sampler is not None:
             samples = sampler.stop()
 

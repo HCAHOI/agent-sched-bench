@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from trace_collect.openclaw_tools import ContainerAgent, execute_trace_tool
+from trace_collect.openclaw_tools import execute_trace_tool
 
 
 def _nested(tool_name: str, payload: dict) -> str:

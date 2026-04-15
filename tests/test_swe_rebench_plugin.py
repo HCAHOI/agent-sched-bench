@@ -16,6 +16,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agents.benchmarks.base import BenchmarkConfig
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
 
@@ -144,10 +146,11 @@ def test_swe_rebench_config_default_prompt_is_cc_aligned() -> None:
     assert plugin.config.default_prompt_template == "cc_aligned"
 
 
-def test_swe_rebench_runtime_mode_for_openclaw_and_miniswe() -> None:
+def test_swe_rebench_runtime_mode_for_openclaw_only() -> None:
     plugin = SWERebenchBenchmark(_make_config())
     assert plugin.runtime_mode_for("openclaw") == "task_container_agent"
-    assert plugin.runtime_mode_for("miniswe") == "task_container_agent"
+    with pytest.raises(NotImplementedError):
+        plugin.runtime_mode_for("unsupported")
 
 
 # ── select_subset / exclude_lite knob ───────────────────────────────────

@@ -49,6 +49,7 @@ def create_app(
     )
     app.state.config_path = resolved_config
     app.state.runtime_state_path = resolved_runtime_state_path
+    app.state.upload_root = resolved_runtime_state_path.parent / "gantt-uploads"
     app.include_router(router)
     if not _is_dev_mode() and FRONTEND_DIST_PATH.exists():
         app.mount("/", StaticFiles(directory=FRONTEND_DIST_PATH, html=True), name="frontend")

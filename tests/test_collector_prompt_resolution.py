@@ -42,9 +42,9 @@ def test_parse_collect_args_max_iterations_defaults_to_100() -> None:
     assert args.max_iterations == 100
 
 
-def test_parse_collect_args_requires_container_for_collect() -> None:
-    with pytest.raises(SystemExit, match="2"):
-        parse_collect_args(["--provider", "openrouter", "--model", "z-ai/glm-5.1"])
+def test_parse_collect_args_allows_omitted_container_for_host_mode() -> None:
+    args = parse_collect_args(["--provider", "openrouter", "--model", "z-ai/glm-5.1"])
+    assert args.container is None
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
@@ -57,6 +57,8 @@ def test_parse_collect_args_accepts_explicit_container(
             "openrouter",
             "--model",
             "z-ai/glm-5.1",
+            "--mcp-config",
+            "none",
             "--container",
             container_executable,
         ]
@@ -97,6 +99,8 @@ def test_run_collect_passes_container_to_collect_traces(
             "openrouter",
             "--model",
             "z-ai/glm-5.1",
+            "--mcp-config",
+            "none",
             "--container",
             container_executable,
         ]

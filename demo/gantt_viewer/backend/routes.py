@@ -111,7 +111,11 @@ async def upload_trace_endpoint(
     if not content:
         raise HTTPException(status_code=422, detail={"message": "empty upload"})
 
-    upload_path = persist_upload(filename, content)
+    upload_path = persist_upload(
+        filename,
+        content,
+        upload_root=request.app.state.upload_root,
+    )
     canonicalized = _canonicalize_or_422(upload_path)
     descriptor = TraceDescriptor(
         id=build_upload_id(filename, content),

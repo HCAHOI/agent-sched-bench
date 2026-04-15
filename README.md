@@ -44,8 +44,8 @@ Currently registered:
 
 | Slug | `task_shape` | Dataset | Split | Docker | Scaffolds | Scoring |
 |---|---|---|---|---|---|---|
-| `swe-bench-verified` | `swe_patch` | `princeton-nlp/SWE-bench_Verified` | `test` | `swebench/sweb.eval.x86.*` (namespace-prefixed) | mini-swe-agent, openclaw | harness (pytest in container) |
-| `swe-rebench` | `swe_patch` | `nebius/SWE-rebench` | `filtered` | `swerebench/sweb.eval.x86_64.*` (fully qualified) | mini-swe-agent, openclaw | harness (pytest in container) |
+| `swe-bench-verified` | `swe_patch` | `princeton-nlp/SWE-bench_Verified` | `test` | `swebench/sweb.eval.x86.*` (namespace-prefixed) | openclaw | harness (pytest in container) |
+| `swe-rebench` | `swe_patch` | `nebius/SWE-rebench` | `filtered` | `swerebench/sweb.eval.x86_64.*` (fully qualified) | openclaw | harness (pytest in container) |
 | `terminal-bench` | `terminal_task` | `terminal-bench-core` (or local task dir) | n/a | Docker task/runtime managed by Terminal-Bench | openclaw (phase 1 only) | Terminal-Bench harness + imported OpenClaw trace |
 
 ### Running a benchmark
@@ -63,7 +63,7 @@ Currently registered:
 
 The collect CLI now requires explicit `--provider` and `--model`; there are no
 provider presets and no default model. Other flags: `--benchmark <slug>`
-(default `swe-bench-verified`), `--scaffold miniswe|openclaw`, `--mcp-config`
+(default `swe-bench-verified`), `--scaffold openclaw`, `--mcp-config`
 (required for `openclaw`; use a config path or `none`),
 `--sample N` (optional task cap), `--instance-ids a,b,c` (optional
 explicit list), `--run-id <path>` (resume an interrupted run),
@@ -74,7 +74,6 @@ Terminal-Bench notes for phase 1:
 - `terminal-bench` is a project dependency and uses the upstream `tb` CLI.
 - Terminal-Bench support requires Python 3.12+ because the upstream package does.
 - The only supported phase-1 combination is `--benchmark terminal-bench --scaffold openclaw`.
-- `terminal-bench --scaffold miniswe` fails fast by design.
 - Docker is the only supported Terminal-Bench runtime in phase 1.
 
 ### Adding a new benchmark

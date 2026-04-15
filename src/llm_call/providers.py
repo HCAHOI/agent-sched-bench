@@ -11,29 +11,24 @@ class ProviderDefinition:
 
     api_base: str
     env_key: str
-    miniswe_litellm_prefix: str
 
 
 PROVIDERS: dict[str, ProviderDefinition] = {
     "openrouter": ProviderDefinition(
         api_base="https://openrouter.ai/api/v1",
         env_key="OPENROUTER_API_KEY",
-        miniswe_litellm_prefix="openrouter",
     ),
     "dashscope": ProviderDefinition(
         api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
         env_key="DASHSCOPE_API_KEY",
-        miniswe_litellm_prefix="openai",
     ),
     "openai": ProviderDefinition(
         api_base="https://api.openai.com/v1",
         env_key="OPENAI_API_KEY",
-        miniswe_litellm_prefix="openai",
     ),
     "siliconflow": ProviderDefinition(
         api_base="https://api.siliconflow.com/v1",
         env_key="SILICONFLOW_API_KEY",
-        miniswe_litellm_prefix="openai",
     ),
 }
 

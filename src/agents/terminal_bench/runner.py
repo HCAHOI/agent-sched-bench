@@ -59,6 +59,19 @@ class TerminalBenchRunner:
             prompt_template,
         )
 
+    async def run_task(
+        self,
+        task: dict[str, Any],
+        *,
+        attempt_ctx: AttemptContext,
+        prompt_template: str,
+    ) -> AttemptResult:
+        return await self.run_openclaw_task(
+            task,
+            attempt_ctx=attempt_ctx,
+            prompt_template=prompt_template,
+        )
+
     def _run_openclaw_task_sync(
         self,
         task: dict[str, Any],
@@ -250,6 +263,7 @@ class TerminalBenchRunner:
                 "trace_format_version": 5,
                 "mode": "collect",
                 "scaffold": "openclaw",
+                "execution_environment": "host",
                 "benchmark": self.benchmark_slug,
                 "model": self.model,
                 "max_iterations": self.max_iterations,

@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-# Skip the entire module if openclaw / minisweagent deps are unavailable.
+# Skip the entire module if OpenClaw deps are unavailable.
 pytest.importorskip("agents.openclaw._session_runner")
 
 from agents.openclaw._session_runner import TraceCollectorHook, _resolve_run_outcome
