@@ -12,6 +12,7 @@ from agents.benchmarks import REGISTRY, get_benchmark_class
 from agents.benchmarks._research import HostResearchOpenClawRunner
 from agents.benchmarks.base import BenchmarkConfig
 from agents.benchmarks.deep_research_bench import DeepResearchBenchBenchmark
+from trace_collect.attempt_pipeline import AttemptContext
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -198,3 +199,23 @@ def test_host_research_runner_stamps_mcp_config_in_metadata(tmp_path: Path) -> N
 
     metadata = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
     assert metadata["run_config"]["mcp_config"] == "configs/mcp/context7.yaml"
+
+
+def test_host_research_runner_uses_attempt_scoped_workspace_and_session(
+    tmp_path: Path,
+) -> None:
+    runner = object.__new__(HostResearchOpenClawRunner)
+    runner.workspace_base = tmp_path / "workspace"
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="drb-1",
+        attempt=2,
+        task={"instance_id": "drb-1", "problem_statement": "Question"},
+        model="qwen-plus-latest",
+        scaffold="openclaw",
+        source_image=None,
+        execution_environment="host",
+    )
+
+    assert runner._workspace_for(ctx) == tmp_path / "workspace" / "drb-1" / "attempt_2"
+    assert runner._session_key_for(ctx) == "research:drb-1:attempt_2"

@@ -172,7 +172,7 @@ class HostResearchOpenClawRunner:
         attempt_ctx: AttemptContext,
         prompt_template: str,
     ) -> AttemptResult:
-        workspace = self.workspace_base / attempt_ctx.instance_id
+        workspace = self._workspace_for(attempt_ctx)
         trace_path = attempt_ctx.attempt_dir / "trace.jsonl"
         prompt = self._render_prompt(task, prompt_template=prompt_template)
         result = await self._session_runner.run(
@@ -180,7 +180,7 @@ class HostResearchOpenClawRunner:
             workspace=workspace,
             tool_workspace=workspace,
             project_workspace=workspace,
-            session_key=f"research:{attempt_ctx.instance_id}",
+            session_key=self._session_key_for(attempt_ctx),
             trace_file=trace_path,
             instance_id=attempt_ctx.instance_id,
             channel="collect",
@@ -209,6 +209,17 @@ class HostResearchOpenClawRunner:
                 "benchmark": self.benchmark_slug,
             },
         )
+
+    def _workspace_for(self, attempt_ctx: AttemptContext) -> Path:
+        return (
+            self.workspace_base
+            / attempt_ctx.instance_id
+            / attempt_ctx.attempt_label
+        )
+
+    @staticmethod
+    def _session_key_for(attempt_ctx: AttemptContext) -> str:
+        return f"research:{attempt_ctx.instance_id}:{attempt_ctx.attempt_label}"
 
     def _stamp_trace_metadata(
         self,
