@@ -125,48 +125,51 @@ def _sample_with_psutil(
             psutil_module=psutil,
             process_cache=process_cache,
         )
-        children = list(process.children(recursive=True))
-        if process_cache is not None:
-            for child in children:
-                child_pid = getattr(child, "pid", None)
-                if isinstance(child_pid, int):
-                    process_cache.setdefault(child_pid, child)
-            children = [
-                process_cache.get(getattr(child, "pid", None), child)
-                for child in children
-            ]
-        processes = [process, *children]
-        cpu = 0.0
-        rss = 0
-        disk_read_bytes = 0
-        disk_write_bytes = 0
-        context_switches = 0
-        found_io = False
-        found_context = False
-        for proc in processes:
-            try:
-                cpu += float(proc.cpu_percent(interval=None))
-            except Exception:
-                pass
-            try:
-                rss += int(proc.memory_info().rss)
-            except Exception:
-                pass
-            try:
-                io_counters = proc.io_counters()
-                disk_read_bytes += int(getattr(io_counters, "read_bytes", 0))
-                disk_write_bytes += int(getattr(io_counters, "write_bytes", 0))
-                found_io = True
-            except Exception:
-                pass
-            try:
-                ctxt = proc.num_ctx_switches()
-                context_switches += int(ctxt.voluntary + ctxt.involuntary)
-                found_context = True
-            except Exception:
-                pass
     except Exception:
         return None
+    try:
+        children = list(process.children(recursive=True))
+    except Exception:
+        children = []
+    if process_cache is not None:
+        for child in children:
+            child_pid = getattr(child, "pid", None)
+            if isinstance(child_pid, int):
+                process_cache.setdefault(child_pid, child)
+        children = [
+            process_cache.get(getattr(child, "pid", None), child)
+            for child in children
+        ]
+    processes = [process, *children]
+    cpu = 0.0
+    rss = 0
+    disk_read_bytes = 0
+    disk_write_bytes = 0
+    context_switches = 0
+    found_io = False
+    found_context = False
+    for proc in processes:
+        try:
+            cpu += float(proc.cpu_percent(interval=None))
+        except Exception:
+            pass
+        try:
+            rss += int(proc.memory_info().rss)
+        except Exception:
+            pass
+        try:
+            io_counters = proc.io_counters()
+            disk_read_bytes += int(getattr(io_counters, "read_bytes", 0))
+            disk_write_bytes += int(getattr(io_counters, "write_bytes", 0))
+            found_io = True
+        except Exception:
+            pass
+        try:
+            ctxt = proc.num_ctx_switches()
+            context_switches += int(ctxt.voluntary + ctxt.involuntary)
+            found_context = True
+        except Exception:
+            pass
     sample = _now_sample()
     sample.update(
         {

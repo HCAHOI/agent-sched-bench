@@ -74,6 +74,44 @@ def test_psutil_sampler_aggregates_recursive_children(monkeypatch) -> None:
     assert sample["process_count"] == 3
 
 
+def test_psutil_sampler_keeps_root_process_when_child_enumeration_fails(
+    monkeypatch,
+) -> None:
+    class FakeProcess:
+        pid = 1
+
+        def children(self, *, recursive: bool):
+            assert recursive is True
+            raise PermissionError("process list unavailable")
+
+        def memory_info(self):
+            return SimpleNamespace(rss=44 * 1024 * 1024)
+
+        def cpu_percent(self, *, interval=None):
+            assert interval is None
+            return 12.25
+
+        def io_counters(self):
+            return SimpleNamespace(read_bytes=4096, write_bytes=8192)
+
+        def num_ctx_switches(self):
+            return SimpleNamespace(voluntary=3, involuntary=4)
+
+    fake_psutil = types.ModuleType("psutil")
+    fake_psutil.Process = lambda pid: FakeProcess()
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+    sample = _sample_with_psutil(1)
+
+    assert sample is not None
+    assert sample["mem_usage"] == "44.000MiB"
+    assert sample["cpu_percent"] == "12.250%"
+    assert sample["disk_read_bytes"] == 4096
+    assert sample["disk_write_bytes"] == 8192
+    assert sample["context_switches"] == 7
+    assert "process_count" not in sample
+
+
 def test_process_sampler_keeps_psutil_child_io_over_proc_parent(monkeypatch) -> None:
     sampler = ProcessStatsSampler(pid=1, interval_s=60.0)
     monkeypatch.setattr(
