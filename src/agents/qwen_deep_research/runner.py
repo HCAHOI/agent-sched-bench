@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import time
-from pathlib import Path
 from typing import Any
 
-from agents.base import TraceAction
+from agents.base import TraceAction, _message_content_to_text
+from agents.benchmarks._research import render_research_prompt
 from harness.trace_logger import TraceLogger
 from llm_call import create_async_openai_client
 from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
@@ -30,22 +29,6 @@ def _get_field(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
-
-
-def _message_content_to_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text", "")))
-            else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part)
-    return str(content)
 
 
 class QwenDeepResearchRunner:
@@ -171,20 +154,11 @@ class QwenDeepResearchRunner:
         *,
         prompt_template: str,
     ) -> list[dict[str, str]]:
-        metadata = {
-            key: task[key]
-            for key in ("topic", "difficulty", "domain", "source_urls")
-            if task.get(key)
-        }
-        prompt = self._load_prompt_template(prompt_template).replace(
-            "{{task}}",
-            str(task["problem_statement"]),
+        prompt = render_research_prompt(
+            self.benchmark_slug,
+            task,
+            prompt_template=prompt_template,
         )
-        if metadata:
-            prompt += (
-                "\n\nInference-time metadata:\n"
-                + json.dumps(metadata, ensure_ascii=False, indent=2)
-            )
         return [
             {
                 "role": "system",
@@ -196,23 +170,6 @@ class QwenDeepResearchRunner:
             },
             {"role": "user", "content": prompt},
         ]
-
-    def _load_prompt_template(self, name: str) -> str:
-        prompt_dir = (
-            Path(__file__).resolve().parents[3]
-            / "configs"
-            / "prompts"
-            / self.benchmark_slug.replace("-", "_")
-        )
-        path = prompt_dir / f"{name}.md"
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Prompt template {name!r} not found at {path}"
-            )
-        text = path.read_text(encoding="utf-8")
-        if "{{task}}" not in text:
-            raise ValueError(f"Prompt template {path} is missing '{{{{task}}}}'")
-        return text
 
     def _runtime_proof(self) -> dict[str, str]:
         return {

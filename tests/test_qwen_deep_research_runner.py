@@ -176,9 +176,8 @@ def test_qwen_prompt_template_controls_messages_without_reference_leak(
         client=_MockClient(),
     )
     monkeypatch.setattr(
-        runner,
-        "_load_prompt_template",
-        lambda name: f"template={name} :: {{{{task}}}}",
+        "agents.benchmarks._research.load_research_prompt_template",
+        lambda benchmark_slug, name: f"{benchmark_slug} template={name} :: {{{{task}}}}",
     )
 
     messages = runner._build_messages(
@@ -190,7 +189,7 @@ def test_qwen_prompt_template_controls_messages_without_reference_leak(
         prompt_template="custom",
     )
 
-    assert "template=custom :: Question" in messages[1]["content"]
+    assert "deep-research-bench template=custom :: Question" in messages[1]["content"]
     assert "science" in messages[1]["content"]
     assert "Do not leak" not in messages[1]["content"]
 

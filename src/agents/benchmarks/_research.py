@@ -11,6 +11,8 @@ from typing import Any, ClassVar
 from agents.benchmarks.base import Benchmark
 from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
 
+INFERENCE_METADATA_FIELDS = ("topic", "difficulty", "domain", "source_urls")
+
 
 def _require_text(raw: dict[str, Any], field: str, *, label: str) -> str:
     value = raw.get(field)
@@ -86,6 +88,51 @@ def _load_hf_rows(
         kwargs["data_files"] = data_files
     ds = load_dataset(dataset, **kwargs)
     return [dict(row) for row in ds]
+
+
+def research_prompt_template_path(benchmark_slug: str, name: str) -> Path:
+    return (
+        Path(__file__).resolve().parents[3]
+        / "configs"
+        / "prompts"
+        / benchmark_slug.replace("-", "_")
+        / f"{name}.md"
+    )
+
+
+def load_research_prompt_template(benchmark_slug: str, name: str) -> str:
+    path = research_prompt_template_path(benchmark_slug, name)
+    if not path.exists():
+        raise FileNotFoundError(f"Prompt template {name!r} not found at {path}")
+    text = path.read_text(encoding="utf-8")
+    if "{{task}}" not in text:
+        raise ValueError(f"Prompt template {path} is missing '{{{{task}}}}'")
+    return text
+
+
+def research_inference_metadata(task: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: task[key]
+        for key in INFERENCE_METADATA_FIELDS
+        if task.get(key)
+    }
+
+
+def render_research_prompt(
+    benchmark_slug: str,
+    task: dict[str, Any],
+    *,
+    prompt_template: str,
+) -> str:
+    template = load_research_prompt_template(benchmark_slug, prompt_template)
+    prompt = template.replace("{{task}}", str(task["problem_statement"]))
+    metadata = research_inference_metadata(task)
+    if metadata:
+        prompt += (
+            "\n\nInference-time metadata:\n"
+            + json.dumps(metadata, ensure_ascii=False, indent=2)
+        )
+    return prompt
 
 
 class HostResearchOpenClawRunner:
@@ -186,57 +233,45 @@ class HostResearchOpenClawRunner:
                         "prompt_template": prompt_template,
                     }
                 )
+                if getattr(self, "mcp_config", None) is not None:
+                    run_config = record.get("run_config") or {}
+                    run_config["mcp_config"] = self.mcp_config
+                    record["run_config"] = run_config
                 replaced = True
             stamped.append(json.dumps(record, ensure_ascii=False))
         if not replaced:
-            stamped.insert(
-                0,
-                json.dumps(
-                    {
-                        "type": "trace_metadata",
-                        "scaffold": "openclaw",
-                        "trace_format_version": 5,
-                        "benchmark": self.benchmark_slug,
-                        "execution_environment": "host",
-                        "instance_id": instance_id,
-                        "prompt_template": prompt_template,
-                    },
-                    ensure_ascii=False,
-                ),
+            metadata = self._trace_metadata(
+                instance_id=instance_id,
+                prompt_template=prompt_template,
             )
+            stamped.insert(0, json.dumps(metadata, ensure_ascii=False))
         trace_path.write_text("\n".join(stamped) + "\n", encoding="utf-8")
 
-    def _render_prompt(self, task: dict[str, Any], *, prompt_template: str) -> str:
-        template = self._load_prompt_template(prompt_template)
-        prompt = template.replace("{{task}}", str(task["problem_statement"]))
-        metadata = {
-            key: task[key]
-            for key in ("topic", "difficulty", "domain", "source_urls")
-            if task.get(key)
+    def _trace_metadata(
+        self,
+        *,
+        instance_id: str,
+        prompt_template: str,
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "type": "trace_metadata",
+            "scaffold": "openclaw",
+            "trace_format_version": 5,
+            "benchmark": self.benchmark_slug,
+            "execution_environment": "host",
+            "instance_id": instance_id,
+            "prompt_template": prompt_template,
         }
-        if metadata:
-            prompt += (
-                "\n\nInference-time metadata:\n"
-                + json.dumps(metadata, ensure_ascii=False, indent=2)
-            )
-        return prompt
+        if getattr(self, "mcp_config", None) is not None:
+            metadata["run_config"] = {"mcp_config": self.mcp_config}
+        return metadata
 
-    def _load_prompt_template(self, name: str) -> str:
-        prompt_dir = (
-            Path(__file__).resolve().parents[3]
-            / "configs"
-            / "prompts"
-            / self.benchmark_slug.replace("-", "_")
+    def _render_prompt(self, task: dict[str, Any], *, prompt_template: str) -> str:
+        return render_research_prompt(
+            self.benchmark_slug,
+            task,
+            prompt_template=prompt_template,
         )
-        path = prompt_dir / f"{name}.md"
-        if not path.exists():
-            raise FileNotFoundError(
-                f"Prompt template {name!r} not found at {path}"
-            )
-        text = path.read_text(encoding="utf-8")
-        if "{{task}}" not in text:
-            raise ValueError(f"Prompt template {path} is missing '{{{{task}}}}'")
-        return text
 
     @staticmethod
     def _trace_summary_totals(

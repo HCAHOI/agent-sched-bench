@@ -171,3 +171,30 @@ def test_host_research_runner_stamps_host_trace_metadata(tmp_path: Path) -> None
     assert metadata["execution_environment"] == "host"
     assert metadata["instance_id"] == "drb-1"
     assert metadata["prompt_template"] == "default"
+
+
+def test_host_research_runner_stamps_mcp_config_in_metadata(tmp_path: Path) -> None:
+    runner = object.__new__(HostResearchOpenClawRunner)
+    runner.benchmark_slug = "deep-research-bench"
+    runner.mcp_config = "configs/mcp/context7.yaml"
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "type": "trace_metadata",
+                "scaffold": "openclaw",
+                "trace_format_version": 5,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runner._stamp_trace_metadata(
+        trace_path,
+        instance_id="drb-1",
+        prompt_template="default",
+    )
+
+    metadata = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+    assert metadata["run_config"]["mcp_config"] == "configs/mcp/context7.yaml"
