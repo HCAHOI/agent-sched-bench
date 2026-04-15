@@ -143,9 +143,68 @@ def test_simulator_accepts_task_with_image_name(
             task_source=task_source,
             output_dir=tmp_path / "out",
             mode="cloud_model",
+            container_executable="docker",
         )
     )
     assert trace_file.exists()
+
+
+def test_container_mode_trace_requires_container_executable(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "trace_format_version": 5,
+                        "scaffold": "openclaw",
+                        "instance_id": "fc_test_003",
+                        "model": "dummy",
+                        "mode": "collect",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0",
+                        "agent_id": "fc_test_003",
+                        "iteration": 0,
+                        "ts_start": 1.0,
+                        "ts_end": 2.0,
+                        "data": {"messages_in": [], "completion_tokens": 1},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    task_source = tmp_path / "tasks.json"
+    task_source.write_text(
+        json.dumps(
+            [
+                {
+                    "instance_id": "fc_test_003",
+                    "problem_statement": "x",
+                    "image_name": "swebench/test-image",
+                }
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="container_executable is required"):
+        asyncio.run(
+            simulate(
+                source_trace=trace_path,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+            )
+        )
 
 
 def test_simulator_rejects_duplicate_agent_ids(tmp_path: Path) -> None:

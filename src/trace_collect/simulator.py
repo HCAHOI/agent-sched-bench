@@ -58,7 +58,7 @@ class PreparedTraceSession:
     """Container plus the loaded source-trace context."""
 
     loaded: LoadedTraceSession
-    container: PreparedContainer
+    container: PreparedContainer | None = None
     sampler: ContainerStatsSampler | None = None
     task_output_dir: Path | None = None
 
@@ -292,6 +292,22 @@ def _resolve_docker_image(loaded: LoadedTraceSession) -> str | None:
     )
 
 
+def _execution_environment(loaded: LoadedTraceSession) -> str:
+    metadata = loaded.metadata or {}
+    value = metadata.get("execution_environment")
+    if value is None or value == "":
+        logger.warning(
+            "%s has no execution_environment metadata; assuming container",
+            loaded.source_trace,
+        )
+        return "container"
+    return str(value)
+
+
+def _is_host_mode(loaded: LoadedTraceSession) -> bool:
+    return _execution_environment(loaded) == "host"
+
+
 def _validate_loaded_sessions(
     sessions: list[LoadedTraceSession],
     *,
@@ -305,6 +321,8 @@ def _validate_loaded_sessions(
     if mode == "local_model" and len(sessions) != 1:
         raise SimulateError("local_model mode supports exactly one source trace")
     for session in sessions:
+        if _is_host_mode(session):
+            continue
         docker_image = _resolve_docker_image(session)
         if not docker_image:
             raise SimulateError(
@@ -385,6 +403,13 @@ async def _prepare_container_session(
     return PreparedTraceSession(loaded=loaded, container=container)
 
 
+async def _prepare_host_session(
+    loaded: LoadedTraceSession,
+) -> PreparedTraceSession:
+    """Prepare a host-mode replay session without Docker/Podman."""
+    return PreparedTraceSession(loaded=loaded, container=None)
+
+
 def _log_trace_metadata(
     *,
     trace_logger: TraceLogger,
@@ -403,6 +428,11 @@ def _log_trace_metadata(
     ]
     metadata: dict[str, Any] = {
         "scaffold": sessions[0].scaffold if len(scaffolds) == 1 else "mixed",
+        "execution_environment": (
+            _execution_environment(sessions[0])
+            if len({_execution_environment(session) for session in sessions}) == 1
+            else "mixed"
+        ),
         "mode": "simulate",
         "simulate_mode": mode,
         "replay_speed": replay_speed,
@@ -594,7 +624,13 @@ async def _run_local_model_simulation(
                     continue
 
                 tool_ts_start = time.time()
-                if tool_name is not None and tool_name.startswith("mcp_"):
+                if ctr is None:
+                    tool_result = td.get("tool_result", "")
+                    tool_duration_ms = 0.0
+                    tool_success = False
+                    tool_ts_end = tool_ts_start
+                    sim_provenance = "skipped_host_mode"
+                elif tool_name is not None and tool_name.startswith("mcp_"):
                     tool_result = td.get("tool_result", "")
                     tool_duration_ms = float(td.get("duration_ms") or 0.0)
                     tool_success = bool(td.get("success", True))
@@ -626,7 +662,9 @@ async def _run_local_model_simulation(
                         "success": tool_success,
                         "sim_metrics": {
                             "source": sim_provenance,
-                            "sim_tool_format": "container_exec",
+                            "sim_tool_format": sim_provenance
+                            if sim_provenance == "skipped_host_mode"
+                            else "container_exec",
                             "warmup": i < warmup_skip_iterations,
                         },
                     },
@@ -820,14 +858,25 @@ async def _replay_cloud_model_session(
 
             record_ts_start = time.time()
             source_duration_ms = float(data.get("duration_ms") or 0.0)
-            if tool_name is not None and tool_name.startswith("mcp_"):
+            if ctr is None:
+                logger.info(
+                    "Skipping host-mode tool action for %s action=%s tool=%s",
+                    loaded.agent_id,
+                    action_id,
+                    tool_name,
+                )
+                replay_source = "skipped_host_mode"
+                tool_result = data.get("tool_result", "")
+                tool_success = False
+                duration_ms = 0.0
+            elif tool_name is not None and tool_name.startswith("mcp_"):
                 if source_duration_ms > 0:
                     await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
                 tool_result = data.get("tool_result", "")
                 tool_success = bool(data.get("success", True))
                 duration_ms = (time.time() - record_ts_start) * 1000
                 replay_source = "replayed_from_trace"
-            else:
+            elif ctr is not None:
                 tool_result, duration_ms, tool_success = await _exec_tool(
                     ctr.agent,
                     tool_name,
@@ -857,7 +906,9 @@ async def _replay_cloud_model_session(
                     "sim_metrics": {
                         "warmup": iteration < warmup_skip_iterations,
                         "source": replay_source,
-                        "sim_tool_format": "container_exec",
+                        "sim_tool_format": replay_source
+                        if replay_source == "skipped_host_mode"
+                        else "container_exec",
                     },
                 },
             )
@@ -942,7 +993,7 @@ async def simulate(
     task_source: Path,
     output_dir: Path,
     mode: str = "local_model",
-    container_executable: str = "docker",
+    container_executable: str | None = None,
     network_mode: str = "host",
     api_base: str | None = None,
     api_key: str | None = None,
@@ -988,6 +1039,13 @@ async def simulate(
 
     try:
         for loaded in loaded_sessions:
+            if _is_host_mode(loaded):
+                prepared_sessions.append(await _prepare_host_session(loaded))
+                continue
+            if container_executable is None:
+                raise ValueError(
+                    "container_executable is required for container-mode traces"
+                )
             prepared_sessions.append(
                 await _prepare_container_session(
                     loaded,
@@ -1000,10 +1058,12 @@ async def simulate(
             task_dir = output_path / prepared.loaded.agent_id / "attempt_1"
             task_dir.mkdir(parents=True, exist_ok=True)
             prepared.task_output_dir = task_dir
+            if prepared.container is None:
+                continue
             sampler = ContainerStatsSampler(
                 container_id=prepared.container.container_id,
                 interval_s=1.0,
-                executable=container_executable,
+                executable=prepared.container.container_executable,
             )
             sampler.start()
             prepared.sampler = sampler
@@ -1071,6 +1131,8 @@ async def simulate(
                         prepared.task_output_dir / "resources.json",
                     )
             ctr = prepared.container
+            if ctr is None:
+                continue
             if ctr.agent is not None:
                 await ctr.agent.stop()
             await asyncio.to_thread(

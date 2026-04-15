@@ -152,9 +152,9 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--container",
-        default="docker",
+        default=None,
         choices=["docker", "podman"],
-        help="Container executable (default: docker).",
+        help="Container executable for container-mode trace replay.",
     )
     parser.add_argument(
         "--network-mode",

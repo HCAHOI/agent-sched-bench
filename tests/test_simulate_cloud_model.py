@@ -51,6 +51,7 @@ def _write_trace(
     tool_start: float = 100.4,
     tool_end: float = 100.45,
     tool_name: str = "write_file",
+    execution_environment: str = "container",
 ) -> None:
     path.write_text(
         "\n".join(
@@ -63,6 +64,7 @@ def _write_trace(
                         "instance_id": agent_id,
                         "model": "claude-haiku",
                         "mode": "collect",
+                        "execution_environment": execution_environment,
                     }
                 ),
                 json.dumps(
@@ -128,6 +130,25 @@ def _write_tasks(path: Path, *agent_ids: str) -> None:
                     "repo": "django/django",
                     "base_commit": "deadbeef",
                     "image_name": f"swebench-test/{agent_id}",
+                }
+                for agent_id in agent_ids
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_host_tasks(path: Path, *agent_ids: str) -> None:
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "instance_id": agent_id,
+                    "problem_statement": f"problem for {agent_id}",
+                    "repo": None,
+                    "image_name": None,
+                    "docker_image": None,
                 }
                 for agent_id in agent_ids
             ]
@@ -220,11 +241,11 @@ def test_parse_simulate_args_accepts_container_flag() -> None:
     assert args.container == "podman"
 
 
-def test_parse_simulate_args_defaults_container_to_docker() -> None:
+def test_parse_simulate_args_defaults_container_to_none() -> None:
     args = parse_simulate_args(
         ["--source-trace", "trace.jsonl"]
     )
-    assert args.container == "docker"
+    assert args.container is None
 
 
 def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Path) -> None:
@@ -254,7 +275,7 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
     assert seen["mode"] == "cloud_model"
     assert seen["source_trace"] == Path("trace.jsonl")
     assert seen["trace_manifest"] is None
-    assert seen["container_executable"] == "docker"
+    assert seen["container_executable"] is None
 
 
 def test_run_simulate_rejects_metrics_url_in_cloud_model(capsys: pytest.CaptureFixture[str]) -> None:
@@ -361,6 +382,7 @@ def test_cloud_model_single_trace_replays_without_llm_client(
             task_source=task_source,
             output_dir=tmp_path / "out",
             mode="cloud_model",
+            container_executable="docker",
             replay_speed=10.0,
         )
     )
@@ -397,6 +419,117 @@ def test_cloud_model_single_trace_replays_without_llm_client(
     assert summary["replay_speed"] == pytest.approx(10.0)
 
 
+def test_cloud_model_host_trace_replays_without_container_or_llm_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        scaffold="qwen-deep-research",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    async def fail_prepare(*args, **kwargs):
+        raise AssertionError("host-mode replay must not prepare a container")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        fail_prepare,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cloud_model must not create llm client")
+        ),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            replay_speed=10.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    metadata = records[0]
+    llm_records = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    ]
+    tool_records = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert metadata["execution_environment"] == "host"
+    assert len(llm_records) == 1
+    assert llm_records[0]["data"]["sim_metrics"]["warmup"] is False
+    assert len(tool_records) == 1
+    assert tool_records[0]["data"]["replay_source"] == "skipped_host_mode"
+    assert tool_records[0]["data"]["success"] is False
+    assert tool_records[0]["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
+    assert summary["success"] is True
+
+
+def test_cloud_model_host_trace_skips_mcp_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        scaffold="qwen-deep-research",
+        tool_name="mcp_search",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    async def fail_prepare(*args, **kwargs):
+        raise AssertionError("host-mode replay must not prepare a container")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        fail_prepare,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cloud_model must not create llm client")
+        ),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            replay_speed=10.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert tool_record["data"]["replay_source"] == "skipped_host_mode"
+    assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
+
+
 def test_cloud_model_replay_marks_warmup_iterations(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -413,6 +546,7 @@ def test_cloud_model_replay_marks_warmup_iterations(
             task_source=task_source,
             output_dir=tmp_path / "out",
             mode="cloud_model",
+            container_executable="docker",
             replay_speed=10.0,
             warmup_skip_iterations=1,
         )
@@ -450,6 +584,7 @@ def test_local_model_single_trace_still_emits_sim_metrics(
             task_source=task_source,
             output_dir=tmp_path / "out",
             mode="local_model",
+            container_executable="docker",
             api_base="https://example.com/v1",
             api_key="secret",
             model="local-qwen",
@@ -478,6 +613,118 @@ def test_local_model_single_trace_still_emits_sim_metrics(
     summary = next(record for record in records if record.get("type") == "summary")
     assert summary["success"] is True
     assert summary["source_success"] is True
+
+
+def test_local_model_host_trace_completes_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        scaffold="qwen-deep-research",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    async def fail_prepare(*args, **kwargs):
+        raise AssertionError("host-mode local simulation must not prepare a container")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        fail_prepare,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: _FakeClient(),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="local_model",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    metadata = records[0]
+    llm_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert metadata["execution_environment"] == "host"
+    assert llm_record["data"]["sim_metrics"]["timing"]["total_ms"] >= 0.0
+    assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
+    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
+    assert tool_record["data"]["success"] is False
+    assert summary["success"] is True
+
+
+def test_local_model_host_trace_skips_mcp_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        scaffold="qwen-deep-research",
+        tool_name="mcp_search",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    async def fail_prepare(*args, **kwargs):
+        raise AssertionError("host-mode local simulation must not prepare a container")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        fail_prepare,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: _FakeClient(),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="local_model",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+
+    assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
+    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
+    assert tool_record["data"]["duration_ms"] == 0.0
+    assert tool_record["data"]["success"] is False
 
 
 def test_cloud_model_trace_manifest_replays_multiple_sessions(
@@ -516,6 +763,7 @@ def test_cloud_model_trace_manifest_replays_multiple_sessions(
             task_source=task_source,
             output_dir=tmp_path / "out",
             mode="cloud_model",
+            container_executable="docker",
             replay_speed=10.0,
         )
     )
@@ -535,6 +783,54 @@ def test_cloud_model_trace_manifest_replays_multiple_sessions(
     assert {record["agent_id"] for record in summaries} == {"task-a", "task-b"}
     assert {record["agent_id"] for record in llm_records} == {"task-a", "task-b"}
     assert abs(llm_records[0]["ts_start"] - llm_records[1]["ts_start"]) < 0.05
+
+
+def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_a = tmp_path / "trace-container.jsonl"
+    trace_b = tmp_path / "trace-host.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.json"
+    _write_trace(trace_a, agent_id="task-a")
+    _write_trace(
+        trace_b,
+        agent_id="task-b",
+        scaffold="qwen-deep-research",
+        execution_environment="host",
+    )
+    _write_tasks(task_source, "task-a", "task-b")
+    manifest.write_text(
+        json.dumps(
+            [
+                {"source_trace": trace_a.name},
+                {"source_trace": trace_b.name, "task_source": task_source.name},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _patch_simulator_runtime(
+        monkeypatch,
+        tmp_path,
+        tool_result_prefix="ok",
+        llm_client_mode="forbid",
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            trace_manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=10.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    assert records[0]["execution_environment"] == "mixed"
 
 
 def test_cloud_model_manifest_with_docker_image_override(
@@ -588,6 +884,7 @@ def test_cloud_model_manifest_with_docker_image_override(
             task_source=task_source,
             output_dir=tmp_path / "out",
             mode="cloud_model",
+            container_executable="docker",
         )
     )
 
@@ -645,6 +942,7 @@ def test_cloud_model_manifest_keeps_default_task_source_cwd_semantics(
             task_source=Path("tasks.json"),
             output_dir=tmp_path / "out",
             mode="cloud_model",
+            container_executable="docker",
             replay_speed=10.0,
         )
     )
