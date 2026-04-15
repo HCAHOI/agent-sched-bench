@@ -4,6 +4,7 @@ import json
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -104,8 +105,22 @@ def test_deep_research_bench_runtime_and_runner_gating() -> None:
 
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
-    with pytest.raises(NotImplementedError, match="Phase 3"):
-        plugin.runtime_mode_for("qwen-deep-research")
+    assert plugin.runtime_mode_for("qwen-deep-research") == "host_controller"
+
+
+def test_deep_research_bench_builds_qwen_runner() -> None:
+    plugin = DeepResearchBenchBenchmark(_make_config())
+
+    runner = plugin.build_runner(
+        scaffold="qwen-deep-research",
+        model="qwen-plus-latest",
+        api_base="https://example.com/v1",
+        api_key="test-key",
+        max_iterations=100,
+        client=SimpleNamespace(),
+    )
+
+    assert runner.benchmark_slug == "deep-research-bench"
 
 
 def test_deep_research_bench_committed_config_matches_generated_report_schema() -> None:

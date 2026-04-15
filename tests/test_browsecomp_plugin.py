@@ -120,8 +120,7 @@ def test_browsecomp_runtime_and_runner_gating() -> None:
 
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
-    with pytest.raises(NotImplementedError, match="Phase 3"):
-        plugin.runtime_mode_for("qwen-deep-research")
+    assert plugin.runtime_mode_for("qwen-deep-research") == "host_controller"
 
 
 def test_browsecomp_committed_config_matches_long_context_schema() -> None:

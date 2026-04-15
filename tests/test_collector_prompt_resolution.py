@@ -47,6 +47,22 @@ def test_parse_collect_args_allows_omitted_container_for_host_mode() -> None:
     assert args.container is None
 
 
+def test_parse_collect_args_accepts_qwen_deep_research_scaffold() -> None:
+    args = parse_collect_args(
+        [
+            "--provider",
+            "dashscope",
+            "--model",
+            "qwen-deep-research",
+            "--scaffold",
+            "qwen-deep-research",
+        ]
+    )
+
+    assert args.scaffold == "qwen-deep-research"
+    assert args.mcp_config is None
+
+
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
 def test_parse_collect_args_accepts_explicit_container(
     container_executable: str,
@@ -109,6 +125,45 @@ def test_run_collect_passes_container_to_collect_traces(
     _run_collect(args)
 
     assert seen["container_executable"] == container_executable
+
+
+def test_run_collect_does_not_require_mcp_config_for_qwen(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_collect_traces(**kwargs):
+        seen.update(kwargs)
+        return Path("/tmp/fake-run")
+
+    monkeypatch.setattr(
+        "trace_collect.cli.resolve_llm_config",
+        lambda **kwargs: SimpleNamespace(
+            name="dashscope",
+            api_base="https://example.com",
+            api_key="test-key",
+            model="qwen-deep-research",
+            env_key="DASHSCOPE_API_KEY",
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.collect_traces",
+        fake_collect_traces,
+    )
+
+    args = parse_collect_args(
+        [
+            "--provider",
+            "dashscope",
+            "--model",
+            "qwen-deep-research",
+            "--scaffold",
+            "qwen-deep-research",
+        ]
+    )
+
+    _run_collect(args)
+
+    assert seen["scaffold"] == "qwen-deep-research"
+    assert seen["mcp_config"] is None
 
 
 def test_main_dispatches_simulate_without_collect_container_flag(monkeypatch) -> None:

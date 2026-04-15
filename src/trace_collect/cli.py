@@ -56,7 +56,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--scaffold",
-        choices=["openclaw"],
+        choices=["openclaw", "qwen-deep-research"],
         default="openclaw",
         help="Agent scaffold to use.",
     )

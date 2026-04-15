@@ -267,8 +267,7 @@ class HostResearchOpenClawRunner:
 class ResearchBenchmark(Benchmark):
     """Base for host-mode QA/research benchmark plugins."""
 
-    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"openclaw"}
-    PLANNED_SCAFFOLDS: ClassVar[set[str]] = {"qwen-deep-research"}
+    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"openclaw", "qwen-deep-research"}
 
     @property
     def execution_environment(self) -> str:
@@ -281,10 +280,6 @@ class ResearchBenchmark(Benchmark):
             raise ValueError(f"{self.slug} requires harness_split")
 
     def validate_scaffold_support(self, scaffold: str) -> None:
-        if scaffold in self.PLANNED_SCAFFOLDS:
-            raise NotImplementedError(
-                f"{scaffold!r} support for {self.config.display_name} lands in Phase 3"
-            )
         if scaffold not in self.SUPPORTED_SCAFFOLDS:
             raise NotImplementedError(
                 f"{self.config.display_name} does not support scaffold={scaffold!r}"
@@ -318,5 +313,11 @@ class ResearchBenchmark(Benchmark):
                 benchmark_slug=self.config.slug,
                 **kwargs,
             )
-        self.validate_scaffold_support(scaffold)
+        if scaffold == "qwen-deep-research":
+            from agents.qwen_deep_research import QwenDeepResearchRunner
+
+            return QwenDeepResearchRunner(
+                benchmark_slug=self.config.slug,
+                **kwargs,
+            )
         raise AssertionError("unreachable")
