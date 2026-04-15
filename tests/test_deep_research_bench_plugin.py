@@ -12,6 +12,8 @@ from agents.benchmarks._research import HostResearchOpenClawRunner
 from agents.benchmarks.base import BenchmarkConfig
 from agents.benchmarks.deep_research_bench import DeepResearchBenchBenchmark
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _make_config(**extras: object) -> BenchmarkConfig:
     return BenchmarkConfig(
@@ -26,11 +28,12 @@ def _make_config(**extras: object) -> BenchmarkConfig:
         default_prompt_template="default",
         extras={
             "id_field": "id",
-            "question_field": "question",
-            "answer_field": "answer",
+            "question_field": "prompt",
+            "answer_field": "article",
             "topic_field": "topic",
             "difficulty_field": "difficulty",
             "domain_field": "domain",
+            "reference_kind": "generated_report",
             **extras,
         },
     )
@@ -47,8 +50,8 @@ def test_deep_research_bench_normalize_task_preserves_research_fields() -> None:
     normalized = plugin.normalize_task(
         {
             "id": "drb-1",
-            "question": "What happened?",
-            "answer": "A documented event.",
+            "prompt": "What happened?",
+            "article": "A documented event.",
             "topic": "history",
             "difficulty": "hard",
             "domain": "humanities",
@@ -62,6 +65,7 @@ def test_deep_research_bench_normalize_task_preserves_research_fields() -> None:
         "topic": "history",
         "difficulty": "hard",
         "domain": "humanities",
+        "reference_kind": "generated_report",
         "repo": None,
         "image_name": None,
         "docker_image": None,
@@ -80,8 +84,8 @@ def test_deep_research_bench_load_tasks_uses_configured_hf_dataset(
         return [
             {
                 "id": "drb-1",
-                "question": "Question",
-                "answer": "Answer",
+                "prompt": "Question",
+                "article": "Answer",
             }
         ]
 
@@ -100,9 +104,29 @@ def test_deep_research_bench_runtime_and_runner_gating() -> None:
 
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
-    assert plugin.runtime_mode_for("qwen-deep-research") == "host_controller"
     with pytest.raises(NotImplementedError, match="Phase 3"):
-        plugin.build_runner(scaffold="qwen-deep-research")
+        plugin.runtime_mode_for("qwen-deep-research")
+
+
+def test_deep_research_bench_committed_config_matches_generated_report_schema() -> None:
+    config = BenchmarkConfig.from_yaml(
+        REPO_ROOT / "configs/benchmarks/deep-research-bench.yaml"
+    )
+    plugin = DeepResearchBenchBenchmark(config)
+
+    normalized = plugin.normalize_task(
+        {
+            "id": 51,
+            "prompt": "Research question",
+            "article": "Reference report",
+        }
+    )
+
+    assert normalized["instance_id"] == "51"
+    assert normalized["problem_statement"] == "Research question"
+    assert normalized["reference_answer"] == "Reference report"
+    assert normalized["reference_kind"] == "generated_report"
+    assert normalized["topic"] is None
 
 
 def test_host_research_runner_stamps_host_trace_metadata(tmp_path: Path) -> None:

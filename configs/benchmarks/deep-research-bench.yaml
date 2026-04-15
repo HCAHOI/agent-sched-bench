@@ -1,7 +1,7 @@
 slug: deep-research-bench
 display_name: "DeepResearchBench"
-harness_dataset: deepresearchbench/deepresearchbench
-harness_split: test
+harness_dataset: muset-ai/DeepResearch-Bench-Dataset
+harness_split: train
 trace_root: traces/deep-research-bench
 default_max_iterations: 100
 selection_n: 32
@@ -9,9 +9,11 @@ selection_seed: 42
 default_prompt_template: default
 exclude_lite: false
 extras:
+  data_files: generated_reports/openai-deepresearch.jsonl
   id_field: id
-  question_field: question
-  answer_field: answer
-  topic_field: topic
-  difficulty_field: difficulty
-  domain_field: domain
+  question_field: prompt
+  answer_field: article
+  reference_kind: generated_report
+  topic_field:
+  difficulty_field:
+  domain_field:

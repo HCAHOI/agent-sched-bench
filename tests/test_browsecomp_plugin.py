@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import sys
 import types
 from pathlib import Path
@@ -8,7 +10,10 @@ import pytest
 
 from agents.benchmarks import REGISTRY, get_benchmark_class
 from agents.benchmarks.base import BenchmarkConfig
+from agents.benchmarks._research import HostResearchOpenClawRunner
 from agents.benchmarks.browsecomp import BrowseCompBenchmark
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_config(**extras: object) -> BenchmarkConfig:
@@ -30,6 +35,13 @@ def _make_config(**extras: object) -> BenchmarkConfig:
             **extras,
         },
     )
+
+
+def _encrypt_xor_sha256(plaintext: str, password: str) -> str:
+    raw = plaintext.encode()
+    digest = hashlib.sha256(password.encode()).digest()
+    key = digest * (len(raw) // len(digest)) + digest[: len(raw) % len(digest)]
+    return base64.b64encode(bytes(a ^ b for a, b in zip(raw, key))).decode()
 
 
 def test_browsecomp_registered() -> None:
@@ -108,7 +120,49 @@ def test_browsecomp_runtime_and_runner_gating() -> None:
 
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
-    assert plugin.runtime_mode_for("qwen-deep-research") == "host_controller"
     with pytest.raises(NotImplementedError, match="Phase 3"):
-        plugin.build_runner(scaffold="qwen-deep-research")
+        plugin.runtime_mode_for("qwen-deep-research")
 
+
+def test_browsecomp_committed_config_matches_long_context_schema() -> None:
+    config = BenchmarkConfig.from_yaml(REPO_ROOT / "configs/benchmarks/browsecomp.yaml")
+    plugin = BrowseCompBenchmark(config)
+    canary = "canary"
+
+    normalized = plugin.normalize_task(
+        {
+            "_row_index": "0",
+            "problem": _encrypt_xor_sha256("Question", canary),
+            "answer": _encrypt_xor_sha256("Answer", canary),
+            "urls": _encrypt_xor_sha256(
+                '[["https://example.com/a", "required"]]',
+                canary,
+            ),
+            "canary": canary,
+        }
+    )
+
+    assert normalized["instance_id"] == "0"
+    assert normalized["problem_statement"] == "Question"
+    assert normalized["reference_answer"] == "Answer"
+    assert normalized["source_urls"] == [
+        {"url": "https://example.com/a", "role": "required"}
+    ]
+
+
+def test_host_research_runner_prompt_includes_source_urls_not_reference() -> None:
+    runner = object.__new__(HostResearchOpenClawRunner)
+    runner.benchmark_slug = "browsecomp"
+
+    prompt = runner._render_prompt(
+        {
+            "problem_statement": "Question",
+            "reference_answer": "Answer",
+            "source_urls": [{"url": "https://example.com/a", "role": "required"}],
+        },
+        prompt_template="default",
+    )
+
+    assert "Question" in prompt
+    assert "https://example.com/a" in prompt
+    assert "Answer" not in prompt

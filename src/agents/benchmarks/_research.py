@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, ClassVar
@@ -30,7 +32,7 @@ def _optional_text(raw: dict[str, Any], field: str | None) -> str | None:
     return text or None
 
 
-def _optional_urls(raw: dict[str, Any], field: str | None) -> list[str]:
+def _optional_urls(raw: dict[str, Any], field: str | None) -> list[Any]:
     if not field:
         return []
     value = raw.get(field)
@@ -46,16 +48,43 @@ def _optional_urls(raw: dict[str, Any], field: str | None) -> list[str]:
             return [stripped]
         value = decoded
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
+        normalized: list[Any] = []
+        for item in value:
+            if isinstance(item, dict):
+                normalized.append(dict(item))
+            elif isinstance(item, (list, tuple)) and item:
+                entry: dict[str, Any] = {"url": str(item[0]).strip()}
+                if len(item) > 1:
+                    entry["role"] = item[1]
+                normalized.append(entry)
+            elif str(item).strip():
+                normalized.append(str(item).strip())
+        return normalized
     return [str(value).strip()] if str(value).strip() else []
 
 
-def _load_hf_rows(dataset: str, split: str | None) -> list[dict[str, Any]]:
+def _decrypt_xor_sha256(ciphertext_b64: str, password: str) -> str:
+    encrypted = base64.b64decode(ciphertext_b64)
+    digest = hashlib.sha256(password.encode()).digest()
+    key = digest * (len(encrypted) // len(digest))
+    key += digest[: len(encrypted) % len(digest)]
+    return bytes(a ^ b for a, b in zip(encrypted, key)).decode()
+
+
+def _load_hf_rows(
+    dataset: str,
+    split: str | None,
+    *,
+    data_files: str | None = None,
+) -> list[dict[str, Any]]:
     from datasets import load_dataset  # type: ignore[import]
 
     if split is None:
         raise ValueError("Host-mode research benchmarks require harness_split")
-    ds = load_dataset(dataset, split=split)
+    kwargs: dict[str, Any] = {"split": split}
+    if data_files:
+        kwargs["data_files"] = data_files
+    ds = load_dataset(dataset, **kwargs)
     return [dict(row) for row in ds]
 
 
@@ -179,7 +208,18 @@ class HostResearchOpenClawRunner:
 
     def _render_prompt(self, task: dict[str, Any], *, prompt_template: str) -> str:
         template = self._load_prompt_template(prompt_template)
-        return template.replace("{{task}}", str(task["problem_statement"]))
+        prompt = template.replace("{{task}}", str(task["problem_statement"]))
+        metadata = {
+            key: task[key]
+            for key in ("topic", "difficulty", "domain", "source_urls")
+            if task.get(key)
+        }
+        if metadata:
+            prompt += (
+                "\n\nInference-time metadata:\n"
+                + json.dumps(metadata, ensure_ascii=False, indent=2)
+            )
+        return prompt
 
     def _load_prompt_template(self, name: str) -> str:
         prompt_dir = (
@@ -227,7 +267,8 @@ class HostResearchOpenClawRunner:
 class ResearchBenchmark(Benchmark):
     """Base for host-mode QA/research benchmark plugins."""
 
-    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"openclaw", "qwen-deep-research"}
+    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"openclaw"}
+    PLANNED_SCAFFOLDS: ClassVar[set[str]] = {"qwen-deep-research"}
 
     @property
     def execution_environment(self) -> str:
@@ -240,6 +281,10 @@ class ResearchBenchmark(Benchmark):
             raise ValueError(f"{self.slug} requires harness_split")
 
     def validate_scaffold_support(self, scaffold: str) -> None:
+        if scaffold in self.PLANNED_SCAFFOLDS:
+            raise NotImplementedError(
+                f"{scaffold!r} support for {self.config.display_name} lands in Phase 3"
+            )
         if scaffold not in self.SUPPORTED_SCAFFOLDS:
             raise NotImplementedError(
                 f"{self.config.display_name} does not support scaffold={scaffold!r}"
@@ -254,8 +299,17 @@ class ResearchBenchmark(Benchmark):
 
     def load_tasks(self) -> list[dict[str, Any]]:
         assert self.config.harness_dataset is not None
-        rows = _load_hf_rows(self.config.harness_dataset, self.config.harness_split)
-        return [self.normalize_task(row) for row in rows]
+        data_files = self.config.extras.get("data_files")
+        rows = _load_hf_rows(
+            self.config.harness_dataset,
+            self.config.harness_split,
+            data_files=str(data_files) if data_files else None,
+        )
+        tasks: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            row.setdefault("_row_index", str(index))
+            tasks.append(self.normalize_task(row))
+        return tasks
 
     def build_runner(self, *, scaffold: str, **kwargs: Any) -> Any:
         self.validate_scaffold_support(scaffold)
@@ -264,6 +318,5 @@ class ResearchBenchmark(Benchmark):
                 benchmark_slug=self.config.slug,
                 **kwargs,
             )
-        raise NotImplementedError(
-            "qwen-deep-research runner is implemented in Phase 3"
-        )
+        self.validate_scaffold_support(scaffold)
+        raise AssertionError("unreachable")

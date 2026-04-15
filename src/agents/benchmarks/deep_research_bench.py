@@ -19,8 +19,8 @@ class DeepResearchBenchBenchmark(ResearchBenchmark):
     def normalize_task(self, raw: dict[str, Any]) -> dict[str, Any]:
         extras = self.config.extras
         id_field = str(extras.get("id_field", "id"))
-        question_field = str(extras.get("question_field", "question"))
-        answer_field = str(extras.get("answer_field", "answer"))
+        question_field = str(extras.get("question_field", "prompt"))
+        answer_field = str(extras.get("answer_field", "article"))
         topic_field = extras.get("topic_field", "topic")
         difficulty_field = extras.get("difficulty_field", "difficulty")
         domain_field = extras.get("domain_field", "domain")
@@ -42,8 +42,8 @@ class DeepResearchBenchBenchmark(ResearchBenchmark):
                 str(difficulty_field) if difficulty_field else None,
             ),
             "domain": _optional_text(raw, str(domain_field) if domain_field else None),
+            "reference_kind": str(extras.get("reference_kind", "generated_report")),
             "repo": None,
             "image_name": None,
             "docker_image": None,
         }
-
