@@ -256,7 +256,7 @@ def _run_sync(args: argparse.Namespace) -> int:
     )
 
     trace_file = _resolve_trace_output(args, session_id, llm_config.model)
-    trace_file.parent.mkdir(parents=True, exist_ok=True)
+    # mkdir deferred to SessionRunner — avoids leaving empty dirs on early exit
     if not is_daemon:
         print(f"Trace: {trace_file}", file=sys.stderr)
 
@@ -338,7 +338,7 @@ def _run_async(args: argparse.Namespace) -> int:
     pid_file = pid_dir / f"{session_id}.pid"
 
     trace_file = _resolve_trace_output(args, session_id, llm_config.model)
-    trace_file.parent.mkdir(parents=True, exist_ok=True)
+    # mkdir deferred to daemon's SessionRunner — avoids empty dirs if spawn fails
 
     cmd = [
         sys.executable,
