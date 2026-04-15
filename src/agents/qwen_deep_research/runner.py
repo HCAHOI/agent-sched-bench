@@ -191,6 +191,7 @@ class QwenDeepResearchRunner:
         summary: dict[str, Any] = {
             "task_id": instance_id,
             "instance_id": instance_id,
+            "model": self.model,
             "success": success,
             "n_iterations": 1 if success else 0,
             "total_llm_ms": llm_summary["total_llm_ms"],

@@ -383,7 +383,10 @@ def _resolve_simulate_output_dir(args: argparse.Namespace) -> Path:
         source_label = Path(args.trace_manifest).stem  # e.g. "openclaw-glm-10-fresh-manifest"
         source_label = source_label.removesuffix("-manifest")
     elif args.source_trace:
-        source_label = Path(args.source_trace).parent.name or "single-trace"
+        # Use instance_id (grandparent) + attempt to avoid collisions
+        # e.g. .../tobymao__sqlglot-3425/attempt_1/trace.jsonl → "tobymao__sqlglot-3425"
+        trace_path = Path(args.source_trace)
+        source_label = trace_path.parents[1].name if len(trace_path.parts) > 2 else trace_path.stem
     else:
         source_label = "unknown"
 
