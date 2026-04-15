@@ -951,6 +951,7 @@ def _split_trace_by_agent(
         for s in sessions
         if s.task_output_dir is not None
     }
+    sessions_by_agent = {s.loaded.agent_id: s for s in sessions}
     if not agent_dirs:
         return
 
@@ -980,7 +981,13 @@ def _split_trace_by_agent(
         out_path = out_dir / "trace.jsonl"
         with out_path.open("w", encoding="utf-8") as fh:
             if metadata_line:
-                fh.write(metadata_line + "\n")
+                metadata = json.loads(metadata_line)
+                session = sessions_by_agent[agent_id].loaded
+                metadata["scaffold"] = session.scaffold
+                metadata["execution_environment"] = _execution_environment(session)
+                metadata["instance_id"] = session.agent_id
+                metadata["source_trace"] = str(session.source_trace)
+                fh.write(json.dumps(metadata, ensure_ascii=False) + "\n")
             for ln in lines:
                 fh.write(ln + "\n")
         logger.info("Wrote per-task trace (%d records) → %s", len(lines), out_path)

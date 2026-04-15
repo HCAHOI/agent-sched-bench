@@ -832,6 +832,12 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
 
     records = _read_jsonl(trace_file)
     assert records[0]["execution_environment"] == "mixed"
+    container_records = _read_jsonl(tmp_path / "out" / "task-a" / "attempt_1" / "trace.jsonl")
+    host_records = _read_jsonl(tmp_path / "out" / "task-b" / "attempt_1" / "trace.jsonl")
+    assert container_records[0]["execution_environment"] == "container"
+    assert container_records[0]["scaffold"] == "openclaw"
+    assert host_records[0]["execution_environment"] == "host"
+    assert host_records[0]["scaffold"] == "qwen-deep-research"
 
 
 def test_cloud_model_manifest_with_docker_image_override(
