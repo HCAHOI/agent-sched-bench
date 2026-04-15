@@ -44,6 +44,7 @@ class SWEBenchVerified(Benchmark):
     """
 
     slug: ClassVar[str] = "swe-bench-verified"
+    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"openclaw"}
 
     # Abstract method implementations
 

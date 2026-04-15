@@ -79,6 +79,8 @@ Benchmarks live in `src/agents/benchmarks/` with YAML config at `configs/benchma
 | `swe-bench-verified` | `princeton-nlp/SWE-bench_Verified` | `test` | 100 |
 | `swe-rebench` | `nebius/SWE-rebench` | `filtered` | 100 |
 | `terminal-bench` | (custom) | — | 100 |
+| `deep-research-bench` | configured in YAML | `test` | 100 |
+| `browsecomp` | configured in YAML | `test` | 100 |
 
 BenchmarkConfig fields: `slug`, `display_name`, `harness_dataset`, `harness_split`,
 `data_root`, `repos_root`, `trace_root`, `default_max_iterations`,

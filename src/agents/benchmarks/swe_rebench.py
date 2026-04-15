@@ -21,6 +21,7 @@ class SWERebenchBenchmark(Benchmark):
     """
 
     slug: ClassVar[str] = "swe-rebench"
+    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"openclaw"}
 
     # Abstract method implementations
 
