@@ -73,7 +73,7 @@ def _sample_with_ps(pid: int) -> dict[str, Any] | None:
             timeout=5,
             check=False,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
@@ -103,29 +103,65 @@ def _sample_with_psutil(pid: int) -> dict[str, Any] | None:
         return None
     try:
         process = psutil.Process(pid)
-        memory = process.memory_info()
-        cpu = process.cpu_percent(interval=None)
+        processes = [process, *process.children(recursive=True)]
+        cpu = 0.0
+        rss = 0
+        disk_read_bytes = 0
+        disk_write_bytes = 0
+        context_switches = 0
+        found_io = False
+        found_context = False
+        for proc in processes:
+            try:
+                cpu += float(proc.cpu_percent(interval=None))
+            except Exception:
+                pass
+            try:
+                rss += int(proc.memory_info().rss)
+            except Exception:
+                pass
+            try:
+                io_counters = proc.io_counters()
+                disk_read_bytes += int(getattr(io_counters, "read_bytes", 0))
+                disk_write_bytes += int(getattr(io_counters, "write_bytes", 0))
+                found_io = True
+            except Exception:
+                pass
+            try:
+                ctxt = proc.num_ctx_switches()
+                context_switches += int(ctxt.voluntary + ctxt.involuntary)
+                found_context = True
+            except Exception:
+                pass
     except Exception:
         return None
     sample = _now_sample()
     sample.update(
         {
-            "mem_usage": f"{memory.rss / (1024 * 1024):.3f}MiB",
+            "mem_usage": f"{rss / (1024 * 1024):.3f}MiB",
             "mem_percent": "0%",
             "cpu_percent": f"{cpu:.3f}%",
         }
     )
-    try:
-        io_counters = process.io_counters()
-        sample["disk_read_bytes"] = int(getattr(io_counters, "read_bytes", 0))
-        sample["disk_write_bytes"] = int(getattr(io_counters, "write_bytes", 0))
-    except Exception:
-        pass
-    try:
-        ctxt = process.num_ctx_switches()
-        sample["context_switches"] = int(ctxt.voluntary + ctxt.involuntary)
-    except Exception:
-        pass
+    if found_io:
+        sample["disk_read_bytes"] = disk_read_bytes
+        sample["disk_write_bytes"] = disk_write_bytes
+    if found_context:
+        sample["context_switches"] = context_switches
+    if len(processes) > 1:
+        sample["process_count"] = len(processes)
+    return sample
+
+
+def _fallback_sample() -> dict[str, Any]:
+    sample = _now_sample()
+    sample.update(
+        {
+            "mem_usage": "0MiB",
+            "mem_percent": "0%",
+            "cpu_percent": "0%",
+        }
+    )
     return sample
 
 
@@ -143,7 +179,7 @@ class ProcessStatsSampler(threading.Thread):
     def _collect_sample(self) -> dict[str, Any] | None:
         sample = _sample_with_psutil(self.pid) or _sample_with_ps(self.pid)
         if sample is None:
-            return None
+            sample = _fallback_sample()
         proc_io = _read_proc_io(self.pid)
         if proc_io is not None:
             sample["disk_read_bytes"] = proc_io["read_bytes"]
