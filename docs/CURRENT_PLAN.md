@@ -240,7 +240,7 @@ def validate_scaffold_benchmark(scaffold: str, benchmark_slug: str) -> None:
 ```
 
 ### 2.3 DeepResearchBench plugin
-**New**: `src/agents/benchmarks/deep_research_bench.py`, `configs/benchmarks/deep-research-bench.yaml`, `configs/prompts/deep_research_bench/default.txt`
+**New**: `src/agents/benchmarks/deep_research_bench.py`, `configs/benchmarks/deep-research-bench.yaml`, `configs/prompts/deep_research_bench/default.md`
 - `slug = "deep-research-bench"`
 - `load_tasks()` — from HuggingFace dataset (ID configured in YAML `harness_dataset`)
 - `normalize_task()` → `{instance_id, problem_statement, reference_answer, topic, difficulty, domain}`
@@ -251,7 +251,7 @@ def validate_scaffold_benchmark(scaffold: str, benchmark_slug: str) -> None:
 - `image_name_for()` → `None`
 
 ### 2.4 BrowseComp plugin
-**New**: `src/agents/benchmarks/browsecomp.py`, `configs/benchmarks/browsecomp.yaml`, `configs/prompts/browsecomp/default.txt`
+**New**: `src/agents/benchmarks/browsecomp.py`, `configs/benchmarks/browsecomp.yaml`, `configs/prompts/browsecomp/default.md`
 - `slug = "browsecomp"`
 - Data source: HuggingFace (configured in YAML)
 - Task schema: `{instance_id, problem_statement, reference_answer, source_urls}`
@@ -419,8 +419,8 @@ class PreparedTraceSession:
 | `src/harness/process_stats_sampler.py` | 5 |
 | `configs/benchmarks/deep-research-bench.yaml` | 2 |
 | `configs/benchmarks/browsecomp.yaml` | 2 |
-| `configs/prompts/deep_research_bench/default.txt` | 2 |
-| `configs/prompts/browsecomp/default.txt` | 2 |
+| `configs/prompts/deep_research_bench/default.md` | 2 |
+| `configs/prompts/browsecomp/default.md` | 2 |
 | `tests/test_deep_research_bench_plugin.py` | 6 |
 | `tests/test_browsecomp_plugin.py` | 6 |
 | `tests/test_qwen_deep_research_runner.py` | 6 |
