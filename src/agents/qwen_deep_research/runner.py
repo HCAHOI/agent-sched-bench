@@ -112,6 +112,7 @@ class QwenDeepResearchRunner:
             llm_summary = summarize_llm_latencies([action.data])
             total_tokens = call["prompt_tokens"] + call["completion_tokens"]
             success = bool(call["content"].strip())
+            n_iterations = 1 if success else 0
             summary = self._summary(
                 attempt_ctx.instance_id,
                 success=success,
@@ -127,7 +128,7 @@ class QwenDeepResearchRunner:
                 error=None
                 if success
                 else "Qwen Deep Research returned an empty response",
-                n_iterations=1,
+                n_iterations=n_iterations,
                 total_llm_ms=float(llm_summary["total_llm_ms"]),
                 total_tool_ms=0.0,
                 total_tokens=total_tokens,

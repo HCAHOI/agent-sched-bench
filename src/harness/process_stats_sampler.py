@@ -96,14 +96,46 @@ def _sample_with_ps(pid: int) -> dict[str, Any] | None:
     return sample
 
 
-def _sample_with_psutil(pid: int) -> dict[str, Any] | None:
+def _cache_process(
+    pid: int,
+    *,
+    psutil_module: Any,
+    process_cache: dict[int, Any] | None,
+) -> Any:
+    if process_cache is None:
+        return psutil_module.Process(pid)
+    process = process_cache.get(pid)
+    if process is None:
+        process = psutil_module.Process(pid)
+        process_cache[pid] = process
+    return process
+
+
+def _sample_with_psutil(
+    pid: int,
+    process_cache: dict[int, Any] | None = None,
+) -> dict[str, Any] | None:
     try:
         import psutil  # type: ignore[import]
     except ImportError:
         return None
     try:
-        process = psutil.Process(pid)
-        processes = [process, *process.children(recursive=True)]
+        process = _cache_process(
+            pid,
+            psutil_module=psutil,
+            process_cache=process_cache,
+        )
+        children = list(process.children(recursive=True))
+        if process_cache is not None:
+            for child in children:
+                child_pid = getattr(child, "pid", None)
+                if isinstance(child_pid, int):
+                    process_cache.setdefault(child_pid, child)
+            children = [
+                process_cache.get(getattr(child, "pid", None), child)
+                for child in children
+            ]
+        processes = [process, *children]
         cpu = 0.0
         rss = 0
         disk_read_bytes = 0
@@ -175,17 +207,25 @@ class ProcessStatsSampler(threading.Thread):
         self.interval_s = interval_s
         self._stop_event = threading.Event()
         self._samples: list[dict[str, Any]] = []
+        self._psutil_process_cache: dict[int, Any] = {}
 
     def _collect_sample(self) -> dict[str, Any] | None:
-        sample = _sample_with_psutil(self.pid) or _sample_with_ps(self.pid)
+        sample = _sample_with_psutil(
+            self.pid,
+            process_cache=self._psutil_process_cache,
+        ) or _sample_with_ps(self.pid)
         if sample is None:
             sample = _fallback_sample()
         proc_io = _read_proc_io(self.pid)
-        if proc_io is not None:
+        if (
+            proc_io is not None
+            and "disk_read_bytes" not in sample
+            and "disk_write_bytes" not in sample
+        ):
             sample["disk_read_bytes"] = proc_io["read_bytes"]
             sample["disk_write_bytes"] = proc_io["write_bytes"]
         ctxt = _read_proc_context_switches(self.pid)
-        if ctxt is not None:
+        if ctxt is not None and "context_switches" not in sample:
             sample["context_switches"] = ctxt
         return sample
 

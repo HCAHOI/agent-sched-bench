@@ -72,3 +72,77 @@ def test_psutil_sampler_aggregates_recursive_children(monkeypatch) -> None:
     assert sample["disk_write_bytes"] == 60
     assert sample["context_switches"] == 15
     assert sample["process_count"] == 3
+
+
+def test_process_sampler_keeps_psutil_child_io_over_proc_parent(monkeypatch) -> None:
+    sampler = ProcessStatsSampler(pid=1, interval_s=60.0)
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._sample_with_psutil",
+        lambda pid, *, process_cache: {
+            "epoch": 1.0,
+            "timestamp": "ts",
+            "mem_usage": "60MiB",
+            "mem_percent": "0%",
+            "cpu_percent": "7.5%",
+            "disk_read_bytes": 600,
+            "disk_write_bytes": 60,
+            "context_switches": 15,
+        },
+    )
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._read_proc_io",
+        lambda pid: {"read_bytes": 1, "write_bytes": 1},
+    )
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._read_proc_context_switches",
+        lambda pid: 1,
+    )
+
+    sample = sampler._collect_sample()
+
+    assert sample is not None
+    assert sample["disk_read_bytes"] == 600
+    assert sample["disk_write_bytes"] == 60
+    assert sample["context_switches"] == 15
+
+
+def test_psutil_sampler_reuses_process_handles_for_cpu_deltas(monkeypatch) -> None:
+    created: list[int] = []
+
+    class FakeProcess:
+        def __init__(self, pid: int) -> None:
+            created.append(pid)
+            self.pid = pid
+            self.calls = 0
+
+        def children(self, *, recursive: bool):
+            assert recursive is True
+            return []
+
+        def memory_info(self):
+            return SimpleNamespace(rss=10 * 1024 * 1024)
+
+        def cpu_percent(self, *, interval=None):
+            assert interval is None
+            self.calls += 1
+            return 0.0 if self.calls == 1 else 12.5
+
+        def io_counters(self):
+            return SimpleNamespace(read_bytes=100, write_bytes=10)
+
+        def num_ctx_switches(self):
+            return SimpleNamespace(voluntary=1, involuntary=2)
+
+    fake_psutil = types.ModuleType("psutil")
+    fake_psutil.Process = FakeProcess
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    cache: dict[int, object] = {}
+
+    first = _sample_with_psutil(1, process_cache=cache)
+    second = _sample_with_psutil(1, process_cache=cache)
+
+    assert created == [1]
+    assert first is not None
+    assert second is not None
+    assert first["cpu_percent"] == "0.000%"
+    assert second["cpu_percent"] == "12.500%"

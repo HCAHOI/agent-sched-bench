@@ -476,7 +476,7 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
     assert llm_records[0]["data"]["sim_metrics"]["warmup"] is False
     assert len(tool_records) == 1
     assert tool_records[0]["data"]["replay_source"] == "skipped_host_mode"
-    assert tool_records[0]["data"]["success"] is False
+    assert tool_records[0]["data"]["success"] is True
     assert tool_records[0]["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
     assert summary["success"] is True
 
@@ -528,6 +528,7 @@ def test_cloud_model_host_trace_skips_mcp_tools(
     )
     assert tool_record["data"]["replay_source"] == "skipped_host_mode"
     assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
+    assert tool_record["data"]["success"] is True
 
 
 def test_cloud_model_replay_marks_warmup_iterations(

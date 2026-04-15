@@ -93,6 +93,37 @@ class _MockClient:
         self.chat = SimpleNamespace(completions=self.completions)
 
 
+class _EmptyCompletions:
+    async def create(self, **kwargs: Any) -> _AsyncStream:
+        return _AsyncStream(
+            [
+                SimpleNamespace(
+                    choices=[],
+                    usage=SimpleNamespace(
+                        prompt_tokens=3,
+                        completion_tokens=0,
+                        model_dump=lambda: {
+                            "prompt_tokens": 3,
+                            "completion_tokens": 0,
+                        },
+                    ),
+                    model_dump=lambda: {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 3,
+                            "completion_tokens": 0,
+                        },
+                    },
+                )
+            ]
+        )
+
+
+class _EmptyClient:
+    def __init__(self) -> None:
+        self.chat = SimpleNamespace(completions=_EmptyCompletions())
+
+
 def _make_attempt_ctx(tmp_path: Path) -> AttemptContext:
     return AttemptContext(
         run_dir=tmp_path / "run",
@@ -192,6 +223,40 @@ def test_qwen_prompt_template_controls_messages_without_reference_leak(
     assert "deep-research-bench template=custom :: Question" in messages[1]["content"]
     assert "science" in messages[1]["content"]
     assert "Do not leak" not in messages[1]["content"]
+
+
+def test_qwen_empty_response_uses_zero_iterations(tmp_path: Path) -> None:
+    runner = QwenDeepResearchRunner(
+        model="qwen-plus-latest",
+        api_base="https://dashscope.example/v1",
+        api_key="test-key",
+        max_iterations=100,
+        benchmark_slug="deep-research-bench",
+        client=_EmptyClient(),
+    )
+    ctx = _make_attempt_ctx(tmp_path)
+
+    result = asyncio.run(
+        runner.run_task(
+            {
+                "instance_id": "research-1",
+                "problem_statement": "Question",
+            },
+            attempt_ctx=ctx,
+            prompt_template="default",
+        )
+    )
+
+    records = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert result.success is False
+    assert result.exit_status == "empty_final_response"
+    assert result.n_iterations == 0
+    assert summary["n_iterations"] == 0
 
 
 def test_collect_traces_dispatches_qwen_runner(

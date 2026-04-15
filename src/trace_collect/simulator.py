@@ -867,7 +867,7 @@ async def _replay_cloud_model_session(
                 )
                 replay_source = "skipped_host_mode"
                 tool_result = data.get("tool_result", "")
-                tool_success = False
+                tool_success = bool(data.get("success", False))
                 duration_ms = 0.0
             elif tool_name is not None and tool_name.startswith("mcp_"):
                 if source_duration_ms > 0:
