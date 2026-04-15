@@ -627,7 +627,7 @@ async def _run_local_model_simulation(
                 if ctr is None:
                     tool_result = td.get("tool_result", "")
                     tool_duration_ms = 0.0
-                    tool_success = False
+                    tool_success = bool(td.get("success", False))
                     tool_ts_end = tool_ts_start
                     sim_provenance = "skipped_host_mode"
                 elif tool_name is not None and tool_name.startswith("mcp_"):

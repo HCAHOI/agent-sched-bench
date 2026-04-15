@@ -23,7 +23,10 @@ class BrowseCompBenchmark(ResearchBenchmark):
         question_field = str(extras.get("question_field", "problem"))
         answer_field = str(extras.get("answer_field", "answer"))
         urls_field = extras.get("source_urls_field", "urls")
-        row = self._maybe_decrypt_row(raw)
+        decrypt_fields = {question_field, answer_field}
+        if urls_field:
+            decrypt_fields.add(str(urls_field))
+        row = self._maybe_decrypt_row(raw, encrypted_fields=decrypt_fields)
 
         instance_id = _require_text(row, id_field, label="instance_id")
         problem_statement = _require_text(
@@ -45,12 +48,17 @@ class BrowseCompBenchmark(ResearchBenchmark):
             "docker_image": None,
         }
 
-    def _maybe_decrypt_row(self, raw: dict[str, Any]) -> dict[str, Any]:
+    def _maybe_decrypt_row(
+        self,
+        raw: dict[str, Any],
+        *,
+        encrypted_fields: set[str],
+    ) -> dict[str, Any]:
         if not self.config.extras.get("encrypted", False):
             return raw
         canary = _require_text(raw, "canary", label="canary")
         row = dict(raw)
-        for field in ("problem", "answer", "urls"):
+        for field in encrypted_fields:
             if field in row and row[field] is not None:
                 row[field] = _decrypt_xor_sha256(str(row[field]), canary)
         return row

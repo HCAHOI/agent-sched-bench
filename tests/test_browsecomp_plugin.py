@@ -149,6 +149,35 @@ def test_browsecomp_committed_config_matches_long_context_schema() -> None:
     ]
 
 
+def test_browsecomp_decrypts_configured_field_names() -> None:
+    plugin = BrowseCompBenchmark(
+        _make_config(
+            encrypted=True,
+            question_field="query",
+            answer_field="gold",
+            source_urls_field="url_list",
+        )
+    )
+    canary = "canary"
+
+    normalized = plugin.normalize_task(
+        {
+            "id": "bc-custom",
+            "query": _encrypt_xor_sha256("Custom question", canary),
+            "gold": _encrypt_xor_sha256("Custom answer", canary),
+            "url_list": _encrypt_xor_sha256(
+                '["https://example.com/custom"]',
+                canary,
+            ),
+            "canary": canary,
+        }
+    )
+
+    assert normalized["problem_statement"] == "Custom question"
+    assert normalized["reference_answer"] == "Custom answer"
+    assert normalized["source_urls"] == ["https://example.com/custom"]
+
+
 def test_host_research_runner_prompt_includes_source_urls_not_reference() -> None:
     runner = object.__new__(HostResearchOpenClawRunner)
     runner.benchmark_slug = "browsecomp"

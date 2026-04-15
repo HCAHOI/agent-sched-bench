@@ -672,7 +672,7 @@ def test_local_model_host_trace_completes_without_container(
     assert llm_record["data"]["sim_metrics"]["timing"]["total_ms"] >= 0.0
     assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
     assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
-    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["success"] is True
     assert summary["success"] is True
 
 
@@ -725,7 +725,7 @@ def test_local_model_host_trace_skips_mcp_tools(
     assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
     assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
     assert tool_record["data"]["duration_ms"] == 0.0
-    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["success"] is True
 
 
 def test_cloud_model_trace_manifest_replays_multiple_sessions(
