@@ -3,8 +3,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
 from agents.base import AgentBase, LLMCallResult
-from harness.runner import BenchmarkRunner, RunnerTaskResult, build_arrival_offsets
+from harness.runner import (
+    BenchmarkRunner,
+    RunnerTaskResult,
+    build_agent_factory,
+    build_arrival_offsets,
+)
 
 
 class SlowAgent(AgentBase):
@@ -38,6 +45,11 @@ class FailingAgent(AgentBase):
 
 def make_agent(agent_id: str, api_base: str, model: str) -> SlowAgent:
     return SlowAgent(agent_id=agent_id, api_base=api_base, model=model)
+
+
+def test_build_agent_factory_rejects_removed_legacy_code_agent() -> None:
+    with pytest.raises(ValueError, match="legacy code agent was removed"):
+        build_agent_factory("code")
 
 
 def test_benchmark_runner_n2_processes_all_tasks() -> None:

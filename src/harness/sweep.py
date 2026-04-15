@@ -11,9 +11,7 @@ from typing import Any
 
 import yaml
 
-from harness.metrics import VLLMMetricsCollector
-from harness.runner import BenchmarkRunner, build_agent_factory
-from harness.trace_logger import TraceLogger, build_run_id
+from harness.trace_logger import build_run_id
 
 
 @dataclass(slots=True)
@@ -154,87 +152,18 @@ async def execute_sweep(
     task_source_overrides: dict[str, str] | None = None,
     sweep_config_path: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute each expanded run cell and persist its runner output."""
-    completed_runs: list[dict[str, Any]] = []
-    execution_config = SweepExecutionConfig(
-        model=model,
-        arrival_mode=arrival_mode,
-        arrival_rate_per_s=arrival_rate_per_s,
-        arrival_seed=arrival_seed,
-        task_source_overrides=task_source_overrides or {},
-        sweep_config_path=sweep_config_path or "",
+    """Execute expanded run cells.
+
+    The legacy sweep executor depended on the removed code-agent scaffold.
+    Keep matrix expansion and dry-run manifests available, but fail execution
+    explicitly instead of advertising a broken runtime path.
+    """
+    if not runs:
+        return []
+    raise ValueError(
+        "Legacy sweep execution was removed with the code_agent scaffold; "
+        "use trace_collect.cli benchmark collection instead."
     )
-    for run in runs:
-        system_path = configs_root / "systems" / f"{run.system.replace('-', '_')}.yaml"
-        system_config = load_config(system_path)
-        api_base = system_config["api_base"]
-        workload_key = run.workload.replace("_agent", "")
-        workload_config = load_config(
-            configs_root / "workloads" / f"{run.workload}.yaml"
-        )
-        agent_kwargs = extract_agent_kwargs(run.workload, workload_config)
-        task_timeout_s = workload_config.get("task_timeout_s")
-        all_tasks = load_tasks(Path(run.tasks_file))
-        # Fixed concurrency: run exactly N tasks simultaneously (matching Continuum protocol)
-        tasks = all_tasks[: run.concurrency]
-        output_path = Path(run.output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        run_id = build_run_id(run.system, run.workload, run.concurrency)
-        metrics_url = system_config.get("metrics_url", "")
-        trace_logger = TraceLogger(output_path.parent, run_id)
-        try:
-            results = []
-            metrics_task = None
-            collector = None
-            if tasks and metrics_url:
-                collector = VLLMMetricsCollector(metrics_url=metrics_url)
-                metrics_task = asyncio.create_task(collector.poll(interval_s=1.0))
-            try:
-                if tasks:
-                    runner = BenchmarkRunner(
-                        agent_factory=build_agent_factory(
-                            workload_key,
-                            agent_kwargs=agent_kwargs,
-                        ),
-                        api_base=api_base,
-                        model=model,
-                        concurrency=run.concurrency,
-                        tasks=tasks,
-                        arrival_mode=arrival_mode,
-                        arrival_rate_per_s=arrival_rate_per_s,
-                        arrival_seed=arrival_seed,
-                        task_timeout_s=task_timeout_s,
-                        trace_logger=trace_logger,
-                    )
-                    results = await runner.run()
-            finally:
-                if metrics_task is not None:
-                    metrics_task.cancel()
-                    await asyncio.gather(metrics_task, return_exceptions=True)
-                if collector is not None:
-                    collector.dump_json(output_path.with_suffix(".metrics.json"))
-        finally:
-            trace_logger.close()
-        payload = {
-            "system": run.system,
-            "workload": run.workload,
-            "concurrency": run.concurrency,
-            "workload_config": workload_config,
-            "execution_config": asdict(execution_config),
-            "results": [
-                {"summary": result.summary, "trace": result.trace} for result in results
-            ],
-        }
-        output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        completed_runs.append(
-            {
-                "run": asdict(run),
-                "result_path": str(output_path),
-                "workload_config": workload_config,
-                "execution_config": asdict(execution_config),
-            }
-        )
-    return completed_runs
 
 
 def parse_args() -> argparse.Namespace:

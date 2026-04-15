@@ -14,12 +14,15 @@ import yaml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol
 
 
-@runtime_checkable
 class Runner(Protocol):
-    """Minimal benchmark runner interface used by host-mode collection."""
+    """Static host-mode runner interface used by collector dispatch.
+
+    Container-mode runners such as SWEBenchRunner have their own in-container
+    adapter path and are not required to satisfy this Protocol directly.
+    """
 
     async def run_task(
         self,

@@ -77,7 +77,7 @@ task_source: """
         configs_root=tmp_path / "configs",
         output_root=tmp_path / "runs",
     )
-    with pytest.raises(ValueError, match="code_agent was removed"):
+    with pytest.raises(ValueError, match="Legacy sweep execution was removed"):
         asyncio.run(
             execute_sweep(
                 runs=runs,

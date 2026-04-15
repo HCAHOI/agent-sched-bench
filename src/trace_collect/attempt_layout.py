@@ -118,9 +118,8 @@ def build_tool_calls_from_trace(trace_path: Path) -> list[dict[str, Any]]:
 
     The harness stores ``tool_calls.json`` as a flat list of
     ``{timestamp, tool, id, input, end_timestamp, duration_ms, result_preview}``.
-    Miniswe and openclaw both emit ``tool_exec`` action records under
-    canonical trace format, which we translate here so downstream analysis can
-    compare all three scaffolds with a single schema.
+    OpenClaw emits ``tool_exec`` action records under canonical trace format,
+    which we translate here so downstream analysis can use a single schema.
     """
     if not trace_path.exists():
         return []

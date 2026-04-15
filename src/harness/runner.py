@@ -46,23 +46,11 @@ class RunnerTaskResult:
 def build_agent_factory(
     agent_name: str, agent_kwargs: dict[str, Any] | None = None
 ) -> AgentFactory:
-    mapping: dict[str, type[AgentBase]] = {}
-    if agent_name not in mapping:
-        raise ValueError(
-            f"Unsupported agent name: {agent_name}. "
-            "The legacy code agent was removed with its scaffold; "
-            "use trace_collect.cli with benchmark plugins instead."
-        )
-
-    agent_cls = mapping[agent_name]
-    agent_kwargs = agent_kwargs or {}
-
-    def factory(agent_id: str, api_base: str, model: str) -> AgentBase:
-        return agent_cls(
-            agent_id=agent_id, api_base=api_base, model=model, **agent_kwargs
-        )
-
-    return factory
+    raise ValueError(
+        f"Unsupported agent name: {agent_name}. "
+        "The legacy code agent was removed with its scaffold; "
+        "use trace_collect.cli with benchmark plugins instead."
+    )
 
 class BenchmarkRunner:
 
