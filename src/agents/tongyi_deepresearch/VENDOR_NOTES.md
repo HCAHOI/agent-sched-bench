@@ -1,7 +1,7 @@
 # Vendor Notes: Tongyi-DeepResearch
 
 Vendored implementation of the Alibaba-NLP/DeepResearch ReAct scaffold,
-pinned to support Ralplan R3 (see `docs/CURRENT_PLAN.md` lines 1-120).
+pinned to support Ralplan R3 (see `docs/CURRENT_PLAN.md`).
 
 ## Upstream pin
 
@@ -37,10 +37,10 @@ Byte-for-byte identity verified against the upstream clone at pinned SHA
 `f72f75d8c3eb842f2bbbab096a12206ff66e270f` on 2026-04-16 during Phase B.
 Recompute with `shasum -a 256 vendor/*.py` to re-verify.
 
-## Patch buckets (R3 Phase C scope — NOT applied at Phase A+B boundary)
+## Patch buckets (actual LOC after Phase C)
 
-All four buckets are at **zero LOC** at Phase A+B completion. Patches land in
-Phase C (separate ralph run per user directive). Tracked here for audit.
+Tracked for audit. Bucket design was refined during Phase C kickoff — see
+"Adapter-side zero-patch strategy" section below for why A + B are at zero.
 
 | Bucket | Description | Actual LOC (+/-) | Applied in |
 |--------|-------------|------------------|------------|
