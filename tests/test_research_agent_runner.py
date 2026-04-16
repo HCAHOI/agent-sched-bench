@@ -176,8 +176,8 @@ def _patch_tools_no_network():
             ts_end=2.0,
             data={
                 "tool_name": "web_search",
-                "args": {"query": query},
-                "result": f"Results for: {query}\n\n1. QC Page\n   https://example.com/{query.replace(' ', '_')}",
+                "tool_args": {"query": query},
+                "tool_result": f"Results for: {query}\n\n1. QC Page\n   https://example.com/{query.replace(' ', '_')}",
                 "duration_ms": 50.0,
                 "error": None,
             },
@@ -202,8 +202,8 @@ def _patch_tools_no_network():
             ts_end=3.0,
             data={
                 "tool_name": "web_fetch",
-                "args": {"url": url},
-                "result": json.dumps({"text": f"Content from {url}", "url": url, "status": 200}),
+                "tool_args": {"url": url},
+                "tool_result": json.dumps({"text": f"Content from {url}", "url": url, "status": 200}),
                 "duration_ms": 80.0,
                 "error": None,
             },
@@ -572,3 +572,54 @@ def test_research_agent_runner_uses_rendered_prompt_template(tmp_path: Path) -> 
         "Rendered benchmark prompt template must appear in at least one "
         "phase's messages_in (otherwise prompt_template is a no-op)."
     )
+
+
+def test_research_agent_tool_actions_use_canonical_keys(tmp_path: Path) -> None:
+    """Regression: tool_exec data must use tool_args/tool_result, not args/result.
+
+    attempt_layout.build_tool_calls_from_trace() reads `tool_args` and
+    `tool_result`; emitting under `args`/`result` silently drops tool I/O
+    from tool_calls.json for research-agent runs.
+    """
+    client = _MockClient([_PLAN_RESPONSE, _EXTRACT_RESPONSE, _SYNTH_RESPONSE])
+    runner = _build_runner(client)
+    ctx = _make_attempt_ctx(tmp_path)
+    task = _make_task()
+
+    search_patch, fetch_patch = _patch_tools_no_network()
+    with search_patch, fetch_patch:
+        asyncio.run(
+            runner.run_task(task, attempt_ctx=ctx, prompt_template="default")
+        )
+
+    records = _read_trace(ctx.attempt_dir)
+    tool_actions = [r for r in records if r.get("action_type") == "tool_exec"]
+    assert tool_actions, "expected at least one tool_exec action"
+
+    for action in tool_actions:
+        data = action["data"]
+        assert "tool_args" in data, f"tool_exec missing tool_args: {data.keys()}"
+        assert "tool_result" in data, f"tool_exec missing tool_result: {data.keys()}"
+        # Ensure the legacy non-canonical keys are not emitted (prevents regression
+        # to a dual-key form where downstream readers pick the wrong alias).
+        assert "args" not in data, "tool_exec must not emit non-canonical 'args' key"
+        assert "result" not in data, "tool_exec must not emit non-canonical 'result' key"
+
+
+def test_research_agent_summary_includes_model(tmp_path: Path) -> None:
+    """Regression: trace summary must carry `model` so simulator can attribute
+    source_model instead of falling back to "unknown"."""
+    client = _MockClient([_PLAN_RESPONSE, _EXTRACT_RESPONSE, _SYNTH_RESPONSE])
+    runner = _build_runner(client)
+    ctx = _make_attempt_ctx(tmp_path)
+    task = _make_task()
+
+    search_patch, fetch_patch = _patch_tools_no_network()
+    with search_patch, fetch_patch:
+        asyncio.run(
+            runner.run_task(task, attempt_ctx=ctx, prompt_template="default")
+        )
+
+    records = _read_trace(ctx.attempt_dir)
+    summary = next(r for r in records if r.get("type") == "summary")
+    assert summary.get("model") == "test-model"

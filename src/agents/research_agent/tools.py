@@ -71,8 +71,8 @@ class TracedWebSearch:
             ts_end=ts_end,
             data={
                 "tool_name": "web_search",
-                "args": {"query": query},
-                "result": result,
+                "tool_args": {"query": query},
+                "tool_result": result,
                 "duration_ms": duration_ms,
                 "error": error,
             },
@@ -136,8 +136,8 @@ class TracedWebFetch:
             ts_end=ts_end,
             data={
                 "tool_name": "web_fetch",
-                "args": {"url": url},
-                "result": result,
+                "tool_args": {"url": url},
+                "tool_result": result,
                 "duration_ms": duration_ms,
                 "error": error,
             },

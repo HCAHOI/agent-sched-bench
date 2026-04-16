@@ -146,8 +146,8 @@ def test_search_phase_traces_tool_exec() -> None:
             ts_end=2.0,
             data={
                 "tool_name": "web_search",
-                "args": {"query": query},
-                "result": f"Results for: {query}\n\n1. Title\n   https://example.com/{query}",
+                "tool_args": {"query": query},
+                "tool_result": f"Results for: {query}\n\n1. Title\n   https://example.com/{query}",
                 "duration_ms": 100.0,
                 "error": None,
             },
@@ -190,8 +190,8 @@ def test_fetch_phase_traces_tool_exec() -> None:
             ts_end=2.0,
             data={
                 "tool_name": "web_fetch",
-                "args": {"url": url},
-                "result": '{"text": "page content", "url": "' + url + '", "status": 200}',
+                "tool_args": {"url": url},
+                "tool_result": '{"text": "page content", "url": "' + url + '", "status": 200}',
                 "duration_ms": 200.0,
                 "error": None,
             },
@@ -283,7 +283,7 @@ def test_traced_web_search_catches_exceptions() -> None:
     assert isinstance(action, TraceAction)
     assert action.action_type == "tool_exec"
     assert action.data["error"] == "network down"
-    assert "Error" in action.data["result"]
+    assert "Error" in action.data["tool_result"]
     # No exception propagated
 
 
@@ -303,4 +303,4 @@ def test_traced_web_fetch_catches_exceptions() -> None:
     assert isinstance(action, TraceAction)
     assert action.action_type == "tool_exec"
     assert action.data["error"] == "fetch failed"
-    assert "Error" in action.data["result"]
+    assert "Error" in action.data["tool_result"]

@@ -196,6 +196,7 @@ class ResearchAgentRunner:
             actions=all_actions,
             final_answer=final_answer if success else "",
             success=success,
+            model=self.model,
         )
         trace_logger.log_summary(agent_id, summary)
         trace_logger.close()
@@ -254,6 +255,7 @@ class ResearchAgentRunner:
         actions: list[TraceAction],
         final_answer: str,
         success: bool,
+        model: str,
     ) -> dict[str, Any]:
         llm_records = [a.data for a in actions if a.action_type == "llm_call"]
         llm_summary = summarize_llm_latencies(llm_records)
@@ -284,6 +286,7 @@ class ResearchAgentRunner:
         return {
             "agent_id": agent_id,
             "instance_id": instance_id,
+            "model": model,
             "n_iterations": n_iterations,
             "total_llm_ms": llm_summary["total_llm_ms"],
             "total_llm_wall_ms": llm_summary["total_llm_wall_ms"],

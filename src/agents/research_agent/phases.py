@@ -240,9 +240,9 @@ class SearchPhase:
 
         search_results: list[dict[str, Any]] = []
         for action in actions:
-            result_text = action.data.get("result", "")
+            result_text = action.data.get("tool_result", "")
             search_results.append({
-                "query": action.data.get("args", {}).get("query", ""),
+                "query": action.data.get("tool_args", {}).get("query", ""),
                 "result": result_text,
                 "error": action.data.get("error"),
             })
@@ -313,7 +313,7 @@ class FetchPhase:
 
         fetched_pages: list[dict[str, Any]] = []
         for i, action in enumerate(actions):
-            raw = action.data.get("result", "")
+            raw = action.data.get("tool_result", "")
             page: dict[str, Any] = {"url": target_urls[i], "raw": raw}
             # Try to parse JSON result from WebFetchTool
             if isinstance(raw, str):
