@@ -296,6 +296,17 @@ def _execution_environment(loaded: LoadedTraceSession) -> str:
     metadata = loaded.metadata or {}
     value = metadata.get("execution_environment")
     if value is None or value == "":
+        # Backward compat for legacy traces that predate the
+        # execution_environment field: host_controller agents always ran on
+        # the host, so infer "host" from agent_runtime_mode before falling
+        # back to the container default.
+        if metadata.get("agent_runtime_mode") == "host_controller":
+            logger.warning(
+                "%s has no execution_environment metadata; inferring host "
+                "from agent_runtime_mode=host_controller",
+                loaded.source_trace,
+            )
+            return "host"
         logger.warning(
             "%s has no execution_environment metadata; assuming container",
             loaded.source_trace,

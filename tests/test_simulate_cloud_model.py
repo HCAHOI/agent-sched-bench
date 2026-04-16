@@ -1171,6 +1171,35 @@ def test_simulator_replays_tongyi_deepresearch_trace(
     assert payload["summary"]["sample_count"] == 0
 
 
+def test_execution_environment_infers_host_from_agent_runtime_mode() -> None:
+    """Legacy traces that predate execution_environment still replay correctly
+    when agent_runtime_mode=host_controller is present. Regression guard for
+    Codex P1 feedback on cc3a18a (PR #13)."""
+    from types import SimpleNamespace
+    from trace_collect.simulator import _execution_environment
+
+    # Legacy host trace: no execution_environment, but agent_runtime_mode is set
+    legacy_host = SimpleNamespace(
+        metadata={"agent_runtime_mode": "host_controller"},
+        source_trace="/tmp/legacy_host.jsonl",
+    )
+    assert _execution_environment(legacy_host) == "host"
+
+    # Legacy unknown trace: nothing → container default retained
+    legacy_unknown = SimpleNamespace(metadata={}, source_trace="/tmp/legacy.jsonl")
+    assert _execution_environment(legacy_unknown) == "container"
+
+    # Explicit execution_environment wins over agent_runtime_mode
+    explicit_container = SimpleNamespace(
+        metadata={
+            "execution_environment": "container",
+            "agent_runtime_mode": "host_controller",
+        },
+        source_trace="/tmp/explicit.jsonl",
+    )
+    assert _execution_environment(explicit_container) == "container"
+
+
 def test_tongyi_deepresearch_fixture_is_valid_v5() -> None:
     """Sanity: the shipped fixture file parses as valid v5 JSONL with the
     expected record shape. Prevents accidental corruption during edits."""
