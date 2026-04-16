@@ -161,21 +161,16 @@ class PlanPhase:
 
     async def execute(
         self,
-        problem_statement: str,
-        source_urls: list[Any] | None = None,
+        task_prompt: str,
     ) -> tuple[list[str], list[TraceAction]]:
         system_msg = (
             f"Generate at most {self.max_queries} diverse search queries to "
             "research this topic. Output one query per line, no numbering or "
             "bullet points, no extra commentary."
         )
-        user_content = problem_statement
-        if source_urls:
-            user_content += "\n\nSource URLs:\n" + "\n".join(str(u) for u in source_urls)
-
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": task_prompt},
         ]
 
         result = await _call_streaming(self.client, self.model, messages)
@@ -357,7 +352,7 @@ class ExtractPhase:
 
     async def execute(
         self,
-        problem_statement: str,
+        task_prompt: str,
         fetched_pages: list[dict[str, Any]],
     ) -> tuple[list[Evidence], list[TraceAction]]:
         if not fetched_pages:
@@ -374,7 +369,7 @@ class ExtractPhase:
 
         system_msg = "Extract relevant evidence from the provided sources."
         user_content = (
-            f"Problem: {problem_statement}\n\nSources:\n{sources_text}\n\n"
+            f"Task:\n{task_prompt}\n\nSources:\n{sources_text}\n\n"
             "For each relevant piece of evidence, output one JSON object per line "
             'with keys: "source_url", "passage", "relevance_note".'
         )
@@ -443,7 +438,7 @@ class SynthesizePhase:
 
     async def execute(
         self,
-        problem_statement: str,
+        task_prompt: str,
         evidence: list[Evidence],
     ) -> tuple[str, list[TraceAction]]:
         system_msg = "Synthesize a final answer based on the evidence."
@@ -460,7 +455,7 @@ class SynthesizePhase:
             evidence_text = "\n(No evidence was collected.)\n"
 
         user_content = (
-            f"Problem: {problem_statement}\n\n"
+            f"Task:\n{task_prompt}\n\n"
             f"Evidence:{evidence_text}\n\n"
             "Provide a concise, well-supported final answer."
         )

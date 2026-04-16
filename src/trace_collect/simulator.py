@@ -871,8 +871,10 @@ async def _replay_cloud_model_session(
                     tool_name,
                 )
                 replay_source = "skipped_host_mode"
-                tool_result = data.get("tool_result", "")
-                tool_success = bool(data.get("success", False))
+                tool_result = data.get("tool_result", data.get("result", ""))
+                # Research-agent tools don't emit "success"; fall back to
+                # absence-of-error so successful runs aren't mislabeled.
+                tool_success = bool(data.get("success", not data.get("error")))
                 if source_duration_ms > 0:
                     await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
                 duration_ms = (time.time() - record_ts_start) * 1000

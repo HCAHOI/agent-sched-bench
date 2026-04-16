@@ -971,3 +971,111 @@ def test_cloud_model_manifest_keeps_default_task_source_cwd_semantics(
 
     records = _read_jsonl(trace_file)
     assert any(record.get("type") == "summary" for record in records)
+
+
+def test_cloud_model_host_tool_without_success_field_is_not_mislabeled_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Regression: research-agent tools don't emit 'success'; host replay must
+    fall back to `not error` instead of defaulting to False.
+    """
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+
+    # Hand-crafted trace whose tool_exec action has NO "success" key, matching
+    # what src/agents/research_agent/tools.py emits.
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps({
+                    "type": "trace_metadata",
+                    "trace_format_version": 5,
+                    "scaffold": "research-agent",
+                    "instance_id": "host-task",
+                    "model": "qwen",
+                    "mode": "collect",
+                    "execution_environment": "host",
+                }),
+                json.dumps({
+                    "type": "action",
+                    "action_type": "llm_call",
+                    "action_id": "host-task-llm-0",
+                    "agent_id": "host-task",
+                    "iteration": 0,
+                    "ts_start": 100.0,
+                    "ts_end": 100.2,
+                    "data": {
+                        "messages_in": [{"role": "user", "content": "x"}],
+                        "raw_response": {"id": "r"},
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "llm_latency_ms": 200.0,
+                    },
+                }),
+                json.dumps({
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "action_id": "host-task-tool-0",
+                    "agent_id": "host-task",
+                    "iteration": 0,
+                    "ts_start": 100.4,
+                    "ts_end": 100.45,
+                    "data": {
+                        "tool_name": "web_search",
+                        "args": {"query": "anything"},
+                        "result": "some result",
+                        "duration_ms": 50.0,
+                        # NOTE: intentionally no "success" key, mirroring
+                        # research-agent tool emission
+                        "error": None,
+                    },
+                }),
+                json.dumps({
+                    "type": "summary",
+                    "agent_id": "host-task",
+                    "model": "qwen",
+                    "success": True,
+                    "n_iterations": 1,
+                    "elapsed_s": 0.45,
+                }),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    async def fail_prepare(*args, **kwargs):
+        raise AssertionError("host-mode replay must not prepare a container")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        fail_prepare,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cloud_model must not create llm client")
+        ),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            replay_speed=10.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    # The bug: without the fallback, a missing "success" would default to
+    # False, mislabeling valid host-mode runs and inflating failure rates.
+    assert tool_record["data"]["success"] is True

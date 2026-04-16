@@ -7,10 +7,7 @@ import time
 from typing import Any
 
 from agents.base import TraceAction
-from agents.benchmarks._research import (
-    render_research_prompt,
-    research_inference_metadata,
-)
+from agents.benchmarks._research import render_research_prompt
 from agents.research_agent.evidence import Evidence
 from agents.research_agent.phases import (
     ExtractPhase,
@@ -89,17 +86,14 @@ class ResearchAgentRunner:
         error_msg: str | None = None
 
         try:
-            # Render the prompt (strips reference_answer via template)
-            prompt = render_research_prompt(
+            # Render the benchmark prompt (drops reference_answer, keeps task +
+            # inference-time metadata like topic/difficulty/domain/source_urls).
+            # This is the single source of task framing for every phase.
+            task_prompt = render_research_prompt(
                 self.benchmark_slug,
                 task,
                 prompt_template=prompt_template,
             )
-            problem_statement = str(task.get("problem_statement", ""))
-
-            # Inference metadata for source_urls
-            inf_meta = research_inference_metadata(task)
-            source_urls: list[Any] = inf_meta.get("source_urls", [])
 
             # Build tools
             search_tool = TracedWebSearch()
@@ -117,9 +111,7 @@ class ResearchAgentRunner:
                 self.client, self.model,
                 agent_id=agent_id, instance_id=instance_id,
             )
-            queries, plan_actions = await plan_phase.execute(
-                problem_statement, source_urls=source_urls,
-            )
+            queries, plan_actions = await plan_phase.execute(task_prompt)
             all_actions.extend(plan_actions)
             self._log_actions(trace_logger, agent_id, plan_actions)
 
@@ -166,7 +158,7 @@ class ResearchAgentRunner:
                     agent_id=agent_id, instance_id=instance_id,
                 )
                 evidence, extract_actions = await extract_phase.execute(
-                    problem_statement, fetched_pages,
+                    task_prompt, fetched_pages,
                 )
                 all_actions.extend(extract_actions)
                 self._log_actions(trace_logger, agent_id, extract_actions)
@@ -185,7 +177,7 @@ class ResearchAgentRunner:
                 agent_id=agent_id, instance_id=instance_id,
             )
             final_answer, synth_actions = await synth_phase.execute(
-                problem_statement, evidence,
+                task_prompt, evidence,
             )
             all_actions.extend(synth_actions)
             self._log_actions(trace_logger, agent_id, synth_actions)
@@ -197,17 +189,18 @@ class ResearchAgentRunner:
             final_answer = ""
 
         # Build summary
+        success = exit_status == "completed"
         summary = self._build_summary(
             agent_id=agent_id,
             instance_id=instance_id,
             actions=all_actions,
-            final_answer=final_answer if exit_status == "completed" else "",
+            final_answer=final_answer if success else "",
+            success=success,
         )
         trace_logger.log_summary(agent_id, summary)
         trace_logger.close()
 
         trace_path = trace_logger.path
-        success = exit_status == "completed"
 
         return AttemptResult(
             success=success,
@@ -260,6 +253,7 @@ class ResearchAgentRunner:
         instance_id: str,
         actions: list[TraceAction],
         final_answer: str,
+        success: bool,
     ) -> dict[str, Any]:
         llm_records = [a.data for a in actions if a.action_type == "llm_call"]
         llm_summary = summarize_llm_latencies(llm_records)
@@ -300,5 +294,5 @@ class ResearchAgentRunner:
             "total_tokens": total_tokens,
             "tool_ms_by_name": tool_ms_by_name,
             "final_answer": final_answer,
-            "success": True,
+            "success": success,
         }

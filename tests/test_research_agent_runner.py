@@ -503,3 +503,72 @@ def test_research_agent_summary_aggregation(tmp_path: Path) -> None:
     # Verify n_iterations
     iterations = {r["iteration"] for r in action_records}
     assert summary["n_iterations"] == len(iterations)
+
+
+def test_research_agent_runner_marks_failed_task_unsuccessful(tmp_path: Path) -> None:
+    """Regression: failures must set summary.success=False (was hardcoded True)."""
+    # Mock client that raises on the first LLM call -> plan phase explodes
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.chat = MagicMock()
+    client.chat.completions = MagicMock()
+
+    async def _boom(**_kwargs: Any) -> Any:
+        raise RuntimeError("upstream LLM failure")
+
+    client.chat.completions.create = _boom
+
+    runner = _build_runner(client)
+    ctx = _make_attempt_ctx(tmp_path)
+    task = _make_task()
+
+    result = asyncio.run(
+        runner.run_task(task, attempt_ctx=ctx, prompt_template="default")
+    )
+
+    assert result.success is False
+    assert result.exit_status == "error"
+
+    records = _read_trace(ctx.attempt_dir)
+    summary = next(r for r in records if r.get("type") == "summary")
+    # The bug: summary["success"] used to be hardcoded True even on failure.
+    assert summary["success"] is False
+    assert summary["final_answer"] == ""
+
+
+def test_research_agent_runner_uses_rendered_prompt_template(tmp_path: Path) -> None:
+    """Regression: phases must see the rendered benchmark prompt, not raw problem_statement."""
+    # browsecomp default.md contains the unique string "browsing-comprehension"
+    # which is only present after render_research_prompt() runs. If we see it
+    # in messages_in, we know the rendered prompt reached the phase.
+    client = _MockClient([_PLAN_RESPONSE, _EXTRACT_RESPONSE, _SYNTH_RESPONSE])
+    runner = _build_runner(client, benchmark_slug="browsecomp")
+    ctx = _make_attempt_ctx(tmp_path)
+    task = _make_task(problem_statement="What is the capital of France?")
+
+    search_patch, fetch_patch = _patch_tools_no_network()
+    with search_patch, fetch_patch:
+        asyncio.run(
+            runner.run_task(task, attempt_ctx=ctx, prompt_template="default")
+        )
+
+    records = _read_trace(ctx.attempt_dir)
+    llm_actions = [r for r in records if r.get("action_type") == "llm_call"]
+    assert llm_actions, "expected at least one LLM call"
+
+    # The browsecomp default prompt template contains "browsing-comprehension".
+    # If phases received only the raw problem_statement, this template text
+    # would never appear in messages_in.
+    found_template_text = False
+    for rec in llm_actions:
+        for msg in rec["data"].get("messages_in", []):
+            content = msg.get("content", "") or ""
+            if "browsing-comprehension" in content:
+                found_template_text = True
+                break
+        if found_template_text:
+            break
+    assert found_template_text, (
+        "Rendered benchmark prompt template must appear in at least one "
+        "phase's messages_in (otherwise prompt_template is a no-op)."
+    )
