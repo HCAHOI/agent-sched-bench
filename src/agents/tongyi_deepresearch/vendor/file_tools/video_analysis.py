@@ -249,7 +249,7 @@ class VideoAnalysis(BaseTool):
         except Exception as e:
             logger.warning(f"Subprocess duration check failed: {str(e)}")
             # Default to a reasonable duration if all else fails
-            return 60.0  # Assume 1 minuteimport base64
+            return 60.0  # Assume 1 minute
 
     def _download_media(self, url: str, save_dir: Path) -> Path:
         """Download remote media file with validation"""

@@ -19,7 +19,7 @@ from qwen_agent.settings import DEFAULT_WORKSPACE, DEFAULT_MAX_INPUT_TOKENS
 from qwen_agent.tools.base import BaseTool
 from qwen_agent.tools.storage import KeyNotExistsError, Storage
 from .utils import (get_file_type, hash_sha256, is_http_url, get_basename_from_url, 
-                                  sanitize_chrome_file_path, save_url_to_local_work_dir)
+                                  sanitize_chrome_file_path, save_url_to_local_work_dir, read_text_from_file)
 from qwen_agent.utils.tokenization_qwen import count_tokens, tokenizer
 from .idp import IDP
 
@@ -224,8 +224,7 @@ def parse_pdf(pdf_path: str, extract_image: bool = False) -> List[dict]:
 
 
 def parse_txt(path: str):
-    with open(path, 'r', encoding='utf-8') as f:  
-        text = f.read()
+    text = read_text_from_file(path)
     paras = text.split(PARAGRAPH_SPLIT_SYMBOL)
     content = []
     for p in paras:
@@ -524,6 +523,7 @@ class SingleFileParser(BaseTool):
 
         parser = self.parsers.get(file_type)
         try:
+            results: list = []
             if USE_IDP and file_type in idp_types:
                 try:
                     results = parse_file_by_idp(file_path=file_path)
@@ -533,7 +533,7 @@ class SingleFileParser(BaseTool):
                             f"No parser available for file type: {file_type}"
                         ) from e
                     results = parser(file_path)
-            else:
+            if not results:
                 if parser is None:
                     raise FileParserError(f"No parser available for file type: {file_type}")
                 results = parser(file_path)
@@ -541,9 +541,13 @@ class SingleFileParser(BaseTool):
             for page in results:
                 for para in page['content']:
                     if 'schema' in para:
-                        para['token'] = count_tokens(json.dumps(para['schema']))
+                        para['token'] = count_tokens(
+                            json.dumps(para['schema'], ensure_ascii=False, cls=CustomJSONEncoder)
+                        )
                     else:
-                        para['token'] = count_tokens(para.get('text', para.get('table')))
+                        para['token'] = count_tokens(
+                            para.get('text') or para.get('table') or ''
+                        )
                     tokens += para['token']
 
             if not results or not tokens:
@@ -560,12 +564,17 @@ class SingleFileParser(BaseTool):
 
     def _cache_result(self, file_path: str, result: list):
         cache_key = f'{hash_sha256(file_path)}_ori'
-        self.db.put(cache_key, json.dumps(result, ensure_ascii=False))
+        self.db.put(cache_key, json.dumps(result, ensure_ascii=False, cls=CustomJSONEncoder))
         logger.info(f'The parsing result of {file_path} has been cached')
 
     def _flatten_result(self, result: list) -> str:
         return PARAGRAPH_SPLIT_SYMBOL.join(
-            para.get('text', para.get('table', ''))
+            para.get('text')
+            or para.get('table')
+            or (
+                json.dumps(para['schema'], ensure_ascii=False, indent=2, cls=CustomJSONEncoder)
+                if 'schema' in para else ''
+            )
             for page in result for para in page['content']
         )
 

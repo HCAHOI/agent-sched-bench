@@ -72,9 +72,19 @@ class PythonInterpreter(BaseToolWithFileAccess):
             'parameters': self.parameters,
         }
 
-    def call(self, params, files= None, timeout = 50, **kwargs) -> str:
+    def call(self, params: Union[str, dict], files= None, timeout = 50, **kwargs) -> str:
         try:
-            code=params
+            if isinstance(params, dict):
+                code = params.get('code', '') or params.get('raw', '')
+                nested_params = params.get('params')
+                if not code and isinstance(nested_params, dict):
+                    code = nested_params.get('code', '') or nested_params.get('raw', '')
+                if not code:
+                    code = extract_code(params)
+            else:
+                code = params
+            if not f"{code}".strip():
+                return '[Python Interpreter Error]: Empty code.'
             last_error = None
             max_attempts = 5
             if not SANDBOX_FUSION_ENDPOINTS:
