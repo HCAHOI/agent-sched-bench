@@ -15,7 +15,11 @@ from qwen_agent.tools import BaseTool
 from qwen_agent.utils.utils import format_as_text_message, merge_generate_cfgs
 from .prompt import *
 import time
+import asyncio
 
+from .tool_file import *
+from .tool_scholar import *
+from .tool_python import *
 from .tool_search import *
 from .tool_visit import *
 
@@ -24,7 +28,13 @@ OBS_END = '\n</tool_response>'
 
 MAX_LLM_CALL_PER_RUN = int(os.getenv('MAX_LLM_CALL_PER_RUN', 100))
 
-TOOL_CLASS = [Visit(), Search()]
+TOOL_CLASS = [
+    FileParser(),
+    Scholar(),
+    Visit(),
+    Search(),
+    PythonInterpreter(),
+]
 TOOL_MAP = {tool.name: tool for tool in TOOL_CLASS}
 
 import random
@@ -149,10 +159,19 @@ class MultiTurnReactAgent(FnCallAgent):
             if '<tool_call>' in content and '</tool_call>' in content:
                 tool_call = content.split('<tool_call>')[1].split('</tool_call>')[0]
                 try:
-                    tool_call = json5.loads(tool_call)
-                    tool_name = tool_call.get('name', '')
-                    tool_args = tool_call.get('arguments', {})
-                    result = self.custom_call_tool(tool_name, tool_args)
+                    if "python" in tool_call.lower():
+                        try:
+                            code_raw=content.split('<tool_call>')[1].split('</tool_call>')[0].split('<code>')[1].split('</code>')[0].strip()
+                            result = TOOL_MAP['PythonInterpreter'].call(code_raw)
+                        except:
+                            result = "[Python Interpreter Error]: Formatting error."
+
+                    else:
+                        tool_call = json5.loads(tool_call)
+                        tool_name = tool_call.get('name', '')
+                        tool_args = tool_call.get('arguments', {})
+                        result = self.custom_call_tool(tool_name, tool_args)
+
                 except:
                     result = 'Error: Tool call is not a valid JSON. Tool call must contain a valid "name" and "arguments" field.'
                 result = "<tool_response>\n" + result + "\n</tool_response>"
@@ -209,5 +228,20 @@ class MultiTurnReactAgent(FnCallAgent):
     def custom_call_tool(self, tool_name: str, tool_args: dict, **kwargs):
         if tool_name in TOOL_MAP:
             tool_args["params"] = tool_args
-            return TOOL_MAP[tool_name].call(tool_args, **kwargs)
-        return f"Error: Tool {tool_name} not found"
+            if "python" in tool_name.lower():
+                result = TOOL_MAP['PythonInterpreter'].call(tool_args)
+            elif tool_name == "parse_file":
+                params = {"files": tool_args["files"]}
+
+                raw_result = asyncio.run(TOOL_MAP[tool_name].call(params, file_root_path="./eval_data/file_corpus"))
+                result = raw_result
+
+                if not isinstance(raw_result, str):
+                    result = str(raw_result)
+            else:
+                raw_result = TOOL_MAP[tool_name].call(tool_args, **kwargs)
+                result = raw_result
+            return result
+
+        else:
+            return f"Error: Tool {tool_name} not found"

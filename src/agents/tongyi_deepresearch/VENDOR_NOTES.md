@@ -20,36 +20,70 @@ upstream bumps are handled as an independent follow-up PR, not within R3 scope.
 
 ## Vendored files
 
-Only the 4 files required by R3 Principle #5 (enabled-tools-only scope) are
-vendored. All other upstream files (`tool_scholar.py`, `tool_python.py`,
-`tool_file.py`, `run_multi_react.py`, `run_react_infer.sh`, `eval_data/`,
-`file_tools/`, …) are intentionally NOT vendored — add as Follow-up #2 if
-future experiments require them.
+**All** upstream inference files required by the ReAct scaffold are vendored
+after the Phase C+F course correction (see "Re-vendor pass" section below).
+Original R3 Principle #5 ("bounded tool surface; only 2 tools") is
+superseded — user directive 2026-04-16: "python 也加上（没有 infra 也加！）".
 
-| File | Upstream path | SHA256 | Status at Phase B |
-|------|---------------|--------|-------------------|
-| `vendor/react_agent.py` | `inference/react_agent.py` | `c9b7f64eb6b870c56ddc3d3e43fd54d6ffb2f75f97b174ac699b36871fe879eb` | verbatim, unpatched |
-| `vendor/prompt.py`      | `inference/prompt.py`      | `6e4262c05e44a4104b349226e6d009aa442d536a011ae3abe2f48c3a4a222315` | verbatim, unpatched |
-| `vendor/tool_search.py` | `inference/tool_search.py` | `b2cf78dd5d6766bcfa39971e4ed220efccdc6e16f1b3d43769a3ac74df1614f7` | verbatim, unpatched |
-| `vendor/tool_visit.py`  | `inference/tool_visit.py`  | `9fea1ce1735d33a98320c021e457e664c7352a5a91185fafcf07957bfca5e6ab` | verbatim, unpatched |
+Only `run_multi_react.py` and `run_react_infer.sh` (batch drivers) stay
+unvendored because the Runner adapter replaces their responsibility.
+
+| File | Upstream path | SHA256 | Patch status |
+|------|---------------|--------|-------------|
+| `vendor/react_agent.py` | `inference/react_agent.py` | patched | Bucket D (6 package-relative imports) |
+| `vendor/prompt.py`      | `inference/prompt.py`      | `6e4262c05e44a4104b349226e6d009aa442d536a011ae3abe2f48c3a4a222315` | verbatim |
+| `vendor/tool_search.py` | `inference/tool_search.py` | `b2cf78dd5d6766bcfa39971e4ed220efccdc6e16f1b3d43769a3ac74df1614f7` | verbatim |
+| `vendor/tool_visit.py`  | `inference/tool_visit.py`  | patched | Bucket D (1 import) |
+| `vendor/tool_scholar.py` | `inference/tool_scholar.py` | `429716a1376c3884544e8e53f77e91012aab53aad66ee501d587d60150001eec` | verbatim |
+| `vendor/tool_file.py`   | `inference/tool_file.py`   | patched | Bucket D (2 imports) |
+| `vendor/tool_python.py` | `inference/tool_python.py` | `eda289fbf17c4d9759869b6b2e45521a737534287ae776f73ef635cf4be60999` | verbatim |
+| `vendor/file_tools/file_parser.py` | `inference/file_tools/file_parser.py` | patched | Bucket D (2 imports) |
+| `vendor/file_tools/idp.py` | `inference/file_tools/idp.py` | `38ccd5ab0171e23b01d907e4083e440e90b2aee0df9369e27f9e2f69306f4e54` | verbatim |
+| `vendor/file_tools/utils.py` | `inference/file_tools/utils.py` | `3ab90cfd911b8c288f7d80745acd8c77fb2001c8410df5959b9adee459125f18` | verbatim |
+| `vendor/file_tools/video_agent.py` | `inference/file_tools/video_agent.py` | patched | Bucket D (1 import) |
+| `vendor/file_tools/video_analysis.py` | `inference/file_tools/video_analysis.py` | `02b498bc40e0e360e64317e6ff8bc3c2a9b8e22cbfa53823b4cc5b13832324af` | verbatim |
 
 Byte-for-byte identity verified against the upstream clone at pinned SHA
-`f72f75d8c3eb842f2bbbab096a12206ff66e270f` on 2026-04-16 during Phase B.
-Recompute with `shasum -a 256 vendor/*.py` to re-verify.
+`f72f75d8c3eb842f2bbbab096a12206ff66e270f`.
+Recompute via `shasum -a 256 vendor/*.py vendor/file_tools/*.py`.
 
-## Patch buckets (actual LOC after Phase C)
+### Re-vendor pass (post Phase F)
+
+Original Phase C dropped 3 tools (`scholar`, `file_parser`, `python`) citing
+"smaller is better". On review this was a misjudgment:
+- `scholar` uses the same `SERPER_API_KEY` already in use for `search` — zero
+  new infra.
+- `file_parser` uses `DASHSCOPE_API_KEY` which the operator already had.
+- `python` needs `sandbox_fusion` pip package plus a `SANDBOX_FUSION_ENDPOINT`
+  at **call time**. The pip client imports cleanly without the endpoint, so
+  vendoring doesn't break module load. A runtime tool call will fail when no
+  endpoint is configured — that's acceptable per user directive ("没有 infra
+  也加") and produces a legitimate scheduling-trace span (retry / error).
+
+All 3 tool files + the transitive `file_tools/` package (5 files: file_parser,
+idp, utils, video_agent, video_analysis) are now vendored. `TOOL_CLASS`
+restored to the 5-tool upstream default. `_run` and `custom_call_tool`'s
+original `python` + `parse_file` dispatch branches restored.
+
+New pip deps added for vendored-code-import viability (all client SDKs; none
+are server infra):
+- `sandbox-fusion==0.3.7`
+- `alibabacloud-docmind-api20220711==1.4.11` (pulled in via idp.py)
+
+## Patch buckets (actual LOC after Phase C + post-F re-vendor)
 
 Tracked for audit. Bucket design was refined during Phase C kickoff — see
 "Adapter-side zero-patch strategy" section below for why A + B are at zero.
+Bucket C was zeroed out during the post-F re-vendor pass (all tools restored).
 
 | Bucket | Description | Actual LOC (+/-) | Applied in |
 |--------|-------------|------------------|------------|
 | A: trace-hook emit        | TraceAction emits at LLM + tool call sites | **0 / 0** | Adapter-side (zero vendor patch; adapter monkey-patches `vendor.OpenAI` and `vendor.TOOL_CLASS` with traced equivalents) |
 | B: streaming shim         | `call_server` streaming + TTFT/TPOT capture | **0 / 0** | Adapter-side (internal to TracedStreamingOpenAI) |
-| C: TOOL_CLASS+imports prune + dead code | Drop `FileParser/Scholar/PythonInterpreter` imports + registry entries; drop dead `python` / `parse_file` branches in `_run` + `custom_call_tool`; drop unused `import asyncio` | **7 / 44** (US-C1) | Phase C |
-| D: package-import fix     | `from prompt import *` → `from .prompt import *` and analogous for `tool_search`, `tool_visit`, `tool_visit`'s `EXTRACTOR_PROMPT` | **4 / 1** (US-C1) | Phase C |
+| C: TOOL_CLASS+imports prune + dead code | (REVERTED post-F) all 5 tools are vendored; `_run`/`custom_call_tool` branches restored | **0 / 0** | Post-F re-vendor pass |
+| D: package-import fix     | File-local `from prompt import *` / `from tool_X import *` / `from file_tools.X import ...` converted to package-relative across 5 touched files | **12 / 12** | Phase C + post-F re-vendor |
 
-Total vendor patch footprint as of Phase C completion: **11 additions, 45 deletions** across 2 files (`react_agent.py`, `tool_visit.py`). No numerical LOC hard limit per user directive; recorded here for audit.
+Total vendor patch footprint after post-F re-vendor: **12 import lines modified** across 5 files (`react_agent.py`, `tool_visit.py`, `tool_file.py`, `file_tools/file_parser.py`, `file_tools/video_agent.py`). No numerical LOC hard limit per user directive; recorded here for audit.
 
 Note: `logical_turn_id` is **not** a patch bucket — per R3 Principle #2, it
 is generated in the runner adapter (Phase D), not injected into vendor code.
