@@ -106,6 +106,37 @@ inner `OpenAI` import the same way the main ReAct loop patches it.
 scenario #1 (dep conflict) did not fire. No install/pin adjustments needed
 for downstream phases.
 
+## Phase E smoke log (2026-04-16, UTC 09:45:06)
+
+First end-to-end invocation of `TongyiDeepResearchRunner` against a real
+cloud backend. Invocation:
+`python scripts/smoke_tongyi_deepresearch.py --provider dashscope --model qwen-plus-latest --max-iterations 4`.
+Synthetic task: "What is the capital of France?".
+
+| Field | Value |
+|---|---|
+| provider | dashscope |
+| model | qwen-plus-latest |
+| api_base | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| exit_status | `completed` |
+| vendor_termination | `answer` |
+| n_turns | 1 |
+| total_llm_ms | 2156.8 |
+| total_tool_ms | 0.0 |
+| total_tokens | 960 |
+| transport_retry_count | 0 |
+| llm_call actions | 1 (non-retry) |
+| tool_exec actions | 0 |
+| transport_retry spans | 0 |
+| final_answer | `"Paris"` |
+
+AC#4 invariants: every llm_call `TraceAction` has non-None `ttft_ms` + `tpot_ms`
+on the DashScope streaming endpoint — **PASS**. Non-Tongyi model
+(`qwen-plus-latest`, not the 30B-A3B) still produced valid `<think>...<answer>`
+output on a trivial prompt, so the ReAct prompt format is not strictly Tongyi-
+model-specific for simple cases (ACCURACY IS NOT A CONSTRAINT here — this is a
+scheduling-trace validation).
+
 ## Deprecation / deletion tracker
 
 - **`src/agents/research_agent/` deletion_deadline**: TBD — set to
