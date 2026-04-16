@@ -47,8 +47,8 @@ Currently registered:
 | `swe-bench-verified` | `swe_patch` | `princeton-nlp/SWE-bench_Verified` | `test` | `swebench/sweb.eval.x86.*` (namespace-prefixed) | openclaw | harness (pytest in container) |
 | `swe-rebench` | `swe_patch` | `nebius/SWE-rebench` | `filtered` | `swerebench/sweb.eval.x86_64.*` (fully qualified) | openclaw | harness (pytest in container) |
 | `terminal-bench` | `terminal_task` | `terminal-bench-core` (or local task dir) | n/a | Docker task/runtime managed by Terminal-Bench | openclaw (phase 1 only) | Terminal-Bench harness + imported OpenClaw trace |
-| `deep-research-bench` | `research_qa` | configured in YAML | `test` | host | openclaw, qwen-deep-research | reference-answer comparison |
-| `browsecomp` | `browse_qa` | configured in YAML | `test` | host | openclaw, qwen-deep-research | reference-answer comparison |
+| `deep-research-bench` | `research_qa` | configured in YAML | `test` | host | openclaw, research-agent | reference-answer comparison |
+| `browsecomp` | `browse_qa` | configured in YAML | `test` | host | openclaw, research-agent | reference-answer comparison |
 
 ### Running a benchmark
 

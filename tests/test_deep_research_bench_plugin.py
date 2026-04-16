@@ -106,14 +106,14 @@ def test_deep_research_bench_runtime_and_runner_gating() -> None:
 
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
-    assert plugin.runtime_mode_for("qwen-deep-research") == "host_controller"
+    assert plugin.runtime_mode_for("research-agent") == "host_controller"
 
 
-def test_deep_research_bench_builds_qwen_runner() -> None:
+def test_deep_research_bench_builds_research_agent_runner() -> None:
     plugin = DeepResearchBenchBenchmark(_make_config())
 
     runner = plugin.build_runner(
-        scaffold="qwen-deep-research",
+        scaffold="research-agent",
         model="qwen-plus-latest",
         api_base="https://example.com/v1",
         api_key="test-key",

@@ -428,7 +428,7 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="qwen-deep-research",
+        scaffold="research-agent",
         execution_environment="host",
     )
     _write_host_tasks(task_source, "host-task")
@@ -490,7 +490,7 @@ def test_cloud_model_host_trace_skips_mcp_tools(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="qwen-deep-research",
+        scaffold="research-agent",
         tool_name="mcp_search",
         execution_environment="host",
     )
@@ -625,7 +625,7 @@ def test_local_model_host_trace_completes_without_container(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="qwen-deep-research",
+        scaffold="research-agent",
         execution_environment="host",
     )
     _write_host_tasks(task_source, "host-task")
@@ -685,7 +685,7 @@ def test_local_model_host_trace_skips_mcp_tools(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="qwen-deep-research",
+        scaffold="research-agent",
         tool_name="mcp_search",
         execution_environment="host",
     )
@@ -798,7 +798,7 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
     _write_trace(
         trace_b,
         agent_id="task-b",
-        scaffold="qwen-deep-research",
+        scaffold="research-agent",
         execution_environment="host",
     )
     _write_tasks(task_source, "task-a", "task-b")
@@ -837,7 +837,7 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
     assert container_records[0]["execution_environment"] == "container"
     assert container_records[0]["scaffold"] == "openclaw"
     assert host_records[0]["execution_environment"] == "host"
-    assert host_records[0]["scaffold"] == "qwen-deep-research"
+    assert host_records[0]["scaffold"] == "research-agent"
 
 
 def test_cloud_model_manifest_with_docker_image_override(

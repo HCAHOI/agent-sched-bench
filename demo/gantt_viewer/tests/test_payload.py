@@ -128,7 +128,7 @@ def test_research_style_llm_only_trace_renders(tmp_path: Path) -> None:
     trace = tmp_path / "research-trace.jsonl"
     head = {
         "type": "trace_metadata",
-        "scaffold": "qwen-deep-research",
+        "scaffold": "research-agent",
         "execution_environment": "host",
         "benchmark": "deep-research-bench",
         "trace_format_version": 5,
@@ -161,7 +161,7 @@ def test_research_style_llm_only_trace_renders(tmp_path: Path) -> None:
     payload = build_gantt_payload(TraceData.load(trace), label="research")
     spans = payload["lanes"][0]["spans"]
 
-    assert payload["metadata"]["scaffold"] == "qwen-deep-research"
+    assert payload["metadata"]["scaffold"] == "research-agent"
     assert [span["type"] for span in spans] == ["llm"]
     assert spans[0]["detail"]["prompt_tokens"] == 100
     assert payload["resource_timeline"][0]["cpu_percent"] == pytest.approx(12.5)

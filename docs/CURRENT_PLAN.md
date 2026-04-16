@@ -1,466 +1,588 @@
-# Plan: Multi-Benchmark Expansion (Ralplan R3 Consensus)
+# Plan: Replace `qwen-deep-research` with `research-agent` Scaffold
 
-**Date**: 2026-04-15
-**Branch**: `feat/multi-benchmark`
-**Status**: Approved (Architect APPROVE + Critic APPROVE, 2 iterations)
-**Estimated Duration**: 12-16 days
+**Ralplan R2** | 2026-04-15 | Branch: `feat/multi-benchmark`
+**Revision**: Incorporates Architect R1 feedback (6 items)
 
-## Goal
+---
 
-Expand the benchmark system from SWE-only to multi-domain:
-- **SWE/code**: swe-bench-verified, swe-rebench (existing)
-- **Terminal**: terminal-bench (existing)
-- **Deep research**: DeepResearchBench (new)
-- **Browsing comprehension**: browsecomp (new)
+## Executive Summary
 
-Add **Qwen Deep Research** as a new scaffold for research-style benchmarks.
-Remove **mini-swe-agent** scaffold (no longer maintained).
-Ensure trace collection, simulation, and visualization work for all benchmark×scaffold combinations.
+The current `qwen-deep-research` scaffold is a single OpenAI-compatible
+streaming chat call that produces exactly one `llm_call` span. It is not a
+multi-step research agent and cannot produce the rich traces (planner, search,
+fetch, evidence, synthesis) needed for scheduling/simulation analysis. This plan
+replaces it with a repo-owned, open-source `research-agent` scaffold that
+implements an explicit multi-phase research workflow, emitting canonical v5 trace
+records at each step. The `qwen-deep-research` scaffold is deleted outright with
+no migration alias.
+
+---
 
 ## RALPLAN-DR Summary
 
 ### Principles
-1. **Plugin purity** — benchmark specifics only in plugin + YAML, never in collector/cli
-2. **Scaffold-benchmark orthogonality** — independent axes, capability matrix is the only link
-3. **Trace format universality** — v5 JSONL accommodates all benchmark types without branching
-4. **Execution environment abstraction** — support both container and host modes
-5. **Maximal code reuse** — new scaffolds reuse `src/llm_call/`, `TraceLogger`, resource samplers
+1. **No benchmark gaming**: scaffold logic must be general, not tuned to specific datasets
+2. **Traceable at step level**: every LLM call and tool execution produces a canonical v5 action record
+3. **Simulatable**: traces must be replayable through the existing `simulator.py` cloud_model and local_model paths
+4. **Provider-agnostic naming**: scaffold identity must not be named after a model family
+5. **Delete over deprecate**: remove misleading code rather than carrying compatibility shims
+
+### Decision Drivers (top 3)
+1. The current scaffold produces a single `llm_call` span — useless for scheduling analysis
+2. Naming (`qwen-*`) conflates scaffold identity with provider/model choice
+3. The existing OpenClaw `WebSearchTool`/`WebFetchTool` are mature and reusable
+
+### Viable Options
+
+**Option A: Hard-delete `qwen-deep-research`, add `research-agent`**
+- Pros: Clean break, no compatibility debt, clear naming
+- Cons: All existing `qwen-deep-research` traces become "legacy scaffold" artifacts
+
+**Option B: Keep alias temporarily, block paid experiments under old name**
+- Pros: Softer migration for existing trace references
+- Cons: Extra code paths, risk of someone using the broken scaffold for real experiments
+
+**Option C: Implement official DashScope DeepResearch API path separately**
+- Pros: Could produce genuine multi-step traces from DashScope's internal workflow
+- Cons: Opaque API (no step-level control), vendor lock-in, not locally simulatable, DashScope API may change
+
+### Invalidation of Alternatives
+- **Option B**: Violates principle #5 (delete over deprecate). The alias code is pure debt with no research value.
+- **Option C**: Violates principles #2 and #3. A black-box API call cannot produce step-level traces we control, and we cannot simulate timing of opaque internal steps. May be added later as a separate `dashscope-deep-research` provider-specific scaffold if DashScope exposes step-level hooks.
+
+### Architect Steelman Antithesis (addressed)
+
+The strongest counterargument: a fixed 5-phase pipeline predetermines trace
+structure, limiting scheduling analysis value. A truly general scaffold
+should be an agentic loop (like OpenClaw) where the LLM decides tool order.
+
+**Resolution**: v1 is explicitly framed as a **structured baseline** whose
+traces serve as a controlled comparison point against OpenClaw's emergent
+traces. Within-phase concurrency (`asyncio.gather` for N search calls, K
+fetch calls) creates genuine scheduling decisions even with a fixed phase
+DAG. OpenClaw remains the agentic-loop scaffold; research-agent is the
+structured-pipeline scaffold. Both produce multi-span traces suitable for
+scheduling analysis from complementary angles.
+
+### Recommended Decision: **Option A**
+
+---
+
+## Requirements Summary
+
+### Functional
+- R1: Multi-phase research workflow (plan, search, fetch, extract, synthesize, answer)
+- R2: Each phase emits canonical v5 trace records (action, event, summary)
+- R3: Compatible with existing simulator (cloud_model and local_model replay)
+- R4: Compatible with Gantt viewer (action_type -> span type mapping)
+- R5: Provider-agnostic: works with any OpenAI-compatible endpoint
+- R6: No reference-answer leakage at any phase
+- R7: Host-mode execution (no container required)
+
+### Non-Functional
+- R8: Reuse existing `WebSearchTool` / `WebFetchTool` from OpenClaw where possible
+- R9: All existing tests continue to pass after migration
+- R10: Paid smoke test with cost cap ($5 USD per run)
+
+---
+
+## Current-State Findings
+
+### qwen-deep-research scaffold
+- **`src/agents/qwen_deep_research/runner.py:34-272`**: `QwenDeepResearchRunner` -- single streaming LLM call
+- **Line 86-110**: One `TraceAction(action_type="llm_call", action_id="llm_0", iteration=0)` -- always exactly one span
+- **Line 75-80**: `scaffold_capabilities={"tools": [], "memory": False, "skills": False, "file_ops": "none"}` -- no tool support declared
+- **Line 152-173**: `_build_messages()` renders prompt via `render_research_prompt()`, correctly excludes `reference_answer`
+- **Line 218-271**: `_call_streaming()` -- standard OpenAI streaming with TTFT/TPOT measurement
+
+### Registration points (all must be updated)
+1. **`src/agents/benchmarks/_research.py:316`**: `SUPPORTED_SCAFFOLDS = {"openclaw", "qwen-deep-research"}`
+2. **`src/agents/benchmarks/_research.py:362-368`**: `build_runner()` dispatch branch for `qwen-deep-research`
+3. **`src/trace_collect/cli.py:59`**: `choices=["openclaw", "qwen-deep-research"]`
+4. **`src/agents/capabilities.py:13-20`**: `all_scaffolds()` dynamically reads from plugins (auto-updates)
+5. **`tests/test_qwen_deep_research_runner.py`**: 4 tests directly testing QwenDeepResearchRunner
+6. **`tests/test_deep_research_bench_plugin.py:109,113-124`**: tests referencing `qwen-deep-research` scaffold
+
+### OpenClaw tools (reusable)
+- **`src/agents/openclaw/tools/web.py:65-234`**: `WebSearchTool` -- Brave, DuckDuckGo, Tavily, Searxng, Jina backends
+- **`src/agents/openclaw/tools/web.py:235-458`**: `WebFetchTool` -- Jina Reader + readability-lxml fallback, SSRF protection
+
+### Trace infrastructure
+- **`src/harness/trace_logger.py:35-90`**: `TraceLogger` -- emits `trace_metadata`, `action`, `event`, `summary` records
+- **`src/agents/base.py`**: `TraceAction` dataclass with `to_dict()` for v5 serialization
+- **`src/trace_collect/simulator.py`**: groups actions by iteration, replays `llm_call` and `tool_exec` types
+- **`demo/gantt_viewer/backend/payload.py`**: maps `action_type` to span types (`llm_call`->`llm`, `tool_exec`->`tool`)
+
+### Prompt templates
+- **`configs/prompts/deep_research_bench/default.md`**: generic research prompt with `{{task}}` placeholder
+- **`configs/prompts/browsecomp/default.md`**: browsing-comprehension prompt with `{{task}}` placeholder
+
+---
+
+## Architecture Plan
+
+### Scaffold Interface
+
+The new scaffold `research-agent` implements the `Runner` protocol from
+`src/agents/benchmarks/base.py:20-35`:
+
+```
+async def run_task(task, *, attempt_ctx, prompt_template) -> AttemptResult
+```
+
+### Runner Structure
+
+```
+src/agents/research_agent/
+    __init__.py          # exports ResearchAgentRunner
+    runner.py            # main runner: orchestrates phases
+    phases.py            # phase definitions (plan, search, fetch, extract, synthesize)
+    tools.py             # thin wrappers around OpenClaw web tools for trace emission
+    evidence.py          # evidence accumulation data model
+```
+
+### Phase Architecture
+
+The runner executes a fixed sequence of phases per task. Each phase consists
+of one or more LLM calls and/or tool executions, all individually traced.
+
+```
+Phase 0: INIT
+  - Log trace_metadata record
+  - Render task prompt from benchmark template
+  - Record scaffold_capabilities
+
+Phase 1: PLAN (iteration=0)
+  - llm_call: Given the task, generate N search queries
+  - event: PHASE_TRANSITION -> "plan"
+  - Output: list[str] of search queries
+
+Phase 2: SEARCH (iteration=1, concurrent tool_execs via asyncio.gather)
+  - tool_exec per query: web_search(query) via WebSearchTool
+  - All N queries execute concurrently (asyncio.gather)
+  - Each gets unique action_id but shares iteration=1
+  - event: PHASE_TRANSITION -> "search"
+  - Output: list[SearchResult] with titles, URLs, snippets
+
+Phase 3: FETCH (iteration=2, concurrent tool_execs via asyncio.gather)
+  - tool_exec per top-K URL: web_fetch(url) via WebFetchTool
+  - All K fetches execute concurrently (asyncio.gather)
+  - Each gets unique action_id but shares iteration=2
+  - event: PHASE_TRANSITION -> "fetch"
+  - Output: list[FetchedPage] with URL, content, fetch timing
+
+Phase 4: EXTRACT (iteration=3)
+  - llm_call: Given fetched pages + task, extract evidence passages
+  - event: PHASE_TRANSITION -> "extract"
+  - Output: list[Evidence] with source_url, passage, relevance_note
+
+Phase 5: SYNTHESIZE (iteration=4)
+  - llm_call: Given evidence + task, produce final answer
+  - event: PHASE_TRANSITION -> "synthesize"
+  - Output: str final answer
+
+Phase 6: EMIT
+  - Log summary record with aggregated timing/tokens
+  - Return AttemptResult
+```
+
+### Iteration Numbering
+
+Each phase uses a distinct `iteration` value for its actions:
+- Phase 1 (plan): iteration=0
+- Phase 2 (search): iteration=1 (all search tool_execs share one iteration)
+- Phase 3 (fetch): iteration=2 (all fetch tool_execs share one iteration)
+- Phase 4 (extract): iteration=3
+- Phase 5 (synthesize): iteration=4
+
+This maps cleanly to the simulator's iteration-grouped replay and the Gantt
+viewer's iteration lanes.
+
+### Model/Provider Abstraction
+
+The runner accepts the same `model`, `api_base`, `api_key` parameters as
+`QwenDeepResearchRunner`. It uses `create_async_openai_client()` from
+`src/llm_call/__init__.py` for the LLM client. Any OpenAI-compatible endpoint
+works (OpenRouter, DashScope, OpenAI, SiliconFlow, local vLLM).
+
+### Tool/Search/Fetch Abstraction
+
+Rather than reimplementing web tools, the runner instantiates OpenClaw's
+`WebSearchTool` and `WebFetchTool` directly:
+
+```python
+from agents.openclaw.tools.web import WebSearchTool, WebFetchTool
+```
+
+Tool execution results are wrapped in `TraceAction(action_type="tool_exec")`
+with timing, input args, and output content -- matching the exact schema that
+OpenClaw's `TraceCollectorHook` produces.
+
+### WebSearchConfig Construction
+
+`WebSearchTool` requires a `WebSearchConfig` (from `agents.openclaw.config.schema`).
+The runner constructs it at init time:
+- Default: `WebSearchConfig(provider="duckduckgo")` (free, no API key)
+- Override via `run_config` extras: pass `search_provider`, `search_api_key`
+  through benchmark YAML extras or CLI `--mcp-config`-style mechanism
+- The `tools.py` wrapper catches all exceptions at the OpenClaw boundary,
+  converting them to structured error results
+
+### scaffold_capabilities Declaration
+
+The new scaffold declares in `trace_metadata`:
+```python
+scaffold_capabilities={
+    "tools": ["web_search", "web_fetch"],
+    "memory": False,
+    "skills": False,
+    "file_ops": "none",
+}
+```
+This is used by downstream analysis and Gantt viewer metadata display.
+
+### Evidence Model
+
+```python
+@dataclass
+class Evidence:
+    source_url: str
+    passage: str           # extracted text
+    relevance_note: str    # LLM's note on why this is relevant
+    search_query: str      # query that discovered this source (for strategy analysis)
+    fetch_timestamp: float # when the page was fetched
+```
+
+Evidence objects are accumulated across phases and serialized into the
+synthesis prompt. They are also stored in the trace's final summary for
+downstream analysis. The `search_query` field links evidence back to the
+query that found it, enabling search strategy effectiveness analysis.
+
+### Trace Schema Mapping
+
+| Phase | action_type | action_id pattern | iteration |
+|-------|-------------|-------------------|-----------|
+| Plan | `llm_call` | `llm_0` | 0 |
+| Search | `tool_exec` | `tool_search_0`, `tool_search_1`, ... | 1 |
+| Fetch | `tool_exec` | `tool_fetch_0`, `tool_fetch_1`, ... | 2 |
+| Extract | `llm_call` | `llm_1` | 3 |
+| Synthesize | `llm_call` | `llm_2` | 4 |
+
+Event records logged at phase transitions:
+```json
+{"type": "event", "category": "SESSION", "event": "phase_transition",
+ "data": {"phase": "search", "prev_phase": "plan"}}
+```
+
+### Simulator Compatibility
+
+The simulator (`src/trace_collect/simulator.py`) processes traces by:
+1. Reading v5 JSONL records
+2. Grouping actions by `iteration`
+3. For each `llm_call`: replay timing (cloud_model) or send real request (local_model)
+4. For each `tool_exec`: replay from trace or re-execute in container
+
+**research-agent traces are compatible without any simulator changes:**
+- `research-agent` traces have `execution_environment: "host"`
+- `_is_host_mode()` at `simulator.py:307` returns `True`
+- `_prepare_host_session()` at line 406 sets `container=None`
+- All `tool_exec` actions hit the `ctr is None` branch at `simulator.py:861`
+  (cloud_model) or `simulator.py:627` (local_model), producing
+  `replay_source="skipped_host_mode"`
+- This means all tool timings are replayed from the source trace data
+- No `_should_replay_tool()` addition is needed -- the host-mode path
+  already handles this correctly
+
+**No simulator code changes required.** Phase 5 (simulator compatibility)
+is reduced to integration testing only.
+
+### Gantt Compatibility
+
+The Gantt viewer (`demo/gantt_viewer/backend/payload.py`) maps:
+- `action_type="llm_call"` -> `"llm"` span (blue)
+- `action_type="tool_exec"` -> `"tool"` span (green)
+
+Research-agent traces use exactly these action types. Phase transitions
+appear as `event` records which the Gantt viewer already renders as markers.
+**No changes needed in the Gantt viewer.**
+
+### BrowseComp Source URLs
+
+BrowseComp tasks include `source_urls` -- URLs that are part of the problem
+context (they tell the agent where to look). These are **not** reference
+answers. The scaffold:
+
+1. Passes `source_urls` to the planning phase as available context
+2. The planner may include these URLs in its fetch targets
+3. The `reference_answer` field is **never** passed to any LLM call or tool
+4. Evidence extraction operates only on fetched page content, not reference answers
+
+This is identical to how a human would use BrowseComp: you're given URLs
+and a question, you read the pages, you answer.
+
+---
+
+## Migration Plan
+
+### Files to DELETE
+| File | Reason |
+|------|--------|
+| `src/agents/qwen_deep_research/__init__.py` | Entire scaffold removed |
+| `src/agents/qwen_deep_research/runner.py` | Entire scaffold removed |
+| `tests/test_qwen_deep_research_runner.py` | Tests for removed scaffold |
+
+### Files to CREATE
+| File | Purpose |
+|------|---------|
+| `src/agents/research_agent/__init__.py` | Export `ResearchAgentRunner` |
+| `src/agents/research_agent/runner.py` | Main runner with phase orchestration |
+| `src/agents/research_agent/phases.py` | Phase definitions and execution logic |
+| `src/agents/research_agent/tools.py` | Traced tool wrappers |
+| `src/agents/research_agent/evidence.py` | Evidence data model |
+| `tests/test_research_agent_runner.py` | Unit tests for new scaffold |
+| `tests/test_research_agent_phases.py` | Unit tests for phase logic |
+
+### Files to MODIFY
+| File | Change |
+|------|--------|
+| `src/agents/benchmarks/_research.py:316` | `SUPPORTED_SCAFFOLDS`: replace `"qwen-deep-research"` with `"research-agent"` |
+| `src/agents/benchmarks/_research.py:355-369` | `build_runner()`: replace qwen dispatch with research-agent dispatch |
+| `src/trace_collect/cli.py:59` | `choices`: replace `"qwen-deep-research"` with `"research-agent"` |
+| `tests/test_deep_research_bench_plugin.py:109,112-124` | Update assertions for new scaffold |
+| `tests/test_browsecomp_plugin.py:123` | Update `runtime_mode_for("qwen-deep-research")` assertion |
+| `tests/test_simulate_cloud_model.py:431,493,628,688,801,840` | Update fixture scaffold strings to `"research-agent"` |
+| `tests/test_collector_prompt_resolution.py:50-62,143-165` | Update scaffold choice tests |
+| `tests/test_capabilities.py:21,33,37` | Update expected scaffold list |
+| `demo/gantt_viewer/tests/test_payload.py:131,164` | Update test fixture scaffold names |
+| `README.md:50-51` | Update scaffold table |
+| `src/trace_collect/CLAUDE.md` | Update scaffold table and docs |
+
+### Docs to UPDATE
+| File | Change |
+|------|--------|
+| `src/trace_collect/CLAUDE.md` | Update scaffold table, remove qwen reference |
+| `README.md` | Update benchmark/scaffold table |
+| `CLAUDE.md` | No change needed (scaffold-agnostic) |
+
+---
+
+## Implementation Phases
+
+### Phase 1: Scaffold skeleton + migration wiring (no LLM calls)
+1. Create `src/agents/research_agent/` directory structure
+2. Implement `ResearchAgentRunner` with `run_task()` stub that raises `NotImplementedError`
+3. Implement `Evidence` dataclass in `evidence.py`
+4. Wire into `_research.py`: update `SUPPORTED_SCAFFOLDS`, `build_runner()`
+5. Wire into `cli.py`: update scaffold choices
+6. Delete `src/agents/qwen_deep_research/` directory
+7. Delete `tests/test_qwen_deep_research_runner.py`
+8. Update `tests/test_deep_research_bench_plugin.py`
+9. Run: `conda run -n ML python -m pytest tests/test_deep_research_bench_plugin.py -v`
+
+**Gate**: all existing tests pass with updated references
+
+### Phase 2: Tool wrappers + trace emission
+1. Implement `tools.py`: `TracedWebSearch` and `TracedWebFetch` that wrap OpenClaw tools and emit `TraceAction(action_type="tool_exec")` records
+2. Unit test tool wrappers with mock HTTP responses
+3. Run: `conda run -n ML python -m pytest tests/test_research_agent_phases.py -v`
+
+**Gate**: tool wrappers produce correct v5 trace records
+
+### Phase 3: Phase logic implementation
+1. Implement `phases.py`: `PlanPhase`, `SearchPhase`, `FetchPhase`, `ExtractPhase`, `SynthesizePhase`
+2. Each phase: accepts inputs, calls LLM/tools, returns structured output + trace actions
+3. LLM calls use `create_async_openai_client()` streaming with TTFT/TPOT measurement (reuse pattern from `QwenDeepResearchRunner._call_streaming`)
+4. Unit test each phase with mock LLM/tool responses
+5. Run: `conda run -n ML python -m pytest tests/test_research_agent_phases.py -v`
+
+**Gate**: all phases produce correct trace records in isolation
+
+### Phase 4: Runner integration
+1. Implement `runner.py`: orchestrate phases sequentially, accumulate evidence, emit summary
+2. Integration test: run full pipeline with mocked LLM + mocked tools, verify complete trace
+3. Verify trace is valid v5 JSONL with correct iteration numbering
+4. Run: `conda run -n ML python -m pytest tests/test_research_agent_runner.py -v`
+
+**Gate**: full pipeline produces a valid multi-span trace
+
+### Phase 5: Simulator + Gantt integration testing (no code changes)
+1. Construct a synthetic research-agent trace fixture (hand-crafted v5 JSONL with
+   3 llm_call + N tool_exec actions across 5 iterations)
+2. Test: load in cloud_model simulator, verify all actions replayed via
+   `skipped_host_mode` path (no container started)
+3. Test: load in Gantt viewer payload parser, verify correct span count and types
+4. Run: `conda run -n ML python -m pytest tests/test_simulator_validation.py tests/test_simulate_cloud_model.py -v`
+
+**Gate**: simulator replays research-agent traces without error; Gantt parses correctly
+**Note**: No simulator code changes needed -- host-mode `ctr is None` path
+handles all tool_exec replay automatically.
+
+### Phase 6: Paid smoke test (REQUIRES REVIEW GATE before proceeding)
+1. Run against 1 task from deep-research-bench with a real LLM endpoint
+2. Run against 1 task from browsecomp with a real LLM endpoint
+3. Verify: multi-span trace, search results returned, pages fetched, answer produced
+4. Cost cap: $5 USD total (use `--sample 1` and a cost-efficient model)
+5. Token accounting: log prompt_tokens + completion_tokens per phase
+6. Run:
+   ```bash
+   conda run -n ML python -m trace_collect.cli \
+     --scaffold research-agent \
+     --benchmark deep-research-bench \
+     --provider dashscope --model qwen-plus-latest \
+     --sample 1 --mcp-config none
+   ```
+
+**Gate**: real trace has >= 3 `llm_call` actions and >= 1 `tool_exec` action
+
+### Phase 7: Gantt verification
+1. Load smoke test trace in Gantt viewer
+2. Verify: multiple colored spans across iterations, phase transition markers visible
+3. Run:
+   ```bash
+   conda run -n ML python -m trace_collect.cli gantt-serve --dev
+   # Load the smoke test trace in browser
+   ```
+
+**Gate**: Gantt viewer renders all spans and markers correctly
+
+---
+
+## Test Plan
+
+### Unit Tests (`tests/test_research_agent_runner.py`)
+- `test_research_agent_runner_writes_v5_trace`: full mock pipeline produces valid trace
+- `test_research_agent_no_reference_leak`: `reference_answer` never appears in any LLM messages
+- `test_research_agent_empty_search_graceful`: runner handles zero search results
+- `test_research_agent_fetch_failure_graceful`: runner handles fetch errors without crashing
+- `test_research_agent_iteration_numbering`: each phase uses correct iteration values
+- `test_research_agent_action_id_uniqueness`: no duplicate action_ids in trace
+- `test_research_agent_summary_aggregation`: summary totals match action-level sums
+
+### Unit Tests (`tests/test_research_agent_phases.py`)
+- `test_plan_phase_generates_queries`: plan phase returns non-empty query list
+- `test_search_phase_traces_tool_exec`: search produces tool_exec actions
+- `test_fetch_phase_traces_tool_exec`: fetch produces tool_exec actions
+- `test_extract_phase_produces_evidence`: extract returns Evidence objects
+- `test_synthesize_phase_uses_evidence`: synthesis prompt includes evidence passages
+
+### Integration Tests (`tests/test_deep_research_bench_plugin.py` -- updated)
+- `test_deep_research_bench_builds_research_agent_runner`: plugin dispatches correctly
+- `test_deep_research_bench_runtime_and_runner_gating`: `research-agent` in supported scaffolds
+- `test_collect_traces_dispatches_research_agent_runner`: end-to-end with mock LLM
+
+### Simulator Checks (no code changes -- testing only)
+- `test_simulator_replays_research_agent_trace`: cloud_model replay of a research-agent trace
+  succeeds via `ctr is None` host-mode path, all tool_execs get `skipped_host_mode`
+- Existing simulator tests pass unchanged (regression)
+
+### Gantt Checks
+- Manual verification: load trace, confirm multi-lane rendering
+- Automated: `test_gantt_payload_parses_research_agent_trace`: TraceData.load succeeds, correct span count
+
+### Paid Smoke Tests (post-review-gate only)
+- 1 task x deep-research-bench x dashscope qwen-plus-latest
+- 1 task x browsecomp x dashscope qwen-plus-latest
+- Verify: >= 3 llm_call spans, >= 1 tool_exec span, non-empty final answer
+- Cost cap: $5 USD total
+
+---
+
+## Research Integrity Review Checklist
+
+- [ ] `reference_answer` is never passed to any LLM call (plan, extract, synthesize)
+- [ ] `reference_answer` is never passed to any tool call
+- [ ] BrowseComp `source_urls` are treated as inference-time information (part of problem, not the answer)
+- [ ] No benchmark-specific branching in scaffold code (no `if benchmark == "browsecomp"`)
+- [ ] Search queries are generated from `problem_statement` only, not from `reference_answer`
+- [ ] Evidence extraction operates on fetched content, not on reference data
+- [ ] All scaffold parameters are configurable, no magic numbers
+- [ ] Phase count and structure are general, not tuned to specific benchmarks
+- [ ] Prompt templates are per-benchmark (already in `configs/prompts/`), scaffold code is generic
+
+---
+
+## Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Search APIs fail / rate-limit | No search results -> poor answers | DuckDuckGo fallback (no API key needed); graceful degradation in search phase |
+| Jina Reader rate-limits fetch | No page content -> extraction fails | readability-lxml fallback already in WebFetchTool |
+| LLM doesn't follow JSON output format for plan phase | Unparseable search queries | Robust parsing with fallback to raw text splitting; retry once |
+| Too many search results -> context overflow | Synthesis LLM call exceeds context window | Cap at K=5 URLs to fetch, truncate page content to configurable max_chars |
+| Simulator unexpectedly needs changes | Replay fails on research-agent traces | Verified: host-mode `ctr is None` path handles all tool replay; Phase 5 is testing-only |
+| Existing traces reference `qwen-deep-research` scaffold name | Analysis scripts break on old data | Old traces remain valid v5 JSONL; scaffold field is metadata, not a runtime dependency |
+
+### Rollback / Stop Conditions
+- If Phase 1 fails (test breakage): revert deletion, fix wiring first
+- If Phase 3 LLM integration produces degenerate traces: pause, inspect prompts, do not proceed to paid tests
+- If Phase 6 smoke test exceeds $5 cost cap: abort immediately, investigate token usage
+- If review gate identifies reference-answer leakage: **hard stop**, fix before any further work
+
+---
+
+## Acceptance Criteria
+
+1. `conda run -n ML python -m pytest tests/ -v` -- all tests pass (0 failures)
+2. `conda run -n ML python -m pytest tests/test_research_agent_runner.py -v` -- >= 7 passing tests
+3. `grep -r "qwen-deep-research" src/ configs/ tests/` -- returns 0 matches (fully removed)
+4. `grep -r "qwen_deep_research" src/ tests/` -- returns 0 matches (fully removed)
+5. Smoke test trace for deep-research-bench contains:
+   - 1 `trace_metadata` record with `scaffold: "research-agent"`
+   - >= 3 `action` records with `action_type: "llm_call"`
+   - >= 1 `action` records with `action_type: "tool_exec"`
+   - 1 `summary` record with `n_iterations >= 3`
+   - Phase transition `event` records
+6. Smoke test trace for browsecomp: same criteria as #5
+7. Gantt viewer renders smoke test trace with distinct spans per phase
+8. Simulator cloud_model replay of smoke test trace completes without error
+9. No occurrence of `reference_answer` in any `messages_in` field across all trace actions
+
+---
+
+## Open Questions
+
+1. **Max search queries per task**: Should the plan phase generate 3, 5, or a configurable number? **Proposed**: 5, configurable via `run_config`.
+2. **Max pages to fetch**: Should we fetch top-K URLs from search results? **Proposed**: K=5, configurable.
+3. **Page content truncation**: Max chars per fetched page? **Proposed**: 30,000 chars (matches WebFetchTool default of 50K but with headroom for multiple pages).
+4. **Search provider default**: Which search backend for smoke tests? **Proposed**: DuckDuckGo (free, no API key).
+5. **Should the scaffold support iterative refinement loops?** E.g., if initial evidence is insufficient, loop back to search. **Proposed**: Not in v1 -- keep it simple, add iteration in v2 if analysis shows need.
+6. **Should research-agent support MCP tools in addition to built-in web tools?** **Proposed**: Not in v1. OpenClaw already handles MCP for research benchmarks.
+
+---
+
+## ADR: Replace qwen-deep-research with research-agent
 
 ### Decision
-**Option A: Thin Abstraction Layer** chosen over Option B (Full Runner Protocol).
-
-Option B invalidated: deep research benchmarks are fundamentally simpler (no containers, no test patches, no code edits). A full Runner protocol over-engineers the simple case. The existing `benchmark.build_runner()` + `runtime_mode_for()` pattern (already validated by terminal-bench) provides sufficient extension points.
-
-### Scaffold × Benchmark Capability Matrix (target state)
-
-| Benchmark | openclaw | qwen-deep-research |
-|-----------|----------|---------------------|
-| swe-bench-verified | ✅ container | ✗ |
-| swe-rebench | ✅ container | ✗ |
-| terminal-bench | ✅ host | ✗ |
-| deep-research-bench | ✅ host | ✅ host |
-| browsecomp | ✅ host | ✅ host |
-
----
-
-## Phase 0: Infrastructure + Schema (0.5 day)
-
-### 0.1 Create branch
-```bash
-git checkout -b feat/multi-benchmark
-```
-
-### 0.2 Trace metadata schema extension
-**Edit**: `src/harness/trace_logger.py`
-- Add optional `execution_environment` field to `log_metadata()` (default: `"container"`)
-- **Backward compatibility**: all trace readers (simulator, inspector, Gantt viewer) use `.get("execution_environment", "container")` when parsing metadata
-
-### 0.3 Define minimal Runner Protocol
-**Edit**: `src/agents/benchmarks/base.py`
-```python
-from typing import Protocol, runtime_checkable
-
-@runtime_checkable
-class Runner(Protocol):
-    async def run_task(
-        self, task: dict[str, Any], *, attempt_ctx: Any, prompt_template: str
-    ) -> Any: ...
-```
-- Existing `SWEBenchRunner` already has compatible `run_task()` — natural conformance
-- `TerminalBenchRunner` has `run_openclaw_task()` — adapt via thin wrapper in `build_runner()` or rename
-
-### Acceptance Criteria
-- [ ] `trace_logger.py` `log_metadata()` accepts `execution_environment` parameter
-- [ ] `Runner` Protocol importable: `from agents.benchmarks.base import Runner`
-- [ ] `make test` passes (pure additive, no breakage)
-
----
-
-## Phase 1a: Generalize Collector Dispatch (1.5 days)
-
-### 1a.1 `container_executable` becomes `str | None`
-
-Downstream chain (every function touched):
-
-| File | Function/Parameter | Change |
-|------|-------------------|--------|
-| `cli.py:66-69` | `--container` argparse | `required=False`, default=`None` |
-| `cli.py:340` | `container_executable=args.container` | Passes `None` for host-mode |
-| `collector.py:697` | `collect_traces(container_executable: str)` | → `str \| None` |
-| `collector.py:343` | `_run_scaffold_tasks(container_executable: str)` | → `str \| None` |
-| `collector.py:399-420` | `_ensure_task_source_ready()` / prefetch | Guard: `if source_image is None: skip` (existing per-task None check) |
-| `collector.py:463-470` | `_cleanup_task_images()` | Guard: `if source_image is None and fixed_image is None: skip` |
-| `collector.py:422-427` | `run_attempt()` | `container_executable: str \| None` |
-| `attempt_pipeline.py` | `run_attempt()`, `start_task_container()` | Guard: host-mode tasks skip container functions |
-
-When `source_image is None`:
-- Skip `_ensure_task_source_ready()`
-- Skip image prefetch (`executor.submit`)
-- Skip `_cleanup_task_images()`
-- `ThreadPoolExecutor` still created (cheap) but never receives work
-
-### 1a.2 Unified `collect_traces()` entry point
-
-Target signature:
-```python
-async def collect_traces(
-    *,
-    scaffold: str,
-    provider_name: str | None = None,
-    container_executable: str | None = None,
-    benchmark_config_path: Path,
-    ...
-) -> Path:
-```
-
-Target implementation (replaces if/elif/else scaffold dispatch):
-```python
-async def collect_traces(...) -> Path:
-    config = BenchmarkConfig.from_yaml(benchmark_config_path)
-    benchmark_cls = get_benchmark_class(config.slug)
-    benchmark = benchmark_cls(config)
-    benchmark.validate_scaffold_support(scaffold)
-
-    # Validate container requirement
-    if benchmark.execution_environment == "container" and container_executable is None:
-        raise ValueError("--container required for container-mode benchmarks")
-
-    tasks = benchmark.load_tasks()
-    tasks = _select_tasks(tasks, benchmark, ...)
-    run_dir = build_run_dir(benchmark, model)
-
-    # Unified dispatch via build_runner()
-    runner = benchmark.build_runner(scaffold=scaffold, provider=..., ...)
-
-    def inner_factory(task):
-        async def _inner(attempt_ctx):
-            return await runner.run_task(task, attempt_ctx=attempt_ctx, ...)
-        return _inner
-
-    return await _run_scaffold_tasks(
-        benchmark=benchmark, tasks=tasks, run_dir=run_dir,
-        inner_factory=inner_factory, container_executable=container_executable, ...
-    )
-```
-
-**Delete**: `collect_miniswe_traces()` and `collect_openclaw_traces()` as separate functions — logic merged into unified `collect_traces()`.
-
-### Acceptance Criteria
-- [ ] `collect_traces()` accepts any scaffold, dispatches via `build_runner()`
-- [ ] `--container` omittable for host-mode benchmarks
-- [ ] Existing openclaw + swe-rebench collection unchanged (regression tests pass)
-- [ ] `grep -n 'collect_miniswe_traces\|collect_openclaw_traces' src/` returns 0 results
-
----
-
-## Phase 1b: Remove mini-swe-agent (1 day)
-
-### Complete File List (31 files)
-
-| File | Action | Details |
-|------|--------|---------|
-| `src/agents/miniswe/agent.py` | **DELETE** | Entire file |
-| `src/agents/miniswe/__init__.py` | **DELETE** | Entire file |
-| `src/llm_call/miniswe.py` | **DELETE** | Entire file |
-| `src/llm_call/__init__.py` | **MODIFY** | Remove `build_miniswe_litellm_model_name` import + `__all__` entry |
-| `src/llm_call/providers.py` | **MODIFY** | Remove `miniswe_litellm_prefix` field from `ProviderDefinition` and all PROVIDERS entries |
-| `src/llm_call/config.py` | **MODIFY** | Remove miniswe references |
-| `src/trace_collect/cli.py` | **MODIFY** | Remove `"miniswe"` from `--scaffold` choices, default → `"openclaw"` |
-| `src/trace_collect/collector.py` | **MODIFY** | Delete `_run_miniswe_in_task_container()` (~120 lines) |
-| `src/trace_collect/runtime/task_container.py` | **MODIFY** | Remove miniswe branches |
-| `src/trace_collect/runtime/entrypoint.py` | **MODIFY** | Remove miniswe references |
-| `src/agents/base.py` | **MODIFY** | Remove miniswe references |
-| `src/agents/benchmarks/swe_bench_verified.py` | **MODIFY** | Remove `runtime_mode_for("miniswe")` branch |
-| `src/agents/benchmarks/swe_rebench.py` | **MODIFY** | Remove miniswe SUPPORTED_SCAFFOLDS and runtime_mode branch |
-| `src/harness/runner.py` | **MODIFY** | Remove miniswe references |
-| `src/agents/openclaw/eval/prepare.py` | **MODIFY** | Remove miniswe reference |
-| `Makefile` | **MODIFY** | Remove `smoke-swe-rebench-miniswe` and similar targets |
-| `README.md` | **MODIFY** | Remove miniswe scaffold documentation |
-| `pyproject.toml` | **MODIFY** | Remove `mini-swe-agent` dependency |
-| `src/trace_collect/CLAUDE.md` | **MODIFY** | Update scaffold table, remove miniswe row |
-| `docs/CURRENT_PLAN.md` | **REPLACE** | This plan |
-| `tests/test_miniswe_container_runtime.py` | **DELETE** | miniswe-only test file |
-| `tests/test_session_runner_actions.py` | **MODIFY** | Remove miniswe references |
-| `tests/test_terminal_bench_plugin.py` | **MODIFY** | Remove miniswe references |
-| `tests/test_task_container_runtime.py` | **MODIFY** | Remove miniswe branch tests |
-| `tests/test_openclaw_runtime_selection.py` | **MODIFY** | Remove miniswe option tests |
-| `tests/test_collector_task_container_runtime.py` | **MODIFY** | Remove miniswe collection tests |
-| `tests/test_attempt_pipeline.py` | **MODIFY** | Remove miniswe references |
-| `tests/test_collector_runtime_mode.py` | **MODIFY** | Remove miniswe dispatch tests |
-| `tests/test_sweep.py` | **MODIFY** | Remove miniswe references |
-| `tests/test_swe_rebench_plugin.py` | **MODIFY** | Remove miniswe scaffold tests |
-| `tests/test_llm_call_config.py` | **MODIFY** | Remove `build_miniswe_litellm_model_name` tests |
-
-> **Note**: Executor should run `grep -rn 'miniswe\|mini.swe\|MiniSWE\|mini_swe' src/ tests/` at execution time for authoritative file list.
-
-### Acceptance Criteria
-- [ ] `grep -rn 'miniswe\|mini.swe\|MiniSWE\|mini_swe' src/ tests/` returns 0 results
-- [ ] `make test` passes
-- [ ] `make lint` passes
-- [ ] `python -m trace_collect.cli --help` shows `--scaffold` without `miniswe`
-- [ ] `python -c "from llm_call import build_miniswe_litellm_model_name"` raises ImportError
-
-### 🔒 REVIEW GATE: Phase 1b complete — verify miniswe fully removed before proceeding
-
----
-
-## Phase 2: Modular Benchmark Interface (1.5-2 days)
-
-### 2.1 Benchmark base class: add `execution_environment`
-**Edit**: `src/agents/benchmarks/base.py`
-```python
-@property
-def execution_environment(self) -> str:
-    """Return 'container' or 'host'. Default: 'container'."""
-    return "container"
-```
-Only this property — `evaluation_method` and `requires_network` deferred until consumers exist.
-
-### 2.2 Capability matrix (runtime probe)
-**New**: `src/agents/capabilities.py`
-```python
-ALL_SCAFFOLDS = ("openclaw", "qwen-deep-research")
-
-def scaffold_benchmark_matrix() -> dict[str, set[str]]:
-    """Derive capability matrix by probing registered plugins."""
-    from agents.benchmarks import REGISTRY
-    matrix: dict[str, set[str]] = {}
-    for slug, cls in REGISTRY.items():
-        for scaffold in ALL_SCAFFOLDS:
-            try:
-                # Probe via runtime_mode_for (raises for unsupported)
-                # Need lightweight probe without full config
-                ...
-            except (NotImplementedError, ValueError):
-                pass
-    return matrix
-
-def validate_scaffold_benchmark(scaffold: str, benchmark_slug: str) -> None:
-    """Early CLI validation. Raises ValueError for invalid combinations."""
-```
-
-### 2.3 DeepResearchBench plugin
-**New**: `src/agents/benchmarks/deep_research_bench.py`, `configs/benchmarks/deep-research-bench.yaml`, `configs/prompts/deep_research_bench/default.md`
-- `slug = "deep-research-bench"`
-- `load_tasks()` — from HuggingFace dataset (ID configured in YAML `harness_dataset`)
-- `normalize_task()` → `{instance_id, problem_statement, reference_answer, topic, difficulty, domain}`
-- `execution_environment` → `"host"`
-- `runtime_mode_for()` → `"host_controller"` for all scaffolds
-- `build_runner(scaffold="openclaw")` → openclaw runner (host-mode)
-- `build_runner(scaffold="qwen-deep-research")` → `QwenDeepResearchRunner`
-- `image_name_for()` → `None`
-
-### 2.4 BrowseComp plugin
-**New**: `src/agents/benchmarks/browsecomp.py`, `configs/benchmarks/browsecomp.yaml`, `configs/prompts/browsecomp/default.md`
-- `slug = "browsecomp"`
-- Data source: HuggingFace (configured in YAML)
-- Task schema: `{instance_id, problem_statement, reference_answer, source_urls}`
-- Same host-mode pattern as DeepResearchBench
-
-### 2.5 Register new benchmarks
-**Edit**: `src/agents/benchmarks/__init__.py` — add to REGISTRY
-
-### Acceptance Criteria
-- [ ] `get_benchmark_class("deep-research-bench")` and `get_benchmark_class("browsecomp")` return correct classes
-- [ ] Both plugins: `execution_environment` returns `"host"`
-- [ ] `validate_scaffold_benchmark("openclaw", "deep-research-bench")` passes
-- [ ] `validate_scaffold_benchmark("qwen-deep-research", "swe-rebench")` raises ValueError
-- [ ] `scaffold_benchmark_matrix()` returns correct mapping
-
----
-
-## Phase 3: Qwen Deep Research Scaffold (2 days)
-
-### 3.1 Runner implementation
-**New**: `src/agents/qwen_deep_research/__init__.py`, `src/agents/qwen_deep_research/runner.py`
-```python
-class QwenDeepResearchRunner:
-    """Qwen Deep Research API wrapper, conforming to Runner Protocol."""
-
-    def __init__(self, *, model: str, api_base: str, api_key: str,
-                 max_iterations: int, benchmark_slug: str):
-        self.client = create_async_openai_client(api_base, api_key)
-        self.model = model
-
-    async def run_task(self, task: dict, *, attempt_ctx, prompt_template: str) -> Any:
-        # 1. Format research query from task['problem_statement']
-        # 2. Call Qwen API via self.client (streaming for TTFT/TPOT)
-        # 3. Log llm_call action via attempt_ctx.trace_logger
-        # 4. Extract answer from response
-        # 5. Return result with success/exit_status
-```
-- Reuses: `create_async_openai_client()`, `TraceLogger`, `summarize_llm_latencies()`
-- dashscope provider already registered in `PROVIDERS`
-
-### 3.2 Integration path
-- DeepResearchBench/BrowseComp `build_runner(scaffold="qwen-deep-research")` → `QwenDeepResearchRunner`
-- Collector dispatches via Phase 1a unified `collect_traces()` → `build_runner()` → `runner.run_task()`
-
-### 3.3 CLI update
-- `--scaffold` choices → `["openclaw", "qwen-deep-research"]`
-- `--mcp-config` not required for qwen-deep-research
-
-### Acceptance Criteria
-- [ ] `isinstance(QwenDeepResearchRunner(...), Runner)` is True
-- [ ] Mock API test: given mock Qwen response, produces valid v5 trace JSONL
-- [ ] Trace contains `llm_call` action with `prompt_tokens`, `completion_tokens`, timing fields
-
----
-
-## Phase 4: Simulator Restructuring (3-4 days) — HIGHEST RISK
-
-### Functions requiring modification
-
-| Function | Location | Current Behavior | Host-mode Behavior |
-|----------|----------|------------------|-------------------|
-| `PreparedContainer` | `simulator.py:47-53` | Required dataclass | Unchanged (only created for container-mode) |
-| `PreparedTraceSession` | `simulator.py:57-63` | `container: PreparedContainer` required | `container: PreparedContainer \| None = None` |
-| `_validate_loaded_sessions` | `simulator.py:295-341` | L308-313: no docker_image → raise | Skip docker_image check when `metadata.execution_environment == "host"` |
-| `_prepare_container_session` | `simulator.py:343-385` | Always starts container | Unchanged (only called for container-mode) |
-| **NEW** `_prepare_host_session` | — | — | Returns `PreparedTraceSession(loaded=loaded, container=None)` |
-| `simulate()` main loop | `simulator.py:990-997` | All → `_prepare_container_session` | Branch: host → `_prepare_host_session()`, container → `_prepare_container_session()` |
-| `simulate()` sampler init | `simulator.py:999-1009` | All → `ContainerStatsSampler` | Branch: host → `ProcessStatsSampler(pid)` or None, container → existing |
-| `_run_local_model_simulation` | `simulator.py:476+` | Accesses `prepared.container.agent` for tools | Guard: `if prepared.container is not None: exec tools; else: skip` |
-| `_replay_cloud_model_session` | `simulator.py:676/717` | Accesses `prepared.container` | Guard: host-mode sessions replay LLM timing only |
-| `_run_cloud_model_replay` | `simulator.py:690/895` | Passes `prepared_session` | Unchanged (guards inside) |
-| `simulate()` finally block | `simulator.py:1056-1080` | Unconditional `ctr.agent.stop()` + `stop_task_container()` | Guard: `if prepared.container is not None: stop; else: pass` |
-
-### Key data structure change
-```python
-@dataclass(slots=True)
-class PreparedTraceSession:
-    loaded: LoadedTraceSession
-    container: PreparedContainer | None = None   # ← NOW OPTIONAL
-    sampler: ContainerStatsSampler | None = None  # or ProcessStatsSampler
-    task_output_dir: Path | None = None
-```
-
-### `container_executable` in simulator
-- `simulate()` signature: `container_executable: str = "docker"` → `container_executable: str | None = None`
-- Only passed to `_prepare_container_session` when `execution_environment == "container"`
-
-### Acceptance Criteria
-- [ ] `simulate --source-trace <host-mode-trace.jsonl> --mode cloud_model` succeeds without Docker
-- [ ] `simulate --source-trace <container-trace.jsonl> --mode cloud_model --container docker` unchanged behavior
-- [ ] `simulate --source-trace <host-mode-trace.jsonl> --mode local_model --provider dashscope --model ... --api-key ...` completes LLM calls and produces trace
-- [ ] Output trace JSONL contains valid `sim_metrics`
-- [ ] All existing simulator tests pass
-
-### 🔒 REVIEW GATE: Phase 4 complete — verify simulator works for both container and host modes
-
----
-
-## Phase 5: Resource Tracking + Gantt (1 day)
-
-### 5.1 ProcessStatsSampler
-**New**: `src/harness/process_stats_sampler.py`
-- Same interface as `ContainerStatsSampler`: `__init__(pid, interval_s=1.0)`, `start()`, `stop() -> list[dict]`
-- Shares `summarize_samples()` from existing code
-- Metrics: CPU %, memory MB, disk I/O (optional), context switches (optional)
-- Linux: `/proc/<pid>/stat`, `/proc/<pid>/io`
-- macOS: `psutil.Process(pid)` (psutil as optional dependency)
-- Output: same `resources.json` schema
-
-### 5.2 Collector integration
-- Container benchmarks → `ContainerStatsSampler`
-- Host benchmarks → `ProcessStatsSampler(runner_pid)`
-
-### 5.3 Gantt viewer verification
-- `build_gantt_payload()` in `demo/gantt_viewer/backend/payload.py` is already generic
-- Verify research-style traces (mostly `llm_call`, few/no `tool_exec`) render correctly
-
-### Acceptance Criteria
-- [ ] `ProcessStatsSampler` instantiable on Linux and macOS
-- [ ] Host-mode collection produces valid `resources.json`
-- [ ] Gantt viewer loads and renders a deep research trace
-
----
-
-## Phase 6: Testing (2 days)
-
-### 6.1 New benchmark plugin tests
-- `tests/test_deep_research_bench_plugin.py` — mock HuggingFace dataset, verify `load_tasks()`, `normalize_task()`, `execution_environment`
-- `tests/test_browsecomp_plugin.py` — same pattern
-
-### 6.2 Qwen runner tests
-- `tests/test_qwen_deep_research_runner.py` — mock API calls, verify trace output format, token counting, timing
-
-### 6.3 Capability matrix tests
-- `tests/test_capabilities.py` — verify `scaffold_benchmark_matrix()`, `validate_scaffold_benchmark()` for valid/invalid combinations
-
-### 6.4 Simulator integration tests
-- Construct minimal host-mode trace fixture (hand-crafted JSONL)
-- Test `simulate()` cloud_model + host-mode trace (no container started)
-- Regression: existing container-mode trace still works
-
-### 6.5 Regression
-- `make test` — full suite, no regressions
-- `make lint` — ruff clean
-
-### Acceptance Criteria
-- [ ] All new tests pass
-- [ ] `make test` no regressions
-- [ ] Coverage: every new benchmark plugin, runner, capability function, simulator host-mode path
-
-### 🔒 FINAL REVIEW GATE: All phases complete, full test suite green
-
----
-
-## File Summary
-
-### New files (14)
-| File | Phase |
-|------|-------|
-| `src/agents/capabilities.py` | 2 |
-| `src/agents/benchmarks/deep_research_bench.py` | 2 |
-| `src/agents/benchmarks/browsecomp.py` | 2 |
-| `src/agents/qwen_deep_research/__init__.py` | 3 |
-| `src/agents/qwen_deep_research/runner.py` | 3 |
-| `src/harness/process_stats_sampler.py` | 5 |
-| `configs/benchmarks/deep-research-bench.yaml` | 2 |
-| `configs/benchmarks/browsecomp.yaml` | 2 |
-| `configs/prompts/deep_research_bench/default.md` | 2 |
-| `configs/prompts/browsecomp/default.md` | 2 |
-| `tests/test_deep_research_bench_plugin.py` | 6 |
-| `tests/test_browsecomp_plugin.py` | 6 |
-| `tests/test_qwen_deep_research_runner.py` | 6 |
-| `tests/test_capabilities.py` | 6 |
-
-### Edited files (10+)
-| File | Phase | Change |
-|------|-------|--------|
-| `src/agents/benchmarks/base.py` | 0, 2 | Runner Protocol + `execution_environment` |
-| `src/agents/benchmarks/__init__.py` | 2 | Register new benchmarks |
-| `src/agents/benchmarks/swe_bench_verified.py` | 1b | Remove miniswe |
-| `src/agents/benchmarks/swe_rebench.py` | 1b | Remove miniswe |
-| `src/trace_collect/cli.py` | 1a, 1b, 3 | container optional, scaffold choices |
-| `src/trace_collect/collector.py` | 1a, 1b | Unified dispatch, remove miniswe |
-| `src/trace_collect/simulator.py` | 4 | Host-mode support |
-| `src/harness/trace_logger.py` | 0 | execution_environment field |
-| `src/llm_call/__init__.py` | 1b | Remove miniswe exports |
-| `src/llm_call/providers.py` | 1b | Remove miniswe_litellm_prefix |
-| `Makefile` | 1b | Remove miniswe targets |
-| + ~15 test files | 1b | Remove miniswe references |
-
-### Deleted files (3)
-| File | Phase |
-|------|-------|
-| `src/agents/miniswe/` (entire directory) | 1b |
-| `src/llm_call/miniswe.py` | 1b |
-| `tests/test_miniswe_container_runtime.py` | 1b |
-
----
-
-## ADR: Multi-Benchmark Architecture Decision
-
-**Decision**: Thin abstraction layer (Option A) — add `execution_environment` property to Benchmark base, unify collector via `build_runner()`, new scaffold as simple runner module.
-
-**Drivers**: (1) Non-containerized benchmark support needed, (2) scaffold dispatch must be polymorphic not hardcoded, (3) miniswe removal creates opportunity for cleanup.
-
-**Alternatives considered**: Full Runner Protocol abstraction (Option B) — rejected because deep research benchmarks are simpler than SWE-bench, making full protocol over-engineering.
-
-**Why chosen**: Minimal disruption, follows existing patterns (terminal-bench already uses host_controller), ships in 12-16 days vs 20+ for Option B.
-
-**Consequences**: Collector retains some scaffold awareness (container vs host branching). Future scaffolds must implement Runner Protocol. Simulator gains optional-container complexity.
-
-**Follow-ups**: (1) Consider `evaluation_method` property when evaluation pipeline is built, (2) Consider `requires_network` when network isolation is needed, (3) Dynamic resource allocation (from NEXT_STEPS_PLAN TODO 6) should account for host-mode benchmarks.
+Delete the `qwen-deep-research` scaffold entirely and replace it with a new
+`research-agent` scaffold that implements a multi-phase research workflow
+with step-level tracing.
+
+### Drivers
+1. Current scaffold produces 1 trace span -- useless for scheduling analysis
+2. Name conflates scaffold identity with provider/model choice
+3. No tool execution traces -- cannot study search/fetch scheduling effects
+4. Existing OpenClaw web tools are mature and directly reusable
+
+### Alternatives Considered
+- **Option B (keep alias)**: rejected -- pure compatibility debt with no research value
+- **Option C (DashScope API)**: rejected -- opaque black-box, not locally simulatable
+
+### Why Chosen
+Option A (hard delete + new scaffold) provides a clean break with no
+migration debt. The new scaffold produces rich multi-span traces that are
+the prerequisite for scheduling/simulation research on research-style
+benchmarks.
+
+### Consequences
+- All existing `qwen-deep-research` traces in `traces/` become historical artifacts
+  (still valid v5 JSONL, just from a removed scaffold)
+- Analysis scripts that filter on `scaffold=="qwen-deep-research"` will match
+  only legacy data -- this is correct behavior
+- Need to update any external documentation that references the old scaffold name
+
+### Follow-ups
+- v2: Add iterative refinement loop (search -> assess -> re-search) if v1 analysis
+  shows single-pass search is insufficient
+- Consider DashScope DeepResearch API as a separate scaffold if they expose
+  step-level hooks in future
+- Add more search backends (Perplexity, Google Custom Search) as providers mature

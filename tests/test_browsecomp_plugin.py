@@ -120,7 +120,7 @@ def test_browsecomp_runtime_and_runner_gating() -> None:
 
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
-    assert plugin.runtime_mode_for("qwen-deep-research") == "host_controller"
+    assert plugin.runtime_mode_for("research-agent") == "host_controller"
 
 
 def test_browsecomp_committed_config_matches_long_context_schema() -> None:

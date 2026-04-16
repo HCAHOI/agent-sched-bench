@@ -18,7 +18,7 @@ def test_scaffold_benchmark_matrix_uses_plugin_supported_scaffolds() -> None:
         "deep-research-bench",
         "browsecomp",
     }
-    assert matrix["qwen-deep-research"] == {
+    assert matrix["research-agent"] == {
         "deep-research-bench",
         "browsecomp",
     }
@@ -30,8 +30,8 @@ def test_validate_scaffold_benchmark_accepts_supported_pair() -> None:
 
 def test_validate_scaffold_benchmark_rejects_unsupported_pair() -> None:
     with pytest.raises(ValueError, match="does not support"):
-        validate_scaffold_benchmark("qwen-deep-research", "swe-rebench")
+        validate_scaffold_benchmark("research-agent", "swe-rebench")
 
 
-def test_validate_scaffold_benchmark_accepts_qwen_research_pair() -> None:
-    validate_scaffold_benchmark("qwen-deep-research", "deep-research-bench")
+def test_validate_scaffold_benchmark_accepts_research_agent_pair() -> None:
+    validate_scaffold_benchmark("research-agent", "deep-research-bench")

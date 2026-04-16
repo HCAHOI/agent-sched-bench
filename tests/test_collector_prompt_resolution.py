@@ -47,19 +47,19 @@ def test_parse_collect_args_allows_omitted_container_for_host_mode() -> None:
     assert args.container is None
 
 
-def test_parse_collect_args_accepts_qwen_deep_research_scaffold() -> None:
+def test_parse_collect_args_accepts_research_agent_scaffold() -> None:
     args = parse_collect_args(
         [
             "--provider",
             "dashscope",
             "--model",
-            "qwen-deep-research",
+            "qwen-plus-latest",
             "--scaffold",
-            "qwen-deep-research",
+            "research-agent",
         ]
     )
 
-    assert args.scaffold == "qwen-deep-research"
+    assert args.scaffold == "research-agent"
     assert args.mcp_config is None
 
 
@@ -127,7 +127,7 @@ def test_run_collect_passes_container_to_collect_traces(
     assert seen["container_executable"] == container_executable
 
 
-def test_run_collect_does_not_require_mcp_config_for_qwen(monkeypatch) -> None:
+def test_run_collect_does_not_require_mcp_config_for_research_agent(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     async def fake_collect_traces(**kwargs):
@@ -140,7 +140,7 @@ def test_run_collect_does_not_require_mcp_config_for_qwen(monkeypatch) -> None:
             name="dashscope",
             api_base="https://example.com",
             api_key="test-key",
-            model="qwen-deep-research",
+            model="qwen-plus-latest",
             env_key="DASHSCOPE_API_KEY",
         ),
     )
@@ -154,15 +154,15 @@ def test_run_collect_does_not_require_mcp_config_for_qwen(monkeypatch) -> None:
             "--provider",
             "dashscope",
             "--model",
-            "qwen-deep-research",
+            "qwen-plus-latest",
             "--scaffold",
-            "qwen-deep-research",
+            "research-agent",
         ]
     )
 
     _run_collect(args)
 
-    assert seen["scaffold"] == "qwen-deep-research"
+    assert seen["scaffold"] == "research-agent"
     assert seen["mcp_config"] is None
 
 
