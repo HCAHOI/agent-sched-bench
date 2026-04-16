@@ -1,3 +1,130 @@
+# Plan: Replace `research-agent` with vendored Tongyi-DeepResearch ReAct scaffold
+
+**Ralplan R3** | 2026-04-16 | Branch: `feat/multi-benchmark`
+**Consensus**: Planner → Architect (APPROVE-with-polish) → Critic v2→v3 ITERATE(8) → v3' → v5 (user simplifications) → v6 ITERATE(3) → v6 Critic APPROVE
+**Status**: FROZEN spec; awaiting user go-ahead for Phase A execution.
+
+---
+
+## Why this plan replaces R2
+
+R2 ("introduce `research-agent` scaffold") was shipped as commit `9d2b9a2` but did not fulfill the original user intent. User's 2026-04-15 directive was to introduce the **real** `Alibaba-NLP/DeepResearch` (Tongyi-DeepResearch) scaffold, not a homegrown 5-phase simplification. R3 corrects that by hard-replacing the homegrown scaffold with a vendored ReAct scaffold from upstream.
+
+R2 content retained below as historical record under **R2_DEPRECATED** marker.
+
+---
+
+## R3 Principles (5)
+
+1. **Upstream fidelity (soft)**: Vendor at pinned SHA. Prefer minimal patches, prefer adapter-layer logic over in-vendor edits. VENDOR_NOTES.md records all patch diff line counts by category for audit. **No LOC hard gate** (per user directive 2026-04-16).
+2. **Trace completeness for scheduling**: Every LLM/tool call emits v5 TraceAction with canonical keys. Model-layer retries get `data.retry_of: <orig_action_id>` + `data.logical_turn_id: <uuid>`. Transport-layer (429/503) retries get `data.transport_retry: true` + the same `logical_turn_id`. `logical_turn_id` is generated **in the runner adapter** (Phase D), NOT in vendor source. `_build_summary` dedups on `logical_turn_id` for turn count; sums all TraceActions for wall-time totals.
+3. **Hard replace with ≤3-day interim shim**: `src/agents/research_agent/` deleted in Phase F (≤3 days post Phase I green). Interim env-flag `OMCBENCH_ALLOW_DEPRECATED_SCAFFOLD=1` required to invoke old scaffold (default: raise DeprecationError). Shim lifetime written into VENDOR_NOTES.md with explicit deadline timestamp.
+4. **Backend-agnostic scaffold**: Runner uses existing `create_async_openai_client(api_base, api_key)` pattern; no backend assumption. Backend chosen at `trace_collect.cli` call time (local vLLM / OpenRouter / DashScope / OpenAI / any OpenAI-compatible proxy). Runner adapter wraps client with 429/503 exponential backoff (max 3 retries) to cover cloud-backend transport failures. Simulate mode (host replay + cloud sleep-with-speedup) does not go through runner.
+5. **Vendor only 2 enabled tools**: `tool_search.py` (Serper) + `tool_visit.py` (Jina) + `react_agent.py` + `prompt.py`. Drop `tool_scholar.py` / `tool_python.py` / `tool_file.py` files entirely; patch `react_agent.py` imports and `TOOL_CLASS` to remove references. Follow-up #2 re-vendors these if future experiments require.
+
+## Decision Drivers (3)
+
+1. Honor 2026-04-15 user directive that R2 failed to fulfill.
+2. MLSys scheduling research requires realistic agent workload traces; homegrown 5-phase pipeline is structurally too simple and not what user asked for.
+3. Minimize blast radius: openclaw / swe-bench / swe-rebench stacks untouched; only deep-research-bench + browsecomp affected.
+
+## Options
+
+| Option | Status | Rationale |
+|---|---|---|
+| **A: vendor enabled-tools-only + trace-hook + backend-agnostic runner** | **CHOSEN** | Matches user directive; bounded scope; auditable |
+| A'': vendor all 5 tools, enable 2 | Rejected | Carries 3 unused tool files → "no just-in-case code" (CLAUDE.md §3, user priority #1) |
+| B: git submodule + monkey-patch | Rejected | User chose vendor over submodule |
+| C: OpenRouter-only backend | Rejected | Obsoleted by Principle #4 backend-agnosticism |
+| D: keep homegrown phased + add tongyi | Rejected | User directive "完全替换" explicit; Architect concern moved to Follow-up #1 |
+
+## Pre-mortem (5 scenarios)
+
+1. **`qwen-agent==0.0.26` dep conflict on conda ML env**: Phase B isolated-env `import` smoke before wiring in; if conflict, pin openai/pydantic versions or revisit qwen-agent minor.
+2. **Non-Tongyi model produces wrong stop pattern**: Acceptable; retry logic fires; scheduling trace still accumulates valid span data. Phase I asserts trace structure only, not answer quality.
+3. **Model-layer retry storm**: `exit_status="retry_exhausted"`; preserve all retry TraceActions.
+4. **Upstream SHA drift during plan execution (A→F)**: Frozen pin; re-pin only for blocker bugs with full audit re-run.
+5. **Cloud backend 429/503 burst**: Adapter exponential backoff; exhaustion → `exit_status="rate_limit_exhausted"`; do NOT silently swap backend (human decision). Trace preserves transport-retry TraceActions for scheduling analysis.
+
+## Phases
+
+```
+A (pin SHA + license check + freeze protocol)
+→ B (vendor 4 files: react_agent / prompt / tool_search / tool_visit; strip others)
+→ C (trace-hook patch, 3 buckets: hook emit / streaming shim / TOOL_CLASS+import prune
+     — record per-bucket line count in VENDOR_NOTES.md; no LOC gate)
+→ D (runner adapter: streaming shim + logical_turn_id assignment + 429/503 backoff wrapper)
+→ E (backend smoke: spin up any chosen backend, run minimal ReAct turn, verify TraceAction emit)
+→ H1 (unit tests with mocked qwen-agent + mocked tools)
+→ G (wire registrations: _research.py / cli.py / capabilities.py / YAML configs)
+→ I (paid smoke 1+1: deep-research-bench task + browsecomp task on user-chosen backend)
+→ [gate: I trace satisfies AC#2 ∧ AC#4, else halt + diagnose]
+→ H2 (integration replay tests on I-produced trace)
+→ J (docs + VENDOR_NOTES.md with F deletion_deadline timestamp)
+→ F (hard-delete src/agents/research_agent/ ≤3 days post-I-green; ADR amendment if exceeded)
+```
+
+## Acceptance Criteria (6)
+
+1. **AC#1**: `rg "research_agent|research-agent" src/ tests/ configs/` → **0 matches** (except this CURRENT_PLAN.md R2_DEPRECATED archive section).
+2. **AC#2**: Phase I smoke trace contains **≥1 complete ReAct step triplet** (`thought → tool_call → tool_response`). Task-agnostic structural assertion.
+3. **AC#3**: `conda run -n ML python -m pytest tests/ -v` → **0 failures**.
+4. **AC#4**: Phase I paid-smoke trace: **every** `llm_call` TraceAction has:
+   - `ttft_ms` = wall time from request dispatch to first non-empty content chunk
+   - `tpot_ms` = `(total_completion_wall_ms − ttft_ms) / completion_tokens`; `completion_tokens` from stream terminal `usage` chunk preferentially, with tokenizer re-count fallback (handles DashScope / proxies that strip per-chunk usage)
+   - Both non-None = pass.
+5. **AC#5**: Tool TraceActions have canonical `tool_args` / `tool_result` / `duration_ms` keys. Model-layer retry TraceActions have `retry_of` + `logical_turn_id`. Transport-layer (429/503) retry TraceActions have `transport_retry: true` + `logical_turn_id`.
+6. **AC#6**: `src/agents/tongyi_deepresearch/VENDOR_NOTES.md` records:
+   - upstream URL
+   - pinned commit SHA
+   - Apache-2.0 NOTICE file preserved at `src/agents/tongyi_deepresearch/vendor/NOTICE`
+   - patch diff line count by bucket (hook emit / streaming shim / TOOL_CLASS+import prune)
+   - `research_agent` deletion_deadline timestamp (= Phase I green date + 3 days)
+
+## ADR
+
+### Decision
+
+Replace homegrown `src/agents/research_agent/` with vendored `Alibaba-NLP/DeepResearch` inference/ ReAct scaffold at pinned commit `<TBD Phase-A>`, Apache-2.0. Backend: any OpenAI-compatible endpoint via existing `create_async_openai_client`. Tool surface: only `search` (Serper) + `visit` (Jina) vendored and enabled. Other 3 upstream tools not vendored.
+
+### Drivers
+
+1. Honor 2026-04-15 user directive.
+2. MLSys scheduling research requires realistic agent workload traces.
+3. Bounded blast radius.
+
+### Alternatives considered
+
+See Options table above.
+
+### Why chosen
+
+Vendor + trace-hook + backend-agnostic runner = auditable fidelity + scheduling trace integrity + user intent alignment, without coupling to any specific backend or hardware spec.
+
+### Consequences
+
+- (+) New pip dep `qwen-agent==0.0.26`
+- (+) ~900 LOC vendored code under `src/agents/tongyi_deepresearch/vendor/` (no hard cap per user)
+- (+) `exit_status` enum gains `rate_limit_exhausted`
+- (−) Historical `research-agent` traces deprecated (still valid v5 JSONL)
+- (−) Scaffold family narrowed to ReAct class only → Follow-up #1 if scheduling-diversity analysis demands otherwise
+- (−) Heavy / IterResearch mode unsupported (upstream did not open-source it) → Follow-up if released
+
+### Follow-ups
+
+1. If scheduling analysis needs phased-pipeline structural contrast → introduce honestly-named `phased-research` scaffold (not a Tongyi impersonation).
+2. If experiments demand additional tools → vendor `tool_scholar.py` / `tool_python.py` / `tool_file.py` on cherry-pick basis.
+3. If Serper cost binds → DDG adapter as optional replacement.
+4. Cross-backend scheduling comparison (local vLLM vs cloud API on same task) — runner's backend-agnostic design enables this without code changes.
+
+---
+
+# R2_DEPRECATED (archived)
+
+The content below this marker is the R2 plan that shipped as `9d2b9a2` and is superseded by R3. Retained for historical record only. New `research_agent` references in R2 text are grandfathered under AC#1's "except CURRENT_PLAN.md R2_DEPRECATED archive" exception.
+
+---
+
 # Plan: Replace `qwen-deep-research` with `research-agent` Scaffold
 
 **Ralplan R2** | 2026-04-15 | Branch: `feat/multi-benchmark`
