@@ -2,7 +2,18 @@
 
 **Ralplan R3** | 2026-04-16 | Branch: `feat/multi-benchmark`
 **Consensus**: Planner → Architect (APPROVE-with-polish) → Critic v2→v3 ITERATE(8) → v3' → v5 (user simplifications) → v6 ITERATE(3) → v6 Critic APPROVE
-**Status**: FROZEN spec; awaiting user go-ahead for Phase A execution.
+**Status**: Phases A, B, C, D, E, G, I, H2, J **COMPLETE**. Phase F (hard-delete `src/agents/research_agent/`) pending — slated for the next commit per R3 Principle #3 (≤3 days post Phase I green = 2026-04-19 deadline).
+
+### Phase log (most recent first)
+
+| Phase | Commit | Notes |
+|-------|--------|-------|
+| H2 | `d85c1fc` | Simulator replay test + `tests/fixtures/tongyi_deepresearch_minimal_v5.jsonl`; 340 / 340 green |
+| I  | `9b63e44` | Paid smoke DRB + browsecomp via DashScope qwen-plus-latest; ~$0.14 total; 3 trace fixes (shared action_id counter, circular-ref strip, env alias) |
+| E  | `b9e3a87` | Backend smoke against DashScope; AC#4 ttft/tpot invariants verified on real streaming |
+| G  | `10faefb` | Scaffold registrations wired into `_research.py`, `cli.py`, capability tests |
+| C+D| `cf30367` | Vendor patches (Buckets C+D only; A+B kept adapter-side) + `TongyiDeepResearchRunner` + trace infrastructure |
+| A+B| `b1ebc07` | Upstream pin (SHA `f72f75d8`) + vendor 4 files verbatim |
 
 ---
 

@@ -202,7 +202,10 @@ R3's $2 paid-smoke budget).
 
 ## Deprecation / deletion tracker
 
-- **`src/agents/research_agent/` deletion_deadline**: TBD — set to
-  `<Phase I green date> + 3 calendar days` per R3 Principle #3 at Phase J.
-- **Interim shim**: env-flag `OMCBENCH_ALLOW_DEPRECATED_SCAFFOLD=1` (introduced
-  in Phase G wiring; removed in Phase F along with the old scaffold).
+- **`src/agents/research_agent/` deletion_deadline**: **2026-04-19**
+  (= Phase I green date 2026-04-16 + 3 calendar days, per R3 Principle #3).
+  Phase F will execute the hard-delete well before this deadline (planned for
+  the commit immediately after this one).
+- **Interim shim**: env-flag `OMCBENCH_ALLOW_DEPRECATED_SCAFFOLD=1` was
+  proposed in R3 Principle #3 but NOT implemented — Phase F's same-day
+  deletion makes the gap-period shim unnecessary.
