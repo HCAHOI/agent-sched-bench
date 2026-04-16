@@ -188,6 +188,13 @@ class ResearchAgentRunner:
             error_msg = str(exc)
             final_answer = ""
 
+        # An empty synthesize output is a failure even when no exception fired
+        # (e.g., model-side filter or truncation), so downgrade exit_status
+        # before deriving success to avoid inflating success metrics.
+        if exit_status == "completed" and not final_answer.strip():
+            exit_status = "empty_final_response"
+            error_msg = error_msg or "synthesize phase returned empty output"
+
         # Build summary
         success = exit_status == "completed"
         summary = self._build_summary(

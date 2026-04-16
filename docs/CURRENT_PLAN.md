@@ -249,14 +249,12 @@ class Evidence:
     source_url: str
     passage: str           # extracted text
     relevance_note: str    # LLM's note on why this is relevant
-    search_query: str      # query that discovered this source (for strategy analysis)
     fetch_timestamp: float # when the page was fetched
 ```
 
 Evidence objects are accumulated across phases and serialized into the
 synthesis prompt. They are also stored in the trace's final summary for
-downstream analysis. The `search_query` field links evidence back to the
-query that found it, enabling search strategy effectiveness analysis.
+downstream analysis.
 
 ### Trace Schema Mapping
 

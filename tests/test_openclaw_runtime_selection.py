@@ -184,46 +184,5 @@ def test_collect_traces_requires_explicit_container_runtime(
         )
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("command_timeout_s", 30.0, "--command-timeout"),
-        ("task_timeout_s", 300.0, "--task-timeout"),
-    ],
-)
-def test_collect_traces_rejects_removed_timeout_knobs(
-    tmp_path: Path,
-    field: str,
-    value: float,
-    message: str,
-) -> None:
-    benchmark = SimpleNamespace(
-        validate_scaffold_support=lambda scaffold: None,
-        runtime_mode_for=lambda scaffold: "host_controller",
-        load_tasks=lambda: (_ for _ in ()).throw(AssertionError("should not load")),
-        build_runner=lambda **kwargs: None,
-        execution_environment="host",
-        config=SimpleNamespace(
-            slug="terminal-bench",
-            default_prompt_template="default",
-            trace_root=tmp_path / "traces",
-            harness_split=None,
-        ),
-        image_name_for=lambda task: None,
-    )
-
-    kwargs = {
-        "scaffold": "openclaw",
-        "provider_name": "openrouter",
-        "api_base": "https://example.com/v1",
-        "api_key": "test-key",
-        "model": "z-ai/glm-5.1",
-        "benchmark": benchmark,
-        field: value,
-    }
-    with pytest.raises(ValueError, match=message):
-        asyncio.run(collect_traces(**kwargs))
-
-
 def test_collectors_max_iterations_defaults_to_100() -> None:
     assert inspect.signature(collect_traces).parameters["max_iterations"].default == 100

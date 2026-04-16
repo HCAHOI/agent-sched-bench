@@ -12,5 +12,4 @@ class Evidence:
     source_url: str
     passage: str
     relevance_note: str
-    search_query: str
     fetch_timestamp: float

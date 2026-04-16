@@ -1146,6 +1146,15 @@ async def simulate(
                         len(samples),
                         prepared.task_output_dir / "resources.json",
                     )
+            elif prepared.task_output_dir is not None:
+                # Host-mode replay has no container sampler; emit a canonical
+                # empty resources.json so downstream consumers can rely on
+                # the file always existing.
+                attempt_layout.write_resources_json(
+                    prepared.task_output_dir,
+                    samples=[],
+                    summary=summarize_samples([]),
+                )
             ctr = prepared.container
             if ctr is None:
                 continue

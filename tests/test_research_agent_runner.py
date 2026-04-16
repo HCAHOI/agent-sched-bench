@@ -606,6 +606,34 @@ def test_research_agent_tool_actions_use_canonical_keys(tmp_path: Path) -> None:
         assert "result" not in data, "tool_exec must not emit non-canonical 'result' key"
 
 
+def test_research_agent_empty_final_answer_marked_unsuccessful(tmp_path: Path) -> None:
+    """Regression: synthesize returning empty/whitespace must downgrade to
+    exit_status=empty_final_response and success=False.
+
+    Previously, run_task derived success solely from exit_status == "completed",
+    so an empty model output still recorded a successful attempt and inflated
+    success metrics.
+    """
+    # Plan returns 1 query; extract returns 1 evidence; synthesize returns "".
+    client = _MockClient(["query one", _EXTRACT_RESPONSE, "   \n  "])
+    runner = _build_runner(client)
+    ctx = _make_attempt_ctx(tmp_path)
+    task = _make_task()
+
+    search_patch, fetch_patch = _patch_tools_no_network()
+    with search_patch, fetch_patch:
+        result = asyncio.run(
+            runner.run_task(task, attempt_ctx=ctx, prompt_template="default")
+        )
+
+    assert result.success is False
+    assert result.exit_status == "empty_final_response"
+    records = _read_trace(ctx.attempt_dir)
+    summary = next(r for r in records if r.get("type") == "summary")
+    assert summary["success"] is False
+    assert summary["final_answer"] == ""
+
+
 def test_research_agent_summary_includes_model(tmp_path: Path) -> None:
     """Regression: trace summary must carry `model` so simulator can attribute
     source_model instead of falling back to "unknown"."""

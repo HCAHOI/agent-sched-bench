@@ -393,7 +393,6 @@ class ExtractPhase:
                     source_url=str(obj.get("source_url", "")),
                     passage=str(obj.get("passage", "")),
                     relevance_note=str(obj.get("relevance_note", "")),
-                    search_query="",
                     fetch_timestamp=0.0,
                 ))
             except (json.JSONDecodeError, TypeError):

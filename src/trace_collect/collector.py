@@ -500,8 +500,6 @@ async def collect_traces(
     provider_name: str | None = None,
     env_key: str | None = None,
     max_iterations: int = 100,
-    command_timeout_s: float = 120.0,
-    task_timeout_s: float = 1200.0,
     sample: int | None = None,
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
@@ -528,14 +526,6 @@ async def collect_traces(
         execution_environment == "container" or runtime_mode == "task_container_agent"
     ) and container_executable is None:
         raise ValueError("--container required for container-mode benchmarks")
-    if command_timeout_s != 120.0:
-        raise ValueError(
-            "--command-timeout is only supported by the removed legacy scaffold"
-        )
-    if task_timeout_s != 1200.0:
-        raise ValueError(
-            "--task-timeout is only supported by the removed legacy scaffold"
-        )
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
     runner = None

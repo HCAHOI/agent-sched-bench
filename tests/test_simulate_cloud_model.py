@@ -480,6 +480,17 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
     assert tool_records[0]["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
     assert summary["success"] is True
 
+    # Regression: host-mode replay must still emit an empty resources.json so
+    # downstream consumers can rely on canonical simulate layout.
+    attempt_dir = (tmp_path / "out" / "host-task" / "attempt_1")
+    resources_path = attempt_dir / "resources.json"
+    assert resources_path.exists(), (
+        "host-mode replay must write resources.json even without a sampler"
+    )
+    payload = json.loads(resources_path.read_text())
+    assert payload["samples"] == []
+    assert payload["summary"]["sample_count"] == 0
+
 
 def test_cloud_model_host_trace_skips_mcp_tools(
     monkeypatch: pytest.MonkeyPatch,

@@ -39,8 +39,6 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--benchmark` | no | `swe-bench-verified` | Slug from `configs/benchmarks/<slug>.yaml` |
 | `--mcp-config` | **yes for openclaw** | `None` | YAML path or literal `none` |
 | `--max-iterations` | no | `100` | Max agent loop iterations per task |
-| `--command-timeout` | no | `120.0` | Seconds per bash command |
-| `--task-timeout` | no | `1200.0` | Seconds per task overall |
 | `--sample` | no | all | Run only first N tasks |
 | `--instance-ids` | no | all | Comma-separated instance IDs |
 | `--max-context-tokens` | no | `256000` | Sliding window token budget |

@@ -24,18 +24,6 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum agent iterations per task.",
     )
     parser.add_argument(
-        "--command-timeout",
-        type=float,
-        default=120.0,
-        help="Timeout in seconds per bash command.",
-    )
-    parser.add_argument(
-        "--task-timeout",
-        type=float,
-        default=1200.0,
-        help="Timeout in seconds per task overall.",
-    )
-    parser.add_argument(
         "--benchmark",
         default="swe-bench-verified",
         help=(
@@ -345,8 +333,6 @@ def _run_collect(args: argparse.Namespace) -> None:
             model=provider_config.model,
             benchmark=benchmark,
             max_iterations=args.max_iterations,
-            command_timeout_s=args.command_timeout,
-            task_timeout_s=args.task_timeout,
             sample=args.sample,
             instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
             run_id=args.run_id,

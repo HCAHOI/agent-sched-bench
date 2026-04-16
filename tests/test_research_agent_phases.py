@@ -250,7 +250,6 @@ def test_synthesize_phase_uses_evidence() -> None:
             source_url="https://a.com",
             passage="fact A",
             relevance_note="key",
-            search_query="q",
             fetch_timestamp=100.0,
         ),
     ]
