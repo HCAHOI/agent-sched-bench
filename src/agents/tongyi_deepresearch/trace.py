@@ -27,6 +27,7 @@ for the duration of a single task, then restores module state.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 import uuid
@@ -163,6 +164,7 @@ class TracedStreamingOpenAI:
         backoff_base_s: float = 1.0,
         call_counter: list[int] | None = None,
         retry_state: dict[str, Any] | None = None,
+        llm_iteration_start_fn: Callable[[], int] | None = None,
     ) -> None:
         self._real = openai.OpenAI(
             api_key=api_key,
@@ -175,6 +177,7 @@ class TracedStreamingOpenAI:
         self._iteration_provider = iteration_provider
         self._max_transport_retries = max_transport_retries
         self._backoff_base_s = backoff_base_s
+        self._llm_iteration_start_fn = llm_iteration_start_fn
 
         # Runner-injected shared state so action_ids + retry-linkage survive
         # vendor constructing a fresh OpenAI client per call_server invocation.
@@ -207,7 +210,10 @@ class TracedStreamingOpenAI:
     ) -> _DuckChatResponse:
         logical_turn_id = _new_turn_id()
         action_id = self._next_action_id()
-        iteration = self._iteration_provider()
+        if self._llm_iteration_start_fn is not None:
+            iteration = self._llm_iteration_start_fn()
+        else:
+            iteration = self._iteration_provider()
 
         # Model-layer retry detection: vendor retries when prior content was empty
         retry_of: str | None = None
@@ -401,52 +407,100 @@ def make_traced_tool_class(
     and per-runner context across multiple tool subclasses without globals.
     """
 
-    class _Traced(base_cls):  # type: ignore[misc, valid-type]
-        def call(self, params: Any, **kwargs: Any) -> str:  # noqa: ANN401
-            action_counter[0] += 1
-            action_id = f"tool_{action_counter[0]}"
-            ts_start = time.time()
-            mono_start = time.monotonic()
-            try:
-                result = super().call(params, **kwargs)
-                error: str | None = None
-            except Exception as exc:  # noqa: BLE001
-                result = f"Error: {exc}"
-                error = str(exc)
-            mono_end = time.monotonic()
-            ts_end = time.time()
-            duration_ms = (mono_end - mono_start) * 1000.0
+    def _safe_tool_args(params: Any) -> Any:
+        # Vendor's custom_call_tool aliases tool_args as tool_args["params"]
+        # (self-reference), which breaks json.dumps serialization inside
+        # the trace logger. Strip the self-ref before recording.
+        if isinstance(params, dict):
+            return {
+                k: v for k, v in params.items()
+                if not (k == "params" and v is params)
+            }
+        return {"raw": str(params)}
 
-            # Vendor's custom_call_tool aliases tool_args as tool_args["params"]
-            # (self-reference), which breaks json.dumps serialization inside
-            # the trace logger. Strip the self-ref before recording.
-            safe_args: Any
-            if isinstance(params, dict):
-                safe_args = {
-                    k: v for k, v in params.items()
-                    if not (k == "params" and v is params)
-                }
-            else:
-                safe_args = {"raw": str(params)}
+    def _next_tool_action_id() -> str:
+        action_counter[0] += 1
+        return f"tool_{action_counter[0]}"
 
-            emit_fn(TraceAction(
-                action_type="tool_exec",
-                action_id=action_id,
-                agent_id=agent_id,
-                instance_id=instance_id,
-                iteration=iteration_provider(),
-                ts_start=ts_start,
-                ts_end=ts_end,
-                data={
-                    "tool_name": getattr(self, "name", base_cls.__name__.lower()),
-                    "tool_args": safe_args,
-                    "tool_result": result if isinstance(result, str) else str(result),
-                    "duration_ms": duration_ms,
-                    "error": error,
-                    "logical_turn_id": None,  # Tools sit outside the LLM-turn scope
-                },
-            ))
-            return result
+    def _emit_tool_action(
+        *,
+        tool_name: str,
+        action_id: str,
+        params: Any,
+        result: Any,
+        error: str | None,
+        ts_start: float,
+        mono_start: float,
+    ) -> None:
+        mono_end = time.monotonic()
+        ts_end = time.time()
+        duration_ms = (mono_end - mono_start) * 1000.0
+        emit_fn(TraceAction(
+            action_type="tool_exec",
+            action_id=action_id,
+            agent_id=agent_id,
+            instance_id=instance_id,
+            iteration=iteration_provider(),
+            ts_start=ts_start,
+            ts_end=ts_end,
+            data={
+                "tool_name": tool_name,
+                "tool_args": _safe_tool_args(params),
+                "tool_result": result if isinstance(result, str) else str(result),
+                "duration_ms": duration_ms,
+                "success": error is None,
+                "error": error,
+                "logical_turn_id": None,  # Tools sit outside the LLM-turn scope
+            },
+        ))
+
+    if inspect.iscoroutinefunction(getattr(base_cls, "call", None)):
+
+        class _Traced(base_cls):  # type: ignore[misc, valid-type]
+            async def call(self, params: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+                action_id = _next_tool_action_id()
+                ts_start = time.time()
+                mono_start = time.monotonic()
+                try:
+                    result = await super().call(params, **kwargs)
+                    error: str | None = None
+                except Exception as exc:  # noqa: BLE001
+                    result = f"Error: {exc}"
+                    error = str(exc)
+                _emit_tool_action(
+                    tool_name=getattr(self, "name", base_cls.__name__.lower()),
+                    action_id=action_id,
+                    params=params,
+                    result=result,
+                    error=error,
+                    ts_start=ts_start,
+                    mono_start=mono_start,
+                )
+                return result
+
+    else:
+
+        class _Traced(base_cls):  # type: ignore[misc, valid-type]
+            def call(self, params: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+                action_id = _next_tool_action_id()
+                ts_start = time.time()
+                mono_start = time.monotonic()
+                try:
+                    result = super().call(params, **kwargs)
+                    error: str | None = None
+                except Exception as exc:  # noqa: BLE001
+                    result = f"Error: {exc}"
+                    error = str(exc)
+                _emit_tool_action(
+                    tool_name=getattr(self, "name", base_cls.__name__.lower()),
+                    action_id=action_id,
+                    params=params,
+                    result=result,
+                    error=error,
+                    ts_start=ts_start,
+                    mono_start=mono_start,
+                )
+                return result
 
     _Traced.__name__ = f"Traced{base_cls.__name__}"
     return _Traced

@@ -4,6 +4,23 @@
 **Consensus**: Planner → Architect (APPROVE-with-polish) → Critic v2→v3 ITERATE(8) → v3' → v5 (user simplifications) → v6 ITERATE(3) → v6 Critic APPROVE
 **Status**: ALL R3 phases A, B, C, D, E, G, I, H2, J, F **COMPLETE** (2026-04-16). Homegrown multi-phase scaffold hard-deleted per R3 Principle #3; zero residual references outside this `docs/CURRENT_PLAN.md` R2_DEPRECATED archive section.
 
+## 2026-04-16 PR #13 latest review triage addendum
+
+- Scope: classify the newest PR #13 comments after head commit `34dea38`.
+- Source reviews: Codex `4120399181`, Gemini `4120407885`.
+- Must-fix in repo-owned code:
+  - Increment Tongyi iteration state per model turn so multi-turn traces do not collapse to `iteration=0`.
+  - Emit canonical `success` on Tongyi `tool_exec` actions so downstream tooling does not treat successful tool calls as failures.
+  - Preserve async tool behavior in the traced tool wrapper; current sync-only wrapper can mis-trace async vendored tools such as `parse_file`.
+- Real vendor/runtime risks:
+  - Guard empty `SANDBOX_FUSION_ENDPOINTS` before `random.choice(...)` in `vendor/tool_python.py`.
+  - Prevent missing-key fallback in `vendor/file_tools/file_parser.py` when IDP parsing fails for formats without parser entries.
+- Not recommended to fix for this round:
+  - Module-level `@staticmethod` in `vendor/tool_visit.py` is not a bug on the supported Python floor (`>=3.11`).
+  - Retry-loop attempt-count mismatch and per-URL timeout message wording in vendor files are minor polish only.
+- Architect re-review verdict:
+  - Upgrade the two vendor/runtime risks above to must-fix if the scaffold continues to expose `PythonInterpreter` and `parse_file` as callable tools in prompt / `TOOL_CLASS`.
+
 ### Phase log (most recent first)
 
 | Phase | Commit | Notes |

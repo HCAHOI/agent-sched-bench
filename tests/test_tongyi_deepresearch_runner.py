@@ -226,3 +226,60 @@ async def test_vendor_monkey_patch_restored_after_run(tmp_path):
     assert vendor.OpenAI is orig_openai
     assert [id(t) for t in vendor.TOOL_CLASS] == orig_tool_class_ids
     assert vendor.MultiTurnReactAgent.count_tokens is orig_count_tokens
+
+
+@pytest.mark.asyncio
+async def test_run_task_increments_iteration_per_llm_turn_and_marks_tool_success(
+    tmp_path,
+    monkeypatch,
+):
+    """Multi-turn Tongyi traces should advance iteration and preserve tool success."""
+    from agents.tongyi_deepresearch.vendor.tool_search import Search
+
+    ctx = _make_attempt_ctx(tmp_path, instance_id="inst-iters")
+
+    responses = [
+        (
+            "<think>search first</think>"
+            '<tool_call>{"name":"search","arguments":{"query":["asyncio event loop"]}}</tool_call>'
+        ),
+        "<think>done</think><answer>final answer</answer>",
+    ]
+    call_idx = {"i": 0}
+
+    def script():
+        content = responses[call_idx["i"]]
+        call_idx["i"] += 1
+        yield _delta_chunk(content, finish_reason="stop")
+        yield _usage_chunk(8, 4)
+
+    monkeypatch.setattr(Search, "call", lambda self, params, **kwargs: "search results")
+
+    runner = TongyiDeepResearchRunner(
+        model="fake-model",
+        api_base="http://fake",
+        api_key="k",
+        max_iterations=5,
+        benchmark_slug="deep-research-bench",
+    )
+    with _install_fake_openai(script):
+        result = await runner.run_task(
+            ctx.task,
+            attempt_ctx=ctx,
+            prompt_template="default",
+        )
+
+    assert result.exit_status == "completed", result.error
+    records = [
+        json.loads(line)
+        for line in result.trace_path.read_text().splitlines()
+        if line.strip()
+    ]
+    actions = [r for r in records if r.get("type") == "action"]
+    llm_calls = [r for r in actions if r.get("action_type") == "llm_call"]
+    tool_execs = [r for r in actions if r.get("action_type") == "tool_exec"]
+
+    assert [r["iteration"] for r in llm_calls] == [0, 1]
+    assert len(tool_execs) == 1
+    assert tool_execs[0]["iteration"] == 0
+    assert tool_execs[0]["data"]["success"] is True

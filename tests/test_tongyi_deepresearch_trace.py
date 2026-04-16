@@ -7,7 +7,6 @@ retry with shared logical_turn_id, tool-exec TraceAction emission.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import patch
 
 import openai
@@ -290,6 +289,7 @@ def test_traced_tool_emits_tool_exec_with_canonical_keys(capture_emits, iter_pro
     assert act.data["tool_args"] == {"query": "Python asyncio"}
     assert act.data["tool_result"].startswith("result for")
     assert act.data["duration_ms"] >= 0.0
+    assert act.data["success"] is True
     assert act.data["error"] is None
 
 
@@ -318,5 +318,42 @@ def test_traced_tool_captures_exceptions_without_reraising(capture_emits, iter_p
 
     assert result.startswith("Error:")
     act = next(a for a in captured if a.action_type == "tool_exec")
+    assert act.data["success"] is False
     assert act.data["error"] == "boom"
     assert act.data["tool_name"] == "visit"
+
+
+@pytest.mark.asyncio
+async def test_traced_async_tool_preserves_async_result_and_emits_success(
+    capture_emits,
+    iter_provider,
+):
+    """Async vendored tools should still trace real results and wall time."""
+    captured, emit = capture_emits
+    get_iter, _ = iter_provider
+
+    class _AsyncTool:
+        name = "parse_file"
+
+        async def call(self, params, **kwargs):
+            return ["parsed page"]
+
+    TracedAsync = make_traced_tool_class(
+        _AsyncTool,
+        emit_fn=emit,
+        agent_id="A",
+        instance_id="I",
+        iteration_provider=get_iter,
+        action_counter=[0],
+    )
+
+    tool = TracedAsync()
+    result = await tool.call({"files": ["paper.pdf"]}, file_root_path="/tmp")
+
+    assert result == ["parsed page"]
+    act = next(a for a in captured if a.action_type == "tool_exec")
+    assert act.data["tool_name"] == "parse_file"
+    assert act.data["tool_args"] == {"files": ["paper.pdf"]}
+    assert act.data["tool_result"] == "['parsed page']"
+    assert act.data["success"] is True
+    assert act.data["error"] is None

@@ -1,14 +1,13 @@
 import re
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, Optional, Union, Any
 import json5
 from qwen_agent.tools.base import BaseToolWithFileAccess, register_tool
 from qwen_agent.utils.utils import extract_code
-from sandbox_fusion import run_code, RunCodeRequest, RunStatus
+from sandbox_fusion import run_code, RunCodeRequest
 from requests.exceptions import Timeout
 import os
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 CHINESE_CHAR_RE = re.compile(r'[\u4e00-\u9fff]')
 
 
@@ -22,7 +21,11 @@ SANDBOX_FUSION_ENDPOINTS = []
 
 # Fallback to single endpoint if environment variable exists
 if 'SANDBOX_FUSION_ENDPOINT' in os.environ:
-    SANDBOX_FUSION_ENDPOINTS = os.environ['SANDBOX_FUSION_ENDPOINT'].split(',')
+    SANDBOX_FUSION_ENDPOINTS = [
+        endpoint.strip()
+        for endpoint in os.environ['SANDBOX_FUSION_ENDPOINT'].split(',')
+        if endpoint.strip()
+    ]
 
 
 @register_tool('PythonInterpreter', allow_overwrite=True)
@@ -73,6 +76,8 @@ class PythonInterpreter(BaseToolWithFileAccess):
         try:
             code=params
             last_error = None
+            if not SANDBOX_FUSION_ENDPOINTS:
+                return '[Python Interpreter Error]: No sandbox fusion endpoints configured.'
             for attempt in range(8):
                 try:
                     # Randomly sample an endpoint for each attempt
@@ -87,12 +92,12 @@ class PythonInterpreter(BaseToolWithFileAccess):
                     if code_result.run_result.stderr:
                         result.append(f"stderr:\n{code_result.run_result.stderr}")
                     if code_result.run_result.execution_time >= timeout-1:
-                        result.append(f"[PythonInterpreter Error] TimeoutError: Execution timed out.")
+                        result.append("[PythonInterpreter Error] TimeoutError: Execution timed out.")
                     result = '\n'.join(result)
                     print('SUCCESS RUNNING TOOL')
                     return result if result.strip() else 'Finished execution.'
 
-                except Timeout as e:
+                except Timeout:
                     last_error = f'[Python Interpreter Error] TimeoutError: Execution timed out on endpoint {endpoint}.'
                     print(f"Timeout on attempt {attempt + 1}: {last_error}")
                     if attempt == 4:  # Last attempt
@@ -144,7 +149,7 @@ class PythonInterpreter(BaseToolWithFileAccess):
             execution_time = end_time - start_time
             return True, result if result.strip() else 'Finished execution.', execution_time
 
-        except Timeout as e:
-            return False, f'[Python Interpreter Error] TimeoutError: Execution timed out.', None
+        except Timeout:
+            return False, '[Python Interpreter Error] TimeoutError: Execution timed out.', None
         except Exception as e:
             return False, f'[Python Interpreter Error]: {str(e)}', None

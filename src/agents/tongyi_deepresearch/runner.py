@@ -26,7 +26,6 @@ import contextlib
 import logging
 import os
 import threading
-import time
 from typing import Any
 
 from agents.base import TraceAction
@@ -82,6 +81,11 @@ def _ensure_visit_summarizer_env(api_key: str, api_base: str, model: str) -> Non
     os.environ.setdefault("SUMMARY_MODEL_NAME", model)
 
 
+def _advance_iteration(iteration_state: dict[str, int]) -> int:
+    iteration_state["current"] += 1
+    return iteration_state["current"]
+
+
 def _approx_tokens_of_messages(messages: list[dict[str, Any]]) -> int:
     """Approximate total token count across message contents via tiktoken."""
     total = 0
@@ -101,6 +105,7 @@ def _patched_vendor(
     agent_id: str,
     instance_id: str,
     iteration_provider,
+    llm_iteration_start_fn,
     max_llm_calls: int,
 ):
     """Patch vendor module globals for the duration of one run_task.
@@ -164,6 +169,7 @@ def _patched_vendor(
                 agent_id=agent_id,
                 instance_id=instance_id,
                 iteration_provider=iteration_provider,
+                llm_iteration_start_fn=llm_iteration_start_fn,
                 call_counter=llm_call_counter,
                 retry_state=llm_retry_state,
             )
@@ -251,14 +257,14 @@ class TongyiDeepResearchRunner:
         )
 
         actions: list[TraceAction] = []
-        iteration_state = {"i": 0}
+        iteration_state = {"current": -1}
 
         def emit(action: TraceAction) -> None:
             actions.append(action)
             trace_logger.log_trace_action(agent_id, action)
 
         def iteration_provider() -> int:
-            return iteration_state["i"]
+            return max(iteration_state["current"], 0)
 
         _ensure_vendor_env_aliases()
         _ensure_visit_summarizer_env(self.api_key, self.api_base, self.model)
@@ -286,6 +292,7 @@ class TongyiDeepResearchRunner:
                     agent_id=agent_id,
                     instance_id=instance_id,
                     iteration_provider=iteration_provider,
+                    llm_iteration_start_fn=lambda: _advance_iteration(iteration_state),
                     max_llm_calls=self.max_iterations,
                 ):
                     agent = vendor.MultiTurnReactAgent(
@@ -302,9 +309,6 @@ class TongyiDeepResearchRunner:
                         "item": {"question": task_prompt, "answer": ""},
                         "planning_port": 0,  # vendor reads this for base_url, shim ignores
                     }
-                    # Iteration counter stays at 0 for all spans; summary aggregates
-                    # by logical_turn_id per R3 Principle #2 (n_turns = distinct turn IDs,
-                    # not distinct iteration).
                     return agent._run(data, self.model)
 
             result = await asyncio.to_thread(_sync_run)

@@ -4,7 +4,6 @@ import re
 import time
 import zipfile
 import math
-from pathlib import Path
 
 from typing import Any, Dict, List, Optional, Union
 from collections import Counter
@@ -17,7 +16,7 @@ import pandas as pd
 from tabulate import tabulate
 from qwen_agent.log import logger
 from qwen_agent.settings import DEFAULT_WORKSPACE, DEFAULT_MAX_INPUT_TOKENS
-from qwen_agent.tools.base import BaseTool, register_tool
+from qwen_agent.tools.base import BaseTool
 from qwen_agent.tools.storage import KeyNotExistsError, Storage
 from .utils import (get_file_type, hash_sha256, is_http_url, get_basename_from_url, 
                                   sanitize_chrome_file_path, save_url_to_local_work_dir)
@@ -523,14 +522,21 @@ class SingleFileParser(BaseTool):
         if file_type not in idp_types:
             file_type = get_basename_from_url(file_path).split('.')[-1].lower()
 
+        parser = self.parsers.get(file_type)
         try:
             if USE_IDP and file_type in idp_types:
                 try:
                     results = parse_file_by_idp(file_path=file_path)
                 except Exception as e:
-                    results = self.parsers[file_type](file_path)
+                    if parser is None:
+                        raise FileParserError(
+                            f"No parser available for file type: {file_type}"
+                        ) from e
+                    results = parser(file_path)
             else:
-                results = self.parsers[file_type](file_path)
+                if parser is None:
+                    raise FileParserError(f"No parser available for file type: {file_type}")
+                results = parser(file_path)
             tokens = 0
             for page in results:
                 for para in page['content']:
@@ -541,12 +547,14 @@ class SingleFileParser(BaseTool):
                     tokens += para['token']
 
             if not results or not tokens:
-                logger.error(f"Parsing failed: No information was parsed")
+                logger.error("Parsing failed: No information was parsed")
                 raise FileParserError("Document parsing failed")
             else:
                 self._cache_result(file_path, results)
                 return results
         except Exception as e:
+            if isinstance(e, FileParserError):
+                raise
             logger.error(f"Parsing failed: {str(e)}")
             raise FileParserError("Document parsing failed", exception=e)
 
