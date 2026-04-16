@@ -1,5 +1,11 @@
 """Tongyi-DeepResearch scaffold (vendored from Alibaba-NLP/DeepResearch).
 
-Phase A/B skeleton: package discovery only. Runner export lands in Phase D
-per R3 plan (docs/CURRENT_PLAN.md).
+Ralplan R3: exports ``TongyiDeepResearchRunner`` as the sole public entrypoint.
+Vendor source lives under ``vendor/`` and is pinned at SHA
+``f72f75d8c3eb842f2bbbab096a12206ff66e270f``. See ``VENDOR_NOTES.md`` for the
+patch audit trail.
 """
+
+from agents.tongyi_deepresearch.runner import TongyiDeepResearchRunner
+
+__all__ = ["TongyiDeepResearchRunner"]

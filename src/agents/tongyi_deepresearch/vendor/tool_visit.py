@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Union
 import requests
 from qwen_agent.tools.base import BaseTool, register_tool
-from prompt import EXTRACTOR_PROMPT 
+from .prompt import EXTRACTOR_PROMPT
 from openai import OpenAI
 import random
 from urllib.parse import urlparse, unquote

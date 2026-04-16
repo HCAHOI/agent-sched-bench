@@ -42,59 +42,69 @@ Recompute with `shasum -a 256 vendor/*.py` to re-verify.
 All four buckets are at **zero LOC** at Phase A+B completion. Patches land in
 Phase C (separate ralph run per user directive). Tracked here for audit.
 
-| Bucket | Description | Phase B LOC | Target phase |
-|--------|-------------|------------:|--------------|
-| A: trace-hook emit        | Insert TraceAction emits at `call_server` and each tool `call()` | 0 | Phase C |
-| B: streaming shim         | `call_server` streaming + TTFT/TPOT capture | 0 | Phase C |
-| C: TOOL_CLASS+import prune | Remove imports/registry entries for unvendored tools (`FileParser`, `Scholar`, `PythonInterpreter`) | 0 | Phase C |
+| Bucket | Description | Actual LOC (+/-) | Applied in |
+|--------|-------------|------------------|------------|
+| A: trace-hook emit        | TraceAction emits at LLM + tool call sites | **0 / 0** | Adapter-side (zero vendor patch; adapter monkey-patches `vendor.OpenAI` and `vendor.TOOL_CLASS` with traced equivalents) |
+| B: streaming shim         | `call_server` streaming + TTFT/TPOT capture | **0 / 0** | Adapter-side (internal to TracedStreamingOpenAI) |
+| C: TOOL_CLASS+imports prune + dead code | Drop `FileParser/Scholar/PythonInterpreter` imports + registry entries; drop dead `python` / `parse_file` branches in `_run` + `custom_call_tool`; drop unused `import asyncio` | **7 / 44** (US-C1) | Phase C |
+| D: package-import fix     | `from prompt import *` → `from .prompt import *` and analogous for `tool_search`, `tool_visit`, `tool_visit`'s `EXTRACTOR_PROMPT` | **4 / 1** (US-C1) | Phase C |
+
+Total vendor patch footprint as of Phase C completion: **11 additions, 45 deletions** across 2 files (`react_agent.py`, `tool_visit.py`). No numerical LOC hard limit per user directive; recorded here for audit.
 
 Note: `logical_turn_id` is **not** a patch bucket — per R3 Principle #2, it
 is generated in the runner adapter (Phase D), not injected into vendor code.
 Vendor source stays turn-semantics-agnostic.
 
-## Phase B import smoke (from Story US-B2, 2026-04-16 conda env `ML`)
+### Adapter-side zero-patch strategy (Phase C design refinement)
 
-Command: `PYTHONPATH=src conda run -n ML python -c "import <module>"` for each target.
+R3 originally budgeted Bucket A + B as vendor patches. During Phase C kickoff
+it was realized `vendor.OpenAI` and `vendor.TOOL_CLASS` are **module-level
+attributes**, so the adapter (Phase D) can monkey-patch them with traced
+equivalents. This eliminates ~70 LOC of vendor patch and moves trace logic
+entirely into the adapter layer, maximizing fidelity preservation. Vendor
+source only changes for the two concerns that cannot live in the adapter:
+(C) runtime-unresolvable imports of unvendored tool files, and (D) package
+layout mismatch (file-local imports).
 
-| Module | Result | Notes |
-|--------|--------|-------|
-| `agents.tongyi_deepresearch` | OK | Top-level package discovered via `src` pythonpath |
-| `agents.tongyi_deepresearch.vendor` | OK | Vendor submodule |
-| `agents.tongyi_deepresearch.vendor.prompt` | OK | No external deps; standalone strings/constants |
-| `agents.tongyi_deepresearch.vendor.tool_search` | OK | Imports resolve (incl. any stdlib/requests) |
-| `agents.tongyi_deepresearch.vendor.react_agent` | **FAIL** | `ModuleNotFoundError: No module named 'prompt'` — file-local `from prompt import *` assumes CWD-style sibling resolution, breaks under package import |
-| `agents.tongyi_deepresearch.vendor.tool_visit` | **FAIL** | Same `ModuleNotFoundError` — also uses `from prompt import *` |
+### Known trace coverage gap: Visit tool's summarization LLM
 
-### Phase C follow-up (new bucket discovered in Phase B)
+`vendor/tool_visit.py` defines its own `Visit.call_server()` method that makes
+a **separate LLM call** to a summarization model via the env-configured
+`API_KEY` / `API_BASE` / `SUMMARY_MODEL_NAME` endpoint, using a raw
+`openai.OpenAI()` client (not via our monkey-patched `TracedStreamingOpenAI`).
+These extractor calls happen every time the Visit tool successfully fetches a
+page through Jina Reader, to distill webpage content into evidence.
 
-The 2 failing files share a single root cause: upstream assumes execution
-from the `inference/` working directory, so `from prompt import *` resolves
-as a file-local sibling import. Under a Python package layout, this is
-invalid. Phase C must patch these with package-relative imports
-(`from .prompt import *` or explicit symbol imports).
+**Implication**: `summary.total_llm_ms` and `n_turns` under-report by the
+wall-ms and call count of these extractor LLM calls. The Visit tool's total
+wall time (including the sub-call) is correctly captured in the tool_exec
+TraceAction's `duration_ms`, so the upstream-facing latency is right, but the
+LLM-call breakdown inside the tool is opaque.
 
-Same issue likely applies to any `from tool_search import ...` /
-`from tool_visit import ...` style imports — Phase C must audit all
-cross-file imports in the 4 vendored files and convert to package-relative.
+Why not trace it: the extractor is an implementation detail of the Visit tool,
+not a ReAct turn, and tracing it would require a second vendor patch. For
+scheduling analysis at the ReAct-turn granularity, this is acceptable (the
+wall time is still attributed). If future research needs visibility into the
+extractor latency distribution, the adapter can patch vendor_tool_visit's
+inner `OpenAI` import the same way the main ReAct loop patches it.
 
-**New patch bucket (added to Phase C scope)**:
+## Import smoke (conda env `ML`, command `PYTHONPATH=src conda run -n ML python -c "import <module>"`)
 
-| Bucket | Description | Est. LOC |
-|--------|-------------|---------:|
-| D: package-import fix | Convert file-local imports (`from prompt import *`, `from tool_search import Search`, etc.) to package-relative (`from .prompt import *`, `from .tool_search import Search`) in `react_agent.py` and `tool_visit.py` | ~5-10 |
+| Module | Phase B (pre-patch) | Phase C (post-patch) |
+|--------|---------------------|----------------------|
+| `agents.tongyi_deepresearch`                    | OK | OK |
+| `agents.tongyi_deepresearch.vendor`             | OK | OK |
+| `agents.tongyi_deepresearch.vendor.prompt`      | OK | OK |
+| `agents.tongyi_deepresearch.vendor.tool_search` | OK | OK |
+| `agents.tongyi_deepresearch.vendor.react_agent` | FAIL (`ModuleNotFoundError: prompt`) | **OK** (after Bucket D) |
+| `agents.tongyi_deepresearch.vendor.tool_visit`  | FAIL (`ModuleNotFoundError: prompt`) | **OK** (after Bucket D) |
 
-This is a tiny, mechanical patch. Does not affect upstream fidelity semantically
-(symbols resolve to the same objects); it only adapts the import syntax to
-match the vendor package layout. Patch diff will be recorded verbatim in
-Phase C.
+### Qwen-agent dep status (resolved in Phase C)
 
-### Qwen-agent dep status: NOT YET CONFIRMED
-
-Because `react_agent.py` fails at the `from prompt import *` line (very near
-top of file), we did NOT reach its `from qwen_agent...` imports this pass.
-Phase C should re-run import smoke after the package-import fix; if
-`qwen-agent==0.0.26` is absent from conda env `ML`, that failure surfaces
-then and becomes Pre-mortem #1 material.
+`qwen-agent==0.0.34` is installed in conda env `ML` (newer than R3's original
+`==0.0.26` pin; API-compatible based on successful vendor import). Pre-mortem
+scenario #1 (dep conflict) did not fire. No install/pin adjustments needed
+for downstream phases.
 
 ## Deprecation / deletion tracker
 
