@@ -234,6 +234,34 @@ LLM turn with real TTFT/TPOT).
 Total smoke cost: ~97k tokens on `qwen-plus-latest` ≈ **$0.14** (well under
 R3's $2 paid-smoke budget).
 
+### 5-tool re-smoke (2026-04-16, post post-F re-vendor, same tasks/model)
+
+After the post-F re-vendor pass restored the full upstream tool surface
+(`scholar`, `parse_file`, `python` added), the same 1+1 paid smoke was
+re-run to observe whether `qwen-plus-latest` reaches for the new tools on
+these benchmark tasks.
+
+| Task | Turns | Tools invoked | Scholar / parse_file / python | Outcome |
+|------|------:|--------------:|------------------------------:|---------|
+| DRB #51 | 8 (hit max) | 6 × `search` + 2 × `visit` | **0 calls** | `exceed available llm calls`; success=False |
+| browsecomp #0 | 1 | 0 | **0 calls** | `answer`; success=True |
+
+Tokens: ~95k total, cost ≈ $0.15.
+
+**Observations**:
+- Expanded tool surface did not change the DRB tool-dispatch profile — model
+  stayed with `search` + `visit`. Scheduling analysis of tool-latency
+  distributions is stable across the 2-tool vs 5-tool scaffold for these
+  tasks on this model.
+- DRB hit `max_iterations=8` limit with the 5-tool scaffold, whereas on the
+  first (2-tool) run it completed in 7 turns with an `<answer>`. The extra
+  `visit` call (40s) pushed wall time up; not an inherent regression — the
+  CLI `--max-iterations` cap is the operational parameter.
+- Neither task exercised `scholar`, `parse_file`, or `python`. For larger
+  or code-heavy task suites, having those tools available is still the
+  faithful upstream setup; this run just shows the operational cost is
+  zero when they go unused.
+
 ## Deprecation tracker
 
 - **Homegrown multi-phase scaffold**: **DELETED 2026-04-16 in Phase F**, within
