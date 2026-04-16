@@ -288,6 +288,7 @@ class TracedStreamingOpenAI:
             logical_turn_id=logical_turn_id,
             parent_action_id=action_id,
             error=last_err,
+            messages_in=messages,
             terminal=True,
         )
         raise RateLimitExhausted(f"Transport retries exhausted after {self._max_transport_retries + 1} attempts: {last_err!r}")
@@ -391,9 +392,19 @@ class TracedStreamingOpenAI:
         logical_turn_id: str,
         parent_action_id: str,
         error: Exception | None,
+        messages_in: list[dict[str, Any]] | None = None,
         terminal: bool = False,
     ) -> None:
         ts = time.time()
+        data = {
+            "transport_retry": True,
+            "transport_retry_terminal": terminal,
+            "parent_action_id": parent_action_id,
+            "logical_turn_id": logical_turn_id,
+            "error": f"{type(error).__name__}: {error}" if error else None,
+        }
+        if terminal and messages_in is not None:
+            data["messages_in"] = messages_in
         self._emit(TraceAction(
             action_type="llm_call",
             action_id=action_id,
@@ -402,13 +413,7 @@ class TracedStreamingOpenAI:
             iteration=iteration,
             ts_start=ts,
             ts_end=ts,
-            data={
-                "transport_retry": True,
-                "transport_retry_terminal": terminal,
-                "parent_action_id": parent_action_id,
-                "logical_turn_id": logical_turn_id,
-                "error": f"{type(error).__name__}: {error}" if error else None,
-            },
+            data=data,
         ))
 
 

@@ -754,6 +754,99 @@ def test_local_model_host_trace_replays_mcp_tool_timing(
     assert tool_record["data"]["success"] is True
 
 
+def test_local_model_terminal_transport_retry_marks_failed_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "trace_format_version": 5,
+                        "scaffold": "tongyi-deepresearch",
+                        "instance_id": "task-a",
+                        "model": "source-model",
+                        "execution_environment": "host",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0_transport_exhausted",
+                        "agent_id": "task-a",
+                        "iteration": 0,
+                        "ts_start": 100.0,
+                        "ts_end": 100.0,
+                        "data": {
+                            "transport_retry": True,
+                            "transport_retry_terminal": True,
+                            "messages_in": [{"role": "user", "content": "fail please"}],
+                            "error": "APIConnectionError: boom",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "summary",
+                        "agent_id": "task-a",
+                        "model": "source-model",
+                        "success": False,
+                        "n_iterations": 1,
+                        "elapsed_s": 0.0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_host_tasks(task_source, "task-a")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("terminal transport retry should not invoke local model")
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("host-mode local simulation must not prepare a container")
+        ),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="local_model",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    llm_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert llm_record["data"]["transport_retry_terminal"] is True
+    assert llm_record["data"]["sim_metrics"]["failed"] is True
+    assert llm_record["data"]["messages_in"] == [{"role": "user", "content": "fail please"}]
+    assert summary["success"] is False
+    assert summary["failed_iterations"] == 1
+
+
 def test_cloud_model_trace_manifest_replays_multiple_sessions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

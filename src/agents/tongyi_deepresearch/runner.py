@@ -56,6 +56,7 @@ _ENV_ALIAS_MAP = {
     "JINA_API_KEYS": ("JINA_API_KEY",),
 }
 _VISIT_SUMMARIZER_ENV_KEYS = ("API_KEY", "API_BASE", "SUMMARY_MODEL_NAME")
+_VENDOR_FILE_ROOT_ENV_KEY = "TONGYI_FILE_ROOT_PATH"
 _VENDOR_TOOL_MODULE_GLOBALS = {
     "SERPER_KEY_ID": ("agents.tongyi_deepresearch.vendor.tool_search", "SERPER_KEY"),
     "JINA_API_KEYS": ("agents.tongyi_deepresearch.vendor.tool_visit", "JINA_API_KEYS"),
@@ -107,6 +108,19 @@ def _override_vendor_env_aliases():
 
 
 @contextlib.contextmanager
+def _override_vendor_file_root_path(file_root_path: str):
+    previous = os.environ.get(_VENDOR_FILE_ROOT_ENV_KEY)
+    os.environ[_VENDOR_FILE_ROOT_ENV_KEY] = file_root_path
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(_VENDOR_FILE_ROOT_ENV_KEY, None)
+        else:
+            os.environ[_VENDOR_FILE_ROOT_ENV_KEY] = previous
+
+
+@contextlib.contextmanager
 def _override_visit_summarizer_env(api_key: str, api_base: str, model: str):
     """Override Visit tool summarization env for the duration of one task run.
 
@@ -151,6 +165,7 @@ def _patched_vendor(
     api_key: str,
     api_base: str,
     summary_model: str,
+    file_root_path: str,
     emit_fn,
     agent_id: str,
     instance_id: str,
@@ -226,28 +241,29 @@ def _patched_vendor(
             traced_map[traced_inst.name] = traced_inst
 
         with _override_vendor_env_aliases():
-            with _override_visit_summarizer_env(api_key, api_base, summary_model):
-                try:
-                    vendor.OpenAI = _BoundTracedOpenAI
-                    vendor.TOOL_CLASS.clear()
-                    vendor.TOOL_CLASS.extend(traced_instances)
-                    vendor.TOOL_MAP.clear()
-                    vendor.TOOL_MAP.update(traced_map)
-                    vendor.MultiTurnReactAgent.count_tokens = (
-                        lambda self, messages: _approx_tokens_of_messages(messages)
-                    )
-                    # MAX_LLM_CALL_PER_RUN is frozen at module-load from os.environ;
-                    # patch the module attribute directly so runner's max_iterations takes effect.
-                    vendor.MAX_LLM_CALL_PER_RUN = max_llm_calls
-                    yield vendor
-                finally:
-                    vendor.OpenAI = orig_openai
-                    vendor.TOOL_CLASS.clear()
-                    vendor.TOOL_CLASS.extend(orig_tool_class)
-                    vendor.TOOL_MAP.clear()
-                    vendor.TOOL_MAP.update(orig_tool_map)
-                    vendor.MultiTurnReactAgent.count_tokens = orig_count_tokens
-                    vendor.MAX_LLM_CALL_PER_RUN = orig_max_calls
+            with _override_vendor_file_root_path(file_root_path):
+                with _override_visit_summarizer_env(api_key, api_base, summary_model):
+                    try:
+                        vendor.OpenAI = _BoundTracedOpenAI
+                        vendor.TOOL_CLASS.clear()
+                        vendor.TOOL_CLASS.extend(traced_instances)
+                        vendor.TOOL_MAP.clear()
+                        vendor.TOOL_MAP.update(traced_map)
+                        vendor.MultiTurnReactAgent.count_tokens = (
+                            lambda self, messages: _approx_tokens_of_messages(messages)
+                        )
+                        # MAX_LLM_CALL_PER_RUN is frozen at module-load from os.environ;
+                        # patch the module attribute directly so runner's max_iterations takes effect.
+                        vendor.MAX_LLM_CALL_PER_RUN = max_llm_calls
+                        yield vendor
+                    finally:
+                        vendor.OpenAI = orig_openai
+                        vendor.TOOL_CLASS.clear()
+                        vendor.TOOL_CLASS.extend(orig_tool_class)
+                        vendor.TOOL_MAP.clear()
+                        vendor.TOOL_MAP.update(orig_tool_map)
+                        vendor.MultiTurnReactAgent.count_tokens = orig_count_tokens
+                        vendor.MAX_LLM_CALL_PER_RUN = orig_max_calls
 
 
 class TongyiDeepResearchRunner:
@@ -332,6 +348,7 @@ class TongyiDeepResearchRunner:
                     api_key=self.api_key,
                     api_base=self.api_base,
                     summary_model=self.model,
+                    file_root_path=str(attempt_ctx.attempt_dir),
                     emit_fn=emit,
                     agent_id=agent_id,
                     instance_id=instance_id,

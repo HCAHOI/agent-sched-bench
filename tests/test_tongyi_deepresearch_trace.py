@@ -296,6 +296,8 @@ def test_transport_exhaustion_raises_rate_limit_exhausted(capture_emits, iter_pr
     retry_actions = [a for a in captured if a.data.get("transport_retry")]
     assert len(retry_actions) == 3
     assert sum(1 for a in retry_actions if a.data.get("transport_retry_terminal")) == 1
+    terminal = next(a for a in retry_actions if a.data.get("transport_retry_terminal"))
+    assert terminal.data["messages_in"] == [{"role": "user", "content": "q"}]
 
 
 def test_model_layer_retry_detection_sets_retry_of(capture_emits, iter_provider):

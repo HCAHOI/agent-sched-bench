@@ -232,8 +232,10 @@ class MultiTurnReactAgent(FnCallAgent):
                 result = TOOL_MAP['PythonInterpreter'].call(tool_args)
             elif tool_name == "parse_file":
                 params = {"files": tool_args["files"]}
-
-                raw_result = asyncio.run(TOOL_MAP[tool_name].call(params, file_root_path="./eval_data/file_corpus"))
+                file_root_path = os.environ.get("TONGYI_FILE_ROOT_PATH", os.getcwd())
+                raw_result = asyncio.run(
+                    TOOL_MAP[tool_name].call(params, file_root_path=file_root_path)
+                )
                 result = raw_result
 
                 if not isinstance(raw_result, str):

@@ -265,6 +265,28 @@ def test_tool_scholar_sets_https_connection_timeout(monkeypatch) -> None:
     assert "A Google scholar for 'llm systems' found 1 results" in result
 
 
+def test_react_agent_parse_file_uses_configured_file_root_path(monkeypatch) -> None:
+    from agents.tongyi_deepresearch.vendor import react_agent
+
+    seen: dict[str, object] = {}
+
+    class _FakeParseTool:
+        async def call(self, params, file_root_path):
+            seen["params"] = params
+            seen["file_root_path"] = file_root_path
+            return ["parsed"]
+
+    monkeypatch.setattr(react_agent, "TOOL_MAP", {"parse_file": _FakeParseTool()})
+    monkeypatch.setenv("TONGYI_FILE_ROOT_PATH", "/tmp/tongyi-root")
+
+    agent = object.__new__(react_agent.MultiTurnReactAgent)
+    result = agent.custom_call_tool("parse_file", {"files": ["report.pdf"]})
+
+    assert seen["params"] == {"files": ["report.pdf"]}
+    assert seen["file_root_path"] == "/tmp/tongyi-root"
+    assert result == "['parsed']"
+
+
 def test_idp_file_submit_with_path_closes_file_handle(monkeypatch, tmp_path: Path) -> None:
     file_path = tmp_path / "doc.pdf"
     file_path.write_bytes(b"pdf")

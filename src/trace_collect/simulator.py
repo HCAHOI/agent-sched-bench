@@ -542,11 +542,7 @@ async def _run_local_model_simulation(
         f"enabled (url={metrics_url})" if metrics_client.is_enabled else "disabled",
     )
 
-    client = create_async_openai_client(
-        api_base=api_base,
-        api_key=api_key,
-        timeout=180.0,
-    )
+    client = None
 
     wall_start = time.time()
     total_iters = len(iterations)
@@ -570,6 +566,36 @@ async def _run_local_model_simulation(
                 messages_in = llm_data.get("messages_in")
                 n_tokens = llm_data.get("completion_tokens", 1) or 1
 
+                if llm_data.get("transport_retry_terminal"):
+                    ts_now = time.time()
+                    llm_record = _make_trace_action(
+                        loaded=loaded,
+                        action_type="llm_call",
+                        action_id=f"llm_{it_num}_{llm_idx}",
+                        iteration=it_num,
+                        ts_start=ts_now,
+                        ts_end=ts_now,
+                        data={
+                            "messages_in": messages_in,
+                            "raw_response": llm_data.get("raw_response", {}),
+                            "prompt_tokens": llm_data.get("prompt_tokens", 0),
+                            "completion_tokens": 0,
+                            "llm_latency_ms": 0.0,
+                            "simulate_source": str(loaded.source_trace),
+                            "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
+                            "transport_retry": True,
+                            "transport_retry_terminal": True,
+                            "error": llm_data.get("error"),
+                            "sim_metrics": {
+                                "warmup": i < warmup_skip_iterations,
+                                "failed": True,
+                            },
+                        },
+                    )
+                    trace_logger.log_trace_action(loaded.agent_id, llm_record)
+                    iter_failed = True
+                    break
+
                 if not messages_in:
                     logger.warning("Iteration %d llm %d: no messages_in, skipping", it_num, llm_idx)
                     continue
@@ -577,6 +603,12 @@ async def _run_local_model_simulation(
                 ts_start = time.time()
 
                 try:
+                    if client is None:
+                        client = create_async_openai_client(
+                            api_base=api_base,
+                            api_key=api_key,
+                            timeout=180.0,
+                        )
                     ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
                         client, model, messages_in, n_tokens
                     )

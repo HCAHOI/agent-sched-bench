@@ -157,6 +157,19 @@ def test_override_vendor_env_aliases_is_scoped_to_context() -> None:
         assert tool_visit.JINA_API_KEYS == old_jina
 
 
+def test_override_vendor_file_root_path_is_scoped_to_context() -> None:
+    from agents.tongyi_deepresearch.runner import (
+        _VENDOR_FILE_ROOT_ENV_KEY,
+        _override_vendor_file_root_path,
+    )
+
+    with patch.dict("os.environ", {_VENDOR_FILE_ROOT_ENV_KEY: "/old/root"}, clear=False):
+        with _override_vendor_file_root_path("/new/root"):
+            assert os.environ[_VENDOR_FILE_ROOT_ENV_KEY] == "/new/root"
+
+        assert os.environ[_VENDOR_FILE_ROOT_ENV_KEY] == "/old/root"
+
+
 @pytest.mark.asyncio
 async def test_run_task_completes_with_valid_answer(tmp_path):
     """AC-b: vendor returns <answer>...</answer> → exit_status='completed'."""
@@ -310,6 +323,7 @@ def test_patched_vendor_defers_wrapper_build_until_lock_is_held(monkeypatch):
                 api_key="k",
                 api_base="http://fake",
                 summary_model="fake-model",
+                file_root_path="/tmp",
                 emit_fn=lambda _action: None,
                 agent_id="agent-1",
                 instance_id="inst-1",
