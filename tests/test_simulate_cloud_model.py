@@ -1090,3 +1090,110 @@ def test_cloud_model_host_tool_without_success_field_is_not_mislabeled_as_failur
     # The bug: without the fallback, a missing "success" would default to
     # False, mislabeling valid host-mode runs and inflating failure rates.
     assert tool_record["data"]["success"] is True
+
+
+# ----------------------------------------------------------------------
+# Ralplan R3 Phase H2: simulator replays tongyi-deepresearch host-mode trace
+# ----------------------------------------------------------------------
+
+_TONGYI_FIXTURE = Path(__file__).parent / "fixtures" / "tongyi_deepresearch_minimal_v5.jsonl"
+
+
+def test_simulator_replays_tongyi_deepresearch_trace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """R3 Principle P3 / Phase H2: host-mode host_controller traces from the
+    vendored Tongyi-DeepResearch scaffold are replayed by cloud_model simulator
+    without any simulator code changes, and without spinning up a container or
+    creating an LLM client (host mode's defining guarantees)."""
+    assert _TONGYI_FIXTURE.exists(), f"missing fixture: {_TONGYI_FIXTURE}"
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_bytes(_TONGYI_FIXTURE.read_bytes())
+
+    task_source = tmp_path / "tasks.json"
+    _write_host_tasks(task_source, "tongyi-fixture-1")
+
+    async def _fail_prepare(*args, **kwargs):
+        raise AssertionError("host-mode replay must not prepare a container")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session", _fail_prepare,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cloud_model must not create llm client")
+        ),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            replay_speed=10.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    metadata = records[0]
+    llm_records = [
+        r for r in records
+        if r.get("type") == "action" and r.get("action_type") == "llm_call"
+    ]
+    tool_records = [
+        r for r in records
+        if r.get("type") == "action" and r.get("action_type") == "tool_exec"
+    ]
+    summary = next(r for r in records if r.get("type") == "summary")
+
+    # Scaffold-agnostic structural invariants: the simulator respects the
+    # source trace's host-mode flag and replays each action span.
+    assert metadata["execution_environment"] == "host"
+    assert metadata["scaffold"] == "tongyi-deepresearch"
+    assert len(llm_records) == 3, "source has 3 llm_calls, simulator must replay all"
+    assert len(tool_records) == 2, "source has 2 tool_execs, simulator must replay all"
+    # Host-mode tool replay gets the canonical 'skipped_host_mode' tag and
+    # success=True fallback, same as research-agent.
+    for tool_record in tool_records:
+        assert tool_record["data"]["replay_source"] == "skipped_host_mode"
+        assert tool_record["data"]["success"] is True
+    assert summary["success"] is True
+
+    # Host-mode replay must still write an empty resources.json so downstream
+    # consumers see a canonical simulate layout.
+    attempt_dir = tmp_path / "out" / "tongyi-fixture-1" / "attempt_1"
+    resources_path = attempt_dir / "resources.json"
+    assert resources_path.exists()
+    payload = json.loads(resources_path.read_text())
+    assert payload["samples"] == []
+    assert payload["summary"]["sample_count"] == 0
+
+
+def test_tongyi_deepresearch_fixture_is_valid_v5() -> None:
+    """Sanity: the shipped fixture file parses as valid v5 JSONL with the
+    expected record shape. Prevents accidental corruption during edits."""
+    records = [json.loads(ln) for ln in _TONGYI_FIXTURE.read_text().splitlines() if ln.strip()]
+
+    # 1 metadata + 3 llm_call + 2 tool_exec + 1 summary = 7 records
+    assert len(records) == 7
+    metadata = records[0]
+    assert metadata["type"] == "trace_metadata"
+    assert metadata["trace_format_version"] == 5
+    assert metadata["scaffold"] == "tongyi-deepresearch"
+
+    llm_calls = [r for r in records if r.get("action_type") == "llm_call"]
+    assert [r["action_id"] for r in llm_calls] == ["llm_1", "llm_2", "llm_3"]
+    for call in llm_calls:
+        assert call["data"]["ttft_ms"] is not None
+        assert call["data"]["tpot_ms"] is not None
+        assert "logical_turn_id" in call["data"]
+
+    tool_execs = [r for r in records if r.get("action_type") == "tool_exec"]
+    assert [r["action_id"] for r in tool_execs] == ["tool_1", "tool_2"]
+    for tool in tool_execs:
+        # Canonical keys (R3 Principle P2)
+        assert "tool_args" in tool["data"]
+        assert "tool_result" in tool["data"]
+        assert "duration_ms" in tool["data"]
