@@ -231,55 +231,64 @@ class HostResearchOpenClawRunner:
         prompt_template: str,
     ) -> None:
         replaced = False
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=trace_path.parent,
-            delete=False,
-        ) as tmp:
-            tmp_path = Path(tmp.name)
-            with trace_path.open("r", encoding="utf-8") as src:
-                for line in src:
-                    if not line.strip():
-                        continue
-                    record = json.loads(line)
-                    if not replaced and record.get("type") == "trace_metadata":
-                        record.update(
-                            {
-                                "benchmark": self.benchmark_slug,
-                                "execution_environment": "host",
-                                "instance_id": instance_id,
-                                "prompt_template": prompt_template,
-                            }
-                        )
-                        if getattr(self, "mcp_config", None) is not None:
-                            run_config = record.get("run_config") or {}
-                            run_config["mcp_config"] = self.mcp_config
-                            record["run_config"] = run_config
-                        replaced = True
-                    tmp.write(json.dumps(record, ensure_ascii=False))
-                    tmp.write("\n")
-        if not replaced:
+        tmp_path: Path | None = None
+        final_path: Path | None = None
+        try:
             with tempfile.NamedTemporaryFile(
                 "w",
                 encoding="utf-8",
                 dir=trace_path.parent,
                 delete=False,
             ) as tmp:
-                final_path = Path(tmp.name)
-                metadata = self._trace_metadata(
-                    instance_id=instance_id,
-                    prompt_template=prompt_template,
-                )
-                tmp.write(json.dumps(metadata, ensure_ascii=False))
-                tmp.write("\n")
-                with tmp_path.open("r", encoding="utf-8") as stamped_src:
-                    for line in stamped_src:
-                        tmp.write(line)
-            os.replace(final_path, trace_path)
-            tmp_path.unlink(missing_ok=True)
-            return
-        os.replace(tmp_path, trace_path)
+                tmp_path = Path(tmp.name)
+                with trace_path.open("r", encoding="utf-8") as src:
+                    for line in src:
+                        if not line.strip():
+                            continue
+                        record = json.loads(line)
+                        if not replaced and record.get("type") == "trace_metadata":
+                            record.update(
+                                {
+                                    "benchmark": self.benchmark_slug,
+                                    "execution_environment": "host",
+                                    "instance_id": instance_id,
+                                    "prompt_template": prompt_template,
+                                }
+                            )
+                            if getattr(self, "mcp_config", None) is not None:
+                                run_config = record.get("run_config") or {}
+                                run_config["mcp_config"] = self.mcp_config
+                                record["run_config"] = run_config
+                            replaced = True
+                        tmp.write(json.dumps(record, ensure_ascii=False))
+                        tmp.write("\n")
+            if not replaced:
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    encoding="utf-8",
+                    dir=trace_path.parent,
+                    delete=False,
+                ) as tmp:
+                    final_path = Path(tmp.name)
+                    metadata = self._trace_metadata(
+                        instance_id=instance_id,
+                        prompt_template=prompt_template,
+                    )
+                    tmp.write(json.dumps(metadata, ensure_ascii=False))
+                    tmp.write("\n")
+                    assert tmp_path is not None
+                    with tmp_path.open("r", encoding="utf-8") as stamped_src:
+                        for line in stamped_src:
+                            tmp.write(line)
+                os.replace(final_path, trace_path)
+                return
+            assert tmp_path is not None
+            os.replace(tmp_path, trace_path)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink()
+            if final_path is not None and final_path.exists():
+                final_path.unlink()
 
     def _trace_metadata(
         self,

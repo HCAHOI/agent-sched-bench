@@ -1,23 +1,31 @@
 import json
 import os
-import signal
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Union
 import requests
 from qwen_agent.tools.base import BaseTool, register_tool
 from .prompt import EXTRACTOR_PROMPT
 from openai import OpenAI
-import random
-from urllib.parse import urlparse, unquote
 import time 
-from transformers import AutoTokenizer
 import tiktoken
 
 VISIT_SERVER_TIMEOUT = int(os.getenv("VISIT_SERVER_TIMEOUT", 200))
 WEBCONTENT_MAXLENGTH = int(os.getenv("WEBCONTENT_MAXLENGTH", 150000))
 
 JINA_API_KEYS = os.getenv("JINA_API_KEYS", "")
+
+
+def _pick_jina_api_key(keys: str) -> str:
+    parts = [part.strip() for part in keys.split(",") if part.strip()]
+    return parts[0] if parts else ""
+
+
+def _extract_json_object(text: str) -> str:
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+    left = cleaned.find('{')
+    right = cleaned.rfind('}')
+    if left != -1 and right != -1 and left <= right:
+        return cleaned[left:right + 1]
+    return cleaned
 
 
 @staticmethod
@@ -65,7 +73,7 @@ class Visit(BaseTool):
         try:
             url = params["url"]
             goal = params["goal"]
-        except:
+        except Exception:
             return "[Visit] Invalid request format: Input must be a JSON object containing 'url' and 'goal' fields"
 
         start_time = time.time()
@@ -82,7 +90,7 @@ class Visit(BaseTool):
             start_time = time.time()
             for u in url: 
                 if time.time() - start_time > 900:
-                    cur_response = "The useful information in {url} for user goal {goal} as follows: \n\n".format(url=url, goal=goal)
+                    cur_response = "The useful information in {url} for user goal {goal} as follows: \n\n".format(url=u, goal=goal)
                     cur_response += "Evidence in page: \n" + "The provided webpage content could not be accessed. Please check the URL or file format." + "\n\n"
                     cur_response += "Summary: \n" + "The webpage content could not be processed, and therefore, no information is available." + "\n\n"
                 else:
@@ -115,14 +123,10 @@ class Visit(BaseTool):
                 if content:
                     try:
                         json.loads(content)
-                    except:
-                        # extract json from string 
-                        left = content.find('{')
-                        right = content.rfind('}') 
-                        if left != -1 and right != -1 and left <= right: 
-                            content = content[left:right+1]
+                    except Exception:
+                        content = _extract_json_object(content)
                     return content
-            except Exception as e:
+            except Exception:
                 # print(e)
                 if attempt == (max_retries - 1):
                     return ""
@@ -142,10 +146,11 @@ class Visit(BaseTool):
         """
         max_retries = 3
         timeout = 50
+        api_key = _pick_jina_api_key(JINA_API_KEYS)
         
         for attempt in range(max_retries):
             headers = {
-                "Authorization": f"Bearer {JINA_API_KEYS}",
+                "Authorization": f"Bearer {api_key}",
             }
             try:
                 response = requests.get(
@@ -159,7 +164,7 @@ class Visit(BaseTool):
                 else:
                     print(response.text)
                     raise ValueError("jina readpage error")
-            except Exception as e:
+            except Exception:
                 time.sleep(0.5)
                 if attempt == max_retries - 1:
                     return "[visit] Failed to read page."
@@ -222,13 +227,31 @@ class Visit(BaseTool):
 
             parse_retry_times = 0
             if isinstance(raw, str):
-                raw = raw.replace("```json", "").replace("```", "").strip()
+                raw = _extract_json_object(raw)
             while parse_retry_times < 3:
                 try:
                     raw = json.loads(raw)
                     break
-                except:
+                except Exception:
                     raw = summary_page_func(messages, max_retries=max_retries)
+                    if isinstance(raw, str):
+                        raw = _extract_json_object(raw)
+                    parse_retry_times += 1
+            if isinstance(raw, dict):
+                while parse_retry_times < 3 and (
+                    "evidence" not in raw or "summary" not in raw
+                ):
+                    retry_raw = summary_page_func(messages, max_retries=max_retries)
+                    if isinstance(retry_raw, str):
+                        retry_raw = _extract_json_object(retry_raw)
+                    try:
+                        retry_parsed = json.loads(retry_raw)
+                    except Exception:
+                        parse_retry_times += 1
+                        continue
+                    if isinstance(retry_parsed, dict):
+                        raw.setdefault("evidence", retry_parsed.get("evidence", ""))
+                        raw.setdefault("summary", retry_parsed.get("summary", ""))
                     parse_retry_times += 1
             
             if parse_retry_times >= 3:
@@ -237,8 +260,8 @@ class Visit(BaseTool):
                 useful_information += "Summary: \n" + "The webpage content could not be processed, and therefore, no information is available." + "\n\n"
             else:
                 useful_information = "The useful information in {url} for user goal {goal} as follows: \n\n".format(url=url, goal=goal)
-                useful_information += "Evidence in page: \n" + str(raw["evidence"]) + "\n\n"
-                useful_information += "Summary: \n" + str(raw["summary"]) + "\n\n"
+                useful_information += "Evidence in page: \n" + str(raw.get("evidence", "")) + "\n\n"
+                useful_information += "Summary: \n" + str(raw.get("summary", "")) + "\n\n"
 
             if len(useful_information) < 10 and summary_retries < 0:
                 print("[visit] Could not generate valid summary after maximum retries")

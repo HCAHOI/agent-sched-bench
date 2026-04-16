@@ -20,6 +20,7 @@ from agents.tongyi_deepresearch.vendor.file_tools.idp import IDP
 from agents.tongyi_deepresearch.vendor.file_tools.utils import save_url_to_local_work_dir
 from agents.tongyi_deepresearch.vendor.tool_python import Timeout
 from agents.tongyi_deepresearch.vendor.tool_python import PythonInterpreter
+from agents.tongyi_deepresearch.vendor.tool_visit import Visit, _pick_jina_api_key
 from agents.tongyi_deepresearch.vendor.tool_scholar import Scholar
 from agents.tongyi_deepresearch.vendor.tool_search import Search
 
@@ -285,6 +286,40 @@ def test_react_agent_parse_file_uses_configured_file_root_path(monkeypatch) -> N
     assert seen["params"] == {"files": ["report.pdf"]}
     assert seen["file_root_path"] == "/tmp/tongyi-root"
     assert result == "['parsed']"
+
+
+def test_pick_jina_api_key_uses_first_non_empty_key() -> None:
+    assert _pick_jina_api_key(" key-a , key-b ") == "key-a"
+    assert _pick_jina_api_key("") == ""
+
+
+def test_visit_batch_timeout_message_uses_current_url(monkeypatch) -> None:
+    time_values = iter([0.0, 0.0, 901.0])
+    monkeypatch.setattr(
+        "agents.tongyi_deepresearch.vendor.tool_visit.time.time",
+        lambda: next(time_values),
+    )
+    tool = Visit()
+    result = tool.call({"url": ["https://a.example"], "goal": "goal"})
+    assert "https://a.example" in result
+
+
+def test_visit_parse_retry_reextracts_json_and_handles_missing_keys(monkeypatch) -> None:
+    tool = Visit()
+    monkeypatch.setattr(tool, "html_readpage_jina", lambda url: "page content")
+
+    responses = iter(
+        [
+            "```json\n{\"evidence\": \"E1\"}\n```",
+            "```json\n{\"summary\": \"S1\"}\n```",
+        ]
+    )
+    monkeypatch.setattr(tool, "call_server", lambda msgs, max_retries=1: next(responses))
+
+    result = tool.readpage_jina("https://a.example", "goal")
+
+    assert "Evidence in page: \nE1" in result
+    assert "Summary: \nS1" in result
 
 
 def test_idp_file_submit_with_path_closes_file_handle(monkeypatch, tmp_path: Path) -> None:

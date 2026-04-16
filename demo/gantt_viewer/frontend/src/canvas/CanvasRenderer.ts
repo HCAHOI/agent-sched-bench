@@ -509,6 +509,12 @@ export class CanvasRenderer extends EventTarget {
           const toolTrackCount = toolTracks.length
             ? Math.max(...toolTracks) + 1
             : 0;
+          const topTrackBySpan = new Map(
+            topSpans.map((span, idx) => [span, topTracks[idx] ?? 0] as const),
+          );
+          const toolTrackBySpan = new Map(
+            toolSpans.map((span, idx) => [span, toolTracks[idx] ?? 0] as const),
+          );
           const layout = computeTrackLayout(
             topTrackCount,
             toolTrackCount,
@@ -520,13 +526,13 @@ export class CanvasRenderer extends EventTarget {
               return { y: laneY + SPAN_PAD, h: SPAN_H };
             }
             if (CONTROL_FLOW_SPAN_TYPES.has(span.type)) {
-              const track = topTracks[topSpans.indexOf(span)];
+              const track = topTrackBySpan.get(span) ?? 0;
               return {
                 y: laneY + layout.topStripY + track * (layout.topTrackH + 2),
                 h: layout.topTrackH,
               };
             }
-            const track = toolTracks[toolSpans.indexOf(span)];
+            const track = toolTrackBySpan.get(span) ?? 0;
             return {
               y: laneY + layout.toolStripY + track * layout.toolTrackH,
               h: layout.toolSpanH,
