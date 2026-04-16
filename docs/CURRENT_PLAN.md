@@ -20,6 +20,9 @@
   - Retry-loop attempt-count mismatch and per-URL timeout message wording in vendor files are minor polish only.
 - Architect re-review verdict:
   - Upgrade the two vendor/runtime risks above to must-fix if the scaffold continues to expose `PythonInterpreter` and `parse_file` as callable tools in prompt / `TOOL_CLASS`.
+- Post-`f8d7a45` latest review triage:
+  - Must-fix: move `_patched_vendor()` baseline snapshot + traced-wrapper construction under `_VENDOR_PATCH_LOCK` to prevent cross-run module-state contamination.
+  - Optional polish: align `vendor/tool_python.py` retry loop to a single explicit 5-attempt budget instead of mixed `range(8)` / `/5` / `attempt == 4`.
 
 ### Phase log (most recent first)
 

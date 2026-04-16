@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -226,6 +227,56 @@ async def test_vendor_monkey_patch_restored_after_run(tmp_path):
     assert vendor.OpenAI is orig_openai
     assert [id(t) for t in vendor.TOOL_CLASS] == orig_tool_class_ids
     assert vendor.MultiTurnReactAgent.count_tokens is orig_count_tokens
+
+
+def test_patched_vendor_defers_wrapper_build_until_lock_is_held(monkeypatch):
+    """Regression: traced wrapper construction must not happen before the patch lock."""
+    from agents.tongyi_deepresearch import runner as runner_mod
+    from agents.tongyi_deepresearch.vendor import react_agent as vendor
+
+    build_called = threading.Event()
+    worker_errors: list[Exception] = []
+    original_openai = vendor.OpenAI
+    original_tool_class_ids = [id(t) for t in vendor.TOOL_CLASS]
+
+    orig_make_traced_tool_class = runner_mod.make_traced_tool_class
+
+    def _recording_make_traced_tool_class(*args, **kwargs):
+        build_called.set()
+        return orig_make_traced_tool_class(*args, **kwargs)
+
+    monkeypatch.setattr(
+        runner_mod,
+        "make_traced_tool_class",
+        _recording_make_traced_tool_class,
+    )
+
+    def _worker() -> None:
+        try:
+            with runner_mod._patched_vendor(
+                api_key="k",
+                api_base="http://fake",
+                emit_fn=lambda _action: None,
+                agent_id="agent-1",
+                instance_id="inst-1",
+                iteration_provider=lambda: 0,
+                llm_iteration_start_fn=lambda: 0,
+                max_llm_calls=1,
+            ):
+                pass
+        except Exception as exc:  # noqa: BLE001
+            worker_errors.append(exc)
+
+    with runner_mod._VENDOR_PATCH_LOCK:
+        thread = threading.Thread(target=_worker)
+        thread.start()
+        assert build_called.wait(0.05) is False
+
+    thread.join(timeout=5)
+    assert not worker_errors
+    assert build_called.is_set()
+    assert vendor.OpenAI is original_openai
+    assert [id(t) for t in vendor.TOOL_CLASS] == original_tool_class_ids
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from agents.tongyi_deepresearch.vendor.file_tools.file_parser import (
     FileParserError,
     SingleFileParser,
 )
+from agents.tongyi_deepresearch.vendor.tool_python import Timeout
 from agents.tongyi_deepresearch.vendor.tool_python import PythonInterpreter
 
 
@@ -23,6 +24,33 @@ def test_python_interpreter_handles_missing_sandbox_endpoints(monkeypatch) -> No
     result = tool.call("print('hello')")
 
     assert result == "[Python Interpreter Error]: No sandbox fusion endpoints configured."
+
+
+def test_python_interpreter_uses_consistent_five_attempt_retry_budget(
+    monkeypatch,
+) -> None:
+    call_count = {"n": 0}
+
+    def _always_timeout(*args, **kwargs):
+        call_count["n"] += 1
+        raise Timeout()
+
+    monkeypatch.setattr(
+        "agents.tongyi_deepresearch.vendor.tool_python.SANDBOX_FUSION_ENDPOINTS",
+        ["endpoint-a"],
+    )
+    monkeypatch.setattr(
+        "agents.tongyi_deepresearch.vendor.tool_python.run_code",
+        _always_timeout,
+    )
+
+    tool = PythonInterpreter()
+    result = tool.call("print('hello')")
+
+    assert call_count["n"] == 5
+    assert result == (
+        "[Python Interpreter Error] TimeoutError: Execution timed out on endpoint endpoint-a."
+    )
 
 
 def test_single_file_parser_raises_clear_error_for_missing_fallback_parser(

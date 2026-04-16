@@ -136,27 +136,6 @@ def _patched_vendor(
     llm_call_counter = [0]
     llm_retry_state: dict[str, Any] = {"last_action_id": None, "last_was_empty": False}
 
-    # Build traced tool classes from whatever vendor currently has registered.
-    # vendor.TOOL_CLASS currently contains concrete tool instances (Visit, Search).
-    # Construction happens before the lock because it only READS vendor.TOOL_CLASS
-    # — mutations (clear/extend) happen inside the lock. Two concurrent callers
-    # would each build their own wrappers from the same underlying tool types,
-    # which is the intended behavior.
-    traced_instances = []
-    traced_map: dict[str, Any] = {}
-    for inst in vendor.TOOL_CLASS:
-        TracedCls = make_traced_tool_class(
-            type(inst),
-            emit_fn=emit_fn,
-            agent_id=agent_id,
-            instance_id=instance_id,
-            iteration_provider=iteration_provider,
-            action_counter=action_counter,
-        )
-        traced_inst = TracedCls()
-        traced_instances.append(traced_inst)
-        traced_map[traced_inst.name] = traced_inst
-
     # Bound OpenAI factory: discards vendor-passed credentials, uses runner's.
     # Injects shared call_counter and retry_state so action_ids stay monotonic
     # and retry_of linkage survives across vendor's per-round client rebuilds.
@@ -174,13 +153,28 @@ def _patched_vendor(
                 retry_state=llm_retry_state,
             )
 
-    orig_openai = vendor.OpenAI
-    orig_tool_class = list(vendor.TOOL_CLASS)
-    orig_tool_map = dict(vendor.TOOL_MAP)
-    orig_count_tokens = vendor.MultiTurnReactAgent.count_tokens
-    orig_max_calls = vendor.MAX_LLM_CALL_PER_RUN
-
     with _VENDOR_PATCH_LOCK:
+        orig_openai = vendor.OpenAI
+        orig_tool_class = list(vendor.TOOL_CLASS)
+        orig_tool_map = dict(vendor.TOOL_MAP)
+        orig_count_tokens = vendor.MultiTurnReactAgent.count_tokens
+        orig_max_calls = vendor.MAX_LLM_CALL_PER_RUN
+
+        traced_instances = []
+        traced_map: dict[str, Any] = {}
+        for inst in orig_tool_class:
+            TracedCls = make_traced_tool_class(
+                type(inst),
+                emit_fn=emit_fn,
+                agent_id=agent_id,
+                instance_id=instance_id,
+                iteration_provider=iteration_provider,
+                action_counter=action_counter,
+            )
+            traced_inst = TracedCls()
+            traced_instances.append(traced_inst)
+            traced_map[traced_inst.name] = traced_inst
+
         try:
             vendor.OpenAI = _BoundTracedOpenAI
             vendor.TOOL_CLASS.clear()

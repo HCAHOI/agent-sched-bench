@@ -76,13 +76,14 @@ class PythonInterpreter(BaseToolWithFileAccess):
         try:
             code=params
             last_error = None
+            max_attempts = 5
             if not SANDBOX_FUSION_ENDPOINTS:
                 return '[Python Interpreter Error]: No sandbox fusion endpoints configured.'
-            for attempt in range(8):
+            for attempt in range(max_attempts):
                 try:
                     # Randomly sample an endpoint for each attempt
                     endpoint = random.choice(SANDBOX_FUSION_ENDPOINTS)
-                    print(f"Attempt {attempt + 1}/5 using endpoint: {endpoint}")
+                    print(f"Attempt {attempt + 1}/{max_attempts} using endpoint: {endpoint}")
                     
                     code_result = run_code(RunCodeRequest(code=code, language='python', run_timeout=timeout), max_attempts=1, client_timeout=timeout, endpoint=endpoint)
                     print("[Python] Code Result", code_result)
@@ -100,14 +101,14 @@ class PythonInterpreter(BaseToolWithFileAccess):
                 except Timeout:
                     last_error = f'[Python Interpreter Error] TimeoutError: Execution timed out on endpoint {endpoint}.'
                     print(f"Timeout on attempt {attempt + 1}: {last_error}")
-                    if attempt == 4:  # Last attempt
+                    if attempt == max_attempts - 1:
                         return last_error
                     continue
                 
                 except Exception as e:
                     last_error = f'[Python Interpreter Error]: {str(e)} on endpoint {endpoint}'
                     print(f"Error on attempt {attempt + 1}: {last_error}")
-                    if attempt == 4:  # Last attempt
+                    if attempt == max_attempts - 1:
                         return last_error
                     continue
 
