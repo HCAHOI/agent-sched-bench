@@ -670,13 +670,23 @@ def test_local_model_host_trace_completes_without_container(
 
     assert metadata["execution_environment"] == "host"
     assert llm_record["data"]["sim_metrics"]["timing"]["total_ms"] >= 0.0
-    assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
-    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
+    # Host-mode tools cannot be re-executed in local_model (no container);
+    # preserve source-trace timing so total_tool_ms stays faithful.
+    assert tool_record["data"]["sim_metrics"]["source"] == "replayed_from_trace"
+    assert (
+        tool_record["data"]["sim_metrics"]["sim_tool_format"]
+        == "replayed_from_trace"
+    )
+    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
+    # ts_end - ts_start should match the replayed duration (0.05s)
+    assert tool_record["ts_end"] - tool_record["ts_start"] == pytest.approx(
+        0.05, abs=0.01
+    )
     assert tool_record["data"]["success"] is True
     assert summary["success"] is True
 
 
-def test_local_model_host_trace_skips_mcp_tools(
+def test_local_model_host_trace_replays_mcp_tool_timing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -722,9 +732,14 @@ def test_local_model_host_trace_skips_mcp_tools(
         if record.get("type") == "action" and record.get("action_type") == "tool_exec"
     )
 
-    assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
-    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "skipped_host_mode"
-    assert tool_record["data"]["duration_ms"] == 0.0
+    # Both MCP and non-MCP host-mode tools go through the same replay path
+    # in local_model — they cannot be re-executed without a container.
+    assert tool_record["data"]["sim_metrics"]["source"] == "replayed_from_trace"
+    assert (
+        tool_record["data"]["sim_metrics"]["sim_tool_format"]
+        == "replayed_from_trace"
+    )
+    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
     assert tool_record["data"]["success"] is True
 
 

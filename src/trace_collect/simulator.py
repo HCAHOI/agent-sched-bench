@@ -625,16 +625,19 @@ async def _run_local_model_simulation(
 
                 tool_ts_start = time.time()
                 if ctr is None:
-                    tool_result = td.get("tool_result", "")
-                    tool_duration_ms = 0.0
-                    tool_success = bool(td.get("success", False))
-                    tool_ts_end = tool_ts_start
-                    sim_provenance = "skipped_host_mode"
+                    # Host-mode tool cannot be re-executed without a container;
+                    # preserve source-trace timing so total_tool_ms and Gantt
+                    # spans remain faithful to the original run.
+                    tool_result = td.get("tool_result", td.get("result", ""))
+                    tool_duration_ms = float(td.get("duration_ms") or 0.0)
+                    tool_success = bool(td.get("success", not td.get("error")))
+                    tool_ts_end = tool_ts_start + tool_duration_ms / 1000.0
+                    sim_provenance = "replayed_from_trace"
                 elif tool_name is not None and tool_name.startswith("mcp_"):
                     tool_result = td.get("tool_result", "")
                     tool_duration_ms = float(td.get("duration_ms") or 0.0)
                     tool_success = bool(td.get("success", True))
-                    tool_ts_end = tool_ts_start
+                    tool_ts_end = tool_ts_start + tool_duration_ms / 1000.0
                     sim_provenance = "replayed_from_trace"
                 else:
                     tool_result, tool_duration_ms, tool_success = await _exec_tool(
@@ -662,9 +665,11 @@ async def _run_local_model_simulation(
                         "success": tool_success,
                         "sim_metrics": {
                             "source": sim_provenance,
-                            "sim_tool_format": sim_provenance
-                            if sim_provenance == "skipped_host_mode"
-                            else "container_exec",
+                            "sim_tool_format": (
+                                "replayed_from_trace"
+                                if sim_provenance == "replayed_from_trace"
+                                else "container_exec"
+                            ),
                             "warmup": i < warmup_skip_iterations,
                         },
                     },
