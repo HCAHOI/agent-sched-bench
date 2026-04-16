@@ -754,6 +754,58 @@ def test_local_model_host_trace_replays_mcp_tool_timing(
     assert tool_record["data"]["success"] is True
 
 
+def test_local_model_host_trace_replay_speed_scales_replayed_tool_timing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    async def fail_prepare(*args, **kwargs):
+        raise AssertionError("host-mode local simulation must not prepare a container")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        fail_prepare,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.create_async_openai_client",
+        lambda **_kwargs: _FakeClient(),
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            source_trace=trace_path,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="local_model",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+            replay_speed=10.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+
+    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
+    assert tool_record["ts_end"] - tool_record["ts_start"] == pytest.approx(
+        0.005, abs=0.01
+    )
+
+
 def test_local_model_terminal_transport_retry_marks_failed_iteration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

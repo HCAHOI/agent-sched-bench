@@ -357,6 +357,20 @@ def test_idp_file_submit_with_path_closes_file_handle(monkeypatch, tmp_path: Pat
     assert closed["value"] is True
 
 
+def test_idp_file_parser_query_returns_error_tuple_on_status_failure(monkeypatch) -> None:
+    class _FailingClient:
+        def query_doc_parser_status(self, request):
+            raise RuntimeError("boom")
+
+    idp = object.__new__(IDP)
+    idp.client = _FailingClient()
+
+    result, status = idp.file_parser_query("job-1")
+
+    assert result is None
+    assert status == "error"
+
+
 def test_tongyi_extra_includes_vendor_runtime_dependencies() -> None:
     import tomllib
 

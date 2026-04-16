@@ -1,7 +1,7 @@
 slug: deep-research-bench
 display_name: "DeepResearchBench"
 harness_dataset: muset-ai/DeepResearch-Bench-Dataset
-harness_split: train
+harness_split: test
 trace_root: traces/deep-research-bench
 default_max_iterations: 100
 selection_n: 32

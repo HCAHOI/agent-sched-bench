@@ -1,7 +1,7 @@
 slug: browsecomp
 display_name: "BrowseComp"
 harness_dataset: openai/BrowseCompLongContext
-harness_split: train
+harness_split: test
 trace_root: traces/browsecomp
 default_max_iterations: 100
 selection_n: 32

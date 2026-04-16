@@ -517,6 +517,7 @@ async def _run_local_model_simulation(
     prepared_session: PreparedTraceSession,
     *,
     trace_logger: TraceLogger,
+    replay_speed: float,
     api_base: str,
     api_key: str,
     model: str,
@@ -676,14 +677,14 @@ async def _run_local_model_simulation(
                     tool_success = bool(td.get("success", not td.get("error")))
                     # Advance wall clock so consecutive replayed spans in the
                     # output trace don't overlap (addresses PR #13 Codex P1).
-                    await asyncio.sleep(max(0.0, tool_duration_ms / 1000.0))
+                    await asyncio.sleep(max(0.0, tool_duration_ms / 1000.0 / replay_speed))
                     tool_ts_end = time.time()
                     sim_provenance = "replayed_from_trace"
                 elif tool_name is not None and tool_name.startswith("mcp_"):
                     tool_result = td.get("tool_result", "")
                     tool_duration_ms = float(td.get("duration_ms") or 0.0)
                     tool_success = bool(td.get("success", True))
-                    await asyncio.sleep(max(0.0, tool_duration_ms / 1000.0))
+                    await asyncio.sleep(max(0.0, tool_duration_ms / 1000.0 / replay_speed))
                     tool_ts_end = time.time()
                     sim_provenance = "replayed_from_trace"
                 else:
@@ -1153,6 +1154,7 @@ async def simulate(
             await _run_local_model_simulation(
                 prepared_sessions[0],
                 trace_logger=trace_logger,
+                replay_speed=replay_speed,
                 api_base=api_base,
                 api_key=api_key,
                 model=model,

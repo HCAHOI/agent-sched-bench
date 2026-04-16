@@ -125,6 +125,7 @@ def test_browsecomp_runtime_and_runner_gating() -> None:
 
 def test_browsecomp_committed_config_matches_long_context_schema() -> None:
     config = BenchmarkConfig.from_yaml(REPO_ROOT / "configs/benchmarks/browsecomp.yaml")
+    assert config.harness_split == "test"
     plugin = BrowseCompBenchmark(config)
     canary = "canary"
 

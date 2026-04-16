@@ -131,6 +131,7 @@ def test_deep_research_bench_committed_config_matches_generated_report_schema() 
     config = BenchmarkConfig.from_yaml(
         REPO_ROOT / "configs/benchmarks/deep-research-bench.yaml"
     )
+    assert config.harness_split == "test"
     plugin = DeepResearchBenchBenchmark(config)
 
     normalized = plugin.normalize_task(
