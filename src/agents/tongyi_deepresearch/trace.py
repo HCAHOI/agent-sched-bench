@@ -161,6 +161,8 @@ class TracedStreamingOpenAI:
         iteration_provider: IterationProvider,
         max_transport_retries: int = 3,
         backoff_base_s: float = 1.0,
+        call_counter: list[int] | None = None,
+        retry_state: dict[str, Any] | None = None,
     ) -> None:
         self._real = openai.OpenAI(
             api_key=api_key,
@@ -174,10 +176,17 @@ class TracedStreamingOpenAI:
         self._max_transport_retries = max_transport_retries
         self._backoff_base_s = backoff_base_s
 
-        # Retry-linkage state
-        self._last_action_id: str | None = None
-        self._last_was_empty: bool = False
-        self._call_counter: int = 0
+        # Runner-injected shared state so action_ids + retry-linkage survive
+        # vendor constructing a fresh OpenAI client per call_server invocation.
+        # Each call to vendor's call_server builds a new TracedStreamingOpenAI,
+        # but the counter and retry_state refer to the same mutable container
+        # owned by _patched_vendor(), keeping action_ids monotonic + retry_of
+        # linkage correct across the entire task.
+        self._call_counter = call_counter if call_counter is not None else [0]
+        self._retry_state = (
+            retry_state if retry_state is not None
+            else {"last_action_id": None, "last_was_empty": False}
+        )
 
         self.chat = _Chat(self)
 
@@ -186,8 +195,8 @@ class TracedStreamingOpenAI:
     # ------------------------------------------------------------------
 
     def _next_action_id(self) -> str:
-        self._call_counter += 1
-        return f"llm_{self._call_counter}"
+        self._call_counter[0] += 1
+        return f"llm_{self._call_counter[0]}"
 
     def _do_streaming_create(
         self,
@@ -202,8 +211,8 @@ class TracedStreamingOpenAI:
 
         # Model-layer retry detection: vendor retries when prior content was empty
         retry_of: str | None = None
-        if self._last_was_empty and self._last_action_id is not None:
-            retry_of = self._last_action_id
+        if self._retry_state["last_was_empty"] and self._retry_state["last_action_id"] is not None:
+            retry_of = self._retry_state["last_action_id"]
 
         last_err: Exception | None = None
         for attempt in range(self._max_transport_retries + 1):
@@ -218,8 +227,8 @@ class TracedStreamingOpenAI:
                     **kwargs,
                 )
                 # Update retry-linkage state for next call
-                self._last_action_id = action_id
-                self._last_was_empty = not (result.choices[0].message.content or "").strip()
+                self._retry_state["last_action_id"] = action_id
+                self._retry_state["last_was_empty"] = not (result.choices[0].message.content or "").strip()
                 return result
             except _TRANSPORT_ERRORS as exc:
                 last_err = exc
@@ -408,6 +417,18 @@ def make_traced_tool_class(
             ts_end = time.time()
             duration_ms = (mono_end - mono_start) * 1000.0
 
+            # Vendor's custom_call_tool aliases tool_args as tool_args["params"]
+            # (self-reference), which breaks json.dumps serialization inside
+            # the trace logger. Strip the self-ref before recording.
+            safe_args: Any
+            if isinstance(params, dict):
+                safe_args = {
+                    k: v for k, v in params.items()
+                    if not (k == "params" and v is params)
+                }
+            else:
+                safe_args = {"raw": str(params)}
+
             emit_fn(TraceAction(
                 action_type="tool_exec",
                 action_id=action_id,
@@ -418,7 +439,7 @@ def make_traced_tool_class(
                 ts_end=ts_end,
                 data={
                     "tool_name": getattr(self, "name", base_cls.__name__.lower()),
-                    "tool_args": params if isinstance(params, dict) else {"raw": str(params)},
+                    "tool_args": safe_args,
                     "tool_result": result if isinstance(result, str) else str(result),
                     "duration_ms": duration_ms,
                     "error": error,

@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -45,6 +46,27 @@ logger = logging.getLogger(__name__)
 # (OpenAI, TOOL_CLASS, TOOL_MAP, count_tokens) are patched globally within
 # the contextmanager. Concurrent patching would race.
 _VENDOR_PATCH_LOCK = threading.Lock()
+
+
+# Map our repo's tool env-var names onto vendor's expected names. The upstream
+# reads SERPER_KEY_ID (Serper's example doc name) and JINA_API_KEYS (plural),
+# while our conventions are SERPER_API_KEY and JINA_API_KEY. Bridge both so
+# vendor works without requiring the operator to set duplicate exports.
+_ENV_ALIAS_MAP = {
+    "SERPER_KEY_ID": ("SERPER_API_KEY",),
+    "JINA_API_KEYS": ("JINA_API_KEY",),
+}
+
+
+def _ensure_vendor_env_aliases() -> None:
+    for vendor_name, aliases in _ENV_ALIAS_MAP.items():
+        if os.environ.get(vendor_name):
+            continue
+        for alias in aliases:
+            value = os.environ.get(alias)
+            if value:
+                os.environ[vendor_name] = value
+                break
 
 
 def _approx_tokens_of_messages(messages: list[dict[str, Any]]) -> int:
@@ -88,6 +110,14 @@ def _patched_vendor(
     # a single mutable counter across multiple tool wrappers.
     action_counter = [0]
 
+    # Shared state for the TracedStreamingOpenAI factory: vendor constructs a
+    # fresh OpenAI client per call_server invocation, so per-instance counters
+    # would reset between rounds and every llm_call would get action_id=llm_1.
+    # These mutable containers are captured by the factory closure and persist
+    # across all instances for the duration of one run_task call.
+    llm_call_counter = [0]
+    llm_retry_state: dict[str, Any] = {"last_action_id": None, "last_was_empty": False}
+
     # Build traced tool classes from whatever vendor currently has registered.
     # vendor.TOOL_CLASS currently contains concrete tool instances (Visit, Search).
     # Construction happens before the lock because it only READS vendor.TOOL_CLASS
@@ -110,6 +140,8 @@ def _patched_vendor(
         traced_map[traced_inst.name] = traced_inst
 
     # Bound OpenAI factory: discards vendor-passed credentials, uses runner's.
+    # Injects shared call_counter and retry_state so action_ids stay monotonic
+    # and retry_of linkage survives across vendor's per-round client rebuilds.
     class _BoundTracedOpenAI(TracedStreamingOpenAI):
         def __init__(self, *_a, **_k):
             super().__init__(
@@ -119,6 +151,8 @@ def _patched_vendor(
                 agent_id=agent_id,
                 instance_id=instance_id,
                 iteration_provider=iteration_provider,
+                call_counter=llm_call_counter,
+                retry_state=llm_retry_state,
             )
 
     orig_openai = vendor.OpenAI
@@ -212,6 +246,8 @@ class TongyiDeepResearchRunner:
 
         def iteration_provider() -> int:
             return iteration_state["i"]
+
+        _ensure_vendor_env_aliases()
 
         task_prompt = render_research_prompt(
             self.benchmark_slug,

@@ -137,6 +137,69 @@ output on a trivial prompt, so the ReAct prompt format is not strictly Tongyi-
 model-specific for simple cases (ACCURACY IS NOT A CONSTRAINT here — this is a
 scheduling-trace validation).
 
+## Phase I smoke log (2026-04-16, paid 1+1 via CLI)
+
+Full `trace_collect.cli` pipeline against DashScope, 1 task each on
+deep-research-bench + browsecomp, `--max-iterations 8`. Two bugs surfaced
+and fixed during this phase:
+
+1. **action_id counter reset per round**: vendor constructs a fresh `OpenAI`
+   client inside every `call_server` invocation, so the per-instance counter
+   started at 0 each round — every `llm_call` got `action_id="llm_1"`. Fix:
+   runner now injects a shared `call_counter` + `retry_state` into the bound
+   factory so IDs stay monotonic across vendor's per-round rebuilds.
+2. **tool_exec not serialised to trace file**: vendor's `custom_call_tool`
+   aliases `tool_args["params"] = tool_args` (self-reference), breaking
+   `json.dumps` inside `log_trace_action`. Actions were captured in memory
+   (so summary saw them) but never reached disk. Fix: tool wrapper strips
+   the self-reference before recording `tool_args` in the TraceAction.
+3. **Env-var name mismatch**: vendor reads `SERPER_KEY_ID` / `JINA_API_KEYS`,
+   our repo convention is `SERPER_API_KEY` / `JINA_API_KEY`. Runner now
+   aliases on demand at `run_task` entry.
+
+### DRB: instance 51 (Japan elderly population + consumption, `qwen-plus-latest`)
+
+| Field | Value |
+|---|---|
+| llm_call actions | 7 (`llm_1` .. `llm_7`) |
+| tool_exec actions | 6 (5 search + 1 visit) |
+| transport_retry_count | 0 |
+| total_llm_ms | 74 515 |
+| total_tool_ms | 55 579 (search ~4–9 s each; visit 22 s) |
+| total_tokens | 68 883 |
+| ttft_ms range | 740 – 3 244 |
+| tpot_ms | ~22.0 (constant) |
+| vendor_termination | `answer` |
+| exit_status | `completed` |
+| AC#2 React triplet | **PASS** (`<tool_call>` in LLM output + 6 tool_execs fired) |
+| AC#4 ttft/tpot non-None | **PASS** (7/7) |
+
+### browsecomp: instance 0 (named-person retrieval, `qwen-plus-latest`)
+
+| Field | Value |
+|---|---|
+| llm_call actions | 1 (`llm_1`) |
+| tool_exec actions | 0 (model answered directly from training memory) |
+| transport_retry_count | 0 |
+| total_llm_ms | 116 635 |
+| total_tool_ms | 0 |
+| total_tokens | 28 748 |
+| ttft_ms | ~2 000 |
+| tpot_ms | ~22 |
+| vendor_termination | `answer` |
+| exit_status | `completed` |
+| AC#4 ttft/tpot non-None | **PASS** (1/1) |
+
+Note: browsecomp task did not trigger tool use — the model's training memory
+had the answer directly. Per R3 AC#2 "**at least one** produced trace contains
+a complete ReAct triplet", the DRB trace satisfies this (browsecomp trace
+does not, but the AC is over the set of Phase I traces, not per-task). The
+browsecomp trace is still a valid scheduling-analysis artifact (one long
+LLM turn with real TTFT/TPOT).
+
+Total smoke cost: ~97k tokens on `qwen-plus-latest` ≈ **$0.14** (well under
+R3's $2 paid-smoke budget).
+
 ## Deprecation / deletion tracker
 
 - **`src/agents/research_agent/` deletion_deadline**: TBD — set to
