@@ -69,6 +69,19 @@ def _ensure_vendor_env_aliases() -> None:
                 break
 
 
+def _ensure_visit_summarizer_env(api_key: str, api_base: str, model: str) -> None:
+    """Propagate runner's backend credentials to Visit tool's summarization env.
+
+    Vendor's ``Visit.call_server()`` distills fetched pages into evidence via
+    a separate OpenAI-compatible client built from ``API_KEY`` / ``API_BASE``
+    / ``SUMMARY_MODEL_NAME`` env vars. The runner already has these values;
+    expose them to the vendor tool unless the operator explicitly set overrides.
+    """
+    os.environ.setdefault("API_KEY", api_key)
+    os.environ.setdefault("API_BASE", api_base)
+    os.environ.setdefault("SUMMARY_MODEL_NAME", model)
+
+
 def _approx_tokens_of_messages(messages: list[dict[str, Any]]) -> int:
     """Approximate total token count across message contents via tiktoken."""
     total = 0
@@ -248,6 +261,7 @@ class TongyiDeepResearchRunner:
             return iteration_state["i"]
 
         _ensure_vendor_env_aliases()
+        _ensure_visit_summarizer_env(self.api_key, self.api_base, self.model)
 
         task_prompt = render_research_prompt(
             self.benchmark_slug,

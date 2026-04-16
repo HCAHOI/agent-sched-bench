@@ -372,7 +372,15 @@ def _resolve_simulate_output_dir(args: argparse.Namespace) -> Path:
         # Use instance_id (grandparent) + attempt to avoid collisions
         # e.g. .../tobymao__sqlglot-3425/attempt_1/trace.jsonl → "tobymao__sqlglot-3425"
         trace_path = Path(args.source_trace)
-        source_label = trace_path.parents[1].name if len(trace_path.parts) > 2 else trace_path.stem
+        if len(trace_path.parts) > 2:
+            source_label = trace_path.parents[1].name
+        else:
+            source_label = trace_path.stem
+        # Guard against trace_path layouts where parents[1] resolves to root
+        # (e.g. /tmp/trace.jsonl → parents[1] == '/' with name == ''). Fall
+        # back to the filename stem so source_label is never empty.
+        if not source_label:
+            source_label = trace_path.stem
     else:
         source_label = "unknown"
 
