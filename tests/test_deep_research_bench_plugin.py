@@ -107,6 +107,7 @@ def test_deep_research_bench_runtime_and_runner_gating() -> None:
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
     assert plugin.runtime_mode_for("research-agent") == "host_controller"
+    assert plugin.runtime_mode_for("tongyi-deepresearch") == "host_controller"
 
 
 def test_deep_research_bench_builds_research_agent_runner() -> None:
@@ -122,6 +123,24 @@ def test_deep_research_bench_builds_research_agent_runner() -> None:
     )
 
     assert runner.benchmark_slug == "deep-research-bench"
+
+
+def test_deep_research_bench_builds_tongyi_deepresearch_runner() -> None:
+    plugin = DeepResearchBenchBenchmark(_make_config())
+
+    runner = plugin.build_runner(
+        scaffold="tongyi-deepresearch",
+        model="qwen-plus-latest",
+        api_base="https://example.com/v1",
+        api_key="test-key",
+        max_iterations=100,
+        client=SimpleNamespace(),
+    )
+
+    assert runner.benchmark_slug == "deep-research-bench"
+    # TongyiDeepResearchRunner is the concrete class
+    from agents.tongyi_deepresearch import TongyiDeepResearchRunner
+    assert isinstance(runner, TongyiDeepResearchRunner)
 
 
 def test_deep_research_bench_committed_config_matches_generated_report_schema() -> None:

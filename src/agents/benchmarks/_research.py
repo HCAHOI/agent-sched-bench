@@ -313,7 +313,9 @@ class HostResearchOpenClawRunner:
 class ResearchBenchmark(Benchmark):
     """Base for host-mode QA/research benchmark plugins."""
 
-    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"openclaw", "research-agent"}
+    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {
+        "openclaw", "research-agent", "tongyi-deepresearch",
+    }
 
     @property
     def execution_environment(self) -> str:
@@ -363,6 +365,13 @@ class ResearchBenchmark(Benchmark):
             from agents.research_agent import ResearchAgentRunner
 
             return ResearchAgentRunner(
+                benchmark_slug=self.config.slug,
+                **kwargs,
+            )
+        if scaffold == "tongyi-deepresearch":
+            from agents.tongyi_deepresearch import TongyiDeepResearchRunner
+
+            return TongyiDeepResearchRunner(
                 benchmark_slug=self.config.slug,
                 **kwargs,
             )

@@ -64,7 +64,8 @@ Defined in `src/llm_call/providers.py`. Resolution: CLI `--api-key` > env var > 
 | Scaffold | Description | MCP | Tools |
 |----------|-------------|-----|-------|
 | `openclaw` | Structured tools agent (nanobot) | **mandatory** | filesystem, shell, web, MCP, memory, skills |
-| `research-agent` | Multi-phase research pipeline (plan/search/fetch/extract/synthesize) | no | web_search, web_fetch |
+| `research-agent` | Multi-phase research pipeline (plan/search/fetch/extract/synthesize) — **deprecated, slated for removal in Ralplan R3 Phase F** | no | web_search, web_fetch |
+| `tongyi-deepresearch` | Vendored ReAct scaffold from Alibaba-NLP/DeepResearch (pinned SHA `f72f75d8`, Apache-2.0) | no | search (Serper), visit (Jina Reader) |
 
 For openclaw, `--mcp-config` is enforced: pass a YAML path or the literal `none`.
 MCP YAML lives in `configs/mcp/` (e.g. `context7.yaml`).

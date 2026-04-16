@@ -22,6 +22,10 @@ def test_scaffold_benchmark_matrix_uses_plugin_supported_scaffolds() -> None:
         "deep-research-bench",
         "browsecomp",
     }
+    assert matrix["tongyi-deepresearch"] == {
+        "deep-research-bench",
+        "browsecomp",
+    }
 
 
 def test_validate_scaffold_benchmark_accepts_supported_pair() -> None:
@@ -35,3 +39,8 @@ def test_validate_scaffold_benchmark_rejects_unsupported_pair() -> None:
 
 def test_validate_scaffold_benchmark_accepts_research_agent_pair() -> None:
     validate_scaffold_benchmark("research-agent", "deep-research-bench")
+
+
+def test_validate_scaffold_benchmark_accepts_tongyi_deepresearch_pair() -> None:
+    validate_scaffold_benchmark("tongyi-deepresearch", "deep-research-bench")
+    validate_scaffold_benchmark("tongyi-deepresearch", "browsecomp")
