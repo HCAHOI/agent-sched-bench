@@ -47,7 +47,7 @@ def test_parse_collect_args_allows_omitted_container_for_host_mode() -> None:
     assert args.container is None
 
 
-def test_parse_collect_args_accepts_research_agent_scaffold() -> None:
+def test_parse_collect_args_accepts_tongyi_deepresearch_scaffold() -> None:
     args = parse_collect_args(
         [
             "--provider",
@@ -55,11 +55,11 @@ def test_parse_collect_args_accepts_research_agent_scaffold() -> None:
             "--model",
             "qwen-plus-latest",
             "--scaffold",
-            "research-agent",
+            "tongyi-deepresearch",
         ]
     )
 
-    assert args.scaffold == "research-agent"
+    assert args.scaffold == "tongyi-deepresearch"
     assert args.mcp_config is None
 
 
@@ -127,7 +127,7 @@ def test_run_collect_passes_container_to_collect_traces(
     assert seen["container_executable"] == container_executable
 
 
-def test_run_collect_does_not_require_mcp_config_for_research_agent(monkeypatch) -> None:
+def test_run_collect_does_not_require_mcp_config_for_tongyi_deepresearch(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
     async def fake_collect_traces(**kwargs):
@@ -156,13 +156,13 @@ def test_run_collect_does_not_require_mcp_config_for_research_agent(monkeypatch)
             "--model",
             "qwen-plus-latest",
             "--scaffold",
-            "research-agent",
+            "tongyi-deepresearch",
         ]
     )
 
     _run_collect(args)
 
-    assert seen["scaffold"] == "research-agent"
+    assert seen["scaffold"] == "tongyi-deepresearch"
     assert seen["mcp_config"] is None
 
 

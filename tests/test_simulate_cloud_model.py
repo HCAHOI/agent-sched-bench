@@ -428,7 +428,7 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="research-agent",
+        scaffold="tongyi-deepresearch",
         execution_environment="host",
     )
     _write_host_tasks(task_source, "host-task")
@@ -501,7 +501,7 @@ def test_cloud_model_host_trace_skips_mcp_tools(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="research-agent",
+        scaffold="tongyi-deepresearch",
         tool_name="mcp_search",
         execution_environment="host",
     )
@@ -636,7 +636,7 @@ def test_local_model_host_trace_completes_without_container(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="research-agent",
+        scaffold="tongyi-deepresearch",
         execution_environment="host",
     )
     _write_host_tasks(task_source, "host-task")
@@ -706,7 +706,7 @@ def test_local_model_host_trace_replays_mcp_tool_timing(
     _write_trace(
         trace_path,
         agent_id="host-task",
-        scaffold="research-agent",
+        scaffold="tongyi-deepresearch",
         tool_name="mcp_search",
         execution_environment="host",
     )
@@ -824,7 +824,7 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
     _write_trace(
         trace_b,
         agent_id="task-b",
-        scaffold="research-agent",
+        scaffold="tongyi-deepresearch",
         execution_environment="host",
     )
     _write_tasks(task_source, "task-a", "task-b")
@@ -863,7 +863,7 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
     assert container_records[0]["execution_environment"] == "container"
     assert container_records[0]["scaffold"] == "openclaw"
     assert host_records[0]["execution_environment"] == "host"
-    assert host_records[0]["scaffold"] == "research-agent"
+    assert host_records[0]["scaffold"] == "tongyi-deepresearch"
 
 
 def test_cloud_model_manifest_with_docker_image_override(
@@ -988,21 +988,21 @@ def test_cloud_model_host_tool_without_success_field_is_not_mislabeled_as_failur
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Regression: research-agent tools don't emit 'success'; host replay must
+    """Regression: host-mode scaffold tools may not emit 'success'; host replay must
     fall back to `not error` instead of defaulting to False.
     """
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
 
     # Hand-crafted trace whose tool_exec action has NO "success" key, matching
-    # what src/agents/research_agent/tools.py emits.
+    # what vendor host-mode tools emit.
     trace_path.write_text(
         "\n".join(
             [
                 json.dumps({
                     "type": "trace_metadata",
                     "trace_format_version": 5,
-                    "scaffold": "research-agent",
+                    "scaffold": "tongyi-deepresearch",
                     "instance_id": "host-task",
                     "model": "qwen",
                     "mode": "collect",
@@ -1038,7 +1038,7 @@ def test_cloud_model_host_tool_without_success_field_is_not_mislabeled_as_failur
                         "result": "some result",
                         "duration_ms": 50.0,
                         # NOTE: intentionally no "success" key, mirroring
-                        # research-agent tool emission
+                        # host-mode tool emission
                         "error": None,
                     },
                 }),
@@ -1155,7 +1155,7 @@ def test_simulator_replays_tongyi_deepresearch_trace(
     assert len(llm_records) == 3, "source has 3 llm_calls, simulator must replay all"
     assert len(tool_records) == 2, "source has 2 tool_execs, simulator must replay all"
     # Host-mode tool replay gets the canonical 'skipped_host_mode' tag and
-    # success=True fallback, same as research-agent.
+    # success=True fallback, same as any host-mode scaffold.
     for tool_record in tool_records:
         assert tool_record["data"]["replay_source"] == "skipped_host_mode"
         assert tool_record["data"]["success"] is True

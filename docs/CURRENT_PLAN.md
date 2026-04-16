@@ -2,7 +2,7 @@
 
 **Ralplan R3** | 2026-04-16 | Branch: `feat/multi-benchmark`
 **Consensus**: Planner → Architect (APPROVE-with-polish) → Critic v2→v3 ITERATE(8) → v3' → v5 (user simplifications) → v6 ITERATE(3) → v6 Critic APPROVE
-**Status**: Phases A, B, C, D, E, G, I, H2, J **COMPLETE**. Phase F (hard-delete `src/agents/research_agent/`) pending — slated for the next commit per R3 Principle #3 (≤3 days post Phase I green = 2026-04-19 deadline).
+**Status**: ALL R3 phases A, B, C, D, E, G, I, H2, J, F **COMPLETE** (2026-04-16). Homegrown multi-phase scaffold hard-deleted per R3 Principle #3; zero residual references outside this `docs/CURRENT_PLAN.md` R2_DEPRECATED archive section.
 
 ### Phase log (most recent first)
 

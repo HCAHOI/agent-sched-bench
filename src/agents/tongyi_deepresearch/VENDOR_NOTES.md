@@ -200,12 +200,12 @@ LLM turn with real TTFT/TPOT).
 Total smoke cost: ~97k tokens on `qwen-plus-latest` ≈ **$0.14** (well under
 R3's $2 paid-smoke budget).
 
-## Deprecation / deletion tracker
+## Deprecation tracker
 
-- **`src/agents/research_agent/` deletion_deadline**: **2026-04-19**
-  (= Phase I green date 2026-04-16 + 3 calendar days, per R3 Principle #3).
-  Phase F will execute the hard-delete well before this deadline (planned for
-  the commit immediately after this one).
+- **Homegrown multi-phase scaffold**: **DELETED 2026-04-16 in Phase F**, within
+  the R3 Principle #3 deadline of 3 calendar days post Phase I green. The
+  `src/agents/<deprecated>/` directory and its 2 test files are gone; all
+  registration surfaces and doc references have been swept.
 - **Interim shim**: env-flag `OMCBENCH_ALLOW_DEPRECATED_SCAFFOLD=1` was
   proposed in R3 Principle #3 but NOT implemented — Phase F's same-day
-  deletion makes the gap-period shim unnecessary.
+  deletion made the gap-period shim unnecessary.
