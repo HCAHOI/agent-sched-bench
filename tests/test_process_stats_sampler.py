@@ -182,5 +182,62 @@ def test_psutil_sampler_reuses_process_handles_for_cpu_deltas(monkeypatch) -> No
     assert created == [1]
     assert first is not None
     assert second is not None
-    assert first["cpu_percent"] == "0.000%"
+    assert first["cpu_percent"] == "12.500%"
     assert second["cpu_percent"] == "12.500%"
+
+
+def test_psutil_sampler_primes_new_child_handles_before_sampling(monkeypatch) -> None:
+    class FakeChild:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.calls = 0
+
+        def cpu_percent(self, *, interval=None):
+            assert interval is None
+            self.calls += 1
+            return 0.0 if self.calls == 1 else 4.0
+
+        def memory_info(self):
+            return SimpleNamespace(rss=5 * 1024 * 1024)
+
+        def io_counters(self):
+            return SimpleNamespace(read_bytes=10, write_bytes=20)
+
+        def num_ctx_switches(self):
+            return SimpleNamespace(voluntary=1, involuntary=1)
+
+    class FakeRoot:
+        pid = 1
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.child = FakeChild(2)
+
+        def children(self, *, recursive: bool):
+            assert recursive is True
+            return [self.child]
+
+        def cpu_percent(self, *, interval=None):
+            assert interval is None
+            self.calls += 1
+            return 0.0 if self.calls == 1 else 6.0
+
+        def memory_info(self):
+            return SimpleNamespace(rss=10 * 1024 * 1024)
+
+        def io_counters(self):
+            return SimpleNamespace(read_bytes=100, write_bytes=50)
+
+        def num_ctx_switches(self):
+            return SimpleNamespace(voluntary=2, involuntary=3)
+
+    root = FakeRoot()
+    fake_psutil = types.ModuleType("psutil")
+    fake_psutil.Process = lambda pid: root
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    cache: dict[int, object] = {}
+
+    sample = _sample_with_psutil(1, process_cache=cache)
+
+    assert sample is not None
+    assert sample["cpu_percent"] == "10.000%"

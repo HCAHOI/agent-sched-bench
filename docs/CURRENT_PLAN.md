@@ -23,6 +23,11 @@
 - Post-`f8d7a45` latest review triage:
   - Must-fix: move `_patched_vendor()` baseline snapshot + traced-wrapper construction under `_VENDOR_PATCH_LOCK` to prevent cross-run module-state contamination.
   - Optional polish: align `vendor/tool_python.py` retry loop to a single explicit 5-attempt budget instead of mixed `range(8)` / `/5` / `attempt == 4`.
+- Post-`d773f78` latest review triage:
+  - Fixed: prime psutil CPU baselines for newly cached root/child process handles in `process_stats_sampler.py`.
+  - Fixed: retry only retryable transport errors in `TracedStreamingOpenAI` (`429` and `5xx`, plus connection/timeout classes), not all `APIStatusError`s.
+  - Fixed: add jitter to Tongyi exponential backoff to reduce synchronized retries in concurrent sweeps.
+  - Fixed: scope `Visit` summarizer env override to each task run and restore previous values after the run completes.
 
 ### Phase log (most recent first)
 

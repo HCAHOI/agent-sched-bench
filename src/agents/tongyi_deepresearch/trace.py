@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import random
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -75,6 +76,24 @@ def _approx_token_count(text: str) -> int:
         return len(enc.encode(text))
     except Exception:
         return max(1, len(text) // 4)
+
+
+def _api_status_code(exc: Exception) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _is_retryable_transport_error(exc: Exception) -> bool:
+    if isinstance(exc, (openai.APIConnectionError, openai.APITimeoutError, openai.RateLimitError)):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        status_code = _api_status_code(exc)
+        return status_code == 429 or (isinstance(status_code, int) and 500 <= status_code < 600)
+    return False
 
 
 @dataclass
@@ -162,6 +181,7 @@ class TracedStreamingOpenAI:
         iteration_provider: IterationProvider,
         max_transport_retries: int = 3,
         backoff_base_s: float = 1.0,
+        backoff_jitter_max_s: float = 1.0,
         call_counter: list[int] | None = None,
         retry_state: dict[str, Any] | None = None,
         llm_iteration_start_fn: Callable[[], int] | None = None,
@@ -177,6 +197,7 @@ class TracedStreamingOpenAI:
         self._iteration_provider = iteration_provider
         self._max_transport_retries = max_transport_retries
         self._backoff_base_s = backoff_base_s
+        self._backoff_jitter_max_s = backoff_jitter_max_s
         self._llm_iteration_start_fn = llm_iteration_start_fn
 
         # Runner-injected shared state so action_ids + retry-linkage survive
@@ -237,6 +258,8 @@ class TracedStreamingOpenAI:
                 self._retry_state["last_was_empty"] = not (result.choices[0].message.content or "").strip()
                 return result
             except _TRANSPORT_ERRORS as exc:
+                if not _is_retryable_transport_error(exc):
+                    raise
                 last_err = exc
                 if attempt < self._max_transport_retries:
                     # Emit a TraceAction for the failed attempt, tagged transport_retry
@@ -247,7 +270,9 @@ class TracedStreamingOpenAI:
                         parent_action_id=action_id,
                         error=exc,
                     )
-                    sleep_s = self._backoff_base_s * (2 ** attempt)
+                    sleep_s = (
+                        self._backoff_base_s * (2 ** attempt)
+                    ) + random.uniform(0.0, self._backoff_jitter_max_s)
                     logger.warning(
                         "TracedStreamingOpenAI transport retry %d/%d on %s; sleeping %.2fs",
                         attempt + 1, self._max_transport_retries,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -104,6 +105,28 @@ def test_runner_construction_accepts_optional_client():
     # client is accepted but not required to be stored
     assert r.model == "m"
     assert r.api_base == "http://fake"
+
+
+def test_override_visit_summarizer_env_is_scoped_to_context() -> None:
+    from agents.tongyi_deepresearch.runner import _override_visit_summarizer_env
+
+    with patch.dict(
+        "os.environ",
+        {
+            "API_KEY": "old-key",
+            "API_BASE": "http://old",
+            "SUMMARY_MODEL_NAME": "old-model",
+        },
+        clear=False,
+    ):
+        with _override_visit_summarizer_env("new-key", "http://new", "new-model"):
+            assert os.environ["API_KEY"] == "new-key"
+            assert os.environ["API_BASE"] == "http://new"
+            assert os.environ["SUMMARY_MODEL_NAME"] == "new-model"
+
+        assert os.environ["API_KEY"] == "old-key"
+        assert os.environ["API_BASE"] == "http://old"
+        assert os.environ["SUMMARY_MODEL_NAME"] == "old-model"
 
 
 @pytest.mark.asyncio
@@ -256,6 +279,7 @@ def test_patched_vendor_defers_wrapper_build_until_lock_is_held(monkeypatch):
             with runner_mod._patched_vendor(
                 api_key="k",
                 api_base="http://fake",
+                summary_model="fake-model",
                 emit_fn=lambda _action: None,
                 agent_id="agent-1",
                 instance_id="inst-1",

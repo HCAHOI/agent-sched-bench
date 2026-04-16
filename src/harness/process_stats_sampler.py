@@ -107,6 +107,10 @@ def _cache_process(
     process = process_cache.get(pid)
     if process is None:
         process = psutil_module.Process(pid)
+        try:
+            process.cpu_percent(interval=None)
+        except Exception:
+            pass
         process_cache[pid] = process
     return process
 
@@ -134,8 +138,12 @@ def _sample_with_psutil(
     if process_cache is not None:
         for child in children:
             child_pid = getattr(child, "pid", None)
-            if isinstance(child_pid, int):
-                process_cache.setdefault(child_pid, child)
+            if isinstance(child_pid, int) and child_pid not in process_cache:
+                try:
+                    child.cpu_percent(interval=None)
+                except Exception:
+                    pass
+                process_cache[child_pid] = child
         children = [
             process_cache.get(getattr(child, "pid", None), child)
             for child in children

@@ -89,6 +89,14 @@ def _install_fake_client(script_factory):
     return patch("agents.tongyi_deepresearch.trace.openai.OpenAI", side_effect=_factory)
 
 
+class _FakeStatusError(openai.APIStatusError):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.response = SimpleNamespace(status_code=status_code)
+        self.body = None
+        Exception.__init__(self, f"status {status_code}")
+
+
 # ----------------------------------------------------------------------
 # Tests
 # ----------------------------------------------------------------------
@@ -186,6 +194,79 @@ def test_transport_retry_emits_tagged_action_sharing_turn_id(capture_emits, iter
     assert retry_action.data["logical_turn_id"] == success_action.data["logical_turn_id"]
     assert retry_action.data["parent_action_id"] == success_action.action_id
     assert "APIConnectionError" in retry_action.data["error"]
+
+
+def test_non_retryable_api_status_error_is_raised_without_transport_retry(
+    capture_emits,
+    iter_provider,
+):
+    captured, emit = capture_emits
+    get_iter, _ = iter_provider
+
+    def _always_unauthorized(*, model, messages, stream, stream_options, **kwargs):
+        raise _FakeStatusError(401)
+
+    class _UnauthorizedClient:
+        def __init__(self, *_a, **_k) -> None:
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=_always_unauthorized))
+
+    with patch("agents.tongyi_deepresearch.trace.openai.OpenAI", side_effect=_UnauthorizedClient):
+        shim = TracedStreamingOpenAI(
+            api_key="x",
+            base_url=None,
+            emit_fn=emit,
+            agent_id="A",
+            instance_id="I",
+            iteration_provider=get_iter,
+            backoff_base_s=0.0,
+            backoff_jitter_max_s=0.0,
+        )
+        with pytest.raises(_FakeStatusError):
+            shim.chat.completions.create(model="m", messages=[{"role": "user", "content": "q"}])
+
+    assert captured == []
+
+
+def test_transport_retry_backoff_includes_jitter(capture_emits, iter_provider):
+    captured, emit = capture_emits
+    get_iter, _ = iter_provider
+
+    call_count = {"n": 0}
+
+    def _fails_then_succeeds(*, model, messages, stream, stream_options, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _FakeStatusError(503)
+        return iter([
+            _delta_chunk("ok", finish_reason="stop"),
+            _usage_chunk(3, 1),
+        ])
+
+    class _RetryableClient:
+        def __init__(self, *_a, **_k) -> None:
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=_fails_then_succeeds))
+
+    with (
+        patch("agents.tongyi_deepresearch.trace.openai.OpenAI", side_effect=_RetryableClient),
+        patch("agents.tongyi_deepresearch.trace.random.uniform", return_value=0.25),
+        patch("agents.tongyi_deepresearch.trace.time.sleep") as mock_sleep,
+    ):
+        shim = TracedStreamingOpenAI(
+            api_key="x",
+            base_url=None,
+            emit_fn=emit,
+            agent_id="A",
+            instance_id="I",
+            iteration_provider=get_iter,
+            backoff_base_s=0.5,
+            backoff_jitter_max_s=1.0,
+        )
+        resp = shim.chat.completions.create(model="m", messages=[{"role": "user", "content": "q"}])
+
+    assert resp.choices[0].message.content == "ok"
+    mock_sleep.assert_called_once_with(0.75)
+    retry_action = next(a for a in captured if a.data.get("transport_retry"))
+    assert "status 503" in retry_action.data["error"]
 
 
 def test_transport_exhaustion_raises_rate_limit_exhausted(capture_emits, iter_provider):

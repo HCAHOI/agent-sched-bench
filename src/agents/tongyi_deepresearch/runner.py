@@ -55,6 +55,7 @@ _ENV_ALIAS_MAP = {
     "SERPER_KEY_ID": ("SERPER_API_KEY",),
     "JINA_API_KEYS": ("JINA_API_KEY",),
 }
+_VISIT_SUMMARIZER_ENV_KEYS = ("API_KEY", "API_BASE", "SUMMARY_MODEL_NAME")
 
 
 def _ensure_vendor_env_aliases() -> None:
@@ -68,17 +69,28 @@ def _ensure_vendor_env_aliases() -> None:
                 break
 
 
-def _ensure_visit_summarizer_env(api_key: str, api_base: str, model: str) -> None:
-    """Propagate runner's backend credentials to Visit tool's summarization env.
+@contextlib.contextmanager
+def _override_visit_summarizer_env(api_key: str, api_base: str, model: str):
+    """Override Visit tool summarization env for the duration of one task run.
 
     Vendor's ``Visit.call_server()`` distills fetched pages into evidence via
     a separate OpenAI-compatible client built from ``API_KEY`` / ``API_BASE``
     / ``SUMMARY_MODEL_NAME`` env vars. The runner already has these values;
-    expose them to the vendor tool unless the operator explicitly set overrides.
+    expose them to the vendor tool per-run, then restore the previous process
+    environment so later tasks can use different backends safely.
     """
-    os.environ.setdefault("API_KEY", api_key)
-    os.environ.setdefault("API_BASE", api_base)
-    os.environ.setdefault("SUMMARY_MODEL_NAME", model)
+    previous = {key: os.environ.get(key) for key in _VISIT_SUMMARIZER_ENV_KEYS}
+    os.environ["API_KEY"] = api_key
+    os.environ["API_BASE"] = api_base
+    os.environ["SUMMARY_MODEL_NAME"] = model
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _advance_iteration(iteration_state: dict[str, int]) -> int:
@@ -101,6 +113,7 @@ def _patched_vendor(
     *,
     api_key: str,
     api_base: str,
+    summary_model: str,
     emit_fn,
     agent_id: str,
     instance_id: str,
@@ -175,27 +188,28 @@ def _patched_vendor(
             traced_instances.append(traced_inst)
             traced_map[traced_inst.name] = traced_inst
 
-        try:
-            vendor.OpenAI = _BoundTracedOpenAI
-            vendor.TOOL_CLASS.clear()
-            vendor.TOOL_CLASS.extend(traced_instances)
-            vendor.TOOL_MAP.clear()
-            vendor.TOOL_MAP.update(traced_map)
-            vendor.MultiTurnReactAgent.count_tokens = (
-                lambda self, messages: _approx_tokens_of_messages(messages)
-            )
-            # MAX_LLM_CALL_PER_RUN is frozen at module-load from os.environ;
-            # patch the module attribute directly so runner's max_iterations takes effect.
-            vendor.MAX_LLM_CALL_PER_RUN = max_llm_calls
-            yield vendor
-        finally:
-            vendor.OpenAI = orig_openai
-            vendor.TOOL_CLASS.clear()
-            vendor.TOOL_CLASS.extend(orig_tool_class)
-            vendor.TOOL_MAP.clear()
-            vendor.TOOL_MAP.update(orig_tool_map)
-            vendor.MultiTurnReactAgent.count_tokens = orig_count_tokens
-            vendor.MAX_LLM_CALL_PER_RUN = orig_max_calls
+        with _override_visit_summarizer_env(api_key, api_base, summary_model):
+            try:
+                vendor.OpenAI = _BoundTracedOpenAI
+                vendor.TOOL_CLASS.clear()
+                vendor.TOOL_CLASS.extend(traced_instances)
+                vendor.TOOL_MAP.clear()
+                vendor.TOOL_MAP.update(traced_map)
+                vendor.MultiTurnReactAgent.count_tokens = (
+                    lambda self, messages: _approx_tokens_of_messages(messages)
+                )
+                # MAX_LLM_CALL_PER_RUN is frozen at module-load from os.environ;
+                # patch the module attribute directly so runner's max_iterations takes effect.
+                vendor.MAX_LLM_CALL_PER_RUN = max_llm_calls
+                yield vendor
+            finally:
+                vendor.OpenAI = orig_openai
+                vendor.TOOL_CLASS.clear()
+                vendor.TOOL_CLASS.extend(orig_tool_class)
+                vendor.TOOL_MAP.clear()
+                vendor.TOOL_MAP.update(orig_tool_map)
+                vendor.MultiTurnReactAgent.count_tokens = orig_count_tokens
+                vendor.MAX_LLM_CALL_PER_RUN = orig_max_calls
 
 
 class TongyiDeepResearchRunner:
@@ -261,7 +275,6 @@ class TongyiDeepResearchRunner:
             return max(iteration_state["current"], 0)
 
         _ensure_vendor_env_aliases()
-        _ensure_visit_summarizer_env(self.api_key, self.api_base, self.model)
 
         task_prompt = render_research_prompt(
             self.benchmark_slug,
@@ -282,6 +295,7 @@ class TongyiDeepResearchRunner:
                 with _patched_vendor(
                     api_key=self.api_key,
                     api_base=self.api_base,
+                    summary_model=self.model,
                     emit_fn=emit,
                     agent_id=agent_id,
                     instance_id=instance_id,
