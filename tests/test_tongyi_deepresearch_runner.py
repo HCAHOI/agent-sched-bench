@@ -129,6 +129,34 @@ def test_override_visit_summarizer_env_is_scoped_to_context() -> None:
         assert os.environ["SUMMARY_MODEL_NAME"] == "old-model"
 
 
+def test_override_vendor_env_aliases_is_scoped_to_context() -> None:
+    from agents.tongyi_deepresearch.runner import _override_vendor_env_aliases
+    from agents.tongyi_deepresearch.vendor import tool_search, tool_visit
+
+    old_serper = tool_search.SERPER_KEY
+    old_jina = tool_visit.JINA_API_KEYS
+    with patch.dict(
+        "os.environ",
+        {
+            "SERPER_API_KEY": "serper-new",
+            "JINA_API_KEY": "jina-new",
+            "SERPER_KEY_ID": "serper-old",
+            "JINA_API_KEYS": "jina-old",
+        },
+        clear=False,
+    ):
+        with _override_vendor_env_aliases():
+            assert os.environ["SERPER_KEY_ID"] == "serper-new"
+            assert os.environ["JINA_API_KEYS"] == "jina-new"
+            assert tool_search.SERPER_KEY == "serper-new"
+            assert tool_visit.JINA_API_KEYS == "jina-new"
+
+        assert os.environ["SERPER_KEY_ID"] == "serper-old"
+        assert os.environ["JINA_API_KEYS"] == "jina-old"
+        assert tool_search.SERPER_KEY == old_serper
+        assert tool_visit.JINA_API_KEYS == old_jina
+
+
 @pytest.mark.asyncio
 async def test_run_task_completes_with_valid_answer(tmp_path):
     """AC-b: vendor returns <answer>...</answer> → exit_status='completed'."""
@@ -155,8 +183,10 @@ async def test_run_task_completes_with_valid_answer(tmp_path):
 
     assert result.exit_status == "completed", (result.exit_status, result.error)
     assert result.success is True
+    assert result.n_iterations == 1
     assert result.summary["final_answer"] == "four"
     assert result.summary["n_turns"] == 1
+    assert result.summary["n_iterations"] == 1
     assert result.summary["total_llm_ms"] > 0
     assert result.summary["model"] == "fake-model"
     # Vendor termination surfaced in summary for analysis
@@ -358,3 +388,5 @@ async def test_run_task_increments_iteration_per_llm_turn_and_marks_tool_success
     assert len(tool_execs) == 1
     assert tool_execs[0]["iteration"] == 0
     assert tool_execs[0]["data"]["success"] is True
+    assert result.n_iterations == 2
+    assert result.summary["n_iterations"] == 2

@@ -38,7 +38,7 @@ class Search(BaseTool):
     def google_search_with_serp(self, query: str):
         def contains_chinese_basic(text: str) -> bool:
             return any('\u4E00' <= char <= '\u9FFF' for char in text)
-        conn = http.client.HTTPSConnection("google.serper.dev")
+        conn = http.client.HTTPSConnection("google.serper.dev", timeout=30)
         if contains_chinese_basic(query):
             payload = json.dumps({
                 "q": query,
@@ -128,4 +128,3 @@ class Search(BaseTool):
             response = "\n=======\n".join(responses)
             
         return response
-

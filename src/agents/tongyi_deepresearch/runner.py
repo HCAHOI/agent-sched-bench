@@ -56,17 +56,54 @@ _ENV_ALIAS_MAP = {
     "JINA_API_KEYS": ("JINA_API_KEY",),
 }
 _VISIT_SUMMARIZER_ENV_KEYS = ("API_KEY", "API_BASE", "SUMMARY_MODEL_NAME")
+_VENDOR_TOOL_MODULE_GLOBALS = {
+    "SERPER_KEY_ID": ("agents.tongyi_deepresearch.vendor.tool_search", "SERPER_KEY"),
+    "JINA_API_KEYS": ("agents.tongyi_deepresearch.vendor.tool_visit", "JINA_API_KEYS"),
+}
 
 
-def _ensure_vendor_env_aliases() -> None:
-    for vendor_name, aliases in _ENV_ALIAS_MAP.items():
-        if os.environ.get(vendor_name):
-            continue
-        for alias in aliases:
-            value = os.environ.get(alias)
-            if value:
+@contextlib.contextmanager
+def _override_vendor_env_aliases():
+    """Refresh vendor tool credentials per task run and restore afterward."""
+    modules: dict[str, Any] = {}
+    previous_env = {key: os.environ.get(key) for key in _ENV_ALIAS_MAP}
+    previous_globals: dict[str, Any] = {}
+
+    for vendor_name, (module_path, attr_name) in _VENDOR_TOOL_MODULE_GLOBALS.items():
+        module = __import__(module_path, fromlist=[attr_name])
+        modules[vendor_name] = module
+        previous_globals[vendor_name] = getattr(module, attr_name)
+
+    try:
+        for vendor_name, aliases in _ENV_ALIAS_MAP.items():
+            value = None
+            for alias in aliases:
+                alias_value = os.environ.get(alias)
+                if alias_value:
+                    value = alias_value
+                    break
+            if value is None:
+                if previous_env[vendor_name] is None:
+                    os.environ.pop(vendor_name, None)
+                else:
+                    os.environ[vendor_name] = previous_env[vendor_name]
+            else:
                 os.environ[vendor_name] = value
-                break
+
+            module = modules[vendor_name]
+            _, attr_name = _VENDOR_TOOL_MODULE_GLOBALS[vendor_name]
+            setattr(module, attr_name, os.environ.get(vendor_name, ""))
+        yield
+    finally:
+        for vendor_name, value in previous_env.items():
+            if value is None:
+                os.environ.pop(vendor_name, None)
+            else:
+                os.environ[vendor_name] = value
+        for vendor_name, previous in previous_globals.items():
+            module = modules[vendor_name]
+            _, attr_name = _VENDOR_TOOL_MODULE_GLOBALS[vendor_name]
+            setattr(module, attr_name, previous)
 
 
 @contextlib.contextmanager
@@ -188,28 +225,29 @@ def _patched_vendor(
             traced_instances.append(traced_inst)
             traced_map[traced_inst.name] = traced_inst
 
-        with _override_visit_summarizer_env(api_key, api_base, summary_model):
-            try:
-                vendor.OpenAI = _BoundTracedOpenAI
-                vendor.TOOL_CLASS.clear()
-                vendor.TOOL_CLASS.extend(traced_instances)
-                vendor.TOOL_MAP.clear()
-                vendor.TOOL_MAP.update(traced_map)
-                vendor.MultiTurnReactAgent.count_tokens = (
-                    lambda self, messages: _approx_tokens_of_messages(messages)
-                )
-                # MAX_LLM_CALL_PER_RUN is frozen at module-load from os.environ;
-                # patch the module attribute directly so runner's max_iterations takes effect.
-                vendor.MAX_LLM_CALL_PER_RUN = max_llm_calls
-                yield vendor
-            finally:
-                vendor.OpenAI = orig_openai
-                vendor.TOOL_CLASS.clear()
-                vendor.TOOL_CLASS.extend(orig_tool_class)
-                vendor.TOOL_MAP.clear()
-                vendor.TOOL_MAP.update(orig_tool_map)
-                vendor.MultiTurnReactAgent.count_tokens = orig_count_tokens
-                vendor.MAX_LLM_CALL_PER_RUN = orig_max_calls
+        with _override_vendor_env_aliases():
+            with _override_visit_summarizer_env(api_key, api_base, summary_model):
+                try:
+                    vendor.OpenAI = _BoundTracedOpenAI
+                    vendor.TOOL_CLASS.clear()
+                    vendor.TOOL_CLASS.extend(traced_instances)
+                    vendor.TOOL_MAP.clear()
+                    vendor.TOOL_MAP.update(traced_map)
+                    vendor.MultiTurnReactAgent.count_tokens = (
+                        lambda self, messages: _approx_tokens_of_messages(messages)
+                    )
+                    # MAX_LLM_CALL_PER_RUN is frozen at module-load from os.environ;
+                    # patch the module attribute directly so runner's max_iterations takes effect.
+                    vendor.MAX_LLM_CALL_PER_RUN = max_llm_calls
+                    yield vendor
+                finally:
+                    vendor.OpenAI = orig_openai
+                    vendor.TOOL_CLASS.clear()
+                    vendor.TOOL_CLASS.extend(orig_tool_class)
+                    vendor.TOOL_MAP.clear()
+                    vendor.TOOL_MAP.update(orig_tool_map)
+                    vendor.MultiTurnReactAgent.count_tokens = orig_count_tokens
+                    vendor.MAX_LLM_CALL_PER_RUN = orig_max_calls
 
 
 class TongyiDeepResearchRunner:
@@ -273,8 +311,6 @@ class TongyiDeepResearchRunner:
 
         def iteration_provider() -> int:
             return max(iteration_state["current"], 0)
-
-        _ensure_vendor_env_aliases()
 
         task_prompt = render_research_prompt(
             self.benchmark_slug,
@@ -366,7 +402,7 @@ class TongyiDeepResearchRunner:
             model_patch="",
             summary=summary,
             error=error_msg,
-            n_iterations=summary.get("n_turns"),
+            n_iterations=summary.get("n_iterations"),
             total_llm_ms=summary.get("total_llm_ms"),
             total_tool_ms=summary.get("total_tool_ms"),
             total_tokens=summary.get("total_tokens"),
@@ -438,6 +474,7 @@ class TongyiDeepResearchRunner:
             "instance_id": instance_id,
             "model": model,
             "n_turns": n_turns,
+            "n_iterations": n_turns,
             "total_llm_ms": total_llm_ms,
             "total_tool_ms": total_tool_ms,
             "total_tokens": total_tokens,

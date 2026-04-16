@@ -43,18 +43,19 @@ class IDP():
     def file_submit_with_path(self, file_path):
         print('parsing with document local path ', file_path)
         file_name = os.path.basename(file_path)
-        request = docmind_api20220711_models.SubmitDocParserJobAdvanceRequest(
-            file_url_object=open(file_path, "rb"),
-            file_name=file_name,
-    )
         runtime = util_models.RuntimeOptions()
         result_dict = None
-        try:
-            response = self.client.submit_doc_parser_job_advance(request, runtime)
-            result_dict = response.body.data.id
-        except Exception as error:
-            print(error)
-            UtilClient.assert_as_string(error.message)
+        with open(file_path, "rb") as file_obj:
+            request = docmind_api20220711_models.SubmitDocParserJobAdvanceRequest(
+                file_url_object=file_obj,
+                file_name=file_name,
+        )
+            try:
+                response = self.client.submit_doc_parser_job_advance(request, runtime)
+                result_dict = response.body.data.id
+            except Exception as error:
+                print(error)
+                UtilClient.assert_as_string(error.message)
 
         return result_dict
 

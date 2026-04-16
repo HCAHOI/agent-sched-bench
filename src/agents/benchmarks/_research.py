@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, ClassVar
 
 from agents.benchmarks.base import Benchmark
@@ -228,35 +230,56 @@ class HostResearchOpenClawRunner:
         instance_id: str,
         prompt_template: str,
     ) -> None:
-        lines = trace_path.read_text(encoding="utf-8").splitlines()
-        stamped: list[str] = []
         replaced = False
-        for line in lines:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if not replaced and record.get("type") == "trace_metadata":
-                record.update(
-                    {
-                        "benchmark": self.benchmark_slug,
-                        "execution_environment": "host",
-                        "instance_id": instance_id,
-                        "prompt_template": prompt_template,
-                    }
-                )
-                if getattr(self, "mcp_config", None) is not None:
-                    run_config = record.get("run_config") or {}
-                    run_config["mcp_config"] = self.mcp_config
-                    record["run_config"] = run_config
-                replaced = True
-            stamped.append(json.dumps(record, ensure_ascii=False))
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=trace_path.parent,
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            with trace_path.open("r", encoding="utf-8") as src:
+                for line in src:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    if not replaced and record.get("type") == "trace_metadata":
+                        record.update(
+                            {
+                                "benchmark": self.benchmark_slug,
+                                "execution_environment": "host",
+                                "instance_id": instance_id,
+                                "prompt_template": prompt_template,
+                            }
+                        )
+                        if getattr(self, "mcp_config", None) is not None:
+                            run_config = record.get("run_config") or {}
+                            run_config["mcp_config"] = self.mcp_config
+                            record["run_config"] = run_config
+                        replaced = True
+                    tmp.write(json.dumps(record, ensure_ascii=False))
+                    tmp.write("\n")
         if not replaced:
-            metadata = self._trace_metadata(
-                instance_id=instance_id,
-                prompt_template=prompt_template,
-            )
-            stamped.insert(0, json.dumps(metadata, ensure_ascii=False))
-        trace_path.write_text("\n".join(stamped) + "\n", encoding="utf-8")
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=trace_path.parent,
+                delete=False,
+            ) as tmp:
+                final_path = Path(tmp.name)
+                metadata = self._trace_metadata(
+                    instance_id=instance_id,
+                    prompt_template=prompt_template,
+                )
+                tmp.write(json.dumps(metadata, ensure_ascii=False))
+                tmp.write("\n")
+                with tmp_path.open("r", encoding="utf-8") as stamped_src:
+                    for line in stamped_src:
+                        tmp.write(line)
+            os.replace(final_path, trace_path)
+            tmp_path.unlink(missing_ok=True)
+            return
+        os.replace(tmp_path, trace_path)
 
     def _trace_metadata(
         self,

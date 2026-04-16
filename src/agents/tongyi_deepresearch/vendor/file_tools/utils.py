@@ -190,7 +190,7 @@ def save_url_to_local_work_dir(url: str, save_dir: str, save_filename: str = '')
             'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
         }
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             with open(new_path, 'wb') as file:
                 file.write(response.content)
