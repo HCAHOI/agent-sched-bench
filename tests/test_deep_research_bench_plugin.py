@@ -101,6 +101,40 @@ def test_deep_research_bench_load_tasks_uses_configured_hf_dataset(
     assert tasks[0]["instance_id"] == "drb-1"
 
 
+def test_deep_research_bench_load_tasks_maps_single_data_file_to_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+    datasets_mod = types.ModuleType("datasets")
+
+    def load_dataset(dataset: str, *, split: str, data_files):
+        seen["dataset"] = dataset
+        seen["split"] = split
+        seen["data_files"] = data_files
+        return [
+            {
+                "id": "drb-1",
+                "prompt": "Question",
+                "article": "Answer",
+            }
+        ]
+
+    datasets_mod.load_dataset = load_dataset
+    monkeypatch.setitem(sys.modules, "datasets", datasets_mod)
+
+    plugin = DeepResearchBenchBenchmark(
+        _make_config(data_files="generated_reports/openai-deepresearch.jsonl")
+    )
+    tasks = plugin.load_tasks()
+
+    assert seen == {
+        "dataset": "example/deepresearchbench",
+        "split": "test",
+        "data_files": {"test": "generated_reports/openai-deepresearch.jsonl"},
+    }
+    assert tasks[0]["instance_id"] == "drb-1"
+
+
 def test_deep_research_bench_runtime_and_runner_gating() -> None:
     plugin = DeepResearchBenchBenchmark(_make_config())
 

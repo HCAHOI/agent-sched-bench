@@ -39,6 +39,11 @@ describe("computeTrackLayout", () => {
     expect(layout.topTrackH).toBe(SPAN_H);
   });
 
+  it("reserves top-strip height for each control-flow track", () => {
+    const layout = computeTrackLayout(3, 1, LANE_H);
+    expect(layout.toolStripY).toBe(SPAN_PAD + 3 * (SPAN_H + 2));
+  });
+
   it("matches the LLM row height for a single tool track (N=1)", () => {
     // Sequential tools (N=1): keep SPAN_H height so tool row matches LLM row.
     const layout = computeTrackLayout(1, 1, LANE_H);
@@ -55,9 +60,9 @@ describe("computeTrackLayout", () => {
 
   it("compresses tool tracks when toolTrackCount = 3 (research-agent fetch)", () => {
     const layout = computeTrackLayout(0, 3, LANE_H);
-    // 24 / 3 = 8
-    expect(layout.toolTrackH).toBeCloseTo(8, 1);
-    expect(layout.toolSpanH).toBeCloseTo(6, 1);
+    // With no control-flow strip reserved, tools get the full drawable height.
+    expect(layout.toolTrackH).toBeCloseTo(14.666, 1);
+    expect(layout.toolSpanH).toBeCloseTo(12.666, 1);
     expect(layout.toolSpanH).toBeGreaterThanOrEqual(MIN_SPAN_H);
   });
 

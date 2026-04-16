@@ -35,7 +35,8 @@ export function computeTrackLayout(
   laneH: number,
 ): TrackLayout {
   const topTrackH = SPAN_H;
-  const topStripH = SPAN_H + 2;               // reserved 20px (one track row)
+  const topSlots = Math.max(0, topTrackCount);
+  const topStripH = topSlots > 0 ? topSlots * (SPAN_H + 2) : 0;
   const topStripY = SPAN_PAD;
   const toolStripY = topStripY + topStripH;
   const toolStripH = Math.max(

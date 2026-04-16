@@ -79,7 +79,7 @@ def _load_hf_rows(
     dataset: str,
     split: str | None,
     *,
-    data_files: str | None = None,
+    data_files: str | dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     from datasets import load_dataset  # type: ignore[import]
 
@@ -87,7 +87,10 @@ def _load_hf_rows(
         raise ValueError("Host-mode research benchmarks require harness_split")
     kwargs: dict[str, Any] = {"split": split}
     if data_files:
-        kwargs["data_files"] = data_files
+        if isinstance(data_files, str):
+            kwargs["data_files"] = {split: data_files}
+        else:
+            kwargs["data_files"] = data_files
     ds = load_dataset(dataset, **kwargs)
     return [dict(row) for row in ds]
 
@@ -376,7 +379,7 @@ class ResearchBenchmark(Benchmark):
         rows = _load_hf_rows(
             self.config.harness_dataset,
             self.config.harness_split,
-            data_files=str(data_files) if data_files else None,
+            data_files=data_files if data_files else None,
         )
         tasks: list[dict[str, Any]] = []
         for index, row in enumerate(rows):
