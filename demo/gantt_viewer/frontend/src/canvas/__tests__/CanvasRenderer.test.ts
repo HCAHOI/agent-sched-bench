@@ -89,10 +89,10 @@ function payloadFixture(): GanttPayload {
                 end_real: 0.7,
                 end_real_abs: 1000.7,
                 iteration: 0,
-                start: 0.5,
-                start_abs: 1000.5,
-                start_real: 0.2,
-                start_real_abs: 1000.2,
+                start: 0.2,
+                start_abs: 1000.2,
+                start_real: 0.1,
+                start_real_abs: 1000.1,
                 type: "tool",
               },
             ],
@@ -276,7 +276,10 @@ describe("CanvasRenderer", () => {
     renderer.setClockMode("real");
     (renderer as unknown as { render: () => void }).render();
 
-    expect(renderer.hitTest(340, 58)?.kind).toBe("span");
+    // With stratified layout, tool spans live in the bottom strip. At x=340
+    // (time ~0.53 in wall fallback), only the tool span covers that X, which
+    // sits at y ≈ 52-62. y=55 lands on the tool row.
+    expect(renderer.hitTest(340, 55)?.kind).toBe("span");
     renderer.destroy();
   });
 

@@ -1,9 +1,21 @@
 import type { GanttPayload, ResourceSample } from "../api/client";
 import { displayColor } from "../theme/displayColor";
 import { RESOURCE_METRIC_COLORS, findNearestSample, sameHit, type Hit, type HitCard } from "./hit";
-import { computeTotalContentHeight, effectiveLaneH, MARKER_H, resourceChartH, SPAN_H, SPAN_PAD, TIME_AXIS_H } from "./layout";
+import {
+  CONTROL_FLOW_SPAN_TYPES,
+  computeTotalContentHeight,
+  computeTrackLayout,
+  effectiveLaneH,
+  LANE_H,
+  MARKER_H,
+  resourceChartH,
+  SPAN_H,
+  SPAN_PAD,
+  TIME_AXIS_H,
+} from "./layout";
 import { setCanvasTimeRange } from "../state/signals";
 import { formatTimeLabel, niceStep } from "./time";
+import { assignTracks } from "./tracks";
 
 type TimeMode = "sync" | "abs";
 type ViewMode = "layered" | "concise";
@@ -470,16 +482,64 @@ export class CanvasRenderer extends EventTarget {
             return leftOrder - rightOrder;
           });
 
-          spans.forEach((span, index) => {
+          // Stratified layout (layered mode): top strip for control-flow
+          // span types (llm/scheduling/mcp) and bottom strip for tool spans.
+          // Concise mode keeps all spans collapsed onto track 0.
+          const isConcise = this.viewMode === "concise";
+          const topSpans = isConcise
+            ? spans
+            : spans.filter((s) => CONTROL_FLOW_SPAN_TYPES.has(s.type));
+          const toolSpans = isConcise
+            ? []
+            : spans.filter((s) => !CONTROL_FLOW_SPAN_TYPES.has(s.type));
+
+          const topTracks = assignTracks(
+            topSpans,
+            (s) => this.selectSpanStart(s),
+            (s) => this.selectSpanEnd(s),
+          );
+          const toolTracks = assignTracks(
+            toolSpans,
+            (s) => this.selectSpanStart(s),
+            (s) => this.selectSpanEnd(s),
+          );
+          const topTrackCount = topTracks.length
+            ? Math.max(...topTracks) + 1
+            : 0;
+          const toolTrackCount = toolTracks.length
+            ? Math.max(...toolTracks) + 1
+            : 0;
+          const layout = computeTrackLayout(
+            topTrackCount,
+            toolTrackCount,
+            LANE_H,
+          );
+
+          const spanYH = (span: (typeof spans)[number]) => {
+            if (isConcise) {
+              return { y: laneY + SPAN_PAD, h: SPAN_H };
+            }
+            if (CONTROL_FLOW_SPAN_TYPES.has(span.type)) {
+              const track = topTracks[topSpans.indexOf(span)];
+              return {
+                y: laneY + layout.topStripY + track * (layout.topTrackH + 2),
+                h: layout.topTrackH,
+              };
+            }
+            const track = toolTracks[toolSpans.indexOf(span)];
+            return {
+              y: laneY + layout.toolStripY + track * layout.toolTrackH,
+              h: layout.toolSpanH,
+            };
+          };
+
+          spans.forEach((span) => {
             const start = this.selectSpanStart(span);
             const end = this.selectSpanEnd(span);
             const x0 = timeToX(start);
             const x1 = timeToX(end);
             const widthPx = Math.max(x1 - x0, 3);
-            const yOffset =
-              laneY +
-              SPAN_PAD +
-              (this.viewMode === "concise" ? 0 : index) * (SPAN_H + 2);
+            const { y: yOffset, h: spanH } = spanYH(span);
             const color =
               displayColor(
                 this.payload?.registries.spans[span.type]?.color ?? UNKNOWN_SPAN_COLOR,
@@ -487,17 +547,17 @@ export class CanvasRenderer extends EventTarget {
 
             this.ctx.fillStyle = color;
             this.ctx.globalAlpha = 0.88;
-            this.ctx.fillRect(x0, yOffset, widthPx, SPAN_H);
+            this.ctx.fillRect(x0, yOffset, widthPx, spanH);
             this.ctx.globalAlpha = 1;
 
-            if (widthPx > 22) {
+            if (widthPx > 22 && spanH >= 10) {
               this.ctx.fillStyle = spanLabelColor;
               this.ctx.textAlign = "left";
-              this.ctx.fillText(String(span.iteration), x0 + 4, yOffset + 12);
+              this.ctx.fillText(String(span.iteration), x0 + 4, yOffset + Math.min(12, spanH - 2));
             }
 
             this.hitBoxes.push({
-              h: SPAN_H,
+              h: spanH,
               hit: {
                 item: span,
                 kind: "span",
