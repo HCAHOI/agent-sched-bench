@@ -9,6 +9,6 @@ exclude_lite: false
 extras:
   task_source_kind: terminal_bench_registry
   dataset_name: terminal-bench-core
-  dataset_version: head
+  dataset_version: 0.1.1
   registry_url:
   local_registry_path:

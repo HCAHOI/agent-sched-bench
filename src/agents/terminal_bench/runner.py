@@ -190,6 +190,8 @@ class TerminalBenchRunner:
             "--agent-kwarg",
             f"env_key={self.env_key}",
             "--agent-kwarg",
+            "api_key=",
+            "--agent-kwarg",
             f"max_iterations={self.max_iterations}",
         ]
         prompt_template_path = self._materialize_prompt_template(
@@ -223,9 +225,15 @@ class TerminalBenchRunner:
         return bool(first.get("is_resolved"))
 
     def _find_trace_path(self, tb_run_path: Path) -> Path:
-        traces = sorted(tb_run_path.glob(f"**/agent-logs/{self._trace_filename()}"))
-        if traces:
-            return traces[0]
+        # Trace is written to /logs (CONTAINER_SESSION_LOGS_PATH) inside the container,
+        # which mounts to sessions/ on the host. Fall back to agent-logs/ for old runs.
+        for pattern in (
+            f"**/sessions/{self._trace_filename()}",
+            f"**/agent-logs/{self._trace_filename()}",
+        ):
+            traces = sorted(tb_run_path.glob(pattern))
+            if traces:
+                return traces[0]
         return tb_run_path / "missing-trace.jsonl"
 
     def _augment_trace_metadata(

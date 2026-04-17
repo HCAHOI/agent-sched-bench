@@ -107,11 +107,15 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _wheel_path(self) -> Path:
         return self._build_wheel()
 
+    # /agent-logs is NOT mounted in terminal-bench task docker-compose.yaml files;
+    # /logs (CONTAINER_SESSION_LOGS_PATH) IS mounted and maps to sessions/ on the host.
+    CONTAINER_SESSION_LOGS_PATH = "/logs"
+
     def _run_agent_commands(self, instruction: str) -> list[TerminalCommand]:
         escaped_instruction = shlex.quote(instruction)
         workspace = shlex.quote(".")
         trace_output = shlex.quote(
-            f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.TRACE_FILENAME}"
+            f"{self.CONTAINER_SESSION_LOGS_PATH}/{self.TRACE_FILENAME}"
         )
         mcp_flag = ""
         if self._mcp_config_path:
