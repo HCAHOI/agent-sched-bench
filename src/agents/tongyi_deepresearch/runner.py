@@ -41,6 +41,9 @@ from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
 
 logger = logging.getLogger(__name__)
 
+_VENDOR_RETRY_EXHAUSTED_SENTINEL = "vllm server error!!!"
+_VENDOR_NO_ANSWER_SENTINEL = "No answer found."
+
 # Serializes concurrent run_task invocations because vendor module attributes
 # (OpenAI, TOOL_CLASS, TOOL_MAP, count_tokens) are patched globally within
 # the contextmanager. Concurrent patching would race.
@@ -376,11 +379,15 @@ class TongyiDeepResearchRunner:
             vendor_termination = result.get("termination")
             final_answer = (result.get("prediction") or "").strip()
 
-            if final_answer == "vllm server error!!!":
+            if final_answer == _VENDOR_RETRY_EXHAUSTED_SENTINEL:
                 exit_status = "retry_exhausted"
                 error_msg = "vendor call_server exhausted its own max_tries"
                 final_answer = ""
-            elif vendor_termination != "answer" or not final_answer or final_answer == "No answer found.":
+            elif (
+                vendor_termination != "answer"
+                or not final_answer
+                or final_answer == _VENDOR_NO_ANSWER_SENTINEL
+            ):
                 # Vendor produces sentinel "No answer found." when it never hits
                 # <answer>…</answer>; treat that as empty_final_response regardless
                 # of whether the sentinel string is technically non-empty.
