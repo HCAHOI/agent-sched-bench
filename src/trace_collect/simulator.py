@@ -225,8 +225,7 @@ def _next_attempt_number(instance_dir: Path) -> int:
 
 def _arrival_tag(arrival_mode: str, arrival_rate_per_s: float | None) -> str:
     if arrival_mode == "poisson" and arrival_rate_per_s:
-        tasks_per_min = arrival_rate_per_s * 60
-        return f"poisson_{tasks_per_min:g}_per_min"
+        return f"poisson_{arrival_rate_per_s:g}_per_s"
     return arrival_mode or "closed_loop"
 
 
