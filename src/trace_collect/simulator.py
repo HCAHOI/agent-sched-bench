@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -204,6 +205,62 @@ def _iteration_count(actions: list[dict[str, Any]]) -> int:
 
 def _sanitize_run_label(value: str) -> str:
     return value.replace("/", "-").replace(":", "-").replace(" ", "-")
+
+
+_ATTEMPT_DIR_RE = re.compile(r"^attempt_(\d+)$")
+
+
+def _next_attempt_number(instance_dir: Path) -> int:
+    if not instance_dir.exists():
+        return 1
+    max_n = 0
+    for child in instance_dir.iterdir():
+        if not child.is_dir():
+            continue
+        match = _ATTEMPT_DIR_RE.fullmatch(child.name)
+        if match:
+            max_n = max(max_n, int(match.group(1)))
+    return max_n + 1
+
+
+def _arrival_tag(arrival_mode: str, arrival_rate_per_s: float | None) -> str:
+    if arrival_mode == "poisson" and arrival_rate_per_s:
+        tasks_per_min = arrival_rate_per_s * 60
+        return f"poisson_{tasks_per_min:g}_per_min"
+    return arrival_mode or "closed_loop"
+
+
+def _structured_output_subdir(
+    sessions: list["LoadedTraceSession"],
+    *,
+    arrival_mode: str,
+    arrival_rate_per_s: float | None,
+) -> Path:
+    primary = sessions[0].metadata or {}
+    benchmark = str(primary.get("benchmark") or "unknown")
+    model = str(primary.get("model") or "unknown")
+    scaffold = str(primary.get("scaffold") or sessions[0].scaffold or "unknown")
+    for session in sessions[1:]:
+        other = session.metadata or {}
+        if (
+            other.get("benchmark") != primary.get("benchmark")
+            or other.get("model") != primary.get("model")
+            or other.get("scaffold") != primary.get("scaffold")
+        ):
+            logger.warning(
+                "Heterogeneous trace metadata in manifest — primary "
+                "benchmark/model/scaffold=%s/%s/%s but %s has %s/%s/%s; "
+                "using primary for output path.",
+                benchmark, model, scaffold, session.agent_id,
+                other.get("benchmark"), other.get("model"), other.get("scaffold"),
+            )
+            break
+    return (
+        Path(_sanitize_run_label(benchmark))
+        / _sanitize_run_label(model)
+        / _sanitize_run_label(scaffold)
+        / _arrival_tag(arrival_mode, arrival_rate_per_s)
+    )
 
 
 def _build_run_id(*, mode: str, model: str | None) -> str:
@@ -1069,6 +1126,7 @@ async def simulate(
     arrival_mode: str = "closed_loop",
     arrival_rate_per_s: float | None = None,
     arrival_seed: int | None = None,
+    structured_output: bool = False,
 ) -> Path:
     if source_trace is not None and trace_manifest is not None:
         raise ValueError("source_trace and trace_manifest are mutually exclusive")
@@ -1096,9 +1154,16 @@ async def simulate(
         replay_speed=replay_speed,
     )
 
+    output_path = Path(output_dir)
+    if structured_output:
+        output_path = output_path / _structured_output_subdir(
+            loaded_sessions,
+            arrival_mode=arrival_mode,
+            arrival_rate_per_s=arrival_rate_per_s,
+        )
+
     prepared_sessions: list[PreparedTraceSession] = []
     trace_logger: TraceLogger | None = None
-    output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -1119,7 +1184,9 @@ async def simulate(
             )
 
         for prepared in prepared_sessions:
-            task_dir = output_path / prepared.loaded.agent_id / "attempt_1"
+            instance_dir = output_path / prepared.loaded.agent_id
+            attempt_n = _next_attempt_number(instance_dir)
+            task_dir = instance_dir / f"attempt_{attempt_n}"
             task_dir.mkdir(parents=True, exist_ok=True)
             prepared.task_output_dir = task_dir
             if prepared.container is None:
