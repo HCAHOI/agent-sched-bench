@@ -348,52 +348,8 @@ def _run_collect(args: argparse.Namespace) -> None:
         print(f"Results written to: {results_path}")
 
 def _resolve_simulate_output_dir(args: argparse.Namespace) -> Path:
-    """Build a structured output directory for simulate results.
-
-    When ``--output-dir`` is left at its default (``traces/simulate``), append
-    a descriptive sub-path derived from the source manifest/trace and arrival
-    mode so that results are self-documenting::
-
-        traces/simulate/{source_label}/{arrival_tag}/
-
-    If the user explicitly overrides ``--output-dir``, honour it as-is.
-    """
-    base = Path(args.output_dir)
-
-    # Detect explicit override: argparse stores the default as string
-    if args.output_dir != "traces/simulate":
-        return base
-
-    # Source label from manifest filename or source-trace parent
-    if args.trace_manifest:
-        source_label = Path(args.trace_manifest).stem  # e.g. "openclaw-glm-10-fresh-manifest"
-        source_label = source_label.removesuffix("-manifest")
-    elif args.source_trace:
-        # Use instance_id (grandparent) + attempt to avoid collisions
-        # e.g. .../tobymao__sqlglot-3425/attempt_1/trace.jsonl → "tobymao__sqlglot-3425"
-        trace_path = Path(args.source_trace)
-        if len(trace_path.parts) > 2:
-            source_label = trace_path.parents[1].name
-        else:
-            source_label = trace_path.stem
-        # Guard against trace_path layouts where parents[1] resolves to root
-        # (e.g. /tmp/trace.jsonl → parents[1] == '/' with name == ''). Fall
-        # back to the filename stem so source_label is never empty.
-        if not source_label:
-            source_label = trace_path.stem
-    else:
-        source_label = "unknown"
-
-    # Arrival tag
-    if args.arrival_mode == "poisson" and args.arrival_rate_per_s:
-        rate = args.arrival_rate_per_s
-        # Convert to tasks/min for readability
-        tasks_per_min = rate * 60
-        arrival_tag = f"poisson_{tasks_per_min:g}_per_min"
-    else:
-        arrival_tag = args.arrival_mode or "closed_loop"
-
-    return base / source_label / arrival_tag
+    """Return the base dir; structured subpath is resolved by simulator.simulate() when at default."""
+    return Path(args.output_dir)
 
 
 def _run_simulate(args: argparse.Namespace) -> None:
@@ -417,6 +373,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "arrival_mode": args.arrival_mode,
         "arrival_rate_per_s": args.arrival_rate_per_s,
         "arrival_seed": args.arrival_seed,
+        "structured_output": args.output_dir == "traces/simulate",
     }
 
     if args.mode == "cloud_model":

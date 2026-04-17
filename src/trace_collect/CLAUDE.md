@@ -362,13 +362,15 @@ traces/<benchmark>/<safe-model>/<timestamp>/        # run_dir
 ### simulate
 
 ```
-traces/simulate/
-  simulate_<model-or-mode>_<timestamp>.jsonl   # combined trace
-  <agent_id>/
-    attempt_1/
-      trace.jsonl          # per-task trace
+traces/simulate/<benchmark>/<safe-model>/<scaffold>/<arrival_tag>/
+  <instance_id>/
+    attempt_<N>/                    # increments per rerun
+      trace.jsonl
       resources.json
+  simulate_<model-or-mode>_<timestamp>.jsonl   # combined
 ```
+
+`<benchmark>`, `<safe-model>`, `<scaffold>` come from the first source trace's `trace_metadata`. Attempt N auto-increments. Explicit `--output-dir` override is honored verbatim without subdir injection.
 
 ### Artifact Files
 
