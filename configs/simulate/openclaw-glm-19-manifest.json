@@ -1,9 +1,5 @@
 [
   {
-    "source_trace": "../../traces/swe-rebench/z-ai-glm-5.1/20-tasks-combined/asottile__dead-21/attempt_1/trace.jsonl",
-    "task_source": "../../data/swe-rebench/tasks.json"
-  },
-  {
     "source_trace": "../../traces/swe-rebench/z-ai-glm-5.1/20-tasks-combined/beeware__briefcase-817/attempt_1/trace.jsonl",
     "task_source": "../../data/swe-rebench/tasks.json"
   },
