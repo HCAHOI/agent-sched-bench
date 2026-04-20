@@ -10,6 +10,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_OPENCLAW_EXEC_DEFAULT_TIMEOUT_S = 300.0
+_OPENCLAW_EXEC_MAX_TIMEOUT_S = 600.0
+
 
 def _unwrap_tool_args(
     *,
@@ -33,6 +36,25 @@ def _unwrap_tool_args(
             return (tool_name or only_name), only_value, True
 
     return tool_name, parsed, False
+
+
+def _resolve_exec_timeout_s(params: dict[str, Any]) -> float:
+    """Mirror OpenClaw ExecTool timeout semantics during replay.
+
+    Source traces may omit ``timeout`` when the tool relied on its default.
+    To preserve source behavior, replay must use the original tool default
+    instead of the simulator's global fallback. Explicit values are capped to
+    the same 600s ceiling enforced by ``ExecTool``.
+    """
+
+    raw_timeout = params.get("timeout", _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S)
+    try:
+        timeout_s = float(raw_timeout)
+    except (TypeError, ValueError):
+        timeout_s = _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S
+    if timeout_s <= 0:
+        timeout_s = _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S
+    return min(timeout_s, _OPENCLAW_EXEC_MAX_TIMEOUT_S)
 
 
 # ---------------------------------------------------------------------------
@@ -335,42 +357,73 @@ def _resolve_tool_request(
     tool_name: str | None,
     params: dict[str, Any],
     command_timeout_s: float,
-) -> dict[str, Any] | None:
-    """Build a JSON-line request for the in-container agent."""
+) -> tuple[dict[str, Any] | None, float]:
+    """Build a JSON-line request plus the outer response timeout."""
 
     # Shell commands
     if "command" in params:
-        return {"tool": "exec", "args": {"command": params["command"], "timeout": command_timeout_s}}
+        timeout_s = _resolve_exec_timeout_s(params)
+        return (
+            {"tool": "exec", "args": {"command": params["command"], "timeout": timeout_s}},
+            timeout_s,
+        )
     if "commands" in params:
-        return {"tool": "commands", "args": {"commands": list(params["commands"]), "timeout": command_timeout_s}}
+        timeout_s = _resolve_exec_timeout_s(params)
+        return (
+            {
+                "tool": "commands",
+                "args": {"commands": list(params["commands"]), "timeout": timeout_s},
+            },
+            timeout_s,
+        )
 
     if tool_name == "exec":
         command = params.get("command")
         commands = params.get("commands")
         if command:
-            return {"tool": "exec", "args": {"command": command, "timeout": command_timeout_s}}
+            timeout_s = _resolve_exec_timeout_s(params)
+            return (
+                {"tool": "exec", "args": {"command": command, "timeout": timeout_s}},
+                timeout_s,
+            )
         if commands:
-            return {"tool": "commands", "args": {"commands": list(commands), "timeout": command_timeout_s}}
-        return None  # missing command/commands
+            timeout_s = _resolve_exec_timeout_s(params)
+            return (
+                {
+                    "tool": "commands",
+                    "args": {"commands": list(commands), "timeout": timeout_s},
+                },
+                timeout_s,
+            )
+        return None, command_timeout_s  # missing command/commands
 
     if tool_name == "read_file":
-        return {"tool": "read_file", "args": {"path": params.get("path", "")}}
+        return {"tool": "read_file", "args": {"path": params.get("path", "")}}, command_timeout_s
 
     if tool_name == "write_file":
-        return {"tool": "write_file", "args": {"path": params.get("path", ""), "content": params.get("content", "")}}
+        return (
+            {
+                "tool": "write_file",
+                "args": {"path": params.get("path", ""), "content": params.get("content", "")},
+            },
+            command_timeout_s,
+        )
 
     if tool_name == "edit_file":
-        return {"tool": "edit_file", "args": {
-            "path": params.get("path", ""),
-            "old_text": params.get("old_text", ""),
-            "new_text": params.get("new_text", ""),
-            "replace_all": bool(params.get("replace_all", False)),
-        }}
+        return (
+            {"tool": "edit_file", "args": {
+                "path": params.get("path", ""),
+                "old_text": params.get("old_text", ""),
+                "new_text": params.get("new_text", ""),
+                "replace_all": bool(params.get("replace_all", False)),
+            }},
+            command_timeout_s,
+        )
 
     if tool_name == "list_dir":
-        return {"tool": "list_dir", "args": {"path": params.get("path", ".")}}
+        return {"tool": "list_dir", "args": {"path": params.get("path", ".")}}, command_timeout_s
 
-    return None  # unsupported tool
+    return None, command_timeout_s  # unsupported tool
 
 
 async def execute_trace_tool(
@@ -387,12 +440,16 @@ async def execute_trace_tool(
         tool_args_json=tool_args_json,
     )
 
-    request = _resolve_tool_request(resolved_name, params, command_timeout_s)
+    request, request_timeout_s = _resolve_tool_request(
+        resolved_name,
+        params,
+        command_timeout_s,
+    )
 
     if request is None:
         return f"Error: Unsupported replay tool {resolved_name!r}", False, None
 
-    resp = await agent.execute(request, timeout_s=command_timeout_s)
+    resp = await agent.execute(request, timeout_s=request_timeout_s)
     result = resp.get("result", "")
     ok = resp.get("ok", False)
     inner_duration_ms = resp.get("inner_duration_ms")

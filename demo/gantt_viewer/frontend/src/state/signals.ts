@@ -7,7 +7,13 @@ export type TimeMode = "sync" | "abs";
 export type ViewMode = "layered" | "concise";
 export type ThemeMode = "dark" | "light";
 export type ClockMode = "wall" | "real";
-export type ResourceMetric = "cpu" | "memory" | "disk_io" | "net_io" | "none";
+export type ResourceMetric =
+  | "cpu"
+  | "memory"
+  | "disk_total"
+  | "disk_read"
+  | "disk_write"
+  | "none";
 
 export const DEFAULT_TIME_MODE: TimeMode = "sync";
 export const DEFAULT_VIEW_MODE: ViewMode = "layered";

@@ -1,6 +1,7 @@
 import type { GanttPayload, ResourceSample } from "../api/client";
 import { displayColor } from "../theme/displayColor";
 import { RESOURCE_METRIC_COLORS, findNearestSample, sameHit, type Hit, type HitCard } from "./hit";
+import { resourceMetricUnit, resourceMetricValues } from "./resourceMetrics";
 import {
   CONTROL_FLOW_SPAN_TYPES,
   computeTotalContentHeight,
@@ -20,7 +21,13 @@ import { assignTracks } from "./tracks";
 type TimeMode = "sync" | "abs";
 type ViewMode = "layered" | "concise";
 type ClockMode = "wall" | "real";
-type ResourceMetric = "cpu" | "memory" | "disk_io" | "net_io" | "none";
+type ResourceMetric =
+  | "cpu"
+  | "memory"
+  | "disk_total"
+  | "disk_read"
+  | "disk_write"
+  | "none";
 
 interface RenderHitBox {
   h: number;
@@ -744,32 +751,8 @@ export class CanvasRenderer extends EventTarget {
     return this.timeMode === "sync" ? sample.t : sample.t_abs;
   }
 
-  private extractMetricValueFor(sample: ResourceSample, metric: ResourceMetric): number {
-    switch (metric) {
-      case "cpu": return sample.cpu_percent;
-      case "memory": return sample.memory_mb;
-      case "disk_io": return (sample.disk_read_mb ?? 0) + (sample.disk_write_mb ?? 0);
-      case "net_io": return (sample.net_rx_mb ?? 0) + (sample.net_tx_mb ?? 0);
-      case "none": return 0;
-    }
-  }
-
-  private extractMetricValue(sample: ResourceSample): number {
-    return this.extractMetricValueFor(sample, this.resourceMetric);
-  }
-
-  private resourceMetricUnitFor(metric: ResourceMetric): string {
-    switch (metric) {
-      case "cpu": return "%";
-      case "memory": return "MB";
-      case "disk_io": return "MB";
-      case "net_io": return "MB";
-      case "none": return "";
-    }
-  }
-
   private resourceMetricUnit(): string {
-    return this.resourceMetricUnitFor(this.resourceMetric);
+    return resourceMetricUnit(this.resourceMetric);
   }
 
   private renderMetricOverlay(
@@ -781,7 +764,7 @@ export class CanvasRenderer extends EventTarget {
     chartPad: number,
     labelSide: "left" | "right",
   ): { vMin: number; vMax: number } {
-    const values = timeline.map((s) => this.extractMetricValueFor(s, metric));
+    const values = resourceMetricValues(timeline, metric);
     let vMin = Number.POSITIVE_INFINITY;
     let vMax = Number.NEGATIVE_INFINITY;
     for (const v of values) {
@@ -839,7 +822,7 @@ export class CanvasRenderer extends EventTarget {
     const metricLabelColor = displayColor(RESOURCE_METRIC_COLORS[metric] ?? "#94A3B8");
     this.ctx.fillStyle = metricLabelColor;
     this.ctx.font = '9px "JetBrains Mono", monospace';
-    const unit = this.resourceMetricUnitFor(metric);
+    const unit = resourceMetricUnit(metric);
     if (labelSide === "left") {
       this.ctx.textAlign = "left";
       this.ctx.fillText(`${vMax.toFixed(1)}${unit}`, 4, laneY + chartPad + 8);

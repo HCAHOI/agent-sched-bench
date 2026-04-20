@@ -153,7 +153,10 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         "--command-timeout",
         type=float,
         default=600.0,
-        help="Timeout in seconds per bash command (default 600s for replay).",
+        help=(
+            "Fallback timeout in seconds for replayed shell commands when the "
+            "source trace does not carry a tool-specific timeout."
+        ),
     )
     parser.add_argument(
         "--metrics-url",

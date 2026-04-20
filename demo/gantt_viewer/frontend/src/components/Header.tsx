@@ -137,8 +137,9 @@ export default function Header(props: HeaderProps) {
           <option value="none">None</option>
           <option value="cpu">CPU %</option>
           <option value="memory">Memory</option>
-          <option value="disk_io">Disk I/O</option>
-          <option value="net_io">Net I/O</option>
+          <option value="disk_total">Disk Total</option>
+          <option value="disk_read">Disk Read</option>
+          <option value="disk_write">Disk Write</option>
         </select>
       </label>
       <label class="zoom-select-wrap" title="Secondary resource metric">
@@ -155,8 +156,9 @@ export default function Header(props: HeaderProps) {
           <option value="none">None</option>
           <option value="cpu">CPU %</option>
           <option value="memory">Memory</option>
-          <option value="disk_io">Disk I/O</option>
-          <option value="net_io">Net I/O</option>
+          <option value="disk_total">Disk Total</option>
+          <option value="disk_read">Disk Read</option>
+          <option value="disk_write">Disk Write</option>
         </select>
       </label>
       <div class="toggle-group">

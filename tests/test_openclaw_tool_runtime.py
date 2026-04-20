@@ -15,11 +15,13 @@ class FakeAgent:
 
     def __init__(self, responses: dict[str, dict] | None = None) -> None:
         self.requests: list[dict] = []
+        self.timeouts: list[float] = []
         self._responses = responses or {}
         self._default = {"ok": True, "result": "ok", "returncode": 0}
 
     async def execute(self, request: dict, *, timeout_s: float = 600.0) -> dict:
         self.requests.append(request)
+        self.timeouts.append(timeout_s)
         tool = request.get("tool", "")
         return self._responses.get(tool, self._default)
 
@@ -38,7 +40,40 @@ def test_exec_command_sends_correct_request() -> None:
     assert "hello" in result
     assert agent.requests[0]["tool"] == "exec"
     assert agent.requests[0]["args"]["command"] == "echo hello"
-    assert agent.requests[0]["args"]["timeout"] == 10.0
+    assert agent.requests[0]["args"]["timeout"] == 300.0
+    assert agent.timeouts == [300.0]
+
+
+def test_exec_timeout_from_trace_overrides_simulate_default() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "hello\n", "returncode": 0}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "echo hello", "timeout": 123}),
+            command_timeout_s=600.0,
+        )
+    )
+    assert success is True
+    assert "hello" in result
+    assert agent.requests[0]["args"]["timeout"] == 123.0
+    assert agent.timeouts == [123.0]
+
+
+def test_exec_timeout_from_trace_is_capped_like_openclaw() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "hello\n", "returncode": 0}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "echo hello", "timeout": 999}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert "hello" in result
+    assert agent.requests[0]["args"]["timeout"] == 600.0
+    assert agent.timeouts == [600.0]
 
 
 def test_read_file_sends_correct_request() -> None:
@@ -150,3 +185,5 @@ def test_commands_sends_list() -> None:
     assert success is True
     assert agent.requests[0]["tool"] == "commands"
     assert agent.requests[0]["args"]["commands"] == ["echo a", "echo b"]
+    assert agent.requests[0]["args"]["timeout"] == 300.0
+    assert agent.timeouts == [300.0]

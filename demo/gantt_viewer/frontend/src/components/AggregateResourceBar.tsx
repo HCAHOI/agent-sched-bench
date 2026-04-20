@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import type { ResourceSample, TracePayload } from "../api/client";
 import { RESOURCE_METRIC_COLORS, findNearestSample } from "../canvas/hit";
+import { resourceMetricUnit, resourceMetricValues } from "../canvas/resourceMetrics";
 import { displayColor } from "../theme/displayColor";
 import { canvasTimeRange } from "../state/signals";
 import type { ClockMode, ResourceMetric, ThemeMode, TimeMode } from "../state/signals";
@@ -19,26 +20,6 @@ interface AggregateResourceBarProps {
 
 const BAR_HEIGHT = 80;
 const CHART_PAD = 4;
-
-function extractValue(sample: ResourceSample, metric: ResourceMetric): number {
-  switch (metric) {
-    case "cpu": return sample.cpu_percent;
-    case "memory": return sample.memory_mb;
-    case "disk_io": return (sample.disk_read_mb ?? 0) + (sample.disk_write_mb ?? 0);
-    case "net_io": return (sample.net_rx_mb ?? 0) + (sample.net_tx_mb ?? 0);
-    case "none": return 0;
-  }
-}
-
-function metricUnit(metric: ResourceMetric): string {
-  switch (metric) {
-    case "cpu": return "%";
-    case "memory": return "MB";
-    case "disk_io": return "MB";
-    case "net_io": return "MB";
-    case "none": return "";
-  }
-}
 
 function selectTime(sample: ResourceSample, timeMode: TimeMode, clockMode: ClockMode): number {
   if (clockMode === "real") {
@@ -81,8 +62,6 @@ function interpolateSample(
     memory_mb: lerp(s0.memory_mb, s1.memory_mb),
     disk_read_mb: lerp(s0.disk_read_mb ?? 0, s1.disk_read_mb ?? 0),
     disk_write_mb: lerp(s0.disk_write_mb ?? 0, s1.disk_write_mb ?? 0),
-    net_rx_mb: lerp(s0.net_rx_mb ?? 0, s1.net_rx_mb ?? 0),
-    net_tx_mb: lerp(s0.net_tx_mb ?? 0, s1.net_tx_mb ?? 0),
   };
 }
 
@@ -140,16 +119,12 @@ function aggregateTimelines(
     let mem = 0;
     let dr = 0;
     let dw = 0;
-    let nr = 0;
-    let nt = 0;
     for (let i = 0; i < clippedTimelines.length; i++) {
       const s = interpolateSample(clippedTimelines[i], traceTimes[i], t);
       cpu += s.cpu_percent;
       mem += s.memory_mb;
       dr += s.disk_read_mb ?? 0;
       dw += s.disk_write_mb ?? 0;
-      nr += s.net_rx_mb ?? 0;
-      nt += s.net_tx_mb ?? 0;
     }
     return {
       t,
@@ -160,8 +135,6 @@ function aggregateTimelines(
       memory_mb: mem,
       disk_read_mb: dr,
       disk_write_mb: dw,
-      net_rx_mb: nr,
-      net_tx_mb: nt,
     };
   });
 }
@@ -180,7 +153,7 @@ function drawMetricOverlay(
   externalTimeMin?: number,
   externalTimeRange?: number,
 ): void {
-  const values = timeline.map((s) => extractValue(s, metric));
+  const values = resourceMetricValues(timeline, metric);
   let vMin = Number.POSITIVE_INFINITY;
   let vMax = Number.NEGATIVE_INFINITY;
   for (const v of values) {
@@ -241,7 +214,7 @@ function drawMetricOverlay(
   // Y-axis labels
   ctx.fillStyle = color;
   ctx.font = '9px "JetBrains Mono", monospace';
-  const unit = metricUnit(metric);
+  const unit = resourceMetricUnit(metric);
   if (side === "left") {
     ctx.textAlign = "left";
     ctx.fillText(`${vMax.toFixed(1)}${unit}`, 4, y + pad + 8);
@@ -374,12 +347,21 @@ export default function AggregateResourceBar(props: AggregateResourceBarProps) {
               <strong>Aggregate</strong>
               <div>CPU: {info().sample.cpu_percent.toFixed(1)}%</div>
               <div>Mem: {info().sample.memory_mb.toFixed(1)} MB</div>
-              {info().sample.disk_read_mb != null && (
-                <div>Disk R/W: {(info().sample.disk_read_mb ?? 0).toFixed(1)} / {(info().sample.disk_write_mb ?? 0).toFixed(1)} MB</div>
-              )}
-              {info().sample.net_rx_mb != null && (
-                <div>Net Rx/Tx: {(info().sample.net_rx_mb ?? 0).toFixed(1)} / {(info().sample.net_tx_mb ?? 0).toFixed(1)} MB</div>
-              )}
+              {(() => {
+                const timeline = aggregated();
+                const index = timeline.indexOf(info().sample);
+                if (index < 0) return null;
+                const total = resourceMetricValues(timeline, "disk_total")[index];
+                const read = resourceMetricValues(timeline, "disk_read")[index];
+                const write = resourceMetricValues(timeline, "disk_write")[index];
+                return (
+                  <>
+                    <div>Disk Total: {total.toFixed(1)} MB/s</div>
+                    <div>Disk Read: {read.toFixed(1)} MB/s</div>
+                    <div>Disk Write: {write.toFixed(1)} MB/s</div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </Show>

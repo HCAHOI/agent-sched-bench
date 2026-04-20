@@ -1,4 +1,5 @@
 import type { Registries, ResourceSample, TracePayload } from "../api/client";
+import { resourceMetricValueAt } from "./resourceMetrics";
 import { displayColor } from "../theme/displayColor";
 import { formatAbsTime } from "./time";
 
@@ -90,15 +91,17 @@ export function sameHit(a: Hit | null, b: Hit | null): boolean {
 export const RESOURCE_METRIC_COLORS: Record<string, string> = {
   cpu: "#00E5FF",
   memory: "#76FF03",
-  disk_io: "#FF6D00",
-  net_io: "#AB47BC",
+  disk_total: "#FF6D00",
+  disk_read: "#FFA726",
+  disk_write: "#FF7043",
 };
 
 const RESOURCE_METRIC_LABELS: Record<string, string> = {
   cpu: "CPU %",
   memory: "Memory MB",
-  disk_io: "Disk I/O MB",
-  net_io: "Network I/O MB",
+  disk_total: "Disk Total MB/s",
+  disk_read: "Disk Read MB/s",
+  disk_write: "Disk Write MB/s",
 };
 
 export function hitAccent(hit: Hit, registries: Registries | null): string {
@@ -140,11 +143,11 @@ export function hitRows(hit: Hit): Array<[string, string]> {
         ["CPU", `${s.cpu_percent.toFixed(1)}%`],
         ["Memory", `${s.memory_mb.toFixed(1)} MB`],
       ];
-      if (s.disk_read_mb != null || s.disk_write_mb != null) {
-        rows.push(["Disk R/W", `${(s.disk_read_mb ?? 0).toFixed(1)} / ${(s.disk_write_mb ?? 0).toFixed(1)} MB`]);
-      }
-      if (s.net_rx_mb != null || s.net_tx_mb != null) {
-        rows.push(["Net Rx/Tx", `${(s.net_rx_mb ?? 0).toFixed(1)} / ${(s.net_tx_mb ?? 0).toFixed(1)} MB`]);
+      const sampleIndex = hit.timeline.indexOf(s);
+      if (sampleIndex >= 0) {
+        rows.push(["Disk Total", `${resourceMetricValueAt(hit.timeline, sampleIndex, "disk_total").toFixed(1)} MB/s`]);
+        rows.push(["Disk Read", `${resourceMetricValueAt(hit.timeline, sampleIndex, "disk_read").toFixed(1)} MB/s`]);
+        rows.push(["Disk Write", `${resourceMetricValueAt(hit.timeline, sampleIndex, "disk_write").toFixed(1)} MB/s`]);
       }
       if (s.context_switches != null) {
         rows.push(["Ctx Switches", String(s.context_switches)]);
