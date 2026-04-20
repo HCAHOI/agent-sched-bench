@@ -144,6 +144,47 @@ def test_process_sampler_keeps_psutil_child_io_over_proc_parent(monkeypatch) -> 
     assert sample["context_switches"] == 15
 
 
+def test_process_sampler_attaches_host_memory_bandwidth(monkeypatch) -> None:
+    sampler = ProcessStatsSampler(pid=1, interval_s=60.0)
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._sample_with_psutil",
+        lambda pid, *, process_cache: {
+            "epoch": 1.0,
+            "timestamp": "ts",
+            "mem_usage": "60MiB",
+            "mem_percent": "0%",
+            "cpu_percent": "7.5%",
+        },
+    )
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._read_proc_io",
+        lambda pid: None,
+    )
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._read_proc_context_switches",
+        lambda pid: None,
+    )
+    monkeypatch.setattr(
+        "harness.process_stats_sampler.attach_host_memory_bandwidth",
+        lambda sample, *, interval_s: sample.update(
+            {
+                "memory_bandwidth_available": True,
+                "memory_bandwidth_source": "perf:test",
+                "memory_total_mb_s": 12.0,
+                "memory_read_mb_s": 7.0,
+                "memory_write_mb_s": 5.0,
+            }
+        ),
+    )
+
+    sample = sampler._collect_sample()
+
+    assert sample is not None
+    assert sample["memory_total_mb_s"] == 12.0
+    assert sample["memory_read_mb_s"] == 7.0
+    assert sample["memory_write_mb_s"] == 5.0
+
+
 def test_psutil_sampler_reuses_process_handles_for_cpu_deltas(monkeypatch) -> None:
     created: list[int] = []
 

@@ -24,6 +24,9 @@ type ClockMode = "wall" | "real";
 type ResourceMetric =
   | "cpu"
   | "memory"
+  | "mem_total"
+  | "mem_read"
+  | "mem_write"
   | "disk_total"
   | "disk_read"
   | "disk_write"
@@ -765,9 +768,13 @@ export class CanvasRenderer extends EventTarget {
     labelSide: "left" | "right",
   ): { vMin: number; vMax: number } {
     const values = resourceMetricValues(timeline, metric);
+    const finiteValues = values.filter((v): v is number => v != null && Number.isFinite(v));
+    if (finiteValues.length === 0) {
+      return { vMin: 0, vMax: 1 };
+    }
     let vMin = Number.POSITIVE_INFINITY;
     let vMax = Number.NEGATIVE_INFINITY;
-    for (const v of values) {
+    for (const v of finiteValues) {
       if (v < vMin) vMin = v;
       if (v > vMax) vMax = v;
     }
@@ -776,13 +783,16 @@ export class CanvasRenderer extends EventTarget {
     const innerH = chartH - chartPad * 2;
     const baselineY = laneY + chartPad + innerH;
 
-    const points: Array<{ x: number; y: number }> = [];
-    for (let i = 0; i < timeline.length; i++) {
-      points.push({
-        x: timeToX(this.selectResourceTime(timeline[i])),
-        y: laneY + chartPad + innerH - ((values[i] - vMin) / vRange) * innerH,
-      });
-    }
+    const points = timeline.flatMap((sample, i) => {
+      const value = values[i];
+      if (value == null || !Number.isFinite(value)) {
+        return [];
+      }
+      return [{
+        x: timeToX(this.selectResourceTime(sample)),
+        y: laneY + chartPad + innerH - ((value - vMin) / vRange) * innerH,
+      }];
+    });
 
     if (points.length > 0) {
       const metricColor = displayColor(

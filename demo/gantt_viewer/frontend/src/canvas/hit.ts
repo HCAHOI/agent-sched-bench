@@ -91,6 +91,9 @@ export function sameHit(a: Hit | null, b: Hit | null): boolean {
 export const RESOURCE_METRIC_COLORS: Record<string, string> = {
   cpu: "#00E5FF",
   memory: "#76FF03",
+  mem_total: "#26C6DA",
+  mem_read: "#4DD0E1",
+  mem_write: "#0097A7",
   disk_total: "#FF6D00",
   disk_read: "#FFA726",
   disk_write: "#FF7043",
@@ -99,6 +102,9 @@ export const RESOURCE_METRIC_COLORS: Record<string, string> = {
 const RESOURCE_METRIC_LABELS: Record<string, string> = {
   cpu: "CPU %",
   memory: "Memory MB",
+  mem_total: "Mem Total MB/s",
+  mem_read: "Mem Read MB/s",
+  mem_write: "Mem Write MB/s",
   disk_total: "Disk Total MB/s",
   disk_read: "Disk Read MB/s",
   disk_write: "Disk Write MB/s",
@@ -145,9 +151,18 @@ export function hitRows(hit: Hit): Array<[string, string]> {
       ];
       const sampleIndex = hit.timeline.indexOf(s);
       if (sampleIndex >= 0) {
-        rows.push(["Disk Total", `${resourceMetricValueAt(hit.timeline, sampleIndex, "disk_total").toFixed(1)} MB/s`]);
-        rows.push(["Disk Read", `${resourceMetricValueAt(hit.timeline, sampleIndex, "disk_read").toFixed(1)} MB/s`]);
-        rows.push(["Disk Write", `${resourceMetricValueAt(hit.timeline, sampleIndex, "disk_write").toFixed(1)} MB/s`]);
+        const memTotal = resourceMetricValueAt(hit.timeline, sampleIndex, "mem_total");
+        const memRead = resourceMetricValueAt(hit.timeline, sampleIndex, "mem_read");
+        const memWrite = resourceMetricValueAt(hit.timeline, sampleIndex, "mem_write");
+        rows.push(["Mem Total", memTotal == null ? "N/A" : `${memTotal.toFixed(1)} MB/s`]);
+        rows.push(["Mem Read", memRead == null ? "N/A" : `${memRead.toFixed(1)} MB/s`]);
+        rows.push(["Mem Write", memWrite == null ? "N/A" : `${memWrite.toFixed(1)} MB/s`]);
+        const diskTotal = resourceMetricValueAt(hit.timeline, sampleIndex, "disk_total") ?? 0;
+        const diskRead = resourceMetricValueAt(hit.timeline, sampleIndex, "disk_read") ?? 0;
+        const diskWrite = resourceMetricValueAt(hit.timeline, sampleIndex, "disk_write") ?? 0;
+        rows.push(["Disk Total", `${diskTotal.toFixed(1)} MB/s`]);
+        rows.push(["Disk Read", `${diskRead.toFixed(1)} MB/s`]);
+        rows.push(["Disk Write", `${diskWrite.toFixed(1)} MB/s`]);
       }
       if (s.context_switches != null) {
         rows.push(["Ctx Switches", String(s.context_switches)]);

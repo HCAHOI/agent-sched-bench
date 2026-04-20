@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from harness.memory_bandwidth import attach_host_memory_bandwidth
+
 logger = logging.getLogger(__name__)
 
 # 4-field pipe-delimited format: mem_usage | mem% | cpu% | net_io
@@ -344,6 +346,12 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "duration_seconds": 0,
             "memory_mb": {"min": 0, "max": 0, "avg": 0},
             "cpu_percent": {"min": 0, "max": 0, "avg": 0},
+            "memory_total_mb_s": {"min": 0, "max": 0, "avg": 0},
+            "memory_read_mb_s": {"min": 0, "max": 0, "avg": 0},
+            "memory_write_mb_s": {"min": 0, "max": 0, "avg": 0},
+            "memory_bandwidth_available": False,
+            "memory_bandwidth_source": None,
+            "memory_bandwidth_reason": None,
             "disk_read_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
             "disk_write_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
             "net_rx_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
@@ -353,11 +361,17 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
     mem_values: list[float] = []
     cpu_values: list[float] = []
+    mem_total_values: list[float] = []
+    mem_read_values: list[float] = []
+    mem_write_values: list[float] = []
     disk_read_values: list[float] = []
     disk_write_values: list[float] = []
     net_rx_values: list[float] = []
     net_tx_values: list[float] = []
     ctxt_values: list[float] = []
+    mem_bw_available = False
+    mem_bw_source: str | None = None
+    mem_bw_reason: str | None = None
 
     for sample in samples:
         mem_mb = _parse_memory_mb(sample.get("mem_usage", ""))
@@ -366,6 +380,21 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         cpu_val = _parse_percent(sample.get("cpu_percent", ""))
         if cpu_val is not None:
             cpu_values.append(cpu_val)
+        mem_total = sample.get("memory_total_mb_s")
+        if mem_total is not None:
+            mem_total_values.append(float(mem_total))
+        mem_read = sample.get("memory_read_mb_s")
+        if mem_read is not None:
+            mem_read_values.append(float(mem_read))
+        mem_write = sample.get("memory_write_mb_s")
+        if mem_write is not None:
+            mem_write_values.append(float(mem_write))
+        if "memory_bandwidth_available" in sample:
+            mem_bw_available = bool(sample.get("memory_bandwidth_available"))
+        if sample.get("memory_bandwidth_source") is not None:
+            mem_bw_source = str(sample.get("memory_bandwidth_source"))
+        if sample.get("memory_bandwidth_reason") is not None:
+            mem_bw_reason = str(sample.get("memory_bandwidth_reason"))
 
         # Disk I/O (from cgroup io.stat, stored as bytes in sample)
         rb = sample.get("disk_read_bytes")
@@ -402,6 +431,12 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "duration_seconds": duration,
         "memory_mb": _minmaxavg(mem_values),
         "cpu_percent": _minmaxavg(cpu_values),
+        "memory_total_mb_s": _minmaxavg(mem_total_values),
+        "memory_read_mb_s": _minmaxavg(mem_read_values),
+        "memory_write_mb_s": _minmaxavg(mem_write_values),
+        "memory_bandwidth_available": mem_bw_available,
+        "memory_bandwidth_source": mem_bw_source,
+        "memory_bandwidth_reason": mem_bw_reason,
         "disk_read_mb": {**_minmaxavg(disk_read_values), "delta": _delta(disk_read_values)},
         "disk_write_mb": {**_minmaxavg(disk_write_values), "delta": _delta(disk_write_values)},
         "net_rx_mb": {**_minmaxavg(net_rx_values), "delta": _delta(net_rx_values)},
@@ -533,6 +568,7 @@ class ContainerStatsSampler(threading.Thread):
                 sample["net_rx_bytes"] = rx
             if tx is not None:
                 sample["net_tx_bytes"] = tx
+        attach_host_memory_bandwidth(sample, interval_s=self.interval_s)
 
     def run(self) -> None:
         while not self._stop_event.is_set():

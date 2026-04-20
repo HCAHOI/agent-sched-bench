@@ -205,6 +205,12 @@ export interface components {
             cpu_percent: number;
             /** Memory Mb */
             memory_mb: number;
+            /** Memory Total Mb S */
+            memory_total_mb_s?: number | null;
+            /** Memory Read Mb S */
+            memory_read_mb_s?: number | null;
+            /** Memory Write Mb S */
+            memory_write_mb_s?: number | null;
             /** Disk Read Mb */
             disk_read_mb?: number | null;
             /** Disk Write Mb */

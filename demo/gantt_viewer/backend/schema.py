@@ -74,6 +74,9 @@ class ResourceSample(BaseModel):
     t_real_abs: float | None = None
     cpu_percent: float
     memory_mb: float
+    memory_total_mb_s: float | None = None
+    memory_read_mb_s: float | None = None
+    memory_write_mb_s: float | None = None
     disk_read_mb: float | None = None
     disk_write_mb: float | None = None
     net_rx_mb: float | None = None

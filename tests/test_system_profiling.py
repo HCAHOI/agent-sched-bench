@@ -339,6 +339,11 @@ def test_summarize_samples_with_io() -> None:
             "mem_usage": "100MB / 1GB",
             "mem_percent": "10%",
             "cpu_percent": "5%",
+            "memory_total_mb_s": 100.0,
+            "memory_read_mb_s": 60.0,
+            "memory_write_mb_s": 40.0,
+            "memory_bandwidth_available": True,
+            "memory_bandwidth_source": "perf:intel-imc-cas",
             "disk_read_bytes": 1024 * 1024,       # 1 MB
             "disk_write_bytes": 512 * 1024,        # 0.5 MB
             "net_rx_bytes": 1000.0,                # ~0.001 MB
@@ -350,6 +355,11 @@ def test_summarize_samples_with_io() -> None:
             "mem_usage": "200MB / 1GB",
             "mem_percent": "20%",
             "cpu_percent": "15%",
+            "memory_total_mb_s": 150.0,
+            "memory_read_mb_s": 90.0,
+            "memory_write_mb_s": 60.0,
+            "memory_bandwidth_available": True,
+            "memory_bandwidth_source": "perf:intel-imc-cas",
             "disk_read_bytes": 2 * 1024 * 1024,   # 2 MB
             "disk_write_bytes": 1024 * 1024,       # 1 MB
             "net_rx_bytes": 5000.0,
@@ -361,6 +371,11 @@ def test_summarize_samples_with_io() -> None:
             "mem_usage": "300MB / 1GB",
             "mem_percent": "30%",
             "cpu_percent": "25%",
+            "memory_total_mb_s": 175.0,
+            "memory_read_mb_s": 100.0,
+            "memory_write_mb_s": 75.0,
+            "memory_bandwidth_available": True,
+            "memory_bandwidth_source": "perf:intel-imc-cas",
             "disk_read_bytes": 4 * 1024 * 1024,   # 4 MB
             "disk_write_bytes": 2 * 1024 * 1024,   # 2 MB
             "net_rx_bytes": 20000.0,
@@ -379,6 +394,11 @@ def test_summarize_samples_with_io() -> None:
     assert summary["cpu_percent"]["min"] == 5.0
     assert summary["cpu_percent"]["max"] == 25.0
     assert summary["cpu_percent"]["avg"] == 15.0
+    assert summary["memory_total_mb_s"]["min"] == pytest.approx(100.0)
+    assert summary["memory_total_mb_s"]["max"] == pytest.approx(175.0)
+    assert summary["memory_total_mb_s"]["avg"] == pytest.approx((100.0 + 150.0 + 175.0) / 3)
+    assert summary["memory_bandwidth_available"] is True
+    assert summary["memory_bandwidth_source"] == "perf:intel-imc-cas"
 
     # Disk I/O
     assert summary["disk_read_mb"]["min"] == pytest.approx(1.0)
@@ -408,6 +428,8 @@ def test_summarize_samples_empty() -> None:
     """Empty input produces zero-valued fields including new ones."""
     summary = summarize_samples([])
     assert summary["sample_count"] == 0
+    assert summary["memory_total_mb_s"]["avg"] == 0
+    assert summary["memory_bandwidth_available"] is False
     assert summary["disk_read_mb"]["min"] == 0
     assert summary["net_rx_mb"]["delta"] == 0
     assert summary["context_switches"]["avg"] == 0
@@ -432,6 +454,8 @@ def test_summarize_samples_legacy_no_io() -> None:
     summary = summarize_samples(samples)
     assert summary["memory_mb"]["avg"] == 150.0
     assert summary["cpu_percent"]["avg"] == 10.0
+    assert summary["memory_total_mb_s"]["avg"] == 0
+    assert summary["memory_bandwidth_available"] is False
     assert summary["disk_read_mb"]["avg"] == 0
     assert summary["net_rx_mb"]["avg"] == 0
     assert summary["context_switches"]["avg"] == 0
@@ -496,6 +520,18 @@ def test_sampler_collects_io_via_cgroup() -> None:
     )
     with (
         patch("harness.container_stats_sampler.subprocess.run", side_effect=fake_subprocess_run),
+        patch(
+            "harness.container_stats_sampler.attach_host_memory_bandwidth",
+            side_effect=lambda sample, *, interval_s: sample.update(
+                {
+                    "memory_bandwidth_available": True,
+                    "memory_bandwidth_source": "perf:test",
+                    "memory_total_mb_s": 12.0,
+                    "memory_read_mb_s": 7.0,
+                    "memory_write_mb_s": 5.0,
+                }
+            ),
+        ),
         patch.object(Path, "read_text", fake_read_text),
         patch.object(Path, "exists", fake_exists),
     ):
@@ -511,6 +547,9 @@ def test_sampler_collects_io_via_cgroup() -> None:
     assert s["context_switches"] == 38  # 10+5+20+3
     assert s["net_rx_bytes"] == pytest.approx(1000.0)
     assert s["net_tx_bytes"] == pytest.approx(2000.0)
+    assert s["memory_total_mb_s"] == pytest.approx(12.0)
+    assert s["memory_read_mb_s"] == pytest.approx(7.0)
+    assert s["memory_write_mb_s"] == pytest.approx(5.0)
 
 
 def test_sampler_falls_back_to_exec_when_cgroup_unavailable() -> None:

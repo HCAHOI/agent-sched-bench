@@ -10,6 +10,9 @@ export type ClockMode = "wall" | "real";
 export type ResourceMetric =
   | "cpu"
   | "memory"
+  | "mem_total"
+  | "mem_read"
+  | "mem_write"
   | "disk_total"
   | "disk_read"
   | "disk_write"

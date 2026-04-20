@@ -60,6 +60,9 @@ describe("Header", () => {
       expect(headerText(host)).toContain("Disk Total");
       expect(headerText(host)).toContain("Disk Read");
       expect(headerText(host)).toContain("Disk Write");
+      expect(headerText(host)).toContain("Mem Total");
+      expect(headerText(host)).toContain("Mem Read");
+      expect(headerText(host)).toContain("Mem Write");
       expect(headerText(host)).not.toContain("Net I/O");
     } finally {
       dispose();

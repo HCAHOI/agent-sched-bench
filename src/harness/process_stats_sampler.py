@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from harness.memory_bandwidth import attach_host_memory_bandwidth
+
 
 def _now_sample() -> dict[str, Any]:
     now = datetime.now(tz=timezone.utc)
@@ -238,6 +240,7 @@ class ProcessStatsSampler(threading.Thread):
         ctxt = _read_proc_context_switches(self.pid)
         if ctxt is not None and "context_switches" not in sample:
             sample["context_switches"] = ctxt
+        attach_host_memory_bandwidth(sample, interval_s=self.interval_s)
         return sample
 
     def run(self) -> None:

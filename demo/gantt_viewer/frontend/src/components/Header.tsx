@@ -137,6 +137,9 @@ export default function Header(props: HeaderProps) {
           <option value="none">None</option>
           <option value="cpu">CPU %</option>
           <option value="memory">Memory</option>
+          <option value="mem_total">Mem Total</option>
+          <option value="mem_read">Mem Read</option>
+          <option value="mem_write">Mem Write</option>
           <option value="disk_total">Disk Total</option>
           <option value="disk_read">Disk Read</option>
           <option value="disk_write">Disk Write</option>
@@ -156,6 +159,9 @@ export default function Header(props: HeaderProps) {
           <option value="none">None</option>
           <option value="cpu">CPU %</option>
           <option value="memory">Memory</option>
+          <option value="mem_total">Mem Total</option>
+          <option value="mem_read">Mem Read</option>
+          <option value="mem_write">Mem Write</option>
           <option value="disk_total">Disk Total</option>
           <option value="disk_read">Disk Read</option>
           <option value="disk_write">Disk Write</option>

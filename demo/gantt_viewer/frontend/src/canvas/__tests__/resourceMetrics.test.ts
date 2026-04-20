@@ -51,4 +51,27 @@ describe("resourceMetrics", () => {
     expect(resourceMetricUnit("memory")).toBe("MB");
     expect(resourceMetricUnit("disk_total")).toBe("MB/s");
   });
+
+  it("uses sample-provided memory bandwidth values directly", () => {
+    const timeline = [
+      {
+        ...sample(0, 100, 0, 0),
+        memory_total_mb_s: null,
+        memory_read_mb_s: null,
+        memory_write_mb_s: null,
+      },
+      {
+        ...sample(1, 120, 0, 0),
+        memory_total_mb_s: 200.0,
+        memory_read_mb_s: 120.0,
+        memory_write_mb_s: 80.0,
+      },
+    ];
+
+    expect(resourceMetricValueAt(timeline, 0, "mem_total")).toBeNull();
+    expect(resourceMetricValueAt(timeline, 1, "mem_total")).toBe(200.0);
+    expect(resourceMetricValueAt(timeline, 1, "mem_read")).toBe(120.0);
+    expect(resourceMetricValueAt(timeline, 1, "mem_write")).toBe(80.0);
+    expect(resourceMetricUnit("mem_total")).toBe("MB/s");
+  });
 });

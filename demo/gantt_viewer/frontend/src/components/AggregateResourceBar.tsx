@@ -53,6 +53,15 @@ function interpolateSample(
   const s1 = timeline[hi];
 
   const lerp = (a: number, b: number) => a + (b - a) * frac;
+  const lerpOptional = (
+    a: number | null | undefined,
+    b: number | null | undefined,
+  ): number | null => {
+    if (a == null && b == null) return null;
+    if (a == null) return b ?? null;
+    if (b == null) return a;
+    return lerp(a, b);
+  };
   return {
     t: targetT,
     t_abs: targetT,
@@ -60,6 +69,9 @@ function interpolateSample(
     t_real_abs: targetT,
     cpu_percent: lerp(s0.cpu_percent, s1.cpu_percent),
     memory_mb: lerp(s0.memory_mb, s1.memory_mb),
+    memory_total_mb_s: lerpOptional(s0.memory_total_mb_s, s1.memory_total_mb_s),
+    memory_read_mb_s: lerpOptional(s0.memory_read_mb_s, s1.memory_read_mb_s),
+    memory_write_mb_s: lerpOptional(s0.memory_write_mb_s, s1.memory_write_mb_s),
     disk_read_mb: lerp(s0.disk_read_mb ?? 0, s1.disk_read_mb ?? 0),
     disk_write_mb: lerp(s0.disk_write_mb ?? 0, s1.disk_write_mb ?? 0),
   };
@@ -117,12 +129,24 @@ function aggregateTimelines(
   return sorted.map((t) => {
     let cpu = 0;
     let mem = 0;
+    let memTotal: number | null = null;
+    let memRead: number | null = null;
+    let memWrite: number | null = null;
     let dr = 0;
     let dw = 0;
     for (let i = 0; i < clippedTimelines.length; i++) {
       const s = interpolateSample(clippedTimelines[i], traceTimes[i], t);
       cpu += s.cpu_percent;
       mem += s.memory_mb;
+      if (s.memory_total_mb_s != null) {
+        memTotal = memTotal == null ? s.memory_total_mb_s : Math.max(memTotal, s.memory_total_mb_s);
+      }
+      if (s.memory_read_mb_s != null) {
+        memRead = memRead == null ? s.memory_read_mb_s : Math.max(memRead, s.memory_read_mb_s);
+      }
+      if (s.memory_write_mb_s != null) {
+        memWrite = memWrite == null ? s.memory_write_mb_s : Math.max(memWrite, s.memory_write_mb_s);
+      }
       dr += s.disk_read_mb ?? 0;
       dw += s.disk_write_mb ?? 0;
     }
@@ -133,6 +157,9 @@ function aggregateTimelines(
       t_real_abs: t,
       cpu_percent: cpu,
       memory_mb: mem,
+      memory_total_mb_s: memTotal,
+      memory_read_mb_s: memRead,
+      memory_write_mb_s: memWrite,
       disk_read_mb: dr,
       disk_write_mb: dw,
     };
@@ -154,9 +181,13 @@ function drawMetricOverlay(
   externalTimeRange?: number,
 ): void {
   const values = resourceMetricValues(timeline, metric);
+  const finiteValues = values.filter((v): v is number => v != null && Number.isFinite(v));
+  if (finiteValues.length === 0) {
+    return;
+  }
   let vMin = Number.POSITIVE_INFINITY;
   let vMax = Number.NEGATIVE_INFINITY;
-  for (const v of values) {
+  for (const v of finiteValues) {
     if (v < vMin) vMin = v;
     if (v > vMax) vMax = v;
   }
@@ -179,10 +210,16 @@ function drawMetricOverlay(
   }
   const timeToX = (t: number) => ((t - tMin) / tRange) * canvasW;
 
-  const points = times.map((t, i) => ({
-    x: timeToX(t),
-    y: y + pad + innerH - ((values[i] - vMin) / vRange) * innerH,
-  }));
+  const points = times.flatMap((t, i) => {
+    const value = values[i];
+    if (value == null || !Number.isFinite(value)) {
+      return [];
+    }
+    return [{
+      x: timeToX(t),
+      y: y + pad + innerH - ((value - vMin) / vRange) * innerH,
+    }];
+  });
 
   if (points.length === 0) return;
 
@@ -351,11 +388,17 @@ export default function AggregateResourceBar(props: AggregateResourceBarProps) {
                 const timeline = aggregated();
                 const index = timeline.indexOf(info().sample);
                 if (index < 0) return null;
-                const total = resourceMetricValues(timeline, "disk_total")[index];
-                const read = resourceMetricValues(timeline, "disk_read")[index];
-                const write = resourceMetricValues(timeline, "disk_write")[index];
+                const memTotal = resourceMetricValues(timeline, "mem_total")[index];
+                const memRead = resourceMetricValues(timeline, "mem_read")[index];
+                const memWrite = resourceMetricValues(timeline, "mem_write")[index];
+                const total = resourceMetricValues(timeline, "disk_total")[index] ?? 0;
+                const read = resourceMetricValues(timeline, "disk_read")[index] ?? 0;
+                const write = resourceMetricValues(timeline, "disk_write")[index] ?? 0;
                 return (
                   <>
+                    <div>Mem Total: {memTotal == null ? "N/A" : `${memTotal.toFixed(1)} MB/s`}</div>
+                    <div>Mem Read: {memRead == null ? "N/A" : `${memRead.toFixed(1)} MB/s`}</div>
+                    <div>Mem Write: {memWrite == null ? "N/A" : `${memWrite.toFixed(1)} MB/s`}</div>
                     <div>Disk Total: {total.toFixed(1)} MB/s</div>
                     <div>Disk Read: {read.toFixed(1)} MB/s</div>
                     <div>Disk Write: {write.toFixed(1)} MB/s</div>

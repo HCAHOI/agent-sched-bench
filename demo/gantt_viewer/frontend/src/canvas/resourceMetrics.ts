@@ -26,6 +26,9 @@ export function resourceMetricUnit(metric: ResourceMetric): string {
       return "%";
     case "memory":
       return "MB";
+    case "mem_total":
+    case "mem_read":
+    case "mem_write":
     case "disk_total":
     case "disk_read":
     case "disk_write":
@@ -39,16 +42,22 @@ export function resourceMetricValueAt(
   timeline: ResourceSample[],
   index: number,
   metric: ResourceMetric,
-): number {
+): number | null {
   const sample = timeline[index];
   if (!sample) {
-    return 0;
+    return null;
   }
   switch (metric) {
     case "cpu":
       return sample.cpu_percent;
     case "memory":
       return sample.memory_mb;
+    case "mem_total":
+      return sample.memory_total_mb_s ?? null;
+    case "mem_read":
+      return sample.memory_read_mb_s ?? null;
+    case "mem_write":
+      return sample.memory_write_mb_s ?? null;
     case "disk_total":
     case "disk_read":
     case "disk_write": {
@@ -75,6 +84,6 @@ export function resourceMetricValueAt(
 export function resourceMetricValues(
   timeline: ResourceSample[],
   metric: ResourceMetric,
-): number[] {
+): Array<number | null> {
   return timeline.map((_sample, index) => resourceMetricValueAt(timeline, index, metric));
 }

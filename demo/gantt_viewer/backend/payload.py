@@ -214,6 +214,14 @@ def _load_resource_timeline(
             "cpu_percent": _parse_percent(s["cpu_percent"]) if isinstance(s.get("cpu_percent"), str) else float(s.get("cpu_percent") or 0),
             "memory_mb": _parse_mem_usage_mb(s["mem_usage"]) if isinstance(s.get("mem_usage"), str) else float(s.get("memory_mb") or 0),
         }
+        for raw_field in (
+            "memory_total_mb_s",
+            "memory_read_mb_s",
+            "memory_write_mb_s",
+        ):
+            val = s.get(raw_field)
+            if val is not None:
+                entry[raw_field] = float(val)
         # Per-sample records store raw bytes; convert to MB.
         # Disk uses binary (1 MiB = 1048576), network uses decimal (1 MB = 1e6).
         for raw_field, out_field, divisor in (
