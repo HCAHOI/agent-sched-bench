@@ -57,6 +57,14 @@ def test_run_command_forwards_mcp_config_to_container() -> None:
     assert '--mcp-config /installed-agent/context7.yaml --workspace .' in command
 
 
+def test_bootstrap_checks_real_venv_creation() -> None:
+    command = StubAgent._bootstrap_dependencies_command()
+    assert 'python3 -m venv --help' not in command
+    assert 'python3 -m venv "$probe_root/venv"' in command
+    assert '"$probe_root/venv/bin/python" -m pip --version' in command
+    assert 'python3 python3-pip python3-venv' in command
+
+
 def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('OPENROUTER_API_KEY', 'env-key')
     agent = StubAgent(

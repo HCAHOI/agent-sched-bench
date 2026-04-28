@@ -107,6 +107,32 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _wheel_path(self) -> Path:
         return self._build_wheel()
 
+    @staticmethod
+    def _bootstrap_dependencies_command() -> str:
+        return (
+            "set -euo pipefail\n"
+            "install_python_deps() {\n"
+            "  apt-get update\n"
+            "  DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-venv\n"
+            "}\n"
+            "if ! command -v python3 >/dev/null 2>&1; then\n"
+            "  install_python_deps\n"
+            "fi\n"
+            "probe_root=$(mktemp -d /tmp/openclaw-venv-check.XXXXXX)\n"
+            "cleanup_probe() { rm -rf \"$probe_root\"; }\n"
+            "trap cleanup_probe EXIT\n"
+            "venv_ready() {\n"
+            "  rm -rf \"$probe_root/venv\"\n"
+            "  python3 -m pip --version >/dev/null 2>&1 && "
+            "python3 -m venv \"$probe_root/venv\" >/dev/null 2>&1 && "
+            "\"$probe_root/venv/bin/python\" -m pip --version >/dev/null 2>&1\n"
+            "}\n"
+            "if ! venv_ready; then\n"
+            "  install_python_deps\n"
+            "  venv_ready\n"
+            "fi\n"
+        )
+
     def _run_agent_commands(self, instruction: str) -> list[TerminalCommand]:
         escaped_instruction = shlex.quote(instruction)
         workspace = shlex.quote(".")
@@ -151,15 +177,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             [
                 "bash",
                 "-lc",
-                (
-                    "set -euo pipefail; "
-                    "if ! command -v python3 >/dev/null 2>&1; then "
-                    "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-venv; "
-                    "fi; "
-                    "if ! python3 -m pip --version >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then "
-                    "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python3-venv; "
-                    "fi"
-                ),
+                self._bootstrap_dependencies_command(),
             ],
             user="root",
         )
