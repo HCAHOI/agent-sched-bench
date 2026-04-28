@@ -14,6 +14,7 @@ contains BOTH action types after a single iteration.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -296,6 +297,101 @@ async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
     assert summary["llm_call_time_count"] == 1
     assert summary["llm_timing_source"] == "openrouter_generation_time_ms"
     assert summary["total_llm_wall_ms"] == 15000.0
+
+
+def test_trace_collector_refetches_late_openrouter_metadata(tmp_path: Path) -> None:
+    import asyncio
+
+    asyncio.run(_drive_refetches_late_openrouter_metadata(tmp_path))
+
+
+async def _drive_refetches_late_openrouter_metadata(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-openrouter-late")
+
+    await hook.before_iteration(
+        _StubContext(iteration=0, messages=[{"role": "user", "content": "Ping"}])
+    )
+    hook._iter_start_wall = 100.0
+    hook._before_exec_wall = 115.0
+
+    extra: dict[str, Any] = {
+        "llm_wall_ts_end": 115.0,
+        "openrouter_generation_id": "gen-late",
+        "openrouter_metadata_fetch_status": "pending",
+        "openrouter_metadata_fetch_ms": 1.0,
+    }
+
+    async def initial_fetch() -> dict[str, Any]:
+        result = {
+            "openrouter_metadata_fetch_status": "unavailable",
+            "openrouter_metadata_fetch_ms": 2.0,
+            "openrouter_metadata_fetch_attempt_count": 1,
+            "openrouter_metadata_fetch_last_status_code": 404,
+            "openrouter_metadata_fetch_last_reason": "not_found",
+        }
+        extra.update(result)
+        return result
+
+    async def refetch() -> dict[str, Any]:
+        return {
+            "openrouter_metadata_fetch_status": "success",
+            "openrouter_metadata_fetch_ms": 3.0,
+            "openrouter_metadata_fetch_attempt_count": 1,
+            "openrouter_metadata_fetch_last_status_code": 200,
+            "openrouter_metadata_fetch_last_reason": "success",
+            "openrouter_metadata": {
+                "generation_id": "gen-late",
+                "generation_time_ms": 4321.0,
+                "latency_ms": 5000.0,
+            },
+            "openrouter_generation_time_ms": 4321.0,
+            "openrouter_latency_ms": 5000.0,
+            "llm_call_time_ms": 4321.0,
+            "llm_timing_source": "openrouter_generation_time_ms",
+        }
+
+    extra["_openrouter_metadata_task"] = asyncio.create_task(initial_fetch())
+    extra["_openrouter_metadata_refetcher"] = refetch
+    response = _StubResponse(content="pong", finish_reason="stop", extra=extra)
+
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=[
+                {"role": "user", "content": "Ping"},
+                {"role": "assistant", "content": "pong"},
+            ],
+            usage={"prompt_tokens": 12, "completion_tokens": 3},
+            response=response,
+        )
+    )
+    await hook.write_summary(success=True, elapsed_s=15.0)
+
+    records = [json.loads(line) for line in trace_file.read_text().strip().splitlines()]
+    llm_call = next(
+        r
+        for r in records
+        if r.get("type") == "action" and r.get("action_type") == "llm_call"
+    )
+    llm_event = next(
+        r
+        for r in records
+        if r.get("type") == "event" and r.get("event") == "llm_call_end"
+    )
+    summary = next(r for r in records if r.get("type") == "summary")
+
+    assert llm_call["data"]["openrouter_metadata_fetch_status"] == "success"
+    assert llm_call["data"]["openrouter_metadata_refetch_attempted"] is True
+    assert llm_call["data"]["openrouter_metadata_initial_fetch_status"] == "unavailable"
+    assert llm_call["data"]["openrouter_generation_time_ms"] == 4321.0
+    assert llm_call["data"]["llm_call_time_ms"] == 4321.0
+    assert llm_call["data"]["llm_timing_source"] == "openrouter_generation_time_ms"
+    assert "_openrouter_metadata_task" not in llm_call["data"]
+    assert "_openrouter_metadata_refetcher" not in llm_call["data"]
+    assert llm_event["data"]["openrouter_metadata_fetch_status"] == "success"
+    assert summary["total_llm_call_time_ms"] == 4321.0
+    assert summary["llm_timing_source"] == "openrouter_generation_time_ms"
 
 
 def test_resolve_run_outcome_uses_trace_llm_error_event(tmp_path: Path) -> None:

@@ -187,27 +187,37 @@ async def _drive_chat_attaches_openrouter_generation_metadata(
     )
     provider = _make_provider(completions=completions)
 
-    async def fake_fetch(generation_id: str) -> dict[str, Any]:
+    async def fake_fetch(
+        generation_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         assert generation_id == "gen-123"
-        return {
-            "generation_id": generation_id,
-            "request_id": "req-123",
-            "provider_name": "Z.AI",
-            "latency_ms": 7000.0,
-            "generation_time_ms": 6500.0,
-            "moderation_latency_ms": 0.0,
-            "provider_latency_ms": 6800.0,
-            "upstream_id": "up-123",
-            "created_at": "2026-04-12T23:15:00Z",
-            "api_type": "completions",
-            "model": "z-ai/glm-5.1",
-            "streamed": False,
-            "provider_responses": [
-                {"provider_name": "Z.AI", "latency_ms": 6800.0, "status": 200}
-            ],
-        }
+        return (
+            {
+                "generation_id": generation_id,
+                "request_id": "req-123",
+                "provider_name": "Z.AI",
+                "latency_ms": 7000.0,
+                "generation_time_ms": 6500.0,
+                "moderation_latency_ms": 0.0,
+                "provider_latency_ms": 6800.0,
+                "upstream_id": "up-123",
+                "created_at": "2026-04-12T23:15:00Z",
+                "api_type": "completions",
+                "model": "z-ai/glm-5.1",
+                "streamed": False,
+                "provider_responses": [
+                    {"provider_name": "Z.AI", "latency_ms": 6800.0, "status": 200}
+                ],
+            },
+            {
+                "openrouter_metadata_fetch_attempt_count": 1,
+                "openrouter_metadata_fetch_last_reason": "success",
+            },
+        )
 
-    monkeypatch.setattr(provider, "_fetch_openrouter_generation_metadata", fake_fetch)
+    monkeypatch.setattr(
+        provider, "_fetch_openrouter_generation_metadata_with_diagnostics", fake_fetch
+    )
 
     response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
     await _await_openrouter_metadata_task(response)
@@ -228,7 +238,13 @@ async def _drive_chat_attaches_openrouter_generation_metadata(
     assert response.extra["openrouter_provider_name"] == "Z.AI"
     assert response.extra["openrouter_upstream_id"] == "up-123"
     assert response.extra["openrouter_metadata"]["generation_id"] == "gen-123"
-    assert response.extra["openrouter_metadata_retry_delays_s"] == [0.0, 0.2, 0.5]
+    assert response.extra["openrouter_metadata_retry_delays_s"] == [
+        0.0,
+        1.0,
+        3.0,
+        10.0,
+        30.0,
+    ]
     assert response.extra["openrouter_metadata_timeout_s"] == 5.0
     assert response.extra["openrouter_metadata_capture_enabled"] is True
     assert response.extra["openrouter_metadata_fetch_status"] == "success"
@@ -263,27 +279,37 @@ async def _drive_chat_stream_attaches_openrouter_generation_metadata(
     provider = _make_provider(completions=completions)
     deltas: list[str] = []
 
-    async def fake_fetch(generation_id: str) -> dict[str, Any]:
+    async def fake_fetch(
+        generation_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         assert generation_id == "gen-456"
-        return {
-            "generation_id": generation_id,
-            "request_id": "req-456",
-            "provider_name": "Z.AI",
-            "latency_ms": 9000.0,
-            "generation_time_ms": 7200.0,
-            "moderation_latency_ms": 0.0,
-            "provider_latency_ms": 8800.0,
-            "upstream_id": "up-456",
-            "created_at": "2026-04-12T23:15:00Z",
-            "api_type": "completions",
-            "model": "z-ai/glm-5.1",
-            "streamed": True,
-            "provider_responses": [
-                {"provider_name": "Z.AI", "latency_ms": 8800.0, "status": 200}
-            ],
-        }
+        return (
+            {
+                "generation_id": generation_id,
+                "request_id": "req-456",
+                "provider_name": "Z.AI",
+                "latency_ms": 9000.0,
+                "generation_time_ms": 7200.0,
+                "moderation_latency_ms": 0.0,
+                "provider_latency_ms": 8800.0,
+                "upstream_id": "up-456",
+                "created_at": "2026-04-12T23:15:00Z",
+                "api_type": "completions",
+                "model": "z-ai/glm-5.1",
+                "streamed": True,
+                "provider_responses": [
+                    {"provider_name": "Z.AI", "latency_ms": 8800.0, "status": 200}
+                ],
+            },
+            {
+                "openrouter_metadata_fetch_attempt_count": 1,
+                "openrouter_metadata_fetch_last_reason": "success",
+            },
+        )
 
-    monkeypatch.setattr(provider, "_fetch_openrouter_generation_metadata", fake_fetch)
+    monkeypatch.setattr(
+        provider, "_fetch_openrouter_generation_metadata_with_diagnostics", fake_fetch
+    )
 
     response = await provider.chat_stream(
         messages=[{"role": "user", "content": "hi"}],
@@ -387,10 +413,18 @@ async def _drive_chat_with_missing_openrouter_metadata_keeps_wall_clock_fallback
     )
     provider = _make_provider(completions=completions)
 
-    async def fake_fetch(_: str) -> dict[str, Any]:
-        return {}
+    async def fake_fetch(_: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        return (
+            {},
+            {
+                "openrouter_metadata_fetch_attempt_count": 1,
+                "openrouter_metadata_fetch_last_reason": "not_found",
+            },
+        )
 
-    monkeypatch.setattr(provider, "_fetch_openrouter_generation_metadata", fake_fetch)
+    monkeypatch.setattr(
+        provider, "_fetch_openrouter_generation_metadata_with_diagnostics", fake_fetch
+    )
 
     response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
     await _await_openrouter_metadata_task(response)
@@ -398,9 +432,16 @@ async def _drive_chat_with_missing_openrouter_metadata_keeps_wall_clock_fallback
     assert response.content == "hello"
     assert response.extra["openrouter_generation_id"] == "gen-missing"
     assert response.extra["openrouter_metadata_capture_enabled"] is True
-    assert response.extra["openrouter_metadata_retry_delays_s"] == [0.0, 0.2, 0.5]
+    assert response.extra["openrouter_metadata_retry_delays_s"] == [
+        0.0,
+        1.0,
+        3.0,
+        10.0,
+        30.0,
+    ]
     assert response.extra["openrouter_metadata_timeout_s"] == 5.0
     assert response.extra["openrouter_metadata_fetch_status"] == "unavailable"
+    assert response.extra["openrouter_metadata_fetch_last_reason"] == "not_found"
     assert response.extra["openrouter_metadata_fetch_ms"] >= 0.0
     assert "openrouter_metadata" not in response.extra
     assert "llm_call_time_ms" not in response.extra
@@ -439,15 +480,25 @@ async def _drive_chat_without_metadata_opt_in_still_fetches_generation_lookup(
     provider = _make_provider(completions=completions)
     seen_generation_ids: list[str] = []
 
-    async def fake_fetch(generation_id: str) -> dict[str, Any]:
+    async def fake_fetch(
+        generation_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         seen_generation_ids.append(generation_id)
-        return {
-            "generation_id": generation_id,
-            "latency_ms": 8000.0,
-            "generation_time_ms": 7000.0,
-        }
+        return (
+            {
+                "generation_id": generation_id,
+                "latency_ms": 8000.0,
+                "generation_time_ms": 7000.0,
+            },
+            {
+                "openrouter_metadata_fetch_attempt_count": 1,
+                "openrouter_metadata_fetch_last_reason": "success",
+            },
+        )
 
-    monkeypatch.setattr(provider, "_fetch_openrouter_generation_metadata", fake_fetch)
+    monkeypatch.setattr(
+        provider, "_fetch_openrouter_generation_metadata_with_diagnostics", fake_fetch
+    )
 
     response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
     await _await_openrouter_metadata_task(response)

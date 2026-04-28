@@ -41,7 +41,7 @@ _ALNUM = string.ascii_letters + string.digits
 _STANDARD_TC_KEYS = frozenset({"id", "type", "index", "function"})
 _STANDARD_FN_KEYS = frozenset({"name", "arguments"})
 _OPENROUTER_GENERATION_ID_HEADER = "x-generation-id"
-_DEFAULT_OPENROUTER_METADATA_RETRY_DELAYS_S = (0.0, 0.2, 0.5)
+_DEFAULT_OPENROUTER_METADATA_RETRY_DELAYS_S = (0.0, 1.0, 3.0, 10.0, 30.0)
 _DEFAULT_OPENROUTER_METADATA_TIMEOUT_S = 5.0
 
 
@@ -333,8 +333,23 @@ class UnifiedProvider(LLMProvider):
         self,
         generation_id: str,
     ) -> dict[str, Any]:
+        metadata, _diagnostics = await (
+            self._fetch_openrouter_generation_metadata_with_diagnostics(generation_id)
+        )
+        return metadata
+
+    async def _fetch_openrouter_generation_metadata_with_diagnostics(
+        self,
+        generation_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        attempts: list[dict[str, Any]] = []
         if not generation_id or not self.api_base or not self.api_key:
-            return {}
+            return {}, {
+                "openrouter_metadata_fetch_attempt_count": 0,
+                "openrouter_metadata_fetch_last_reason": (
+                    "missing_generation_id_or_credentials"
+                ),
+            }
 
         url = f"{self.api_base.rstrip('/')}/generation"
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -345,44 +360,93 @@ class UnifiedProvider(LLMProvider):
             for delay_s in retry_delays_s:
                 if delay_s:
                     await asyncio.sleep(delay_s)
+                attempt: dict[str, Any] = {
+                    "delay_s": delay_s,
+                    "attempt": len(attempts) + 1,
+                }
                 try:
                     response = await client.get(
                         url,
                         params={"id": generation_id},
                         headers=headers,
                     )
-                except httpx.HTTPError:
-                    return {}
+                except httpx.HTTPError as exc:
+                    attempt["reason"] = "http_exception"
+                    attempt["error_type"] = type(exc).__name__
+                    attempts.append(attempt)
+                    continue
 
+                attempt["status_code"] = response.status_code
                 if response.status_code == 404:
+                    attempt["reason"] = "not_found"
+                    attempts.append(attempt)
                     continue
                 if response.is_error:
-                    return {}
+                    attempt["reason"] = "http_error"
+                    attempts.append(attempt)
+                    continue
 
                 try:
                     payload = response.json()
                 except ValueError:
-                    return {}
+                    attempt["reason"] = "invalid_json"
+                    attempts.append(attempt)
+                    continue
 
                 data = payload.get("data") if isinstance(payload, dict) else None
                 if isinstance(data, Mapping):
-                    return self._normalize_openrouter_generation_metadata(
-                        data,
-                        generation_id=generation_id,
+                    attempt["reason"] = "success"
+                    attempts.append(attempt)
+                    return (
+                        self._normalize_openrouter_generation_metadata(
+                            data,
+                            generation_id=generation_id,
+                        ),
+                        self._summarize_openrouter_metadata_attempts(attempts),
                     )
-        return {}
+                attempt["reason"] = "missing_data"
+                attempts.append(attempt)
+        return {}, self._summarize_openrouter_metadata_attempts(attempts)
+
+    @staticmethod
+    def _summarize_openrouter_metadata_attempts(
+        attempts: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        summary: dict[str, Any] = {
+            "openrouter_metadata_fetch_attempt_count": len(attempts)
+        }
+        status_codes = [
+            attempt["status_code"]
+            for attempt in attempts
+            if attempt.get("status_code") is not None
+        ]
+        if status_codes:
+            summary["openrouter_metadata_fetch_status_codes"] = status_codes
+            summary["openrouter_metadata_fetch_last_status_code"] = status_codes[-1]
+        if attempts:
+            last = attempts[-1]
+            if last.get("reason") is not None:
+                summary["openrouter_metadata_fetch_last_reason"] = last["reason"]
+            if last.get("error_type") is not None:
+                summary["openrouter_metadata_fetch_last_error_type"] = last[
+                    "error_type"
+                ]
+        return summary
 
     async def _fetch_openrouter_extra_fields(
         self, generation_id: str
     ) -> dict[str, Any]:
         metadata_fetch_started_at = time.time()
-        metadata = await self._fetch_openrouter_generation_metadata(generation_id)
+        metadata, diagnostics = await (
+            self._fetch_openrouter_generation_metadata_with_diagnostics(generation_id)
+        )
         extra_fields: dict[str, Any] = {
             "openrouter_metadata_fetch_ms": (time.time() - metadata_fetch_started_at)
             * 1000.0,
             "openrouter_metadata_fetch_status": (
                 "success" if metadata else "unavailable"
             ),
+            **diagnostics,
         }
         if not metadata:
             return extra_fields
@@ -440,10 +504,12 @@ class UnifiedProvider(LLMProvider):
         extra["openrouter_metadata_retry_delays_s"] = metadata_policy["retry_delays_s"]
         extra["openrouter_metadata_timeout_s"] = metadata_policy["timeout_s"]
         extra["openrouter_metadata_task_pending"] = True
-        metadata_task = asyncio.create_task(
-            self._fetch_openrouter_extra_fields(generation_id)
-        )
+        async def _refetch_openrouter_metadata() -> dict[str, Any]:
+            return await self._fetch_openrouter_extra_fields(generation_id)
+
+        metadata_task = asyncio.create_task(_refetch_openrouter_metadata())
         extra["_openrouter_metadata_task"] = metadata_task
+        extra["_openrouter_metadata_refetcher"] = _refetch_openrouter_metadata
         response.extra = extra
 
         def _apply_openrouter_metadata(task: asyncio.Task[dict[str, Any]]) -> None:

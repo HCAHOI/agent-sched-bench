@@ -387,7 +387,9 @@ class TraceCollectorHook(AgentHook):
                     await task
                 except Exception:
                     pass
+            await self._refresh_unavailable_openrouter_metadata(response)
             response.extra.pop("_openrouter_metadata_task", None)
+            response.extra.pop("_openrouter_metadata_refetcher", None)
             response.extra["openrouter_metadata_task_pending"] = False
             llm_wall_latency_ms = float(pending["action_data"]["llm_wall_latency_ms"])
             llm_call_time_ms = self._resolve_llm_call_time_ms(
@@ -418,6 +420,36 @@ class TraceCollectorHook(AgentHook):
             if generation_id is not None:
                 raw_response["openrouter_generation_id"] = generation_id
         self._pending_llm_records.clear()
+
+    @staticmethod
+    async def _refresh_unavailable_openrouter_metadata(response: Any) -> None:
+        if response is None or not getattr(response, "extra", None):
+            return
+        extra = response.extra
+        if extra.get("openrouter_metadata_fetch_status") == "success":
+            return
+        generation_id = extra.get("openrouter_generation_id")
+        refetcher = extra.get("_openrouter_metadata_refetcher")
+        if not generation_id or not callable(refetcher):
+            return
+
+        initial_status = extra.get("openrouter_metadata_fetch_status")
+        initial_fetch_ms = extra.get("openrouter_metadata_fetch_ms")
+        try:
+            refreshed = await refetcher()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            extra["openrouter_metadata_refetch_attempted"] = True
+            extra["openrouter_metadata_refetch_error"] = str(exc)
+            return
+        if not isinstance(refreshed, dict):
+            return
+
+        extra.update(refreshed)
+        extra["openrouter_metadata_refetch_attempted"] = True
+        if initial_status is not None:
+            extra["openrouter_metadata_initial_fetch_status"] = initial_status
+        if initial_fetch_ms is not None:
+            extra["openrouter_metadata_initial_fetch_ms"] = initial_fetch_ms
 
     @staticmethod
     def _clone_messages(messages: list[dict] | None) -> list[dict[str, Any]] | None:
@@ -491,6 +523,15 @@ class TraceCollectorHook(AgentHook):
             "openrouter_metadata_timeout_s",
             "openrouter_metadata_fetch_ms",
             "openrouter_metadata_fetch_status",
+            "openrouter_metadata_fetch_attempt_count",
+            "openrouter_metadata_fetch_status_codes",
+            "openrouter_metadata_fetch_last_status_code",
+            "openrouter_metadata_fetch_last_reason",
+            "openrouter_metadata_fetch_last_error_type",
+            "openrouter_metadata_refetch_attempted",
+            "openrouter_metadata_refetch_error",
+            "openrouter_metadata_initial_fetch_status",
+            "openrouter_metadata_initial_fetch_ms",
             "openrouter_metadata",
         ):
             if key in extra:
