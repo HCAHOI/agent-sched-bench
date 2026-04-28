@@ -52,7 +52,7 @@ class TerminalBenchBenchmark(Benchmark):
 
     @property
     def execution_environment(self) -> str:
-        return "host"
+        return "container"
 
     def load_tasks(self) -> list[dict[str, Any]]:
         dataset_root, task_paths = self._load_dataset_paths()

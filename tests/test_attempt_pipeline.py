@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -283,6 +284,87 @@ def test_run_attempt_supports_non_image_success_without_patch(
     resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
     assert resources["samples"]
     assert resources["summary"]["sample_count"] >= 1
+
+
+def test_run_attempt_waits_for_published_container_name_before_sampling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="hello-world",
+        attempt=1,
+        task={"instance_id": "hello-world"},
+        model="z-ai/glm-5.1",
+        scaffold="openclaw",
+        source_image=None,
+        prompt_template="default",
+        execution_environment="container",
+    )
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+    inspect_calls = {"count": 0}
+    sampled: dict[str, str] = {}
+
+    def fake_container_is_inspectable(container_id: str, *, container_executable: str) -> bool:
+        inspect_calls["count"] += 1
+        return inspect_calls["count"] >= 2
+
+    class FakeContainerStatsSampler:
+        def __init__(self, container_id: str, **kwargs) -> None:
+            sampled["container_id"] = container_id
+            sampled["executable"] = kwargs["executable"]
+
+        def start(self) -> None:
+            sampled["started"] = "yes"
+
+        def stop(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "timestamp": "2026-04-28T00:00:00",
+                    "epoch": time.time(),
+                    "mem_usage": "128MiB / 1024MiB",
+                    "mem_percent": "12.5%",
+                    "cpu_percent": "42.0%",
+                }
+            ]
+
+    monkeypatch.setattr(
+        "trace_collect.attempt_pipeline._container_is_inspectable",
+        fake_container_is_inspectable,
+    )
+    monkeypatch.setattr(
+        "trace_collect.attempt_pipeline.ContainerStatsSampler",
+        FakeContainerStatsSampler,
+    )
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        ctx.mark_container_ready("hello-world-1-of-1-run")
+        await asyncio.sleep(0.15)
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
+
+    assert inspect_calls["count"] >= 2
+    assert sampled == {
+        "container_id": "hello-world-1-of-1-run",
+        "executable": "docker",
+        "started": "yes",
+    }
+    resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
+    assert len(resources["samples"]) == 1
+    assert resources["summary"]["sample_count"] == 1
 
 
 def test_run_attempt_disk_shortfall_aborts_early(tmp_path: Path) -> None:

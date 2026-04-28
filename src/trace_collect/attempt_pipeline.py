@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -209,18 +210,46 @@ async def _watch_for_container_ready(
     """Wait for ``ctx.container_id`` and start sampling once it appears."""
     while not stop_event.is_set():
         if ctx.container_id:
-            sampler = ContainerStatsSampler(
-                container_id=ctx.container_id,
-                interval_s=1.0,
-                executable=container_executable,
-            )
-            sampler.start()
-            return sampler
+            if _container_is_inspectable(
+                ctx.container_id,
+                container_executable=container_executable,
+            ):
+                sampler = ContainerStatsSampler(
+                    container_id=ctx.container_id,
+                    interval_s=1.0,
+                    executable=container_executable,
+                )
+                sampler.start()
+                return sampler
         try:
             await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             return None
     return None
+
+
+def _container_is_inspectable(
+    container_id: str,
+    *,
+    container_executable: str,
+) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                container_executable,
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                container_id,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 async def run_attempt(

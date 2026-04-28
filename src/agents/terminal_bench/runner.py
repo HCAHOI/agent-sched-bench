@@ -16,6 +16,7 @@ from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
 class TerminalBenchRunner:
     AGENT_IMPORT_PATH = "agents.terminal_bench.openclaw_agent:TerminalBenchOpenClawAgent"
     TRACE_FILENAME = "openclaw-trace.jsonl"
+    N_ATTEMPTS = 1
 
     def __init__(
         self,
@@ -83,6 +84,12 @@ class TerminalBenchRunner:
         run_id = attempt_ctx.instance_id.replace("/", "_")
         run_root.mkdir(parents=True, exist_ok=True)
 
+        attempt_ctx.mark_container_ready(
+            self._expected_client_container_name(
+                task_id=str(task["task_id"]),
+                run_id=run_id,
+            )
+        )
         command = self._build_tb_command(
             task=task,
             run_root=run_root,
@@ -156,6 +163,11 @@ class TerminalBenchRunner:
             "agent_runtime_mode": "host_controller",
         }
 
+    @classmethod
+    def _expected_client_container_name(cls, *, task_id: str, run_id: str) -> str:
+        trial_name = f"{task_id}.1-of-{cls.N_ATTEMPTS}.{run_id}"
+        return trial_name.replace(".", "-")
+
     def _build_tb_command(
         self,
         *,
@@ -179,6 +191,8 @@ class TerminalBenchRunner:
             run_id,
             "--n-concurrent",
             "1",
+            "--n-attempts",
+            str(self.N_ATTEMPTS),
             "--agent-import-path",
             self.AGENT_IMPORT_PATH,
             "--model",
@@ -263,7 +277,7 @@ class TerminalBenchRunner:
                 "trace_format_version": 5,
                 "mode": "collect",
                 "scaffold": "openclaw",
-                "execution_environment": "host",
+                "execution_environment": "container",
                 "benchmark": self.benchmark_slug,
                 "model": self.model,
                 "max_iterations": self.max_iterations,

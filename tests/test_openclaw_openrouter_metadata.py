@@ -407,15 +407,15 @@ async def _drive_chat_with_missing_openrouter_metadata_keeps_wall_clock_fallback
     assert "llm_timing_source" not in response.extra
 
 
-def test_chat_without_metadata_opt_in_skips_generation_lookup(
+def test_chat_without_metadata_opt_in_still_fetches_generation_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     asyncio.run(
-        _drive_chat_without_metadata_opt_in_skips_generation_lookup(monkeypatch)
+        _drive_chat_without_metadata_opt_in_still_fetches_generation_lookup(monkeypatch)
     )
 
 
-async def _drive_chat_without_metadata_opt_in_skips_generation_lookup(
+async def _drive_chat_without_metadata_opt_in_still_fetches_generation_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     completions = _FakeCompletions(
@@ -437,18 +437,27 @@ async def _drive_chat_without_metadata_opt_in_skips_generation_lookup(
         )
     )
     provider = _make_provider(completions=completions)
+    seen_generation_ids: list[str] = []
 
-    async def fail_fetch(_: str) -> dict[str, Any]:
-        raise AssertionError("metadata fetch should not run without explicit opt-in")
+    async def fake_fetch(generation_id: str) -> dict[str, Any]:
+        seen_generation_ids.append(generation_id)
+        return {
+            "generation_id": generation_id,
+            "latency_ms": 8000.0,
+            "generation_time_ms": 7000.0,
+        }
 
-    monkeypatch.setattr(provider, "_fetch_openrouter_generation_metadata", fail_fetch)
+    monkeypatch.setattr(provider, "_fetch_openrouter_generation_metadata", fake_fetch)
 
     response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
+    await _await_openrouter_metadata_task(response)
 
     assert response.content == "hello"
+    assert seen_generation_ids == ["gen-disabled"]
     assert response.extra["openrouter_generation_id"] == "gen-disabled"
-    assert response.extra["openrouter_metadata_fetch_status"] == "disabled"
-    assert "llm_call_time_ms" not in response.extra
+    assert response.extra["openrouter_metadata_capture_enabled"] is True
+    assert response.extra["openrouter_metadata_fetch_status"] == "success"
+    assert response.extra["llm_call_time_ms"] == 7000.0
 
 
 async def _append_delta(target: list[str], delta: str) -> None:

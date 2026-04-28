@@ -105,7 +105,7 @@ def test_terminal_bench_runtime_mode_and_scaffold_gating() -> None:
     assert plugin.runtime_mode_for("openclaw") == "host_controller"
     with pytest.raises(NotImplementedError, match="openclaw"):
         plugin.validate_scaffold_support("unsupported")
-    assert plugin.execution_environment == "host"
+    assert plugin.execution_environment == "container"
 
 
 def test_terminal_bench_normalize_task_preserves_non_swe_shape(tb_stub) -> None:

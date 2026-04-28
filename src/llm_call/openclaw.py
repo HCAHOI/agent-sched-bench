@@ -116,13 +116,6 @@ def _get_openrouter_metadata_policy() -> dict[str, Any]:
     }
 
 
-def _should_capture_openrouter_metadata() -> bool:
-    raw_value = os.environ.get("NANOBOT_OPENROUTER_CAPTURE_GENERATION_METADATA")
-    if raw_value is None:
-        return False
-    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _extract_tc_extras(
     tc: Any,
 ) -> tuple[
@@ -438,11 +431,6 @@ class UnifiedProvider(LLMProvider):
         if generation_id:
             extra["openrouter_generation_id"] = generation_id
         if not generation_id:
-            response.extra = extra
-            return response
-
-        if not _should_capture_openrouter_metadata():
-            extra["openrouter_metadata_fetch_status"] = "disabled"
             response.extra = extra
             return response
 
