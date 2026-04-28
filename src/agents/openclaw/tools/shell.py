@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -105,6 +106,7 @@ class ExecTool(Tool):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=env,
+                start_new_session=(sys.platform != "win32"),
             )
 
             try:
@@ -113,7 +115,16 @@ class ExecTool(Tool):
                     timeout=effective_timeout,
                 )
             except asyncio.TimeoutError:
-                process.kill()
+                # Kill the entire process group so descendants (e.g. python
+                # train.py spawned by `sh -c`) don't survive as orphans.
+                if sys.platform != "win32":
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError, OSError) as e:
+                        logger.debug("killpg failed: {}", e)
+                        process.kill()
+                else:
+                    process.kill()
                 try:
                     await asyncio.wait_for(process.wait(), timeout=5.0)
                 except asyncio.TimeoutError:
