@@ -76,27 +76,28 @@ def build_vllm_command(config: VLLMServerConfig) -> list[str]:
 
 
 def _exec_with_stderr_tee(command: list[str], log_path: str) -> int:
-    """Spawn `command` as a subprocess, teeing stderr to both `log_path` and parent's stderr.
+    """Spawn `command` as a subprocess, teeing combined stdout+stderr to
+    both `log_path` and the parent's stderr.
 
-    Blocks until the subprocess exits and returns its exit code. Used by
-    the launcher when `capture_startup_log_path` is set so downstream
-    tools (vllm_startup_parser) can extract baseline memory facts from a
-    file while the user still sees vLLM's logs in their terminal.
+    vLLM 0.10+ writes INFO logs to stdout (not stderr); merging the two
+    streams ensures both engine startup lines AND tqdm progress bars
+    land in the captured log so `vllm_startup_parser` can extract a
+    baseline regardless of vLLM version.
     """
     log_dir = Path(log_path).parent
     log_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         command,
-        stderr=subprocess.PIPE,
-        stdout=None,  # inherit
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
     )
-    assert proc.stderr is not None
+    assert proc.stdout is not None
 
     def _tee() -> None:
         with open(log_path, "w", encoding="utf-8") as f:
-            for line in proc.stderr:  # type: ignore[arg-type]
+            for line in proc.stdout:  # type: ignore[arg-type]
                 sys.stderr.write(line)
                 sys.stderr.flush()
                 f.write(line)

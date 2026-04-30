@@ -38,6 +38,15 @@ def test_parse_startup_log_v07_extracts_baseline():
     assert result.tensor_parallel_size == 2
 
 
+def test_parse_startup_log_v020_extracts_baseline():
+    result = parse_startup_log_file(FIXTURES / "vllm_startup_0_20.log")
+    assert result is not None
+    assert result.weights_mib == pytest.approx(2.89 * 1024, rel=0.001)
+    assert result.kv_cache_total_mib == pytest.approx(22.63 * 1024, rel=0.001)
+    assert result.model == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert result.dtype == "float16"
+
+
 def test_parse_startup_log_returns_none_when_weights_missing(caplog):
     text = "GPU KV cache size: 32768 tokens, 0.25 GiB\ndtype=float16\n"
     with caplog.at_level(logging.WARNING):
