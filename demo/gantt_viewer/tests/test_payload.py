@@ -113,6 +113,8 @@ def _build(tmp_path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def test_llm_action_becomes_span(tmp_path: Path) -> None:
     payload = _build(tmp_path, [_llm_action(0, 1000.0, 1001.0)])
+    assert payload["id"] == "test"
+    assert payload["label"] == "test"
     spans = payload["lanes"][0]["spans"]
     llm_spans = [s for s in spans if s["type"] == "llm"]
     assert len(llm_spans) == 1
@@ -122,6 +124,25 @@ def test_llm_action_becomes_span(tmp_path: Path) -> None:
     assert llm_spans[0]["end_real"] == pytest.approx(1.0)
     assert llm_spans[0]["iteration"] == 0
     assert DEFAULT_SPAN_REGISTRY["llm"]["color"] == "#00E5FF"
+
+
+def test_t0_prefers_first_action_over_pre_action_event(tmp_path: Path) -> None:
+    records = [
+        _event("SESSION", "session_load", 0, 999.5),
+        _llm_action(0, 1000.0, 1001.0),
+    ]
+    records[1]["data"]["llm_call_time_ms"] = 500.0
+    records[1]["data"]["llm_timing_source"] = "openrouter_generation_time_ms"
+
+    payload = _build(tmp_path, records)
+    span = next(s for s in payload["lanes"][0]["spans"] if s["type"] == "llm")
+    marker = payload["lanes"][0]["markers"][0]
+
+    assert payload["t0"] == pytest.approx(1000.0)
+    assert span["start"] == pytest.approx(0.0)
+    assert span["start_real"] == pytest.approx(0.0)
+    assert marker["t"] == pytest.approx(-0.5)
+    assert marker["t_real"] == pytest.approx(-0.5)
 
 
 def test_research_style_llm_only_trace_renders(tmp_path: Path) -> None:

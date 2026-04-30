@@ -210,9 +210,7 @@ export function hitRows(hit: Hit): Array<[string, string]> {
       ["start", formatAbsTime(hit.item.start_abs)],
       ["relative", `+${hit.item.start.toFixed(3)}s`],
     ];
-    for (const [key, value] of Object.entries(hit.item.detail ?? {})) {
-      rows.push([key, formatDetailValue(value)]);
-    }
+    rows.push(...spanDetailRows(hit.item.type, hit.item.detail ?? {}));
     return rows;
   }
 
@@ -227,6 +225,106 @@ export function hitRows(hit: Hit): Array<[string, string]> {
     rows.push([key, formatDetailValue(value)]);
   }
   return rows;
+}
+
+function spanDetailRows(spanType: string, detail: Record<string, unknown>): Array<[string, string]> {
+  if (spanType !== "llm") {
+    return Object.entries(detail).map(([key, value]) => [key, formatDetailValue(value)]);
+  }
+
+  const rows: Array<[string, string]> = [];
+  pushDetailRow(rows, detail, "finish_reason", "finish");
+  pushDetailRow(rows, detail, "prompt_tokens", "prompt_tokens");
+  pushDetailRow(rows, detail, "completion_tokens", "completion_tokens");
+  pushDetailRow(rows, detail, "llm_content", "response");
+  pushDetailRow(rows, detail, "tool_calls_requested", "tool_calls");
+  pushDetailRow(rows, detail, "llm_call_time_ms", "llm_call_time_ms");
+  pushDetailRow(rows, detail, "llm_wall_latency_ms", "llm_wall_latency_ms");
+  pushDetailRow(rows, detail, "llm_timing_source", "timing_source");
+
+  const openrouterSummary = formatOpenRouterSummary(detail);
+  if (openrouterSummary) {
+    rows.push(["openrouter", openrouterSummary]);
+  }
+
+  const shown = new Set([
+    "finish_reason",
+    "prompt_tokens",
+    "completion_tokens",
+    "llm_content",
+    "tool_calls_requested",
+    "llm_call_time_ms",
+    "llm_latency_ms",
+    "llm_wall_latency_ms",
+    "llm_timing_source",
+    ...OPENROUTER_DETAIL_FIELDS,
+  ]);
+  for (const [key, value] of Object.entries(detail)) {
+    if (shown.has(key) || key.startsWith("openrouter_")) {
+      continue;
+    }
+    rows.push([key, formatDetailValue(value)]);
+  }
+  return rows;
+}
+
+const OPENROUTER_DETAIL_FIELDS = [
+  "openrouter_generation_id",
+  "openrouter_metadata_fetch_status",
+  "openrouter_generation_time_ms",
+  "openrouter_latency_ms",
+  "openrouter_provider_latency_ms",
+  "openrouter_provider_name",
+  "openrouter_model",
+  "openrouter_metadata_fetch_last_reason",
+  "openrouter_metadata_refetch_attempted",
+  "openrouter_metadata_initial_fetch_status",
+  "openrouter_metadata_fetch_attempt_count",
+  "openrouter_metadata_fetch_status_codes",
+  "openrouter_metadata_fetch_last_status_code",
+  "openrouter_metadata_capture_enabled",
+  "openrouter_metadata_task_pending",
+  "openrouter_metadata_retry_delays_s",
+  "openrouter_metadata_timeout_s",
+  "openrouter_metadata_fetch_ms",
+  "openrouter_request_id",
+  "openrouter_upstream_id",
+  "openrouter_created_at",
+  "openrouter_api_type",
+  "openrouter_metadata",
+];
+
+function pushDetailRow(
+  rows: Array<[string, string]>,
+  detail: Record<string, unknown>,
+  key: string,
+  label: string,
+): void {
+  if (detail[key] == null) {
+    return;
+  }
+  rows.push([label, formatDetailValue(detail[key])]);
+}
+
+function formatOpenRouterSummary(detail: Record<string, unknown>): string | null {
+  const status = detail.openrouter_metadata_fetch_status;
+  const generationMs = detail.openrouter_generation_time_ms;
+  const latencyMs = detail.openrouter_latency_ms;
+  const provider = detail.openrouter_provider_name;
+  const parts: string[] = [];
+  if (typeof status === "string" && status) {
+    parts.push(status);
+  }
+  if (typeof generationMs === "number" && Number.isFinite(generationMs)) {
+    parts.push(`generation ${generationMs.toFixed(0)} ms`);
+  }
+  if (typeof latencyMs === "number" && Number.isFinite(latencyMs)) {
+    parts.push(`latency ${latencyMs.toFixed(0)} ms`);
+  }
+  if (typeof provider === "string" && provider) {
+    parts.push(provider);
+  }
+  return parts.length ? parts.join(" · ") : null;
 }
 
 type TimeMode = "sync" | "abs";

@@ -413,10 +413,13 @@ export class CanvasRenderer extends EventTarget {
         }
       }
       if (this.showResourceChart && trace.resource_timeline?.length) {
-        const first = this.selectResourceTime(trace.resource_timeline[0]);
-        const last = this.selectResourceTime(trace.resource_timeline[trace.resource_timeline.length - 1]);
-        minTime = Math.min(minTime, first);
-        maxTime = Math.max(maxTime, last);
+        const timeline = this.displayResourceTimeline(trace);
+        if (timeline.length) {
+          const first = this.selectResourceTime(timeline[0]);
+          const last = this.selectResourceTime(timeline[timeline.length - 1]);
+          minTime = Math.min(minTime, first);
+          maxTime = Math.max(maxTime, last);
+        }
       }
     }
 
@@ -638,20 +641,9 @@ export class CanvasRenderer extends EventTarget {
       }
 
       // Resource utilization chart for this trace (dual-metric overlay)
-      // Clip resource timeline to end of last action
-      let timeline = trace.resource_timeline;
       const hasAnyMetric = this.resourceMetric !== "none" || this.resourceMetricSecondary !== "none";
-      if (this.showResourceChart && hasAnyMetric && timeline?.length) {
-        let lastActionEnd = -Infinity;
-        for (const lane of trace.lanes) {
-          for (const span of lane.spans) {
-            lastActionEnd = Math.max(lastActionEnd, this.selectSpanEnd(span));
-          }
-        }
-        if (Number.isFinite(lastActionEnd)) {
-          const cutoff = lastActionEnd + 60;
-          timeline = timeline.filter((s) => this.selectResourceTime(s) <= cutoff);
-        }
+      if (this.showResourceChart && hasAnyMetric && trace.resource_timeline?.length) {
+        const timeline = this.displayResourceTimeline(trace);
         if (!timeline.length) { laneY += resourceChartH(this.viewMode); continue; }
         const chartH = resourceChartH(this.viewMode);
         const chartPad = 3;
@@ -752,6 +744,168 @@ export class CanvasRenderer extends EventTarget {
       }
     }
     return this.timeMode === "sync" ? sample.t : sample.t_abs;
+  }
+
+  private displayResourceTimeline(trace: GanttPayload["traces"][number]): ResourceSample[] {
+    const timeline = trace.resource_timeline ?? [];
+    if (timeline.length === 0) {
+      return [];
+    }
+    const bounds = this.traceSpanTimeBounds(trace);
+    if (!bounds) {
+      return timeline;
+    }
+    return this.clipResourceTimelineToBounds(timeline, bounds.min, bounds.max);
+  }
+
+  private traceSpanTimeBounds(trace: GanttPayload["traces"][number]): { min: number; max: number } | null {
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const lane of trace.lanes) {
+      for (const span of lane.spans) {
+        min = Math.min(min, this.selectSpanStart(span));
+        max = Math.max(max, this.selectSpanEnd(span));
+      }
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      return null;
+    }
+    return { min, max };
+  }
+
+  private clipResourceTimelineToBounds(
+    timeline: ResourceSample[],
+    min: number,
+    max: number,
+  ): ResourceSample[] {
+    if (max < min) {
+      return [];
+    }
+
+    const entries = timeline
+      .map((sample) => ({ sample, time: this.selectResourceTime(sample) }))
+      .filter((entry) => Number.isFinite(entry.time))
+      .sort((left, right) => left.time - right.time);
+    if (entries.length === 0) {
+      return [];
+    }
+
+    const clipped: ResourceSample[] = [];
+    const startSample = this.resourceSampleAt(entries, min);
+    if (startSample) {
+      this.appendDistinctResourceSample(clipped, startSample);
+    }
+
+    for (const { sample, time } of entries) {
+      if (time > min && time < max) {
+        this.appendDistinctResourceSample(clipped, sample);
+      }
+    }
+
+    const endSample = this.resourceSampleAt(entries, max);
+    if (endSample) {
+      this.appendDistinctResourceSample(clipped, endSample);
+    }
+    return clipped;
+  }
+
+  private resourceSampleAt(
+    entries: Array<{ sample: ResourceSample; time: number }>,
+    targetTime: number,
+  ): ResourceSample | null {
+    if (targetTime < entries[0].time || targetTime > entries[entries.length - 1].time) {
+      return null;
+    }
+
+    let previous = entries[0];
+    for (const entry of entries) {
+      if (Math.abs(entry.time - targetTime) < 1e-9) {
+        return this.withSelectedResourceTime({ ...entry.sample }, targetTime);
+      }
+      if (entry.time > targetTime) {
+        return this.interpolateResourceSample(previous, entry, targetTime);
+      }
+      previous = entry;
+    }
+    return this.withSelectedResourceTime({ ...entries[entries.length - 1].sample }, targetTime);
+  }
+
+  private interpolateResourceSample(
+    left: { sample: ResourceSample; time: number },
+    right: { sample: ResourceSample; time: number },
+    targetTime: number,
+  ): ResourceSample {
+    const range = right.time - left.time;
+    const frac = range === 0 ? 0 : (targetTime - left.time) / range;
+    const lerp = (a: number, b: number) => a + (b - a) * frac;
+    const lerpOptional = (
+      a: number | null | undefined,
+      b: number | null | undefined,
+    ): number | null => {
+      if (a == null && b == null) return null;
+      if (a == null) return b ?? null;
+      if (b == null) return a;
+      return lerp(a, b);
+    };
+
+    const contextSwitches = lerpOptional(
+      left.sample.context_switches,
+      right.sample.context_switches,
+    );
+    const sample: ResourceSample = {
+      t: lerp(left.sample.t, right.sample.t),
+      t_abs: lerp(left.sample.t_abs, right.sample.t_abs),
+      t_real: lerpOptional(left.sample.t_real, right.sample.t_real),
+      t_real_abs: lerpOptional(left.sample.t_real_abs, right.sample.t_real_abs),
+      cpu_percent: lerp(left.sample.cpu_percent, right.sample.cpu_percent),
+      memory_mb: lerp(left.sample.memory_mb, right.sample.memory_mb),
+      memory_total_mb_s: lerpOptional(
+        left.sample.memory_total_mb_s,
+        right.sample.memory_total_mb_s,
+      ),
+      memory_read_mb_s: lerpOptional(
+        left.sample.memory_read_mb_s,
+        right.sample.memory_read_mb_s,
+      ),
+      memory_write_mb_s: lerpOptional(
+        left.sample.memory_write_mb_s,
+        right.sample.memory_write_mb_s,
+      ),
+      disk_read_mb: lerpOptional(left.sample.disk_read_mb, right.sample.disk_read_mb),
+      disk_write_mb: lerpOptional(left.sample.disk_write_mb, right.sample.disk_write_mb),
+      net_rx_mb: lerpOptional(left.sample.net_rx_mb, right.sample.net_rx_mb),
+      net_tx_mb: lerpOptional(left.sample.net_tx_mb, right.sample.net_tx_mb),
+      context_switches: contextSwitches == null ? null : Math.round(contextSwitches),
+    };
+    return this.withSelectedResourceTime(sample, targetTime);
+  }
+
+  private withSelectedResourceTime(sample: ResourceSample, targetTime: number): ResourceSample {
+    if (this.clockMode === "real") {
+      if (this.timeMode === "sync") {
+        sample.t_real = targetTime;
+      } else {
+        sample.t_real_abs = targetTime;
+      }
+    } else if (this.timeMode === "sync") {
+      sample.t = targetTime;
+    } else {
+      sample.t_abs = targetTime;
+    }
+    return sample;
+  }
+
+  private appendDistinctResourceSample(samples: ResourceSample[], sample: ResourceSample): void {
+    const previous = samples.at(-1);
+    if (previous) {
+      const previousTime = this.selectResourceTime(previous);
+      const nextTime = this.selectResourceTime(sample);
+      if (Math.abs(previousTime - nextTime) < 1e-9) {
+        samples[samples.length - 1] = sample;
+        return;
+      }
+    }
+    samples.push(sample);
   }
 
   private resourceMetricUnit(): string {

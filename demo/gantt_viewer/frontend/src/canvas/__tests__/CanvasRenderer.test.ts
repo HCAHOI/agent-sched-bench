@@ -6,6 +6,7 @@ function createMockContext(): CanvasRenderingContext2D {
   return {
     arc: noop,
     beginPath: noop,
+    closePath: noop,
     clearRect: noop,
     fill: noop,
     fillRect: noop,
@@ -324,6 +325,50 @@ describe("CanvasRenderer", () => {
         markerBox!.y + markerBox!.h / 2,
       )?.kind,
     ).toBe("marker");
+    renderer.destroy();
+  });
+
+  it("clips resource charts to span bounds with interpolated endpoints", () => {
+    const canvas = document.createElement("canvas");
+    const wrap = document.createElement("div");
+    const context = createMockContext();
+    vi.spyOn(canvas, "getContext").mockImplementation(() => context);
+    vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: 360,
+      height: 320,
+      left: 0,
+      right: 640,
+      top: 0,
+      width: 640,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    setElementBox(canvas, 640, 320);
+    setElementBox(wrap, 640, 320);
+
+    const payload = payloadFixture();
+    payload.traces[0].lanes[0].markers[0].t = 2;
+    payload.traces[0].lanes[0].markers[0].t_abs = 1002;
+    payload.traces[0].resource_timeline = [
+      { cpu_percent: 10, memory_mb: 100, t: -0.5, t_abs: 999.5 },
+      { cpu_percent: 30, memory_mb: 200, t: 0.5, t_abs: 1000.5 },
+      { cpu_percent: 50, memory_mb: 300, t: 1.5, t_abs: 1001.5 },
+    ];
+
+    const renderer = new CanvasRenderer(canvas, wrap);
+    renderer.setPayload(payload);
+    (renderer as unknown as { render: () => void }).render();
+    const resourceBox = (
+      renderer as unknown as {
+        hitBoxes: Array<{ hit: { kind: string; timeline?: Array<{ cpu_percent: number; t: number }> } }>;
+      }
+    ).hitBoxes.find((box) => box.hit.kind === "resource");
+    const timeline = resourceBox?.hit.timeline;
+
+    expect(timeline?.map((sample) => sample.t)).toEqual([0, 0.5, 1]);
+    expect(timeline?.[0].cpu_percent).toBeCloseTo(20);
+    expect(timeline?.[2].cpu_percent).toBeCloseTo(40);
     renderer.destroy();
   });
 });

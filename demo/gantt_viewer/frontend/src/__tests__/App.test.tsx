@@ -2,10 +2,14 @@ import { render } from "solid-js/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Registries, TraceDescriptor, TracePayload } from "../api/client";
+import type { SnapshotBootstrapData } from "../bootstrap/snapshot";
 import {
   __resetSignalsForTests,
+  clockMode,
   descriptors as descriptorState,
   loadedTraces,
+  resourceMetric,
+  resourceMetricSecondary,
   setClockMode,
   setLoadedTraces,
   setRegistries,
@@ -14,6 +18,7 @@ import {
   setViewMode,
   setVisibility,
   setZoom,
+  showResourceChart,
   themeMode,
   timeMode,
   viewMode,
@@ -131,7 +136,7 @@ function createSnapshotTrace(id: string, label: string, instanceId: string): Tra
   };
 }
 
-function createSnapshotBootstrap(traces: TracePayload[]) {
+function createSnapshotBootstrap(traces: TracePayload[]): SnapshotBootstrapData {
   const traceIds = traces.map((trace) => trace.id);
   return {
     mode: "snapshot" as const,
@@ -208,7 +213,7 @@ describe("App", () => {
     const { dispose, host } = mountApp();
     try {
       const activeButtons = Array.from(host.querySelectorAll(".toggle-group button.active"));
-      expect(activeButtons.map((button) => button.textContent)).toEqual(["DARK", "SYNC", "WALL", "LAYER", "RES"]);
+      expect(activeButtons.map((button) => button.textContent)).toEqual(["LIGHT", "SYNC", "WALL", "LAYER", "RES"]);
 
       await flush();
 
@@ -225,12 +230,76 @@ describe("App", () => {
       expect(descriptorState().map((descriptor) => descriptor.id)).toEqual(["trace-b", "trace-a"]);
       expect(loadedTraces().map((trace) => trace.id)).toEqual(["trace-b", "trace-a"]);
       expect(visibility()).toEqual({ "trace-b": true, "trace-a": true });
-      expect(themeMode()).toBe("dark");
+      expect(themeMode()).toBe("light");
       expect(timeMode()).toBe("sync");
       expect(viewMode()).toBe("layered");
       expect(zoom()).toBe(1);
       expect(persist.enableDisplaySync).toHaveBeenCalledOnce();
       expect(persist.enablePersistence).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+    }
+  });
+
+  it("applies embedded snapshot display defaults", async () => {
+    const snapshot = createSnapshotBootstrap([baseTrace]);
+    snapshot.display = {
+      clockMode: "real",
+      resourceMetric: "disk_total",
+      resourceMetricSecondary: "none",
+      showResourceChart: false,
+      themeMode: "light",
+      timeMode: "abs",
+      viewMode: "concise",
+      zoom: 4,
+    };
+    setSnapshotBootstrap(snapshot);
+
+    const { dispose } = mountApp();
+    try {
+      await flush();
+
+      expect(clockMode()).toBe("real");
+      expect(resourceMetric()).toBe("disk_total");
+      expect(resourceMetricSecondary()).toBe("none");
+      expect(showResourceChart()).toBe(false);
+      expect(themeMode()).toBe("light");
+      expect(timeMode()).toBe("abs");
+      expect(viewMode()).toBe("concise");
+      expect(zoom()).toBe(4);
+      expect(apiClient.getTraces).not.toHaveBeenCalled();
+      expect(apiClient.getPayload).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+    }
+  });
+
+  it("falls back from invalid embedded snapshot display values", async () => {
+    const snapshot = createSnapshotBootstrap([baseTrace]);
+    snapshot.display = {
+      clockMode: "invalid",
+      resourceMetric: "invalid",
+      resourceMetricSecondary: "invalid",
+      showResourceChart: "yes",
+      themeMode: "invalid",
+      timeMode: "invalid",
+      viewMode: "invalid",
+      zoom: -1,
+    } as unknown as SnapshotBootstrapData["display"];
+    setSnapshotBootstrap(snapshot);
+
+    const { dispose } = mountApp();
+    try {
+      await flush();
+
+      expect(clockMode()).toBe("wall");
+      expect(resourceMetric()).toBe("cpu");
+      expect(resourceMetricSecondary()).toBe("memory");
+      expect(showResourceChart()).toBe(true);
+      expect(themeMode()).toBe("light");
+      expect(timeMode()).toBe("sync");
+      expect(viewMode()).toBe("layered");
+      expect(zoom()).toBe(1);
     } finally {
       dispose();
     }

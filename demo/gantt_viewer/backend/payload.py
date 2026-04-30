@@ -249,7 +249,7 @@ def build_gantt_payload(
     meta = data.metadata
     scaffold = meta.get("scaffold", "unknown")
     instance_id = meta.get("instance_id", "")
-    trace_id = label or f"{scaffold}/{instance_id}" or str(data.path.stem)
+    trace_label = label or f"{scaffold}/{instance_id}" or str(data.path.stem)
 
     t0 = _compute_t0(data)
     agents = list(data.agents)
@@ -279,7 +279,8 @@ def build_gantt_payload(
         _apply_real_timeline_to_resources(resource_timeline, lanes)
 
     return {
-        "id": trace_id,
+        "id": trace_label,
+        "label": trace_label,
         "metadata": {
             "scaffold": scaffold,
             "model": meta.get("model"),
@@ -314,16 +315,20 @@ def build_gantt_payload_multi(
 
 
 def _compute_t0(data: TraceData) -> float:
-    t0 = float("inf")
-    for ev in data.events:
-        ts = ev.get("ts", 0)
-        if ts and ts < t0:
-            t0 = ts
+    action_t0 = float("inf")
     for step in data.actions:
         ts = step.get("ts_start", 0)
-        if ts and ts < t0:
-            t0 = ts
-    return t0 if t0 != float("inf") else 0.0
+        if ts and ts < action_t0:
+            action_t0 = ts
+    if action_t0 != float("inf"):
+        return action_t0
+
+    event_t0 = float("inf")
+    for ev in data.events:
+        ts = ev.get("ts", 0)
+        if ts and ts < event_t0:
+            event_t0 = ts
+    return event_t0 if event_t0 != float("inf") else 0.0
 
 
 def _get_elapsed(data: TraceData) -> float | None:
@@ -444,17 +449,12 @@ def _apply_real_timeline_to_resources(
             str(s.get("type", "")),
         ),
     )
-    all_markers = [
-        marker for lane in lanes for marker in lane.get("markers") or []
-    ]
     if not all_spans:
         return
 
-    # Match _apply_real_timeline: real_t0_abs = min(span_real_abs, marker_real_abs)
-    real_t0_abs = min(
-        [float(s.get("start_real_abs", float("inf"))) for s in all_spans]
-        + [float(m.get("t_real_abs", float("inf"))) for m in all_markers]
-    )
+    # Keep resources anchored to actual workload spans. Markers before the
+    # first action are allowed to be negative but must not shift the workload.
+    real_t0_abs = min(float(s.get("start_real_abs", float("inf"))) for s in all_spans)
     if real_t0_abs == float("inf"):
         return
 
@@ -503,11 +503,15 @@ def _apply_real_timeline(
         marker_abs = float(marker.get("t_abs", 0.0))
         marker["t_real_abs"] = _map_time_to_real_abs(marker_abs, sorted_spans)
 
-    real_t0_abs = min(
-        [float(span.get("start_real_abs", trace_t0)) for span in spans]
-        + [float(marker.get("t_real_abs", trace_t0)) for marker in markers]
-        + [trace_t0]
-    )
+    if spans:
+        real_t0_abs = min(
+            float(span.get("start_real_abs", trace_t0)) for span in spans
+        )
+    else:
+        real_t0_abs = min(
+            [float(marker.get("t_real_abs", trace_t0)) for marker in markers]
+            + [trace_t0]
+        )
 
     for span in spans:
         span["start_real"] = (

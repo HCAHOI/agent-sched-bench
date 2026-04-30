@@ -273,6 +273,14 @@ def main() -> None:
         from demo.gantt_viewer.backend.dev import main as run_gantt_server
 
         run_gantt_server(sys.argv[2:])
+    elif sub == "gantt-export":
+        from demo.gantt_viewer.backend.static_export import (
+            build_parser as build_gantt_export_parser,
+            export_from_args,
+        )
+
+        result = export_from_args(build_gantt_export_parser().parse_args(sys.argv[2:]))
+        print(json.dumps(result, indent=2, sort_keys=True))
     else:
         _run_collect(parse_collect_args())
 

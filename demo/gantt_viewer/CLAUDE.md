@@ -16,6 +16,12 @@ python -m trace_collect.cli gantt-serve --dev
 # Production (static dist/ served from :8765)
 python -m trace_collect.cli gantt-serve
 
+# Standalone HTML export for the curated GLM/OpenClaw/100 SWE-rebench cohort
+PYTHONPATH=src:. python -m trace_collect.cli gantt-export \
+  --preset swe-rebench-glm-openclaw-100 \
+  --group all \
+  --output-dir results/gantt-viewer
+
 # Full options
 python -m trace_collect.cli gantt-serve \
   --config demo/gantt_viewer/configs/example.yaml \

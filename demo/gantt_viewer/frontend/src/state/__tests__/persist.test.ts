@@ -52,6 +52,11 @@ describe("persist", () => {
     expect(initialThemeMode()).toBe("light");
   });
 
+  it("restores dark mode from localStorage", () => {
+    window.localStorage.setItem("gantt.themeMode", "dark");
+    expect(initialThemeMode()).toBe("dark");
+  });
+
   it("restores real mode from localStorage", () => {
     window.localStorage.setItem("gantt.clockMode", "real");
     expect(initialClockMode()).toBe("real");

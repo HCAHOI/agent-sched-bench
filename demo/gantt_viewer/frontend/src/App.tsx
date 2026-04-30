@@ -19,7 +19,7 @@ import AggregateResourceBar from "./components/AggregateResourceBar";
 import TraceChipBar from "./components/TraceChipBar";
 import { selectInitialTraceIds } from "./bootstrap/autoload";
 import {
-  SNAPSHOT_DEFAULTS,
+  normalizeSnapshotDisplay,
   readSnapshotBootstrap,
   snapshotDescriptorsFromTraces,
   visibilityFromTraceIds,
@@ -88,11 +88,15 @@ function removeIdFlag(flags: Record<string, boolean>, id: string): Record<string
 }
 
 function applySnapshotBootstrap(snapshotBootstrap: NonNullable<ReturnType<typeof readSnapshotBootstrap>>): void {
-  setClockMode(SNAPSHOT_DEFAULTS.clockMode);
-  setThemeMode(SNAPSHOT_DEFAULTS.themeMode);
-  setTimeMode(SNAPSHOT_DEFAULTS.timeMode);
-  setViewMode(SNAPSHOT_DEFAULTS.viewMode);
-  setZoom(SNAPSHOT_DEFAULTS.zoom);
+  const display = normalizeSnapshotDisplay(snapshotBootstrap.display);
+  setClockMode(display.clockMode);
+  setThemeMode(display.themeMode);
+  setTimeMode(display.timeMode);
+  setViewMode(display.viewMode);
+  setZoom(display.zoom);
+  setResourceMetric(display.resourceMetric);
+  setResourceMetricSecondary(display.resourceMetricSecondary);
+  setShowResourceChart(display.showResourceChart);
   setDescriptors(snapshotDescriptorsFromTraces(snapshotBootstrap.payload.traces));
   setRegistries(snapshotBootstrap.payload.registries);
   setLoadedTraces(snapshotBootstrap.payload.traces);

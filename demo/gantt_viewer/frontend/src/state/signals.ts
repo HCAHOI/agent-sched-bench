@@ -20,7 +20,7 @@ export type ResourceMetric =
 
 export const DEFAULT_TIME_MODE: TimeMode = "sync";
 export const DEFAULT_VIEW_MODE: ViewMode = "layered";
-export const DEFAULT_THEME_MODE: ThemeMode = "dark";
+export const DEFAULT_THEME_MODE: ThemeMode = "light";
 export const DEFAULT_CLOCK_MODE: ClockMode = "wall";
 export const DEFAULT_ZOOM = 1;
 
@@ -51,7 +51,7 @@ export function initialClockMode(): ClockMode {
 }
 
 export function initialThemeMode(): ThemeMode {
-  return readStoredMode(STORAGE_KEYS.themeMode, "light", DEFAULT_THEME_MODE);
+  return readStoredMode(STORAGE_KEYS.themeMode, "dark", DEFAULT_THEME_MODE);
 }
 
 export const [timeMode, setTimeMode] = createSignal<TimeMode>(DEFAULT_TIME_MODE);

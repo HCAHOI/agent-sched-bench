@@ -29,6 +29,47 @@ function selectTime(sample: ResourceSample, timeMode: TimeMode, clockMode: Clock
   return timeMode === "sync" ? sample.t : sample.t_abs;
 }
 
+function selectSpanStart(
+  span: TracePayload["lanes"][number]["spans"][number],
+  timeMode: TimeMode,
+  clockMode: ClockMode,
+): number {
+  if (clockMode === "real") {
+    const realStart = timeMode === "sync" ? span.start_real : span.start_real_abs;
+    if (typeof realStart === "number" && Number.isFinite(realStart)) return realStart;
+  }
+  return timeMode === "sync" ? span.start : span.start_abs;
+}
+
+function selectSpanEnd(
+  span: TracePayload["lanes"][number]["spans"][number],
+  timeMode: TimeMode,
+  clockMode: ClockMode,
+): number {
+  if (clockMode === "real") {
+    const realEnd = timeMode === "sync" ? span.end_real : span.end_real_abs;
+    if (typeof realEnd === "number" && Number.isFinite(realEnd)) return realEnd;
+  }
+  return timeMode === "sync" ? span.end : span.end_abs;
+}
+
+function traceSpanBounds(
+  trace: TracePayload,
+  timeMode: TimeMode,
+  clockMode: ClockMode,
+): { min: number; max: number } | null {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const lane of trace.lanes) {
+    for (const span of lane.spans) {
+      min = Math.min(min, selectSpanStart(span, timeMode, clockMode));
+      max = Math.max(max, selectSpanEnd(span, timeMode, clockMode));
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  return { min, max };
+}
+
 /** Binary-search the nearest sample, then linearly interpolate. */
 function interpolateSample(
   timeline: ResourceSample[],
@@ -77,6 +118,65 @@ function interpolateSample(
   };
 }
 
+function pushDistinctSample(
+  samples: ResourceSample[],
+  sample: ResourceSample,
+  time: number,
+  timeMode: TimeMode,
+  clockMode: ClockMode,
+): void {
+  if (samples.length > 0) {
+    const previous = samples[samples.length - 1];
+    const previousTime = selectTime(previous, timeMode, clockMode);
+    if (Math.abs(previousTime - time) < 1e-9) {
+      samples[samples.length - 1] = sample;
+      return;
+    }
+  }
+  samples.push(sample);
+}
+
+function clipTimelineToBounds(
+  timeline: ResourceSample[],
+  min: number,
+  max: number,
+  timeMode: TimeMode,
+  clockMode: ClockMode,
+): ResourceSample[] {
+  if (max < min) return [];
+  const entries = timeline
+    .map((sample) => ({ sample, time: selectTime(sample, timeMode, clockMode) }))
+    .filter((entry) => Number.isFinite(entry.time))
+    .sort((left, right) => left.time - right.time);
+  if (entries.length === 0 || max < entries[0].time || min > entries[entries.length - 1].time) {
+    return [];
+  }
+
+  const sortedTimeline = entries.map((entry) => entry.sample);
+  const times = entries.map((entry) => entry.time);
+  const clipped: ResourceSample[] = [];
+  pushDistinctSample(
+    clipped,
+    interpolateSample(sortedTimeline, times, min),
+    min,
+    timeMode,
+    clockMode,
+  );
+  for (const { sample, time } of entries) {
+    if (time > min && time < max) {
+      pushDistinctSample(clipped, sample, time, timeMode, clockMode);
+    }
+  }
+  pushDistinctSample(
+    clipped,
+    interpolateSample(sortedTimeline, times, max),
+    max,
+    timeMode,
+    clockMode,
+  );
+  return clipped;
+}
+
 function aggregateTimelines(
   traces: TracePayload[],
   visibility: Record<string, boolean>,
@@ -88,23 +188,16 @@ function aggregateTimelines(
   );
   if (valid.length === 0) return [];
 
-  // Clip each trace's resource timeline to its last action end time
-  function selectSpanEnd(span: { end: number; end_abs: number; end_real?: number | null; end_real_abs?: number | null }): number {
-    if (clockMode === "real") {
-      const r = timeMode === "sync" ? span.end_real : span.end_real_abs;
-      if (typeof r === "number" && Number.isFinite(r)) return r;
-    }
-    return timeMode === "sync" ? span.end : span.end_abs;
-  }
-
   const clippedTimelines = valid.map((t) => {
-    let lastEnd = -Infinity;
-    for (const lane of t.lanes) {
-      for (const span of lane.spans) lastEnd = Math.max(lastEnd, selectSpanEnd(span));
-    }
-    if (!Number.isFinite(lastEnd)) return t.resource_timeline!;
-    const cutoff = lastEnd + 60;
-    return t.resource_timeline!.filter((s) => selectTime(s, timeMode, clockMode) <= cutoff);
+    const bounds = traceSpanBounds(t, timeMode, clockMode);
+    if (!bounds) return t.resource_timeline!;
+    return clipTimelineToBounds(
+      t.resource_timeline!,
+      bounds.min,
+      bounds.max,
+      timeMode,
+      clockMode,
+    );
   }).filter((tl) => tl.length > 0);
 
   if (clippedTimelines.length === 0) return [];

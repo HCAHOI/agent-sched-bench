@@ -14,6 +14,7 @@ def write_trace(
     scaffold: str = "synthetic",
     model: str = "test-model",
     max_iterations: int = 10,
+    metadata_overrides: dict[str, Any] | None = None,
 ) -> Path:
     """Write a minimal canonical trace JSONL file."""
     trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -24,6 +25,8 @@ def write_trace(
         "trace_format_version": 5,
         "max_iterations": max_iterations,
     }
+    if metadata_overrides:
+        header.update(metadata_overrides)
     with trace_path.open("w", encoding="utf-8") as handle:
         handle.write(json.dumps(header) + "\n")
         for record in records:
