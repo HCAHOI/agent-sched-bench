@@ -14,6 +14,40 @@ import httpx
 from harness.prometheus import parse_prometheus_metric_values
 
 @dataclass(slots=True)
+class GpuMemoryBreakdown:
+
+    gpu_index: int
+    pid: int
+    total_pid_mib: float
+    weights_mib: float | None
+    kv_cache_used_mib: float | None
+    kv_cache_total_mib: float | None
+    activations_mib: float | None
+    ts: float
+
+
+@dataclass(slots=True)
+class GpuBaseline:
+
+    weights_mib: float
+    kv_cache_total_mib: float
+    model: str
+    dtype: str
+    tensor_parallel_size: int
+
+
+@dataclass(slots=True)
+class GpuComponentBreakdown:
+
+    step_index: int
+    attn_mib: float
+    mlp_mib: float
+    other_activations_mib: float
+    per_module: list[dict]
+    measurement_kind: str
+
+
+@dataclass(slots=True)
 class PreemptionSnapshot:
 
     num_preemptions_total: float | None
@@ -21,6 +55,7 @@ class PreemptionSnapshot:
     cpu_cache_usage_perc: float | None
     gpu_prefix_cache_hit_rate: float | None
     cpu_prefix_cache_hit_rate: float | None
+    gpu_memory_breakdown: GpuMemoryBreakdown | None = None
 
 @dataclass(slots=True)
 class EvictionEvent:
@@ -55,7 +90,7 @@ def parse_prometheus_metrics(metrics_payload: str) -> PreemptionSnapshot:
         wanted,
         include_missing=True,
     )
-    return PreemptionSnapshot(**values)
+    return PreemptionSnapshot(**values, gpu_memory_breakdown=None)
 
 def empty_snapshot() -> PreemptionSnapshot:
     """Return a PreemptionSnapshot with all fields set to None.
@@ -71,6 +106,7 @@ def empty_snapshot() -> PreemptionSnapshot:
         cpu_cache_usage_perc=None,
         gpu_prefix_cache_hit_rate=None,
         cpu_prefix_cache_hit_rate=None,
+        gpu_memory_breakdown=None,
     )
 
 def get_snapshot(

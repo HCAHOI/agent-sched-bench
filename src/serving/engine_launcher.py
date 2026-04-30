@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 from serving._common import print_or_exec_command
 
@@ -24,6 +27,7 @@ class VLLMServerConfig:
     tool_call_parser: str | None = None
     enable_scheduler_hook: bool = False
     scheduler_hook_report_path: str | None = None
+    capture_startup_log_path: str | None = None
 
 
 def build_vllm_command(config: VLLMServerConfig) -> list[str]:
@@ -69,6 +73,40 @@ def build_vllm_command(config: VLLMServerConfig) -> list[str]:
     return [sys.executable, "-m", "vllm.entrypoints.openai.api_server", *server_args]
 
 
+def _exec_with_stderr_tee(command: list[str], log_path: str) -> int:
+    """Spawn `command` as a subprocess, teeing stderr to both `log_path` and parent's stderr.
+
+    Blocks until the subprocess exits and returns its exit code. Used by
+    the launcher when `capture_startup_log_path` is set so downstream
+    tools (vllm_startup_parser) can extract baseline memory facts from a
+    file while the user still sees vLLM's logs in their terminal.
+    """
+    log_dir = Path(log_path).parent
+    log_dir.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        command,
+        stderr=subprocess.PIPE,
+        stdout=None,  # inherit
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stderr is not None
+
+    def _tee() -> None:
+        with open(log_path, "w", encoding="utf-8") as f:
+            for line in proc.stderr:  # type: ignore[arg-type]
+                sys.stderr.write(line)
+                sys.stderr.flush()
+                f.write(line)
+                f.flush()
+
+    t = threading.Thread(target=_tee, daemon=True)
+    t.start()
+    proc.wait()
+    t.join(timeout=5.0)
+    return proc.returncode
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build and optionally launch a raw vLLM API server command."
@@ -86,6 +124,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tool-call-parser", default=None)
     parser.add_argument("--enable-scheduler-hook", action="store_true")
     parser.add_argument("--scheduler-hook-report-path")
+    parser.add_argument(
+        "--capture-startup-log",
+        default=None,
+        metavar="PATH",
+        help="Tee vLLM stderr to this file while also forwarding to parent stderr.",
+    )
     parser.add_argument(
         "--print-only",
         action="store_true",
@@ -110,8 +154,12 @@ def main() -> None:
         tool_call_parser=args.tool_call_parser,
         enable_scheduler_hook=args.enable_scheduler_hook,
         scheduler_hook_report_path=args.scheduler_hook_report_path,
+        capture_startup_log_path=args.capture_startup_log,
     )
     command = build_vllm_command(config)
+    if args.capture_startup_log and not args.print_only:
+        returncode = _exec_with_stderr_tee(command, args.capture_startup_log)
+        sys.exit(returncode)
     print_or_exec_command(config=config, command=command, print_only=args.print_only)
 
 

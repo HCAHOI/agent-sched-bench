@@ -209,6 +209,36 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="RNG seed for Poisson arrival offsets (for reproducibility).",
     )
     parser.add_argument(
+        "--gpu-tracking",
+        choices=["on", "off"],
+        default="off",
+        help=(
+            "Enable GPU memory tracking. When 'on', requires --metrics-url, "
+            "--vllm-pid, and --vllm-startup-log. Forbidden in cloud_model mode."
+        ),
+    )
+    parser.add_argument(
+        "--gpu-sample-hz",
+        type=float,
+        default=10.0,
+        help="GPU memory sampling rate in Hz (default: 10.0). Used only when --gpu-tracking on.",
+    )
+    parser.add_argument(
+        "--vllm-pid",
+        type=int,
+        default=None,
+        help="PID of the vLLM server process. Required when --gpu-tracking on.",
+    )
+    parser.add_argument(
+        "--vllm-startup-log",
+        type=Path,
+        default=None,
+        help=(
+            "Path to vLLM startup stderr log. Required when --gpu-tracking on. "
+            "Used to extract GPU baseline (weights MiB, KV cache MiB)."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -281,6 +311,10 @@ def main() -> None:
 
         result = export_from_args(build_gantt_export_parser().parse_args(sys.argv[2:]))
         print(json.dumps(result, indent=2, sort_keys=True))
+    elif sub == "profile-gpu":
+        from trace_collect.profile_gpu import main as run_profile_gpu
+
+        sys.exit(run_profile_gpu(sys.argv[2:]))
     else:
         _run_collect(parse_collect_args())
 
@@ -369,7 +403,13 @@ def _run_simulate(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    from trace_collect.simulator import simulate
+    from trace_collect.simulator import simulate, validate_gpu_tracking_args
+    try:
+        validate_gpu_tracking_args(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+
     simulate_kwargs = {
         "source_trace": Path(args.source_trace) if args.source_trace else None,
         "trace_manifest": Path(args.trace_manifest) if args.trace_manifest else None,
@@ -429,6 +469,23 @@ def _run_simulate(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
+    gpu_tracking_kwargs: dict = {}
+    if getattr(args, "gpu_tracking", "off") == "on":
+        from harness.vllm_startup_parser import parse_startup_log_file
+        gpu_baseline = parse_startup_log_file(args.vllm_startup_log)
+        if gpu_baseline is None:
+            print(
+                f"ERROR: Failed to parse vLLM startup log at {args.vllm_startup_log}; "
+                "check log file content and vLLM version (supported 0.5–0.7)",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        gpu_tracking_kwargs = {
+            "gpu_baseline": gpu_baseline,
+            "vllm_pid": args.vllm_pid,
+            "gpu_sample_hz": args.gpu_sample_hz,
+        }
+
     trace_file = asyncio.run(
         simulate(
             **simulate_kwargs,
@@ -436,6 +493,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
             api_key=llm_config.api_key,
             model=llm_config.model,
             metrics_url=args.metrics_url,
+            **gpu_tracking_kwargs,
         )
     )
     print(f"Simulate trace written to: {trace_file}")

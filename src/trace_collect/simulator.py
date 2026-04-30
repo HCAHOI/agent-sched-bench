@@ -14,8 +14,10 @@ from typing import Any
 from agents.base import TraceAction
 from harness.container_image_prep import ensure_fixed_image, normalize_image_reference
 from harness.container_stats_sampler import ContainerStatsSampler, summarize_samples
+from harness.gpu_resource_sampler import GpuResourceSampler
 from harness.runner import build_arrival_offsets
 from harness.metrics_client import VLLMMetricsClient
+from harness.scheduler_hooks import GpuBaseline
 from harness.trace_logger import TraceLogger
 from llm_call import create_async_openai_client
 from trace_collect import attempt_layout
@@ -26,6 +28,33 @@ logger = logging.getLogger(__name__)
 
 class SimulateError(Exception):
     """Raised when simulation encounters a fatal issue."""
+
+
+def validate_gpu_tracking_args(args: Any) -> None:
+    """Validate GPU tracking CLI args. Raises ValueError with a clear message on failure.
+
+    Designed to be called from _run_simulate before any work begins,
+    so failures are fast and explicit (CLAUDE.md no-silent-fallback rule).
+    """
+    gpu_tracking = getattr(args, "gpu_tracking", "off")
+    if gpu_tracking != "on":
+        return
+
+    mode = getattr(args, "mode", "local_model")
+    if mode == "cloud_model":
+        raise ValueError("--gpu-tracking on is forbidden in cloud_model mode")
+
+    metrics_url = getattr(args, "metrics_url", None)
+    if not metrics_url:
+        raise ValueError("--gpu-tracking on requires --metrics-url")
+
+    vllm_pid = getattr(args, "vllm_pid", None)
+    if vllm_pid is None:
+        raise ValueError("--gpu-tracking on requires --vllm-pid")
+
+    vllm_startup_log = getattr(args, "vllm_startup_log", None)
+    if vllm_startup_log is None:
+        raise ValueError("--gpu-tracking on requires --vllm-startup-log")
 
 
 @dataclass(slots=True)
@@ -580,6 +609,10 @@ async def _run_local_model_simulation(
     command_timeout_s: float,
     metrics_url: str | None,
     warmup_skip_iterations: int,
+    gpu_baseline: GpuBaseline | None = None,
+    vllm_pid: int | None = None,
+    gpu_sample_hz: float = 10.0,
+    gpu_output_path: Path | None = None,
 ) -> None:
     loaded = prepared_session.loaded
     iterations = loaded.iterations
@@ -593,11 +626,27 @@ async def _run_local_model_simulation(
         model,
     )
 
-    metrics_client = VLLMMetricsClient(metrics_url=metrics_url)
+    metrics_client = VLLMMetricsClient(
+        metrics_url=metrics_url,
+        gpu_baseline=gpu_baseline,
+        vllm_pid=vllm_pid,
+    )
     logger.info(
         "vLLM metrics client: %s",
         f"enabled (url={metrics_url})" if metrics_client.is_enabled else "disabled",
     )
+
+    gpu_sampler: GpuResourceSampler | None = None
+    if gpu_baseline is not None and vllm_pid is not None and metrics_url and gpu_output_path:
+        gpu_sampler = GpuResourceSampler(
+            metrics_url=metrics_url,
+            gpu_baseline=gpu_baseline,
+            vllm_pid=vllm_pid,
+            output_path=gpu_output_path,
+            sample_hz=gpu_sample_hz,
+        )
+        await gpu_sampler.start()
+        logger.info("GPU resource sampler started (%.1f Hz) → %s", gpu_sample_hz, gpu_output_path)
 
     client = None
 
@@ -791,6 +840,10 @@ async def _run_local_model_simulation(
                 total_tool_ms,
             )
     finally:
+        if gpu_sampler is not None:
+            await gpu_sampler.stop()
+            logger.info("GPU resource sampler stopped → %s", gpu_output_path)
+
         wall_end = time.time()
 
         simulate_summary = _make_trace_summary(
@@ -1126,6 +1179,9 @@ async def simulate(
     arrival_rate_per_s: float | None = None,
     arrival_seed: int | None = None,
     structured_output: bool = False,
+    gpu_baseline: GpuBaseline | None = None,
+    vllm_pid: int | None = None,
+    gpu_sample_hz: float = 10.0,
 ) -> Path:
     if source_trace is not None and trace_manifest is not None:
         raise ValueError("source_trace and trace_manifest are mutually exclusive")
@@ -1217,6 +1273,12 @@ async def simulate(
             assert api_base is not None
             assert api_key is not None
             assert model is not None
+            # Compute gpu_output_path from the single session's attempt dir
+            gpu_output_path: Path | None = None
+            if gpu_baseline is not None and vllm_pid is not None and metrics_url:
+                task_dir = prepared_sessions[0].task_output_dir
+                if task_dir is not None:
+                    gpu_output_path = task_dir / "gpu_resources.json"
             await _run_local_model_simulation(
                 prepared_sessions[0],
                 trace_logger=trace_logger,
@@ -1227,6 +1289,10 @@ async def simulate(
                 command_timeout_s=command_timeout_s,
                 metrics_url=metrics_url,
                 warmup_skip_iterations=warmup_skip_iterations,
+                gpu_baseline=gpu_baseline,
+                vllm_pid=vllm_pid,
+                gpu_sample_hz=gpu_sample_hz,
+                gpu_output_path=gpu_output_path,
             )
         else:
             assert trace_logger is not None

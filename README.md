@@ -135,6 +135,12 @@ PYTHONPATH=src python -m trace_collect.cli simulate \
 `TraceAction.data.sim_metrics`. Container resource usage is sampled at 1 Hz by
 `ContainerStatsSampler` and written to `resources.json`.
 
+**GPU memory tracking** (`--gpu-tracking on`): add `--vllm-pid`, `--vllm-startup-log`,
+and `--gpu-sample-hz` to capture a full GPU memory breakdown time-series (weights,
+KV cache, activations) sampled in the background and written to `gpu_resources.json`.
+For per-component (attn/mlp) deep profiling without a separate server, use the
+`profile-gpu` subcommand (requires `pip install -e .[profile]`; GPU + vLLM only).
+
 See `src/trace_collect/CLAUDE.md` §Simulate for the full flag table, manifest
 format, output directory layout, and simulation-specific fields in `action.data`.
 

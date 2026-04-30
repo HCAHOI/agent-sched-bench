@@ -9,7 +9,7 @@ on SWE-style benchmarks.
 python -m trace_collect.cli <subcommand> [OPTIONS]
 ```
 
-Subcommands: (none) = **collect**, `simulate`, `import-claude-code`, `inspect`, `gantt-serve`.
+Subcommands: (none) = **collect**, `simulate`, `import-claude-code`, `inspect`, `gantt-serve`, `profile-gpu`.
 
 ---
 
@@ -211,6 +211,118 @@ iteration and stores them in `TraceAction.data.sim_metrics`:
 - `PreemptionSnapshot`: `num_preemptions_total`, `gpu_cache_usage_perc`,
   `cpu_cache_usage_perc`, `gpu_prefix_cache_hit_rate`, `cpu_prefix_cache_hit_rate`
 - When unset: empty (all-None) snapshots recorded as explicit opt-out
+
+#### GPU Memory Tracking (US-6)
+
+Full GPU memory breakdown time-series, sampled continuously in the background
+throughout the simulation run. Requires `--gpu-tracking on` plus three additional
+flags (all mutually required):
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--gpu-tracking` | `off` | `on` or `off`. When `on`, the three flags below are required. Forbidden in `cloud_model` mode. |
+| `--gpu-sample-hz` | `10.0` | Sampling rate in Hz for `GpuResourceSampler`. |
+| `--vllm-pid` | — | PID of the vLLM server process (used by nvidia-smi per-PID query). |
+| `--vllm-startup-log` | — | Path to vLLM startup stderr log. Parsed to extract `GpuBaseline` (weights MiB, KV cache MiB). |
+
+Validation is performed eagerly before any work begins (CLAUDE.md no-silent-fallback
+rule). If `parse_startup_log_file()` returns `None`, the CLI exits with code 2 and
+an explicit message naming the log path and supported vLLM versions (0.5–0.7).
+
+Output: `<attempt-dir>/gpu_resources.json` with keys `gpu_baseline`, `gpu_samples`,
+`summary`. Written atomically by `GpuResourceSampler.stop()`.
+
+Per-iteration snapshots (`TraceAction.data.sim_metrics.vllm_scheduler_snapshot`) also
+gain a `gpu_memory_breakdown` field when GPU tracking is enabled.
+
+**Complete example:**
+
+```bash
+python -m trace_collect.cli simulate \
+  --source-trace traces/.../trace.jsonl \
+  --mode local_model \
+  --provider openai --api-base http://localhost:8000/v1 \
+  --api-key dummy --model Qwen/Qwen3-32B \
+  --container docker \
+  --metrics-url http://localhost:8000/metrics \
+  --gpu-tracking on \
+  --vllm-pid 12345 \
+  --vllm-startup-log /tmp/vllm_startup.log \
+  --gpu-sample-hz 10.0
+```
+
+#### Deep Profile Mode (profile-gpu subcommand)
+
+The `profile-gpu` subcommand runs vLLM **in-process** (no separate server process)
+and attaches PyTorch forward hooks on attention and MLP submodules to measure
+per-step GPU memory consumption split by component type.
+
+**Required setup:**
+
+```bash
+pip install -e .[profile]   # installs vllm + torch extras
+```
+
+**What it does:**
+
+1. Loads the model via `InProcessEngine` (wraps `vllm.LLM`).
+2. Walks the module tree, identifies `attn`/`mlp` submodules by class-name pattern.
+3. Attaches `register_forward_pre_hook` + `register_forward_hook` on each module.
+4. Replays LLM calls from the source trace (up to `--max-iterations`), calls
+   `profiler.record_step()` after each `engine.generate()`.
+5. Writes one output record per step with `sim_metrics.gpu_component_breakdown`.
+
+**Restriction:** `tensor_parallel_size=1` only. Multi-GPU TP is out of scope;
+the hook architecture assumes a single-process model graph.
+
+**User-contribution callback:**
+
+`src/harness/component_memory_profiler.py` — `default_memory_measurement()`.
+The `# TODO(user):` block is the measurement strategy — replace with whichever
+policy your experiment requires:
+
+| Strategy | API | Notes |
+|----------|-----|-------|
+| `memory_allocated_delta` *(default)* | `torch.cuda.memory_allocated()` pre/post delta | Actual live tensors; misses caching-allocator headroom |
+| `memory_reserved_delta` | `torch.cuda.memory_reserved()` pre/post delta | Matches nvidia-smi; includes allocator slack |
+| Peak tracking | `reset_peak_memory_stats()` + `max_memory_allocated()` | Catches spikes, needs reset per step |
+
+Keep the returned dict shape `{"value_mib": float, "measurement_kind": str}` stable;
+the rest of the profiler scaffolding depends on it.
+
+**Example invocation:**
+
+```bash
+python -m trace_collect.cli profile-gpu \
+  --source-trace traces/.../trace.jsonl \
+  --model Qwen/Qwen3-1.7B \
+  --max-iterations 5
+```
+
+Optional flags: `--dtype float16` (default), `--max-model-len 4096` (default),
+`--output-dir traces/profile_gpu` (default).
+
+**Output:**
+
+`traces/profile_gpu/profile_gpu_<ts>.jsonl` — v5 JSONL trace. Each `action`
+record has:
+
+```json
+{
+  "data": {
+    "sim_metrics": {
+      "gpu_component_breakdown": {
+        "step_index": 0,
+        "attn_mib": 42.3,
+        "mlp_mib": 18.7,
+        "other_activations_mib": 0.0,
+        "per_module": [{"module_path": "...", "kind": "attn", "value_mib": 42.3}],
+        "measurement_kind": "memory_allocated_delta"
+      }
+    }
+  }
+}
+```
 
 ### Container Resource Sampling
 
