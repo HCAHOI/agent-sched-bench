@@ -78,9 +78,13 @@ EVICTION_PATTERN = re.compile(
 )
 
 def parse_prometheus_metrics(metrics_payload: str) -> PreemptionSnapshot:
+    # vLLM 0.10+ renamed `gpu_cache_usage_perc` → `kv_cache_usage_perc` and
+    # dropped `gpu_prefix_cache_hit_rate`. Both old and new gauge names map
+    # to the same alias so either vLLM version populates it.
     wanted = {
         "vllm:num_preemptions_total": "num_preemptions_total",
         "vllm:gpu_cache_usage_perc": "gpu_cache_usage_perc",
+        "vllm:kv_cache_usage_perc": "gpu_cache_usage_perc",
         "vllm:cpu_cache_usage_perc": "cpu_cache_usage_perc",
         "vllm:gpu_prefix_cache_hit_rate": "gpu_prefix_cache_hit_rate",
         "vllm:cpu_prefix_cache_hit_rate": "cpu_prefix_cache_hit_rate",
