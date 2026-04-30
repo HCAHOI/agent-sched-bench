@@ -21,7 +21,9 @@ class VLLMServerConfig:
     max_model_len: int = 32768
     gpu_memory_utilization: float = 0.90
     enable_chunked_prefill: bool = True
-    preemption_mode: str = "recompute"
+    # `--preemption-mode` was removed in vLLM 0.10+; pass an explicit value only
+    # when targeting older versions that still accept the flag.
+    preemption_mode: str | None = None
     max_num_seqs: int = 256
     enable_auto_tool_choice: bool = False
     tool_call_parser: str | None = None
@@ -45,11 +47,11 @@ def build_vllm_command(config: VLLMServerConfig) -> list[str]:
         str(config.max_model_len),
         "--gpu-memory-utilization",
         f"{config.gpu_memory_utilization:.2f}",
-        "--preemption-mode",
-        config.preemption_mode,
         "--max-num-seqs",
         str(config.max_num_seqs),
     ]
+    if config.preemption_mode is not None:
+        server_args.extend(["--preemption-mode", config.preemption_mode])
     if config.enable_chunked_prefill:
         server_args.append("--enable-chunked-prefill")
     if config.enable_auto_tool_choice:
@@ -118,7 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-model-len", type=int, default=32768)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--enable-chunked-prefill", action="store_true")
-    parser.add_argument("--preemption-mode", default="recompute")
+    parser.add_argument("--preemption-mode", default=None)
     parser.add_argument("--max-num-seqs", type=int, default=256)
     parser.add_argument("--enable-auto-tool-choice", action="store_true")
     parser.add_argument("--tool-call-parser", default=None)
