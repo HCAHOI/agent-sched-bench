@@ -10,6 +10,57 @@
 
 ## Current Checkpoint
 
+- 2026-05-08: autonomous recording Terminal-Bench run requested for
+  `fix-git,dna-insert,causal-inference-r,security-celery-redis-rce,schemelike-metacircular-eval`,
+  sequentially with `--max-iterations 200` for every task and
+  `--record-internals` enabled.
+- Active run:
+  `traces/terminal-bench/Qwen_Qwen3-Coder-30B-A3B-Instruct/remote-record-internals-5tasks-200iter-20260508T112330Z`
+- Early artifact sanity: `fix-git/attempt_1/recordings/iter_0000` opens
+  successfully. `attention.npz` has `segment_mass` shape `(221184, 4)` with
+  max row-sum error `1.47e-7`; `routing.npz` has 48 routing records over 128
+  experts with top-8 choices.
+- That run later failed before completing useful formal recordings:
+  `fix-git` wrote 37 complete calls, `dna-insert` wrote 23 complete calls, and
+  the remaining tasks wrote no calls. Root causes were sidecar request overlap
+  (`nested recording sessions`) and the old routing path's second full-sequence
+  `output_router_logits=True` forward triggering Qwen MoE aux-loss OOM.
+- Fix applied: serialize `HFRecordingProvider.chat()` with a provider-level
+  lock, and record routing from `.mlp.gate` forward hooks during generation
+  instead of doing a second full forward.
+- Rerun after the fix:
+  `traces/terminal-bench/Qwen_Qwen3-Coder-30B-A3B-Instruct/remote-record-internals-5tasks-200iter-gatehook-20260508T122208Z`
+- Rerun early artifact sanity: `fix-git/attempt_1/recordings/iter_0000`
+  opens successfully; `routing.npz` has `record_path == "gate"` only,
+  `expert_choice` shape `(123552, 8)`, and `expert_load` shape
+  `(3744, 4, 128)`. `attention.npz` segment-mass max row-sum error is
+  `1.4e-7`.
+- The gatehook rerun was stopped after the first completed tasks all failed
+  by Terminal-Bench agent timeout. Treat these as invalid timeout artifacts,
+  not model-quality results: earlier token-as-a-service runs generated much
+  faster, while local HuggingFace recording is expected to be substantially
+  slower. The interrupted task was `security-celery-redis-rce`; artifacts were
+  left in place and the active harness/container processes were shut down.
+- Follow-up Terminal-Bench runs now set the harness agent timeout to 7200
+  seconds through `configs/benchmarks/terminal-bench.yaml`.
+- Next ten-task diagnostic set:
+  `fix-git,dna-insert,causal-inference-r,security-celery-redis-rce,schemelike-metacircular-eval,multi-source-data-merger,ode-solver-rk4,git-leak-recovery,cancel-async-tasks,feal-differential-cryptanalysis`.
+  The last two are intentionally difficult for agent reasoning and trace
+  analysis, but not primarily difficult because of GPU training, long builds,
+  or large downloads.
+- Alignment note from `fix-git`: recording has 43 iters while trace has 42
+  `llm_call` actions. The raw OpenClaw trace, canonical attempt trace, and
+  Terminal-Bench copied trace all agree: 43 `llm_call_start` events, 42
+  `llm_call_end` events, 42 `llm_call` actions. The extra recording is
+  `iter_0042`, corresponding to a final `llm_call_start` at the agent timeout
+  boundary. This is not a collector copy bug; it is an interrupted final
+  OpenClaw iteration where the HF sidecar finished and flushed recording, but
+  OpenClaw did not emit the after-iteration trace action before harness
+  shutdown.
+- Local sync fix prepared: attempt finalization now writes `recordings/meta.json`
+  after canonical `trace.jsonl` is available, keeps only trace-aligned calls in
+  `meta.iters` when the trace `iteration`/`action_id` proves the mapping, and
+  preserves unpaired flushed recordings under `meta.orphan_iters`.
 - 2026-05-08: no-recording remote smoke for Terminal-Bench `fix-git` passed
   against the temporary HF/OpenAI-compatible proxy with `--max-iterations 50`.
 - Run directory:

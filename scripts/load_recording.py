@@ -23,12 +23,17 @@ def _load_trace_calls(trace_path: Path) -> list[dict[str, Any]]:
     return calls
 
 
-def _iter_dir(recordings_dir: Path, call_idx: int) -> Path:
+def _iter_entry(recordings_dir: Path, call_idx: int) -> tuple[Path, dict[str, Any]]:
     meta_path = recordings_dir / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     for item in meta.get("iters", []):
         if int(item.get("call_idx", -1)) == call_idx:
-            return recordings_dir / str(item["dir"])
+            return recordings_dir / str(item["dir"]), item
+    for item in meta.get("orphan_iters", []):
+        if int(item.get("call_idx", -1)) == call_idx:
+            raise ValueError(
+                f"call_idx {call_idx} has no matching llm_call action in trace"
+            )
     raise ValueError(f"call_idx {call_idx} not found in {meta_path}")
 
 
@@ -69,7 +74,7 @@ def main() -> None:
     args = parser.parse_args()
 
     recordings_dir = args.attempt_dir / "recordings"
-    call_dir = _iter_dir(recordings_dir, args.call_idx)
+    call_dir, iter_meta = _iter_entry(recordings_dir, args.call_idx)
     segments = json.loads((call_dir / "segments.json").read_text(encoding="utf-8"))
     token_segment_id = segments.get("token_segment_id") or []
     total_tokens = int(segments["total_tokens"])
@@ -79,10 +84,21 @@ def main() -> None:
         )
 
     calls = _load_trace_calls(args.attempt_dir / "trace.jsonl")
-    if args.call_idx >= len(calls):
+    trace_action_id = iter_meta.get("trace_action_id")
+    trace_iteration = iter_meta.get("trace_iteration")
+    if trace_action_id is not None:
+        if not any(call.get("action_id") == trace_action_id for call in calls):
+            raise ValueError(f"trace action {trace_action_id!r} not found")
+    elif trace_iteration is not None:
+        if not any(call.get("iteration") == trace_iteration for call in calls):
+            raise ValueError(f"trace iteration {trace_iteration!r} not found")
+    elif args.call_idx >= len(calls):
         raise ValueError(
             f"trace has {len(calls)} llm_call actions, no call_idx {args.call_idx}"
         )
+    else:
+        trace_action_id = calls[args.call_idx].get("action_id")
+        trace_iteration = calls[args.call_idx].get("iteration")
 
     with np.load(call_dir / "attention.npz") as attention:
         attention_summary = _check_attention(attention)
@@ -92,7 +108,8 @@ def main() -> None:
     summary = {
         "attempt_dir": str(args.attempt_dir),
         "call_idx": args.call_idx,
-        "trace_action_id": calls[args.call_idx].get("action_id"),
+        "trace_action_id": trace_action_id,
+        "trace_iteration": trace_iteration,
         "input_tokens": int(segments["input_tokens"]),
         "output_tokens": int(segments["output_tokens"]),
         "total_tokens": total_tokens,

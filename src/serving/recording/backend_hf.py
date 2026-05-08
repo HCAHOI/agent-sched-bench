@@ -382,6 +382,7 @@ class HFRecordingProvider(LLMProvider):
         self.config = config or RecordingConfig()
         self.generation = GenerationSettings(temperature=0.1, max_tokens=8192)
         self._call_idx = 0
+        self._chat_lock = threading.Lock()
 
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -419,8 +420,8 @@ class HFRecordingProvider(LLMProvider):
         self._call_idx = 0
         self.capturer.start_attempt(recordings_dir)
 
-    def finish_attempt(self) -> None:
-        self.capturer.finish_attempt()
+    def finish_attempt(self, trace_path: Path | None = None) -> None:
+        self.capturer.finish_attempt(trace_path=trace_path)
 
     def _model_summary(self) -> dict[str, Any]:
         cfg = self.model.config
@@ -491,6 +492,24 @@ class HFRecordingProvider(LLMProvider):
                 finish_reason="error",
                 extra={"error_type": "unsupported_tool_choice"},
             )
+        with self._chat_lock:
+            return await self._chat_locked(
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tool_choice=tool_choice,
+            )
+
+    async def _chat_locked(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        max_tokens: int,
+        temperature: float,
+        tool_choice: str | dict[str, Any] | None,
+    ) -> LLMResponse:
         template_tools = None if tool_choice == "none" else tools
         call_idx = self._call_idx
         self._call_idx += 1
@@ -524,20 +543,6 @@ class HFRecordingProvider(LLMProvider):
             ):
                 sequences = self.model.generate(**generation_kwargs)
                 output_ids = sequences[0, input_token_count:].detach().cpu().tolist()
-                if self._captures_router_logits:
-                    with self.capturer.suspend_attention():
-                        router_outputs = self.model(
-                            input_ids=sequences,
-                            attention_mask=self._torch.ones_like(sequences),
-                            use_cache=False,
-                            return_dict=True,
-                            output_attentions=False,
-                            output_router_logits=True,
-                        )
-                    self.capturer.record_router_logits(
-                        router_outputs,
-                        total_tokens=int(sequences.shape[-1]),
-                    )
                 self.capturer.flush(output_token_ids=output_ids)
             text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
             return text, output_ids

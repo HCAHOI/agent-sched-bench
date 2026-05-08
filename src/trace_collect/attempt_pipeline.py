@@ -338,9 +338,6 @@ async def run_attempt(
             process_samples = process_sampler.stop()
             if not samples:
                 samples = process_samples
-        if recording_provider is not None:
-            recording_provider.finish_attempt()
-
         ctx.end_time = datetime.now(tz=timezone.utc)
 
     status = "completed"
@@ -445,8 +442,22 @@ async def run_attempt(
 
     resources_summary = summarize_samples(samples)
 
-    if result is not None and result.trace_path.exists():
-        attempt_layout.copy_trace_jsonl(ctx.attempt_dir, result.trace_path)
+    copied_trace_path: Path | None = None
+    try:
+        if result is not None and result.trace_path.exists():
+            copied_trace_path = attempt_layout.copy_trace_jsonl(
+                ctx.attempt_dir,
+                result.trace_path,
+            )
+    finally:
+        if recording_provider is not None:
+            trace_path = copied_trace_path
+            if trace_path is None and result is not None and result.trace_path.exists():
+                trace_path = result.trace_path
+            recording_provider.finish_attempt(
+                trace_path=trace_path if trace_path and trace_path.exists() else None
+            )
+
 
     trace_file = ctx.attempt_dir / attempt_layout.TRACE_FILENAME
     if result is not None and result.tool_calls:

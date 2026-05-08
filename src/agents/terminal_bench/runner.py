@@ -4,6 +4,7 @@ import asyncio
 import importlib.metadata
 import importlib.util
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -11,6 +12,18 @@ from pathlib import Path
 from typing import Any
 
 from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
+
+
+def _optional_positive_float(value: Any, *, name: str) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive float, got {value!r}") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{name} must be a finite positive float, got {value!r}")
+    return parsed
 
 
 class TerminalBenchRunner:
@@ -43,6 +56,10 @@ class TerminalBenchRunner:
         self.context_window_tokens = context_window_tokens
         self.benchmark_slug = benchmark_slug
         self.benchmark_extras = dict(benchmark_extras)
+        self.global_agent_timeout_sec = _optional_positive_float(
+            self.benchmark_extras.get("global_agent_timeout_sec"),
+            name="benchmark_extras.global_agent_timeout_sec",
+        )
         self.mcp_config = self._resolve_mcp_config(mcp_config)
         self.mcp_config_label = self._mcp_config_label(mcp_config)
 
@@ -125,6 +142,8 @@ class TerminalBenchRunner:
             "agent_import_path": self.AGENT_IMPORT_PATH,
             "tb_run_path": str(tb_run_path),
         }
+        if self.global_agent_timeout_sec is not None:
+            summary["global_agent_timeout_sec"] = self.global_agent_timeout_sec
         if self.mcp_config_label is not None:
             summary["mcp_config"] = self.mcp_config_label
         if not trace_path.exists():
@@ -206,6 +225,13 @@ class TerminalBenchRunner:
             "--agent-kwarg",
             f"max_iterations={self.max_iterations}",
         ]
+        if self.global_agent_timeout_sec is not None:
+            command.extend(
+                [
+                    "--global-agent-timeout-sec",
+                    str(self.global_agent_timeout_sec),
+                ]
+            )
         prompt_template_path = self._materialize_prompt_template(
             prompt_template=prompt_template,
             run_root=run_root,
@@ -297,6 +323,10 @@ class TerminalBenchRunner:
         if self.mcp_config_label is not None:
             run_config = merged.get("run_config") or {}
             run_config["mcp_config"] = self.mcp_config_label
+            merged["run_config"] = run_config
+        if self.global_agent_timeout_sec is not None:
+            run_config = merged.get("run_config") or {}
+            run_config["global_agent_timeout_sec"] = self.global_agent_timeout_sec
             merged["run_config"] = run_config
 
         dst.parent.mkdir(parents=True, exist_ok=True)

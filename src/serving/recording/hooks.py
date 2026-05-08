@@ -25,6 +25,8 @@ from serving.recording.recording import (
 
 
 _LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)\.self_attn$")
+_GATE_RE = re.compile(r"(?:^|\.)layers\.(\d+)\.mlp\.gate$")
+_LLM_ACTION_ID_RE = re.compile(r"^llm_(\d+)$")
 
 
 def _layer_index(module_name: str) -> int | None:
@@ -34,6 +36,11 @@ def _layer_index(module_name: str) -> int | None:
     if module_name.endswith(".self_attn") or module_name == "self_attn":
         return -1
     return None
+
+
+def _gate_layer_index(module_name: str) -> int | None:
+    match = _GATE_RE.search(module_name)
+    return int(match.group(1)) if match else None
 
 
 def _as_numpy(tensor: Any) -> np.ndarray:
@@ -124,6 +131,55 @@ def _cached_key_states(past_key_values: Any, layer_idx: int) -> Any | None:
     return None
 
 
+def _load_trace_llm_calls(trace_path: Path) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    with trace_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if record.get("type") == "action" and record.get("action_type") == "llm_call":
+                calls.append(record)
+    return calls
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_trace_indices(values: list[int | None]) -> list[int] | None:
+    if not values or any(value is None for value in values):
+        return None
+    concrete = [int(value) for value in values if value is not None]
+    if concrete != sorted(concrete) or len(set(concrete)) != len(concrete):
+        return None
+    offset = concrete[0]
+    if offset not in {0, 1}:
+        return None
+    return [value - offset for value in concrete]
+
+
+def _trace_call_indices(trace_calls: list[dict[str, Any]]) -> tuple[list[int], str] | None:
+    iteration_indices = _normalize_trace_indices(
+        [_int_or_none(call.get("iteration")) for call in trace_calls]
+    )
+    if iteration_indices is not None:
+        return iteration_indices, "iteration"
+
+    action_id_values: list[int | None] = []
+    for call in trace_calls:
+        action_id = call.get("action_id")
+        match = _LLM_ACTION_ID_RE.match(action_id) if isinstance(action_id, str) else None
+        action_id_values.append(_int_or_none(match.group(1)) if match else None)
+    action_id_indices = _normalize_trace_indices(action_id_values)
+    if action_id_indices is not None:
+        return action_id_indices, "action_id"
+    return None
+
+
 class LayerCapturer:
     """Capture reduced attention and routing tensors for one HF model."""
 
@@ -146,16 +202,23 @@ class LayerCapturer:
         self._attention_suspended = 0
 
         n_attention_modules = 0
+        n_gate_modules = 0
         for name, module in model.named_modules():
             layer = _layer_index(name)
-            if layer is None:
-                continue
-            n_attention_modules += 1
-            self._handles.append(
-                module.register_forward_hook(self._hook(layer), with_kwargs=True)
-            )
+            if layer is not None:
+                n_attention_modules += 1
+                self._handles.append(
+                    module.register_forward_hook(self._hook(layer), with_kwargs=True)
+                )
+            gate_layer = _gate_layer_index(name)
+            if gate_layer is not None:
+                n_gate_modules += 1
+                self._handles.append(module.register_forward_hook(self._gate_hook(gate_layer)))
         if n_attention_modules == 0:
             raise ValueError("no attention modules matched '.layers.<n>.self_attn'")
+        self.model_summary["router_capture_mode"] = (
+            "gate_forward_hook" if n_gate_modules else "none"
+        )
         self._decode_records = DecodeRingBuffer(
             config.decode_window * max(1, n_attention_modules)
         )
@@ -174,14 +237,51 @@ class LayerCapturer:
             "iters": [],
         }
 
-    def finish_attempt(self) -> None:
+    def finish_attempt(self, trace_path: Path | None = None) -> None:
         if self._attempt_dir is None:
             return
+        if trace_path is not None and trace_path.exists():
+            self._align_meta_to_trace(trace_path)
         (self._attempt_dir / "meta.json").write_text(
             json.dumps(self._meta, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         self._attempt_dir = None
+
+    def _align_meta_to_trace(self, trace_path: Path) -> None:
+        trace_calls = _load_trace_llm_calls(trace_path)
+        trace_indices = _trace_call_indices(trace_calls)
+        original_iters = [dict(item) for item in self._meta.get("iters", [])]
+        aligned: list[dict[str, Any]] = []
+        orphaned: list[dict[str, Any]] = []
+        trace_call_by_idx: dict[int, dict[str, Any]] = {}
+        alignment_source = "unavailable"
+        if trace_indices is not None:
+            indices, alignment_source = trace_indices
+            trace_call_by_idx = dict(zip(indices, trace_calls))
+        for item in original_iters:
+            call_idx = int(item.get("call_idx", -1))
+            trace_call = trace_call_by_idx.get(call_idx)
+            if trace_call is not None:
+                item["trace_action_id"] = trace_call.get("action_id")
+                item["trace_iteration"] = trace_call.get("iteration")
+                aligned.append(item)
+            else:
+                item["trace_action_id"] = None
+                item["trace_iteration"] = None
+                item["trace_alignment_status"] = "orphan_no_llm_action"
+                orphaned.append(item)
+        self._meta["iters"] = aligned
+        if orphaned:
+            self._meta["orphan_iters"] = orphaned
+        self._meta["alignment"] = {
+            "trace_path": str(trace_path),
+            "trace_llm_actions": len(trace_calls),
+            "recording_iters": len(original_iters),
+            "aligned_iters": len(aligned),
+            "orphan_iters": len(orphaned),
+            "alignment_source": alignment_source,
+        }
 
     @contextmanager
     def recording_session(
@@ -237,6 +337,15 @@ class LayerCapturer:
             if self._session is None or self._attention_suspended:
                 return
             self._capture_sampled_attention(layer, module, args, kwargs)
+
+        return capture
+
+    def _gate_hook(self, layer: int):
+        def capture(module: Any, args: tuple[Any, ...], output: Any) -> None:
+            del module, args
+            if self._session is None:
+                return
+            self._record_router_tensor(layer=layer, path=("gate",), tensor=output)
 
         return capture
 
@@ -470,6 +579,59 @@ class LayerCapturer:
                     "expert_load": _as_numpy(load).astype(np.float32),
                 }
             )
+
+    def _record_router_tensor(
+        self,
+        *,
+        layer: int,
+        path: tuple[str, ...],
+        tensor: Any,
+    ) -> None:
+        if self._session is None or tensor is None or tensor.ndim < 2:
+            return
+        n_segments = self._session["generated_segment_id"] + 1
+        top_k_experts = int(
+            self.model_summary.get("num_experts_per_tok")
+            or self.model_summary.get("num_experts_per_token")
+            or 1
+        )
+        logits = tensor.reshape(-1, tensor.shape[-1])
+        token_ids = self._gate_token_ids(n_tokens=int(logits.shape[0])).to(
+            device=logits.device
+        )
+        choices, weights, load = expert_load_per_segment(
+            logits,
+            token_ids,
+            n_segments=n_segments,
+            top_k_experts=top_k_experts,
+        )
+        self._routing_records.append(
+            {
+                "path": ".".join(path),
+                "layer": layer,
+                "expert_choice": _as_numpy(choices).astype(np.int32),
+                "expert_weight": _as_numpy(weights).astype(np.float32),
+                "expert_load": _as_numpy(load).astype(np.float32),
+            }
+        )
+
+    def _gate_token_ids(self, *, n_tokens: int):
+        assert self._session is not None
+        input_tokens = int(self._session["input_token_count"])
+        if n_tokens == input_tokens:
+            return token_segment_ids(
+                input_tokens,
+                self._session["segments"],
+                generated_segment_id=None,
+            )
+
+        import torch
+
+        return torch.full(
+            (n_tokens,),
+            self._session["generated_segment_id"],
+            dtype=torch.long,
+        )
 
     def _routing_token_ids(self, *, n_tokens: int, total_tokens: int, nested_path: tuple[int, ...]):
         assert self._session is not None

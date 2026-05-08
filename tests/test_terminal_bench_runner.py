@@ -71,6 +71,36 @@ def test_build_tb_command_uses_agent_import_path() -> None:
     assert "api_key=test-key" not in joined
 
 
+def test_build_tb_command_forwards_global_agent_timeout() -> None:
+    runner = _make_runner(
+        benchmark_extras={
+            "dataset_name": "terminal-bench-core",
+            "dataset_version": "head",
+            "global_agent_timeout_sec": 7200.0,
+        },
+    )
+    cmd = runner._build_tb_command(
+        task={"dataset_root": "/tmp/dataset", "task_id": "hello-world"},
+        run_root=Path("/tmp/out"),
+        run_id="hello-world",
+        prompt_template="default",
+    )
+    joined = " ".join(cmd)
+    assert "--global-agent-timeout-sec 7200.0" in joined
+
+
+def test_global_agent_timeout_must_be_positive() -> None:
+    for timeout in (0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="global_agent_timeout_sec"):
+            _make_runner(
+                benchmark_extras={
+                    "dataset_name": "terminal-bench-core",
+                    "dataset_version": "head",
+                    "global_agent_timeout_sec": timeout,
+                },
+            )
+
+
 def test_build_tb_command_materializes_prompt_template(tmp_path: Path) -> None:
     runner = _make_runner()
     cmd = runner._build_tb_command(
@@ -121,7 +151,14 @@ def test_find_trace_path_prefers_agent_logs(tmp_path: Path) -> None:
 
 
 def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> None:
-    runner = _make_runner(mcp_config="configs/mcp/context7.yaml")
+    runner = _make_runner(
+        mcp_config="configs/mcp/context7.yaml",
+        benchmark_extras={
+            "dataset_name": "terminal-bench-core",
+            "dataset_version": "head",
+            "global_agent_timeout_sec": 7200.0,
+        },
+    )
     src = tmp_path / "src.jsonl"
     src.write_text(
         json.dumps({"type": "trace_metadata", "model": "old", "instance_id": "x"}) + "\n"
@@ -150,6 +187,7 @@ def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> 
     assert metadata["tb_version"] == "0.2.18"
     assert metadata["task_source_kind"] == "terminal_bench_registry"
     assert metadata["run_config"]["mcp_config"] == "context7.yaml"
+    assert metadata["run_config"]["global_agent_timeout_sec"] == 7200.0
 
 
 def test_run_openclaw_task_publishes_terminal_bench_container_name(

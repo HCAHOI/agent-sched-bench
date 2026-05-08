@@ -56,6 +56,8 @@ class _ToyModel(nn.Module):
         self.model = nn.Module()
         self.model.layers = nn.ModuleList([nn.Module()])
         self.model.layers[0].self_attn = _ToyAttention()
+        self.model.layers[0].mlp = nn.Module()
+        self.model.layers[0].mlp.gate = nn.Linear(8, 3, bias=False)
 
 
 def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
@@ -170,6 +172,200 @@ def test_layer_capturer_rejects_model_without_attention_modules() -> None:
             config=RecordingConfig(),
             model_summary={"name": "no-attn"},
         )
+
+
+def test_layer_capturer_records_router_gate_hook_without_second_forward(tmp_path) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(attention_top_k=2, decode_window=2),
+        model_summary={
+            "name": "toy",
+            "num_experts_per_tok": 2,
+        },
+    )
+    recordings_dir = tmp_path / "recordings"
+    capturer.start_attempt(recordings_dir)
+    segments = [
+        {
+            "role": "user",
+            "message_index": 0,
+            "token_start": 0,
+            "token_end": 4,
+            "has_content": True,
+            "has_tool_calls": False,
+        }
+    ]
+
+    with capturer.recording_session(
+        call_idx=0,
+        segments=segments,
+        input_token_count=4,
+    ):
+        attn = model.model.layers[0].self_attn
+        attn(
+            torch.zeros(1, 4, 8),
+            position_embeddings=(
+                torch.ones(1, 4, 4, dtype=torch.float32),
+                torch.zeros(1, 4, 4, dtype=torch.float32),
+            ),
+            past_key_values=_FakeCache(torch.zeros(1, 1, 4, 4)),
+        )
+        model.model.layers[0].mlp.gate(torch.zeros(1, 4, 8))
+        model.model.layers[0].mlp.gate(torch.zeros(1, 1, 8))
+        capturer.flush(output_token_ids=[42])
+    capturer.finish_attempt()
+
+    with np.load(recordings_dir / "iter_0000" / "routing.npz") as routing:
+        assert routing["record_path"].tolist() == ["gate", "gate"]
+        assert routing["record_layer"].tolist() == [0, 0]
+        assert routing["expert_choice"].shape == (5, 2)
+        assert routing["expert_load"].shape == (2, 2, 3)
+
+    meta = json.loads((recordings_dir / "meta.json").read_text())
+    assert meta["model"]["router_capture_mode"] == "gate_forward_hook"
+
+
+def test_layer_capturer_aligns_meta_iters_to_trace_actions(tmp_path) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(attention_top_k=2, decode_window=2),
+        model_summary={"name": "toy"},
+    )
+    recordings_dir = tmp_path / "recordings"
+    capturer.start_attempt(recordings_dir)
+    segments = [
+        {
+            "role": "user",
+            "message_index": 0,
+            "token_start": 0,
+            "token_end": 4,
+            "has_content": True,
+            "has_tool_calls": False,
+        }
+    ]
+    attn = model.model.layers[0].self_attn
+
+    for call_idx in range(2):
+        with capturer.recording_session(
+            call_idx=call_idx,
+            segments=segments,
+            input_token_count=4,
+        ):
+            attn(
+                torch.zeros(1, 4, 8),
+                position_embeddings=(
+                    torch.ones(1, 4, 4, dtype=torch.float32),
+                    torch.zeros(1, 4, 4, dtype=torch.float32),
+                ),
+                past_key_values=_FakeCache(torch.zeros(1, 1, 4, 4)),
+            )
+            capturer.flush(output_token_ids=[42])
+
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        json.dumps({"type": "trace_metadata"}) + "\n"
+        + json.dumps(
+            {
+                "type": "action",
+                "action_type": "llm_call",
+                "action_id": "llm_1",
+                "iteration": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    capturer.finish_attempt(trace_path=trace_path)
+
+    meta = json.loads((recordings_dir / "meta.json").read_text())
+    assert meta["alignment"] == {
+        "trace_path": str(trace_path),
+        "trace_llm_actions": 1,
+        "recording_iters": 2,
+        "aligned_iters": 1,
+        "orphan_iters": 1,
+        "alignment_source": "iteration",
+    }
+    assert [item["call_idx"] for item in meta["iters"]] == [0]
+    assert meta["iters"][0]["trace_action_id"] == "llm_1"
+    assert [item["call_idx"] for item in meta["orphan_iters"]] == [1]
+    assert meta["orphan_iters"][0]["trace_alignment_status"] == "orphan_no_llm_action"
+    assert (recordings_dir / "iter_0001" / "attention.npz").exists()
+
+
+def test_layer_capturer_uses_trace_indices_for_non_tail_gaps(tmp_path) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(attention_top_k=2, decode_window=2),
+        model_summary={"name": "toy"},
+    )
+    recordings_dir = tmp_path / "recordings"
+    capturer.start_attempt(recordings_dir)
+    segments = [
+        {
+            "role": "user",
+            "message_index": 0,
+            "token_start": 0,
+            "token_end": 4,
+            "has_content": True,
+            "has_tool_calls": False,
+        }
+    ]
+    attn = model.model.layers[0].self_attn
+
+    for call_idx in range(3):
+        with capturer.recording_session(
+            call_idx=call_idx,
+            segments=segments,
+            input_token_count=4,
+        ):
+            attn(
+                torch.zeros(1, 4, 8),
+                position_embeddings=(
+                    torch.ones(1, 4, 4, dtype=torch.float32),
+                    torch.zeros(1, 4, 4, dtype=torch.float32),
+                ),
+                past_key_values=_FakeCache(torch.zeros(1, 1, 4, 4)),
+            )
+            capturer.flush(output_token_ids=[42])
+
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "trace_metadata"}),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0",
+                        "iteration": 0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_2",
+                        "iteration": 2,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    capturer.finish_attempt(trace_path=trace_path)
+
+    meta = json.loads((recordings_dir / "meta.json").read_text())
+    assert [item["call_idx"] for item in meta["iters"]] == [0, 2]
+    assert [item["trace_action_id"] for item in meta["iters"]] == ["llm_0", "llm_2"]
+    assert [item["call_idx"] for item in meta["orphan_iters"]] == [1]
+    assert meta["alignment"]["aligned_iters"] == 2
+    assert meta["alignment"]["orphan_iters"] == 1
 
 
 def test_segment_bucket_normalizes_low_precision_rows() -> None:

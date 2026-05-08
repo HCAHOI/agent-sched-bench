@@ -10,5 +10,6 @@ extras:
   task_source_kind: terminal_bench_registry
   dataset_name: terminal-bench-core
   dataset_version: head
+  global_agent_timeout_sec: 7200.0
   registry_url:
   local_registry_path:

@@ -70,6 +70,20 @@ def _write_trace(path: Path) -> None:
     )
 
 
+class _RecordingProvider:
+    def __init__(self) -> None:
+        self.recordings_dir: Path | None = None
+        self.finish_trace_path: Path | None = None
+        self.finish_trace_exists = False
+
+    def start_attempt(self, recordings_dir: Path) -> None:
+        self.recordings_dir = recordings_dir
+
+    def finish_attempt(self, trace_path: Path | None = None) -> None:
+        self.finish_trace_path = trace_path
+        self.finish_trace_exists = bool(trace_path and trace_path.exists())
+
+
 def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
     ctx.agent_runtime_mode = "task_container_agent"
@@ -158,6 +172,70 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
 
     trace = (ctx.attempt_dir / "trace.jsonl").read_text()
     assert "trace_metadata" in trace
+
+
+def test_run_attempt_finishes_recording_after_trace_copy(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+    recording_provider = _RecordingProvider()
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="Submitted",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+            recording_provider=recording_provider,
+        )
+    )
+
+    assert recording_provider.recordings_dir == ctx.attempt_dir / "recordings"
+    assert recording_provider.finish_trace_path == ctx.attempt_dir / "trace.jsonl"
+    assert recording_provider.finish_trace_exists is True
+
+
+def test_run_attempt_finishes_recording_if_trace_copy_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+    recording_provider = _RecordingProvider()
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="Submitted",
+            trace_path=trace_source,
+        )
+
+    def fail_copy(_attempt_dir: Path, _source_path: Path) -> Path:
+        raise OSError("copy failed")
+
+    monkeypatch.setattr("trace_collect.attempt_pipeline.attempt_layout.copy_trace_jsonl", fail_copy)
+
+    with pytest.raises(OSError, match="copy failed"):
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=0.001,
+                container_executable="docker",
+                recording_provider=recording_provider,
+            )
+        )
+
+    assert recording_provider.finish_trace_path == trace_source
+    assert recording_provider.finish_trace_exists is True
 
 
 def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> None:
