@@ -93,6 +93,15 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Resume an interrupted run by passing its existing run directory path.",
     )
     parser.add_argument(
+        "--record-internals",
+        action="store_true",
+        help=(
+            "Record per-call attention aggregates and MoE routing with a "
+            "host-side HuggingFace SDPA backend. Forces OpenClaw model request "
+            "concurrency to 1 for the run."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -336,6 +345,14 @@ def _run_collect(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    if args.record_internals and args.scaffold != "openclaw":
+        print(
+            "ERROR: --record-internals currently supports --scaffold openclaw only.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if args.record_internals:
+        os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
 
     try:
         provider_config = resolve_llm_config(
@@ -385,6 +402,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             mcp_config=args.mcp_config,
             prompt_template=args.prompt_template,
             min_free_disk_gb=args.min_free_disk_gb,
+            record_internals=args.record_internals,
         )
     )
     print(f"Traces written to: {run_dir}/")

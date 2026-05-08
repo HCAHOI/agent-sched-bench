@@ -115,6 +115,41 @@ def test_normalize_openclaw_trace_preserves_runner_scaffold_capabilities(
     assert metadata["scaffold_capabilities"] == {"tools": ["custom"], "memory": False}
 
 
+def test_normalize_openclaw_trace_stamps_record_internals(tmp_path: Path) -> None:
+    from trace_collect.collector import _normalize_openclaw_trace
+
+    src = tmp_path / "src.jsonl"
+    src.write_text(
+        json.dumps(
+            {
+                "type": "trace_metadata",
+                "scaffold": "openclaw",
+                "trace_format_version": 5,
+                "run_config": {"mcp_config": "none"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    dst = tmp_path / "dst.jsonl"
+    plugin = get_benchmark_class("swe-bench-verified")(_make_config())
+    _normalize_openclaw_trace(
+        src=src,
+        dst=dst,
+        benchmark=plugin,
+        model="test/model",
+        api_base="https://x.y",
+        max_iterations=100,
+        instance_id="test-1",
+        record_internals=True,
+    )
+
+    metadata = json.loads(dst.read_text(encoding="utf-8").splitlines()[0])
+    assert metadata["run_config"]["mcp_config"] == "none"
+    assert metadata["run_config"]["record_internals"] is True
+
+
 def test_normalize_openclaw_trace_marks_unknown_capabilities_without_metadata(
     tmp_path: Path,
 ) -> None:

@@ -47,6 +47,7 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--run-id` | no | auto | Resume an interrupted run (pass existing run dir) |
 | `--api-base` | no | from provider | Override API base URL |
 | `--api-key` | no | from env | Override API key |
+| `--record-internals` | no | off | OpenClaw-only: record sampled HF attention/MoE artifacts under each attempt's `recordings/`; forces model request concurrency to 1 |
 
 ### Provider System
 

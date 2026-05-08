@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from llm_call import UnifiedProvider
+from serving.recording import HFRecordingProvider, HFRecordingServer
 from harness.container_image_prep import (
     drop_cached_fixed_image,
     ensure_source_image,
@@ -41,6 +42,27 @@ if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
 
 logger = logging.getLogger(__name__)
+_DOCKER_HOST_GATEWAY = "172.17.0.1"
+
+
+def _recording_server_public_host(
+    *,
+    execution_environment: str,
+    runtime_mode: str,
+    container_executable: str | None,
+) -> str | None:
+    explicit = os.environ.get("HF_RECORDING_PUBLIC_HOST")
+    if explicit:
+        return explicit
+    if (
+        container_executable == "docker"
+        and (
+            execution_environment == "container"
+            or runtime_mode == "task_container_agent"
+        )
+    ):
+        return _DOCKER_HOST_GATEWAY
+    return None
 
 _ATTEMPT_DIR_NAME_RE = re.compile(r"^attempt_(\d+)$")
 
@@ -351,6 +373,7 @@ async def _run_scaffold_tasks(
     prompt_template: str | None,
     min_free_disk_gb: float,
     inner_factory,
+    recording_provider: Any | None = None,
 ) -> Path:
     """Iterate over tasks, wrapping each in ``run_attempt``."""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -435,12 +458,14 @@ async def _run_scaffold_tasks(
                         container_executable=container_executable,
                     )
 
-                result = await run_attempt(
-                    attempt_ctx,
-                    inner=_inner,
-                    min_free_disk_gb=min_free_disk_gb,
-                    container_executable=container_executable,
-                )
+                run_attempt_kwargs: dict[str, Any] = {
+                    "inner": _inner,
+                    "min_free_disk_gb": min_free_disk_gb,
+                    "container_executable": container_executable,
+                }
+                if recording_provider is not None:
+                    run_attempt_kwargs["recording_provider"] = recording_provider
+                result = await run_attempt(attempt_ctx, **run_attempt_kwargs)
             except Exception as exc:
                 logger.exception("FAILED %s", instance_id)
                 results.append(
@@ -508,8 +533,11 @@ async def collect_traces(
     mcp_config: str | None = None,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
+    record_internals: bool = False,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
+    if record_internals and scaffold != "openclaw":
+        raise ValueError("--record-internals currently supports scaffold='openclaw' only")
     benchmark.validate_scaffold_support(scaffold)
     execution_environment = benchmark.execution_environment
     if execution_environment not in {"container", "host"}:
@@ -528,23 +556,44 @@ async def collect_traces(
         raise ValueError("--container required for container-mode benchmarks")
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
+    recording_provider = (
+        HFRecordingProvider(default_model=model) if record_internals else None
+    )
+    recording_server = (
+        HFRecordingServer(
+            recording_provider,
+            public_host=_recording_server_public_host(
+                execution_environment=execution_environment,
+                runtime_mode=runtime_mode,
+                container_executable=container_executable,
+            ),
+        )
+        if recording_provider is not None
+        else None
+    )
+    if recording_server is not None:
+        recording_server.__enter__()
+    effective_api_base = recording_server.api_base if recording_server else api_base
+    effective_api_key = "hf-recording" if recording_server else api_key
+    effective_provider_name = "openai" if recording_server else provider_name
+    provider = recording_provider or UnifiedProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+    )
     runner = None
     if runtime_mode == "host_controller":
         runner = benchmark.build_runner(
             scaffold=scaffold,
-            provider=UnifiedProvider(
-                api_key=api_key,
-                api_base=api_base,
-                default_model=model,
-            ),
+            provider=provider,
             workspace_base=run_dir / "_workspace_base",
             max_iterations=max_iterations,
             context_window_tokens=max_context_tokens,
             model=model,
-            provider_name=provider_name,
+            provider_name=effective_provider_name,
             env_key=env_key,
-            api_base=api_base,
-            api_key=api_key,
+            api_base=effective_api_base,
+            api_key=effective_api_key,
             mcp_config=mcp_config,
             mcp_servers=load_mcp_servers(mcp_config),
         )
@@ -571,14 +620,15 @@ async def collect_traces(
                     ctx=ctx,
                     task=task,
                     benchmark=benchmark,
-                    provider_name=provider_name,
-                    api_base=api_base,
-                    api_key=api_key,
+                    provider_name=effective_provider_name,
+                    api_base=effective_api_base,
+                    api_key=effective_api_key,
                     model=model,
                     max_iterations=max_iterations,
                     max_context_tokens=max_context_tokens,
                     mcp_config=mcp_config,
                     container_executable=container_executable,
+                    record_internals=record_internals,
                 )
 
             assert runner is not None
@@ -592,21 +642,31 @@ async def collect_traces(
                     "benchmark runner returned "
                     f"{type(result).__name__}, expected AttemptResult"
                 )
+            if record_internals and result.trace_path is not None:
+                _stamp_trace_run_config(
+                    result.trace_path,
+                    {"record_internals": True},
+                )
             return result
 
         return inner
 
-    return await _run_scaffold_tasks(
-        benchmark=benchmark,
-        tasks=tasks,
-        run_dir=run_dir,
-        model=model,
-        scaffold=scaffold,
-        container_executable=container_executable,
-        prompt_template=prompt_template,
-        min_free_disk_gb=min_free_disk_gb,
-        inner_factory=make_inner,
-    )
+    try:
+        return await _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=tasks,
+            run_dir=run_dir,
+            model=model,
+            scaffold=scaffold,
+            container_executable=container_executable,
+            prompt_template=prompt_template,
+            min_free_disk_gb=min_free_disk_gb,
+            inner_factory=make_inner,
+            recording_provider=recording_provider,
+        )
+    finally:
+        if recording_server is not None:
+            recording_server.__exit__(None, None, None)
 
 
 def _normalize_openclaw_trace(
@@ -622,6 +682,7 @@ def _normalize_openclaw_trace(
     prompt_template: str | None = None,
     agent_runtime_mode: str | None = None,
     runtime_proof: dict[str, Any] | None = None,
+    record_internals: bool = False,
 ) -> None:
     """Copy an OpenClaw trace into the attempt dir, merging trace metadata."""
     lines = src.read_text(encoding="utf-8").splitlines()
@@ -673,6 +734,10 @@ def _normalize_openclaw_trace(
         run_config = merged.get("run_config") or {}
         run_config["mcp_config"] = mcp_config_label
         merged["run_config"] = run_config
+    if record_internals:
+        run_config = merged.get("run_config") or {}
+        run_config["record_internals"] = True
+        merged["run_config"] = run_config
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "w", encoding="utf-8") as f:
@@ -697,6 +762,23 @@ def _resolve_prompt_template(
     return prompt_template or benchmark.config.default_prompt_template
 
 
+def _stamp_trace_run_config(trace_path: Path, values: dict[str, Any]) -> None:
+    lines = trace_path.read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    replaced = False
+    for line in lines:
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if not replaced and rec.get("type") == "trace_metadata":
+            run_config = dict(rec.get("run_config") or {})
+            run_config.update(values)
+            rec["run_config"] = run_config
+            replaced = True
+        out.append(json.dumps(rec, ensure_ascii=False))
+    trace_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 async def _run_openclaw_in_task_container(
     *,
     ctx: AttemptContext,
@@ -710,6 +792,7 @@ async def _run_openclaw_in_task_container(
     max_iterations: int,
     max_context_tokens: int,
     mcp_config: str | None,
+    record_internals: bool = False,
 ) -> AttemptResult:
     fixed_image = ctx.fixed_image or task.get("image_name") or ""
     if not fixed_image:
@@ -820,6 +903,7 @@ async def _run_openclaw_in_task_container(
             prompt_template=ctx.prompt_template,
             agent_runtime_mode=ctx.agent_runtime_mode,
             runtime_proof=runtime_proof,
+            record_internals=record_internals,
         )
     finally:
         container_logs = stop_task_container(

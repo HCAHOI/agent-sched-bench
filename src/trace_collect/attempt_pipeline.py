@@ -46,6 +46,7 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "no_proxy",
     "PIP_INDEX_URL",
     "TASK_CONTAINER_PIP_INDEX_URL",
+    "NANOBOT_MAX_CONCURRENT_REQUESTS",
 )
 
 
@@ -258,6 +259,7 @@ async def run_attempt(
     inner: Callable[[AttemptContext], Awaitable[AttemptResult]],
     min_free_disk_gb: float = 30.0,
     container_executable: str | None,
+    recording_provider: Any | None = None,
 ) -> AttemptResult:
     """Execute one scaffold attempt and write its artifacts."""
     try:
@@ -307,6 +309,8 @@ async def run_attempt(
     if ctx.execution_environment == "host":
         process_sampler = ProcessStatsSampler(pid=os.getpid(), interval_s=1.0)
         process_sampler.start()
+    if recording_provider is not None:
+        recording_provider.start_attempt(ctx.attempt_dir / "recordings")
 
     sampler: ContainerStatsSampler | ProcessStatsSampler | None = None
     samples: list[dict[str, Any]] = []
@@ -334,6 +338,8 @@ async def run_attempt(
             process_samples = process_sampler.stop()
             if not samples:
                 samples = process_samples
+        if recording_provider is not None:
+            recording_provider.finish_attempt()
 
         ctx.end_time = datetime.now(tz=timezone.utc)
 

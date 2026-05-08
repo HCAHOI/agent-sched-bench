@@ -67,6 +67,45 @@ Key flags: `--benchmark <slug>` (default `swe-bench-verified`),
 See `src/trace_collect/CLAUDE.md` for the complete flag reference, provider
 registry, checkpointing behaviour, and trace schema v5 layout.
 
+### Recording Internals
+
+`--record-internals` switches OpenClaw model calls to a host-side HuggingFace
+backend and records reduced attention/MoE artifacts beside each attempt.
+It currently supports `--scaffold openclaw` only.
+For task-container benchmarks, the container talks to a temporary local
+OpenAI-compatible proxy backed by that host model, so benchmark tools still run
+inside the task container. Docker task containers use `172.17.0.1` as the
+default host gateway for that proxy; set `HF_RECORDING_PUBLIC_HOST` if the
+server uses a different bridge address.
+
+```bash
+PYTHONPATH=src python -m trace_collect.cli \
+    --provider openai --api-key hf-recording \
+    --model Qwen/Qwen3-Coder-30B-A3B-Instruct \
+    --benchmark swe-rebench \
+    --scaffold openclaw \
+    --container docker \
+    --mcp-config none \
+    --sample 1 \
+    --record-internals
+```
+
+Artifacts are written under
+`<attempt_dir>/recordings/iter_0000/{attention.npz,routing.npz,segments.json}`
+plus `<attempt_dir>/recordings/meta.json`. `call_idx` is 0-based and aligns to
+the nth `action_type="llm_call"` record in `trace.jsonl`.
+
+Sanity-check one call:
+
+```bash
+python scripts/load_recording.py --attempt-dir <attempt_dir> --call-idx 0
+```
+
+Recording uses `attn_implementation="sdpa"` for the model path and computes
+only sampled attention rows inside hooks. It forces
+`NANOBOT_MAX_CONCURRENT_REQUESTS=1` and is intended for data collection, not
+production throughput.
+
 ### Registered Benchmarks
 
 | Slug | `task_shape` | Dataset | Split | Docker | Scaffolds | Scoring |
