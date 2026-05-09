@@ -24,6 +24,7 @@ class AgentHookContext:
     final_content: str | None = None
     stop_reason: str | None = None
     error: str | None = None
+    malformed_retry_count: int = 0
 
 
 class AgentHook:

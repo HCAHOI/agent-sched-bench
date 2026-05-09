@@ -240,6 +240,8 @@ class AgentRunner:
                     malformed_retry_count = 1
                     last_malformed_input_hash = input_hash
 
+                context.malformed_retry_count = malformed_retry_count
+
                 if malformed_retry_count > spec.malformed_retry_budget:
                     logger.warning(
                         "Malformed tool-call retry budget exhausted ({}/{}); "

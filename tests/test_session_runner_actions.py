@@ -67,6 +67,7 @@ class _StubContext:
         self.tool_calls = tool_calls or []
         self.usage = usage or {}
         self.response = response
+        self.malformed_retry_count = 0
 
 
 def test_trace_collector_emits_llm_call_action(tmp_path: Path) -> None:

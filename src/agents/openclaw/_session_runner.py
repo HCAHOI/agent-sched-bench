@@ -199,6 +199,7 @@ class TraceCollectorHook(AgentHook):
             "finish_reason": context.response.finish_reason
             if context.response
             else None,
+            "is_malformed_retry": context.malformed_retry_count > 0,
         }
         llm_action_data: dict[str, Any] = {
             "messages_in": self._iter_messages_snapshot,
@@ -209,6 +210,8 @@ class TraceCollectorHook(AgentHook):
             "llm_call_time_ms": round(llm_call_time_ms, 2),
             "llm_wall_latency_ms": round(llm_wall_latency_ms, 2),
             "llm_timing_source": llm_timing_source,
+            "malformed_retry_count": context.malformed_retry_count,
+            "is_malformed_retry": context.malformed_retry_count > 0,
         }
         trace_llm_fields = self._extract_trace_llm_fields(context.response)
         if trace_llm_fields:
