@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,6 +122,8 @@ class AgentRunner:
         stop_reason = "completed"
         tool_events: list[dict[str, str]] = []
         external_lookup_counts: dict[str, int] = {}
+        malformed_retry_count = 0
+        last_malformed_input_hash: int | None = None
 
         for iteration in range(spec.max_iterations):
             try:
@@ -148,6 +151,7 @@ class AgentRunner:
             await hook.after_llm_response(context)
 
             if response.has_tool_calls:
+                malformed_retry_count = 0
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=True)
 
@@ -226,24 +230,50 @@ class AgentRunner:
                 response.finish_reason != "error"
                 and _looks_like_malformed_tool_call(response.content)
             ):
+                input_hash = hash(
+                    json.dumps(messages_for_model, sort_keys=True, default=str)
+                )
+                if input_hash == last_malformed_input_hash:
+                    malformed_retry_count += 1
+                else:
+                    malformed_retry_count = 1
+                    last_malformed_input_hash = input_hash
+
                 logger.warning(
-                    "Malformed tool-call-looking response on turn {} for {}; "
-                    "asking model to regenerate a structured tool call",
+                    "Malformed tool-call response on turn {} for {} "
+                    "(retry {}); injecting role=tool feedback",
                     iteration,
                     spec.session_key or "default",
+                    malformed_retry_count,
                 )
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=True)
+
+                synthetic_tool_call_id = (
+                    f"malformed_retry_{iteration}_{malformed_retry_count}"
+                )
                 messages.append(
                     build_assistant_message(
                         response.content or "",
+                        tool_calls=[
+                            {
+                                "id": synthetic_tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": "_invalid_tool_call",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ],
                         reasoning_content=response.reasoning_content,
                         thinking_blocks=response.thinking_blocks,
                     )
                 )
                 messages.append(
                     {
-                        "role": "user",
+                        "role": "tool",
+                        "tool_call_id": synthetic_tool_call_id,
+                        "name": "_invalid_tool_call",
                         "content": _malformed_tool_call_feedback(spec.tools),
                     }
                 )

@@ -119,7 +119,14 @@ async def _run_malformed_tool_call_case() -> None:
     retry_messages = provider.seen_messages[1]
     assert retry_messages[-2]["role"] == "assistant"
     assert "<function=list_dir>" in retry_messages[-2]["content"]
-    assert retry_messages[-1]["role"] == "user"
+    synth_calls = retry_messages[-2].get("tool_calls") or []
+    assert len(synth_calls) == 1, "synthetic assistant_call missing"
+    synth_id = synth_calls[0]["id"]
+    assert synth_id.startswith("malformed_retry_")
+    assert synth_calls[0]["function"]["name"] == "_invalid_tool_call"
+    assert retry_messages[-1]["role"] == "tool"
+    assert retry_messages[-1]["tool_call_id"] == synth_id
+    assert retry_messages[-1]["name"] == "_invalid_tool_call"
     assert "not valid and no tool was executed" in retry_messages[-1]["content"]
     assert "<tool_call>" in retry_messages[-1]["content"]
     assert "list_dir" in retry_messages[-1]["content"]
