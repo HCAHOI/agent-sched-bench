@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from agents.openclaw._hook import AgentHook, AgentHookContext
 from agents.openclaw._runner import AgentRunner, AgentRunSpec
 from agents.openclaw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from agents.openclaw.tools.base import Tool
@@ -162,3 +163,168 @@ async def _run_inline_tool_markup_final_case() -> None:
         "markup, not an action I need to execute."
     )
     assert len(provider.seen_messages) == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 1 — budget exhaustion
+# ---------------------------------------------------------------------------
+
+def test_malformed_retry_budget_exhaustion() -> None:
+    asyncio.run(_run_budget_exhaustion_case())
+
+
+async def _run_budget_exhaustion_case() -> None:
+    # budget=0 means the very first malformed response exhausts the budget
+    malformed = LLMResponse(
+        content="<tool_call>\n<function=list_dir>",
+        usage={"prompt_tokens": 10, "completion_tokens": 5},
+    )
+    provider = _FakeProvider([malformed])
+    registry = ToolRegistry()
+    registry.register(_ListDirTool())
+
+    result = await AgentRunner(provider).run(
+        AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "Do the thing."}],
+            tools=registry,
+            model="fake-model",
+            max_iterations=10,
+            max_tool_result_chars=1000,
+            malformed_retry_budget=0,
+        )
+    )
+
+    assert result.stop_reason == "malformed_tool_call_budget_exhausted"
+    assert result.error is not None
+    assert "after 0 retries" in result.final_content
+    assert len(provider.seen_messages) == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 2 — hook context carries malformed_retry_count
+# ---------------------------------------------------------------------------
+
+def test_malformed_retry_emits_action_metadata() -> None:
+    asyncio.run(_run_trace_metadata_case())
+
+
+async def _run_trace_metadata_case() -> None:
+    provider = _FakeProvider(
+        [
+            LLMResponse(
+                content="<tool_call>\n<function=list_dir>",
+                usage={"prompt_tokens": 10, "completion_tokens": 5},
+            ),
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_list",
+                        name="list_dir",
+                        arguments={"path": "/app"},
+                    )
+                ],
+                finish_reason="tool_calls",
+                usage={"prompt_tokens": 20, "completion_tokens": 4},
+            ),
+            LLMResponse(
+                content="done",
+                usage={"prompt_tokens": 30, "completion_tokens": 1},
+            ),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(_ListDirTool())
+
+    captured: list[dict[str, Any]] = []
+
+    class _CaptureHook(AgentHook):
+        async def after_iteration(self, context: AgentHookContext) -> None:
+            captured.append(
+                {
+                    "iteration": context.iteration,
+                    "malformed_retry_count": context.malformed_retry_count,
+                }
+            )
+
+    result = await AgentRunner(provider).run(
+        AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "Do the thing."}],
+            tools=registry,
+            model="fake-model",
+            max_iterations=5,
+            max_tool_result_chars=1000,
+            hook=_CaptureHook(),
+        )
+    )
+
+    assert result.final_content == "done"
+    assert len(captured) == 3
+    # iter 0: malformed — count is 1
+    assert captured[0]["iteration"] == 0
+    assert captured[0]["malformed_retry_count"] == 1
+    # iter 1: successful tool call — count reset to 0
+    assert captured[1]["iteration"] == 1
+    assert captured[1]["malformed_retry_count"] == 0
+    # iter 2: final answer
+    assert captured[2]["iteration"] == 2
+    assert captured[2]["malformed_retry_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — synthetic pair is never orphaned after snip
+# ---------------------------------------------------------------------------
+
+def test_malformed_retry_pair_survives_snip() -> None:
+    asyncio.run(_run_pair_survives_snip_case())
+
+
+async def _run_pair_survives_snip_case() -> None:
+    provider = _FakeProvider(
+        [
+            LLMResponse(
+                content="<tool_call>\n<function=list_dir>",
+                usage={"prompt_tokens": 10, "completion_tokens": 5},
+            ),
+            LLMResponse(
+                content="recovered final answer",
+                usage={"prompt_tokens": 15, "completion_tokens": 3},
+            ),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(_ListDirTool())
+
+    await AgentRunner(provider).run(
+        AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "Do thing. " * 20}],
+            tools=registry,
+            model="fake-model",
+            max_iterations=4,
+            max_tool_result_chars=1000,
+            context_window_tokens=200,  # tight — forces snip
+        )
+    )
+
+    assert len(provider.seen_messages) == 2
+    iter1_messages = provider.seen_messages[1]
+
+    # Collect all tool messages and all assistant messages that carry tool_calls
+    tool_messages = [m for m in iter1_messages if m.get("role") == "tool"]
+    asst_with_calls = [
+        m
+        for m in iter1_messages
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+
+    # Every tool message must have a matching declared id in some assistant_call.
+    # No orphaned tool message is allowed.
+    declared_ids = {
+        tc["id"]
+        for m in asst_with_calls
+        for tc in m["tool_calls"]
+    }
+    for tm in tool_messages:
+        assert tm["tool_call_id"] in declared_ids, (
+            f"orphan tool message id={tm['tool_call_id']!r} in snip output"
+        )
