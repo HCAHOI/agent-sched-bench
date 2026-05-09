@@ -19,6 +19,7 @@ class AgentDefaults(Base):
     max_tool_iterations: int = 200
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
+    malformed_retry_budget: int = 3
     reasoning_effort: str | None = (
         None  # low / medium / high - enables LLM thinking mode
     )

@@ -151,6 +151,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.1,
         help="Sampling temperature (default: 0.1).",
     )
+    parser.add_argument(
+        "--malformed-retry-budget",
+        type=int,
+        default=3,
+        help="Max malformed tool-call retries per logical step before giving up (default: 3).",
+    )
 
     parser.add_argument(
         "--quiet",
@@ -266,6 +272,7 @@ def _run_sync(args: argparse.Namespace) -> int:
         max_iterations=args.max_iterations,
         extra_hooks=[cli_hook],
         mcp_servers=load_mcp_servers(args.mcp_config),
+        malformed_retry_budget=args.malformed_retry_budget,
     )
 
     if is_daemon:
@@ -363,6 +370,8 @@ def _run_async(args: argparse.Namespace) -> int:
         str(args.max_tokens),
         "--temperature",
         str(args.temperature),
+        "--malformed-retry-budget",
+        str(args.malformed_retry_budget),
         "--session-id",
         session_id,
         "--trace-output",

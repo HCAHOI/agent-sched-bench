@@ -266,6 +266,10 @@ class TraceCollectorHook(AgentHook):
                     tool_name_by_id[tc.id] = tc.name
 
             for tc_id, tool_name, tool_content, tool_ok in tool_results_from_messages:
+                if tool_name == "_invalid_tool_call" or (
+                    tc_id and tc_id.startswith("malformed_retry_")
+                ):
+                    continue
                 tool_start_mono = self._tool_start_ts.pop(tc_id, None)
                 duration_ms = (
                     (time.monotonic() - tool_start_mono) * 1000
@@ -680,6 +684,7 @@ class SessionRunner:
         mcp_servers: dict | None = None,
         extra_hooks: list[AgentHook] | None = None,
         exec_config: ExecToolConfig | None = None,
+        malformed_retry_budget: int = 3,
     ) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
@@ -689,6 +694,7 @@ class SessionRunner:
         self.mcp_servers = mcp_servers or {}
         self.extra_hooks = extra_hooks or []
         self.exec_config = exec_config or ExecToolConfig()
+        self.malformed_retry_budget = malformed_retry_budget
 
     @staticmethod
     def _scaffold_tools() -> list[str]:
@@ -759,6 +765,7 @@ class SessionRunner:
             mcp_servers=self.mcp_servers,
             session_manager=session_manager,
             hooks=all_hooks,
+            malformed_retry_budget=self.malformed_retry_budget,
         )
 
         inject_event_callbacks(agent, trace_hook)

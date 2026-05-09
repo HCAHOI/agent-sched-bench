@@ -168,7 +168,7 @@ def test_run_sync_loads_mcp_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     captured: dict[str, object] = {}
 
     class FakeRunner:
-        def __init__(self, provider, *, model, max_iterations, extra_hooks, mcp_servers):
+        def __init__(self, provider, *, model, max_iterations, extra_hooks, mcp_servers, malformed_retry_budget=3):
             captured["mcp_servers"] = mcp_servers
 
         async def run(self, **kwargs):
