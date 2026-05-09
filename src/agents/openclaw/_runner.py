@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,35 @@ _DEFAULT_MAX_ITERATIONS_MESSAGE = (
     "without completing the task. You can try breaking the task into smaller steps."
 )
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
+
+def _looks_like_malformed_tool_call(content: str | None) -> bool:
+    if not content:
+        return False
+    return bool(
+        re.search(r"(?im)^\s*<tool_call\b", content)
+        or re.search(r"(?im)^\s*</tool_call>", content)
+        or re.search(r"(?im)^\s*<function=[^>\n]+>\s*$", content)
+        or re.search(r"(?im)^\s*<parameter=[^>\n]+>\s*$", content)
+    )
+
+
+def _malformed_tool_call_feedback(tools: ToolRegistry) -> str:
+    tool_names = ", ".join(tools.tool_names) or "(no tools available)"
+    return (
+        "Your previous response looked like an attempted tool call, but it was "
+        "not valid and no tool was executed. Do not treat that as a final "
+        "answer. Re-emit the intended action as a valid tool call using one of "
+        f"the available tools: {tool_names}.\n\n"
+        "If you are emitting Qwen XML tool-call text, wrap it exactly like this:\n"
+        "<tool_call>\n"
+        "<function=tool_name>\n"
+        "<parameter=arg_name>\n"
+        "value\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>\n"
+        "Do not omit the <tool_call> wrapper."
+    )
 _SNIP_SAFETY_BUFFER = 1024
 
 
@@ -188,6 +218,34 @@ class AgentRunner:
                         "completed_tool_results": completed_tool_results,
                         "pending_tool_calls": [],
                     },
+                )
+                await hook.after_iteration(context)
+                continue
+
+            if (
+                response.finish_reason != "error"
+                and _looks_like_malformed_tool_call(response.content)
+            ):
+                logger.warning(
+                    "Malformed tool-call-looking response on turn {} for {}; "
+                    "asking model to regenerate a structured tool call",
+                    iteration,
+                    spec.session_key or "default",
+                )
+                if hook.wants_streaming():
+                    await hook.on_stream_end(context, resuming=True)
+                messages.append(
+                    build_assistant_message(
+                        response.content or "",
+                        reasoning_content=response.reasoning_content,
+                        thinking_blocks=response.thinking_blocks,
+                    )
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": _malformed_tool_call_feedback(spec.tools),
+                    }
                 )
                 await hook.after_iteration(context)
                 continue
