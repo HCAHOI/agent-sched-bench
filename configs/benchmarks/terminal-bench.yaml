@@ -11,5 +11,6 @@ extras:
   dataset_name: terminal-bench-core
   dataset_version: head
   global_agent_timeout_sec: 7200.0
+  llm_timeout_sec: 1800.0
   registry_url:
   local_registry_path:

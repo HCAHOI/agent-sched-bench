@@ -35,6 +35,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         env_key: str,
         api_key: str | None = None,
         max_iterations: int = 100,
+        llm_timeout_sec: float | None = None,
         mcp_config_path: str | None = None,
         *args,
         **kwargs,
@@ -50,13 +51,19 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 f"missing API key for TerminalBenchOpenClawAgent env_key={env_key!r}"
             )
         self._max_iterations = int(max_iterations)
+        self._llm_timeout_sec = (
+            None if llm_timeout_sec is None else float(llm_timeout_sec)
+        )
         self._mcp_config_path = mcp_config_path
 
     @property
     def _env(self) -> dict[str, str]:
-        return {
+        env = {
             self._env_key: self._api_key,
         }
+        if self._llm_timeout_sec is not None:
+            env["OPENCLAW_LLM_TIMEOUT_S"] = str(self._llm_timeout_sec)
+        return env
 
     @property
     def _install_agent_script_path(self) -> Path:
