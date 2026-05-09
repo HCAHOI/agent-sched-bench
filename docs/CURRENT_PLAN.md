@@ -1,3 +1,107 @@
+# Current checkpoint: Terminal-Bench Qwen3-Coder recording sync + visualization
+
+## Terminal-Bench watchdog checkpoint
+
+- Current task: restart the 10-task Qwen3-Coder recording run with
+  `--max-iterations 100`.
+- 2026-05-09 replacement checkpoint: `git-leak-recovery` succeeded in
+  `remote-record-internals-2tasks-100iter-gitleak-feal-fix-20260509T041925Z`.
+  `feal-differential-cryptanalysis` was stopped after five flushed recording
+  iterations and no task/run results, then replaced with a single-task
+  recording for `model-extraction-relu-logits`.
+- Active replacement run:
+  `traces/terminal-bench/Qwen_Qwen3-Coder-30B-A3B-Instruct/remote-record-internals-1task-100iter-model-extraction-relu-logits-20260509T050312Z`;
+  log: `logs/record-model-extraction-relu-logits-20260509T050312Z.log`.
+- Replacement rationale: `model-extraction-relu-logits` is Terminal-Bench
+  hard / 480min expert-time, but resource-light: python-3-13 base with
+  `numpy==2.2.5`, no model training, VM, image/video pipeline, or long compile.
+- Initial replacement status check: collector, `tb run`, OpenClaw, and Docker
+  container were running; `attempt_1/recordings/iter_0000` existed; no
+  BrokenPipe/Timeout/Traceback/Error-calling-LLM log lines and no
+  `results.jsonl` yet.
+- Scope: `TerminalBenchRunner`, `configs/benchmarks/terminal-bench.yaml`,
+  focused runner tests, and handoff docs only.
+- Watchdog semantics: while `tb run` is alive, monitor
+  `agent-logs/openclaw-trace.jsonl` and the attempt `recordings/` tree. If both
+  stop advancing after the configured grace, terminate `tb run` and return a
+  structured `AttemptResult` with `exit_status` in
+  `stalled_tool_completion`, `stalled_llm_generation`, or
+  `stalled_no_progress`.
+- Required gate before restarting the 10-task experiment: targeted tests,
+  ruff/compile checks, then a separate strict code-review sub-agent because this
+  touches the evaluation pipeline.
+- User update: the next restarted run should use `--max-iterations 100`; keep
+  historical `200iter` artifact names unchanged when they describe old runs.
+- User decision: do not deploy or enable the new watchdog on the remote
+  experiment yet. Restart with the existing remote code first, then test the
+  watchdog stability separately before using it for formal collection.
+
+## 2026-05-08 figure script checkpoint
+
+- User redirected from syncing full recordings to writing local reusable figure
+  scripts under `scripts/recoding_figures/`.
+- Scope for this pass: implement Plot 1-3 from the research-question plan:
+  pairwise iter JS distance matrices for attention and MoE, layer
+  specialization maps, and cross-modality alignment scatter.
+- Inputs must be real recording artifacts:
+  `attempt_*/recordings/meta.json`,
+  `attempt_*/recordings/iter_*/attention.npz`,
+  `routing.npz`, and `segments.json`.
+- The scripts must not require model loading or rerunning inference; they are
+  pure analysis/plotting over recorded npz/json artifacts.
+- Later plots (system-prompt bar, tool-output decay, oracle/baseline gap) are
+  intentionally left for the next pass because they need cross-trace grouping
+  choices and policy baselines beyond the current recording schema.
+- Implemented scripts:
+  `scripts/recoding_figures/make_figures.py`,
+  `plot_iter_distance.py`, `plot_layer_specialization.py`,
+  `plot_alignment_scatter.py`, `recording_loader.py`, and `metrics.py`.
+- Verification:
+  `conda run -n ML python -m py_compile scripts/recoding_figures/*.py`;
+  `conda run -n ML ruff check scripts/recoding_figures`;
+  smoke-generated Plot 1-3 PDFs from the locally available
+  `causal-inference-r/attempt_1` recording prefix with `--layers 0,24,47`.
+
+## 2026-05-09 figure acceleration checkpoint
+
+- User requested faster visualization over the curated 14 Terminal-Bench
+  recording tasks.
+- Current bottleneck is dense `attention.npz` / `routing.npz` numerical array
+  processing rather than JSONL/table scans, so this pass avoids a new Polars
+  dependency and accelerates the existing NumPy/Matplotlib scripts directly.
+- Planned changes:
+  vectorize pairwise JS matrix construction, load attention/MoE distributions
+  once per figure batch, and add a curated-14 wrapper that runs per-task figure
+  generation with a bounded process pool while preserving the combined all-task
+  figure output.
+- Verification target before remote run:
+  py_compile, ruff, a numeric consistency check that vectorized pairwise JS
+  matches the scalar implementation, then a real recording smoke if local
+  recording internals are present.
+
+## 2026-05-08 task
+
+- Read `docs/TERMINAL_BENCH_QWEN3_CODER_TASK_LIST.md` and
+  `docs/REMOTE_QWEN3_CODER_HANDOFF.md` for run context.
+- Remote server: `root@175.28.230.22:58912`, repo
+  `/root/agent-sched-bench`, conda env `ML`.
+- Active remote experiment at 2026-05-08 15:09 UTC:
+  `traces/terminal-bench/Qwen_Qwen3-Coder-30B-A3B-Instruct/remote-record-internals-10tasks-200iter-localtasks-20260508T144236Z`;
+  it is currently running `fix-git`.
+- Previous run selected for local sync:
+  `traces/terminal-bench/Qwen_Qwen3-Coder-30B-A3B-Instruct/remote-record-internals-5tasks-200iter-gatehook-20260508T122208Z`.
+- Observed previous-run recording counts before sync:
+  `fix-git`: 43 recording dirs / 42 trace LLM calls;
+  `dna-insert`: 26 / 25;
+  `causal-inference-r`: 30 / 29;
+  `security-celery-redis-rce`: 20 recording dirs / no finalized trace;
+  `schemelike-metacircular-eval`: no task dir.
+- Next steps: rsync previous-run artifacts to local `traces/`, generate
+  reproducible MoE/attention visualizations from the synced recordings, then
+  sanity-check at least one representative call.
+
+---
+
 # KV attention + MoE routing per-iter recording
 
 ## Context
