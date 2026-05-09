@@ -131,6 +131,28 @@ def _make_provider(*, completions: _FakeCompletions) -> UnifiedProvider:
     return provider
 
 
+def test_unified_provider_reads_llm_timeout_env(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_create_async_openai_client(**kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setenv("OPENCLAW_LLM_TIMEOUT_S", "1800")
+    monkeypatch.setattr(
+        "llm_call.openclaw.create_async_openai_client",
+        fake_create_async_openai_client,
+    )
+
+    UnifiedProvider(
+        api_key="test-key",
+        api_base="http://localhost:1234/v1",
+        default_model="local-model",
+    )
+
+    assert captured["timeout"] == 1800.0
+
+
 def test_normalize_openrouter_generation_metadata_prefers_served_provider() -> None:
     metadata = UnifiedProvider._normalize_openrouter_generation_metadata(
         {

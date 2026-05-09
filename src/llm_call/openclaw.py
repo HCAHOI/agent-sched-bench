@@ -43,6 +43,7 @@ _STANDARD_FN_KEYS = frozenset({"name", "arguments"})
 _OPENROUTER_GENERATION_ID_HEADER = "x-generation-id"
 _DEFAULT_OPENROUTER_METADATA_RETRY_DELAYS_S = (0.0, 1.0, 3.0, 10.0, 30.0)
 _DEFAULT_OPENROUTER_METADATA_TIMEOUT_S = 5.0
+_OPENCLAW_LLM_TIMEOUT_ENV = "OPENCLAW_LLM_TIMEOUT_S"
 
 
 def _short_tool_id() -> str:
@@ -109,6 +110,16 @@ def _get_openrouter_metadata_timeout_s() -> float:
     return value
 
 
+def _get_openclaw_llm_timeout_s() -> float | None:
+    raw_value = os.environ.get(_OPENCLAW_LLM_TIMEOUT_ENV)
+    if raw_value is None or raw_value == "":
+        return None
+    value = _coerce_float(raw_value)
+    if value is None or value <= 0.0:
+        raise ValueError(f"{_OPENCLAW_LLM_TIMEOUT_ENV} must be a positive number")
+    return value
+
+
 def _get_openrouter_metadata_policy() -> dict[str, Any]:
     return {
         "retry_delays_s": list(_get_openrouter_metadata_retry_delays_s()),
@@ -172,6 +183,7 @@ class UnifiedProvider(LLMProvider):
         *,
         max_tokens: int = 8192,
         temperature: float = 0.1,
+        timeout: float | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -181,6 +193,7 @@ class UnifiedProvider(LLMProvider):
         self._client = create_async_openai_client(
             api_key=api_key,
             api_base=api_base,
+            timeout=timeout if timeout is not None else _get_openclaw_llm_timeout_s(),
             include_session_affinity=True,
         )
 
