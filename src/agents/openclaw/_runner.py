@@ -89,6 +89,7 @@ class AgentRunSpec:
     context_window_tokens: int | None = None
     context_block_limit: int | None = None
     provider_retry_mode: str = "standard"
+    malformed_retry_budget: int = 3
     progress_callback: Any | None = None
     checkpoint_callback: Any | None = None
 
@@ -238,6 +239,29 @@ class AgentRunner:
                 else:
                     malformed_retry_count = 1
                     last_malformed_input_hash = input_hash
+
+                if malformed_retry_count > spec.malformed_retry_budget:
+                    logger.warning(
+                        "Malformed tool-call retry budget exhausted ({}/{}); "
+                        "giving up on iter {} for {}",
+                        malformed_retry_count,
+                        spec.malformed_retry_budget,
+                        iteration,
+                        spec.session_key or "default",
+                    )
+                    final_content = (
+                        f"Tool-call format invalid after {spec.malformed_retry_budget} "
+                        f"retries. Last attempt began with: "
+                        f"{(response.content or '')[:300]}..."
+                    )
+                    stop_reason = "malformed_tool_call_budget_exhausted"
+                    error = final_content
+                    self._append_final_message(messages, final_content)
+                    context.final_content = final_content
+                    context.error = error
+                    context.stop_reason = stop_reason
+                    await hook.after_iteration(context)
+                    break
 
                 logger.warning(
                     "Malformed tool-call response on turn {} for {} "
