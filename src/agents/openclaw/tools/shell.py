@@ -11,6 +11,9 @@ from loguru import logger
 from agents.openclaw.tools.base import Tool
 
 
+MAX_EXEC_TOOL_TIMEOUT_SEC = 600
+
+
 class ExecTool(Tool):
     _DEFAULT_TIMEOUT = 300
 
@@ -44,7 +47,7 @@ class ExecTool(Tool):
     def name(self) -> str:
         return "exec"
 
-    _MAX_TIMEOUT = 600
+    _MAX_TIMEOUT = MAX_EXEC_TOOL_TIMEOUT_SEC
     _MAX_OUTPUT = 10_000
 
     @property
