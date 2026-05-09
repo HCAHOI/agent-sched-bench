@@ -32,9 +32,14 @@ agent-sched-bench/
 
 ## Development Workflow
 
+All Python invocations run inside conda env "ML" (Python 3.12). On a fresh
+server, run `bash scripts/setup/bootstrap.sh` once — it installs miniconda,
+creates env ML, installs deps, and runs a 1-task terminal-bench smoke. Do
+not create `.venv` or `pip install` ad hoc.
+
 ```bash
+conda activate ML
 make help    # list all targets
-make sync    # install dependencies (uv)
 make test    # run pytest
 make lint    # ruff
 ```

@@ -17,6 +17,15 @@ The goal is to produce **publishable, reproducible, and scientifically rigorous*
 
 ---
 
+## Environment
+
+All Python invocations run inside conda env "ML" (Python 3.12). On a fresh
+server, run `bash scripts/setup/bootstrap.sh` once. Do not create `.venv`
+or `pip install` ad hoc — `bootstrap.sh` is the single source of truth for
+the runtime.
+
+---
+
 ## Research Integrity & Taste (CRITICAL)
 
 > These principles are NON-NEGOTIABLE. Violating them compromises the scientific validity of our work.

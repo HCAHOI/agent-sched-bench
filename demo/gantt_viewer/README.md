@@ -43,13 +43,14 @@ demo/gantt_viewer/
 
 ## Prerequisites
 
-- Python deps installed into `.venv`
+- Conda env "ML" active (`conda activate ML` — see project root README)
 - Node/npm available for the frontend
 
 Recommended setup:
 
 ```bash
-uv pip install --python .venv/bin/python -e ".[dev,gantt-viewer]"
+conda activate ML
+pip install -e ".[dev,gantt-viewer]"
 make gantt-viewer-install
 ```
 
@@ -64,14 +65,14 @@ make gantt-viewer-dev
 Equivalent CLI:
 
 ```bash
-PYTHONPATH=src:. ./.venv/bin/python -m trace_collect.cli gantt-serve --dev
+PYTHONPATH=src:. python -m trace_collect.cli gantt-serve --dev
 ```
 
 Production mode serves `frontend/dist` directly from FastAPI:
 
 ```bash
 make gantt-viewer-build
-PYTHONPATH=src:. ./.venv/bin/python -m trace_collect.cli gantt-serve
+PYTHONPATH=src:. python -m trace_collect.cli gantt-serve
 ```
 
 ## Static HTML Export
@@ -97,7 +98,7 @@ missing resource samples are reported in `manifest.json` rather than filled in.
 Use the example discovery config explicitly if you want the acceptance layout:
 
 ```bash
-PYTHONPATH=src:. ./.venv/bin/python -m trace_collect.cli gantt-serve \
+PYTHONPATH=src:. python -m trace_collect.cli gantt-serve \
   --config demo/gantt_viewer/configs/example.yaml
 ```
 
@@ -148,7 +149,7 @@ The shipped example config currently discovers:
 Quick API check:
 
 ```bash
-./.venv/bin/python - <<'PY'
+python - <<'PY'
 from fastapi.testclient import TestClient
 from demo.gantt_viewer.backend.app import create_app
 
@@ -167,7 +168,7 @@ Expected today:
 AC1 payload check:
 
 ```bash
-./.venv/bin/python - <<'PY'
+python - <<'PY'
 from fastapi.testclient import TestClient
 from demo.gantt_viewer.backend.app import create_app
 
@@ -189,7 +190,7 @@ When backend schema changes, regenerate both the frozen snapshot and the
 frontend types together:
 
 ```bash
-./.venv/bin/python - <<'PY' > demo/gantt_viewer/tests/fixtures/openapi.snapshot.json
+python - <<'PY' > demo/gantt_viewer/tests/fixtures/openapi.snapshot.json
 import json
 from demo.gantt_viewer.backend.app import create_app
 print(json.dumps(create_app().openapi(), indent=2, sort_keys=True))
