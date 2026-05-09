@@ -165,7 +165,7 @@ class AgentLoop:
         context_block_limit: int | None = None,
         max_tool_result_chars: int | None = None,
         provider_retry_mode: str = "standard",
-        malformed_retry_budget: int = 3,
+        malformed_retry_budget: int | None = None,
         web_search_config: WebSearchConfig | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -201,7 +201,11 @@ class AgentLoop:
             else defaults.max_tool_result_chars
         )
         self.provider_retry_mode = provider_retry_mode
-        self.malformed_retry_budget = malformed_retry_budget
+        self.malformed_retry_budget = (
+            malformed_retry_budget
+            if malformed_retry_budget is not None
+            else defaults.malformed_retry_budget
+        )
         self.web_search_config = web_search_config or WebSearchConfig()
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
@@ -232,6 +236,7 @@ class AgentLoop:
             web_proxy=web_proxy,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
+            malformed_retry_budget=self.malformed_retry_budget,
         )
 
         self._running = False

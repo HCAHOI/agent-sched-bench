@@ -67,6 +67,53 @@ def _malformed_tool_call_feedback(tools: ToolRegistry) -> str:
 _SNIP_SAFETY_BUFFER = 1024
 
 
+def _strip_synthetic_malformed_pairs(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove (assistant_call, tool_result) pairs synthesised for malformed retries.
+
+    These pairs feed model-feedback only; they should not appear in result
+    persistence, eval tools_used, or downstream analysis.
+    """
+    cleaned: list[dict[str, Any]] = []
+    skip_tool_ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            tool_calls = msg.get("tool_calls") or []
+            synth_calls = [
+                tc for tc in tool_calls
+                if isinstance(tc, dict)
+                and tc.get("function", {}).get("name") == "_invalid_tool_call"
+            ]
+            if synth_calls and len(synth_calls) == len(tool_calls):
+                # entire assistant message is synthetic
+                for tc in synth_calls:
+                    if tc.get("id"):
+                        skip_tool_ids.add(str(tc["id"]))
+                continue
+            # Mixed case: assistant has both real and synthetic calls — keep
+            # the message but drop the synthetic tool_calls entries.
+            if synth_calls:
+                msg = dict(msg)
+                msg["tool_calls"] = [
+                    tc for tc in tool_calls
+                    if not (
+                        isinstance(tc, dict)
+                        and tc.get("function", {}).get("name") == "_invalid_tool_call"
+                    )
+                ]
+                for tc in synth_calls:
+                    if tc.get("id"):
+                        skip_tool_ids.add(str(tc["id"]))
+        if (
+            msg.get("role") == "tool"
+            and str(msg.get("tool_call_id", "")) in skip_tool_ids
+        ):
+            continue
+        cleaned.append(msg)
+    return cleaned
+
+
 @dataclass(slots=True)
 class AgentRunSpec:
     """Configuration for a single agent execution."""
@@ -381,7 +428,7 @@ class AgentRunner:
 
         return AgentRunResult(
             final_content=final_content,
-            messages=messages,
+            messages=_strip_synthetic_malformed_pairs(messages),
             tools_used=tools_used,
             usage=usage,
             stop_reason=stop_reason,

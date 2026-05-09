@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+
 from loguru import logger
 
 from agents.openclaw._hook import AgentHook, AgentHookContext
@@ -52,6 +53,7 @@ class SubagentManager:
         web_proxy: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
+        malformed_retry_budget: int | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -62,6 +64,7 @@ class SubagentManager:
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        self.malformed_retry_budget = malformed_retry_budget
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
@@ -147,19 +150,20 @@ class SubagentManager:
                 {"role": "user", "content": task},
             ]
 
-            result = await self.runner.run(
-                AgentRunSpec(
-                    initial_messages=messages,
-                    tools=tools,
-                    model=self.model,
-                    max_iterations=15,
-                    max_tool_result_chars=self.max_tool_result_chars,
-                    hook=_SubagentHook(task_id),
-                    max_iterations_message="Task completed but no final response was generated.",
-                    error_message=None,
-                    fail_on_tool_error=True,
-                )
+            run_kwargs: dict[str, Any] = dict(
+                initial_messages=messages,
+                tools=tools,
+                model=self.model,
+                max_iterations=15,
+                max_tool_result_chars=self.max_tool_result_chars,
+                hook=_SubagentHook(task_id),
+                max_iterations_message="Task completed but no final response was generated.",
+                error_message=None,
+                fail_on_tool_error=True,
             )
+            if self.malformed_retry_budget is not None:
+                run_kwargs["malformed_retry_budget"] = self.malformed_retry_budget
+            result = await self.runner.run(AgentRunSpec(**run_kwargs))
             if result.stop_reason == "tool_error":
                 await self._announce_result(
                     task_id,

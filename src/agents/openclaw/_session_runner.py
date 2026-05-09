@@ -684,7 +684,7 @@ class SessionRunner:
         mcp_servers: dict | None = None,
         extra_hooks: list[AgentHook] | None = None,
         exec_config: ExecToolConfig | None = None,
-        malformed_retry_budget: int = 3,
+        malformed_retry_budget: int | None = None,
     ) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
