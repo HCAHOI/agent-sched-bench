@@ -380,7 +380,7 @@ class HFRecordingProvider(LLMProvider):
         super().__init__(api_key=api_key, api_base=api_base)
         self.default_model = default_model
         self.config = config or RecordingConfig()
-        self.generation = GenerationSettings(temperature=0.1, max_tokens=8192)
+        self.generation = GenerationSettings(temperature=0.1, max_tokens=4096)
         self._call_idx = 0
         self._chat_lock = threading.Lock()
 

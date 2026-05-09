@@ -181,7 +181,7 @@ class UnifiedProvider(LLMProvider):
         api_base: str | None,
         default_model: str,
         *,
-        max_tokens: int = 8192,
+        max_tokens: int = 4096,
         temperature: float = 0.1,
         timeout: float | None = None,
     ):

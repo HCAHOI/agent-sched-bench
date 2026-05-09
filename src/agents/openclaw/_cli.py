@@ -142,8 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=8192,
-        help="Max tokens per LLM call (default: 8192).",
+        default=4096,
+        help="Max tokens per LLM call (default: 4096).",
     )
     parser.add_argument(
         "--temperature",

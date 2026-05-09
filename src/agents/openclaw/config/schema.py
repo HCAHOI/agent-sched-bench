@@ -12,7 +12,7 @@ class AgentDefaults(Base):
     workspace: str = "~/.nanobot/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    max_tokens: int = 8192
+    max_tokens: int = 4096
     context_window_tokens: int = 65_536
     context_block_limit: int | None = None
     temperature: float = 0.1
