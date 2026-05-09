@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-${REPO_ROOT}/.venv/bin/python}"
 
 if [[ ! -f "${REPO_ROOT}/src/harness/sweep.py" ]]; then
   echo "Sweep orchestrator is not implemented yet." >&2
@@ -11,4 +10,4 @@ if [[ ! -f "${REPO_ROOT}/src/harness/sweep.py" ]]; then
 fi
 
 cd "${REPO_ROOT}"
-PYTHONPATH="${REPO_ROOT}/src" "${PYTHON_BIN}" -m harness.sweep "$@"
+PYTHONPATH="${REPO_ROOT}/src" python -m harness.sweep "$@"

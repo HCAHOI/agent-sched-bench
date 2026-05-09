@@ -21,7 +21,7 @@ if [[ ! -f ".env" ]]; then
 fi
 
 # Update or append a key=value in .env (in-place, no temp file needed via Python)
-"${REPO_ROOT}/.venv/bin/python" - <<PY
+python - <<PY
 import os
 from pathlib import Path
 

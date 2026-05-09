@@ -3,12 +3,11 @@ UV ?= uv
 TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
 GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
-.PHONY: help pull sync test lint serve-vllm run-smoke run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull test lint serve-vllm run-smoke run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
 	@printf "  pull              Fast-forward pull the current branch\n"
-	@printf "  sync              Install dependencies with uv\n"
 	@printf "  test              Run the full test suite\n"
 	@printf "  lint              Run ruff\n"
 	@printf "  serve-vllm        Run the raw vLLM launcher\n"
@@ -32,10 +31,6 @@ help:
 
 pull:
 	./scripts/pull_repo.sh
-
-sync:
-	test -x .venv/bin/python || $(UV) venv .venv
-	$(UV) pip install --python .venv/bin/python -e ".[dev]"
 
 test:
 	$(PYTHON) -m pytest

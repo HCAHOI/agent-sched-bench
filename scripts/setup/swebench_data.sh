@@ -10,13 +10,13 @@ cd "$REPO_ROOT"
 TASKS_FILE="data/swebench_verified/tasks.json"
 
 if [[ -f "$TASKS_FILE" ]]; then
-    count=$("${REPO_ROOT}/.venv/bin/python" -c "import json; print(len(json.load(open('${TASKS_FILE}'))))")
+    count=$(python -c "import json; print(len(json.load(open('${TASKS_FILE}'))))")
     echo "[setup] SKIP swebench_data: ${TASKS_FILE} already exists (${count} tasks)"
     exit 0
 fi
 
 echo "[setup] Downloading SWE-bench Verified dataset..."
-PYTHONPATH="${REPO_ROOT}/src" "${REPO_ROOT}/.venv/bin/python" - <<'PYEOF'
+PYTHONPATH="${REPO_ROOT}/src" python - <<'PYEOF'
 import json
 from pathlib import Path
 
