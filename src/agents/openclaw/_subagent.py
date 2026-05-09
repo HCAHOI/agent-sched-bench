@@ -161,8 +161,7 @@ class SubagentManager:
                 error_message=None,
                 fail_on_tool_error=True,
             )
-            if self.malformed_retry_budget is not None:
-                run_kwargs["malformed_retry_budget"] = self.malformed_retry_budget
+            run_kwargs["malformed_retry_budget"] = self.malformed_retry_budget
             result = await self.runner.run(AgentRunSpec(**run_kwargs))
             if result.stop_reason == "tool_error":
                 await self._announce_result(

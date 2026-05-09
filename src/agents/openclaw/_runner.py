@@ -80,31 +80,15 @@ def _strip_synthetic_malformed_pairs(
     for msg in messages:
         if msg.get("role") == "assistant":
             tool_calls = msg.get("tool_calls") or []
-            synth_calls = [
-                tc for tc in tool_calls
-                if isinstance(tc, dict)
+            if tool_calls and all(
+                isinstance(tc, dict)
                 and tc.get("function", {}).get("name") == "_invalid_tool_call"
-            ]
-            if synth_calls and len(synth_calls) == len(tool_calls):
-                # entire assistant message is synthetic
-                for tc in synth_calls:
+                for tc in tool_calls
+            ):
+                for tc in tool_calls:
                     if tc.get("id"):
                         skip_tool_ids.add(str(tc["id"]))
                 continue
-            # Mixed case: assistant has both real and synthetic calls — keep
-            # the message but drop the synthetic tool_calls entries.
-            if synth_calls:
-                msg = dict(msg)
-                msg["tool_calls"] = [
-                    tc for tc in tool_calls
-                    if not (
-                        isinstance(tc, dict)
-                        and tc.get("function", {}).get("name") == "_invalid_tool_call"
-                    )
-                ]
-                for tc in synth_calls:
-                    if tc.get("id"):
-                        skip_tool_ids.add(str(tc["id"]))
         if (
             msg.get("role") == "tool"
             and str(msg.get("tool_call_id", "")) in skip_tool_ids
