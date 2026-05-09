@@ -47,25 +47,19 @@ def test_project_mount_args_skip_host_system_mounts_off_linux(
     assert "/usr:/usr:ro" not in joined
 
 
-def test_current_container_python_runtime_keeps_unresolved_venv_path(
-    tmp_path: Path,
+def test_current_container_python_runtime_returns_sys_executable_under_conda_ml(
     monkeypatch,
 ) -> None:
-    real_python = tmp_path / "real-python"
-    real_python.write_text("", encoding="utf-8")
-    bin_dir = tmp_path / "venv" / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    symlink_python = bin_dir / "python"
-    os.symlink(real_python, symlink_python)
+    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
+    import sys
 
-    monkeypatch.setattr(
-        "trace_collect.runtime.task_container.REPO_VENV_PYTHON",
-        symlink_python,
-    )
+    assert current_container_python_runtime() == sys.executable
 
-    runtime = Path(current_container_python_runtime())
-    assert runtime == symlink_python
-    assert runtime.resolve() == real_python
+
+def test_current_container_python_runtime_requires_conda_ml(monkeypatch):
+    monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
+    with pytest.raises(RuntimeError, match="conda env 'ML'"):
+        current_container_python_runtime()
 
 
 def test_resolve_task_container_exec_config_bootstraps_on_cross_platform(
@@ -426,8 +420,8 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
                         "container_id": "cid-1",
                         "hostname": "host-a",
                         "cwd": "/testbed",
-                        "python_executable": "/repo/.venv/bin/python",
-                        "python_prefix": "/repo/.venv",
+                        "python_executable": "/opt/conda/envs/ML/bin/python",
+                        "python_prefix": "/opt/conda/envs/ML",
                         "project_root": "/repo",
                         "sys_path": ["/repo/src"],
                     },
@@ -458,7 +452,7 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
     )
 
     assert proof.container_id == "cid-1"
-    assert proof.python_executable == "/repo/.venv/bin/python"
+    assert proof.python_executable == "/opt/conda/envs/ML/bin/python"
     assert Path(str(seen["result_path"])).is_absolute()
     assert Path(str(seen["writable_probe"])).is_absolute()
     assert Path(str(seen["result_path"])) == result_path
@@ -602,6 +596,7 @@ def test_run_task_container_agent_prefers_explicit_success_over_patch(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
     result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
     stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
     stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
@@ -656,6 +651,7 @@ def test_run_task_container_agent_timeout_writes_partial_logs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
     result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
     stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
     stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
@@ -703,6 +699,7 @@ def test_preflight_task_container_runtime_passes_container_executable_to_exec(
     monkeypatch,
     container_executable: str,
 ) -> None:
+    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
     seen: dict[str, object] = {}
     result_path = (
         tmp_path / "attempt" / "_task_container_runtime" / "preflight" / "result.json"

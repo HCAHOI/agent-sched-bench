@@ -8,6 +8,7 @@ import platform
 import ssl
 import subprocess
 import shutil
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -18,7 +19,6 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOTNAME = "_task_container_runtime"
-REPO_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 _REDACTED_SECRET = "***REDACTED***"
 _DEFAULT_RUNTIME_PYTHONPATH = f"{REPO_ROOT / 'src'}:{REPO_ROOT}"
 _CONTAINER_SYSTEM_PYTHON = "/usr/bin/python3"
@@ -211,8 +211,14 @@ def _inspect_image_platform(
 
 
 def current_container_python_runtime() -> str:
-    """Return the Python interpreter path that the container should use."""
-    return str(REPO_VENV_PYTHON)
+    """Host-side Python; must run with conda env ML active."""
+    if os.environ.get("CONDA_DEFAULT_ENV") != "ML":
+        raise RuntimeError(
+            "must run inside conda env 'ML' (got "
+            f"CONDA_DEFAULT_ENV={os.environ.get('CONDA_DEFAULT_ENV')!r}); "
+            "run `conda activate ML` or use scripts/setup/bootstrap.sh"
+        )
+    return sys.executable
 
 
 def task_container_runtime_dir(attempt_dir: Path, scaffold: str) -> Path:
@@ -279,7 +285,7 @@ def resolve_task_container_exec_config(
 
     if use_host_runtime:
         return TaskContainerExecConfig(
-            runtime=str(REPO_VENV_PYTHON),
+            runtime=current_container_python_runtime(),
             pythonpath=_DEFAULT_RUNTIME_PYTHONPATH,
             start_extra_args=tuple(start_args),
             bootstrap=False,

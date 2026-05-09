@@ -37,7 +37,7 @@ def test_exec_task_container_entrypoint_uses_run_mode_for_scaffold_requests(
     exec_task_container_entrypoint(
         container_id="cid-1",
         request_path=request_path,
-        runtime="/repo/.venv/bin/python",
+        runtime="/opt/conda/envs/ML/bin/python",
         pythonpath=None,
         container_executable="docker",
         timeout=10,
@@ -72,7 +72,7 @@ def test_exec_task_container_entrypoint_uses_preflight_mode_for_preflight_reques
     exec_task_container_entrypoint(
         container_id="cid-1",
         request_path=request_path,
-        runtime="/repo/.venv/bin/python",
+        runtime="/opt/conda/envs/ML/bin/python",
         pythonpath=None,
         container_executable="docker",
         timeout=10,
@@ -133,7 +133,7 @@ def test_exec_task_container_entrypoint_uses_original_payload_for_stdin(
             "api_key": "secret-value",
             "result_path": str(tmp_path / "r.json"),
         },
-        runtime="/repo/.venv/bin/python",
+        runtime="/opt/conda/envs/ML/bin/python",
         pythonpath=None,
         container_executable="docker",
         timeout=10,
