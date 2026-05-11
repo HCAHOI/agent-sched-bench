@@ -4,6 +4,10 @@ The loader deliberately keeps only per-iteration, per-layer aggregate
 distributions. It does not retain raw query rows or token-level routing arrays,
 so it can be used on multi-GB recording runs without materializing the whole run
 in memory.
+
+The KV eviction audit (`kv_eviction.npz`) is loaded raw rather than aggregated
+since each row is already a small per-(layer, decode_step) record; see
+`load_kv_eviction()`.
 """
 
 from __future__ import annotations
@@ -61,6 +65,71 @@ class LayerDistributionSet:
     axis_labels: list[str]
     distributions: dict[int, np.ndarray] = field(default_factory=dict)
     observation_counts: dict[int, np.ndarray] = field(default_factory=dict)
+
+
+# Schema fields exposed by `load_kv_eviction`; mirrors `KVEvictionRecorder.write`
+# in `src/serving/kv_policies/recorder.py`. Update both together if the writer
+# changes.
+KV_EVICTION_COLUMNS: tuple[str, ...] = (
+    "task",
+    "call_idx",
+    "iter_dir",
+    "policy_name",
+    "record_step",
+    "record_layer",
+    "record_phase",
+    "pre_len",
+    "post_len",
+    "budget",
+    "evict_reason",
+)
+
+
+@dataclass
+class KVEvictionFrame:
+    """Per-row KV eviction audit, flattened across iterations.
+
+    Each row corresponds to one `BaseEvictionCache.update()` call (one
+    `(call_idx, layer, decode_step)` tuple). Scalar columns are 1-D numpy
+    arrays of length R; CSR data is exposed both as raw flat arrays plus
+    offsets and as per-row decoded lists for ergonomic consumption.
+    """
+
+    n_rows: int
+    # Provenance columns (added by the loader, not in npz):
+    task: np.ndarray  # (R,) U
+    call_idx: np.ndarray  # (R,) int32
+    iter_dir: np.ndarray  # (R,) U  (str(iter_dir) per row)
+    # Native npz columns:
+    policy_name: np.ndarray  # (R,) U16
+    record_step: np.ndarray  # (R,) int32
+    record_layer: np.ndarray  # (R,) int32
+    record_phase: np.ndarray  # (R,) U7
+    pre_len: np.ndarray  # (R,) int32
+    post_len: np.ndarray  # (R,) int32
+    budget: np.ndarray  # (R,) int32
+    evict_reason: np.ndarray  # (R,) U16
+    # CSR raw form preserved verbatim for callers who want offsets:
+    kept_offsets: np.ndarray  # (R+1,) int64
+    kept_indices: np.ndarray  # (sum_kept,) int32
+    evicted_offsets: np.ndarray  # (R+1,) int64
+    evicted_indices: np.ndarray  # (sum_evicted,) int32
+    # Per-row decoded form (one np.ndarray per row), convenient for
+    # `for kept, evicted in zip(frame.kept_per_row, frame.evicted_per_row)`:
+    kept_per_row: list[np.ndarray] = field(default_factory=list)
+    evicted_per_row: list[np.ndarray] = field(default_factory=list)
+    # h2o-only diagnostic columns; sentinel-filled (-1 / NaN) for other
+    # policies. Width = max heavy-slot count across rows; may be 0.
+    score_topk_index: np.ndarray = field(  # (R, k) int32
+        default_factory=lambda: np.empty((0, 0), dtype=np.int32)
+    )
+    score_topk_value: np.ndarray = field(  # (R, k) float32
+        default_factory=lambda: np.empty((0, 0), dtype=np.float32)
+    )
+
+    @property
+    def is_empty(self) -> bool:
+        return self.n_rows == 0
 
 
 def find_attempt_dirs(paths: Sequence[Path]) -> list[Path]:
@@ -159,6 +228,25 @@ def collect_role_labels(records: Iterable[IterationRecord]) -> list[str]:
     return ordered
 
 
+def segment_role_indices_for_record(
+    record: IterationRecord,
+    role_labels: Sequence[str],
+) -> list[int]:
+    """Map each saved segment in a record to a role-label column."""
+    role_index = {role: idx for idx, role in enumerate(role_labels)}
+    return _segment_role_indices(_segment_roles(record), role_index)
+
+
+def role_token_counts_for_key_len(
+    segments: Sequence[dict],
+    role_labels: Sequence[str],
+    key_len: int,
+) -> np.ndarray:
+    """Count visible key tokens by role for a causal query key length."""
+    role_index = {role: idx for idx, role in enumerate(role_labels)}
+    return _role_token_counts_for_key_len(segments, role_index, key_len)
+
+
 def load_token_role_distributions(
     records: Sequence[IterationRecord],
     *,
@@ -221,14 +309,21 @@ def load_attention_key_role_distributions(
                 positions = query_positions[start:end]
                 if positions.size == 0:
                     continue
-                key_len = int(np.max(positions)) + 1
-                if key_len <= 0:
-                    continue
-                counts = _role_token_counts_for_key_len(segments, role_index, key_len)
+                counts = np.zeros(len(labels), dtype=np.float64)
+                unique_positions, position_counts = np.unique(positions, return_counts=True)
+                for position, count in zip(unique_positions, position_counts, strict=True):
+                    key_len = int(position) + 1
+                    if key_len <= 0:
+                        continue
+                    counts += _role_token_counts_for_key_len(
+                        segments,
+                        role_index,
+                        key_len,
+                    ) * float(count)
                 row_count = int(end - start)
                 layer_int = int(layer)
                 layer_sums.setdefault(layer_int, np.zeros(len(labels), dtype=np.float64))
-                layer_sums[layer_int] += counts * float(row_count)
+                layer_sums[layer_int] += counts
                 layer_counts[layer_int] = layer_counts.get(layer_int, 0) + row_count
 
         for layer, values in layer_sums.items():
@@ -313,7 +408,11 @@ def load_attention_distributions(
     )
 
 
-def load_moe_distributions(records: Sequence[IterationRecord]) -> LayerDistributionSet:
+def load_moe_distributions(
+    records: Sequence[IterationRecord],
+    *,
+    phase: str = "all",
+) -> LayerDistributionSet:
     """Load layer x expert-load distributions for each iteration."""
     n_experts = _infer_n_experts(records)
     labels = [str(idx) for idx in range(n_experts)]
@@ -328,6 +427,11 @@ def load_moe_distributions(records: Sequence[IterationRecord]) -> LayerDistribut
                 raise ValueError(
                     f"{record.iter_dir}: expected expert_load rank 3, got {expert_load.shape}"
                 )
+            record_phases = (
+                derive_moe_record_phases(record, routing, expert_load=expert_load)
+                if phase != "all"
+                else None
+            )
             if expert_load.shape[2] > n_experts:
                 raise ValueError(
                     f"{record.iter_dir}: expert dimension {expert_load.shape[2]} > {n_experts}"
@@ -336,6 +440,8 @@ def load_moe_distributions(records: Sequence[IterationRecord]) -> LayerDistribut
             layer_sums: dict[int, np.ndarray] = {}
             layer_counts: dict[int, float] = {}
             for idx, layer in enumerate(record_layers):
+                if record_phases is not None and str(record_phases[idx]) != phase:
+                    continue
                 load = expert_load[idx].sum(axis=0)
                 values = np.zeros(n_experts, dtype=np.float64)
                 values[: load.shape[0]] = load
@@ -353,12 +459,312 @@ def load_moe_distributions(records: Sequence[IterationRecord]) -> LayerDistribut
     distributions = _finalize_distribution_slots(per_layer, len(records), n_experts)
     observation_counts = _finalize_count_slots(per_layer_counts, len(records))
     return LayerDistributionSet(
-        modality="moe",
+        modality="moe" if phase == "all" else f"moe_{phase}",
         records=list(records),
         layers=sorted(distributions),
         axis_labels=labels,
         distributions=distributions,
         observation_counts=observation_counts,
+    )
+
+
+def derive_moe_record_phases(
+    record: IterationRecord,
+    routing: object,
+    *,
+    expert_load: np.ndarray | None = None,
+) -> np.ndarray:
+    """Derive per-routing-record prefill/decode labels from saved token spans.
+
+    Prefer an explicit `record_phase` field when present. Older recordings do not
+    have that field, but they do preserve token row offsets and per-segment expert
+    load. In those artifacts, records covering input tokens with no generation
+    load are prefill; records whose load is entirely on the generated segment are
+    decode. Any mixed record is left as `mixed` rather than forced into a phase.
+    """
+    if "record_phase" in routing.files:
+        phases = routing["record_phase"].astype(str)
+        if expert_load is not None and int(phases.shape[0]) != int(expert_load.shape[0]):
+            raise ValueError(
+                f"{record.iter_dir}: record_phase length {phases.shape[0]} "
+                f"does not match expert_load records {expert_load.shape[0]}"
+            )
+        if expert_load is None and "expert_load" in routing.files:
+            n_records = int(routing["expert_load"].shape[0])
+            if int(phases.shape[0]) != n_records:
+                raise ValueError(
+                    f"{record.iter_dir}: record_phase length {phases.shape[0]} "
+                    f"does not match expert_load records {n_records}"
+                )
+        return phases
+    if "token_row_offsets" not in routing.files:
+        raise ValueError(f"{record.iter_dir}: routing.npz lacks token_row_offsets")
+
+    load = (
+        np.asarray(expert_load, dtype=np.float64)
+        if expert_load is not None
+        else routing["expert_load"].astype(np.float64)
+    )
+    if load.ndim != 3:
+        raise ValueError(f"{record.iter_dir}: expected expert_load rank 3, got {load.shape}")
+    offsets = routing["token_row_offsets"].astype(np.int64)
+    if int(offsets.shape[0]) != int(load.shape[0]) + 1:
+        raise ValueError(
+            f"{record.iter_dir}: token_row_offsets length {offsets.shape[0]} "
+            f"does not match expert_load records {load.shape[0]}"
+        )
+    payload = json.loads((record.iter_dir / "segments.json").read_text(encoding="utf-8"))
+    input_tokens = _optional_int(payload.get("input_tokens")) or record.input_tokens
+    if input_tokens is None:
+        raise ValueError(f"{record.iter_dir}: cannot derive MoE phase without input_tokens")
+    segments = list(payload.get("segments", []))
+    generation_idx = _generation_segment_index(segments)
+    if generation_idx is None or generation_idx >= int(load.shape[1]):
+        raise ValueError(f"{record.iter_dir}: cannot identify generation segment")
+
+    eps = 1e-8
+    token_rows = np.diff(offsets)
+    segment_load = load.sum(axis=2)
+    total = segment_load.sum(axis=1)
+    generation_mass = segment_load[:, generation_idx]
+    non_generation_mass = total - generation_mass
+
+    phases = np.full(int(load.shape[0]), "mixed", dtype="<U7")
+    unknown = total <= 0
+    prefill = (
+        (token_rows == int(input_tokens))
+        & ~unknown
+        & (generation_mass <= eps * total)
+    )
+    decode = ~unknown & (non_generation_mass <= eps * total)
+    phases[unknown] = "unknown"
+    phases[prefill] = "prefill"
+    phases[decode] = "decode"
+    return phases
+
+
+def count_moe_record_phases(records: Sequence[IterationRecord]) -> dict[str, object]:
+    """Count MoE routing records by explicit or derived phase labels."""
+    counts: dict[str, int] = {
+        "prefill": 0,
+        "decode": 0,
+        "mixed": 0,
+        "unknown": 0,
+    }
+    failures: list[dict[str, object]] = []
+    n_iteration_records_with_phase = 0
+    n_routing_records_with_phase = 0
+
+    for record in records:
+        try:
+            with np.load(record.iter_dir / "routing.npz") as routing:
+                phases = derive_moe_record_phases(record, routing)
+        except (KeyError, OSError, ValueError) as exc:
+            failures.append(
+                {
+                    "task": record.task,
+                    "call_idx": record.call_idx,
+                    "iter_dir": str(record.iter_dir),
+                    "error": str(exc),
+                }
+            )
+            continue
+        n_iteration_records_with_phase += 1
+        n_routing_records_with_phase += int(phases.shape[0])
+        for phase in phases.astype(str):
+            counts[phase] = counts.get(phase, 0) + 1
+
+    return {
+        "counts": counts,
+        "n_iteration_records": len(records),
+        "n_iteration_records_with_phase": n_iteration_records_with_phase,
+        "n_iteration_records_failed": len(failures),
+        "n_routing_records_with_phase": n_routing_records_with_phase,
+        "failure_examples": failures[:8],
+    }
+
+
+def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
+    """Load per-row KV eviction audit frames across all iter dirs.
+
+    Each `kv_eviction.npz` is appended along its R axis (one row per
+    `(layer, decode_step)` decision). Iterations missing the npz are skipped
+    silently — `kv_eviction.npz` is only emitted when an eviction policy is
+    configured (`--kv-policy {streaming,h2o,random}`); old recordings and
+    `--kv-policy none` runs predate the artifact entirely.
+
+    Returns an empty `KVEvictionFrame` (n_rows=0, all columns 0-length) when
+    no records carry the npz. Raises only on malformed npz, never on missing.
+    """
+    columns: dict[str, list[np.ndarray]] = {
+        "task": [],
+        "call_idx": [],
+        "iter_dir": [],
+        "policy_name": [],
+        "record_step": [],
+        "record_layer": [],
+        "record_phase": [],
+        "pre_len": [],
+        "post_len": [],
+        "budget": [],
+        "evict_reason": [],
+        "kept_indices_per_call": [],
+        "kept_offsets_per_call": [],
+        "evicted_indices_per_call": [],
+        "evicted_offsets_per_call": [],
+        "score_index_per_call": [],
+        "score_value_per_call": [],
+    }
+
+    for record in records:
+        npz_path = record.iter_dir / "kv_eviction.npz"
+        if not npz_path.is_file():
+            continue
+        with np.load(npz_path) as data:
+            n = int(data["record_step"].shape[0])
+            if n == 0:
+                continue
+            columns["task"].append(np.full(n, record.task, dtype=object))
+            columns["call_idx"].append(
+                np.full(n, int(record.call_idx), dtype=np.int32)
+            )
+            columns["iter_dir"].append(np.full(n, str(record.iter_dir), dtype=object))
+            columns["policy_name"].append(
+                np.full(n, str(data["policy_name"]), dtype="U16")
+            )
+            columns["record_step"].append(data["record_step"].astype(np.int32))
+            columns["record_layer"].append(data["record_layer"].astype(np.int32))
+            columns["record_phase"].append(data["record_phase"].astype("U7"))
+            columns["pre_len"].append(data["pre_len"].astype(np.int32))
+            columns["post_len"].append(data["post_len"].astype(np.int32))
+            columns["budget"].append(data["budget"].astype(np.int32))
+            columns["evict_reason"].append(data["evict_reason"].astype("U16"))
+            columns["kept_offsets_per_call"].append(
+                data["kept_offsets"].astype(np.int64)
+            )
+            columns["kept_indices_per_call"].append(
+                data["kept_indices"].astype(np.int32)
+            )
+            columns["evicted_offsets_per_call"].append(
+                data["evicted_offsets"].astype(np.int64)
+            )
+            columns["evicted_indices_per_call"].append(
+                data["evicted_indices"].astype(np.int32)
+            )
+            columns["score_index_per_call"].append(
+                data["score_topk_index"].astype(np.int32)
+            )
+            columns["score_value_per_call"].append(
+                data["score_topk_value"].astype(np.float32)
+            )
+
+    if not columns["record_step"]:
+        return KVEvictionFrame(
+            n_rows=0,
+            task=np.empty(0, dtype=object),
+            call_idx=np.empty(0, dtype=np.int32),
+            iter_dir=np.empty(0, dtype=object),
+            policy_name=np.empty(0, dtype="U16"),
+            record_step=np.empty(0, dtype=np.int32),
+            record_layer=np.empty(0, dtype=np.int32),
+            record_phase=np.empty(0, dtype="U7"),
+            pre_len=np.empty(0, dtype=np.int32),
+            post_len=np.empty(0, dtype=np.int32),
+            budget=np.empty(0, dtype=np.int32),
+            evict_reason=np.empty(0, dtype="U16"),
+            kept_offsets=np.zeros(1, dtype=np.int64),
+            kept_indices=np.empty(0, dtype=np.int32),
+            evicted_offsets=np.zeros(1, dtype=np.int64),
+            evicted_indices=np.empty(0, dtype=np.int32),
+            kept_per_row=[],
+            evicted_per_row=[],
+            score_topk_index=np.empty((0, 0), dtype=np.int32),
+            score_topk_value=np.empty((0, 0), dtype=np.float32),
+        )
+
+    # Per-call CSR offsets concatenated end-to-end need their `[1:]` slice
+    # shifted by the running flat-array length so the global offsets remain
+    # monotone. Per-call score widths may differ (different h2o k); pad to
+    # max width with sentinels (-1 / NaN) before vstacking.
+    kept_per_row: list[np.ndarray] = []
+    evicted_per_row: list[np.ndarray] = []
+    kept_offsets_global: list[int] = [0]
+    kept_flat: list[np.ndarray] = []
+    evicted_offsets_global: list[int] = [0]
+    evicted_flat: list[np.ndarray] = []
+
+    for k_off, k_idx, e_off, e_idx in zip(
+        columns["kept_offsets_per_call"],
+        columns["kept_indices_per_call"],
+        columns["evicted_offsets_per_call"],
+        columns["evicted_indices_per_call"],
+        strict=True,
+    ):
+        n = int(k_off.shape[0]) - 1
+        for r in range(n):
+            kept_per_row.append(k_idx[int(k_off[r]) : int(k_off[r + 1])].copy())
+            evicted_per_row.append(e_idx[int(e_off[r]) : int(e_off[r + 1])].copy())
+        base_k = kept_offsets_global[-1]
+        for r in range(n):
+            kept_offsets_global.append(base_k + int(k_off[r + 1]))
+        kept_flat.append(k_idx)
+        base_e = evicted_offsets_global[-1]
+        for r in range(n):
+            evicted_offsets_global.append(base_e + int(e_off[r + 1]))
+        evicted_flat.append(e_idx)
+
+    score_widths = [arr.shape[1] for arr in columns["score_index_per_call"]]
+    max_k = max(score_widths) if score_widths else 0
+    score_index_blocks: list[np.ndarray] = []
+    score_value_blocks: list[np.ndarray] = []
+    for s_idx, s_val in zip(
+        columns["score_index_per_call"],
+        columns["score_value_per_call"],
+        strict=True,
+    ):
+        n = int(s_idx.shape[0])
+        if max_k == 0:
+            score_index_blocks.append(np.empty((n, 0), dtype=np.int32))
+            score_value_blocks.append(np.empty((n, 0), dtype=np.float32))
+            continue
+        idx_padded = np.full((n, max_k), -1, dtype=np.int32)
+        val_padded = np.full((n, max_k), np.nan, dtype=np.float32)
+        idx_padded[:, : s_idx.shape[1]] = s_idx
+        val_padded[:, : s_val.shape[1]] = s_val
+        score_index_blocks.append(idx_padded)
+        score_value_blocks.append(val_padded)
+
+    return KVEvictionFrame(
+        n_rows=sum(int(arr.shape[0]) for arr in columns["record_step"]),
+        task=np.concatenate(columns["task"]),
+        call_idx=np.concatenate(columns["call_idx"]),
+        iter_dir=np.concatenate(columns["iter_dir"]),
+        policy_name=np.concatenate(columns["policy_name"]),
+        record_step=np.concatenate(columns["record_step"]),
+        record_layer=np.concatenate(columns["record_layer"]),
+        record_phase=np.concatenate(columns["record_phase"]),
+        pre_len=np.concatenate(columns["pre_len"]),
+        post_len=np.concatenate(columns["post_len"]),
+        budget=np.concatenate(columns["budget"]),
+        evict_reason=np.concatenate(columns["evict_reason"]),
+        kept_offsets=np.asarray(kept_offsets_global, dtype=np.int64),
+        kept_indices=np.concatenate(kept_flat) if kept_flat else np.empty(0, dtype=np.int32),
+        evicted_offsets=np.asarray(evicted_offsets_global, dtype=np.int64),
+        evicted_indices=(
+            np.concatenate(evicted_flat) if evicted_flat else np.empty(0, dtype=np.int32)
+        ),
+        kept_per_row=kept_per_row,
+        evicted_per_row=evicted_per_row,
+        score_topk_index=(
+            np.vstack(score_index_blocks)
+            if score_index_blocks
+            else np.empty((0, max_k), dtype=np.int32)
+        ),
+        score_topk_value=(
+            np.vstack(score_value_blocks)
+            if score_value_blocks
+            else np.empty((0, max_k), dtype=np.float32)
+        ),
     )
 
 
@@ -431,6 +837,10 @@ def _task_name(attempt_dir: Path) -> str:
 
 
 def _has_recording_files(iter_dir: Path) -> bool:
+    # `kv_eviction.npz` is intentionally NOT required: it is only emitted when
+    # an eviction policy is configured (`--kv-policy {streaming,h2o,random}`),
+    # and old recordings predate the artifact entirely. `load_kv_eviction()`
+    # returns an empty frame on iter dirs without it.
     return (
         (iter_dir / "attention.npz").is_file()
         and (iter_dir / "routing.npz").is_file()
@@ -471,6 +881,13 @@ def _normalize_role(segment: dict) -> str:
     if role in ROLE_ORDER:
         return role
     return "other"
+
+
+def _generation_segment_index(segments: Sequence[dict]) -> int | None:
+    for idx, segment in enumerate(segments):
+        if _normalize_role(segment) == "generation":
+            return idx
+    return None
 
 
 def _segment_role_indices(
