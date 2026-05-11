@@ -48,12 +48,16 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--api-base` | no | from provider | Override API base URL |
 | `--api-key` | no | from env | Override API key |
 | `--record-internals` | no | off | OpenClaw-only: record sampled HF attention/MoE artifacts under each attempt's `recordings/`; forces model request concurrency to 1 |
-| `--kv-policy` | no | `none` | KV cache eviction policy for the HF recording backend. `none` (default) = stock `DynamicCache`. `random` = uniform random over-budget eviction (step 3 baseline). `streaming` = StreamingLLM (sink prefix + recent window, naive variant — no RoPE re-rotation). H2O ships in step 6. Requires `--record-internals`. |
-| `--kv-budget` | when `--kv-policy != none` | — | Per-layer KV budget in tokens. Required and must be `> 0` whenever `--kv-policy` is set. For `streaming`, acts as the **trigger threshold** (no eviction while `key_len <= budget`); must be `>= --kv-sink-size + --kv-recent-window`. Each call writes a `kv_eviction.npz` under `recordings/iter_<call>/` with the keep/evict audit. |
-| `--kv-sink-size` | no | `4` | StreamingLLM sink-prefix length (head tokens preserved). Ignored by `random`. |
-| `--kv-recent-window` | no | `256` | StreamingLLM recent-window length (tail tokens preserved). Ignored by `random`. |
+| `--kv-policy` | no | `none` | KV cache eviction policy for the HF recording backend. `none` (default) = stock `DynamicCache`. `random` = uniform random over-budget eviction (step 3 baseline). `streaming` = StreamingLLM (sink prefix + recent window, naive variant — no RoPE re-rotation). `h2o` = Heavy-Hitter Oracle (arXiv:2306.14048): keep sink + recent + top-k middle positions ranked by accumulated post-softmax attention; subscribes to the `AttentionBus` to share LayerCapturer's softmax. Requires `--record-internals`. |
+| `--kv-budget` | when `--kv-policy != none` | — | Per-layer KV budget in tokens. Required and must be `> 0` whenever `--kv-policy` is set. For `streaming` and `h2o`, acts as the **trigger threshold** (no eviction while `key_len <= budget`); must be `>= --kv-sink-size + --kv-recent-window`. For `h2o`, post-eviction layer length is exactly `budget`; the heavy-hitter slot count is `budget - sink_size - recent_window`. Each call writes a `kv_eviction.npz` under `recordings/iter_<call>/` with the keep/evict audit. |
+| `--kv-sink-size` | no | `4` | Sink-prefix length (head tokens preserved). Used by `streaming` and `h2o`. Ignored by `random`. |
+| `--kv-recent-window` | no | `256` | Recent-window length (tail tokens preserved). Used by `streaming` and `h2o`. Ignored by `random`. |
+| `--kv-aggregate` | no | `sum` | H2O score aggregation across queries. Only `sum` (paper default) implemented; `mean`/`ema` will arrive via yaml config. Ignored by `random` and `streaming`. |
 
-Internal note: `LayerCapturer` publishes the post-softmax attention tensor on a per-provider `AttentionBus` (`src/serving/recording/attention_bus.py`). Step 5 leaves the bus subscriber-less so no behaviour changes; H2O (step 6) subscribes and consumes the same tensor without re-running softmax.
+Internal notes:
+- `LayerCapturer` publishes the post-softmax attention tensor on a per-provider `AttentionBus` (`src/serving/recording/attention_bus.py`). With no subscribers (e.g. `--kv-policy none` / `streaming` / `random`), publish is a no-op and `attention.npz` is byte-identical to the pre-bus path.
+- `h2o` subscribes to that bus at construction time, consumes the same softmax tensor (no re-softmax), accumulates a head-mean cumulative score per layer, and unsubscribes in a `finally` around `model.generate(...)` to avoid leaking subscribers across calls. The score buffer is pre-allocated to `model.config.max_position_embeddings` per layer in fp32 on the attn device.
+- `meta.json` gains an attempt-level `kv_policy` block reflecting the active config. The `prefill_score_bias` field is `true` when `h2o` runs with `prefill_mode="sampled"` (the bus only sees LayerCapturer-sampled prefill rows, so the score accumulator is biased toward those rows). Always `false` for `random` / `streaming` / `none`.
 
 ### Provider System
 

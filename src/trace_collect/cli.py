@@ -103,16 +103,18 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--kv-policy",
-        choices=["none", "random", "streaming"],
+        choices=["none", "random", "streaming", "h2o"],
         default="none",
         help=(
             "KV cache eviction policy used by the HF recording backend. "
             "`none` (default) keeps stock DynamicCache behaviour. `random` "
             "evicts uniformly when key_len > budget. `streaming` keeps "
             "`--kv-sink-size` head + `--kv-recent-window` tail tokens "
-            "(StreamingLLM, naive variant — no RoPE re-rotation). H2O ships "
-            "in step 6 and is intentionally not listed so unknown values "
-            "fail at parse-time."
+            "(StreamingLLM, naive variant — no RoPE re-rotation). `h2o` "
+            "(Heavy-Hitter Oracle, arXiv:2306.14048) keeps sink + recent + "
+            "top-k positions ranked by accumulated post-softmax attention; "
+            "subscribes to the per-provider AttentionBus to share the "
+            "softmax tensor with LayerCapturer (no double-softmax)."
         ),
     )
     parser.add_argument(
@@ -121,8 +123,10 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Per-layer KV budget (kept tokens). Required when --kv-policy is "
-            "not `none`. For `streaming`, acts as the trigger threshold and "
-            "must be >= --kv-sink-size + --kv-recent-window."
+            "not `none`. For `streaming` and `h2o`, acts as the trigger "
+            "threshold and must be >= --kv-sink-size + --kv-recent-window. "
+            "For `h2o`, post-eviction layer length is exactly `budget`; the "
+            "middle slot count is `budget - sink_size - recent_window`."
         ),
     )
     parser.add_argument(
@@ -130,9 +134,9 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=4,
         help=(
-            "StreamingLLM sink-prefix length (tokens kept from the start of "
-            "the sequence). Default 4 matches the paper's §3 ablation. "
-            "Ignored by `random`."
+            "Sink-prefix length (head tokens kept) for `streaming` and `h2o`. "
+            "Default 4 matches StreamingLLM's §3 ablation. Ignored by "
+            "`random`."
         ),
     )
     parser.add_argument(
@@ -140,8 +144,18 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=256,
         help=(
-            "StreamingLLM recent-window length (tokens kept from the tail). "
-            "Default 256. Ignored by `random`."
+            "Recent-window length (tail tokens kept) for `streaming` and "
+            "`h2o`. Default 256. Ignored by `random`."
+        ),
+    )
+    parser.add_argument(
+        "--kv-aggregate",
+        choices=["sum"],
+        default="sum",
+        help=(
+            "H2O score aggregation across queries. Only `sum` is implemented "
+            "(paper default). `mean`/`ema` will be added via yaml in a future "
+            "step. Ignored by `random` and `streaming`."
         ),
     )
     parser.add_argument(

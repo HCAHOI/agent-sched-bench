@@ -215,6 +215,10 @@ class LayerCapturer:
         # Bus is per-provider and lives across calls. None preserves the
         # pre-step-5 behaviour byte-for-byte (no publish at all).
         self._attention_bus: "AttentionBus | None" = attention_bus
+        # Attempt-level KV policy summary written to meta.json on
+        # `finish_attempt`. Provider sets via `set_kv_policy_meta(...)`
+        # before `start_attempt`. Default None = `--kv-policy none`.
+        self._kv_policy_meta: dict[str, Any] | None = None
 
         n_attention_modules = 0
         n_gate_modules = 0
@@ -251,6 +255,15 @@ class LayerCapturer:
         """Swap the KV recorder. Caller (provider) drives the per-call lifecycle."""
         self._kv_recorder = recorder
 
+    def set_kv_policy_meta(self, meta: dict[str, Any] | None) -> None:
+        """Stash the attempt-level KV policy summary for `meta.json`.
+
+        Provider populates this in `start_attempt` (or just before) so that
+        `kv_policy.prefill_score_bias` is recorded once per attempt rather
+        than per call. Pass None for `--kv-policy none`.
+        """
+        self._kv_policy_meta = dict(meta) if meta is not None else None
+
     def start_attempt(self, recordings_dir: Path) -> None:
         self._attempt_dir = Path(recordings_dir)
         self._attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -259,6 +272,8 @@ class LayerCapturer:
             "recording_config": asdict(self.config),
             "iters": [],
         }
+        if getattr(self, "_kv_policy_meta", None) is not None:
+            self._meta["kv_policy"] = dict(self._kv_policy_meta)
 
     def finish_attempt(self, trace_path: Path | None = None) -> None:
         if self._attempt_dir is None:

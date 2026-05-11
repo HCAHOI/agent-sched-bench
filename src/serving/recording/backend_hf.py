@@ -427,6 +427,41 @@ class HFRecordingProvider(LLMProvider):
             model_summary=self._model_summary(),
             attention_bus=self._attention_bus,
         )
+        # Attempt-level KV policy summary lands in meta.json. The
+        # `prefill_score_bias` flag is the explicit warning that H2O's score
+        # accumulator only saw the LayerCapturer-sampled prefill rows
+        # (plan E12 — recording bias). False for non-h2o policies; analysis
+        # code can branch on it.
+        self.capturer.set_kv_policy_meta(self._kv_policy_meta_payload())
+
+    def _kv_policy_meta_payload(self) -> dict[str, Any] | None:
+        """Build the attempt-level kv_policy block for meta.json.
+
+        Returns None when no eviction policy is configured. Otherwise mirrors
+        the serialisable subset of EvictionPolicyConfig plus the
+        `prefill_score_bias` flag — True when H2O is paired with the sampled
+        prefill mode (the bus only sees the LayerCapturer-sampled query rows
+        during prefill), False otherwise.
+        """
+        cfg = self._eviction_config
+        if cfg is None:
+            return None
+        prefill_score_bias = (
+            cfg.name == "h2o" and getattr(cfg, "prefill_mode", "sampled") == "sampled"
+        )
+        return {
+            "name": cfg.name,
+            "budget": int(cfg.budget) if cfg.budget is not None else None,
+            "sink_size": int(cfg.sink_size),
+            "recent_window": int(cfg.recent_window),
+            "heavy_ratio": float(cfg.heavy_ratio),
+            "aggregate": str(cfg.aggregate),
+            "ema_decay": float(cfg.ema_decay),
+            "seed": int(cfg.seed),
+            "record": bool(cfg.record),
+            "prefill_mode": str(cfg.prefill_mode),
+            "prefill_score_bias": bool(prefill_score_bias),
+        }
 
     def get_default_model(self) -> str:
         return self.default_model
@@ -556,28 +591,53 @@ class HFRecordingProvider(LLMProvider):
             # back to its stock DynamicCache and behaves byte-identically to
             # the pre-step-3 path.
             kv_recorder: KVEvictionRecorder | None = None
+            cache_obj: Any = None
             if self._eviction_config is not None:
                 kv_recorder = KVEvictionRecorder(
                     call_idx=call_idx,
                     policy_name=self._eviction_config.name,
                 )
                 self.capturer.set_kv_recorder(kv_recorder)
-                generation_kwargs["past_key_values"] = build_eviction_cache(
+                cache_obj = build_eviction_cache(
                     self._eviction_config,
                     num_layers=int(self.model.config.num_hidden_layers),
                     recorder=kv_recorder,
+                    attention_bus=self._attention_bus,
+                    max_position_embeddings=int(
+                        self.model.config.max_position_embeddings
+                    ),
                 )
+                generation_kwargs["past_key_values"] = cache_obj
             else:
                 # Make sure a stale recorder from a prior call cannot bleed in.
                 self.capturer.set_kv_recorder(None)
-            with self._torch.no_grad(), self.capturer.recording_session(
-                call_idx=call_idx,
-                segments=segments,
-                input_token_count=input_token_count,
-            ):
-                sequences = self.model.generate(**generation_kwargs)
-                output_ids = sequences[0, input_token_count:].detach().cpu().tolist()
-                self.capturer.flush(output_token_ids=output_ids)
+            try:
+                with self._torch.no_grad(), self.capturer.recording_session(
+                    call_idx=call_idx,
+                    segments=segments,
+                    input_token_count=input_token_count,
+                ):
+                    sequences = self.model.generate(**generation_kwargs)
+                    output_ids = sequences[0, input_token_count:].detach().cpu().tolist()
+                    self.capturer.flush(output_token_ids=output_ids)
+            finally:
+                # Eviction caches that subscribe to the AttentionBus (H2O)
+                # MUST unsubscribe at end-of-call. Otherwise each subsequent
+                # `chat()` would (a) leak the prior cache via the bus's
+                # consumer list and (b) cause every observe() to fan out to
+                # every dead-but-still-subscribed cache. We drop only the
+                # current cache so manually-attached subscribers (none today)
+                # are untouched.
+                if cache_obj is not None and getattr(
+                    cache_obj, "requires_attention", lambda: False
+                )():
+                    try:
+                        self._attention_bus.unsubscribe(cache_obj)
+                    except ValueError:
+                        # Already unsubscribed (defensive); the cache may
+                        # have raised before subscribing in some failure
+                        # paths.
+                        pass
             text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
             return text, output_ids
 

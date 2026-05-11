@@ -37,9 +37,15 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
         )
     sink_size = getattr(args, "kv_sink_size", None)
     recent_window = getattr(args, "kv_recent_window", None)
+    aggregate = getattr(args, "kv_aggregate", None)
     kwargs: dict[str, Any] = {"name": policy, "budget": int(budget)}
     if sink_size is not None:
         kwargs["sink_size"] = int(sink_size)
     if recent_window is not None:
         kwargs["recent_window"] = int(recent_window)
+    if aggregate is not None:
+        # `aggregate` is h2o-specific; for streaming/random the dataclass
+        # default ("sum") is irrelevant. Forwarding unconditionally keeps the
+        # adapter narrow.
+        kwargs["aggregate"] = str(aggregate)
     return EvictionPolicyConfig(**kwargs)

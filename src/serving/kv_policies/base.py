@@ -102,9 +102,17 @@ class BaseEvictionCache(DynamicCache):
         decision = self._decide_evict(layer_idx, pre_len)
         if decision.evict_indices:
             keys, values = self._physically_drop(layer_idx, decision.keep_indices)
+            # Subclasses with per-key-position state (H2O score buffer) need to
+            # compact that state in lockstep with the K/V drop. Default no-op
+            # for stateless policies (streaming, random).
+            self._post_evict_hook(layer_idx, decision)
         post_len = int(keys.shape[-2])
 
         if self.recorder is not None and self.config.record:
+            # `policy_state` is the carry slot for policy-specific diagnostics
+            # the recorder writes to npz; H2O fills `score_topk_index/value`,
+            # other policies leave it None and the recorder fills sentinels.
+            policy_state = decision.policy_state or {}
             self.recorder.append(
                 step=step,
                 layer=int(layer_idx),
@@ -115,10 +123,20 @@ class BaseEvictionCache(DynamicCache):
                 kept_indices=list(decision.keep_indices),
                 evicted_indices=list(decision.evict_indices),
                 evict_reason=decision.reason,
-                score_topk_index=None,
-                score_topk_value=None,
+                score_topk_index=policy_state.get("score_topk_index"),
+                score_topk_value=policy_state.get("score_topk_value"),
             )
         return keys, values
+
+    def _post_evict_hook(self, layer_idx: int, decision: EvictionDecision) -> None:
+        """Hook fired after `_physically_drop` succeeds.
+
+        Default: no-op. Subclasses with per-key-position state (H2O's score
+        buffer) override to compact that state by `decision.keep_indices` so
+        subsequent `observe()` calls write into the right slots.
+        """
+        del layer_idx, decision
+        return
 
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         """Return keep/evict decision for `layer_idx` given current `key_len`.
