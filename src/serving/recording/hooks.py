@@ -26,6 +26,7 @@ from serving.recording.recording import (
 if TYPE_CHECKING:
     # Lazy: avoid forcing transformers import via kv_policies at module load.
     from serving.kv_policies.recorder import KVEvictionRecorder
+    from serving.recording.attention_bus import AttentionBus
 
 
 _LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)\.self_attn$")
@@ -194,6 +195,7 @@ class LayerCapturer:
         config: RecordingConfig,
         model_summary: dict[str, Any],
         kv_recorder: "KVEvictionRecorder | None" = None,
+        attention_bus: "AttentionBus | None" = None,
     ) -> None:
         self.config = config
         self.model_summary = dict(model_summary)
@@ -210,6 +212,9 @@ class LayerCapturer:
         # `recording_session()`. LayerCapturer only flushes whatever the
         # current recorder buffered when the session ends.
         self._kv_recorder: "KVEvictionRecorder | None" = kv_recorder
+        # Bus is per-provider and lives across calls. None preserves the
+        # pre-step-5 behaviour byte-for-byte (no publish at all).
+        self._attention_bus: "AttentionBus | None" = attention_bus
 
         n_attention_modules = 0
         n_gate_modules = 0
@@ -426,6 +431,7 @@ class LayerCapturer:
             key_states=key_states,
             row_indices=row_indices,
             query_positions=query_positions,
+            layer=layer,
         )
         token_ids = self._token_ids_for_key_len(key_len).to(device=attn_rows.device)
         n_segments = self._session["generated_segment_id"] + 1
@@ -484,6 +490,7 @@ class LayerCapturer:
         key_states: Any,
         row_indices: list[int],
         query_positions: list[int],
+        layer: int,
     ) -> Any:
         import torch
 
@@ -524,6 +531,32 @@ class LayerCapturer:
             key_len=key_len,
         )
         attn = torch.softmax(scores, dim=-1)
+        # Publish post-softmax, pre-reshape: shape is the documented
+        # (B, num_q_heads, n_query_rows, key_len) the bus contract requires.
+        # H2O (step 6) consumes this exact tensor; the capturer's own reduce
+        # below stays unchanged so attention.npz bytes don't move when no
+        # subscriber is attached.
+        if self._attention_bus is not None:
+            phase = (
+                "decode"
+                if (
+                    int(hidden_states.shape[-2]) == 1
+                    and self._session is not None
+                    and key_len > int(self._session["input_token_count"])
+                )
+                else "prefill"
+            )
+            query_pos_tensor = torch.as_tensor(
+                query_positions, dtype=torch.long, device=attn.device
+            )
+            self._attention_bus.publish(
+                layer=layer,
+                attn=attn,
+                query_positions=query_pos_tensor,
+                key_len=key_len,
+                phase=phase,
+                suspended=self._attention_suspended > 0,
+            )
         return attn[0].reshape(n_query_heads * len(row_indices), key_len)
 
     def _apply_attention_mask(

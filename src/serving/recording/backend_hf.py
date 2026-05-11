@@ -26,6 +26,7 @@ from agents.openclaw.providers.base import (
 from serving.kv_policies import build_eviction_cache
 from serving.kv_policies.base import EvictionPolicyConfig
 from serving.kv_policies.recorder import KVEvictionRecorder
+from serving.recording.attention_bus import AttentionBus
 from serving.recording.hooks import LayerCapturer
 from serving.recording.recording import RecordingConfig, segment_role
 
@@ -415,10 +416,16 @@ class HFRecordingProvider(LLMProvider):
         self.model.eval()
         self._torch = torch
         self._captures_router_logits = self._model_has_router_logits()
+        # Per-provider AttentionBus: lives across calls so future strategy
+        # code (H2O in step 6) can subscribe at construction time. Step 5
+        # leaves it with zero subscribers, which makes it a no-op dispatch
+        # and preserves attention.npz byte-equality vs the pre-step-5 path.
+        self._attention_bus = AttentionBus()
         self.capturer = LayerCapturer(
             self.model,
             config=self.config,
             model_summary=self._model_summary(),
+            attention_bus=self._attention_bus,
         )
 
     def get_default_model(self) -> str:

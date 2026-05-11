@@ -53,6 +53,8 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--kv-sink-size` | no | `4` | StreamingLLM sink-prefix length (head tokens preserved). Ignored by `random`. |
 | `--kv-recent-window` | no | `256` | StreamingLLM recent-window length (tail tokens preserved). Ignored by `random`. |
 
+Internal note: `LayerCapturer` publishes the post-softmax attention tensor on a per-provider `AttentionBus` (`src/serving/recording/attention_bus.py`). Step 5 leaves the bus subscriber-less so no behaviour changes; H2O (step 6) subscribes and consumes the same tensor without re-running softmax.
+
 ### Provider System
 
 Defined in `src/llm_call/providers.py`. Resolution: CLI `--api-key` > env var > error.
