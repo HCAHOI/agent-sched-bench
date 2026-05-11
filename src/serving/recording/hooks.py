@@ -8,7 +8,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 import numpy as np
 
@@ -22,6 +22,10 @@ from serving.recording.recording import (
     select_query_positions,
     token_segment_ids,
 )
+
+if TYPE_CHECKING:
+    # Lazy: avoid forcing transformers import via kv_policies at module load.
+    from serving.kv_policies.recorder import KVEvictionRecorder
 
 
 _LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)\.self_attn$")
@@ -189,6 +193,7 @@ class LayerCapturer:
         *,
         config: RecordingConfig,
         model_summary: dict[str, Any],
+        kv_recorder: "KVEvictionRecorder | None" = None,
     ) -> None:
         self.config = config
         self.model_summary = dict(model_summary)
@@ -200,6 +205,11 @@ class LayerCapturer:
         self._routing_records: list[dict[str, Any]] = []
         self._meta: dict[str, Any] = {}
         self._attention_suspended = 0
+        # KV eviction recorder is per-call; lifecycle is owned by the caller
+        # (HFRecordingProvider in step 3+) which swaps it before each
+        # `recording_session()`. LayerCapturer only flushes whatever the
+        # current recorder buffered when the session ends.
+        self._kv_recorder: "KVEvictionRecorder | None" = kv_recorder
 
         n_attention_modules = 0
         n_gate_modules = 0
@@ -227,6 +237,14 @@ class LayerCapturer:
         for handle in self._handles:
             handle.remove()
         self._handles = []
+
+    def kv_recorder(self) -> "KVEvictionRecorder | None":
+        """Currently-attached KV eviction recorder, or None."""
+        return self._kv_recorder
+
+    def set_kv_recorder(self, recorder: "KVEvictionRecorder | None") -> None:
+        """Swap the KV recorder. Caller (provider) drives the per-call lifecycle."""
+        self._kv_recorder = recorder
 
     def start_attempt(self, recordings_dir: Path) -> None:
         self._attempt_dir = Path(recordings_dir)
@@ -702,6 +720,10 @@ class LayerCapturer:
         )
         self._write_attention_npz(iter_dir / "attention.npz", len(segments))
         self._write_routing_npz(iter_dir / "routing.npz", len(segments))
+        if self._kv_recorder is not None and self._kv_recorder.n_records() > 0:
+            # KV eviction npz lives alongside attention.npz / routing.npz so
+            # downstream loaders can join on (call_idx, layer, decode_step).
+            self._kv_recorder.write(iter_dir / "kv_eviction.npz")
         self._meta["iters"].append(
             {
                 "call_idx": self._session["call_idx"],
