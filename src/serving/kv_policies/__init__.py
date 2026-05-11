@@ -1,6 +1,6 @@
 """KV cache eviction policies for the HF recording path.
 
-Step 3 wires `random`. `streaming` and `h2o` ship in step 4 / step 6.
+Steps 3 + 4 wire `random` + `streaming`. `h2o` ships in step 6.
 """
 
 from __future__ import annotations
@@ -31,13 +31,17 @@ def build_eviction_cache(
         from serving.kv_policies.random_evict import RandomEvictCache
 
         return RandomEvictCache(config, num_layers, recorder=recorder)
+    if name == "streaming":
+        from serving.kv_policies.streaming import StreamingLLMCache
+
+        return StreamingLLMCache(config, num_layers, recorder=recorder)
     if name == "none":
         raise ValueError(
             "build_eviction_cache should not be called when policy is disabled "
             "(config.name == 'none'); gate on `eviction_config is not None`"
         )
     raise NotImplementedError(
-        f"policy {name!r} not yet registered (step 4+/6 adds streaming/h2o)"
+        f"policy {name!r} not yet registered (step 6 adds h2o)"
     )
 
 

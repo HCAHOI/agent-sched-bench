@@ -21,6 +21,11 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
     pattern-match on `if eviction_config is not None`. Validates that a
     non-none policy carries a positive budget; emits an argparse error so the
     failure message lands in the same channel as other CLI mistakes.
+
+    `sink_size` / `recent_window` are forwarded for the `streaming` policy;
+    `random` ignores them. The dataclass validates the streaming-specific
+    relationship (`budget >= sink_size + recent_window`) at cache construction
+    time, not here, so that yaml-driven configs (step 8) hit the same gate.
     """
     policy = getattr(args, "kv_policy", "none")
     if policy == "none":
@@ -30,4 +35,11 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
         raise argparse.ArgumentTypeError(
             f"--kv-policy {policy!r} requires --kv-budget > 0 (got {budget!r})"
         )
-    return EvictionPolicyConfig(name=policy, budget=int(budget))
+    sink_size = getattr(args, "kv_sink_size", None)
+    recent_window = getattr(args, "kv_recent_window", None)
+    kwargs: dict[str, Any] = {"name": policy, "budget": int(budget)}
+    if sink_size is not None:
+        kwargs["sink_size"] = int(sink_size)
+    if recent_window is not None:
+        kwargs["recent_window"] = int(recent_window)
+    return EvictionPolicyConfig(**kwargs)

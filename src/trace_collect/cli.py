@@ -103,14 +103,16 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--kv-policy",
-        choices=["none", "random"],
+        choices=["none", "random", "streaming"],
         default="none",
         help=(
             "KV cache eviction policy used by the HF recording backend. "
             "`none` (default) keeps stock DynamicCache behaviour. `random` "
-            "evicts uniformly when key_len > budget. Streaming / H2O ship in "
-            "later steps and are intentionally not listed here so unknown "
-            "values fail at parse-time."
+            "evicts uniformly when key_len > budget. `streaming` keeps "
+            "`--kv-sink-size` head + `--kv-recent-window` tail tokens "
+            "(StreamingLLM, naive variant — no RoPE re-rotation). H2O ships "
+            "in step 6 and is intentionally not listed so unknown values "
+            "fail at parse-time."
         ),
     )
     parser.add_argument(
@@ -119,7 +121,27 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Per-layer KV budget (kept tokens). Required when --kv-policy is "
-            "not `none`."
+            "not `none`. For `streaming`, acts as the trigger threshold and "
+            "must be >= --kv-sink-size + --kv-recent-window."
+        ),
+    )
+    parser.add_argument(
+        "--kv-sink-size",
+        type=int,
+        default=4,
+        help=(
+            "StreamingLLM sink-prefix length (tokens kept from the start of "
+            "the sequence). Default 4 matches the paper's §3 ablation. "
+            "Ignored by `random`."
+        ),
+    )
+    parser.add_argument(
+        "--kv-recent-window",
+        type=int,
+        default=256,
+        help=(
+            "StreamingLLM recent-window length (tokens kept from the tail). "
+            "Default 256. Ignored by `random`."
         ),
     )
     parser.add_argument(

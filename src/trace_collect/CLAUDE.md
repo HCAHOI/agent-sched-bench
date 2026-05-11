@@ -48,8 +48,10 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--api-base` | no | from provider | Override API base URL |
 | `--api-key` | no | from env | Override API key |
 | `--record-internals` | no | off | OpenClaw-only: record sampled HF attention/MoE artifacts under each attempt's `recordings/`; forces model request concurrency to 1 |
-| `--kv-policy` | no | `none` | KV cache eviction policy for the HF recording backend. `none` (default) = stock `DynamicCache`. `random` = uniform random over-budget eviction (step 3 baseline). Streaming/H2O ship in later steps and are intentionally not in choices yet. Requires `--record-internals`. |
-| `--kv-budget` | when `--kv-policy != none` | — | Per-layer KV budget in tokens. Required and must be `> 0` whenever `--kv-policy` is set. Each call writes a `kv_eviction.npz` under `recordings/iter_<call>/` with the keep/evict audit. |
+| `--kv-policy` | no | `none` | KV cache eviction policy for the HF recording backend. `none` (default) = stock `DynamicCache`. `random` = uniform random over-budget eviction (step 3 baseline). `streaming` = StreamingLLM (sink prefix + recent window, naive variant — no RoPE re-rotation). H2O ships in step 6. Requires `--record-internals`. |
+| `--kv-budget` | when `--kv-policy != none` | — | Per-layer KV budget in tokens. Required and must be `> 0` whenever `--kv-policy` is set. For `streaming`, acts as the **trigger threshold** (no eviction while `key_len <= budget`); must be `>= --kv-sink-size + --kv-recent-window`. Each call writes a `kv_eviction.npz` under `recordings/iter_<call>/` with the keep/evict audit. |
+| `--kv-sink-size` | no | `4` | StreamingLLM sink-prefix length (head tokens preserved). Ignored by `random`. |
+| `--kv-recent-window` | no | `256` | StreamingLLM recent-window length (tail tokens preserved). Ignored by `random`. |
 
 ### Provider System
 
