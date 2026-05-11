@@ -40,6 +40,7 @@ from trace_collect.runtime.task_container import (
 
 if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
+    from serving.kv_policies.base import EvictionPolicyConfig
 
 logger = logging.getLogger(__name__)
 _DOCKER_HOST_GATEWAY = "172.17.0.1"
@@ -534,6 +535,7 @@ async def collect_traces(
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
     record_internals: bool = False,
+    eviction_config: "EvictionPolicyConfig | None" = None,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     if record_internals and scaffold != "openclaw":
@@ -557,7 +559,9 @@ async def collect_traces(
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
     recording_provider = (
-        HFRecordingProvider(default_model=model) if record_internals else None
+        HFRecordingProvider(default_model=model, eviction_config=eviction_config)
+        if record_internals
+        else None
     )
     recording_server = (
         HFRecordingServer(

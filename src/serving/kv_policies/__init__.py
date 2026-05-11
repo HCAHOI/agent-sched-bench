@@ -1,12 +1,9 @@
 """KV cache eviction policies for the HF recording path.
 
-Step 2 (scaffolding only) — `build_eviction_cache` is intentionally a stub.
-Step 3+ wires concrete policies (random, streaming, h2o) into the registry.
+Step 3 wires `random`. `streaming` and `h2o` ship in step 4 / step 6.
 """
 
 from __future__ import annotations
-
-from typing import TYPE_CHECKING
 
 from serving.kv_policies.base import (
     BaseEvictionCache,
@@ -15,18 +12,32 @@ from serving.kv_policies.base import (
 )
 from serving.kv_policies.recorder import KVEvictionRecorder
 
-if TYPE_CHECKING:
-    pass
-
 
 def build_eviction_cache(
     config: EvictionPolicyConfig,
     num_layers: int,
     recorder: KVEvictionRecorder | None = None,
 ) -> BaseEvictionCache:
-    """Factory for the configured eviction cache. Populated in step 3+."""
+    """Factory for the configured eviction cache.
+
+    Callers must gate on `config is not None` upstream — the `"none"` policy
+    is a CLI-layer concept (no cache subclass needed) so reaching this factory
+    with `name="none"` indicates a wiring bug, not a runtime fallback.
+    """
+    name = config.name
+    if name == "random":
+        # Local import keeps `transformers.cache_utils` import out of module
+        # load when no policy is in use.
+        from serving.kv_policies.random_evict import RandomEvictCache
+
+        return RandomEvictCache(config, num_layers, recorder=recorder)
+    if name == "none":
+        raise ValueError(
+            "build_eviction_cache should not be called when policy is disabled "
+            "(config.name == 'none'); gate on `eviction_config is not None`"
+        )
     raise NotImplementedError(
-        f"policy registry empty (requested {config.name!r}); step 3+ will populate"
+        f"policy {name!r} not yet registered (step 4+/6 adds streaming/h2o)"
     )
 
 

@@ -23,6 +23,9 @@ from agents.openclaw.providers.base import (
     LLMResponse,
     ToolCallRequest,
 )
+from serving.kv_policies import build_eviction_cache
+from serving.kv_policies.base import EvictionPolicyConfig
+from serving.kv_policies.recorder import KVEvictionRecorder
 from serving.recording.hooks import LayerCapturer
 from serving.recording.recording import RecordingConfig, segment_role
 
@@ -376,6 +379,7 @@ class HFRecordingProvider(LLMProvider):
         config: RecordingConfig | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
+        eviction_config: EvictionPolicyConfig | None = None,
     ) -> None:
         super().__init__(api_key=api_key, api_base=api_base)
         self.default_model = default_model
@@ -383,6 +387,10 @@ class HFRecordingProvider(LLMProvider):
         self.generation = GenerationSettings(temperature=0.1, max_tokens=4096)
         self._call_idx = 0
         self._chat_lock = threading.Lock()
+        # Per-call cache builds happen inside _chat_locked; storing the config
+        # here keeps the constructor side-effect-free w.r.t. transformers
+        # `Cache` instantiation.
+        self._eviction_config = eviction_config
 
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -536,6 +544,25 @@ class HFRecordingProvider(LLMProvider):
             }
             if temperature > 0:
                 generation_kwargs["temperature"] = float(temperature)
+            # KV eviction injection: build a fresh per-call cache + recorder
+            # only when a policy is configured. When None, generate() falls
+            # back to its stock DynamicCache and behaves byte-identically to
+            # the pre-step-3 path.
+            kv_recorder: KVEvictionRecorder | None = None
+            if self._eviction_config is not None:
+                kv_recorder = KVEvictionRecorder(
+                    call_idx=call_idx,
+                    policy_name=self._eviction_config.name,
+                )
+                self.capturer.set_kv_recorder(kv_recorder)
+                generation_kwargs["past_key_values"] = build_eviction_cache(
+                    self._eviction_config,
+                    num_layers=int(self.model.config.num_hidden_layers),
+                    recorder=kv_recorder,
+                )
+            else:
+                # Make sure a stale recorder from a prior call cannot bleed in.
+                self.capturer.set_kv_recorder(None)
             with self._torch.no_grad(), self.capturer.recording_session(
                 call_idx=call_idx,
                 segments=segments,

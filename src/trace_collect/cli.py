@@ -102,6 +102,27 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--kv-policy",
+        choices=["none", "random"],
+        default="none",
+        help=(
+            "KV cache eviction policy used by the HF recording backend. "
+            "`none` (default) keeps stock DynamicCache behaviour. `random` "
+            "evicts uniformly when key_len > budget. Streaming / H2O ship in "
+            "later steps and are intentionally not listed here so unknown "
+            "values fail at parse-time."
+        ),
+    )
+    parser.add_argument(
+        "--kv-budget",
+        type=int,
+        default=None,
+        help=(
+            "Per-layer KV budget (kept tokens). Required when --kv-policy is "
+            "not `none`."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -351,6 +372,16 @@ def _run_collect(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    # KV eviction policies live in the HF recording path; they are meaningless
+    # without --record-internals (no HF backend = no Cache subclass injection
+    # site).
+    if args.kv_policy != "none" and not args.record_internals:
+        print(
+            "ERROR: --kv-policy requires --record-internals "
+            "(KV eviction only applies to the HF recording backend).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if args.record_internals:
         os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
 
@@ -374,7 +405,10 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     from agents.benchmarks import get_benchmark_class
     from agents.benchmarks.base import BenchmarkConfig
+    from serving.kv_policies.config import load_eviction_config
     from trace_collect.collector import collect_traces
+
+    eviction_config = load_eviction_config(args)
 
     benchmark_yaml = REPO_ROOT / "configs" / "benchmarks" / f"{args.benchmark}.yaml"
     if not benchmark_yaml.exists():
@@ -403,6 +437,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             prompt_template=args.prompt_template,
             min_free_disk_gb=args.min_free_disk_gb,
             record_internals=args.record_internals,
+            eviction_config=eviction_config,
         )
     )
     print(f"Traces written to: {run_dir}/")
