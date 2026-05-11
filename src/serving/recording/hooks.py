@@ -219,6 +219,12 @@ class LayerCapturer:
         # `finish_attempt`. Provider sets via `set_kv_policy_meta(...)`
         # before `start_attempt`. Default None = `--kv-policy none`.
         self._kv_policy_meta: dict[str, Any] | None = None
+        # Optional override for `config.max_prefill_queries`. None = use the
+        # frozen RecordingConfig value. Step 8 prefill_mode="full" sets this
+        # to +inf via `unbounded_prefill_queries()` so every query row is
+        # observed during prefill (needed by H2O when sampled prefill biases
+        # the score accumulator).
+        self._max_prefill_queries_override: int | None = None
 
         n_attention_modules = 0
         n_gate_modules = 0
@@ -365,6 +371,27 @@ class LayerCapturer:
         finally:
             self._attention_suspended -= 1
 
+    @contextmanager
+    def unbounded_prefill_queries(self) -> Iterator[None]:
+        """Temporarily disable the prefill query-row sample cap.
+
+        Step 8 prefill_mode="full" wraps `model.generate(...)` with this so
+        H2O sees every prefill query row (no `select_query_positions` cap).
+        Restores the previous override on exit; nesting is supported by
+        stashing the prior value in a local. Must NOT be used when no
+        recording session is active — the override is consulted only inside
+        the attention hook.
+        """
+        previous = self._max_prefill_queries_override
+        # `2**31 - 1` is what `select_query_positions` treats as "no cap"
+        # since `query_len <= max_queries` short-circuits to the identity
+        # range. Practical sequence lengths sit comfortably below this.
+        self._max_prefill_queries_override = 2_147_483_647
+        try:
+            yield
+        finally:
+            self._max_prefill_queries_override = previous
+
     def _hook(self, layer: int):
         def capture(
             module: Any,
@@ -419,10 +446,18 @@ class LayerCapturer:
 
         assert self._session is not None
         query_len = int(hidden_states.shape[-2])
+        # Override path (step 8): when `unbounded_prefill_queries()` is
+        # active, treat every query row as sampled. Cheaper than mutating
+        # the frozen RecordingConfig and immediately reverts on context exit.
+        max_queries = (
+            self._max_prefill_queries_override
+            if self._max_prefill_queries_override is not None
+            else self.config.max_prefill_queries
+        )
         row_indices = (
             [0]
             if query_len == 1
-            else select_query_positions(query_len, self.config.max_prefill_queries)
+            else select_query_positions(query_len, max_queries)
         )
         key_states = self._key_states(
             module=module,

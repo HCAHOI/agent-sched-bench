@@ -274,17 +274,37 @@ def test_h2o_validates_budget_floor() -> None:
         )
 
 
-def test_h2o_unimplemented_aggregates_raise() -> None:
+def test_h2o_unknown_aggregate_raises() -> None:
+    """`sum`, `mean`, `ema` are wired (step 8); anything else must raise."""
     bus = AttentionBus()
-    for agg in ("mean", "ema"):
-        with pytest.raises(NotImplementedError, match="aggregate="):
+    with pytest.raises(ValueError, match="unsupported"):
+        H2OCache(
+            EvictionPolicyConfig(
+                name="h2o",
+                budget=4,
+                sink_size=1,
+                recent_window=1,
+                aggregate="bogus",  # type: ignore[arg-type]
+            ),
+            num_layers=2,
+            attention_bus=bus,
+            max_position_embeddings=64,
+        )
+
+
+def test_h2o_ema_decay_must_be_in_range() -> None:
+    """ema_decay <= 0 or >= 1 makes the EMA degenerate; reject loudly."""
+    bus = AttentionBus()
+    for bad in (0.0, 1.0, -0.1, 1.5):
+        with pytest.raises(ValueError, match="ema_decay"):
             H2OCache(
                 EvictionPolicyConfig(
                     name="h2o",
                     budget=4,
                     sink_size=1,
                     recent_window=1,
-                    aggregate=agg,
+                    aggregate="ema",
+                    ema_decay=bad,
                 ),
                 num_layers=2,
                 attention_bus=bus,
@@ -372,6 +392,165 @@ def test_h2o_decide_evict_with_stale_middle_raises() -> None:
     )
     with pytest.raises(RuntimeError, match="< middle_end"):
         cache._decide_evict(layer_idx=0, key_len=10)
+
+
+# ---------------------------------------------------------------------------
+# Step 8: aggregate=mean and aggregate=ema correctness.
+# ---------------------------------------------------------------------------
+
+
+def _make_cache_with_aggregate(
+    aggregate: str,
+    *,
+    ema_decay: float = 0.9,
+    budget: int = 4,
+    sink_size: int = 1,
+    recent_window: int = 1,
+    max_position_embeddings: int = 32,
+) -> tuple[H2OCache, AttentionBus]:
+    bus = AttentionBus()
+    cfg = EvictionPolicyConfig(
+        name="h2o",
+        budget=budget,
+        sink_size=sink_size,
+        recent_window=recent_window,
+        aggregate=aggregate,
+        ema_decay=ema_decay,
+    )
+    cache = H2OCache(
+        cfg,
+        num_layers=2,
+        attention_bus=bus,
+        max_position_embeddings=max_position_embeddings,
+    )
+    return cache, bus
+
+
+def test_h2o_aggregate_mean_evicts_correctly() -> None:
+    """mean normalises by observation count, so a position observed once at
+    score=10 outranks a position observed twice at score=6 (mean 6.0).
+    """
+    cache, _bus = _make_cache_with_aggregate("mean", max_position_embeddings=16)
+    key_len = 10
+
+    # First observe: every middle slot sees one query row, peak at slot 7
+    # (score 6) and slot 3 (score 6). Counts everywhere = 1.
+    attn1 = _attn_with_peaks(
+        key_len=key_len, peak_positions=[3, 7], peak_value=6.0, n_query_rows=1
+    )
+    cache.observe(
+        layer=0,
+        attn=attn1,
+        query_positions=torch.tensor([0], dtype=torch.long),
+        key_len=key_len,
+        phase="prefill",
+    )
+    # Second observe: slot 3 only — sees 6 again. Now slot 3 has sum=12,
+    # count=2 -> mean 6.0; slot 7 still sum=6, count=2 -> mean 3.0.
+    # Slot 5 gets a fresh score 10 with count 2 -> mean 5.0.
+    attn2 = _attn_with_peaks(
+        key_len=key_len, peak_positions=[3, 5], peak_value=10.0, n_query_rows=1
+    )
+    # bring it to score 6 at slot 3, 10 at slot 5
+    attn2[..., 3] = 6.0
+    attn2[..., 5] = 10.0
+    cache.observe(
+        layer=0,
+        attn=attn2,
+        query_positions=torch.tensor([0], dtype=torch.long),
+        key_len=key_len,
+        phase="prefill",
+    )
+
+    # All middle slots seen twice (count = 2 across [0, key_len)).
+    counts = cache._score_counts[0]
+    assert counts is not None
+    assert int(counts[3]) == 2
+    assert int(counts[5]) == 2
+    assert int(counts[7]) == 2
+
+    # Decision: budget=4, sink=1, recent=1 -> n_heavy=2 over middle [1,9).
+    # Means: slot 3 = (6+6)/2 = 6.0 ; slot 5 = (0+10)/2 = 5.0 ;
+    # slot 7 = (6+0)/2 = 3.0 ; others = 0. Top-2 = {3, 5}.
+    decision = cache._decide_evict(layer_idx=0, key_len=key_len)
+    state = decision.policy_state
+    assert state is not None
+    assert set(state["score_topk_index"]) == {3, 5}, state
+    # keep = sink {0} + recent {9} + heavy {3, 5}
+    assert set(decision.keep_indices) == {0, 3, 5, 9}
+
+
+def test_h2o_aggregate_ema_decays() -> None:
+    """ema buffer applies decay on each observe; decision picks the most
+    recently heavy positions, not the historically dominant ones."""
+    cache, _bus = _make_cache_with_aggregate(
+        "ema", ema_decay=0.5, max_position_embeddings=16
+    )
+    key_len = 10
+
+    # Observe a tall historical peak at slot 3.
+    attn1 = _attn_with_peaks(
+        key_len=key_len, peak_positions=[3], peak_value=10.0, n_query_rows=1
+    )
+    cache.observe(
+        layer=0,
+        attn=attn1,
+        query_positions=torch.tensor([0], dtype=torch.long),
+        key_len=key_len,
+        phase="prefill",
+    )
+    buffer_after_first = cache._scores[0].clone()
+    assert float(buffer_after_first[3]) == pytest.approx(10.0, abs=1e-5)
+
+    # Observe a fresh peak at slot 7. With decay=0.5, slot 3 should fall
+    # to 5.0 and slot 7 should land at 10.0 (first-time write into a
+    # previously-zero slot still applies the decay path because the layer
+    # was already initialised; new addend wins).
+    attn2 = _attn_with_peaks(
+        key_len=key_len, peak_positions=[7], peak_value=10.0, n_query_rows=1
+    )
+    cache.observe(
+        layer=0,
+        attn=attn2,
+        query_positions=torch.tensor([0], dtype=torch.long),
+        key_len=key_len,
+        phase="prefill",
+    )
+    buf = cache._scores[0]
+    assert float(buf[3]) == pytest.approx(5.0, abs=1e-5)
+    assert float(buf[7]) == pytest.approx(10.0, abs=1e-5)
+
+    # Decision: budget=4, sink=1, recent=1 -> n_heavy=2; middle scores
+    # rank slot 7 (10.0) > slot 3 (5.0) > all others.
+    decision = cache._decide_evict(layer_idx=0, key_len=key_len)
+    state = decision.policy_state
+    assert state is not None
+    assert state["score_topk_index"][0] == 7  # heaviest first
+    assert set(state["score_topk_index"]) == {3, 7}
+
+
+def test_h2o_aggregate_ema_first_observe_is_assignment() -> None:
+    """First observe on a layer must skip the (1 - decay) scaling that a
+    naive `mul_(decay).add_(per_key)` would apply to the freshly-zero buffer.
+    Without the short-circuit the very first decision would be biased toward
+    zero by exactly `1 - ema_decay`.
+    """
+    cache, _bus = _make_cache_with_aggregate(
+        "ema", ema_decay=0.1, max_position_embeddings=8
+    )
+    attn = _attn_with_peaks(
+        key_len=4, peak_positions=[2], peak_value=10.0, n_query_rows=1
+    )
+    cache.observe(
+        layer=0,
+        attn=attn,
+        query_positions=torch.tensor([0], dtype=torch.long),
+        key_len=4,
+        phase="prefill",
+    )
+    # Should be the raw 10.0, NOT 0.1*0 + 10 = 10 (coincidence at zero start)
+    # nor 10*0.1 = 1.0 — verify it's exactly the per-key value.
+    assert float(cache._scores[0][2]) == pytest.approx(10.0, abs=1e-5)
 
 
 # ---------------------------------------------------------------------------

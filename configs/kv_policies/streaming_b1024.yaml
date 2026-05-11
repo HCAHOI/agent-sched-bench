@@ -1,0 +1,10 @@
+# StreamingLLM (Xiao et al. 2023, arXiv:2309.17453). Naive variant — no
+# RoPE re-rotation; cached K/V keep their original rotations and HF's
+# `cache_position` continues to advance with the absolute index.
+# `budget` is the trigger threshold: no eviction while key_len <= budget;
+# otherwise keep the first `sink_size` + last `recent_window` tokens.
+name: streaming
+budget: 1024
+sink_size: 4
+recent_window: 256
+record: true

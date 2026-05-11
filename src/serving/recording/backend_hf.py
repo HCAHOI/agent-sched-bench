@@ -593,10 +593,17 @@ class HFRecordingProvider(LLMProvider):
             kv_recorder: KVEvictionRecorder | None = None
             cache_obj: Any = None
             if self._eviction_config is not None:
-                kv_recorder = KVEvictionRecorder(
-                    call_idx=call_idx,
-                    policy_name=self._eviction_config.name,
-                )
+                # Step 9: `record=False` runs the policy but skips both the
+                # KVEvictionRecorder allocation AND the capturer.flush() npz
+                # write, isolating eviction overhead from recording overhead
+                # for the perf microbench. The cache itself still runs;
+                # `BaseEvictionCache.update` short-circuits the recorder
+                # branch when `config.record is False`.
+                if self._eviction_config.record:
+                    kv_recorder = KVEvictionRecorder(
+                        call_idx=call_idx,
+                        policy_name=self._eviction_config.name,
+                    )
                 self.capturer.set_kv_recorder(kv_recorder)
                 cache_obj = build_eviction_cache(
                     self._eviction_config,
@@ -611,12 +618,30 @@ class HFRecordingProvider(LLMProvider):
             else:
                 # Make sure a stale recorder from a prior call cannot bleed in.
                 self.capturer.set_kv_recorder(None)
+            # H2O + prefill_mode="full" — bypass the LayerCapturer sample
+            # cap so the H2O score accumulator observes every prefill query
+            # row (plan F + critical-correctness note "H2O accumulation").
+            # We use a `nullcontext` for all other configs so the indent
+            # block stays uniform.
+            from contextlib import nullcontext
+
+            cfg = self._eviction_config
+            wants_full_prefill = (
+                cfg is not None
+                and cfg.name == "h2o"
+                and getattr(cfg, "prefill_mode", "sampled") == "full"
+            )
+            prefill_ctx = (
+                self.capturer.unbounded_prefill_queries()
+                if wants_full_prefill
+                else nullcontext()
+            )
             try:
                 with self._torch.no_grad(), self.capturer.recording_session(
                     call_idx=call_idx,
                     segments=segments,
                     input_token_count=input_token_count,
-                ):
+                ), prefill_ctx:
                     sequences = self.model.generate(**generation_kwargs)
                     output_ids = sequences[0, input_token_count:].detach().cpu().tolist()
                     self.capturer.flush(output_token_ids=output_ids)

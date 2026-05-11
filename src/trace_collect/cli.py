@@ -150,12 +150,40 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--kv-aggregate",
-        choices=["sum"],
+        choices=["sum", "mean", "ema"],
         default="sum",
         help=(
-            "H2O score aggregation across queries. Only `sum` is implemented "
-            "(paper default). `mean`/`ema` will be added via yaml in a future "
-            "step. Ignored by `random` and `streaming`."
+            "H2O score aggregation across queries. `sum` (paper default) "
+            "accumulates raw mass; `mean` divides by the number of observed "
+            "queries per position; `ema` uses an exponential moving average "
+            "with `--kv-ema-decay` (yaml only). Ignored by `random` and "
+            "`streaming`."
+        ),
+    )
+    parser.add_argument(
+        "--kv-config",
+        type=str,
+        default=None,
+        help=(
+            "Optional YAML file under e.g. configs/kv_policies/ containing a "
+            "flat map of EvictionPolicyConfig fields (name, budget, sink_size, "
+            "recent_window, heavy_ratio, aggregate, ema_decay, seed, record, "
+            "prefill_mode). When set, the YAML supplies the base config and "
+            "any explicitly-passed --kv-* flag overrides the corresponding "
+            "yaml value. Mutually compatible with --kv-policy: yaml-name and "
+            "an explicit --kv-policy must agree (CLI wins on explicit set)."
+        ),
+    )
+    parser.add_argument(
+        "--kv-record",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "Whether to write `kv_eviction.npz` recordings. Default `on` "
+            "preserves the audit trail. `off` runs the policy but skips the "
+            "per-call recorder allocation and npz write — used by step 9 "
+            "perf microbench to isolate eviction overhead from recording "
+            "overhead. Meaningful only when --kv-policy != none."
         ),
     )
     parser.add_argument(
@@ -410,10 +438,13 @@ def _run_collect(args: argparse.Namespace) -> None:
         sys.exit(2)
     # KV eviction policies live in the HF recording path; they are meaningless
     # without --record-internals (no HF backend = no Cache subclass injection
-    # site).
-    if args.kv_policy != "none" and not args.record_internals:
+    # site). Either an explicit --kv-policy != none OR a --kv-config yaml that
+    # supplies a non-none `name` activates eviction; both must imply
+    # --record-internals.
+    kv_policy_active = args.kv_policy != "none" or args.kv_config is not None
+    if kv_policy_active and not args.record_internals:
         print(
-            "ERROR: --kv-policy requires --record-internals "
+            "ERROR: --kv-policy / --kv-config requires --record-internals "
             "(KV eviction only applies to the HF recording backend).",
             file=sys.stderr,
         )

@@ -21,6 +21,10 @@ dependencies = [
   "json-repair>=0.30,<1.0",
   "tiktoken>=0.7,<1.0",
   "terminal-bench>=0.2.18; python_version >= '3.12'",
+  # Spike Q3 (kv_cache_subclass_spike.md): SinkCache became a stub in 4.58
+  # and the DynamicCache subclass contract held on 4.55-4.57. Keep the upper
+  # bound until 4.58+ is re-validated.
+  "transformers>=4.55,<4.58",
 ]
 
 [project.optional-dependencies]

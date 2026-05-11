@@ -30,11 +30,24 @@ A. **Score buffer shape — head-mean at `observe()` time, NOT per-head store.**
    for Qwen3) for zero behavioural difference. The published `attn` from the
    bus carries the per-query-head dim already, so we mean over that axis.
 
-B. **`config.aggregate` — only `sum` is implemented.**
-   The paper's default is cumulative sum across all queries, prefill + decode
-   sharing one accumulator. `mean` and `ema` raise `NotImplementedError` here
-   so a future step can wire them in without leaving silent placeholder
-   semantics on disk.
+B. **`config.aggregate` — `sum` (default), `mean`, `ema`.**
+   * `sum` — paper default; cumulative score across observed queries, prefill
+     + decode sharing one accumulator.
+   * `mean` — `sum / observation_count` per key position. Maintains a parallel
+     int counter per (layer, key_pos) incremented by `n_query_rows` on every
+     observe(). Decision time divides the live prefix by the counter (clamped
+     to 1 to avoid div-by-zero on never-observed slots; sink+recent are kept
+     unconditionally so an unobserved slot is harmless). Algebraically this
+     re-normalises the score so that older positions don't dominate purely
+     because they have been exposed to more queries.
+   * `ema` — exponential moving average with decay `ema_decay`. observe()
+     applies `buffer = ema_decay * buffer + per_key` on the live prefix only,
+     leaving the unallocated tail untouched. First observe on a layer
+     short-circuits to a plain assignment so the EMA does not start from
+     ambient zero (which would scale the first decision by `1 - ema_decay`).
+     Score buffer compaction (`_post_evict_hook`) gathers the EMA prefix the
+     same way as for sum, so the moving average survives eviction without a
+     phase shift.
 
 C. **Score buffer pre-allocation.**
    We pre-allocate a single `(max_position_embeddings,)` fp32 tensor per
@@ -128,14 +141,17 @@ class H2OCache(BaseEvictionCache):
                 f"({config.budget!r} < {config.sink_size!r} + {config.recent_window!r} "
                 f"= {floor})"
             )
-        if config.aggregate != "sum":
-            # mean / ema are paper-side ablations; deliberately not silently
-            # falling back to sum — that would alter the score semantics
-            # without the user noticing.
-            raise NotImplementedError(
-                f"aggregate={config.aggregate!r} not yet implemented; "
-                "use sum (paper default)"
+        if config.aggregate not in {"sum", "mean", "ema"}:
+            raise ValueError(
+                f"aggregate={config.aggregate!r} unsupported; "
+                "use one of {sum, mean, ema}"
             )
+        if config.aggregate == "ema":
+            if not (0.0 < float(config.ema_decay) < 1.0):
+                raise ValueError(
+                    f"aggregate='ema' requires 0 < ema_decay < 1; "
+                    f"got {config.ema_decay!r}"
+                )
         if attention_bus is None:
             raise ValueError("H2OCache requires an attention_bus to subscribe to")
         if max_position_embeddings is None or int(max_position_embeddings) <= 0:
@@ -148,6 +164,13 @@ class H2OCache(BaseEvictionCache):
         # first observe() pins device + dtype.
         self._scores: list[torch.Tensor | None] = [None] * int(num_layers)
         self._score_lengths: list[int] = [0] * int(num_layers)
+        # `aggregate="mean"` needs an observation count per (layer, key_pos)
+        # so the decision-time divide is well-defined. Lazy alloc parallel to
+        # `_scores` keeps the cost zero for sum/ema. We use int32 (n_query_rows
+        # per observe is bounded by max_prefill_queries ≪ 2**31).
+        self._aggregate = str(config.aggregate)
+        self._ema_decay = float(config.ema_decay)
+        self._score_counts: list[torch.Tensor | None] = [None] * int(num_layers)
         # Subscribe AFTER all validation succeeds so a constructor failure
         # cannot leave a half-built cache wired to the bus.
         self._attention_bus: "AttentionBus" = attention_bus
@@ -204,8 +227,14 @@ class H2OCache(BaseEvictionCache):
         # cumulative-attention definition more naturally.
         per_head_per_key = attn.sum(dim=2).sum(dim=0)  # (H, K)
         per_key = per_head_per_key.mean(dim=0)  # (K,) — head-mean (choice A)
+        # Number of query rows that contributed mass into this observation.
+        # Each query row sums to ~1 across keys, so for `mean` we need the
+        # divisor to scale with both the query axis and the (already summed)
+        # batch axis.
+        n_query_rows = int(attn.shape[0]) * int(attn.shape[2])
 
         buffer = self._scores[int(layer)]
+        first_observe = buffer is None
         if buffer is None:
             # Choice C+D: pre-allocate fp32 buffer on the attn device on
             # first sight. fp32 keeps numerics stable across the cumulative
@@ -213,9 +242,30 @@ class H2OCache(BaseEvictionCache):
             buffer = torch.zeros(self._max_pos, dtype=torch.float32, device=attn.device)
             self._scores[int(layer)] = buffer
 
-        # Cast to fp32 in case attn is bf16/fp16; in-place add into the live
-        # slots only.
-        buffer[:actual_key_len].add_(per_key.to(dtype=buffer.dtype))
+        per_key_fp32 = per_key.to(dtype=buffer.dtype)
+        if self._aggregate == "ema":
+            if first_observe:
+                # Avoid scaling the very first sample by (1 - ema_decay), which
+                # would silently bias initial decisions toward zero.
+                buffer[:actual_key_len] = per_key_fp32
+            else:
+                # EMA touches only the live prefix so the unallocated tail
+                # never accumulates ambient zero updates.
+                buffer[:actual_key_len].mul_(self._ema_decay).add_(per_key_fp32)
+        else:
+            # `sum` and `mean` both accumulate raw mass; `mean` divides at
+            # decision time using the parallel count buffer below.
+            buffer[:actual_key_len].add_(per_key_fp32)
+
+        if self._aggregate == "mean":
+            counts = self._score_counts[int(layer)]
+            if counts is None:
+                counts = torch.zeros(
+                    self._max_pos, dtype=torch.int32, device=buffer.device
+                )
+                self._score_counts[int(layer)] = counts
+            counts[:actual_key_len].add_(n_query_rows)
+
         if actual_key_len > self._score_lengths[int(layer)]:
             self._score_lengths[int(layer)] = actual_key_len
 
@@ -282,6 +332,26 @@ class H2OCache(BaseEvictionCache):
         # score. `topk` returns descending; sort the absolute indices for a
         # stable keep set.
         middle_scores = buffer[middle_start:middle_end]
+        if self._aggregate == "mean":
+            counts = self._score_counts[int(layer_idx)]
+            if counts is None:
+                # mean was selected but observe() never ran for this layer;
+                # _decide_evict's earlier `buffer is None` guard covers the
+                # symmetric case for sum/ema, and the mean-specific count
+                # missing here means observe() wired the buffer but skipped
+                # the count branch — invariant breach, not a runtime fallback.
+                raise RuntimeError(
+                    f"H2OCache._decide_evict(mean): no count buffer for layer "
+                    f"{layer_idx}; observe() failed to maintain the parallel "
+                    "count tensor."
+                )
+            # Sink + recent are always kept regardless of score; the only
+            # slots whose count actually matters are middle slots that have
+            # been observed. Clamp to 1 so unobserved middle slots (count==0)
+            # produce a finite (zero) mean rather than a NaN that would
+            # propagate through topk.
+            middle_counts = counts[middle_start:middle_end].to(dtype=middle_scores.dtype)
+            middle_scores = middle_scores / middle_counts.clamp(min=1)
         # n_heavy may be 0 (budget == sink + recent); topk(0) is degenerate
         # but valid in torch.
         n_heavy_eff = min(n_heavy, middle_len)
@@ -313,7 +383,7 @@ class H2OCache(BaseEvictionCache):
     # -- Post-eviction state compaction (choice E) --------------------------
 
     def _post_evict_hook(self, layer_idx: int, decision: EvictionDecision) -> None:
-        """Compact the score buffer to mirror the K/V drop.
+        """Compact the score buffer (and mean-aggregate count) to mirror the K/V drop.
 
         Without this, the next `observe()` would `.add_()` into stale slots
         — old positions would remain in the buffer past the K/V boundary
@@ -325,8 +395,11 @@ class H2OCache(BaseEvictionCache):
             return
         keep = decision.keep_indices
         n_keep = len(keep)
+        counts = self._score_counts[int(layer_idx)]
         if n_keep == 0:
             buffer.zero_()
+            if counts is not None:
+                counts.zero_()
             self._score_lengths[int(layer_idx)] = 0
             return
         index = torch.as_tensor(keep, dtype=torch.long, device=buffer.device)
@@ -336,4 +409,9 @@ class H2OCache(BaseEvictionCache):
         compact = buffer.index_select(0, index)
         buffer.zero_()
         buffer[:n_keep] = compact
+        if counts is not None:
+            count_index = index.to(device=counts.device)
+            compact_counts = counts.index_select(0, count_index)
+            counts.zero_()
+            counts[:n_keep] = compact_counts
         self._score_lengths[int(layer_idx)] = n_keep

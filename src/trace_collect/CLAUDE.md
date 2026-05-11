@@ -52,12 +52,65 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--kv-budget` | when `--kv-policy != none` | — | Per-layer KV budget in tokens. Required and must be `> 0` whenever `--kv-policy` is set. For `streaming` and `h2o`, acts as the **trigger threshold** (no eviction while `key_len <= budget`); must be `>= --kv-sink-size + --kv-recent-window`. For `h2o`, post-eviction layer length is exactly `budget`; the heavy-hitter slot count is `budget - sink_size - recent_window`. Each call writes a `kv_eviction.npz` under `recordings/iter_<call>/` with the keep/evict audit. |
 | `--kv-sink-size` | no | `4` | Sink-prefix length (head tokens preserved). Used by `streaming` and `h2o`. Ignored by `random`. |
 | `--kv-recent-window` | no | `256` | Recent-window length (tail tokens preserved). Used by `streaming` and `h2o`. Ignored by `random`. |
-| `--kv-aggregate` | no | `sum` | H2O score aggregation across queries. Only `sum` (paper default) implemented; `mean`/`ema` will arrive via yaml config. Ignored by `random` and `streaming`. |
+| `--kv-aggregate` | no | `sum` | H2O score aggregation across queries. `sum` = cumulative mass (paper default); `mean` = sum / observation count per position (parallel int32 counter); `ema` = exponential moving average with `ema_decay` (yaml-only field, default 0.9, must be in (0, 1)). Ignored by `random` and `streaming`. |
+| `--kv-config` | no | `None` | Optional YAML file (e.g. `configs/kv_policies/h2o_b1024.yaml`) carrying a flat map of `EvictionPolicyConfig` fields. CLI flags overlay yaml: an explicitly-passed `--kv-*` overrides the corresponding yaml value, while CLI flags left at their argparse default fall back to the yaml value. `--kv-policy none` plus a yaml `name:` activates the yaml's policy; passing `--kv-policy <other>` overrides yaml's `name`. Either an active `--kv-policy` OR a `--kv-config` requires `--record-internals`. |
+| `--kv-record` | no | `on` | Whether to write `kv_eviction.npz` recordings. `on` (default) preserves the audit trail. `off` runs the configured policy but skips both the per-call `KVEvictionRecorder` allocation and the `kv_eviction.npz` write — used by the step 9 perf microbench (`scripts/spikes/step9_perf_microbench.py`) to isolate eviction overhead from recording overhead. Meaningful only when `--kv-policy != none` (or yaml supplies a name). |
 
 Internal notes:
 - `LayerCapturer` publishes the post-softmax attention tensor on a per-provider `AttentionBus` (`src/serving/recording/attention_bus.py`). With no subscribers (e.g. `--kv-policy none` / `streaming` / `random`), publish is a no-op and `attention.npz` is byte-identical to the pre-bus path.
 - `h2o` subscribes to that bus at construction time, consumes the same softmax tensor (no re-softmax), accumulates a head-mean cumulative score per layer, and unsubscribes in a `finally` around `model.generate(...)` to avoid leaking subscribers across calls. The score buffer is pre-allocated to `model.config.max_position_embeddings` per layer in fp32 on the attn device.
-- `meta.json` gains an attempt-level `kv_policy` block reflecting the active config. The `prefill_score_bias` field is `true` when `h2o` runs with `prefill_mode="sampled"` (the bus only sees LayerCapturer-sampled prefill rows, so the score accumulator is biased toward those rows). Always `false` for `random` / `streaming` / `none`.
+- `meta.json` gains an attempt-level `kv_policy` block reflecting the active config. The `prefill_score_bias` field is `true` when `h2o` runs with `prefill_mode="sampled"` (the bus only sees LayerCapturer-sampled prefill rows, so the score accumulator is biased toward those rows). Always `false` for `random` / `streaming` / `none` AND for `h2o` with `prefill_mode="full"`.
+
+### KV Cache Eviction Policies
+
+Three policies are wired into the HF recording path; choose one with
+`--kv-policy` plus `--kv-budget`, OR point `--kv-config` at a YAML under
+`configs/kv_policies/`. The YAML schema is a flat map mirroring
+`src/serving/kv_policies/base.py:EvictionPolicyConfig` field-for-field:
+
+```yaml
+# configs/kv_policies/h2o_b1024.yaml
+name: h2o            # one of: random, streaming, h2o
+budget: 1024         # required, > 0
+sink_size: 4         # streaming + h2o
+recent_window: 256   # streaming + h2o
+heavy_ratio: 0.5     # h2o (currently informational; eviction uses
+                     #      budget - sink - recent for the heavy slot count)
+aggregate: sum       # h2o: sum | mean | ema
+ema_decay: 0.9       # h2o, when aggregate=ema (must be in (0, 1))
+seed: 0              # random
+record: true         # write kv_eviction.npz; set false for perf isolation
+prefill_mode: sampled  # h2o: sampled | full
+```
+
+| Policy | What it keeps |
+|--------|---------------|
+| `random` | Uniform-random over `[0, key_len)`; no recency carve-out. Determinism via `seed`. |
+| `streaming` | StreamingLLM (Xiao 2023): first `sink_size` + last `recent_window` tokens; naive variant — no RoPE re-rotation. |
+| `h2o` | Heavy-Hitter Oracle (Zhang 2023): sink + recent + top-`(budget - sink - recent)` middle positions ranked by accumulated post-softmax attention. |
+
+CLI / YAML resolution order (see `src/serving/kv_policies/config.py`):
+
+1. If `--kv-config PATH` is set, load that YAML as the base map.
+2. Each `--kv-*` flag explicitly different from its argparse default
+   overrides the corresponding yaml value. Defaults left untouched fall
+   through to yaml.
+3. `--kv-policy none` (the default) does NOT clobber a yaml-supplied
+   `name:`; any other explicit `--kv-policy` does.
+4. The merged map must produce a non-`none` `name` and a positive `budget`,
+   otherwise the loader exits with `argparse.ArgumentTypeError`.
+
+`prefill_mode` (h2o only):
+
+| Mode | Behaviour |
+|------|-----------|
+| `sampled` (default) | Bus sees only LayerCapturer-sampled prefill query rows (cap = `RecordingConfig.max_prefill_queries`, default 80). Cheap; meta.json marks `prefill_score_bias=true`. |
+| `full` | `HFRecordingProvider._chat_locked` wraps `model.generate(...)` in `LayerCapturer.unbounded_prefill_queries()`, lifting the cap to `2**31-1`. Every prefill query row is observed; `prefill_score_bias=false`. Cost is O(prefill_len) extra `observe()` calls per layer. |
+
+Perf isolation (`--kv-record off`): policy still runs, no
+`KVEvictionRecorder` allocated, no `kv_eviction.npz` written. Used by
+`scripts/spikes/step9_perf_microbench.py` to separate eviction overhead
+from recording overhead.
 
 ### Provider System
 
