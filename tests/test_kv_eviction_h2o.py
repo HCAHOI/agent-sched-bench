@@ -360,23 +360,33 @@ def test_h2o_observe_rejects_overlong_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_h2o_decide_evict_without_observe_raises() -> None:
-    """Score buffer absent -> raise instead of silently using zeros."""
+def test_h2o_decide_evict_without_observe_falls_back() -> None:
+    """Score buffer absent → streaming-style fallback (not raise).
+
+    Prefill-first-evict case: first cache.update sees `key_len > budget` and
+    the bus has not yet published. Falling back to sink + recent + uniform-
+    middle preserves the H2O paper's keep-set shape and keeps the recording
+    chain alive — raising here would kill the whole session via the
+    `finally unsubscribe` chain in HFRecordingProvider.chat().
+    """
     cache, _bus = _make_cache(
         budget=4, sink_size=1, recent_window=1, max_position_embeddings=16
     )
-    with pytest.raises(RuntimeError, match="no score buffer"):
-        cache._decide_evict(layer_idx=0, key_len=10)
+    decision = cache._decide_evict(layer_idx=0, key_len=10)
+    assert decision.reason == "score_missing"
+    # Sink (pos 0) + 2 uniformly-spaced middle (step = 8//2 = 4) +
+    # recent (pos 9) → {0, 1, 5, 9}; evict the rest.
+    assert decision.keep_indices == [0, 1, 5, 9]
+    assert set(decision.evict_indices) == {2, 3, 4, 6, 7, 8}
 
 
-def test_h2o_decide_evict_with_stale_middle_raises() -> None:
-    """Score buffer that doesn't cover the middle window -> raise.
+def test_h2o_decide_evict_with_stale_middle_falls_back() -> None:
+    """Score buffer not covering middle window → fallback (not raise).
 
-    The check is `score_lengths < middle_end` (not `< key_len`) because in
-    HF generate the cache.update() runs BEFORE the softmax hook publishes
-    for the same step — newly-appended positions sit in the recent window
-    and don't need a score. But if the score buffer doesn't even cover the
-    middle window, the bus wiring is broken.
+    `score_lengths < middle_end` means observe() has not seen the heavy-
+    hitter window yet (typically prefill mid-flight). Same fallback as the
+    `buffer is None` case — paper-correct top-k can't be computed, so fall
+    back to a streaming-style keep set marked with `reason="score_missing"`.
     """
     cache, _bus = _make_cache(
         budget=4, sink_size=1, recent_window=1, max_position_embeddings=64
@@ -390,8 +400,10 @@ def test_h2o_decide_evict_with_stale_middle_raises() -> None:
         key_len=2,
         phase="prefill",
     )
-    with pytest.raises(RuntimeError, match="< middle_end"):
-        cache._decide_evict(layer_idx=0, key_len=10)
+    decision = cache._decide_evict(layer_idx=0, key_len=10)
+    assert decision.reason == "score_missing"
+    assert decision.keep_indices == [0, 1, 5, 9]
+    assert set(decision.evict_indices) == {2, 3, 4, 6, 7, 8}
 
 
 # ---------------------------------------------------------------------------

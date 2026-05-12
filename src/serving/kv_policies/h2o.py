@@ -303,29 +303,40 @@ class H2OCache(BaseEvictionCache):
         # Order-of-operations note: in HF generate, the layer's
         # `past_key_values.update(...)` runs BEFORE softmax/capturer hook for
         # the same forward step. So at decision time the score buffer
-        # reflects scores accumulated through the *previous* forward; the
-        # newly-appended positions in `[key_len_prev, key_len)` have no
-        # score yet. This is fine: they sit inside the recent window
-        # (decode appends one token; recent_window >= 1 ensures the new
-        # token is recent-kept and not eligible for heavy-hitter ranking).
-        # Pre-condition we DO need: middle window must be covered by the
-        # score buffer. If `_score_lengths[layer] < middle_end`, the bus
-        # wiring is broken or the recent_window is too small relative to
-        # how many new tokens this forward appends.
-        if buffer is None:
-            raise RuntimeError(
-                f"H2OCache._decide_evict: no score buffer for layer {layer_idx}; "
-                "AttentionBus.publish never reached this consumer — check that "
-                "the cache is subscribed and LayerCapturer is publishing."
-            )
-        if self._score_lengths[int(layer_idx)] < middle_end:
-            raise RuntimeError(
-                f"H2OCache._decide_evict: score buffer length "
-                f"{self._score_lengths[int(layer_idx)]} < middle_end "
-                f"{middle_end} for layer {layer_idx}; observe() did not "
-                "cover the heavy-hitter window. Either the bus subscription "
-                "is broken or recent_window is too small for the per-forward "
-                "query_len."
+        # reflects scores accumulated through the *previous* forward.
+        #
+        # Prefill case: the *first* forward pass has no "previous" forward;
+        # if prefill_len > budget the very first cache.update triggers an
+        # eviction call here with `buffer is None` (or score_lengths <
+        # middle_end). Fail-fast in that branch is wrong — the H2O paper's
+        # heavy-hitter ranking is undefined without observed attention, and
+        # raising would silently kill the whole recording session via the
+        # `finally unsubscribe` chain in HFRecordingProvider.chat().
+        #
+        # Fallback: use a streaming-style keep set when score is missing —
+        # sink + recent + uniformly-spaced middle positions filling the
+        # `n_heavy` slots. Post-prefill once observe() has populated the
+        # buffer, subsequent _decide_evict calls take the top-k path below
+        # and recover the paper-correct semantics.
+        if buffer is None or self._score_lengths[int(layer_idx)] < middle_end:
+            if n_heavy <= 0 or middle_len <= 0:
+                keep_middle: list[int] = []
+            else:
+                # Evenly-spaced absolute positions in `[middle_start, middle_end)`.
+                # Linear ramp guarantees `n_heavy_eff` distinct indices when
+                # `middle_len >= n_heavy`; clamp to a unique-preserving cap.
+                n_heavy_eff = min(n_heavy, middle_len)
+                step = max(1, middle_len // n_heavy_eff)
+                keep_middle = sorted(
+                    {middle_start + i * step for i in range(n_heavy_eff)}
+                    & set(range(middle_start, middle_end))
+                )
+            keep = list(range(0, sink)) + keep_middle + list(range(middle_end, key_len))
+            evict = sorted(set(range(key_len)) - set(keep))
+            return EvictionDecision(
+                keep_indices=keep,
+                evict_indices=evict,
+                reason="score_missing",
             )
 
         # Pick top-`n_heavy` positions in the middle window by accumulated
