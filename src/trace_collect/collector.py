@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from llm_call import UnifiedProvider
-from serving.recording import HFRecordingProvider, HFRecordingServer
+
+# `serving.recording` (and its KV-eviction transitive deps) pulls in `torch`
+# via `transformers.cache_utils`. Container venvs that only need MCP/scaffold
+# helpers from this module must not pay that import cost — keep this lazy
+# inside the `record_internals` branch in `collect_traces`.
 from harness.container_image_prep import (
     drop_cached_fixed_image,
     ensure_source_image,
@@ -558,13 +562,16 @@ async def collect_traces(
         raise ValueError("--container required for container-mode benchmarks")
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
-    recording_provider = (
-        HFRecordingProvider(default_model=model, eviction_config=eviction_config)
-        if record_internals
-        else None
-    )
-    recording_server = (
-        HFRecordingServer(
+    recording_provider = None
+    recording_server = None
+    if record_internals:
+        # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
+        from serving.recording import HFRecordingProvider, HFRecordingServer
+
+        recording_provider = HFRecordingProvider(
+            default_model=model, eviction_config=eviction_config
+        )
+        recording_server = HFRecordingServer(
             recording_provider,
             public_host=_recording_server_public_host(
                 execution_environment=execution_environment,
@@ -572,9 +579,6 @@ async def collect_traces(
                 container_executable=container_executable,
             ),
         )
-        if recording_provider is not None
-        else None
-    )
     if recording_server is not None:
         recording_server.__enter__()
     effective_api_base = recording_server.api_base if recording_server else api_base
