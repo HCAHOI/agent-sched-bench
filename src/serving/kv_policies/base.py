@@ -87,6 +87,17 @@ class BaseEvictionCache(DynamicCache):
         """True if this policy needs to subscribe to AttentionBus (H2O)."""
         return False
 
+    def notify_new_call(self, call_idx: int) -> None:
+        """Mark a fresh chat() boundary.
+
+        Resets per-call step counters so the next forward maps to `(prefill, -1)`
+        and decode counts from 0 again. Physical KV slots, score buffers, and
+        bus subscription persist across calls — only the recording labels reset.
+        """
+        del call_idx
+        self._step_counter.clear()
+        self._seen_prefill.clear()
+
     def update(
         self,
         key_states: "torch.Tensor",

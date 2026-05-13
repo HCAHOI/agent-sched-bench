@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import json
+import logging
 import os
 import secrets
 import string
@@ -24,11 +25,14 @@ from agents.openclaw.providers.base import (
     ToolCallRequest,
 )
 from serving.kv_policies import build_eviction_cache
-from serving.kv_policies.base import EvictionPolicyConfig
+from serving.kv_policies.base import BaseEvictionCache, EvictionPolicyConfig
 from serving.kv_policies.recorder import KVEvictionRecorder
 from serving.recording.attention_bus import AttentionBus
 from serving.recording.hooks import LayerCapturer
 from serving.recording.recording import RecordingConfig, segment_role
+
+
+_LOG = logging.getLogger(__name__)
 
 
 _ALLOWED_MSG_KEYS = frozenset(
@@ -185,8 +189,47 @@ def tokenize_chat_with_segments(
             add_generation_prompt=False,
         )
         if not full_text.startswith(prefix):
-            raise ValueError("chat template prefixes do not align with full prompt")
+            # Some chat templates (e.g. Qwen3) render assistant turns
+            # differently when add_generation_prompt=False vs. True (adding
+            # <think> markers absent from the full-conversation rendering).
+            # We cannot determine the exact char boundary for this turn, so
+            # emit an "unmatched" sentinel that covers from the last known
+            # boundary to the start of the NEXT turn's prefix (determined on
+            # the following iteration). This preserves full token coverage and
+            # lets downstream consumers filter "unmatched" out of per-role
+            # analyses rather than silently mislabeling those tokens as
+            # belonging to the surrounding turn.
+            _LOG.warning(
+                "chat template prefix misalignment at message_index=%d role=%s; "
+                "emitting 'unmatched' segment — downstream per-role stats will "
+                "exclude this region",
+                idx,
+                message.get("role"),
+            )
+            char_segments.append(
+                {
+                    "role": "unmatched",
+                    "message_index": idx,
+                    "char_start": previous_end,
+                    "char_end": previous_end,  # end filled by next aligned prefix
+                    "has_content": _message_has_content(message),
+                    "has_tool_calls": bool(message.get("tool_calls")),
+                    "_pending": True,
+                }
+            )
+            continue
         end = len(prefix)
+        # Close any pending "unmatched" segments opened on prior misaligned
+        # turns. Their true end is the start of THIS aligned turn (i.e.
+        # `previous_end`), not `end` — closing at `end` would swallow the
+        # current aligned turn's content and make the aligned segment vanish
+        # (its `previous_end < end` guard would fail after we advance
+        # `previous_end`). Two back-to-back misaligned turns each get their
+        # own sentinel with non-overlapping ranges.
+        for seg in char_segments:
+            if seg.get("_pending"):
+                seg["char_end"] = previous_end
+                del seg["_pending"]
         if previous_end < end:
             char_segments.append(
                 {
@@ -199,6 +242,12 @@ def tokenize_chat_with_segments(
                 }
             )
         previous_end = end
+    # Close any "unmatched" segment that was still pending at loop end
+    # (last message misaligned, no subsequent aligned prefix to close it).
+    for seg in char_segments:
+        if seg.get("_pending"):
+            seg["char_end"] = len(full_text)
+            del seg["_pending"]
     if previous_end < len(full_text):
         char_segments.append(
             {
@@ -355,6 +404,18 @@ def _positive_int_env(name: str) -> int | None:
     return value
 
 
+def _longest_common_prefix(a: Any, b: Any) -> int:
+    """Length of the longest matching prefix between two 1-D token id tensors."""
+    n = int(min(a.shape[0], b.shape[0]))
+    if n == 0:
+        return 0
+    eq = (a[:n] == b[:n]).to(dtype=bool)
+    # `argmax` on a bool tensor returns the index of the first True; we want
+    # the first False. Flip and use cumprod so the prefix of all-True stays 1
+    # and the first mismatch zeros everything after — sum gives the LCP.
+    return int(eq.to(dtype=a.dtype).cumprod(dim=0).sum().item())
+
+
 def _hf_max_memory(torch_module: Any) -> dict[int | str, str] | None:
     gpu_gib = _positive_int_env("HF_RECORDING_MAX_GPU_MEMORY_GIB")
     if gpu_gib is None:
@@ -388,10 +449,22 @@ class HFRecordingProvider(LLMProvider):
         self.generation = GenerationSettings(temperature=0.1, max_tokens=4096)
         self._call_idx = 0
         self._chat_lock = threading.Lock()
-        # Per-call cache builds happen inside _chat_locked; storing the config
-        # here keeps the constructor side-effect-free w.r.t. transformers
-        # `Cache` instantiation.
+        # Session-shared cache lives across chat() calls so H2O score buffers,
+        # streaming-LLM windows, and eviction state accumulate over the
+        # provider's lifetime. Built lazily on first call so the constructor
+        # stays free of transformers `Cache` instantiation. None when no
+        # eviction policy is configured.
         self._eviction_config = eviction_config
+        self._session_cache: BaseEvictionCache | None = None
+        # Token IDs currently materialised in the session cache, including any
+        # decoded tokens from prior calls. (1, T) growing tensor; LCP is
+        # computed against this to derive the delta passed to generate().
+        self._session_token_ids: Any | None = None
+        # Debug-only audit log populated by _prepare_session_cache. Each entry
+        # is {call_idx, used_session_cache, lcp, cached_len_before, new_len,
+        # delta_len}. Not part of the public API; used by tests to assert that
+        # the strict-prefix path fired correctly.
+        self._session_history: list[dict[str, Any]] = []
 
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -513,6 +586,140 @@ class HFRecordingProvider(LLMProvider):
         if self._torch.cuda.is_available():
             self._torch.cuda.empty_cache()
 
+    def _build_session_cache(self) -> BaseEvictionCache:
+        assert self._eviction_config is not None
+        return build_eviction_cache(
+            self._eviction_config,
+            num_layers=int(self.model.config.num_hidden_layers),
+            recorder=None,
+            attention_bus=self._attention_bus,
+            max_position_embeddings=int(self.model.config.max_position_embeddings),
+        )
+
+    def _drop_session_cache(self) -> None:
+        cache = self._session_cache
+        if cache is None:
+            return
+        if cache.requires_attention():
+            try:
+                self._attention_bus.unsubscribe(cache)
+            except ValueError:
+                pass
+        self._session_cache = None
+        self._session_token_ids = None
+
+    def _prepare_session_cache(
+        self, *, prompt_ids: Any, call_idx: int
+    ) -> tuple[Any, bool]:
+        """Resolve the cache state for one chat() call.
+
+        Returns `(input_ids, used_session_cache)` — `input_ids` is the tensor
+        to pass to `generate()` (delta when the cache is a strict prefix of
+        the prompt, full prompt otherwise), and `used_session_cache` records
+        whether `past_key_values` will be supplied.
+
+        Thread-safety: must only be called while `_chat_lock` is held.
+        `_session_cache.recorder` and `_session_token_ids` are mutated here and
+        in `run_generate`; the lock serialises concurrent `chat()` callers.
+        """
+        if self._eviction_config is None:
+            return prompt_ids, False
+        new_len = int(prompt_ids.shape[-1])
+        if self._session_cache is None:
+            self._session_cache = self._build_session_cache()
+            self._session_token_ids = prompt_ids.clone()
+            _LOG.debug(
+                "session cache built (call_idx=%d, prompt_len=%d)",
+                call_idx,
+                new_len,
+            )
+            self._session_history.append({
+                "call_idx": call_idx,
+                "used_session_cache": True,
+                "lcp": 0,
+                "cached_len_before": 0,
+                "new_len": new_len,
+                "delta_len": new_len,
+            })
+            return prompt_ids, True
+        assert self._session_token_ids is not None
+        cached_ids = self._session_token_ids[0]
+        new_ids = prompt_ids[0]
+        lcp = _longest_common_prefix(cached_ids, new_ids)
+        cached_len = int(cached_ids.shape[0])
+        _LOG.debug(
+            "session cache lcp check (call_idx=%d, lcp=%d, cached_len=%d, "
+            "new_len=%d, is_prefix=%s)",
+            call_idx,
+            lcp,
+            cached_len,
+            new_len,
+            lcp == cached_len,
+        )
+        if lcp == cached_len and new_len > cached_len:
+            # Strict prefix: pass only the delta.
+            delta_len = new_len - lcp
+            self._session_history.append({
+                "call_idx": call_idx,
+                "used_session_cache": True,
+                "lcp": lcp,
+                "cached_len_before": cached_len,
+                "new_len": new_len,
+                "delta_len": delta_len,
+            })
+            return prompt_ids[:, lcp:], True
+        # Divergence: monotonic-reprompt assumption violated. Drop and rebuild.
+        _LOG.warning(
+            "session KV cache diverged from new prompt (lcp=%d, cached_len=%d, "
+            "new_len=%d, call_idx=%d); rebuilding fresh cache",
+            lcp,
+            cached_len,
+            new_len,
+            call_idx,
+        )
+        self._drop_session_cache()
+        self._session_cache = self._build_session_cache()
+        self._session_token_ids = prompt_ids.clone()
+        self._session_history.append({
+            "call_idx": call_idx,
+            "used_session_cache": True,
+            "lcp": lcp,
+            "cached_len_before": cached_len,
+            "new_len": new_len,
+            "delta_len": new_len,
+            "diverged": True,
+        })
+        return prompt_ids, True
+
+    def _extend_session_tokens(self, *, prompt_ids: Any, output_ids: list[int]) -> None:
+        if self._eviction_config is None:
+            return
+        # Append raw generated token ids to prompt_ids. Note: for models with
+        # chain-of-thought generation (e.g. Qwen3 <think>…</think>), the raw
+        # output_ids include thinking tokens that differ from how the next
+        # call's apply_chat_template re-renders the completed turn. When that
+        # happens, _prepare_session_cache will detect a divergence (LCP <
+        # cached_len) and rebuild the cache from scratch — a correct fallback
+        # at the cost of one extra full-prefill. The divergence path is safe;
+        # this simpler storage avoids a re-render whose template behavior is
+        # model-specific and hard to predict in the general case.
+        generated = self._torch.as_tensor(
+            output_ids, dtype=prompt_ids.dtype, device=prompt_ids.device
+        ).unsqueeze(0)
+        # O(N²) cat per call; acceptable for agent-loop scales (≤100 turns ×
+        # ≤32K tokens). Future: track only the suffix delta.
+        self._session_token_ids = self._torch.cat([prompt_ids, generated], dim=-1)
+
+    def close(self) -> None:
+        """Release the session cache and bus subscription."""
+        self._drop_session_cache()
+
+    def __del__(self) -> None:
+        try:
+            self._drop_session_cache()
+        except Exception:
+            pass
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -570,15 +777,18 @@ class HFRecordingProvider(LLMProvider):
             messages,
             tools=template_tools,
         )
-        input_ids = encoded.input_ids if hasattr(encoded, "input_ids") else encoded["input_ids"]
-        input_token_count = int(input_ids.shape[-1])
+        prompt_ids = (
+            encoded.input_ids if hasattr(encoded, "input_ids") else encoded["input_ids"]
+        )
+        input_token_count = int(prompt_ids.shape[-1])
+        delta_ids, used_session_cache = self._prepare_session_cache(
+            prompt_ids=prompt_ids, call_idx=call_idx
+        )
 
         def run_generate() -> tuple[str, list[int]]:
-            input_tensor = input_ids.to(self._input_device())
-            attention_mask = self._torch.ones_like(input_tensor)
+            input_tensor = delta_ids.to(self._input_device())
             generation_kwargs: dict[str, Any] = {
                 "input_ids": input_tensor,
-                "attention_mask": attention_mask,
                 "max_new_tokens": max(1, int(max_tokens)),
                 "do_sample": temperature > 0,
                 "return_dict_in_generate": False,
@@ -586,43 +796,52 @@ class HFRecordingProvider(LLMProvider):
             }
             if temperature > 0:
                 generation_kwargs["temperature"] = float(temperature)
-            # KV eviction injection: build a fresh per-call cache + recorder
-            # only when a policy is configured. When None, generate() falls
-            # back to its stock DynamicCache and behaves byte-identically to
-            # the pre-step-3 path.
+            # KV eviction injection: a session-shared cache lives across
+            # chat() calls. When no policy is configured, generate() falls
+            # back to its stock DynamicCache and behaves identically to the
+            # pre-session-cache path (no delta-input either; `delta_ids` ==
+            # `prompt_ids` in that branch).
             kv_recorder: KVEvictionRecorder | None = None
-            cache_obj: Any = None
             if self._eviction_config is not None:
-                # Step 9: `record=False` runs the policy but skips both the
+                # `record=False` runs the policy but skips both the
                 # KVEvictionRecorder allocation AND the capturer.flush() npz
-                # write, isolating eviction overhead from recording overhead
-                # for the perf microbench. The cache itself still runs;
-                # `BaseEvictionCache.update` short-circuits the recorder
-                # branch when `config.record is False`.
+                # write; the cache mechanics still run.
                 if self._eviction_config.record:
                     kv_recorder = KVEvictionRecorder(
                         call_idx=call_idx,
                         policy_name=self._eviction_config.name,
                     )
                 self.capturer.set_kv_recorder(kv_recorder)
-                cache_obj = build_eviction_cache(
-                    self._eviction_config,
-                    num_layers=int(self.model.config.num_hidden_layers),
-                    recorder=kv_recorder,
-                    attention_bus=self._attention_bus,
-                    max_position_embeddings=int(
-                        self.model.config.max_position_embeddings
-                    ),
-                )
-                generation_kwargs["past_key_values"] = cache_obj
+                assert self._session_cache is not None
+                self._session_cache.recorder = kv_recorder
+                # Step counters reset per call; physical KV slots and score
+                # buffers persist.
+                self._session_cache.notify_new_call(call_idx)
+                generation_kwargs["past_key_values"] = self._session_cache
+                # phys_kv_len: physical slots after eviction (attention_mask width).
+                # logical_kv_len: absolute conversation position of delta[0] (RoPE).
+                # These diverge after eviction; using phys for RoPE silently
+                # corrupts embeddings. Explicit cache_position also sidesteps
+                # HF's arange(delta_len)[past_length:] empty-tensor crash.
+                phys_kv_len = self._session_cache.get_seq_length(0)
+                delta_len = int(delta_ids.shape[-1])
+                logical_kv_len = int(prompt_ids.shape[-1]) - delta_len
+                mask_len = phys_kv_len + delta_len
+                generation_kwargs["attention_mask"] = self._torch.ones(
+                    (1, mask_len), dtype=self._torch.long
+                ).to(self._input_device())
+                generation_kwargs["cache_position"] = self._torch.arange(
+                    logical_kv_len, logical_kv_len + delta_len, dtype=self._torch.long
+                ).to(self._input_device())
             else:
-                # Make sure a stale recorder from a prior call cannot bleed in.
+                # No policy: stock DynamicCache, full prompt each call.
                 self.capturer.set_kv_recorder(None)
+                generation_kwargs["attention_mask"] = self._torch.ones_like(
+                    input_tensor
+                )
             # H2O + prefill_mode="full" — bypass the LayerCapturer sample
             # cap so the H2O score accumulator observes every prefill query
-            # row (plan F + critical-correctness note "H2O accumulation").
-            # We use a `nullcontext` for all other configs so the indent
-            # block stays uniform.
+            # row.
             from contextlib import nullcontext
 
             cfg = self._eviction_config
@@ -636,34 +855,25 @@ class HFRecordingProvider(LLMProvider):
                 if wants_full_prefill
                 else nullcontext()
             )
-            try:
-                with self._torch.no_grad(), self.capturer.recording_session(
-                    call_idx=call_idx,
-                    segments=segments,
-                    input_token_count=input_token_count,
-                ), prefill_ctx:
-                    sequences = self.model.generate(**generation_kwargs)
+            with self._torch.no_grad(), self.capturer.recording_session(
+                call_idx=call_idx,
+                segments=segments,
+                input_token_count=input_token_count,
+            ), prefill_ctx:
+                sequences = self.model.generate(**generation_kwargs)
+                # `sequences` shape depends on whether session cache was
+                # active: with `past_key_values`, HF returns just the new
+                # tokens (delta + generated); without, full prompt + generated.
+                if used_session_cache:
+                    output_ids = sequences[0, delta_ids.shape[-1]:].detach().cpu().tolist()
+                else:
                     output_ids = sequences[0, input_token_count:].detach().cpu().tolist()
-                    self.capturer.flush(output_token_ids=output_ids)
-            finally:
-                # Eviction caches that subscribe to the AttentionBus (H2O)
-                # MUST unsubscribe at end-of-call. Otherwise each subsequent
-                # `chat()` would (a) leak the prior cache via the bus's
-                # consumer list and (b) cause every observe() to fan out to
-                # every dead-but-still-subscribed cache. We drop only the
-                # current cache so manually-attached subscribers (none today)
-                # are untouched.
-                if cache_obj is not None and getattr(
-                    cache_obj, "requires_attention", lambda: False
-                )():
-                    try:
-                        self._attention_bus.unsubscribe(cache_obj)
-                    except ValueError:
-                        # Already unsubscribed (defensive); the cache may
-                        # have raised before subscribing in some failure
-                        # paths.
-                        pass
+                self.capturer.flush(output_token_ids=output_ids)
+            if self._session_cache is not None:
+                # Detach recorder so the next call's recorder swap is clean.
+                self._session_cache.recorder = None
             text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+            self._extend_session_tokens(prompt_ids=prompt_ids, output_ids=output_ids)
             return text, output_ids
 
         self._clear_cuda_cache()
