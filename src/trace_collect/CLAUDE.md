@@ -42,7 +42,7 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--sample` | no | all | Run only first N tasks |
 | `--instance-ids` | no | all | Comma-separated instance IDs |
 | `--max-context-tokens` | no | `256000` | Sliding window token budget |
-| `--prompt-template` | no | from YAML | Override under `configs/prompts/swe_rebench/` |
+| `--prompt-template` | no | from YAML | Override; resolved as `configs/prompts/<benchmark_slug>/<name>.md` (hyphens → underscores) |
 | `--min-free-disk-gb` | no | `30.0` | Disk space preflight |
 | `--run-id` | no | auto | Resume an interrupted run (pass existing run dir) |
 | `--api-base` | no | from provider | Override API base URL |

@@ -39,7 +39,7 @@ def test_swebench_runner_extracts_patch_from_exec_working_dir(tmp_path: Path) ->
     target.write_text("print('after')\n", encoding="utf-8")
 
     provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
-    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
+    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws", benchmark_slug="swe-rebench")
 
     async def fake_run(**kwargs):
         return SimpleNamespace(
@@ -107,7 +107,7 @@ def test_swebench_runner_local_patch_extraction_includes_untracked_files(
     untracked.write_text("print('new')\n", encoding="utf-8")
 
     provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
-    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
+    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws", benchmark_slug="swe-rebench")
 
     async def fake_run(**kwargs):
         return SimpleNamespace(
@@ -184,7 +184,7 @@ def test_swebench_runner_prefers_patch_txt_and_excludes_submission_artifacts(
     (repo / "local.bin").write_text("chunk1chunk2chunk3", encoding="utf-8")
 
     provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
-    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
+    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws", benchmark_slug="swe-rebench")
 
     async def fake_run(**kwargs):
         return SimpleNamespace(
@@ -226,7 +226,7 @@ def test_swebench_runner_propagates_noncompleted_stop_reason(
     tmp_path: Path,
 ) -> None:
     provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
-    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
+    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws", benchmark_slug="swe-rebench")
 
     async def fake_run(**kwargs):
         return SimpleNamespace(
@@ -267,7 +267,7 @@ def test_swebench_runner_passes_tool_workspace_as_project_workspace(
 ) -> None:
     captured: dict[str, object] = {}
     provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
-    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws")
+    runner = SWEBenchRunner(provider=provider, workspace_base=tmp_path / "ws", benchmark_slug="swe-rebench")
 
     async def fake_run(**kwargs):
         captured.update(kwargs)

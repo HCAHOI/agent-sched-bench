@@ -419,7 +419,7 @@ class TerminalBenchRunner:
         from trace_collect.prompt_loader import load_prompt_template
 
         run_root.mkdir(parents=True, exist_ok=True)
-        template_text = load_prompt_template(prompt_template).replace(
+        template_text = load_prompt_template(prompt_template, self.benchmark_slug).replace(
             "{{task}}",
             "{{ instruction }}",
         )

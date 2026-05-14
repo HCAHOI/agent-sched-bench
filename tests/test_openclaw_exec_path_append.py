@@ -14,6 +14,7 @@ def test_swebench_runner_passes_exec_path_append_into_session_runner(
     runner = SWEBenchRunner(
         provider=_DummyProvider(),
         workspace_base=tmp_path / "ws",
+        benchmark_slug="swe-rebench",
         exec_path_append="/tmp/a:/tmp/b",
     )
 

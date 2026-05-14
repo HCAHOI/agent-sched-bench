@@ -135,6 +135,7 @@ class SWEBenchVerified(Benchmark):
         return SWEBenchRunner(
             provider=provider,
             workspace_base=workspace_base,
+            benchmark_slug=self.config.slug,
             max_iterations=max_iterations,
             context_window_tokens=context_window_tokens,
             model=model,

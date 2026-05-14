@@ -76,9 +76,10 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--prompt-template",
         default=None,
         help=(
-            "Optional prompt template override under configs/prompts/swe_rebench/. "
+            "Optional prompt template override; resolved as "
+            "configs/prompts/<benchmark_slug>/<name>.md (hyphens converted to underscores). "
             "When omitted, uses the benchmark config default "
-            "(e.g. swe-rebench -> cc_aligned)."
+            "(e.g. swe-rebench -> cc_aligned, terminal-bench -> default)."
         ),
     )
     parser.add_argument(

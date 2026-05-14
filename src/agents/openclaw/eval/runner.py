@@ -50,6 +50,7 @@ class SWEBenchRunner:
         self,
         provider: LLMProvider,
         workspace_base: Path,
+        benchmark_slug: str,
         mcp_servers: dict | None = None,
         max_iterations: int | None = None,
         context_window_tokens: int | None = None,
@@ -59,6 +60,7 @@ class SWEBenchRunner:
     ) -> None:
         self.provider = provider
         self.workspace_base = Path(workspace_base).resolve()
+        self.benchmark_slug = benchmark_slug
         self.mcp_servers = mcp_servers or {}
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
@@ -146,8 +148,8 @@ class SWEBenchRunner:
             )
             return None
 
-    @staticmethod
     def _build_swe_bench_prompt(
+        self,
         problem_statement: str,
         *,
         prompt_template: str,
@@ -156,7 +158,7 @@ class SWEBenchRunner:
         from trace_collect.prompt_loader import load_prompt_template, render_prompt
 
         return render_prompt(
-            load_prompt_template(prompt_template),
+            load_prompt_template(prompt_template, self.benchmark_slug),
             problem_statement,
         )
 
