@@ -9,6 +9,7 @@ import logging
 import os
 import secrets
 import string
+import sys
 import threading
 import time
 from dataclasses import asdict
@@ -933,26 +934,35 @@ class HFRecordingServer:
                 if self.path not in {"/v1/chat/completions", "/chat/completions"}:
                     self.send_error(404)
                     return
-                length = int(self.headers.get("content-length", "0"))
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                response = asyncio.run(
-                    provider.chat(
-                        messages=payload.get("messages") or [],
-                        tools=payload.get("tools"),
-                        model=payload.get("model"),
-                        max_tokens=int(payload.get("max_tokens") or 4096),
-                        temperature=float(payload.get("temperature") or 0.0),
-                        reasoning_effort=payload.get("reasoning_effort"),
-                        tool_choice=payload.get("tool_choice"),
+                try:
+                    length = int(self.headers.get("content-length", "0"))
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    response = asyncio.run(
+                        provider.chat(
+                            messages=payload.get("messages") or [],
+                            tools=payload.get("tools"),
+                            model=payload.get("model"),
+                            max_tokens=int(payload.get("max_tokens") or 4096),
+                            temperature=float(payload.get("temperature") or 0.0),
+                            reasoning_effort=payload.get("reasoning_effort"),
+                            tool_choice=payload.get("tool_choice"),
+                        )
                     )
-                )
-                body = self._response_body(response)
-                raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
-                self.send_response(200)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+                    body = self._response_body(response)
+                    raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                except Exception as exc:
+                    import traceback
+                    sys.stderr.write(
+                        f"[HFRecordingServer] chat handler raised: {exc!r}\n"
+                        f"{traceback.format_exc()}\n"
+                    )
+                    sys.stderr.flush()
+                    self.send_error(500, str(exc)[:200])
 
             def log_message(self, _format: str, *args: Any) -> None:
                 return

@@ -56,6 +56,19 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         )
         self._mcp_config_path = mcp_config_path
 
+    _ENV_PASSTHROUGH = (
+        "PIP_INDEX_URL",
+        "PIP_EXTRA_INDEX_URL",
+        "PIP_TRUSTED_HOST",
+        "OPENCLAW_APT_MIRROR_PREFIX",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    )
+
     @property
     def _env(self) -> dict[str, str]:
         env = {
@@ -63,6 +76,10 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         }
         if self._llm_timeout_sec is not None:
             env["OPENCLAW_LLM_TIMEOUT_S"] = str(self._llm_timeout_sec)
+        for key in self._ENV_PASSTHROUGH:
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
         return env
 
     @property
@@ -89,7 +106,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             return cls._WHEEL_CACHE
         repo_root = cls._repo_root()
         wheel_dir = Path(tempfile.mkdtemp(prefix="agent_sched_bench_wheel_"))
-        subprocess.run(
+        result = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -100,10 +117,17 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 "-w",
                 str(wheel_dir),
             ],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "pip wheel failed (returncode="
+                f"{result.returncode}). stdout tail:\n"
+                f"{result.stdout[-2000:]}\n--- stderr tail:\n"
+                f"{result.stderr[-2000:]}"
+            )
         wheels = sorted(wheel_dir.glob("agent_sched_bench-*.whl"))
         if not wheels:
             raise RuntimeError("failed to build agent-sched-bench wheel")
@@ -114,11 +138,34 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _wheel_path(self) -> Path:
         return self._build_wheel()
 
-    @staticmethod
-    def _bootstrap_dependencies_command() -> str:
+    def _bootstrap_dependencies_command(self) -> str:
+        # `container.exec_run(...)` does NOT inherit the tmux session's
+        # setup-env.sh exports, so the mirror prefix must be embedded into
+        # the script literally rather than read from an env var at runtime.
+        # The glob covers both legacy `*.list` and Ubuntu 24.04+ deb822
+        # `*.sources` files; sed patterns use the URL stem (no trailing `/`)
+        # so they hit both formats.
+        apt_mirror = os.environ.get("OPENCLAW_APT_MIRROR_PREFIX", "").rstrip("/")
+        if apt_mirror:
+            mirror_swap = (
+                "  for f in /etc/apt/sources.list "
+                "/etc/apt/sources.list.d/*.list "
+                "/etc/apt/sources.list.d/*.sources; do\n"
+                "    [ -f \"$f\" ] || continue\n"
+                "    sed -i \\\n"
+                f"      -e 's|http://archive.ubuntu.com/ubuntu|{apt_mirror}/ubuntu|g' \\\n"
+                f"      -e 's|http://security.ubuntu.com/ubuntu|{apt_mirror}/ubuntu|g' \\\n"
+                f"      -e 's|http://deb.debian.org/debian|{apt_mirror}/debian|g' \\\n"
+                f"      -e 's|http://security.debian.org/debian-security|{apt_mirror}/debian-security|g' \\\n"
+                "      \"$f\" || true\n"
+                "  done\n"
+            )
+        else:
+            mirror_swap = ""
         return (
             "set -euo pipefail\n"
             "install_python_deps() {\n"
+            f"{mirror_swap}"
             "  apt-get update\n"
             "  DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-venv\n"
             "}\n"
