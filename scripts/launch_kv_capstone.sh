@@ -29,7 +29,13 @@ export HF_RECORDING_MAX_GPU_MEMORY_GIB=90
 export PYTHONPATH="$REPO/src:${PYTHONPATH:-}"
 export OPENAI_API_KEY=dummy
 
-PY=/home/featurize/work/envs/ML/bin/python
+# Conda env bin must be on PATH so terminal-bench's `tb` CLI (and any other
+# console-script the runner shells out to) is reachable. Using absolute
+# `python` alone skips this, and runner.py:_preflight() raises early.
+ENV_BIN=/home/featurize/work/envs/ML/bin
+export PATH="$ENV_BIN:${PATH}"
+
+PY="$ENV_BIN/python"
 
 echo "=== launch_kv_capstone.sh ==="
 echo "ts=$TS"
