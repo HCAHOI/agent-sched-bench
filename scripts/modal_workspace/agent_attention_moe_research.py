@@ -51,6 +51,7 @@ def run_research() -> dict[str, Any]:
     """Run the full offline research analysis over the curated-14 recordings."""
     sys.path.insert(0, "/opt/recoding_figures")
 
+    from expert_cache_metrics import expert_cache_coverage_summary
     from metrics import pairwise_js
     from plot_iter_distance import compute_iter_distance_matrices
     from recording_loader import (
@@ -109,7 +110,11 @@ def run_research() -> dict[str, Any]:
     moe = load_moe_distributions(records)
     moe_matrices, _finite_values = compute_iter_distance_matrices(moe)
     moe_summary = _distance_summary(records, moe_matrices)
-    expert_cache = _expert_cache_summary(moe, ks=(8, 16, 32, 64))
+    expert_cache = _expert_cache_summary(
+        moe,
+        ks=(8, 16, 32, 64),
+        expert_cache_coverage_summary=expert_cache_coverage_summary,
+    )
     coupling = _attention_moe_coupling(
         records,
         attention_matrices_by_phase,
@@ -366,39 +371,19 @@ def _role_value_summary(
     }
 
 
-def _expert_cache_summary(dataset: Any, *, ks: Sequence[int]) -> dict[str, Any]:
-    n_experts = len(dataset.axis_labels)
-    rows: list[dict[str, float]] = []
-    global_dist = _weighted_distribution(dataset)
-    for k_value in ks:
-        k = min(int(k_value), n_experts)
-        global_hotset = _top_indices(global_dist, k)
-        static_global = _coverage_for_fixed_hotset(dataset, global_hotset)
-        static_layer = _layer_static_coverage(dataset, k)
-        adjacent = _adjacent_dynamic_coverage(dataset, k)
-        rows.append(
-            {
-                "k": float(k),
-                "static_global_coverage": static_global["coverage"],
-                "static_layer_coverage": static_layer["coverage"],
-                "static_layer_minus_global": static_layer["coverage"] - static_global["coverage"],
-                "adjacent_prev_iter_coverage": adjacent["coverage"],
-                "adjacent_same_task_coverage": adjacent["same_task_coverage"],
-                "adjacent_cross_task_boundary_coverage": adjacent["cross_task_boundary_coverage"],
-                "adjacent_topk_jaccard": adjacent["topk_jaccard"],
-                "layer_hotset_pairwise_jaccard": _layer_hotset_jaccard(dataset, k),
-            }
-        )
-
-    return {
-        "n_layers": float(len(dataset.layers)),
-        "n_experts": float(n_experts),
-        "moe_recording_phase_limit": (
-            "routing.npz does not record prefill/decode labels, so current MoE "
-            "cacheability is all-token rather than phase-separated"
-        ),
-        "coverage_rows": rows,
-    }
+def _expert_cache_summary(
+    dataset: Any,
+    *,
+    ks: Sequence[int],
+    expert_cache_coverage_summary: Any,
+) -> dict[str, Any]:
+    summary = expert_cache_coverage_summary(dataset, ks=ks)
+    summary["moe_recording_phase_limit"] = (
+        "routing.npz does not record prefill/decode labels in this historical "
+        "script; revised A1-A5 analysis derives phase labels from "
+        "token_row_offsets, segments.json, and expert_load."
+    )
+    return summary
 
 
 def _attention_moe_coupling(
@@ -512,123 +497,6 @@ def _weighted_profile(dataset: Any, layers: Sequence[int]) -> Any:
     return total / float(total.sum())
 
 
-def _weighted_distribution(dataset: Any, layer: int | None = None) -> Any:
-    import numpy as np
-
-    total: Any | None = None
-    total_weight = 0.0
-    layers = [layer] if layer is not None else dataset.layers
-    for selected_layer in layers:
-        matrix = dataset.distributions[selected_layer]
-        weights = dataset.observation_counts[selected_layer].astype(np.float64)
-        valid = weights > 0
-        if not bool(valid.any()):
-            continue
-        weighted = np.sum(matrix[valid] * weights[valid, None], axis=0)
-        total = weighted if total is None else total + weighted
-        total_weight += float(weights[valid].sum())
-    if total is None or total_weight <= 0:
-        return np.zeros(len(dataset.axis_labels), dtype=np.float64)
-    return total / float(total.sum())
-
-
-def _coverage_for_fixed_hotset(dataset: Any, hotset: Any) -> dict[str, float]:
-    import numpy as np
-
-    coverages: list[float] = []
-    weights_out: list[float] = []
-    for layer in dataset.layers:
-        matrix = dataset.distributions[layer]
-        weights = dataset.observation_counts[layer].astype(np.float64)
-        valid = weights > 0
-        if not bool(valid.any()):
-            continue
-        coverages.extend(float(value) for value in matrix[valid][:, hotset].sum(axis=1))
-        weights_out.extend(float(value) for value in weights[valid])
-    return {"coverage": _weighted_mean(coverages, weights_out)}
-
-
-def _layer_static_coverage(dataset: Any, k: int) -> dict[str, float]:
-    coverages: list[float] = []
-    weights: list[float] = []
-    for layer in dataset.layers:
-        hotset = _top_indices(_weighted_distribution(dataset, layer), k)
-        matrix = dataset.distributions[layer]
-        obs = dataset.observation_counts[layer]
-        valid = obs > 0
-        if not bool(valid.any()):
-            continue
-        coverages.extend(float(value) for value in matrix[valid][:, hotset].sum(axis=1))
-        weights.extend(float(value) for value in obs[valid])
-    return {"coverage": _weighted_mean(coverages, weights)}
-
-
-def _adjacent_dynamic_coverage(dataset: Any, k: int) -> dict[str, float]:
-    all_coverages: list[float] = []
-    all_weights: list[float] = []
-    same_coverages: list[float] = []
-    same_weights: list[float] = []
-    cross_coverages: list[float] = []
-    cross_weights: list[float] = []
-    jaccards: list[float] = []
-
-    records = dataset.records
-    for layer in dataset.layers:
-        matrix = dataset.distributions[layer]
-        obs = dataset.observation_counts[layer]
-        for idx in range(1, len(records)):
-            if obs[idx - 1] <= 0 or obs[idx] <= 0:
-                continue
-            prev_hotset = set(int(item) for item in _top_indices(matrix[idx - 1], k))
-            curr_hotset = set(int(item) for item in _top_indices(matrix[idx], k))
-            coverage = float(matrix[idx, list(prev_hotset)].sum())
-            weight = float(obs[idx])
-            all_coverages.append(coverage)
-            all_weights.append(weight)
-            jaccards.append(_jaccard(prev_hotset, curr_hotset))
-            if records[idx - 1].task == records[idx].task:
-                same_coverages.append(coverage)
-                same_weights.append(weight)
-            else:
-                cross_coverages.append(coverage)
-                cross_weights.append(weight)
-    return {
-        "coverage": _weighted_mean(all_coverages, all_weights),
-        "same_task_coverage": _weighted_mean(same_coverages, same_weights),
-        "cross_task_boundary_coverage": _weighted_mean(cross_coverages, cross_weights),
-        "topk_jaccard": _mean(jaccards),
-    }
-
-
-def _layer_hotset_jaccard(dataset: Any, k: int) -> float:
-    hotsets = [
-        set(int(item) for item in _top_indices(_weighted_distribution(dataset, layer), k))
-        for layer in dataset.layers
-    ]
-    values = [
-        _jaccard(hotsets[left], hotsets[right])
-        for left in range(len(hotsets))
-        for right in range(left + 1, len(hotsets))
-    ]
-    return _mean(values)
-
-
-def _top_indices(values: Any, k: int) -> Any:
-    import numpy as np
-
-    arr = np.asarray(values, dtype=np.float64)
-    if k >= arr.size:
-        return np.arange(arr.size)
-    return np.argpartition(-arr, kth=k - 1)[:k]
-
-
-def _jaccard(left: set[int], right: set[int]) -> float:
-    union = left | right
-    if not union:
-        return float("nan")
-    return float(len(left & right) / len(union))
-
-
 def _pearson(x_values: Any, y_values: Any) -> float:
     import numpy as np
 
@@ -658,17 +526,6 @@ def _median(values: Any) -> float:
     arr = np.asarray(list(values), dtype=np.float64)
     arr = arr[np.isfinite(arr)]
     return float(np.median(arr)) if arr.size else float("nan")
-
-
-def _weighted_mean(values: Sequence[float], weights: Sequence[float]) -> float:
-    import numpy as np
-
-    value_arr = np.asarray(values, dtype=np.float64)
-    weight_arr = np.asarray(weights, dtype=np.float64)
-    finite = np.isfinite(value_arr) & np.isfinite(weight_arr) & (weight_arr > 0)
-    if not bool(finite.any()):
-        return float("nan")
-    return float(np.average(value_arr[finite], weights=weight_arr[finite]))
 
 
 def _nanmean_array(values: Any) -> float:
@@ -819,7 +676,9 @@ def _phase4_evidence_lines(phase_summary: dict[str, Any]) -> list[str]:
         if math.isfinite(float(item["mean_corr_attention_residual_vs_moe_js"]))
     ]
     lines = [
-        "- These are asymmetric correlations: phase-specific attention vs all-token MoE."
+        "- These are historical asymmetric correlations: phase-specific attention "
+        "vs all-token MoE. The revised A1-A5 workflow derives phase-specific MoE "
+        "from token_row_offsets, segments.json, and expert_load."
     ]
     if residual_values and max(residual_values) < 0.3:
         lines.append(
@@ -859,7 +718,7 @@ def _phase5_lines(
             "Not yet supported:",
             "",
             "- A claim that role-aggregated block/stripe plots alone prove intrinsic phase transitions.",
-            "- Phase-separated MoE serving conclusions, because current routing artifacts lack prefill/decode labels.",
+            "- Phase-separated MoE serving conclusions from this historical all-token report; use the revised A1-A5 phase-derived MoE analysis for that question.",
             "- A dynamic adjacent-iteration expert policy unless its coverage beats the layer-static baseline for the chosen cache budget.",
         ]
     )
@@ -942,7 +801,9 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
     lines.extend(_phase3_evidence_lines(top32))
     lines.extend(["", "## Phase 4 - Attention/MoE Coupling", ""])
     lines.append(
-        "- Coupling rows compare phase-specific attention distances against all-token MoE routing distances; current routing artifacts are not phase-labeled."
+        "- Coupling rows in this historical report compare phase-specific "
+        "attention distances against all-token MoE routing distances. Revised "
+        "A1-A5 outputs use phase-derived MoE where available."
     )
     for phase, item in summary["phase4_attention_moe_coupling"]["phase_summary"].items():
         lines.append(
@@ -960,7 +821,7 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
             "",
             "Next measurements to add:",
             "",
-            "- Record MoE routing phase labels or separate prefill/decode expert-load arrays.",
+            "- Prefer explicit MoE routing phase labels in future recordings even though the current artifact can derive phases for this analysis.",
             "- Add position/recency buckets within role so KV value can distinguish old system, recent tool output, and generated context.",
             "- Validate per-task phase structure before using combined-all14 plots for paper claims.",
             "",
