@@ -2,8 +2,12 @@
 # Launch a KV-eviction capstone trace on terminal-bench/jsonl-aggregator with
 # Qwen3-Coder-30B + openclaw + HF recording backend (session-shared KV cache).
 #
+# The KV policy is driven entirely by the yaml's `name:` field (random | streaming | h2o).
+# No --kv-policy flag is passed so the CLI default ("none") does not clobber it.
+#
 # Usage:
 #   ./scripts/launch_kv_capstone.sh configs/kv_policies/h2o_b1024.yaml [label-suffix]
+#   ./scripts/launch_kv_capstone.sh configs/kv_policies/streaming_b4096.yaml
 #
 # Env (override defaults if your host differs):
 #   REPO    - repo root (default: $(pwd))
@@ -66,7 +70,6 @@ exec "$PY" -m trace_collect.cli \
   --container docker \
   --mcp-config none \
   --instance-ids jsonl-aggregator \
-  --kv-policy h2o \
   --kv-config "$KV_CONFIG" \
   --record-internals \
   --max-iterations 100

@@ -308,22 +308,43 @@ def _parse_qwen_xml_tool_calls(text: str) -> tuple[str | None, list[ToolCallRequ
         r"<parameter=([^>\n]+)>\s*(.*?)\s*</parameter>",
         re.DOTALL,
     )
-    for match in outer_pattern.finditer(text):
-        function_match = function_pattern.search(match.group(1))
-        if function_match is None:
-            continue
-        args = {
-            param_match.group(1).strip(): _parse_tool_value(param_match.group(2))
-            for param_match in parameter_pattern.finditer(function_match.group(2))
-        }
-        calls.append(
-            ToolCallRequest(
-                id=_short_tool_id(),
-                name=_normalize_tool_name(function_match.group(1)),
-                arguments=args,
+    outer_matches = list(outer_pattern.finditer(text))
+    if outer_matches:
+        for match in outer_matches:
+            function_match = function_pattern.search(match.group(1))
+            if function_match is None:
+                continue
+            args = {
+                param_match.group(1).strip(): _parse_tool_value(param_match.group(2))
+                for param_match in parameter_pattern.finditer(function_match.group(2))
+            }
+            calls.append(
+                ToolCallRequest(
+                    id=_short_tool_id(),
+                    name=_normalize_tool_name(function_match.group(1)),
+                    arguments=args,
+                )
             )
-        )
-        blocks.append((match.start(), match.end()))
+            blocks.append((match.start(), match.end()))
+    else:
+        # Lenient fallback: model may have dropped the outer <tool_call> wrap
+        # under KV-eviction context loss. Empirically observed on
+        # Qwen3-Coder-30B (h2o b4096 capstone, iter ≥13) where eviction
+        # trimmed the chat template's example. Accept bare
+        # <function=...></function> blocks.
+        for fm in function_pattern.finditer(text):
+            args = {
+                pm.group(1).strip(): _parse_tool_value(pm.group(2))
+                for pm in parameter_pattern.finditer(fm.group(2))
+            }
+            calls.append(
+                ToolCallRequest(
+                    id=_short_tool_id(),
+                    name=_normalize_tool_name(fm.group(1)),
+                    arguments=args,
+                )
+            )
+            blocks.append((fm.start(), fm.end()))
     return _strip_tool_blocks(text, blocks), calls
 
 
