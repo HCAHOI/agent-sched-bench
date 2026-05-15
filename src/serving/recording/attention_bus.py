@@ -23,6 +23,11 @@ forward (post-eviction if a KV-policy cache shrunk it).
 ``phase`` is one of ``"prefill"`` or ``"decode"``, matching
 ``attention.npz.record_phase``.
 
+When ``full_prefill=True``, the payload is a bounded chunk of an otherwise
+full prefill scan and is delivered only to consumers that opt in with
+``prefill_observe_mode="full"``. This lets H2O accumulate paper-faithful
+prefill scores without forcing ``attention.npz`` to store every query row.
+
 Suspend semantics
 -----------------
 
@@ -55,6 +60,7 @@ class AttentionConsumer(Protocol):
     """
 
     always_active: bool
+    prefill_observe_mode: str
 
     def observe(
         self,
@@ -88,6 +94,12 @@ class AttentionBus:
     def n_consumers(self) -> int:
         return len(self._consumers)
 
+    def has_full_prefill_consumers(self) -> bool:
+        return any(
+            str(getattr(consumer, "prefill_observe_mode", "sampled")) == "full"
+            for consumer in self._consumers
+        )
+
     def publish(
         self,
         *,
@@ -97,10 +109,17 @@ class AttentionBus:
         key_len: int,
         phase: str,
         suspended: bool,
+        full_prefill: bool = False,
     ) -> None:
         if not self._consumers:
             return
         for consumer in self._consumers:
+            if phase == "prefill":
+                mode = str(getattr(consumer, "prefill_observe_mode", "sampled"))
+                if full_prefill and mode != "full":
+                    continue
+                if not full_prefill and mode == "full":
+                    continue
             if suspended and not getattr(consumer, "always_active", False):
                 continue
             consumer.observe(

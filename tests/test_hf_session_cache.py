@@ -137,7 +137,7 @@ def test_consecutive_chats_share_kv_state() -> None:
     """Two prepare()s. After call 1 ingests (prompt_1 + generated_1) the
     second call must pass only the delta beyond that cumulative sequence.
     """
-    cfg = EvictionPolicyConfig(name="streaming", budget=16, sink_size=2, recent_window=4)
+    cfg = EvictionPolicyConfig(name="streaming", budget=16, sink_size=2, recent_window=14)
     provider = _build_provider(cfg)
 
     prompt_1 = torch.tensor([[1, 2, 3]], dtype=torch.long)
@@ -215,6 +215,7 @@ def test_h2o_score_buffer_accumulates_across_calls() -> None:
         sink_size=1,
         recent_window=2,
         aggregate="sum",
+        prefill_mode="sampled",
     )
     bus = AttentionBus()
     cache = H2OCache(

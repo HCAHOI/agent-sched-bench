@@ -14,6 +14,7 @@ import torch
 
 from serving.kv_policies.base import EvictionPolicyConfig
 from serving.kv_policies.h2o import H2OCache
+from serving.kv_policies.recorder import KVEvictionRecorder
 from serving.recording.attention_bus import AttentionBus
 
 
@@ -30,6 +31,8 @@ def _make_cache(
     num_layers: int = 2,
     max_position_embeddings: int = 64,
     bus: AttentionBus | None = None,
+    prefill_mode: str = "full",
+    recorder: KVEvictionRecorder | None = None,
 ) -> tuple[H2OCache, AttentionBus]:
     """Build an H2OCache + the bus it subscribes to."""
     config = EvictionPolicyConfig(
@@ -37,11 +40,13 @@ def _make_cache(
         budget=budget,
         sink_size=sink_size,
         recent_window=recent_window,
+        prefill_mode=prefill_mode,  # type: ignore[arg-type]
     )
     bus = bus or AttentionBus()
     cache = H2OCache(
         config,
         num_layers=num_layers,
+        recorder=recorder,
         attention_bus=bus,
         max_position_embeddings=max_position_embeddings,
     )
@@ -404,6 +409,87 @@ def test_h2o_decide_evict_with_stale_middle_falls_back() -> None:
     assert decision.reason == "score_missing"
     assert decision.keep_indices == [0, 1, 5, 9]
     assert set(decision.evict_indices) == {2, 3, 4, 6, 7, 8}
+
+
+def test_h2o_update_defers_over_budget_prefill_until_observe() -> None:
+    """The first over-budget prefill must be ranked by observed attention.
+
+    `DynamicCache.update()` runs before the attention hook publishes scores, so
+    H2O defers the prefill compaction. Once `observe()` sees the final prefill
+    query row, the cache is compacted with a real top-k decision and the
+    recorder row is written as `over_budget`, not `score_missing`.
+    """
+    recorder = KVEvictionRecorder(call_idx=0, policy_name="h2o")
+    cache, _bus = _make_cache(
+        budget=4,
+        sink_size=1,
+        recent_window=1,
+        num_layers=1,
+        max_position_embeddings=16,
+        recorder=recorder,
+        prefill_mode="full",
+    )
+    key_states = torch.zeros(1, 1, 10, 4)
+    value_states = torch.zeros(1, 1, 10, 4)
+
+    keys, _values = cache.update(key_states, value_states, layer_idx=0)
+    assert int(keys.shape[-2]) == 10
+    assert cache.get_seq_length(0) == 10
+    assert cache._pending_prefill_evictions == {0: (-1, 10)}
+    assert recorder.n_records() == 0
+
+    cache.observe(
+        layer=0,
+        attn=_attn_with_peaks(key_len=10, peak_positions=[3, 7], n_query_rows=10),
+        query_positions=torch.arange(10, dtype=torch.long),
+        key_len=10,
+        phase="prefill",
+    )
+
+    assert cache._pending_prefill_evictions == {}
+    assert cache.get_seq_length(0) == 4
+    assert recorder.n_records() == 1
+    row = recorder._rows[0]
+    assert row.phase == "prefill"
+    assert row.evict_reason == "over_budget"
+    assert row.pre_len == 10
+    assert row.post_len == 4
+    assert set(row.kept_indices) == {0, 3, 7, 9}
+    assert row.score_topk_index is not None
+    assert set(row.score_topk_index) == {3, 7}
+
+
+def test_h2o_full_prefill_waits_for_final_chunk_before_compacting() -> None:
+    """Chunked full-prefill scoring must not compact after the first chunk."""
+    cache, _bus = _make_cache(
+        budget=4,
+        sink_size=1,
+        recent_window=1,
+        num_layers=1,
+        max_position_embeddings=16,
+        prefill_mode="full",
+    )
+    cache.update(torch.zeros(1, 1, 10, 4), torch.zeros(1, 1, 10, 4), layer_idx=0)
+
+    cache.observe(
+        layer=0,
+        attn=_attn_with_peaks(key_len=10, peak_positions=[3], n_query_rows=4),
+        query_positions=torch.arange(4, dtype=torch.long),
+        key_len=10,
+        phase="prefill",
+    )
+    assert cache.get_seq_length(0) == 10
+    assert cache._pending_prefill_evictions == {0: (-1, 10)}
+
+    cache.observe(
+        layer=0,
+        attn=_attn_with_peaks(key_len=10, peak_positions=[7], n_query_rows=6),
+        query_positions=torch.arange(4, 10, dtype=torch.long),
+        key_len=10,
+        phase="prefill",
+    )
+    assert cache.get_seq_length(0) == 4
+    assert cache._pending_prefill_evictions == {}
 
 
 # ---------------------------------------------------------------------------

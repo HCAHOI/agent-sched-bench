@@ -50,6 +50,7 @@ def test_cli_only_h2o() -> None:
     assert cfg.sink_size == 4
     assert cfg.recent_window == 256
     assert cfg.aggregate == "sum"
+    assert cfg.prefill_mode == "full"
 
 
 def test_cli_only_streaming_with_overrides() -> None:
@@ -58,14 +59,22 @@ def test_cli_only_streaming_with_overrides() -> None:
             kv_policy="streaming",
             kv_budget=1024,
             kv_sink_size=8,
-            kv_recent_window=512,
+            kv_recent_window=1016,
         )
     )
     assert cfg is not None
     assert cfg.name == "streaming"
     assert cfg.budget == 1024
     assert cfg.sink_size == 8
-    assert cfg.recent_window == 512
+    assert cfg.recent_window == 1016
+
+
+def test_cli_only_streaming_defaults_recent_to_capacity() -> None:
+    cfg = load_eviction_config(_ns(kv_policy="streaming", kv_budget=1024))
+    assert cfg is not None
+    assert cfg.name == "streaming"
+    assert cfg.sink_size == 4
+    assert cfg.recent_window == 1020
 
 
 def test_cli_missing_budget_raises() -> None:

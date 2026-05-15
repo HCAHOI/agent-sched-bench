@@ -219,11 +219,10 @@ class LayerCapturer:
         # `finish_attempt`. Provider sets via `set_kv_policy_meta(...)`
         # before `start_attempt`. Default None = `--kv-policy none`.
         self._kv_policy_meta: dict[str, Any] | None = None
-        # Optional override for `config.max_prefill_queries`. None = use the
-        # frozen RecordingConfig value. Step 8 prefill_mode="full" sets this
-        # to +inf via `unbounded_prefill_queries()` so every query row is
-        # observed during prefill (needed by H2O when sampled prefill biases
-        # the score accumulator).
+        # Optional manual override for `config.max_prefill_queries`. None = use
+        # the frozen RecordingConfig value. H2O full-prefill scoring no longer
+        # uses this path; it streams full rows in bounded chunks below so the
+        # recording sample cap stays intact.
         self._max_prefill_queries_override: int | None = None
 
         n_attention_modules = 0
@@ -375,12 +374,11 @@ class LayerCapturer:
     def unbounded_prefill_queries(self) -> Iterator[None]:
         """Temporarily disable the prefill query-row sample cap.
 
-        Step 8 prefill_mode="full" wraps `model.generate(...)` with this so
-        H2O sees every prefill query row (no `select_query_positions` cap).
-        Restores the previous override on exit; nesting is supported by
-        stashing the prior value in a local. Must NOT be used when no
-        recording session is active — the override is consulted only inside
-        the attention hook.
+        This is retained for debugging and direct recording experiments. The
+        paper-faithful H2O path does not use it because uncapping the recording
+        rows can materialize a full QxK tensor on long prompts. Restores the
+        previous override on exit; nesting is supported by stashing the prior
+        value in a local.
         """
         previous = self._max_prefill_queries_override
         # `2**31 - 1` is what `select_query_positions` treats as "no cap"
@@ -446,9 +444,9 @@ class LayerCapturer:
 
         assert self._session is not None
         query_len = int(hidden_states.shape[-2])
-        # Override path (step 8): when `unbounded_prefill_queries()` is
-        # active, treat every query row as sampled. Cheaper than mutating
-        # the frozen RecordingConfig and immediately reverts on context exit.
+        # Manual override path: when `unbounded_prefill_queries()` is active,
+        # treat every query row as sampled. Normal H2O full-prefill scoring
+        # leaves this cap bounded and streams full rows only to H2O consumers.
         max_queries = (
             self._max_prefill_queries_override
             if self._max_prefill_queries_override is not None
@@ -473,16 +471,31 @@ class LayerCapturer:
             else "prefill"
         )
         query_positions = [key_len - query_len + idx for idx in row_indices]
-        attn_rows = self._sampled_attention_rows(
-            module=module,
-            hidden_states=hidden_states,
-            position_embeddings=position_embeddings,
-            attention_mask=attention_mask,
-            key_states=key_states,
-            row_indices=row_indices,
-            query_positions=query_positions,
-            layer=layer,
-        )
+        if (
+            phase == "prefill"
+            and self._attention_bus is not None
+            and self._attention_bus.has_full_prefill_consumers()
+        ):
+            attn_rows = self._full_prefill_attention_rows(
+                module=module,
+                hidden_states=hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=attention_mask,
+                key_states=key_states,
+                row_indices=row_indices,
+                layer=layer,
+            )
+        else:
+            attn_rows = self._sampled_attention_rows(
+                module=module,
+                hidden_states=hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=attention_mask,
+                key_states=key_states,
+                row_indices=row_indices,
+                query_positions=query_positions,
+                layer=layer,
+            )
         token_ids = self._token_ids_for_key_len(key_len).to(device=attn_rows.device)
         n_segments = self._session["generated_segment_id"] + 1
 
@@ -541,6 +554,97 @@ class LayerCapturer:
         row_indices: list[int],
         query_positions: list[int],
         layer: int,
+        full_prefill: bool = False,
+    ) -> Any:
+        attn = self._attention_tensor(
+            module=module,
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            key_states=key_states,
+            row_indices=row_indices,
+            query_positions=query_positions,
+        )
+        self._publish_attention(
+            layer=layer,
+            attn=attn,
+            query_positions=query_positions,
+            key_len=int(key_states.shape[-2]),
+            full_prefill=full_prefill,
+        )
+        return attn[0].reshape(attn.shape[1] * len(row_indices), int(key_states.shape[-2]))
+
+    def _full_prefill_attention_rows(
+        self,
+        *,
+        module: Any,
+        hidden_states: Any,
+        position_embeddings: tuple[Any, Any],
+        attention_mask: Any,
+        key_states: Any,
+        row_indices: list[int],
+        layer: int,
+    ) -> Any:
+        """Publish all prefill rows to full-prefill consumers in bounded chunks.
+
+        This gives H2O paper-faithful prefill scores without constructing a
+        full `(heads, query_len, key_len)` attention tensor at once. We retain
+        only the normal sampled rows for `attention.npz`, preserving the bounded
+        recording footprint.
+        """
+        import torch
+
+        query_len = int(hidden_states.shape[-2])
+        key_len = int(key_states.shape[-2])
+        if query_len <= 0:
+            raise ValueError(f"query_len must be positive, got {query_len}")
+        chunk_size = max(1, int(self.config.max_prefill_queries))
+        selected: dict[int, Any] = {}
+        selected_set = set(int(idx) for idx in row_indices)
+        base_position = key_len - query_len
+
+        for start in range(0, query_len, chunk_size):
+            stop = min(query_len, start + chunk_size)
+            chunk_rows = list(range(start, stop))
+            chunk_positions = [base_position + idx for idx in chunk_rows]
+            attn = self._attention_tensor(
+                module=module,
+                hidden_states=hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=attention_mask,
+                key_states=key_states,
+                row_indices=chunk_rows,
+                query_positions=chunk_positions,
+            )
+            self._publish_attention(
+                layer=layer,
+                attn=attn,
+                query_positions=chunk_positions,
+                key_len=key_len,
+                full_prefill=True,
+            )
+            local_selected = [
+                (row, row - start) for row in chunk_rows if row in selected_set
+            ]
+            for row, local_idx in local_selected:
+                selected[int(row)] = attn[:, :, local_idx : local_idx + 1, :].detach()
+
+        if set(selected) != selected_set:
+            missing = sorted(selected_set.difference(selected))
+            raise RuntimeError(f"failed to retain sampled prefill rows: {missing}")
+        sampled = torch.cat([selected[int(idx)] for idx in row_indices], dim=2)
+        return sampled[0].reshape(sampled.shape[1] * len(row_indices), key_len)
+
+    def _attention_tensor(
+        self,
+        *,
+        module: Any,
+        hidden_states: Any,
+        position_embeddings: tuple[Any, Any],
+        attention_mask: Any,
+        key_states: Any,
+        row_indices: list[int],
+        query_positions: list[int],
     ) -> Any:
         import torch
 
@@ -581,6 +685,19 @@ class LayerCapturer:
             key_len=key_len,
         )
         attn = torch.softmax(scores, dim=-1)
+        return attn
+
+    def _publish_attention(
+        self,
+        *,
+        layer: int,
+        attn: Any,
+        query_positions: list[int],
+        key_len: int,
+        full_prefill: bool,
+    ) -> None:
+        import torch
+
         # Publish post-softmax, pre-reshape: shape is the documented
         # (B, num_q_heads, n_query_rows, key_len) the bus contract requires.
         # H2O (step 6) consumes this exact tensor; the capturer's own reduce
@@ -590,7 +707,7 @@ class LayerCapturer:
             phase = (
                 "decode"
                 if (
-                    int(hidden_states.shape[-2]) == 1
+                    len(query_positions) == 1
                     and self._session is not None
                     and key_len > int(self._session["input_token_count"])
                 )
@@ -606,8 +723,8 @@ class LayerCapturer:
                 key_len=key_len,
                 phase=phase,
                 suspended=self._attention_suspended > 0,
+                full_prefill=full_prefill,
             )
-        return attn[0].reshape(n_query_heads * len(row_indices), key_len)
 
     def _apply_attention_mask(
         self,

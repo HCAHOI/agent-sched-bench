@@ -152,6 +152,11 @@ class H2OCache(BaseEvictionCache):
                     f"aggregate='ema' requires 0 < ema_decay < 1; "
                     f"got {config.ema_decay!r}"
                 )
+        if config.prefill_mode not in {"sampled", "full"}:
+            raise ValueError(
+                f"prefill_mode={config.prefill_mode!r} unsupported; "
+                "use one of {sampled, full}"
+            )
         if attention_bus is None:
             raise ValueError("H2OCache requires an attention_bus to subscribe to")
         if max_position_embeddings is None or int(max_position_embeddings) <= 0:
@@ -171,6 +176,8 @@ class H2OCache(BaseEvictionCache):
         self._aggregate = str(config.aggregate)
         self._ema_decay = float(config.ema_decay)
         self._score_counts: list[torch.Tensor | None] = [None] * int(num_layers)
+        self.prefill_observe_mode = str(config.prefill_mode)
+        self._pending_prefill_evictions: dict[int, tuple[int, int]] = {}
         # Subscribe AFTER all validation succeeds so a constructor failure
         # cannot leave a half-built cache wired to the bus.
         self._attention_bus: "AttentionBus" = attention_bus
@@ -198,8 +205,6 @@ class H2OCache(BaseEvictionCache):
         across heads to get a `(key_len,)` vector that we add into the
         running buffer at slots `[0:key_len]`.
         """
-        del query_positions, phase  # unused: head-mean over heads; positions
-        # already implicit in the key axis.
         if attn.ndim != 4:
             raise ValueError(
                 f"H2OCache.observe expected 4-D attn (B,H,Q,K); got {tuple(attn.shape)}"
@@ -268,6 +273,82 @@ class H2OCache(BaseEvictionCache):
 
         if actual_key_len > self._score_lengths[int(layer)]:
             self._score_lengths[int(layer)] = actual_key_len
+        if self._observed_last_prefill_query(
+            query_positions=query_positions,
+            key_len=actual_key_len,
+            phase=phase,
+        ):
+            self._flush_pending_prefill_eviction(
+                layer_idx=int(layer), key_len=actual_key_len
+            )
+
+    def _observed_last_prefill_query(
+        self, *, query_positions: torch.Tensor, key_len: int, phase: str
+    ) -> bool:
+        if str(phase) != "prefill":
+            return False
+        if query_positions.numel() == 0:
+            return False
+        return int(query_positions.max().item()) == int(key_len) - 1
+
+    def _defer_decision(
+        self,
+        *,
+        layer_idx: int,
+        phase: str,
+        step: int,
+        pre_len: int,
+        decision: EvictionDecision,
+    ) -> bool:
+        """Defer first over-budget prefill until this layer's attention is observed.
+
+        HF appends K/V before the attention hook publishes post-softmax rows.
+        For the first over-budget prefill, evicting inside `update()` would use
+        the `score_missing` fallback. H2O's paper contract requires ranking by
+        observed attention, so we keep the full prefill K/V for the current
+        layer forward and compact it in `observe()` immediately after scores
+        are accumulated.
+        """
+        if phase == "prefill" and decision.reason == "score_missing":
+            self._pending_prefill_evictions[int(layer_idx)] = (int(step), int(pre_len))
+            return True
+        return False
+
+    def _flush_pending_prefill_eviction(self, *, layer_idx: int, key_len: int) -> None:
+        pending = self._pending_prefill_evictions.pop(int(layer_idx), None)
+        if pending is None:
+            return
+        step, pre_len = pending
+        if int(pre_len) != int(key_len):
+            raise RuntimeError(
+                "H2OCache pending prefill eviction length mismatch: "
+                f"pending pre_len={pre_len}, observed key_len={key_len}"
+            )
+
+        decision = self._decide_evict(layer_idx=int(layer_idx), key_len=int(key_len))
+        if decision.reason == "score_missing":
+            raise RuntimeError(
+                "H2OCache deferred prefill eviction still has no score after observe(); "
+                "the attention bus did not publish a usable prefill score."
+            )
+        keys, _values = self._get_layer_kv(int(layer_idx))
+        if int(keys.shape[-2]) != int(key_len):
+            raise RuntimeError(
+                "H2OCache pending prefill eviction cache length mismatch: "
+                f"cache_len={int(keys.shape[-2])}, observed key_len={key_len}"
+            )
+        if decision.evict_indices:
+            keys, _values = self._physically_drop(int(layer_idx), decision.keep_indices)
+            self._post_evict_hook(int(layer_idx), decision)
+        post_len = int(keys.shape[-2])
+        self._record_decision(
+            layer_idx=int(layer_idx),
+            phase="prefill",
+            step=int(step),
+            pre_len=int(pre_len),
+            post_len=post_len,
+            decision=decision,
+        )
 
     # -- Eviction logic ------------------------------------------------------
 
@@ -313,11 +394,12 @@ class H2OCache(BaseEvictionCache):
         # raising would silently kill the whole recording session via the
         # `finally unsubscribe` chain in HFRecordingProvider.chat().
         #
-        # Fallback: use a streaming-style keep set when score is missing —
-        # sink + recent + uniformly-spaced middle positions filling the
-        # `n_heavy` slots. Post-prefill once observe() has populated the
-        # buffer, subsequent _decide_evict calls take the top-k path below
-        # and recover the paper-correct semantics.
+        # Fallback for direct/stale decision calls: use a streaming-style keep
+        # set when score is missing — sink + recent + uniformly-spaced middle
+        # positions filling the `n_heavy` slots. The normal `update()` path
+        # defers over-budget prefill decisions until `observe()` has populated
+        # scores, so paper-faithful H2O runs should not record this reason for
+        # prefill.
         if buffer is None or self._score_lengths[int(layer_idx)] < middle_end:
             if n_heavy <= 0 or middle_len <= 0:
                 keep_middle: list[int] = []

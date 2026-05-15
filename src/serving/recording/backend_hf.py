@@ -542,7 +542,7 @@ class HFRecordingProvider(LLMProvider):
         if cfg is None:
             return None
         prefill_score_bias = (
-            cfg.name == "h2o" and getattr(cfg, "prefill_mode", "sampled") == "sampled"
+            cfg.name == "h2o" and getattr(cfg, "prefill_mode", "full") == "sampled"
         )
         return {
             "name": cfg.name,
@@ -861,22 +861,13 @@ class HFRecordingProvider(LLMProvider):
                 generation_kwargs["attention_mask"] = self._torch.ones_like(
                     input_tensor
                 )
-            # H2O + prefill_mode="full" — bypass the LayerCapturer sample
-            # cap so the H2O score accumulator observes every prefill query
-            # row.
             from contextlib import nullcontext
 
-            cfg = self._eviction_config
-            wants_full_prefill = (
-                cfg is not None
-                and cfg.name == "h2o"
-                and getattr(cfg, "prefill_mode", "sampled") == "full"
-            )
-            prefill_ctx = (
-                self.capturer.unbounded_prefill_queries()
-                if wants_full_prefill
-                else nullcontext()
-            )
+            # H2O full-prefill scoring is handled inside LayerCapturer in
+            # bounded chunks and delivered only to full-prefill consumers. Do
+            # not lift the recording sample cap here; doing so would materialize
+            # a full QxK attention tensor and can OOM on long prompts.
+            prefill_ctx = nullcontext()
             with self._torch.no_grad(), self.capturer.recording_session(
                 call_idx=call_idx,
                 segments=segments,

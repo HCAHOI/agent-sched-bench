@@ -84,6 +84,7 @@ class _RecordingSubscriber:
     """
 
     always_active: bool = True
+    prefill_observe_mode: str = "sampled"
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def observe(
@@ -288,6 +289,44 @@ def test_reduce_output_unchanged_with_passive_subscriber() -> None:
         np.testing.assert_array_equal(
             a[key], b[key], err_msg=f"field {key} diverged when adding a passive subscriber"
         )
+
+
+def test_full_prefill_consumer_gets_chunked_rows_without_uncapping_recording() -> None:
+    """Full-prefill H2O consumers get all rows in chunks; attention.npz stays sampled."""
+    bus = AttentionBus()
+    subscriber = _RecordingSubscriber(always_active=True, prefill_observe_mode="full")
+    bus.subscribe(subscriber)
+    model, capturer = _make_capturer(attention_bus=bus)
+
+    capturer.start_attempt(_TmpDir())  # type: ignore[arg-type]
+    with capturer.recording_session(
+        call_idx=0,
+        segments=[
+            {
+                "role": "user",
+                "message_index": 0,
+                "token_start": 0,
+                "token_end": 8,
+                "has_content": True,
+                "has_tool_calls": False,
+            }
+        ],
+        input_token_count=8,
+    ):
+        attn = model.model.layers[0].self_attn
+        cos = torch.ones(1, 8, 4, dtype=torch.float32)
+        sin = torch.zeros(1, 8, 4, dtype=torch.float32)
+        attn(
+            torch.zeros(1, 8, 8),
+            position_embeddings=(cos, sin),
+            past_key_values=_FakeCache(torch.zeros(1, 1, 8, 4)),
+        )
+
+    assert [call["query_positions"] for call in subscriber.calls] == [
+        [0, 1, 2, 3],
+        [4, 5, 6, 7],
+    ]
+    assert capturer._prefill_records[0]["query_positions"].tolist() == [0, 2, 5, 7]
 
 
 # ---------------------------------------------------------------------------

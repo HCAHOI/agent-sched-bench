@@ -1,4 +1,4 @@
-"""Tests for step 8 prefill_mode="full" and step 9 record=off plumbing.
+"""Tests for prefill recording controls and record=off plumbing.
 
 These exercise the LayerCapturer/HFRecordingProvider seams without spinning
 up a real HF model: we drive the capturer-side override directly and inspect
@@ -108,7 +108,7 @@ class _TmpAttemptDir:
 
 
 # ---------------------------------------------------------------------------
-# Step 8: prefill_mode=full disables the LayerCapturer prefill sample cap.
+# Manual override: unbounded_prefill_queries disables the prefill sample cap.
 # ---------------------------------------------------------------------------
 
 
@@ -198,7 +198,7 @@ def test_h2o_prefill_score_bias_meta_reflects_prefill_mode() -> None:
             "name": cfg.name,
             "prefill_mode": cfg.prefill_mode,
             "prefill_score_bias": (
-                cfg.name == "h2o" and getattr(cfg, "prefill_mode", "sampled") == "sampled"
+                cfg.name == "h2o" and getattr(cfg, "prefill_mode", "full") == "sampled"
             ),
         }
 
@@ -266,14 +266,14 @@ def test_kv_record_off_skips_npz_write(tmp_path: Path) -> None:
         name="streaming",
         budget=8,
         sink_size=2,
-        recent_window=4,
+        recent_window=6,
         record=False,
     )
     cfg_record_on = EvictionPolicyConfig(
         name="streaming",
         budget=8,
         sink_size=2,
-        recent_window=4,
+        recent_window=6,
         record=True,
     )
 

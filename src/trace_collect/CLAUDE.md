@@ -49,7 +49,7 @@ OPENROUTER_API_KEY=sk-... python -m trace_collect.cli \
 | `--api-key` | no | from env | Override API key |
 | `--record-internals` | no | off | OpenClaw-only: record sampled HF attention/MoE artifacts under each attempt's `recordings/`; forces model request concurrency to 1 |
 | `--kv-policy` | no | `none` | KV cache eviction policy for the HF recording backend. `none` (default) = stock `DynamicCache`. `random` = uniform random over-budget eviction (step 3 baseline). `streaming` = StreamingLLM (sink prefix + recent window, naive variant — no RoPE re-rotation). `h2o` = Heavy-Hitter Oracle (arXiv:2306.14048): keep sink + recent + top-k middle positions ranked by accumulated post-softmax attention; subscribes to the `AttentionBus` to share LayerCapturer's softmax. Requires `--record-internals`. |
-| `--kv-budget` | when `--kv-policy != none` | — | Per-layer KV budget in tokens. Required and must be `> 0` whenever `--kv-policy` is set. For `streaming` and `h2o`, acts as the **trigger threshold** (no eviction while `key_len <= budget`); must be `>= --kv-sink-size + --kv-recent-window`. For `h2o`, post-eviction layer length is exactly `budget`; the heavy-hitter slot count is `budget - sink_size - recent_window`. Each call writes a `kv_eviction.npz` under `recordings/iter_<call>/` with the keep/evict audit. |
+| `--kv-budget` | when `--kv-policy != none` | — | Per-layer KV budget in tokens. Required and must be `> 0` whenever `--kv-policy` is set. For `streaming`, this is the fixed cache capacity and must equal `sink_size + recent_window`. For `h2o`, post-eviction layer length is exactly `budget`; the heavy-hitter slot count is `budget - sink_size - recent_window`. Each call writes a `kv_eviction.npz` under `recordings/iter_<call>/` with the keep/evict audit. |
 | `--kv-sink-size` | no | `4` | Sink-prefix length (head tokens preserved). Used by `streaming` and `h2o`. Ignored by `random`. |
 | `--kv-recent-window` | no | `256` | Recent-window length (tail tokens preserved). Used by `streaming` and `h2o`. Ignored by `random`. |
 | `--kv-aggregate` | no | `sum` | H2O score aggregation across queries. `sum` = cumulative mass (paper default); `mean` = sum / observation count per position (parallel int32 counter); `ema` = exponential moving average with `ema_decay` (yaml-only field, default 0.9, must be in (0, 1)). Ignored by `random` and `streaming`. |
@@ -80,7 +80,7 @@ aggregate: sum       # h2o: sum | mean | ema
 ema_decay: 0.9       # h2o, when aggregate=ema (must be in (0, 1))
 seed: 0              # random
 record: true         # write kv_eviction.npz; set false for perf isolation
-prefill_mode: sampled  # h2o: sampled | full
+prefill_mode: full     # h2o: sampled | full
 ```
 
 | Policy | What it keeps |
@@ -104,8 +104,8 @@ CLI / YAML resolution order (see `src/serving/kv_policies/config.py`):
 
 | Mode | Behaviour |
 |------|-----------|
-| `sampled` (default) | Bus sees only LayerCapturer-sampled prefill query rows (cap = `RecordingConfig.max_prefill_queries`, default 80). Cheap; meta.json marks `prefill_score_bias=true`. |
-| `full` | `HFRecordingProvider._chat_locked` wraps `model.generate(...)` in `LayerCapturer.unbounded_prefill_queries()`, lifting the cap to `2**31-1`. Every prefill query row is observed; `prefill_score_bias=false`. Cost is O(prefill_len) extra `observe()` calls per layer. |
+| `sampled` | Bus sees only LayerCapturer-sampled prefill query rows (cap = `RecordingConfig.max_prefill_queries`, default 80). Cheap approximation; meta.json marks `prefill_score_bias=true`. |
+| `full` | LayerCapturer streams every prefill query row to H2O in bounded chunks of at most `RecordingConfig.max_prefill_queries`, while `attention.npz` remains sampled. This avoids materializing a full QxK recording tensor; `prefill_score_bias=false`. |
 
 Perf isolation (`--kv-record off`): policy still runs, no
 `KVEvictionRecorder` allocated, no `kv_eviction.npz` written. Used by

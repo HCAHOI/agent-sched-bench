@@ -86,11 +86,12 @@ class PerfRow:
 def _build_config(policy: str, record: bool) -> EvictionPolicyConfig | None:
     if policy == "none":
         return None
+    recent_window = 252 if policy == "streaming" else 64
     return EvictionPolicyConfig(
         name=policy,
         budget=256,
         sink_size=4,
-        recent_window=64,
+        recent_window=recent_window,
         aggregate="sum",
         record=record,
     )

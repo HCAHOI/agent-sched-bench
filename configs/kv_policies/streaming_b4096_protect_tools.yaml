@@ -1,3 +1,6 @@
+# StreamingLLM protect-tools ablation, not the generic paper baseline.
+# For the generic b4096 StreamingLLM baseline, use streaming_b4096.yaml.
+#
 # StreamingLLM (Xiao et al. ICLR 2024, arXiv:2309.17453), naive variant.
 # Designed to test the "tool-definition KV is the cliff" hypothesis from the
 # h2o b4096 capstone: that policy's catastrophic zombie loop coincided with
@@ -13,10 +16,9 @@
 # intact. Middle assistant/tool history is dropped — the contrast vs. h2o
 # isolates whether tools-KV preservation alone reverses the cliff.
 #
-# trigger: no eviction while key_len ≤ 4096
-# post-eviction layer length: sink_size + recent_window = 3584 tokens
+# Fixed capacity: sink_size + recent_window = 4096 tokens.
 name: streaming
 budget: 4096
 sink_size: 2560
-recent_window: 1024
+recent_window: 1536
 record: true

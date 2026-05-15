@@ -43,7 +43,7 @@ from serving.recording.backend_hf import HFRecordingProvider  # noqa: E402
 MODEL = "Qwen/Qwen3-0.6B"
 BUDGET = 16
 SINK_SIZE = 4
-RECENT_WINDOW = 8
+RECENT_WINDOW = BUDGET - SINK_SIZE
 MAX_NEW_TOKENS = 24
 
 

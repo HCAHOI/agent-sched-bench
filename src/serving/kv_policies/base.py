@@ -36,7 +36,7 @@ class EvictionPolicyConfig:
     ema_decay: float = 0.9  # h2o (when aggregate="ema")
     seed: int = 0  # random
     record: bool = True  # F15: instrument toggle
-    prefill_mode: Literal["sampled", "full"] = "sampled"  # B4 fidelity
+    prefill_mode: Literal["sampled", "full"] = "full"  # h2o prefill fidelity
 
 
 @dataclass
@@ -59,9 +59,11 @@ class BaseEvictionCache(DynamicCache):
     Lifecycle per `update()` call:
       1. delegate to `super().update()` to append the new K/V slots
       2. call `_decide_evict(layer_idx, post_append_len)`
-      3. if any evictions, physically drop those positions from this layer's
+      3. give subclasses one chance to defer the decision when their score is
+         only available after the current attention forward (H2O prefill)
+      4. if any evictions, physically drop those positions from this layer's
          K/V tensors so `get_seq_length()` returns the post-eviction length
-      4. if a recorder is attached and `config.record` is True, record the
+      5. if a recorder is attached and `config.record` is True, record the
          decision via `KVEvictionRecorder.append()`
 
     Step 2-only: `_decide_evict` is abstract. Step 3+ adds policy subclasses.
@@ -111,6 +113,14 @@ class BaseEvictionCache(DynamicCache):
         phase, step = self._advance_step(layer_idx, query_len=query_len)
 
         decision = self._decide_evict(layer_idx, pre_len)
+        if self._defer_decision(
+            layer_idx=layer_idx,
+            phase=phase,
+            step=step,
+            pre_len=pre_len,
+            decision=decision,
+        ):
+            return keys, values
         if decision.evict_indices:
             keys, values = self._physically_drop(layer_idx, decision.keep_indices)
             # Subclasses with per-key-position state (H2O score buffer) need to
@@ -119,25 +129,58 @@ class BaseEvictionCache(DynamicCache):
             self._post_evict_hook(layer_idx, decision)
         post_len = int(keys.shape[-2])
 
-        if self.recorder is not None and self.config.record:
-            # `policy_state` is the carry slot for policy-specific diagnostics
-            # the recorder writes to npz; H2O fills `score_topk_index/value`,
-            # other policies leave it None and the recorder fills sentinels.
-            policy_state = decision.policy_state or {}
-            self.recorder.append(
-                step=step,
-                layer=int(layer_idx),
-                phase=phase,
-                pre_len=pre_len,
-                post_len=post_len,
-                budget=int(self.config.budget) if self.config.budget is not None else -1,
-                kept_indices=list(decision.keep_indices),
-                evicted_indices=list(decision.evict_indices),
-                evict_reason=decision.reason,
-                score_topk_index=policy_state.get("score_topk_index"),
-                score_topk_value=policy_state.get("score_topk_value"),
-            )
+        self._record_decision(
+            layer_idx=layer_idx,
+            phase=phase,
+            step=step,
+            pre_len=pre_len,
+            post_len=post_len,
+            decision=decision,
+        )
         return keys, values
+
+    def _defer_decision(
+        self,
+        *,
+        layer_idx: int,
+        phase: str,
+        step: int,
+        pre_len: int,
+        decision: EvictionDecision,
+    ) -> bool:
+        """Return True when a subclass will finish and record this decision later."""
+        del layer_idx, phase, step, pre_len, decision
+        return False
+
+    def _record_decision(
+        self,
+        *,
+        layer_idx: int,
+        phase: str,
+        step: int,
+        pre_len: int,
+        post_len: int,
+        decision: EvictionDecision,
+    ) -> None:
+        if self.recorder is None or not self.config.record:
+            return
+        # `policy_state` is the carry slot for policy-specific diagnostics the
+        # recorder writes to npz; H2O fills `score_topk_index/value`, other
+        # policies leave it None and the recorder fills sentinels.
+        policy_state = decision.policy_state or {}
+        self.recorder.append(
+            step=step,
+            layer=int(layer_idx),
+            phase=phase,
+            pre_len=pre_len,
+            post_len=post_len,
+            budget=int(self.config.budget) if self.config.budget is not None else -1,
+            kept_indices=list(decision.keep_indices),
+            evicted_indices=list(decision.evict_indices),
+            evict_reason=decision.reason,
+            score_topk_index=policy_state.get("score_topk_index"),
+            score_topk_value=policy_state.get("score_topk_value"),
+        )
 
     def _post_evict_hook(self, layer_idx: int, decision: EvictionDecision) -> None:
         """Hook fired after `_physically_drop` succeeds.

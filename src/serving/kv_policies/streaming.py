@@ -32,18 +32,16 @@ shifted-RoPE variant).
 Budget semantics
 ----------------
 
-`config.budget` here is the **trigger threshold**, not a post-eviction
-target. Concretely:
+`config.budget` is the fixed StreamingLLM cache capacity:
 
-* `key_len <= budget` → no eviction (matches stock DynamicCache during
-  prefill of short prompts).
+* `key_len <= budget` → no eviction.
 * `key_len > budget` → evict middle, keep
-  `[0..sink_size-1] ∪ [key_len-recent_window..key_len-1]`. Post-eviction
-  length is exactly `sink_size + recent_window`.
+  `[0..sink_size-1] ∪ [key_len-recent_window..key_len-1]`.
 
-`__init__` enforces `budget >= sink_size + recent_window` so the trigger
-threshold is at least as large as the post-eviction floor — otherwise
-eviction would pad up the cache, which is nonsense.
+`__init__` enforces `budget == sink_size + recent_window`. Letting `budget`
+float above the sink+recent capacity turns StreamingLLM into a custom
+"large trigger, small post-eviction window" policy and makes budget-labeled
+comparisons misleading.
 """
 
 from __future__ import annotations
@@ -91,11 +89,11 @@ class StreamingLLMCache(BaseEvictionCache):
                 f"StreamingLLMCache requires recent_window > 0; got {config.recent_window!r}"
             )
         floor = int(config.sink_size) + int(config.recent_window)
-        if int(config.budget) < floor:
+        if int(config.budget) != floor:
             raise ValueError(
-                f"StreamingLLMCache requires budget >= sink_size + recent_window "
-                f"({config.budget!r} < {config.sink_size!r} + {config.recent_window!r} "
-                f"= {floor})"
+                f"StreamingLLMCache requires budget == sink_size + recent_window "
+                f"({config.budget!r} != {config.sink_size!r} + {config.recent_window!r} "
+                f"= {floor}); budget is the fixed cache capacity"
             )
 
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:

@@ -32,11 +32,11 @@ def _make_cache(
 def test_streaming_keeps_sink_and_recent() -> None:
     """Plan G16#1: budget=8, sink=2, recent=4 over a sweep of key lengths.
 
-    `key_len <= budget` -> no eviction (sink+recent=6 < budget=8 means at
-    key_len=8 we're still at the trigger threshold and pass through). Once
-    `key_len > budget`, we keep `[0, 1] ∪ [key_len-4 .. key_len-1]`.
+    `key_len <= budget` -> no eviction. Once `key_len > budget`, we keep
+    `[0, 1] ∪ [key_len-6 .. key_len-1]`, so post-eviction length stays at the
+    fixed StreamingLLM capacity.
     """
-    cache = _make_cache(budget=8, sink_size=2, recent_window=4)
+    cache = _make_cache(budget=8, sink_size=2, recent_window=6)
 
     # Sweep key_len from 1 to 64 inclusive — pin every transition.
     for n in range(1, 65):
@@ -46,24 +46,24 @@ def test_streaming_keeps_sink_and_recent() -> None:
             assert decision.keep_indices == list(range(n)), f"n={n} keep mismatch"
             assert decision.reason == "none", f"n={n} reason"
         else:
-            expected_keep = [0, 1] + list(range(n - 4, n))
-            expected_evict = list(range(2, n - 4))
+            expected_keep = [0, 1] + list(range(n - 6, n))
+            expected_evict = list(range(2, n - 6))
             assert decision.keep_indices == expected_keep, f"n={n} keep mismatch"
             assert decision.evict_indices == expected_evict, f"n={n} evict mismatch"
             assert decision.reason == "over_budget", f"n={n} reason"
 
     # Spot-check the headline values from the task brief.
     d12 = cache._decide_evict(layer_idx=0, key_len=12)
-    assert d12.keep_indices == [0, 1, 8, 9, 10, 11]
-    assert d12.evict_indices == [2, 3, 4, 5, 6, 7]
+    assert d12.keep_indices == [0, 1, 6, 7, 8, 9, 10, 11]
+    assert d12.evict_indices == [2, 3, 4, 5]
 
     d64 = cache._decide_evict(layer_idx=0, key_len=64)
-    assert d64.keep_indices == [0, 1, 60, 61, 62, 63]
+    assert d64.keep_indices == [0, 1, 58, 59, 60, 61, 62, 63]
 
 
 def test_streaming_config_validation() -> None:
-    """sink + recent > budget must raise — eviction would otherwise pad up."""
-    with pytest.raises(ValueError, match="budget >= sink_size \\+ recent_window"):
+    """sink + recent must equal budget; budget is the fixed cache capacity."""
+    with pytest.raises(ValueError, match="budget == sink_size \\+ recent_window"):
         StreamingLLMCache(
             EvictionPolicyConfig(
                 name="streaming",
@@ -73,11 +73,21 @@ def test_streaming_config_validation() -> None:
             ),
             num_layers=4,
         )
+    with pytest.raises(ValueError, match="budget == sink_size \\+ recent_window"):
+        StreamingLLMCache(
+            EvictionPolicyConfig(
+                name="streaming",
+                budget=8,
+                sink_size=2,
+                recent_window=4,  # 2 + 4 = 6 < 8
+            ),
+            num_layers=4,
+        )
 
     # Other defensive guards: positive budget, non-negative sink, positive recent.
     with pytest.raises(ValueError, match="positive config.budget"):
         StreamingLLMCache(
-            EvictionPolicyConfig(name="streaming", budget=None, sink_size=2, recent_window=4),
+            EvictionPolicyConfig(name="streaming", budget=None, sink_size=2, recent_window=6),
             num_layers=4,
         )
     with pytest.raises(ValueError, match="recent_window > 0"):
@@ -95,7 +105,7 @@ def test_streaming_layer_independence() -> None:
     per-layer state (which would diverge from the paper's contract and break
     cross-policy comparisons against H2O in step 6).
     """
-    cache = _make_cache(budget=8, sink_size=2, recent_window=4, num_layers=8)
+    cache = _make_cache(budget=8, sink_size=2, recent_window=6, num_layers=8)
     decisions = [
         cache._decide_evict(layer_idx=i, key_len=20) for i in range(8)
     ]

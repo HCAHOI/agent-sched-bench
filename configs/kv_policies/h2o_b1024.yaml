@@ -12,10 +12,10 @@
 #
 # `prefill_mode`:
 #   sampled — observe only LayerCapturer-sampled query rows during prefill
-#             (cheap, default). meta.json marks `prefill_score_bias=true`.
-#   full    — bypass the sample cap during prefill so every query row is
-#             observed. Gives unbiased prefill scores at the cost of
-#             O(prefill_len) extra observe() calls.
+#             (cheap approximation). meta.json marks `prefill_score_bias=true`.
+#   full    — stream every prefill query row to H2O in bounded chunks while
+#             keeping attention.npz sampling capped. This is the paper-faithful
+#             setting and avoids materializing a full QxK recording tensor.
 name: h2o
 budget: 1024
 sink_size: 4
@@ -24,4 +24,4 @@ heavy_ratio: 0.5
 aggregate: sum
 ema_decay: 0.9
 record: true
-prefill_mode: sampled
+prefill_mode: full

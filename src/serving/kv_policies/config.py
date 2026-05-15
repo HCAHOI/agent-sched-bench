@@ -96,9 +96,10 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
        silently disable yaml-supplied policies, so we special-case it: a
        CLI `"none"` only kicks in when there's no yaml file.
     3. Validate the merged map: `name` must be present and != `"none"`,
-       `budget` must be a positive int. Other invariants (sink+recent <=
-       budget, etc.) live on the cache subclasses themselves so yaml-only
-       and CLI-only paths hit the same gate.
+       `budget` must be a positive int. For streaming, an omitted
+       `recent_window` is resolved to `budget - sink_size` so `--kv-budget`
+       alone means "fixed cache capacity"; explicit YAML/CLI windows remain
+       explicit and are validated by the cache subclass.
 
     Returns None when the resolved policy is `"none"` (or absent and no
     yaml supplied), so callers can keep the simple `if eviction_config is
@@ -123,6 +124,7 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
     }
 
     merged: dict[str, Any] = dict(base)
+    explicit_cli_fields: set[str] = set()
     for cli_attr, field_name in _CLI_TO_FIELD.items():
         cli_value = getattr(args, cli_attr, cli_defaults.get(cli_attr))
         default_value = cli_defaults.get(cli_attr)
@@ -132,11 +134,13 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
             # a yaml-supplied name when the user did not pass --kv-config.
             if cli_explicit:
                 merged[field_name] = cli_value
+                explicit_cli_fields.add(field_name)
             elif yaml_path is None and field_name not in merged:
                 merged[field_name] = cli_value
         else:
             if cli_explicit:
                 merged[field_name] = cli_value
+                explicit_cli_fields.add(field_name)
             elif field_name not in merged and default_value is not None:
                 # Carry the argparse default into the merged map only when
                 # yaml didn't speak — keeps the dataclass default visible
@@ -164,6 +168,20 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
             f"kv policy {name!r} requires budget > 0 (got {budget!r})"
         )
     merged["budget"] = budget_int
+
+    if name == "streaming":
+        recent_explicit = (
+            "recent_window" in base or "recent_window" in explicit_cli_fields
+        )
+        if not recent_explicit:
+            sink = int(merged.get("sink_size", EvictionPolicyConfig.sink_size))
+            recent = budget_int - sink
+            if recent <= 0:
+                raise argparse.ArgumentTypeError(
+                    f"kv policy 'streaming' requires budget > sink_size "
+                    f"when recent_window is omitted (got budget={budget_int}, sink={sink})"
+                )
+            merged["recent_window"] = recent
 
     # Drop unknown keys (already validated by _load_yaml for yaml; CLI keys
     # are all in _CLI_TO_FIELD which targets known fields). Coerce remaining
