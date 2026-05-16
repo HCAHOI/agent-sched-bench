@@ -303,18 +303,23 @@ import importlib.metadata as md
 print(f"[terminal-bench-setup] huggingface_hub={md.version('huggingface-hub')}")
 PY
 
-  # Intentionally no `hf auth login`. snapshot_download(token=...) reads
-  # HF_TOKEN at call time, sidesteps huggingface_hub 1.x multi-token-store
-  # quirks ("Token X not found in stored_tokens"), and keeps the token out
-  # of disk-cached config.
   if [ -z "${HF_TOKEN:-}" ]; then
     if [ "${REQUIRE_HF_TOKEN}" = "1" ]; then
       fatal "HF_TOKEN is not set; export it before invoking this script (needed for HF private repos — see REQUIRE_HF_TOKEN=0 to bypass for public-only setups)"
     fi
     log "HF_TOKEN not set; public-repo access only"
-  else
-    log "HF_TOKEN provided; will be passed to snapshot_download via env var"
+    return 0
   fi
+  # Persist token to the standard HF storage so subsequent HF API / git-LFS
+  # calls work without HF_TOKEN re-export. `hf auth login` exists in both
+  # huggingface_hub 0.x and 1.x with identical semantics.
+  log "writing HF token via hf auth login"
+  "${VENV_PATH}/bin/hf" auth login --token "${HF_TOKEN}" --add-to-git-credential >/dev/null
+  local who
+  who=$("${VENV_PATH}/bin/python" -c \
+    "from huggingface_hub import HfApi; print(HfApi().whoami()['name'])" 2>&1) \
+    || fatal "HF auth login wrote token but whoami failed: ${who}"
+  log "HF authenticated as ${who}"
 }
 
 prefetch_terminal_bench() {
