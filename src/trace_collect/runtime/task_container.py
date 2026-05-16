@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agents.openclaw.runtime_deps import OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOTNAME = "_task_container_runtime"
@@ -26,17 +28,6 @@ _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple"
 _GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 _GET_PIP_FETCH_ATTEMPTS = 3
 _GET_PIP_FETCH_BACKOFF_SECONDS = 1.0
-_BOOTSTRAP_REQUIREMENTS = (
-    "openai>=2.0,<3.0",
-    "anyio>=4.0,<5.0",
-    "PyYAML>=6.0,<7.0",
-    "json-repair>=0.30,<1.0",
-    "loguru>=0.7,<1.0",
-    "pydantic>=2.0,<3.0",
-    "httpx>=0.27,<1.0",
-    "socksio>=1.0,<2.0",
-    "tiktoken>=0.7,<1.0",
-)
 _ARCH_ALIASES = {
     "amd64": "amd64",
     "x86_64": "amd64",
@@ -576,7 +567,9 @@ def bootstrap_task_container_python(
         return
 
     marker = exec_config.bootstrap_site_dir / ".bootstrap-ready.json"
-    requirements = tuple(dict.fromkeys(_BOOTSTRAP_REQUIREMENTS + extra_requirements))
+    requirements = tuple(
+        dict.fromkeys(OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS + extra_requirements)
+    )
     if _bootstrap_marker_matches(
         marker,
         requirements=requirements,

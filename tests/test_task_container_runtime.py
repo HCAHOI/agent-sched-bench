@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 import ssl
 import urllib.error
 from pathlib import Path
 
 import pytest
 
+from agents.openclaw.runtime_deps import OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
 from trace_collect.runtime.task_container import (
     TaskContainerExecConfig,
     TaskContainerRunResult,
@@ -212,9 +212,18 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
 
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
     assert "/opt/conda/envs/ML/bin/python" in seen["cmd"]
-    assert "anyio>=4.0,<5.0" in str(seen["input"])
+    input_script = str(seen["input"])
+    for requirement in OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS:
+        assert requirement in input_script
     assert "mcp>=1.0" in str(seen["input"])
-    assert "socksio>=1.0,<2.0" in str(seen["input"])
+    for heavy_dep in (
+        "datasets",
+        "terminal-bench",
+        "transformers",
+        "accelerate",
+        "trafilatura",
+    ):
+        assert heavy_dep not in input_script
 
 
 def test_bootstrap_task_container_python_retries_transient_get_pip_failures(

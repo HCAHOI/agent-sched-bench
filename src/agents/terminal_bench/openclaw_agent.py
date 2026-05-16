@@ -16,6 +16,11 @@ from terminal_bench.agents.installed_agents.abstract_installed_agent import (
 from terminal_bench.terminal.models import TerminalCommand
 from terminal_bench.terminal.tmux_session import TmuxSession
 
+from agents.openclaw.runtime_deps import (
+    OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS,
+    OPENCLAW_MCP_RUNTIME_REQUIREMENTS,
+)
+
 
 def _optional_float(value: object) -> float | None:
     if value is None or value == "":
@@ -159,17 +164,28 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
 
     @property
     def _install_agent_script_path(self) -> Path:
+        requirements = self._container_runtime_requirements()
+        install_requirements = " ".join(shlex.quote(req) for req in requirements)
         script = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
         script.write(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
             f"python3 -m venv {self.VENV_PATH}\n"
             f"{self.VENV_PATH}/bin/python -m pip install --upgrade pip\n"
-            f"{self.VENV_PATH}/bin/python -m pip install /installed-agent/{self._wheel_path.name}\n"
+            f"{self.VENV_PATH}/bin/python -m pip install {install_requirements}\n"
+            f"{self.VENV_PATH}/bin/python -m pip install --no-deps /installed-agent/{self._wheel_path.name}\n"
         )
         script.close()
         os.chmod(script.name, 0o755)
         return Path(script.name)
+
+    def _container_runtime_requirements(self) -> tuple[str, ...]:
+        extra_requirements = (
+            OPENCLAW_MCP_RUNTIME_REQUIREMENTS if self._mcp_config_path else ()
+        )
+        return tuple(
+            dict.fromkeys(OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS + extra_requirements)
+        )
 
     @classmethod
     def _repo_root(cls) -> Path:

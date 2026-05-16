@@ -176,6 +176,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
             api_key="test-key",
             model="qwen-plus-latest",
             max_iterations=10,
+            generation_config=None,
             max_context_tokens=1024,
             mcp_config=None,
         )
@@ -306,6 +307,7 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
             api_key="test-key",
             model="qwen-plus-latest",
             max_iterations=10,
+            generation_config=None,
             max_context_tokens=1024,
             mcp_config="configs/mcp/context7.yaml",
         )

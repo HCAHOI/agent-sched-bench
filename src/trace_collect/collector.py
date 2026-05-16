@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from llm_call import UnifiedProvider
+from agents.openclaw.runtime_deps import OPENCLAW_MCP_RUNTIME_REQUIREMENTS
 
 # `serving.recording` (and its KV-eviction transitive deps) pulls in `torch`
 # via `transformers.cache_utils`. Container venvs that only need MCP/scaffold
@@ -881,7 +882,7 @@ async def _run_openclaw_in_task_container(
         bootstrap_requirements: tuple[str, ...] = ()
         if mcp_config not in {None, "none"}:
             preflight_imports.append("agents.openclaw.tools.mcp")
-            bootstrap_requirements = ("mcp>=1.0",)
+            bootstrap_requirements = OPENCLAW_MCP_RUNTIME_REQUIREMENTS
         bootstrap_task_container_python(
             container_id=container_id,
             exec_config=exec_config,
