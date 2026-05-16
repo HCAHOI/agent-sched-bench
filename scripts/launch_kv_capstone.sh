@@ -14,7 +14,8 @@
 # Env (override defaults if your host differs):
 #   REPO        - repo root (default: $(pwd))
 #   INSTANCE_ID - terminal-bench task id (default: jsonl-aggregator)
-#   MODEL_ID    - HF model id/path (default: Qwen/Qwen3-Coder-30B-A3B-Instruct)
+#   MODEL_ID    - HF model id/path (default: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8;
+#                 FP8 fits on 80 GB / 48 GB cards — bf16 30B-A3B needs 96 GB)
 #   ENV_BIN     - conda env bin dir holding python + the `tb` console script
 #                 (default: dir of `which python`)
 #   HF_HOME     - HuggingFace cache dir (default: $HOME/hf_cache)
@@ -51,7 +52,7 @@ export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export HF_RECORDING_MAX_GPU_MEMORY_GIB="${HF_RECORDING_MAX_GPU_MEMORY_GIB:-90}"
 export PYTHONPATH="$REPO/src:${PYTHONPATH:-}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
-MODEL_ID="${MODEL_ID:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
+MODEL_ID="${MODEL_ID:-Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8}"
 OPENCLAW_TEMPERATURE="${OPENCLAW_TEMPERATURE:-0.7}"
 OPENCLAW_TOP_P="${OPENCLAW_TOP_P:-0.8}"
 OPENCLAW_TOP_K="${OPENCLAW_TOP_K:-20}"

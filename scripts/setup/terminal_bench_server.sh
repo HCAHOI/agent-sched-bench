@@ -1,44 +1,52 @@
 #!/usr/bin/env bash
-# Idempotent setup for Ubuntu GPU servers running Terminal-Bench traces with
-# OpenClaw and the HF recording backend.
+# Ephemeral cloud-GPU setup for Terminal-Bench + OpenClaw runs.
 #
-# This script only prepares host state. Project code changes belong in the repo,
-# not in this script.
+# Uses uv directly (no conda) — see CLAUDE.md "Runtime entry points".
+# Verified on Ubuntu 22.04 + RTX 6000 Ada (fresh instance, 64.247.196.218),
+# total ~2 min: project deps 5s + torch 30s + 30 GB FP8 snapshot 60s.
 #
-# Intended use: paste this shape into the cloud GPU platform's startup command
-# box, then replace "your token" before launching the instance:
+# Two backend modes (set SETUP_BACKEND):
+#   transformers  — HF transformers + KV recording backend (capstone runs)
+#   vllm          — OpenAI-compatible vLLM server (no recording)
+#   both          — install both into .venv (let uv resolver pick torch)
+#
+# Tunables (env vars):
+#   REPO_ROOT         — repo root              (default: script_dir/../..)
+#   VENV_PATH         — .venv location         (default: $REPO_ROOT/.venv)
+#   PYTHON_VERSION    — Python pin             (default: 3.12)
+#   MODEL_ID          — HF model id            (default: Qwen3-Coder-30B-A3B-Instruct-FP8)
+#                         FP8 default — bf16 30B-A3B needs a 96 GB card.
+#   HF_HOME           — HF cache root          (default: $HOME/hf_cache)
+#   HF_TOKEN          — required for private repos; REQUIRE_HF_TOKEN=1 default
+#   SETUP_BACKEND     — transformers|vllm|both (default: transformers)
+#   INSTALL_TORCH     — install torch into venv (default: 1; vllm pulls its own)
+#   PREWARM_MODEL     — snapshot_download model (default: 1)
+#   TORCH_SPEC        — pip spec               (default: torch==2.6.0+cu124)
+#   TORCH_INDEX_URL                           (default: pytorch.org cu124 index)
+#   VLLM_SPEC         — pip spec               (default: vllm)
+#   HF_HUB_ENABLE_HF_TRANSFER                 (default: 1; Rust parallel downloader)
+#   REQUIRE_HF_TOKEN  — fail if HF_TOKEN unset (default: 1; private-repo users)
+#   SETUP_DOCKER_FIREWALL — iptables INPUT changes (default: 0; opt-in)
+#
+# Standard invocation after SSH:
+#   cd ~/agent-sched-bench
+#   HF_TOKEN=hf_xxx bash scripts/setup/terminal_bench_server.sh
+#
+# Cloud startup-command form:
 #   /usr/bin/bash <<'STARTUP'
 #   set -euo pipefail
-#   export HF_TOKEN="your token"
+#   export HF_TOKEN="..."   # WARNING: provider logs startup commands
 #   export REPO_DIR="${HOME}/agent-sched-bench"
-#   if [ ! -d "${REPO_DIR}/.git" ]; then
-#     /usr/bin/git clone --branch main \
-#       https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
-#   fi
+#   [ -d "${REPO_DIR}/.git" ] || /usr/bin/git clone --branch main \
+#     https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
 #   cd "${REPO_DIR}"
-#   /usr/bin/git fetch origin main
-#   /usr/bin/git checkout main
 #   /usr/bin/git pull --ff-only origin main
 #   /usr/bin/bash scripts/setup/terminal_bench_server.sh
 #   STARTUP
 #
-# Manual rerun after SSH:
-#   cd ~/agent-sched-bench
-#   HF_TOKEN=... bash scripts/setup/terminal_bench_server.sh
-#
-# Tunables:
-#   PYTHON_VERSION=3.12
-#   VENV_PATH=.venv
-#   MODEL_ID=Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
-#   HF_HOME=$HOME/hf_cache
-#   INSTALL_TORCH=1
-#   PREWARM_MODEL=1
-#   TORCH_SPEC=torch==2.6.0+cu124
-#   TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
-#   SETUP_DOCKER_FIREWALL=1
-#   HF_HUB_ENABLE_HF_TRANSFER=1
-#   REQUIRE_HF_TOKEN=1
-#
+# Token-safety note: cloud provider startup boxes write to provider-side logs.
+# Prefer SSH-in + `export HF_TOKEN=...` over startup-box paste for production
+# tokens. Rotate any token that touches a startup box after the run.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,36 +59,35 @@ SETUP_STATUS_PATH="${SETUP_STATUS_PATH:-${HOME}/terminal-bench-setup.status}"
 mkdir -p "$(dirname "${SETUP_LOG_PATH}")"
 exec > >(tee -a "${SETUP_LOG_PATH}") 2>&1
 
+VENV_PATH="${VENV_PATH:-${REPO_ROOT}/.venv}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
-VENV_PATH="${VENV_PATH:-.venv}"
 MODEL_ID="${MODEL_ID:-Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8}"
 HF_HOME="${HF_HOME:-${HOME}/hf_cache}"
+SETUP_BACKEND="${SETUP_BACKEND:-transformers}"
 INSTALL_TORCH="${INSTALL_TORCH:-1}"
 PREWARM_MODEL="${PREWARM_MODEL:-1}"
 TORCH_SPEC="${TORCH_SPEC:-torch==2.6.0+cu124}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
-SETUP_DOCKER_FIREWALL="${SETUP_DOCKER_FIREWALL:-1}"
+VLLM_SPEC="${VLLM_SPEC:-vllm}"
 HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 REQUIRE_HF_TOKEN="${REQUIRE_HF_TOKEN:-1}"
+SETUP_DOCKER_FIREWALL="${SETUP_DOCKER_FIREWALL:-0}"
 
-log() {
-  printf '[terminal-bench-setup] %s\n' "$*"
-}
-
-fatal() {
-  printf '[terminal-bench-setup] ERROR: %s\n' "$*" >&2
-  exit 1
-}
+log()   { printf '[terminal-bench-setup] %s\n' "$*"; }
+fatal() { printf '[terminal-bench-setup] ERROR: %s\n' "$*" >&2; exit 1; }
 
 write_status() {
   local state="$1"
   local detail="${2:-}"
   {
-    printf 'state=%s\n' "${state}"
-    printf 'detail=%s\n' "${detail}"
-    printf 'updated_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'repo=%s\n' "${REPO_ROOT}"
-    printf 'log=%s\n' "${SETUP_LOG_PATH}"
+    printf 'state=%s\n'          "${state}"
+    printf 'detail=%s\n'         "${detail}"
+    printf 'backend=%s\n'        "${SETUP_BACKEND}"
+    printf 'model=%s\n'          "${MODEL_ID}"
+    printf 'updated_utc=%s\n'    "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'repo=%s\n'           "${REPO_ROOT}"
+    printf 'venv=%s\n'           "${VENV_PATH}"
+    printf 'log=%s\n'            "${SETUP_LOG_PATH}"
   } > "${SETUP_STATUS_PATH}"
 }
 
@@ -91,12 +98,15 @@ on_exit() {
   else
     write_status "failed" "exit_status=${status}"
   fi
+  # tee runs in a background subshell; ensure its stdout is flushed before exit
+  exec >&- 2>&- || true
+  wait 2>/dev/null || true
 }
-
 trap on_exit EXIT
-write_status "running" "setup started"
+write_status "running" "setup started backend=${SETUP_BACKEND}"
 log "writing log to ${SETUP_LOG_PATH}"
 log "writing status to ${SETUP_STATUS_PATH}"
+log "backend=${SETUP_BACKEND} model=${MODEL_ID} venv=${VENV_PATH}"
 
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -119,8 +129,9 @@ target_user() {
 install_system_packages() {
   command -v apt-get >/dev/null 2>&1 || fatal "apt-get not found; this setup targets Ubuntu/Debian"
   log "installing system packages"
-  as_root apt-get update
-  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  as_root apt-get update -qq
+  # Intentionally no python — uv installs its own. Docker handled separately.
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     acl \
     build-essential \
     ca-certificates \
@@ -131,96 +142,124 @@ install_system_packages() {
     iptables \
     jq \
     pkg-config \
-    python3 \
-    python3-dev \
-    python3-pip \
-    python3-venv \
     rsync \
     tmux \
     unzip \
     zstd
 }
 
-install_docker() {
+ensure_docker_usable() {
   if ! command -v docker >/dev/null 2>&1; then
-    log "installing Docker from Ubuntu packages"
-    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-plugin
+    log "docker not present; installing docker.io"
+    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io docker-compose-plugin
+    as_root systemctl enable --now docker >/dev/null 2>&1 \
+      || as_root service docker start >/dev/null 2>&1 \
+      || true
   fi
-
-  log "starting Docker service"
-  as_root systemctl enable --now docker >/dev/null 2>&1 || as_root service docker start >/dev/null 2>&1 || true
-
   local user
   user="$(target_user)"
   if getent group docker >/dev/null 2>&1; then
     as_root usermod -aG docker "${user}" || true
   fi
+  # setfacl gives the current user docker.sock access without needing a new
+  # login (group changes don't take effect mid-session).
   if [ -S /var/run/docker.sock ] && command -v setfacl >/dev/null 2>&1; then
     as_root setfacl -m "u:${user}:rw" /var/run/docker.sock || true
   fi
-
   if docker info >/dev/null 2>&1; then
-    log "docker is usable by ${user}"
+    log "docker usable by ${user}"
   elif as_root docker info >/dev/null 2>&1; then
-    log "docker works via root; group membership may require a new login"
+    log "docker works via root; setfacl should make user access work in this session"
   else
     fatal "docker daemon is not usable"
   fi
 }
 
 configure_docker_bridge_firewall() {
-  [ "${SETUP_DOCKER_FIREWALL}" = "1" ] || return 0
+  [ "${SETUP_DOCKER_FIREWALL}" = "1" ] || {
+    log "skipping iptables changes (SETUP_DOCKER_FIREWALL=0; opt-in only)"
+    return 0
+  }
   command -v iptables >/dev/null 2>&1 || return 0
-
-  log "allowing Docker bridge traffic to host services"
+  # docker0 = default bridge; br-<hash> = user-defined networks
+  log "allowing Docker bridge traffic to host services (docker0 + br-*)"
   as_root bash -c '
     set -e
-    iptables -C INPUT -i br+ -p tcp -j ACCEPT 2>/dev/null || \
-      iptables -I INPUT 1 -i br+ -p tcp -j ACCEPT
-    iptables -C INPUT -i docker+ -p tcp -j ACCEPT 2>/dev/null || \
-      iptables -I INPUT 1 -i docker+ -p tcp -j ACCEPT
-  ' || log "warning: could not update iptables; set HF_RECORDING_PUBLIC_HOST manually if containers cannot connect"
+    iptables -C INPUT -i docker0 -p tcp -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -i docker0 -p tcp -j ACCEPT
+    iptables -C INPUT -i br-+ -p tcp -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -i br-+ -p tcp -j ACCEPT
+  ' || log "warning: iptables update failed; set HF_RECORDING_PUBLIC_HOST manually if containers cannot reach the host"
 }
 
 install_uv() {
   export PATH="${HOME}/.local/bin:${PATH}"
   if command -v uv >/dev/null 2>&1; then
-    log "uv already installed: $(uv --version)"
+    log "uv already installed ($(uv --version))"
     return 0
   fi
-  log "installing uv"
+  log "installing uv to ~/.local/bin"
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="${HOME}/.local/bin:${PATH}"
   command -v uv >/dev/null 2>&1 || fatal "uv install did not put uv on PATH"
+  log "uv $(uv --version) installed"
 }
 
 setup_python_env() {
   export PATH="${HOME}/.local/bin:${PATH}"
-  log "creating/updating ${VENV_PATH} with Python ${PYTHON_VERSION}"
+  log "ensuring Python ${PYTHON_VERSION} via uv-managed binaries"
   uv python find "${PYTHON_VERSION}" >/dev/null 2>&1 || uv python install "${PYTHON_VERSION}"
+
+  log "creating venv at ${VENV_PATH}"
   uv venv "${VENV_PATH}" --python "${PYTHON_VERSION}" --seed
 
   local py="${VENV_PATH}/bin/python"
   [ -x "${py}" ] || fatal "venv python missing at ${py}"
 
-  uv pip install --python "${py}" pip wheel
+  log "installing project (editable) + dev extras"
   uv pip install --python "${py}" -e ".[dev]"
+  log "installing huggingface_hub[hf_transfer] for parallel HF downloads"
   uv pip install --python "${py}" "huggingface_hub[hf_transfer]>=0.30,<1.0"
-  "${py}" -m pip --version
 }
 
-hf_cli_path() {
-  if [ -x "${VENV_PATH}/bin/hf" ]; then
-    printf '%s\n' "${VENV_PATH}/bin/hf"
-  elif [ -x "${VENV_PATH}/bin/huggingface-cli" ]; then
-    printf '%s\n' "${VENV_PATH}/bin/huggingface-cli"
+install_backend_torch() {
+  [ "${INSTALL_TORCH}" = "1" ] || return 0
+  local py="${VENV_PATH}/bin/python"
+  if "${py}" - <<'PY' >/dev/null 2>&1
+import torch
+assert torch.cuda.is_available()
+PY
+  then
+    log "torch+CUDA already available in venv"
   else
-    fatal "Hugging Face CLI not found in ${VENV_PATH}/bin"
+    log "installing ${TORCH_SPEC} from ${TORCH_INDEX_URL}"
+    uv pip install --python "${py}" --index-url "${TORCH_INDEX_URL}" "${TORCH_SPEC}"
   fi
+  "${py}" - <<'PY'
+import torch
+print(f"[terminal-bench-setup] torch={torch.__version__} cuda={torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"[terminal-bench-setup] gpu={torch.cuda.get_device_name(0)}")
+PY
+}
+
+install_backend_vllm() {
+  local py="${VENV_PATH}/bin/python"
+  log "installing ${VLLM_SPEC}"
+  uv pip install --python "${py}" "${VLLM_SPEC}"
+  "${py}" -c "import vllm; print(f'[terminal-bench-setup] vllm={vllm.__version__}')"
+}
+
+install_backend() {
+  case "${SETUP_BACKEND}" in
+    transformers) install_backend_torch ;;
+    vllm)         install_backend_vllm ;;
+    both)         install_backend_torch; install_backend_vllm ;;
+    *) fatal "SETUP_BACKEND must be one of: transformers, vllm, both (got '${SETUP_BACKEND}')" ;;
+  esac
 }
 
 configure_huggingface() {
-  local py="${VENV_PATH}/bin/python"
   export HF_HOME
   export HF_HUB_ENABLE_HF_TRANSFER
   mkdir -p "${HF_HOME}"
@@ -229,33 +268,45 @@ configure_huggingface() {
     git lfs install --skip-repo >/dev/null 2>&1 || true
   fi
 
-  "${py}" - <<'PY'
+  "${VENV_PATH}/bin/python" - <<'PY'
 import importlib.metadata as md
 print(f"[terminal-bench-setup] huggingface_hub={md.version('huggingface-hub')}")
 PY
 
+  # Intentionally no `hf auth login`. snapshot_download(token=...) reads
+  # HF_TOKEN at call time, sidesteps huggingface_hub 1.x multi-token-store
+  # quirks ("Token X not found in stored_tokens"), and keeps the token out
+  # of disk-cached config.
   if [ -z "${HF_TOKEN:-}" ]; then
     if [ "${REQUIRE_HF_TOKEN}" = "1" ]; then
-      fatal "HF_TOKEN is not set; paste export HF_TOKEN=\"...\" into the startup command"
+      fatal "HF_TOKEN is not set; export it before invoking this script (needed for HF private repos — see REQUIRE_HF_TOKEN=0 to bypass for public-only setups)"
     fi
-    log "HF_TOKEN is not set; skipping Hugging Face auth"
-    return 0
-  fi
-
-  local hf_cli
-  hf_cli="$(hf_cli_path)"
-  log "configuring Hugging Face auth for private repo access"
-  if "${hf_cli}" auth login --token "${HF_TOKEN}" --add-to-git-credential >/dev/null 2>&1; then
-    :
-  elif "${hf_cli}" login --token "${HF_TOKEN}" --add-to-git-credential >/dev/null 2>&1; then
-    :
+    log "HF_TOKEN not set; public-repo access only"
   else
-    fatal "Hugging Face login failed"
+    log "HF_TOKEN provided; will be passed to snapshot_download via env var"
   fi
-  "${hf_cli}" whoami >/dev/null || fatal "Hugging Face token validation failed"
 }
 
 configure_shell_environment() {
+  # Prefer /etc/profile.d so it survives shell choice (bash/zsh) and works
+  # when SSH user differs from the user that ran setup. Fall back to user
+  # .bashrc only when we can't write system-wide.
+  local snippet_body
+  snippet_body=$(cat <<EOF
+# Managed by agent-sched-bench scripts/setup/terminal_bench_server.sh
+export HF_HOME=${HF_HOME}
+export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}
+export PATH=${HOME}/.local/bin:\$PATH
+EOF
+)
+  if [ "$(id -u)" -eq 0 ] || sudo -n true 2>/dev/null; then
+    local target=/etc/profile.d/agent-sched-bench.sh
+    printf '%s\n' "${snippet_body}" | as_root tee "${target}" >/dev/null
+    as_root chmod 0644 "${target}"
+    log "wrote ${target} (sourced by all login shells)"
+    return 0
+  fi
+
   local bashrc="${HOME}/.bashrc"
   local tmp
   tmp="$(mktemp "${bashrc}.tmp.XXXXXX")"
@@ -267,40 +318,16 @@ configure_shell_environment() {
   ' "${bashrc}" > "${tmp}"
   {
     printf '\n# >>> agent-sched-bench terminal-bench setup >>>\n'
-    printf 'export HF_HOME=%q\n' "${HF_HOME}"
-    printf 'export HF_HUB_ENABLE_HF_TRANSFER=%q\n' "${HF_HUB_ENABLE_HF_TRANSFER}"
+    printf '%s\n' "${snippet_body}"
     printf '# <<< agent-sched-bench terminal-bench setup <<<\n'
   } >> "${tmp}"
   mv "${tmp}" "${bashrc}"
-  log "updated ${bashrc} with non-secret Hugging Face environment"
-}
-
-install_torch() {
-  [ "${INSTALL_TORCH}" = "1" ] || return 0
-  local py="${VENV_PATH}/bin/python"
-  if "${py}" - <<'PY' >/dev/null 2>&1
-import torch
-assert torch.cuda.is_available()
-PY
-  then
-    log "torch with CUDA is already available"
-  else
-    log "installing ${TORCH_SPEC} from ${TORCH_INDEX_URL}"
-    uv pip install --python "${py}" --index-url "${TORCH_INDEX_URL}" "${TORCH_SPEC}"
-  fi
-
-  "${py}" - <<'PY'
-import torch
-print(f"[terminal-bench-setup] torch={torch.__version__} cuda={torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"[terminal-bench-setup] gpu={torch.cuda.get_device_name(0)}")
-PY
+  log "updated ${bashrc} (no sudo available for /etc/profile.d)"
 }
 
 prefetch_terminal_bench() {
-  local py="${VENV_PATH}/bin/python"
   log "loading Terminal-Bench registry and pinned dataset"
-  PYTHONPATH="${REPO_ROOT}/src:${REPO_ROOT}" "${py}" - <<'PY'
+  PYTHONPATH="${REPO_ROOT}/src:${REPO_ROOT}" "${VENV_PATH}/bin/python" - <<'PY'
 from pathlib import Path
 from agents.benchmarks import get_benchmark_class
 from agents.benchmarks.base import BenchmarkConfig
@@ -308,43 +335,47 @@ from agents.benchmarks.base import BenchmarkConfig
 config = BenchmarkConfig.from_yaml(Path("configs/benchmarks/terminal-bench.yaml"))
 benchmark = get_benchmark_class(config.slug)(config)
 tasks = benchmark.load_tasks()
-ids = {task["instance_id"] for task in tasks}
 print(f"[terminal-bench-setup] loaded_tasks={len(tasks)}")
-if "causal-inference-r" not in ids:
-    raise SystemExit("causal-inference-r missing from Terminal-Bench dataset")
+if not tasks:
+    raise SystemExit("Terminal-Bench load_tasks() returned empty list")
 PY
 }
 
 prewarm_model() {
   [ "${PREWARM_MODEL}" = "1" ] || return 0
-  local py="${VENV_PATH}/bin/python"
   export HF_HOME
   mkdir -p "${HF_HOME}"
 
   log "prefetching ${MODEL_ID} into HF_HOME=${HF_HOME}"
-  "${py}" - <<'PY'
-import os
+  HF_HOME="${HF_HOME}" \
+  HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER}" \
+  HF_TOKEN="${HF_TOKEN:-}" \
+  MODEL_ID="${MODEL_ID}" \
+    "${VENV_PATH}/bin/python" - <<'PY'
+import os, time
 from huggingface_hub import snapshot_download
 
-model_id = os.environ["MODEL_ID"]
-snapshot_download(
-    repo_id=model_id,
-    token=os.environ.get("HF_TOKEN"),
+t0 = time.time()
+path = snapshot_download(
+    repo_id=os.environ["MODEL_ID"],
+    token=os.environ.get("HF_TOKEN") or None,
 )
-print(f"[terminal-bench-setup] model_cached={model_id}")
+print(f"[terminal-bench-setup] model_cached={path} elapsed={time.time()-t0:.1f}s")
 PY
 }
 
 verify_setup() {
-  local py="${VENV_PATH}/bin/python"
   log "verifying setup"
-  "${py}" - <<'PY'
+  "${VENV_PATH}/bin/python" - <<'PY'
 import importlib.metadata as md
 import sys
 
 print(f"[terminal-bench-setup] python={sys.version.split()[0]}")
-for package in ("agent-sched-bench", "terminal-bench", "transformers"):
-    print(f"[terminal-bench-setup] {package}={md.version(package)}")
+for package in ("agent-sched-bench", "terminal-bench", "transformers", "torch", "huggingface-hub"):
+    try:
+        print(f"[terminal-bench-setup] {package}={md.version(package)}")
+    except md.PackageNotFoundError:
+        print(f"[terminal-bench-setup] WARNING {package} not installed")
 PY
   docker version --format '[terminal-bench-setup] docker client={{.Client.Version}} server={{.Server.Version}}' || true
   nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || log "warning: nvidia-smi not available"
@@ -353,36 +384,35 @@ PY
 print_next_steps() {
   cat <<EOF
 
-[terminal-bench-setup] DONE
+[terminal-bench-setup] DONE (backend=${SETUP_BACKEND})
 
-Next baseline launch example:
+Activate the venv and launch:
   cd ${REPO_ROOT}
   source ${VENV_PATH}/bin/activate
   export HF_HOME=${HF_HOME}
   export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}
   export HF_HUB_OFFLINE=1
   export TRANSFORMERS_OFFLINE=1
+
+Scenario A (transformers + KV recording):
   INSTANCE_ID=causal-inference-r \\
   MODEL_ID=${MODEL_ID} \\
   ./scripts/launch_kv_capstone.sh none baseline-causal-inference-r
 
-If Docker group changes were just applied, start a new SSH session before
-running long experiments unless this script reported Docker is already usable.
-If HF_TOKEN was provided, Hugging Face CLI and git credentials are ready for
-private repo access; verify with: ${VENV_PATH}/bin/hf auth whoami
+Scenario B (vLLM + openclaw):
+  ${VENV_PATH}/bin/vllm serve ${MODEL_ID} --port 44345 --host 127.0.0.1 &
+  # then point openclaw at http://127.0.0.1:44345/v1 via OPENAI_BASE_URL
 EOF
 }
 
-export MODEL_ID
-
 install_system_packages
-install_docker
+ensure_docker_usable
 configure_docker_bridge_firewall
 install_uv
 setup_python_env
+install_backend
 configure_huggingface
 configure_shell_environment
-install_torch
 prefetch_terminal_bench
 prewarm_model
 verify_setup

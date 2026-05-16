@@ -19,10 +19,22 @@ The goal is to produce **publishable, reproducible, and scientifically rigorous*
 
 ## Environment
 
-All Python invocations run inside conda env "ML" (Python 3.12). On a fresh
-server, run `bash scripts/setup/bootstrap.sh` once. Do not create `.venv`
-or `pip install` ad hoc — `bootstrap.sh` is the single source of truth for
-the runtime.
+Two runtime entry points (pick by host type, not preference):
+
+1. **Persistent dev hosts** (Mac, x86 research server, anything you SSH back
+   into next week): conda env "ML" (Python 3.12) via
+   `bash scripts/setup/bootstrap.sh`. Do not create ad-hoc `.venv` or
+   `pip install` on these hosts — `bootstrap.sh` is the single source of
+   truth for the conda flow.
+2. **Ephemeral cloud GPU instances** (vast.ai, runpod, lambda, etc. — boxes
+   that get destroyed after one experiment): `uv` directly via
+   `bash scripts/setup/terminal_bench_server.sh`. Uses `.venv` at repo root.
+   Verified ~2 min total on a fresh Ubuntu 22.04 + GPU instance (vs ~25 min
+   for the conda path). No conda, no miniconda footprint.
+
+Both paths produce a Python 3.12 env with the same project deps (pyproject
+is the spec; the two entry points only differ in env manager + package
+installer). Don't mix them on a single host.
 
 ---
 

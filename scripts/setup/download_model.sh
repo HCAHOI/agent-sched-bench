@@ -17,9 +17,23 @@ log() {
   printf '[setup/download_model] %s\n' "$*"
 }
 
+ensure_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    return 0
+  fi
+  log "installing uv to ~/.local/bin"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="${HOME}/.local/bin:${PATH}"
+  command -v uv >/dev/null 2>&1 || {
+    echo "[setup/download_model] ERROR: uv install did not put uv on PATH" >&2
+    exit 1
+  }
+}
+
 install_download_dependencies() {
-  log "Installing download dependencies into ${CONDA_PREFIX}"
-  pip install "${TRANSFORMERS_SPEC}" "${HF_HUB_SPEC}"
+  ensure_uv
+  log "Installing download dependencies into ${CONDA_PREFIX} via uv"
+  uv pip install --python "$(command -v python)" "${TRANSFORMERS_SPEC}" "${HF_HUB_SPEC}"
 }
 
 download_from_huggingface() {

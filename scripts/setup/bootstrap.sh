@@ -13,6 +13,10 @@
 #   BOOTSTRAP_SMOKE_MODEL     — default: Qwen/Qwen3-Coder-30B-A3B-Instruct
 #   HF_TOKEN                  — required for download_model step
 #   BOOTSTRAP_VASTAI=1        — force the podman step on non-vastai hosts
+#   BOOTSTRAP_SKIP            — comma-separated step keys to skip (e.g.
+#                                "swe_rebench_data,download_model,terminal_bench_smoke"
+#                                for terminal-bench-only hosts that don't need
+#                                the swe-rebench dataset or the pinned AWQ model)
 
 set -euo pipefail
 
@@ -27,8 +31,19 @@ cd "${REPO_ROOT}"
 is_done() { grep -q "^${1}=ok$" "${PROGRESS}"; }
 mark_done() { echo "${1}=ok" >> "${PROGRESS}"; }
 
+is_skipped() {
+    local key="$1"
+    [[ -z "${BOOTSTRAP_SKIP:-}" ]] && return 1
+    # match key as a comma-separated token in BOOTSTRAP_SKIP
+    [[ ",${BOOTSTRAP_SKIP}," == *",${key},"* ]]
+}
+
 step() {
     local key="$1"; shift
+    if is_skipped "${key}"; then
+        echo "[bootstrap] SKIP ${key} (in BOOTSTRAP_SKIP)"
+        return 0
+    fi
     if is_done "${key}"; then
         echo "[bootstrap] SKIP ${key}"
         return 0
@@ -98,6 +113,20 @@ do_conda_env_ml() {
     conda create -n ML -y python=3.12
 }
 
+do_install_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        echo "[bootstrap] install_uv: uv already on PATH ($(uv --version))"
+        return 0
+    fi
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="${HOME}/.local/bin:${PATH}"
+    command -v uv >/dev/null 2>&1 || {
+        echo "[bootstrap] install_uv: uv install did not put uv on PATH" >&2
+        exit 1
+    }
+    uv --version
+}
+
 do_clone_repos() {
     _source_conda
     conda run -n ML bash "${SETUP_DIR}/clone_repos.sh" \
@@ -143,6 +172,7 @@ step arm_check            do_arm_check
 step podman               do_podman
 step miniconda            do_miniconda
 step conda_env_ml         do_conda_env_ml
+step install_uv           do_install_uv
 step clone_repos          do_clone_repos
 step install_deps         do_install_deps
 step swe_rebench_data     do_swe_rebench_data
