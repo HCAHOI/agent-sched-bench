@@ -5,8 +5,22 @@
 # This script only prepares host state. Project code changes belong in the repo,
 # not in this script.
 #
-# Typical use on a fresh server:
-#   git clone <repo> ~/agent-sched-bench
+# Intended use: called by the cloud GPU platform's startup command after that
+# command has cloned/pulled this repo and exported HF_TOKEN. Example startup
+# command shape:
+#   /usr/bin/bash -lc 'set -euo pipefail; export HF_TOKEN="..."; \
+#     export REPO_DIR=/home/Ubuntu/agent-sched-bench; \
+#     if [ ! -d "$REPO_DIR/.git" ]; then \
+#       /usr/bin/git clone --branch dev/gpu-resource-tracker \
+#         https://github.com/HCAHOI/agent-sched-bench.git "$REPO_DIR"; \
+#     fi; \
+#     cd "$REPO_DIR"; \
+#     /usr/bin/git fetch origin dev/gpu-resource-tracker; \
+#     /usr/bin/git checkout dev/gpu-resource-tracker; \
+#     /usr/bin/git pull --ff-only origin dev/gpu-resource-tracker; \
+#     /usr/bin/bash scripts/setup/terminal_bench_server.sh'
+#
+# Manual rerun after SSH:
 #   cd ~/agent-sched-bench
 #   HF_TOKEN=... bash scripts/setup/terminal_bench_server.sh
 #
