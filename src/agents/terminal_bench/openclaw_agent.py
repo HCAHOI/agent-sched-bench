@@ -101,6 +101,12 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _env(self) -> dict[str, str]:
         env = {
             self._env_key: self._api_key,
+            # Exported here so setup-env.sh can rewrite it (gateway resolution)
+            # before the openclaw command consumes it. Keeping the rewrite in
+            # setup-env.sh — not as a per-command shell prefix — is what keeps
+            # the final openclaw line short enough for tmux send-keys +
+            # asciinema rec --stdin to handle without breaking sync.
+            "OPENCLAW_API_BASE": self._api_base,
         }
         if self._llm_timeout_sec is not None:
             env["OPENCLAW_LLM_TIMEOUT_S"] = str(self._llm_timeout_sec)
@@ -109,6 +115,47 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             if value:
                 env[key] = value
         return env
+
+    def _create_env_setup_file(self) -> str:
+        """Extend the parent's export lines with gateway-resolution logic.
+
+        Why this lives here and not as a shell prefix on the openclaw command:
+        terminal-bench wraps the agent shell in `asciinema rec --stdin`, and
+        sending a long multi-line command (prefix + openclaw + multi-line
+        prompt) through `tmux send-keys` breaks asciinema's stdin sync —
+        asciinema exits early and the openclaw subprocess never runs. Putting
+        the resolution in setup-env.sh keeps the openclaw command itself a
+        single short line that tmux/asciinema can handle.
+        """
+        base = super()._create_env_setup_file()
+        if not self._should_resolve_api_base_from_container_gateway(self._api_base):
+            return base
+        # Use /proc/net/route (always present on Linux) instead of `ip route`
+        # (iproute2 is missing in many minimal container images, including
+        # terminal-bench-core's). Gateway is a little-endian hex IP.
+        resolution = (
+            "\n"
+            "# Resolve OPENCLAW_API_BASE to the container's actual default gateway\n"
+            "# when the original points at a host-local placeholder (172.17.0.1\n"
+            "# etc.). Terminal-Bench user-defined networks can give the task\n"
+            "# container a non-default-bridge gateway.\n"
+            "_oc_gw_hex=$(awk '$2==\"00000000\"{print $3; exit}' "
+            "/proc/net/route 2>/dev/null)\n"
+            'if [ -n "$_oc_gw_hex" ] && [ "$_oc_gw_hex" != 00000000 ]; then\n'
+            "  _oc_gw=$(printf '%d.%d.%d.%d' "
+            '"$((0x${_oc_gw_hex:6:2}))" "$((0x${_oc_gw_hex:4:2}))" '
+            '"$((0x${_oc_gw_hex:2:2}))" "$((0x${_oc_gw_hex:0:2}))" 2>/dev/null)\n'
+            '  case "$_oc_gw" in *.*.*.*)\n'
+            "    OPENCLAW_API_BASE=$(printf '%s' \"$OPENCLAW_API_BASE\" | "
+            'sed -E "s#^(https?://)'
+            r"(127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|172\\.17\\.0\\.1|host\\.docker\\.internal)"
+            '(:|/)#\\\\1${_oc_gw}\\\\3#")\n'
+            "    export OPENCLAW_API_BASE\n"
+            "  ;; esac\n"
+            "fi\n"
+            "unset _oc_gw_hex _oc_gw\n"
+        )
+        return base + resolution
 
     @property
     def _install_agent_script_path(self) -> Path:
@@ -224,25 +271,15 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _api_base_shell_prefix(self) -> tuple[str, str]:
         """Return a shell prefix and argv expression for the OpenClaw API base.
 
-        Terminal-Bench runs OpenClaw inside the task container. Host-local API
-        endpoints such as the HF recording server must therefore use the task
-        container's default gateway, not the host-side bridge address guessed
-        before Terminal-Bench creates its per-task Docker network.
+        Gateway resolution is done in setup-env.sh (see _create_env_setup_file),
+        which is sourced into the container shell long before openclaw runs.
+        That keeps the openclaw command line short — important because the
+        outer asciinema rec --stdin wrapper drops sync when tmux send-keys
+        delivers a very long multi-line command.
         """
         if not self._should_resolve_api_base_from_container_gateway(self._api_base):
             return "", shlex.quote(self._api_base)
-        prefix = (
-            f"OPENCLAW_API_BASE={shlex.quote(self._api_base)}; "
-            "OPENCLAW_GATEWAY=$(ip route show default 2>/dev/null | "
-            "awk 'NR==1 {print $3}'); "
-            'if [ -n "$OPENCLAW_GATEWAY" ]; then '
-            'OPENCLAW_API_BASE=$(printf "%s" "$OPENCLAW_API_BASE" | '
-            'sed -E "s#^(https?://)'
-            r'(127\.0\.0\.1|localhost|0\.0\.0\.0|172\.17\.0\.1|host\.docker\.internal)'
-            '(:|/)#\\\\1${OPENCLAW_GATEWAY}\\\\3#"); '
-            "fi; "
-        )
-        return prefix, '"${OPENCLAW_API_BASE}"'
+        return "", '"${OPENCLAW_API_BASE}"'
 
     def _run_agent_commands(self, instruction: str) -> list[TerminalCommand]:
         escaped_instruction = shlex.quote(instruction)
