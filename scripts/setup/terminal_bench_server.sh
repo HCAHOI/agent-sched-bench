@@ -20,6 +20,7 @@
 #   TORCH_SPEC=torch==2.6.0+cu124
 #   TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 #   SETUP_DOCKER_FIREWALL=1
+#   HF_HUB_ENABLE_HF_TRANSFER=1
 #
 # Optional mirror settings for slow networks:
 #   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -32,6 +33,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 cd "${REPO_ROOT}"
 
+SETUP_LOG_DIR="${SETUP_LOG_DIR:-${HOME}}"
+SETUP_LOG_PATH="${SETUP_LOG_PATH:-${SETUP_LOG_DIR}/terminal-bench-setup-$(date -u +%Y%m%dT%H%M%SZ).log}"
+SETUP_STATUS_PATH="${SETUP_STATUS_PATH:-${HOME}/terminal-bench-setup.status}"
+mkdir -p "$(dirname "${SETUP_LOG_PATH}")"
+exec > >(tee -a "${SETUP_LOG_PATH}") 2>&1
+
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 VENV_PATH="${VENV_PATH:-.venv}"
 MODEL_ID="${MODEL_ID:-Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8}"
@@ -41,6 +48,7 @@ PREWARM_MODEL="${PREWARM_MODEL:-1}"
 TORCH_SPEC="${TORCH_SPEC:-torch==2.6.0+cu124}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
 SETUP_DOCKER_FIREWALL="${SETUP_DOCKER_FIREWALL:-1}"
+HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 
 log() {
   printf '[terminal-bench-setup] %s\n' "$*"
@@ -50,6 +58,32 @@ fatal() {
   printf '[terminal-bench-setup] ERROR: %s\n' "$*" >&2
   exit 1
 }
+
+write_status() {
+  local state="$1"
+  local detail="${2:-}"
+  {
+    printf 'state=%s\n' "${state}"
+    printf 'detail=%s\n' "${detail}"
+    printf 'updated_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'repo=%s\n' "${REPO_ROOT}"
+    printf 'log=%s\n' "${SETUP_LOG_PATH}"
+  } > "${SETUP_STATUS_PATH}"
+}
+
+on_exit() {
+  local status=$?
+  if [ "${status}" -eq 0 ]; then
+    write_status "ok" "setup completed"
+  else
+    write_status "failed" "exit_status=${status}"
+  fi
+}
+
+trap on_exit EXIT
+write_status "running" "setup started"
+log "writing log to ${SETUP_LOG_PATH}"
+log "writing status to ${SETUP_STATUS_PATH}"
 
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -100,6 +134,7 @@ install_system_packages() {
     ca-certificates \
     curl \
     git \
+    git-lfs \
     iproute2 \
     iptables \
     jq \
@@ -178,7 +213,51 @@ setup_python_env() {
 
   uv pip install --python "${py}" pip wheel
   uv pip install --python "${py}" -e ".[dev]"
+  uv pip install --python "${py}" "huggingface_hub[hf_transfer]>=0.30,<1.0"
   "${py}" -m pip --version
+}
+
+hf_cli_path() {
+  if [ -x "${VENV_PATH}/bin/hf" ]; then
+    printf '%s\n' "${VENV_PATH}/bin/hf"
+  elif [ -x "${VENV_PATH}/bin/huggingface-cli" ]; then
+    printf '%s\n' "${VENV_PATH}/bin/huggingface-cli"
+  else
+    fatal "Hugging Face CLI not found in ${VENV_PATH}/bin"
+  fi
+}
+
+configure_huggingface() {
+  local py="${VENV_PATH}/bin/python"
+  export HF_HOME
+  export HF_HUB_ENABLE_HF_TRANSFER
+  mkdir -p "${HF_HOME}"
+
+  if command -v git-lfs >/dev/null 2>&1; then
+    git lfs install --skip-repo >/dev/null 2>&1 || true
+  fi
+
+  "${py}" - <<'PY'
+import importlib.metadata as md
+print(f"[terminal-bench-setup] huggingface_hub={md.version('huggingface-hub')}")
+PY
+
+  if [ -z "${HF_TOKEN:-}" ]; then
+    log "HF_TOKEN is not set; skipping Hugging Face auth"
+    return 0
+  fi
+
+  local hf_cli
+  hf_cli="$(hf_cli_path)"
+  log "configuring Hugging Face auth for private repo access"
+  if "${hf_cli}" auth login --token "${HF_TOKEN}" --add-to-git-credential >/dev/null 2>&1; then
+    :
+  elif "${hf_cli}" login --token "${HF_TOKEN}" --add-to-git-credential >/dev/null 2>&1; then
+    :
+  else
+    fatal "Hugging Face login failed"
+  fi
+  "${hf_cli}" whoami >/dev/null || fatal "Hugging Face token validation failed"
 }
 
 install_torch() {
@@ -265,6 +344,7 @@ Next baseline launch example:
   cd ${REPO_ROOT}
   source ${VENV_PATH}/bin/activate
   export HF_HOME=${HF_HOME}
+  export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}
   export HF_HUB_OFFLINE=1
   export TRANSFORMERS_OFFLINE=1
   INSTANCE_ID=causal-inference-r \\
@@ -273,6 +353,8 @@ Next baseline launch example:
 
 If Docker group changes were just applied, start a new SSH session before
 running long experiments unless this script reported Docker is already usable.
+If HF_TOKEN was provided, Hugging Face CLI and git credentials are ready for
+private repo access; verify with: ${VENV_PATH}/bin/hf auth whoami
 EOF
 }
 
@@ -283,6 +365,7 @@ install_docker
 configure_docker_bridge_firewall
 install_uv
 setup_python_env
+configure_huggingface
 install_torch
 prefetch_terminal_bench
 prewarm_model
