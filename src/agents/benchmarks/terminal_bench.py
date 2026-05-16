@@ -77,6 +77,8 @@ class TerminalBenchBenchmark(Benchmark):
             "task_id": task_path.name,
             "dataset_root": str(dataset_root),
             "problem_statement": task.instruction,
+            "max_agent_timeout_sec": task.max_agent_timeout_sec,
+            "max_test_timeout_sec": task.max_test_timeout_sec,
             "task_source_kind": extras["task_source_kind"],
             "task_source_id": task_path.name,
             "task_source_path": str(task_path),

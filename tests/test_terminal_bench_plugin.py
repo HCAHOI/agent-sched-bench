@@ -23,7 +23,9 @@ def tb_stub(monkeypatch, tmp_path: Path):
     task_root = tmp_path / "dataset"
     task_dir = task_root / "hello-world"
     task_dir.mkdir(parents=True)
-    (task_dir / "task.yaml").write_text("instruction: fix it\ndifficulty: easy\n", encoding="utf-8")
+    (task_dir / "task.yaml").write_text(
+        "instruction: fix it\ndifficulty: easy\n", encoding="utf-8"
+    )
 
     terminal_bench_pkg = types.ModuleType("terminal_bench")
     dataset_pkg = types.ModuleType("terminal_bench.dataset")
@@ -32,7 +34,15 @@ def tb_stub(monkeypatch, tmp_path: Path):
     handler_mod = types.ModuleType("terminal_bench.handlers.trial_handler")
 
     class Dataset:
-        def __init__(self, *, path=None, name=None, version=None, registry_url=None, local_registry_path=None):
+        def __init__(
+            self,
+            *,
+            path=None,
+            name=None,
+            version=None,
+            registry_url=None,
+            local_registry_path=None,
+        ):
             self.config = types.SimpleNamespace(path=path)
             self._path = Path(path) if path else task_root
             self._tasks = [task_dir]
@@ -43,7 +53,11 @@ def tb_stub(monkeypatch, tmp_path: Path):
     class Task:
         @classmethod
         def from_yaml(cls, path: Path):
-            return types.SimpleNamespace(instruction="fix it")
+            return types.SimpleNamespace(
+                instruction="fix it",
+                max_agent_timeout_sec=360.0,
+                max_test_timeout_sec=60.0,
+            )
 
     class TaskPaths:
         def __init__(self, input_path: Path):
@@ -57,7 +71,9 @@ def tb_stub(monkeypatch, tmp_path: Path):
     monkeypatch.setitem(sys.modules, "terminal_bench.dataset", dataset_pkg)
     monkeypatch.setitem(sys.modules, "terminal_bench.dataset.dataset", dataset_mod)
     monkeypatch.setitem(sys.modules, "terminal_bench.handlers", handlers_pkg)
-    monkeypatch.setitem(sys.modules, "terminal_bench.handlers.trial_handler", handler_mod)
+    monkeypatch.setitem(
+        sys.modules, "terminal_bench.handlers.trial_handler", handler_mod
+    )
     return task_root, task_dir
 
 
@@ -86,7 +102,10 @@ def test_terminal_bench_registered() -> None:
 
 
 def test_terminal_bench_config_requires_dataset_locator() -> None:
-    with pytest.raises(ValueError, match="dataset_path or both extras.dataset_name and extras.dataset_version"):
+    with pytest.raises(
+        ValueError,
+        match="dataset_path or both extras.dataset_name and extras.dataset_version",
+    ):
         get_benchmark_class("terminal-bench")(
             BenchmarkConfig(
                 slug="terminal-bench",
@@ -110,12 +129,20 @@ def test_terminal_bench_runtime_mode_and_scaffold_gating() -> None:
 
 def test_terminal_bench_normalize_task_preserves_non_swe_shape(tb_stub) -> None:
     task_root, task_dir = tb_stub
-    plugin = get_benchmark_class("terminal-bench")(_make_config(dataset_path=str(task_root), task_source_kind="terminal_bench_local"))
+    plugin = get_benchmark_class("terminal-bench")(
+        _make_config(
+            dataset_path=str(task_root), task_source_kind="terminal_bench_local"
+        )
+    )
 
-    normalized = plugin.normalize_task({"task_path": str(task_dir), "dataset_root": str(task_root)})
+    normalized = plugin.normalize_task(
+        {"task_path": str(task_dir), "dataset_root": str(task_root)}
+    )
 
     assert normalized["instance_id"] == "hello-world"
     assert normalized["problem_statement"] == "fix it"
+    assert normalized["max_agent_timeout_sec"] == 360.0
+    assert normalized["max_test_timeout_sec"] == 60.0
     assert normalized["dataset_root"] == str(task_root)
     assert normalized["task_source_path"] == str(task_dir)
     assert normalized["image_name"] is None

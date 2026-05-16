@@ -15,5 +15,6 @@ extras:
   dataset_version: head-pinned-2025-12-04
   global_agent_timeout_sec: 7200.0
   llm_timeout_sec: 1800.0
+  tb_process_cleanup_grace_sec: 300.0
   registry_url:
   local_registry_path: configs/benchmarks/terminal_bench_registry.json

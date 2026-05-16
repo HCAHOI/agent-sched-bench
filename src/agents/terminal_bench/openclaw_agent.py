@@ -5,7 +5,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from terminal_bench.agents.base_agent import AgentResult
@@ -61,6 +63,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         api_key: str | None = None,
         max_iterations: int = 100,
         llm_timeout_sec: float | None = None,
+        agent_timeout_sec: float | str | None = None,
         mcp_config_path: str | None = None,
         temperature: float | str | None = None,
         top_p: float | str | None = None,
@@ -83,6 +86,11 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         self._llm_timeout_sec = (
             None if llm_timeout_sec is None else float(llm_timeout_sec)
         )
+        self._agent_timeout_sec = _optional_float(agent_timeout_sec)
+        if self._agent_timeout_sec is not None and self._agent_timeout_sec <= 0:
+            raise ValueError(
+                f"agent_timeout_sec must be positive, got {self._agent_timeout_sec!r}"
+            )
         self._mcp_config_path = mcp_config_path
         self._temperature = _optional_float(temperature)
         self._top_p = _optional_float(top_p)
@@ -336,11 +344,156 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             TerminalCommand(
                 command=command,
                 min_timeout_sec=0.0,
-                max_timeout_sec=float("inf"),
+                max_timeout_sec=self._agent_timeout_sec
+                if self._agent_timeout_sec is not None
+                else float("inf"),
                 block=True,
                 append_enter=True,
             )
         ]
+
+    @staticmethod
+    def _deadline(timeout_sec: float | None) -> float | None:
+        if timeout_sec is None:
+            return None
+        return time.monotonic() + timeout_sec
+
+    def _remaining_timeout(self, deadline: float | None) -> float:
+        if deadline is None:
+            return float("inf")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Agent timed out after {self._agent_timeout_sec} seconds"
+            )
+        return remaining
+
+    def _command_with_deadline(
+        self,
+        command: TerminalCommand,
+        deadline: float | None,
+    ) -> TerminalCommand:
+        max_timeout_sec = command.max_timeout_sec
+        if deadline is not None:
+            max_timeout_sec = min(max_timeout_sec, self._remaining_timeout(deadline))
+        return TerminalCommand(
+            command=command.command,
+            min_timeout_sec=command.min_timeout_sec,
+            max_timeout_sec=max_timeout_sec,
+            block=command.block,
+            append_enter=command.append_enter,
+        )
+
+    def _exec_run_with_deadline(
+        self,
+        session: TmuxSession,
+        command: list[str],
+        deadline: float | None,
+        *,
+        user: str | None = None,
+    ) -> Any:
+        if deadline is None:
+            return session.container.exec_run(command, user=user)
+        timeout_sec = self._remaining_timeout(deadline)
+        result = session.container.exec_run(
+            ["timeout", f"{timeout_sec:.3f}s", *command],
+            user=user,
+        )
+        if result.exit_code == 124:
+            raise TimeoutError(
+                f"Agent timed out after {self._agent_timeout_sec} seconds"
+            )
+        self._remaining_timeout(deadline)
+        return result
+
+    @staticmethod
+    def _container_copy_target(session: TmuxSession) -> str:
+        container = session.container
+        container_id = getattr(container, "id", None) or getattr(
+            container, "name", None
+        )
+        if container_id:
+            return str(container_id)
+        attrs = getattr(container, "attrs", None) or {}
+        container_name = attrs.get("Name")
+        if container_name:
+            return str(container_name).lstrip("/")
+        raise RuntimeError("Unable to determine Docker container id for copy")
+
+    def _copy_to_container_with_deadline(
+        self,
+        session: TmuxSession,
+        *,
+        paths: list[Path],
+        container_dir: str,
+        deadline: float | None,
+    ) -> None:
+        if deadline is None:
+            session.copy_to_container(paths=paths, container_dir=container_dir)
+            return
+        self._exec_run_with_deadline(
+            session,
+            ["mkdir", "-p", container_dir],
+            deadline,
+        )
+        container_target = self._container_copy_target(session)
+        destination = f"{container_target}:{container_dir.rstrip('/')}/"
+        for path in paths:
+            try:
+                result = subprocess.run(
+                    ["docker", "cp", str(path), destination],
+                    capture_output=True,
+                    text=True,
+                    timeout=self._remaining_timeout(deadline),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError(
+                    f"Agent timed out after {self._agent_timeout_sec} seconds"
+                ) from exc
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "docker cp failed while installing OpenClaw into "
+                    f"Terminal-Bench container. stdout tail:\n"
+                    f"{result.stdout[-2000:]}\n--- stderr tail:\n"
+                    f"{result.stderr[-2000:]}"
+                )
+
+    def _cleanup_timed_out_session(
+        self,
+        session: TmuxSession,
+        logging_dir: Path | None,
+    ) -> None:
+        if logging_dir is not None:
+            logging_dir.mkdir(parents=True, exist_ok=True)
+            (logging_dir / "openclaw-timeout.marker").write_text(
+                "timeout\n",
+                encoding="utf-8",
+            )
+            try:
+                (logging_dir / "openclaw-timeout-pane.txt").write_text(
+                    session.capture_pane(capture_entire=True),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+
+        try:
+            session.send_keys(["C-c"], min_timeout_sec=0.1)
+        except Exception:
+            pass
+
+        session_name = str(getattr(session, "_session_name", "agent"))
+        cleanup_script = (
+            f"tmux kill-session -t {shlex.quote(session_name)} 2>/dev/null || true\n"
+            "pkill -TERM -f '/installed-agent/venv/bin/openclaw' 2>/dev/null || true\n"
+            "sleep 2\n"
+            "pkill -KILL -f '/installed-agent/venv/bin/openclaw' 2>/dev/null || true\n"
+        )
+        try:
+            session.container.exec_run(["sh", "-lc", cleanup_script])
+        except Exception:
+            pass
 
     def perform_task(
         self,
@@ -348,60 +501,79 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         session: TmuxSession,
         logging_dir: Path | None = None,
     ) -> AgentResult:
-        bootstrap = session.container.exec_run(
-            [
-                "bash",
-                "-lc",
-                self._bootstrap_dependencies_command(),
-            ],
-            user="root",
-        )
-        if bootstrap.exit_code != 0:
-            return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
+        deadline = self._deadline(self._agent_timeout_sec)
+        try:
+            bootstrap = self._exec_run_with_deadline(
+                session,
+                [
+                    "bash",
+                    "-lc",
+                    self._bootstrap_dependencies_command(),
+                ],
+                deadline,
+                user="root",
+            )
+            if bootstrap.exit_code != 0:
+                return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
 
-        install_script = self._install_agent_script_path
-        copy_paths = [self._wheel_path, install_script]
-        if self._mcp_config_path:
-            host_mcp_config = Path(self._mcp_config_path).expanduser().resolve()
-            if not host_mcp_config.exists():
-                raise FileNotFoundError(
-                    f"Terminal-Bench MCP config path does not exist: {host_mcp_config}"
-                )
-            copy_paths.append(host_mcp_config)
-        session.copy_to_container(paths=copy_paths, container_dir="/installed-agent")
+            install_script = self._install_agent_script_path
+            copy_paths = [self._wheel_path, install_script]
+            if self._mcp_config_path:
+                host_mcp_config = Path(self._mcp_config_path).expanduser().resolve()
+                if not host_mcp_config.exists():
+                    raise FileNotFoundError(
+                        "Terminal-Bench MCP config path does not exist: "
+                        f"{host_mcp_config}"
+                    )
+                copy_paths.append(host_mcp_config)
+            self._copy_to_container_with_deadline(
+                session,
+                paths=copy_paths,
+                container_dir="/installed-agent",
+                deadline=deadline,
+            )
 
-        env_setup_content = self._create_env_setup_file()
-        session.container.exec_run(
-            [
-                "sh",
-                "-c",
-                (
-                    f"echo {shlex.quote(env_setup_content)} > "
-                    "/installed-agent/setup-env.sh"
-                ),
-            ]
-        )
+            env_setup_content = self._create_env_setup_file()
+            self._exec_run_with_deadline(
+                session,
+                [
+                    "sh",
+                    "-c",
+                    (
+                        f"echo {shlex.quote(env_setup_content)} > "
+                        "/installed-agent/setup-env.sh"
+                    ),
+                ],
+                deadline,
+            )
 
-        session.send_keys(["source /installed-agent/setup-env.sh", "Enter"], block=True)
-        session.send_keys(
-            [
-                (
-                    "source /installed-agent/"
-                    + install_script.name
-                    + " || echo 'INSTALL_FAIL_STATUS'"
-                ),
-                "Enter",
-            ],
-            block=True,
-            max_timeout_sec=float("inf"),
-        )
-        installation_output = session.capture_pane(capture_entire=True)
-        if "INSTALL_FAIL_STATUS" in installation_output.splitlines():
-            return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
+            session.send_keys(
+                ["source /installed-agent/setup-env.sh", "Enter"],
+                block=True,
+                max_timeout_sec=self._remaining_timeout(deadline),
+            )
+            session.send_keys(
+                [
+                    (
+                        "source /installed-agent/"
+                        + install_script.name
+                        + " || echo 'INSTALL_FAIL_STATUS'"
+                    ),
+                    "Enter",
+                ],
+                block=True,
+                max_timeout_sec=self._remaining_timeout(deadline),
+            )
+            installation_output = session.capture_pane(capture_entire=True)
+            if "INSTALL_FAIL_STATUS" in installation_output.splitlines():
+                return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
 
-        rendered_instruction = self._render_instruction(instruction)
-        for command in self._run_agent_commands(rendered_instruction):
-            session.send_command(command)
+            rendered_instruction = self._render_instruction(instruction)
+            for command in self._run_agent_commands(rendered_instruction):
+                session.send_command(self._command_with_deadline(command, deadline))
+        except TimeoutError:
+            self._cleanup_timed_out_session(session, logging_dir)
+            return AgentResult(failure_mode=FailureMode.AGENT_TIMEOUT)
         if logging_dir is not None:
             marker_path = logging_dir / "openclaw-complete.marker"
             marker_path.write_text("completed", encoding="utf-8")
