@@ -206,6 +206,12 @@ install_uv() {
     log "uv already installed ($(uv --version))"
     return 0
   fi
+  # Some cloud images ship /home/$USER/.config as root-owned, which makes the
+  # uv installer fail when it writes its self-update receipt. Force-fix
+  # ownership before the curl|sh step.
+  local user
+  user="$(target_user)"
+  as_root install -d -m 0755 -o "${user}" -g "${user}" "${HOME}/.config"
   log "installing uv to ~/.local/bin"
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="${HOME}/.local/bin:${PATH}"
