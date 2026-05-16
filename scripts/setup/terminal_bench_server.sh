@@ -12,13 +12,13 @@
 #   export HF_TOKEN="your token"
 #   export REPO_DIR="${HOME}/agent-sched-bench"
 #   if [ ! -d "${REPO_DIR}/.git" ]; then
-#     /usr/bin/git clone --branch dev/gpu-resource-tracker \
+#     /usr/bin/git clone --branch main \
 #       https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
 #   fi
 #   cd "${REPO_DIR}"
-#   /usr/bin/git fetch origin dev/gpu-resource-tracker
-#   /usr/bin/git checkout dev/gpu-resource-tracker
-#   /usr/bin/git pull --ff-only origin dev/gpu-resource-tracker
+#   /usr/bin/git fetch origin main
+#   /usr/bin/git checkout main
+#   /usr/bin/git pull --ff-only origin main
 #   /usr/bin/bash scripts/setup/terminal_bench_server.sh
 #   STARTUP
 #
