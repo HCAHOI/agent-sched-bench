@@ -712,8 +712,29 @@ async def collect_traces(
             recording_provider=recording_provider,
         )
     finally:
+        # Shut down HTTP server before releasing provider so no in-flight
+        # request touches a partially-torn-down model.
         if recording_server is not None:
             recording_server.__exit__(None, None, None)
+        if recording_provider is not None:
+            # Drop the session KV cache and unsubscribe any H2O bus listener.
+            recording_provider.close()
+            # Release the HF model and all GPU tensors (H2O score buffers,
+            # session cache, etc.) while the CUDA context is still alive.
+            # Without this, Python's interpreter-shutdown GC fires __del__
+            # after CUDA teardown → C++ std::terminate / SIGABRT (exit 134).
+            del recording_provider
+            import gc
+
+            gc.collect()
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+            except Exception:
+                pass
 
 
 def _normalize_openclaw_trace(
