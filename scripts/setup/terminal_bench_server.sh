@@ -28,14 +28,22 @@
 #   REQUIRE_HF_TOKEN  — fail if HF_TOKEN unset (default: 1; private-repo users)
 #   SETUP_DOCKER_FIREWALL — iptables INPUT changes (default: 0; opt-in)
 #
-# Standard invocation after SSH:
-#   cd ~/agent-sched-bench
-#   HF_TOKEN=hf_xxx bash scripts/setup/terminal_bench_server.sh
+# Two-layer startup design (do NOT confuse them):
 #
-# Cloud startup-command form:
+#   Layer 1 — cloud-provider "startup command" box: runs once at instance boot.
+#             Owns the things this script can't see (repo URL, HF token, branch).
+#             Pasted into the provider UI; provider logs may capture it.
+#
+#   Layer 2 — this script: self-contained install + venv + model prewarm.
+#             Reads env vars Layer 1 exported. Does NOT persist anything to
+#             host shell config (no /etc/profile.d, no .bashrc edits).
+#             After it returns, env is gone — print_next_steps shows the
+#             one-liner that re-establishes env for the actual run.
+#
+# Layer-1 (paste into cloud startup-command box):
 #   /usr/bin/bash <<'STARTUP'
 #   set -euo pipefail
-#   export HF_TOKEN="..."   # WARNING: provider logs startup commands
+#   export HF_TOKEN="..."   # WARNING: provider logs this line; rotate after run
 #   export REPO_DIR="${HOME}/agent-sched-bench"
 #   [ -d "${REPO_DIR}/.git" ] || /usr/bin/git clone --branch main \
 #     https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
@@ -44,9 +52,9 @@
 #   /usr/bin/bash scripts/setup/terminal_bench_server.sh
 #   STARTUP
 #
-# Token-safety note: cloud provider startup boxes write to provider-side logs.
-# Prefer SSH-in + `export HF_TOKEN=...` over startup-box paste for production
-# tokens. Rotate any token that touches a startup box after the run.
+# Layer-2 (manual SSH-in form, equivalent):
+#   cd ~/agent-sched-bench
+#   HF_TOKEN=hf_xxx bash scripts/setup/terminal_bench_server.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -287,44 +295,6 @@ PY
   fi
 }
 
-configure_shell_environment() {
-  # Prefer /etc/profile.d so it survives shell choice (bash/zsh) and works
-  # when SSH user differs from the user that ran setup. Fall back to user
-  # .bashrc only when we can't write system-wide.
-  local snippet_body
-  snippet_body=$(cat <<EOF
-# Managed by agent-sched-bench scripts/setup/terminal_bench_server.sh
-export HF_HOME=${HF_HOME}
-export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}
-export PATH=${HOME}/.local/bin:\$PATH
-EOF
-)
-  if [ "$(id -u)" -eq 0 ] || sudo -n true 2>/dev/null; then
-    local target=/etc/profile.d/agent-sched-bench.sh
-    printf '%s\n' "${snippet_body}" | as_root tee "${target}" >/dev/null
-    as_root chmod 0644 "${target}"
-    log "wrote ${target} (sourced by all login shells)"
-    return 0
-  fi
-
-  local bashrc="${HOME}/.bashrc"
-  local tmp
-  tmp="$(mktemp "${bashrc}.tmp.XXXXXX")"
-  touch "${bashrc}"
-  awk '
-    $0 == "# >>> agent-sched-bench terminal-bench setup >>>" { skip = 1; next }
-    $0 == "# <<< agent-sched-bench terminal-bench setup <<<" { skip = 0; next }
-    skip != 1 { print }
-  ' "${bashrc}" > "${tmp}"
-  {
-    printf '\n# >>> agent-sched-bench terminal-bench setup >>>\n'
-    printf '%s\n' "${snippet_body}"
-    printf '# <<< agent-sched-bench terminal-bench setup <<<\n'
-  } >> "${tmp}"
-  mv "${tmp}" "${bashrc}"
-  log "updated ${bashrc} (no sudo available for /etc/profile.d)"
-}
-
 prefetch_terminal_bench() {
   log "loading Terminal-Bench registry and pinned dataset"
   PYTHONPATH="${REPO_ROOT}/src:${REPO_ROOT}" "${VENV_PATH}/bin/python" - <<'PY'
@@ -386,21 +356,20 @@ print_next_steps() {
 
 [terminal-bench-setup] DONE (backend=${SETUP_BACKEND})
 
-Activate the venv and launch:
-  cd ${REPO_ROOT}
-  source ${VENV_PATH}/bin/activate
-  export HF_HOME=${HF_HOME}
-  export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER}
-  export HF_HUB_OFFLINE=1
-  export TRANSFORMERS_OFFLINE=1
+Launch fix-git smoke (transformers + KV recording, single copy-paste):
 
-Scenario A (transformers + KV recording):
-  INSTANCE_ID=causal-inference-r \\
-  MODEL_ID=${MODEL_ID} \\
-  ./scripts/launch_kv_capstone.sh none baseline-causal-inference-r
+  cd ${REPO_ROOT} && source ${VENV_PATH}/bin/activate && \\
+    INSTANCE_ID=fix-git \\
+    MODEL_ID=${MODEL_ID} \\
+    ./scripts/launch_kv_capstone.sh none baseline-fix-git
 
-Scenario B (vLLM + openclaw):
-  ${VENV_PATH}/bin/vllm serve ${MODEL_ID} --port 44345 --host 127.0.0.1 &
+(launch_kv_capstone.sh already defaults HF_HOME, HF_HUB_OFFLINE=1,
+ TRANSFORMERS_OFFLINE=1, OPENAI_API_KEY=dummy — no extra exports needed.)
+
+vLLM serve (after running this script with SETUP_BACKEND=vllm or both):
+
+  source ${VENV_PATH}/bin/activate && \\
+    vllm serve ${MODEL_ID} --port 44345 --host 127.0.0.1
   # then point openclaw at http://127.0.0.1:44345/v1 via OPENAI_BASE_URL
 EOF
 }
@@ -412,7 +381,6 @@ install_uv
 setup_python_env
 install_backend
 configure_huggingface
-configure_shell_environment
 prefetch_terminal_bench
 prewarm_model
 verify_setup
