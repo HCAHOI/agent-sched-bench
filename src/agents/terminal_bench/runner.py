@@ -27,7 +27,9 @@ def _optional_positive_float(value: Any, *, name: str) -> float | None:
 
 
 class TerminalBenchRunner:
-    AGENT_IMPORT_PATH = "agents.terminal_bench.openclaw_agent:TerminalBenchOpenClawAgent"
+    AGENT_IMPORT_PATH = (
+        "agents.terminal_bench.openclaw_agent:TerminalBenchOpenClawAgent"
+    )
     TRACE_FILENAME = "openclaw-trace.jsonl"
     N_ATTEMPTS = 1
 
@@ -45,6 +47,7 @@ class TerminalBenchRunner:
         benchmark_slug: str,
         benchmark_extras: dict[str, Any],
         mcp_config: str | None = None,
+        generation_config: dict[str, Any] | None = None,
     ) -> None:
         self.provider_name = provider_name or "openai"
         self.env_key = env_key or "OPENAI_API_KEY"
@@ -56,6 +59,7 @@ class TerminalBenchRunner:
         self.context_window_tokens = context_window_tokens
         self.benchmark_slug = benchmark_slug
         self.benchmark_extras = dict(benchmark_extras)
+        self.generation_config = dict(generation_config or {})
         self.global_agent_timeout_sec = _optional_positive_float(
             self.benchmark_extras.get("global_agent_timeout_sec"),
             name="benchmark_extras.global_agent_timeout_sec",
@@ -151,8 +155,12 @@ class TerminalBenchRunner:
             tb_process_logs=tb_process_logs,
         )
         if not trace_path.exists():
-            raise RuntimeError(f"terminal-bench trace file not found under {tb_run_path}")
-        normalized_trace = run_root / f"{attempt_ctx.instance_id}-terminal-bench-trace.jsonl"
+            raise RuntimeError(
+                f"terminal-bench trace file not found under {tb_run_path}"
+            )
+        normalized_trace = (
+            run_root / f"{attempt_ctx.instance_id}-terminal-bench-trace.jsonl"
+        )
         self._augment_trace_metadata(
             src=trace_path,
             dst=normalized_trace,
@@ -245,6 +253,19 @@ class TerminalBenchRunner:
             "--agent-kwarg",
             f"max_iterations={self.max_iterations}",
         ]
+        for key in (
+            "temperature",
+            "top_p",
+            "top_k",
+            "repetition_penalty",
+        ):
+            if key in self.generation_config:
+                command.extend(
+                    [
+                        "--agent-kwarg",
+                        f"{key}={self.generation_config[key]}",
+                    ]
+                )
         if self.llm_timeout_sec is not None:
             command.extend(
                 [
@@ -377,6 +398,8 @@ class TerminalBenchRunner:
             run_config["global_agent_timeout_sec"] = self.global_agent_timeout_sec
         if self.llm_timeout_sec is not None:
             run_config["llm_timeout_sec"] = self.llm_timeout_sec
+        if self.generation_config:
+            run_config["generation"] = dict(self.generation_config)
         if run_config:
             merged["run_config"] = run_config
         return merged
@@ -403,6 +426,8 @@ class TerminalBenchRunner:
             summary["llm_timeout_sec"] = self.llm_timeout_sec
         if self.mcp_config_label is not None:
             summary["mcp_config"] = self.mcp_config_label
+        if self.generation_config:
+            summary["generation"] = dict(self.generation_config)
         if tb_process_logs:
             summary.update(tb_process_logs)
         return summary
@@ -419,7 +444,9 @@ class TerminalBenchRunner:
         from trace_collect.prompt_loader import load_prompt_template
 
         run_root.mkdir(parents=True, exist_ok=True)
-        template_text = load_prompt_template(prompt_template, self.benchmark_slug).replace(
+        template_text = load_prompt_template(
+            prompt_template, self.benchmark_slug
+        ).replace(
             "{{task}}",
             "{{ instruction }}",
         )

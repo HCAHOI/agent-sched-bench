@@ -32,6 +32,4 @@ def test_hf_recording_default_max_tokens_is_4096() -> None:
     # Static source check — avoids loading torch/transformers in CI.
     src = Path(__file__).resolve().parents[1] / "src/serving/recording/backend_hf.py"
     text = src.read_text(encoding="utf-8")
-    assert "GenerationSettings(temperature=0.1, max_tokens=4096)" in text, (
-        "HFRecordingProvider GenerationSettings drifted from max_tokens=4096"
-    )
+    assert "max_tokens=4096" in text, "HFRecordingProvider max_tokens default drifted"

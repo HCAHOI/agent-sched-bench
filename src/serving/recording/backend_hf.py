@@ -60,13 +60,29 @@ def _message_has_content(message: dict[str, Any]) -> bool:
 def _token_count(encoded: Any) -> int:
     input_ids = encoded["input_ids"] if isinstance(encoded, dict) else encoded.input_ids
     if hasattr(input_ids, "ndim"):
-        return int(input_ids.numel()) if input_ids.ndim == 1 else int(input_ids.shape[-1])
+        return (
+            int(input_ids.numel()) if input_ids.ndim == 1 else int(input_ids.shape[-1])
+        )
     if input_ids and isinstance(input_ids[0], list):
         return len(input_ids[0])
     return len(input_ids)
 
 
-def _token_boundary_for_char(tokenizer: Any, text: str, offsets: Any, char_pos: int) -> int:
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _token_boundary_for_char(
+    tokenizer: Any, text: str, offsets: Any, char_pos: int
+) -> int:
     if char_pos <= 0:
         return 0
     if offsets is None:
@@ -78,7 +94,9 @@ def _token_boundary_for_char(tokenizer: Any, text: str, offsets: Any, char_pos: 
     return len(offsets)
 
 
-def _tokenize_with_offsets(tokenizer: Any, text: str) -> tuple[Any, list[list[int]] | None]:
+def _tokenize_with_offsets(
+    tokenizer: Any, text: str
+) -> tuple[Any, list[list[int]] | None]:
     try:
         encoded = tokenizer(
             text,
@@ -114,10 +132,7 @@ def _parse_tool_value(raw_value: str) -> Any:
     value = raw_value.strip()
     if not value:
         return ""
-    if (
-        value[0] not in "{[\"'-0123456789"
-        and value not in {"true", "false", "null"}
-    ):
+    if value[0] not in "{[\"'-0123456789" and value not in {"true", "false", "null"}:
         return value
     try:
         return json_repair.loads(value)
@@ -464,11 +479,21 @@ class HFRecordingProvider(LLMProvider):
         api_key: str | None = None,
         api_base: str | None = None,
         eviction_config: EvictionPolicyConfig | None = None,
+        temperature: float = 0.1,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repetition_penalty: float | None = None,
     ) -> None:
         super().__init__(api_key=api_key, api_base=api_base)
         self.default_model = default_model
         self.config = config or RecordingConfig()
-        self.generation = GenerationSettings(temperature=0.1, max_tokens=4096)
+        self.generation = GenerationSettings(
+            temperature=temperature,
+            max_tokens=4096,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
+        )
         self._call_idx = 0
         self._chat_lock = threading.Lock()
         # Session-shared cache lives across chat() calls so H2O score buffers,
@@ -655,14 +680,16 @@ class HFRecordingProvider(LLMProvider):
                 call_idx,
                 new_len,
             )
-            self._session_history.append({
-                "call_idx": call_idx,
-                "used_session_cache": True,
-                "lcp": 0,
-                "cached_len_before": 0,
-                "new_len": new_len,
-                "delta_len": new_len,
-            })
+            self._session_history.append(
+                {
+                    "call_idx": call_idx,
+                    "used_session_cache": True,
+                    "lcp": 0,
+                    "cached_len_before": 0,
+                    "new_len": new_len,
+                    "delta_len": new_len,
+                }
+            )
             return prompt_ids, True
         assert self._session_token_ids is not None
         cached_ids = self._session_token_ids[0]
@@ -681,14 +708,16 @@ class HFRecordingProvider(LLMProvider):
         if lcp == cached_len and new_len > cached_len:
             # Strict prefix: pass only the delta.
             delta_len = new_len - lcp
-            self._session_history.append({
-                "call_idx": call_idx,
-                "used_session_cache": True,
-                "lcp": lcp,
-                "cached_len_before": cached_len,
-                "new_len": new_len,
-                "delta_len": delta_len,
-            })
+            self._session_history.append(
+                {
+                    "call_idx": call_idx,
+                    "used_session_cache": True,
+                    "lcp": lcp,
+                    "cached_len_before": cached_len,
+                    "new_len": new_len,
+                    "delta_len": delta_len,
+                }
+            )
             return prompt_ids[:, lcp:], True
         # Divergence: monotonic-reprompt assumption violated. Drop and rebuild.
         _LOG.warning(
@@ -702,15 +731,17 @@ class HFRecordingProvider(LLMProvider):
         self._drop_session_cache()
         self._session_cache = self._build_session_cache()
         self._session_token_ids = prompt_ids.clone()
-        self._session_history.append({
-            "call_idx": call_idx,
-            "used_session_cache": True,
-            "lcp": lcp,
-            "cached_len_before": cached_len,
-            "new_len": new_len,
-            "delta_len": new_len,
-            "diverged": True,
-        })
+        self._session_history.append(
+            {
+                "call_idx": call_idx,
+                "used_session_cache": True,
+                "lcp": lcp,
+                "cached_len_before": cached_len,
+                "new_len": new_len,
+                "delta_len": new_len,
+                "diverged": True,
+            }
+        )
         return prompt_ids, True
 
     def _extend_session_tokens(self, *, prompt_ids: Any, output_ids: list[int]) -> None:
@@ -749,6 +780,9 @@ class HFRecordingProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repetition_penalty: float | None = None,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
@@ -756,8 +790,7 @@ class HFRecordingProvider(LLMProvider):
         if reasoning_effort is not None:
             return LLMResponse(
                 content=(
-                    "Error: HF recording provider does not support "
-                    "reasoning_effort."
+                    "Error: HF recording provider does not support reasoning_effort."
                 ),
                 finish_reason="error",
                 extra={"error_type": "unsupported_reasoning_effort"},
@@ -765,7 +798,7 @@ class HFRecordingProvider(LLMProvider):
         if isinstance(tool_choice, dict) or tool_choice not in {None, "auto", "none"}:
             return LLMResponse(
                 content=(
-                    'Error: HF recording provider does not support forced tool_choice; '
+                    "Error: HF recording provider does not support forced tool_choice; "
                     'supported values are ["none", "auto"].'
                 ),
                 finish_reason="error",
@@ -777,6 +810,13 @@ class HFRecordingProvider(LLMProvider):
                 tools=tools,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                top_p=self.generation.top_p if top_p is None else top_p,
+                top_k=self.generation.top_k if top_k is None else top_k,
+                repetition_penalty=(
+                    self.generation.repetition_penalty
+                    if repetition_penalty is None
+                    else repetition_penalty
+                ),
                 tool_choice=tool_choice,
             )
 
@@ -787,6 +827,9 @@ class HFRecordingProvider(LLMProvider):
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
         temperature: float,
+        top_p: float | None,
+        top_k: int | None,
+        repetition_penalty: float | None,
         tool_choice: str | dict[str, Any] | None,
     ) -> LLMResponse:
         template_tools = None if tool_choice == "none" else tools
@@ -818,6 +861,12 @@ class HFRecordingProvider(LLMProvider):
             }
             if temperature > 0:
                 generation_kwargs["temperature"] = float(temperature)
+            if top_p is not None:
+                generation_kwargs["top_p"] = float(top_p)
+            if top_k is not None:
+                generation_kwargs["top_k"] = int(top_k)
+            if repetition_penalty is not None:
+                generation_kwargs["repetition_penalty"] = float(repetition_penalty)
             # KV eviction injection: a session-shared cache lives across
             # chat() calls. When no policy is configured, generate() falls
             # back to its stock DynamicCache and behaves identically to the
@@ -868,19 +917,27 @@ class HFRecordingProvider(LLMProvider):
             # not lift the recording sample cap here; doing so would materialize
             # a full QxK attention tensor and can OOM on long prompts.
             prefill_ctx = nullcontext()
-            with self._torch.no_grad(), self.capturer.recording_session(
-                call_idx=call_idx,
-                segments=segments,
-                input_token_count=input_token_count,
-            ), prefill_ctx:
+            with (
+                self._torch.no_grad(),
+                self.capturer.recording_session(
+                    call_idx=call_idx,
+                    segments=segments,
+                    input_token_count=input_token_count,
+                ),
+                prefill_ctx,
+            ):
                 sequences = self.model.generate(**generation_kwargs)
                 # `sequences` shape depends on whether session cache was
                 # active: with `past_key_values`, HF returns just the new
                 # tokens (delta + generated); without, full prompt + generated.
                 if used_session_cache:
-                    output_ids = sequences[0, delta_ids.shape[-1]:].detach().cpu().tolist()
+                    output_ids = (
+                        sequences[0, delta_ids.shape[-1] :].detach().cpu().tolist()
+                    )
                 else:
-                    output_ids = sequences[0, input_token_count:].detach().cpu().tolist()
+                    output_ids = (
+                        sequences[0, input_token_count:].detach().cpu().tolist()
+                    )
                 self.capturer.flush(output_token_ids=output_ids)
             if self._session_cache is not None:
                 # Detach recorder so the next call's recorder swap is clean.
@@ -956,6 +1013,11 @@ class HFRecordingServer:
                             model=payload.get("model"),
                             max_tokens=int(payload.get("max_tokens") or 4096),
                             temperature=float(payload.get("temperature") or 0.0),
+                            top_p=_optional_float(payload.get("top_p")),
+                            top_k=_optional_int(payload.get("top_k")),
+                            repetition_penalty=_optional_float(
+                                payload.get("repetition_penalty")
+                            ),
                             reasoning_effort=payload.get("reasoning_effort"),
                             tool_choice=payload.get("tool_choice"),
                         )
@@ -969,6 +1031,7 @@ class HFRecordingServer:
                     self.wfile.write(raw)
                 except Exception as exc:
                     import traceback
+
                     sys.stderr.write(
                         f"[HFRecordingServer] chat handler raised: {exc!r}\n"
                         f"{traceback.format_exc()}\n"

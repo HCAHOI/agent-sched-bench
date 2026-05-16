@@ -183,12 +183,19 @@ class UnifiedProvider(LLMProvider):
         *,
         max_tokens: int = 4096,
         temperature: float = 0.1,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repetition_penalty: float | None = None,
         timeout: float | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.generation = GenerationSettings(
-            temperature=temperature, max_tokens=max_tokens
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
         )
         self._client = create_async_openai_client(
             api_key=api_key,
@@ -254,6 +261,18 @@ class UnifiedProvider(LLMProvider):
             "temperature": temperature,
             "max_tokens": max(1, max_tokens),
         }
+        if self.generation.top_p is not None:
+            kwargs["top_p"] = self.generation.top_p
+        extra_body = {
+            key: value
+            for key, value in {
+                "top_k": self.generation.top_k,
+                "repetition_penalty": self.generation.repetition_penalty,
+            }.items()
+            if value is not None
+        }
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
         if tools:
@@ -346,8 +365,11 @@ class UnifiedProvider(LLMProvider):
         self,
         generation_id: str,
     ) -> dict[str, Any]:
-        metadata, _diagnostics = await (
-            self._fetch_openrouter_generation_metadata_with_diagnostics(generation_id)
+        (
+            metadata,
+            _diagnostics,
+        ) = await self._fetch_openrouter_generation_metadata_with_diagnostics(
+            generation_id
         )
         return metadata
 
@@ -450,8 +472,11 @@ class UnifiedProvider(LLMProvider):
         self, generation_id: str
     ) -> dict[str, Any]:
         metadata_fetch_started_at = time.time()
-        metadata, diagnostics = await (
-            self._fetch_openrouter_generation_metadata_with_diagnostics(generation_id)
+        (
+            metadata,
+            diagnostics,
+        ) = await self._fetch_openrouter_generation_metadata_with_diagnostics(
+            generation_id
         )
         extra_fields: dict[str, Any] = {
             "openrouter_metadata_fetch_ms": (time.time() - metadata_fetch_started_at)
@@ -517,6 +542,7 @@ class UnifiedProvider(LLMProvider):
         extra["openrouter_metadata_retry_delays_s"] = metadata_policy["retry_delays_s"]
         extra["openrouter_metadata_timeout_s"] = metadata_policy["timeout_s"]
         extra["openrouter_metadata_task_pending"] = True
+
         async def _refetch_openrouter_metadata() -> dict[str, Any]:
             return await self._fetch_openrouter_extra_fields(generation_id)
 

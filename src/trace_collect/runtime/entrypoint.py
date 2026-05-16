@@ -111,6 +111,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         api_key=llm_config.api_key,
         api_base=llm_config.api_base,
         default_model=llm_config.model,
+        **dict(request.get("generation_config") or {}),
     )
     runner = benchmark.build_runner(
         scaffold="openclaw",
@@ -121,6 +122,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         model=llm_config.model,
         mcp_servers=load_mcp_servers(request.get("mcp_config")),
         exec_path_append=exec_path_append,
+        generation_config=dict(request.get("generation_config") or {}),
     )
     task_raw = dict(request["task"])
     eval_task = EvalTask(

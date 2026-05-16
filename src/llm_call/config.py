@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from dataclasses import dataclass
 from typing import Mapping
@@ -50,6 +51,51 @@ def add_llm_config_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def nonnegative_float_arg(value: str) -> float:
+    parsed = _float_arg(value, name="value")
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"value must be non-negative, got {value!r}")
+    return parsed
+
+
+def positive_float_arg(value: str) -> float:
+    parsed = _float_arg(value, name="value")
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"value must be positive, got {value!r}")
+    return parsed
+
+
+def top_p_arg(value: str) -> float:
+    parsed = positive_float_arg(value)
+    if parsed > 1:
+        raise argparse.ArgumentTypeError(f"top_p must be <= 1, got {value!r}")
+    return parsed
+
+
+def positive_int_arg(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"value must be an integer, got {value!r}"
+        ) from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"value must be positive, got {value!r}")
+    return parsed
+
+
+def _float_arg(value: str, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"{name} must be a float, got {value!r}"
+        ) from exc
+    if not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError(f"{name} must be finite, got {value!r}")
+    return parsed
+
+
 def resolve_llm_config(
     *,
     provider: str | None,
@@ -69,9 +115,7 @@ def resolve_llm_config(
             f"Unsupported provider {provider!r}. Choose one of: {', '.join(provider_choices())}."
         )
     if not model:
-        raise ValueError(
-            "Missing required --model. Example: --model z-ai/glm-5.1."
-        )
+        raise ValueError("Missing required --model. Example: --model z-ai/glm-5.1.")
 
     env = os.environ if environ is None else environ
     definition = PROVIDERS[provider]

@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 import re
@@ -11,9 +10,9 @@ from loguru import logger
 
 from agents.openclaw.utils.helpers import image_placeholder_text
 
+
 @dataclass
 class ToolCallRequest:
-
     id: str
     name: str
     arguments: dict[str, Any]
@@ -40,9 +39,9 @@ class ToolCallRequest:
             )
         return tool_call
 
+
 @dataclass
 class LLMResponse:
-
     content: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
     finish_reason: str = "stop"
@@ -55,15 +54,29 @@ class LLMResponse:
     def has_tool_calls(self) -> bool:
         return len(self.tool_calls) > 0
 
+
 @dataclass(frozen=True)
 class GenerationSettings:
-
     temperature: float = 0.7
     max_tokens: int = 4096
     reasoning_effort: str | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    repetition_penalty: float | None = None
+
+    def sampling_overrides(self) -> dict[str, Any]:
+        """Generation controls that are omitted unless explicitly configured."""
+        values: dict[str, Any] = {}
+        if self.top_p is not None:
+            values["top_p"] = self.top_p
+        if self.top_k is not None:
+            values["top_k"] = self.top_k
+        if self.repetition_penalty is not None:
+            values["repetition_penalty"] = self.repetition_penalty
+        return values
+
 
 class LLMProvider(ABC):
-
     _CHAT_RETRY_DELAYS = (1, 2, 4, 8, 16, 32)
     _PERSISTENT_MAX_DELAY = 60
     _PERSISTENT_IDENTICAL_ERROR_LIMIT = 10

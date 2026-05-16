@@ -57,7 +57,9 @@ class SWEBenchRunner:
         max_tool_result_chars: int | None = None,
         model: str | None = None,
         exec_path_append: str = "",
+        generation_config: dict[str, Any] | None = None,
     ) -> None:
+        del generation_config
         self.provider = provider
         self.workspace_base = Path(workspace_base).resolve()
         self.benchmark_slug = benchmark_slug

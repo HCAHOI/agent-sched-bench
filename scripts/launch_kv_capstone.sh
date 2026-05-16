@@ -14,10 +14,14 @@
 # Env (override defaults if your host differs):
 #   REPO        - repo root (default: $(pwd))
 #   INSTANCE_ID - terminal-bench task id (default: jsonl-aggregator)
+#   MODEL_ID    - HF model id/path (default: Qwen/Qwen3-Coder-30B-A3B-Instruct)
 #   ENV_BIN     - conda env bin dir holding python + the `tb` console script
 #                 (default: dir of `which python`)
 #   HF_HOME     - HuggingFace cache dir (default: $HOME/hf_cache)
 #   HF_RECORDING_MAX_GPU_MEMORY_GIB - cap for backend_hf (default: 90)
+#   OPENCLAW_TEMPERATURE / OPENCLAW_TOP_P / OPENCLAW_TOP_K /
+#   OPENCLAW_REPETITION_PENALTY - generation controls. Defaults match the
+#                 Qwen3-Coder model card for this Qwen-focused launcher.
 #
 # Optional, China-network only (set externally if upstream PyPI/Ubuntu repos
 # are slow from your host; both are forwarded into the agent container by
@@ -48,11 +52,16 @@ cd "$REPO"
 mkdir -p logs
 
 export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export HF_RECORDING_MAX_GPU_MEMORY_GIB="${HF_RECORDING_MAX_GPU_MEMORY_GIB:-90}"
 export PYTHONPATH="$REPO/src:${PYTHONPATH:-}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
+MODEL_ID="${MODEL_ID:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
+OPENCLAW_TEMPERATURE="${OPENCLAW_TEMPERATURE:-0.7}"
+OPENCLAW_TOP_P="${OPENCLAW_TOP_P:-0.8}"
+OPENCLAW_TOP_K="${OPENCLAW_TOP_K:-20}"
+OPENCLAW_REPETITION_PENALTY="${OPENCLAW_REPETITION_PENALTY:-1.05}"
 
 # Conda env bin must be on PATH so terminal-bench's `tb` console script
 # resolves (TerminalBenchRunner._preflight greps PATH for it). Calling
@@ -66,6 +75,11 @@ echo "=== launch_kv_capstone.sh ==="
 echo "ts=$TS"
 echo "kv_config=$KV_CONFIG"
 echo "instance_id=$INSTANCE_ID"
+echo "model_id=$MODEL_ID"
+echo "temperature=$OPENCLAW_TEMPERATURE"
+echo "top_p=$OPENCLAW_TOP_P"
+echo "top_k=$OPENCLAW_TOP_K"
+echo "repetition_penalty=$OPENCLAW_REPETITION_PENALTY"
 echo "label=$LABEL_SUFFIX"
 echo "log=$LOG"
 echo "head=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -74,14 +88,18 @@ echo "================================"
 
 CMD=("$PY" -m trace_collect.cli
   --provider openai
-  --model Qwen/Qwen3-Coder-30B-A3B-Instruct
+  --model "$MODEL_ID"
   --benchmark terminal-bench
   --scaffold openclaw
   --container docker
   --mcp-config none
   --instance-ids "$INSTANCE_ID"
   --record-internals
-  --max-iterations 100)
+  --max-iterations 100
+  --temperature "$OPENCLAW_TEMPERATURE"
+  --top-p "$OPENCLAW_TOP_P"
+  --top-k "$OPENCLAW_TOP_K"
+  --repetition-penalty "$OPENCLAW_REPETITION_PENALTY")
 if [ "$KV_CONFIG" != "none" ]; then
   CMD+=(--kv-config "$KV_CONFIG")
 fi

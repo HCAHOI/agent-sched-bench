@@ -43,6 +43,24 @@ def test_run_command_uses_venv_openclaw_and_iteration_limit() -> None:
     assert '--max-iterations 25' in command
 
 
+def test_run_command_resolves_host_local_api_base_inside_container() -> None:
+    agent = StubAgent(
+        model_name='local-model',
+        provider_name='openai',
+        api_base='http://172.17.0.1:33895/v1',
+        api_key='test-key',
+        env_key='OPENAI_API_KEY',
+        max_iterations=25,
+    )
+
+    command = agent._run_agent_commands('hello task')[0].command
+
+    assert command.startswith("OPENCLAW_API_BASE=http://172.17.0.1:33895/v1; ")
+    assert 'ip route show default' in command
+    assert '--api-base "${OPENCLAW_API_BASE}"' in command
+    assert '/installed-agent/venv/bin/openclaw ' in command
+
+
 def test_run_command_forwards_mcp_config_to_container() -> None:
     agent = StubAgent(
         model_name='nvidia/nemotron-3-super-120b-a12b:free',
@@ -66,6 +84,8 @@ def test_bootstrap_checks_real_venv_creation() -> None:
 
 
 def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in TerminalBenchOpenClawAgent._ENV_PASSTHROUGH:
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv('OPENROUTER_API_KEY', 'env-key')
     agent = StubAgent(
         model_name='nvidia/nemotron-3-super-120b-a12b:free',

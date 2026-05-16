@@ -59,15 +59,12 @@ def _recording_server_public_host(
     explicit = os.environ.get("HF_RECORDING_PUBLIC_HOST")
     if explicit:
         return explicit
-    if (
-        container_executable == "docker"
-        and (
-            execution_environment == "container"
-            or runtime_mode == "task_container_agent"
-        )
+    if container_executable == "docker" and (
+        execution_environment == "container" or runtime_mode == "task_container_agent"
     ):
         return _DOCKER_HOST_GATEWAY
     return None
+
 
 _ATTEMPT_DIR_NAME_RE = re.compile(r"^attempt_(\d+)$")
 
@@ -117,6 +114,25 @@ def _read_text_if_exists(path: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _generation_config(
+    *,
+    temperature: float | None,
+    top_p: float | None,
+    top_k: int | None,
+    repetition_penalty: float | None,
+) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "repetition_penalty": repetition_penalty,
+        }.items()
+        if value is not None
+    }
 
 
 @dataclass(slots=True)
@@ -305,7 +321,9 @@ def _cleanup_task_images(
             if free_gb > keep_gb:
                 logger.info(
                     "cleanup %s skipped: %.1f GB free > %.1f GB threshold",
-                    instance_id, free_gb, keep_gb,
+                    instance_id,
+                    free_gb,
+                    keep_gb,
                 )
                 return
         except (ValueError, OSError):
@@ -530,6 +548,10 @@ async def collect_traces(
     provider_name: str | None = None,
     env_key: str | None = None,
     max_iterations: int = 100,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    repetition_penalty: float | None = None,
     sample: int | None = None,
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
@@ -543,7 +565,9 @@ async def collect_traces(
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     if record_internals and scaffold != "openclaw":
-        raise ValueError("--record-internals currently supports scaffold='openclaw' only")
+        raise ValueError(
+            "--record-internals currently supports scaffold='openclaw' only"
+        )
     benchmark.validate_scaffold_support(scaffold)
     execution_environment = benchmark.execution_environment
     if execution_environment not in {"container", "host"}:
@@ -562,6 +586,12 @@ async def collect_traces(
         raise ValueError("--container required for container-mode benchmarks")
 
     run_dir = Path(run_id) if run_id else build_run_dir(benchmark, model)
+    generation_config = _generation_config(
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        repetition_penalty=repetition_penalty,
+    )
     recording_provider = None
     recording_server = None
     if record_internals:
@@ -569,7 +599,12 @@ async def collect_traces(
         from serving.recording import HFRecordingProvider, HFRecordingServer
 
         recording_provider = HFRecordingProvider(
-            default_model=model, eviction_config=eviction_config
+            default_model=model,
+            eviction_config=eviction_config,
+            temperature=temperature if temperature is not None else 0.1,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
         )
         recording_server = HFRecordingServer(
             recording_provider,
@@ -588,6 +623,7 @@ async def collect_traces(
         api_key=api_key,
         api_base=api_base,
         default_model=model,
+        **generation_config,
     )
     runner = None
     if runtime_mode == "host_controller":
@@ -604,6 +640,7 @@ async def collect_traces(
             api_key=effective_api_key,
             mcp_config=mcp_config,
             mcp_servers=load_mcp_servers(mcp_config),
+            generation_config=generation_config,
         )
 
     tasks = _select_tasks(
@@ -633,6 +670,7 @@ async def collect_traces(
                     api_key=effective_api_key,
                     model=model,
                     max_iterations=max_iterations,
+                    generation_config=generation_config,
                     max_context_tokens=max_context_tokens,
                     mcp_config=mcp_config,
                     container_executable=container_executable,
@@ -691,6 +729,7 @@ def _normalize_openclaw_trace(
     agent_runtime_mode: str | None = None,
     runtime_proof: dict[str, Any] | None = None,
     record_internals: bool = False,
+    generation_config: dict[str, Any] | None = None,
 ) -> None:
     """Copy an OpenClaw trace into the attempt dir, merging trace metadata."""
     lines = src.read_text(encoding="utf-8").splitlines()
@@ -746,6 +785,10 @@ def _normalize_openclaw_trace(
         run_config = merged.get("run_config") or {}
         run_config["record_internals"] = True
         merged["run_config"] = run_config
+    if generation_config:
+        run_config = merged.get("run_config") or {}
+        run_config["generation"] = dict(generation_config)
+        merged["run_config"] = run_config
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "w", encoding="utf-8") as f:
@@ -798,6 +841,7 @@ async def _run_openclaw_in_task_container(
     model: str,
     container_executable: str,
     max_iterations: int,
+    generation_config: dict[str, Any] | None,
     max_context_tokens: int,
     mcp_config: str | None,
     record_internals: bool = False,
@@ -869,6 +913,7 @@ async def _run_openclaw_in_task_container(
                 "api_key": api_key,
                 "model": model,
                 "max_iterations": max_iterations,
+                "generation_config": generation_config or {},
                 "max_context_tokens": max_context_tokens,
                 "prompt_template": ctx.prompt_template,
                 "agent_runtime_mode": ctx.agent_runtime_mode,
@@ -912,6 +957,7 @@ async def _run_openclaw_in_task_container(
             agent_runtime_mode=ctx.agent_runtime_mode,
             runtime_proof=runtime_proof,
             record_internals=record_internals,
+            generation_config=generation_config,
         )
     finally:
         container_logs = stop_task_container(

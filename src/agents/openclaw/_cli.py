@@ -20,9 +20,17 @@ from pathlib import Path
 from typing import Any
 
 from llm_call import UnifiedProvider, add_llm_config_arguments, resolve_llm_config
+from llm_call.config import (
+    nonnegative_float_arg,
+    positive_float_arg,
+    positive_int_arg,
+    top_p_arg,
+)
+
 
 def _ts() -> str:
     return datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
+
 
 class CLIStreamHook:
     """Print real-time agent events to stderr."""
@@ -86,6 +94,7 @@ class CLIStreamHook:
             f"{self._total_tokens} total tokens",
         )
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m agents.openclaw",
@@ -147,9 +156,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--temperature",
-        type=float,
+        type=nonnegative_float_arg,
         default=0.1,
         help="Sampling temperature (default: 0.1).",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=top_p_arg,
+        default=None,
+        help="Optional nucleus sampling top_p value.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=positive_int_arg,
+        default=None,
+        help="Optional top_k sampling value for compatible providers.",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=positive_float_arg,
+        default=None,
+        help="Optional repetition penalty for compatible providers.",
     )
     parser.add_argument(
         "--malformed-retry-budget",
@@ -175,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
+
 def _resolve_llm_config(args: argparse.Namespace):
     try:
         config = resolve_llm_config(
@@ -195,6 +223,7 @@ def _resolve_llm_config(args: argparse.Namespace):
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
 
+
 def _resolve_repo_root() -> Path | None:
     """Walk up from this file to find the agent-sched-bench repo root.
 
@@ -207,12 +236,14 @@ def _resolve_repo_root() -> Path | None:
             return parent
     return None
 
+
 def _slug_model(name: str) -> str:
     """Convert a model identifier to a filesystem-safe slug.
 
     e.g., ``z-ai/glm-5.1`` -> ``z-ai_glm-5.1``.
     """
     return name.replace("/", "_").replace(":", "_")
+
 
 def _resolve_trace_output(
     args: argparse.Namespace, session_id: str, model: str
@@ -227,7 +258,15 @@ def _resolve_trace_output(
 
     base = _resolve_repo_root() or Path.cwd().resolve()
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return base / "traces" / "openclaw_cli" / _slug_model(model) / ts / f"{session_id}.jsonl"
+    return (
+        base
+        / "traces"
+        / "openclaw_cli"
+        / _slug_model(model)
+        / ts
+        / f"{session_id}.jsonl"
+    )
+
 
 def _run_sync(args: argparse.Namespace) -> int:
     llm_config = _resolve_llm_config(args)
@@ -259,6 +298,9 @@ def _run_sync(args: argparse.Namespace) -> int:
         default_model=llm_config.model,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        repetition_penalty=args.repetition_penalty,
     )
 
     trace_file = _resolve_trace_output(args, session_id, llm_config.model)
@@ -317,6 +359,7 @@ def _run_sync(args: argparse.Namespace) -> int:
 
     return 0
 
+
 def _install_daemon_signal_handlers(args: argparse.Namespace) -> None:
     pid_file = getattr(args, "_pid_file", None)
 
@@ -331,6 +374,7 @@ def _install_daemon_signal_handlers(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGTERM, _cleanup)
     if pid_file:
         atexit.register(lambda: Path(pid_file).unlink(missing_ok=True))
+
 
 def _run_async(args: argparse.Namespace) -> int:
     from agents.openclaw._daemon import spawn_daemon
@@ -377,6 +421,12 @@ def _run_async(args: argparse.Namespace) -> int:
         "--trace-output",
         str(trace_file),
     ]
+    if args.top_p is not None:
+        cmd.extend(["--top-p", str(args.top_p)])
+    if args.top_k is not None:
+        cmd.extend(["--top-k", str(args.top_k)])
+    if args.repetition_penalty is not None:
+        cmd.extend(["--repetition-penalty", str(args.repetition_penalty)])
     if args.mcp_config is not None:
         cmd.extend(["--mcp-config", str(args.mcp_config)])
 
@@ -398,6 +448,7 @@ def _run_async(args: argparse.Namespace) -> int:
     print(json.dumps(result, indent=2))
     return 0
 
+
 def _run_status(args: argparse.Namespace) -> int:
     from agents.openclaw._daemon import get_session_status
 
@@ -409,6 +460,7 @@ def _run_status(args: argparse.Namespace) -> int:
     status = get_session_status(args.session_id, workspace)
     print(json.dumps(status, indent=2))
     return 0
+
 
 def main() -> None:
     args = build_parser().parse_args()

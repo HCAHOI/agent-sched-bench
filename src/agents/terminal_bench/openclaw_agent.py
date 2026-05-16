@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from terminal_bench.agents.base_agent import AgentResult
 from terminal_bench.agents.failure_mode import FailureMode
@@ -16,12 +17,31 @@ from terminal_bench.terminal.models import TerminalCommand
 from terminal_bench.terminal.tmux_session import TmuxSession
 
 
+def _optional_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
 class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     """Terminal-Bench adapter that installs this repo and runs OpenClaw."""
 
     TRACE_FILENAME = "openclaw-trace.jsonl"
     VENV_PATH = "/installed-agent/venv"
     _WHEEL_CACHE: Path | None = None
+    _CONTAINER_LOCAL_API_HOSTS = {
+        "127.0.0.1",
+        "localhost",
+        "0.0.0.0",
+        "172.17.0.1",
+        "host.docker.internal",
+    }
 
     @staticmethod
     def name() -> str:
@@ -37,6 +57,10 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         max_iterations: int = 100,
         llm_timeout_sec: float | None = None,
         mcp_config_path: str | None = None,
+        temperature: float | str | None = None,
+        top_p: float | str | None = None,
+        top_k: int | str | None = None,
+        repetition_penalty: float | str | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -55,6 +79,10 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             None if llm_timeout_sec is None else float(llm_timeout_sec)
         )
         self._mcp_config_path = mcp_config_path
+        self._temperature = _optional_float(temperature)
+        self._top_p = _optional_float(top_p)
+        self._top_k = _optional_int(top_k)
+        self._repetition_penalty = _optional_float(repetition_penalty)
 
     _ENV_PASSTHROUGH = (
         "PIP_INDEX_URL",
@@ -138,7 +166,8 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _wheel_path(self) -> Path:
         return self._build_wheel()
 
-    def _bootstrap_dependencies_command(self) -> str:
+    @staticmethod
+    def _bootstrap_dependencies_command() -> str:
         # `container.exec_run(...)` does NOT inherit the tmux session's
         # setup-env.sh exports, so the mirror prefix must be embedded into
         # the script literally rather than read from an env var at runtime.
@@ -151,13 +180,13 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 "  for f in /etc/apt/sources.list "
                 "/etc/apt/sources.list.d/*.list "
                 "/etc/apt/sources.list.d/*.sources; do\n"
-                "    [ -f \"$f\" ] || continue\n"
+                '    [ -f "$f" ] || continue\n'
                 "    sed -i \\\n"
                 f"      -e 's|http://archive.ubuntu.com/ubuntu|{apt_mirror}/ubuntu|g' \\\n"
                 f"      -e 's|http://security.ubuntu.com/ubuntu|{apt_mirror}/ubuntu|g' \\\n"
                 f"      -e 's|http://deb.debian.org/debian|{apt_mirror}/debian|g' \\\n"
                 f"      -e 's|http://security.debian.org/debian-security|{apt_mirror}/debian-security|g' \\\n"
-                "      \"$f\" || true\n"
+                '      "$f" || true\n'
                 "  done\n"
             )
         else:
@@ -173,13 +202,13 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             "  install_python_deps\n"
             "fi\n"
             "probe_root=$(mktemp -d /tmp/openclaw-venv-check.XXXXXX)\n"
-            "cleanup_probe() { rm -rf \"$probe_root\"; }\n"
+            'cleanup_probe() { rm -rf "$probe_root"; }\n'
             "trap cleanup_probe EXIT\n"
             "venv_ready() {\n"
-            "  rm -rf \"$probe_root/venv\"\n"
+            '  rm -rf "$probe_root/venv"\n'
             "  python3 -m pip --version >/dev/null 2>&1 && "
-            "python3 -m venv \"$probe_root/venv\" >/dev/null 2>&1 && "
-            "\"$probe_root/venv/bin/python\" -m pip --version >/dev/null 2>&1\n"
+            'python3 -m venv "$probe_root/venv" >/dev/null 2>&1 && '
+            '"$probe_root/venv/bin/python" -m pip --version >/dev/null 2>&1\n'
             "}\n"
             "if ! venv_ready; then\n"
             "  install_python_deps\n"
@@ -187,27 +216,66 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             "fi\n"
         )
 
+    @classmethod
+    def _should_resolve_api_base_from_container_gateway(cls, api_base: str) -> bool:
+        host = urlparse(api_base).hostname
+        return host in cls._CONTAINER_LOCAL_API_HOSTS
+
+    def _api_base_shell_prefix(self) -> tuple[str, str]:
+        """Return a shell prefix and argv expression for the OpenClaw API base.
+
+        Terminal-Bench runs OpenClaw inside the task container. Host-local API
+        endpoints such as the HF recording server must therefore use the task
+        container's default gateway, not the host-side bridge address guessed
+        before Terminal-Bench creates its per-task Docker network.
+        """
+        if not self._should_resolve_api_base_from_container_gateway(self._api_base):
+            return "", shlex.quote(self._api_base)
+        prefix = (
+            f"OPENCLAW_API_BASE={shlex.quote(self._api_base)}; "
+            "OPENCLAW_GATEWAY=$(ip route show default 2>/dev/null | "
+            "awk 'NR==1 {print $3}'); "
+            'if [ -n "$OPENCLAW_GATEWAY" ]; then '
+            'OPENCLAW_API_BASE=$(printf "%s" "$OPENCLAW_API_BASE" | '
+            'sed -E "s#^(https?://)'
+            r'(127\.0\.0\.1|localhost|0\.0\.0\.0|172\.17\.0\.1|host\.docker\.internal)'
+            '(:|/)#\\\\1${OPENCLAW_GATEWAY}\\\\3#"); '
+            "fi; "
+        )
+        return prefix, '"${OPENCLAW_API_BASE}"'
+
     def _run_agent_commands(self, instruction: str) -> list[TerminalCommand]:
         escaped_instruction = shlex.quote(instruction)
         workspace = shlex.quote(".")
         trace_output = shlex.quote(
             f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.TRACE_FILENAME}"
         )
+        api_base_prefix, api_base_arg = self._api_base_shell_prefix()
         mcp_flag = ""
         if self._mcp_config_path:
-            mcp_flag = (
-                f"--mcp-config "
-                f"{shlex.quote(self._container_mcp_config_path)} "
+            mcp_flag = f"--mcp-config {shlex.quote(self._container_mcp_config_path)} "
+        generation_flags = ""
+        if self._temperature is not None:
+            generation_flags += f"--temperature {shlex.quote(str(self._temperature))} "
+        if self._top_p is not None:
+            generation_flags += f"--top-p {shlex.quote(str(self._top_p))} "
+        if self._top_k is not None:
+            generation_flags += f"--top-k {shlex.quote(str(self._top_k))} "
+        if self._repetition_penalty is not None:
+            generation_flags += (
+                f"--repetition-penalty {shlex.quote(str(self._repetition_penalty))} "
             )
         command = (
+            f"{api_base_prefix}"
             f"{self.VENV_PATH}/bin/openclaw "
             f"--provider {shlex.quote(self._provider_name)} "
             f"--model {shlex.quote(self._model_name)} "
-            f"--api-base {shlex.quote(self._api_base)} "
+            f"--api-base {api_base_arg} "
             f"{mcp_flag}"
             f"--workspace {workspace} "
             f"--trace-output {trace_output} "
             f"--max-iterations {self._max_iterations} "
+            f"{generation_flags}"
             "--quiet "
             f"--prompt {escaped_instruction}"
         )
@@ -265,8 +333,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         session.send_keys(
             [
                 (
-                    "source /installed-agent/" + install_script.name +
-                    " || echo 'INSTALL_FAIL_STATUS'"
+                    "source /installed-agent/"
+                    + install_script.name
+                    + " || echo 'INSTALL_FAIL_STATUS'"
                 ),
                 "Enter",
             ],

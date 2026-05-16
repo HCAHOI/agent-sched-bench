@@ -17,9 +17,7 @@ class TerminalBenchBenchmark(Benchmark):
 
     def validate_config(self) -> None:
         if sys.version_info < (3, 12):
-            raise ValueError(
-                "terminal-bench benchmark requires Python 3.12+"
-            )
+            raise ValueError("terminal-bench benchmark requires Python 3.12+")
         if importlib.util.find_spec("terminal_bench") is None:
             raise ValueError(
                 "terminal-bench benchmark requires the `terminal-bench` Python package. "
@@ -106,7 +104,9 @@ class TerminalBenchBenchmark(Benchmark):
         return TerminalBenchRunner(
             provider_name=kwargs.get("provider_name"),
             env_key=kwargs.get("env_key"),
-            api_base=kwargs.get("api_base") or getattr(provider, "api_base", None) or "",
+            api_base=kwargs.get("api_base")
+            or getattr(provider, "api_base", None)
+            or "",
             api_key=kwargs.get("api_key") or getattr(provider, "api_key", None) or "",
             model=model,
             workspace_base=workspace_base,
@@ -115,6 +115,7 @@ class TerminalBenchBenchmark(Benchmark):
             benchmark_slug=self.config.slug,
             benchmark_extras=self.config.extras,
             mcp_config=kwargs.get("mcp_config"),
+            generation_config=kwargs.get("generation_config") or {},
         )
 
     def _load_dataset_paths(self) -> tuple[Path, list[Path]]:

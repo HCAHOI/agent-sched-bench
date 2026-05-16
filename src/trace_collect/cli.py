@@ -11,6 +11,13 @@ import sys
 from pathlib import Path
 
 from llm_call import add_llm_config_arguments, resolve_llm_config
+from llm_call.config import (
+    nonnegative_float_arg,
+    positive_float_arg,
+    positive_int_arg,
+    top_p_arg,
+)
+
 
 def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -22,6 +29,33 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=100,
         help="Maximum agent iterations per task.",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=nonnegative_float_arg,
+        default=None,
+        help=(
+            "Optional agent sampling temperature. When omitted, the scaffold "
+            "default is used."
+        ),
+    )
+    parser.add_argument(
+        "--top-p",
+        type=top_p_arg,
+        default=None,
+        help="Optional agent nucleus sampling top_p value.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=positive_int_arg,
+        default=None,
+        help="Optional agent top_k sampling value for compatible providers.",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=positive_float_arg,
+        default=None,
+        help="Optional agent repetition penalty for compatible providers.",
     )
     parser.add_argument(
         "--benchmark",
@@ -195,6 +229,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
+
 def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Simulate a trace with local model timing (TTFT/TPOT).",
@@ -341,6 +376,7 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
+
 def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -370,9 +406,7 @@ def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--run-id",
         default=None,
-        help=(
-            "Optional explicit run directory suffix (default: session uuid)."
-        ),
+        help=("Optional explicit run directory suffix (default: session uuid)."),
     )
     parser.add_argument(
         "--no-sidechains",
@@ -385,6 +419,7 @@ def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     return parser.parse_args(argv)
+
 
 def main() -> None:
     sub = sys.argv[1] if len(sys.argv) > 1 else None
@@ -413,7 +448,9 @@ def main() -> None:
     else:
         _run_collect(parse_collect_args())
 
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
@@ -497,6 +534,10 @@ def _run_collect(args: argparse.Namespace) -> None:
             model=provider_config.model,
             benchmark=benchmark,
             max_iterations=args.max_iterations,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            repetition_penalty=args.repetition_penalty,
             sample=args.sample,
             instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
             run_id=args.run_id,
@@ -513,6 +554,7 @@ def _run_collect(args: argparse.Namespace) -> None:
     if results_path.exists():
         print(f"Results written to: {results_path}")
 
+
 def _resolve_simulate_output_dir(args: argparse.Namespace) -> Path:
     """Return the base dir; structured subpath is resolved by simulator.simulate() when at default."""
     return Path(args.output_dir)
@@ -525,6 +567,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
     )
 
     from trace_collect.simulator import simulate, validate_gpu_tracking_args
+
     try:
         validate_gpu_tracking_args(args)
     except ValueError as exc:
@@ -593,6 +636,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
     gpu_tracking_kwargs: dict = {}
     if getattr(args, "gpu_tracking", "off") == "on":
         from harness.vllm_startup_parser import parse_startup_log_file
+
         gpu_baseline = parse_startup_log_file(args.vllm_startup_log)
         if gpu_baseline is None:
             print(
@@ -619,6 +663,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
     )
     print(f"Simulate trace written to: {trace_file}")
 
+
 def _run_import_claude_code(args: argparse.Namespace) -> None:
     """Convert a Claude Code session JSONL into a canonical trace for the Gantt viewer."""
     from trace_collect.claude_code_import import import_claude_code_session
@@ -634,6 +679,7 @@ def _run_import_claude_code(args: argparse.Namespace) -> None:
         "Start the dynamic Gantt viewer with: "
         "python -m trace_collect.cli gantt-serve --dev"
     )
+
 
 def _run_inspect(argv: list[str]) -> None:
     import argparse as _argparse
@@ -789,6 +835,7 @@ examples:
             print(json.dumps({"error": "timeline does not support --json output"}))
             return
         cmd_timeline(data)
+
 
 if __name__ == "__main__":
     main()
