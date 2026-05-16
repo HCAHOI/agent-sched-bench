@@ -255,6 +255,26 @@ PY
   "${hf_cli}" whoami >/dev/null || fatal "Hugging Face token validation failed"
 }
 
+configure_shell_environment() {
+  local bashrc="${HOME}/.bashrc"
+  local tmp
+  tmp="$(mktemp "${bashrc}.tmp.XXXXXX")"
+  touch "${bashrc}"
+  awk '
+    $0 == "# >>> agent-sched-bench terminal-bench setup >>>" { skip = 1; next }
+    $0 == "# <<< agent-sched-bench terminal-bench setup <<<" { skip = 0; next }
+    skip != 1 { print }
+  ' "${bashrc}" > "${tmp}"
+  {
+    printf '\n# >>> agent-sched-bench terminal-bench setup >>>\n'
+    printf 'export HF_HOME=%q\n' "${HF_HOME}"
+    printf 'export HF_HUB_ENABLE_HF_TRANSFER=%q\n' "${HF_HUB_ENABLE_HF_TRANSFER}"
+    printf '# <<< agent-sched-bench terminal-bench setup <<<\n'
+  } >> "${tmp}"
+  mv "${tmp}" "${bashrc}"
+  log "updated ${bashrc} with non-secret Hugging Face environment"
+}
+
 install_torch() {
   [ "${INSTALL_TORCH}" = "1" ] || return 0
   local py="${VENV_PATH}/bin/python"
@@ -361,6 +381,7 @@ configure_docker_bridge_firewall
 install_uv
 setup_python_env
 configure_huggingface
+configure_shell_environment
 install_torch
 prefetch_terminal_bench
 prewarm_model
