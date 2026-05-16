@@ -25,6 +25,10 @@ dependencies = [
   # and the DynamicCache subclass contract held on 4.55-4.57. Keep the upper
   # bound until 4.58+ is re-validated.
   "transformers>=4.55,<4.58",
+  # AutoModelForCausalLM.from_pretrained(device_map="auto") raises when
+  # accelerate is missing. The HF recording backend always uses device_map,
+  # so accelerate is a hard runtime dep, not optional.
+  "accelerate>=1.0,<2.0",
 ]
 
 [project.optional-dependencies]
