@@ -5,20 +5,22 @@
 # This script only prepares host state. Project code changes belong in the repo,
 # not in this script.
 #
-# Intended use: called by the cloud GPU platform's startup command after that
-# command has cloned/pulled this repo and exported HF_TOKEN. Example startup
-# command shape:
-#   /usr/bin/bash -lc 'set -euo pipefail; export HF_TOKEN="..."; \
-#     export REPO_DIR=/home/Ubuntu/agent-sched-bench; \
-#     if [ ! -d "$REPO_DIR/.git" ]; then \
-#       /usr/bin/git clone --branch dev/gpu-resource-tracker \
-#         https://github.com/HCAHOI/agent-sched-bench.git "$REPO_DIR"; \
-#     fi; \
-#     cd "$REPO_DIR"; \
-#     /usr/bin/git fetch origin dev/gpu-resource-tracker; \
-#     /usr/bin/git checkout dev/gpu-resource-tracker; \
-#     /usr/bin/git pull --ff-only origin dev/gpu-resource-tracker; \
-#     /usr/bin/bash scripts/setup/terminal_bench_server.sh'
+# Intended use: paste this shape into the cloud GPU platform's startup command
+# box, then replace "your token" before launching the instance:
+#   /usr/bin/bash <<'STARTUP'
+#   set -euo pipefail
+#   export HF_TOKEN="your token"
+#   export REPO_DIR="${HOME}/agent-sched-bench"
+#   if [ ! -d "${REPO_DIR}/.git" ]; then
+#     /usr/bin/git clone --branch dev/gpu-resource-tracker \
+#       https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
+#   fi
+#   cd "${REPO_DIR}"
+#   /usr/bin/git fetch origin dev/gpu-resource-tracker
+#   /usr/bin/git checkout dev/gpu-resource-tracker
+#   /usr/bin/git pull --ff-only origin dev/gpu-resource-tracker
+#   /usr/bin/bash scripts/setup/terminal_bench_server.sh
+#   STARTUP
 #
 # Manual rerun after SSH:
 #   cd ~/agent-sched-bench
@@ -35,6 +37,7 @@
 #   TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 #   SETUP_DOCKER_FIREWALL=1
 #   HF_HUB_ENABLE_HF_TRANSFER=1
+#   REQUIRE_HF_TOKEN=1
 #
 set -euo pipefail
 
@@ -58,6 +61,7 @@ TORCH_SPEC="${TORCH_SPEC:-torch==2.6.0+cu124}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
 SETUP_DOCKER_FIREWALL="${SETUP_DOCKER_FIREWALL:-1}"
 HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
+REQUIRE_HF_TOKEN="${REQUIRE_HF_TOKEN:-1}"
 
 log() {
   printf '[terminal-bench-setup] %s\n' "$*"
@@ -231,6 +235,9 @@ print(f"[terminal-bench-setup] huggingface_hub={md.version('huggingface-hub')}")
 PY
 
   if [ -z "${HF_TOKEN:-}" ]; then
+    if [ "${REQUIRE_HF_TOKEN}" = "1" ]; then
+      fatal "HF_TOKEN is not set; paste export HF_TOKEN=\"...\" into the startup command"
+    fi
     log "HF_TOKEN is not set; skipping Hugging Face auth"
     return 0
   fi
