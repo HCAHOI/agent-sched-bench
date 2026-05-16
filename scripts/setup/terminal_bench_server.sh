@@ -22,11 +22,6 @@
 #   SETUP_DOCKER_FIREWALL=1
 #   HF_HUB_ENABLE_HF_TRANSFER=1
 #
-# Optional mirror settings for slow networks:
-#   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-#   PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
-#   OPENCLAW_APT_MIRROR_PREFIX=https://mirrors.tuna.tsinghua.edu.cn
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -103,29 +98,8 @@ target_user() {
   fi
 }
 
-maybe_apply_apt_mirror() {
-  local mirror="${OPENCLAW_APT_MIRROR_PREFIX:-}"
-  mirror="${mirror%/}"
-  [ -n "${mirror}" ] || return 0
-
-  log "configuring apt mirror prefix: ${mirror}"
-  as_root bash -c "
-    set -e
-    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
-      [ -f \"\$f\" ] || continue
-      sed -i \
-        -e 's|http://archive.ubuntu.com/ubuntu|${mirror}/ubuntu|g' \
-        -e 's|http://security.ubuntu.com/ubuntu|${mirror}/ubuntu|g' \
-        -e 's|http://deb.debian.org/debian|${mirror}/debian|g' \
-        -e 's|http://security.debian.org/debian-security|${mirror}/debian-security|g' \
-        \"\$f\"
-    done
-  "
-}
-
 install_system_packages() {
   command -v apt-get >/dev/null 2>&1 || fatal "apt-get not found; this setup targets Ubuntu/Debian"
-  maybe_apply_apt_mirror
   log "installing system packages"
   as_root apt-get update
   as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y \

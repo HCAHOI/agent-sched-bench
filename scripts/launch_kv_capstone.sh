@@ -23,12 +23,6 @@
 #   OPENCLAW_REPETITION_PENALTY - generation controls. Defaults match the
 #                 Qwen3-Coder model card for this Qwen-focused launcher.
 #
-# Optional, China-network only (set externally if upstream PyPI/Ubuntu repos
-# are slow from your host; both are forwarded into the agent container by
-# openclaw_agent._ENV_PASSTHROUGH):
-#   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-#   PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
-#   OPENCLAW_APT_MIRROR_PREFIX=https://mirrors.tuna.tsinghua.edu.cn
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
