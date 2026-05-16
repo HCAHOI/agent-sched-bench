@@ -30,68 +30,47 @@
 #
 # Two-layer startup design (do NOT confuse them):
 #
-#   Layer 1 — cloud-provider "startup command" box: runs once at instance boot.
-#             Owns the things this script can't see (repo URL, HF token, branch).
-#             Pasted into the provider UI; provider logs may capture it.
-#             Typically executed as root.
+#   Layer 1 — cloud-provider "startup command" box: runs once at instance boot,
+#             typically as root. Responsible for switching to the SSH-in user
+#             via sudo -Hu, cloning the repo into ${HOME}/agent-sched-bench,
+#             and invoking this script. Provider logs may capture this block.
 #
 #   Layer 2 — this script: self-contained install + venv + model prewarm.
-#             Reads env vars Layer 1 exported. Does NOT persist anything to
-#             host shell config (no /etc/profile.d, no .bashrc edits).
-#             If invoked as root from a fresh login, self-relaunches under
-#             the first /home/<user> account so the repo + venv + HF cache
-#             land where the SSH-in user can reach them (set
-#             SETUP_NO_USER_SWITCH=1 to bypass; SETUP_USER=foo to override).
-#             After it returns, env is gone — print_next_steps shows the
-#             one-liner that re-establishes env for the actual run.
+#             Hard-asserts non-root invocation (run via Layer 1's sudo -Hu).
+#             Uses sudo internally for the apt/docker steps that need root.
+#             Does NOT persist anything to host shell config (no /etc/profile.d,
+#             no .bashrc edits). After it returns, env is gone — print_next_steps
+#             shows the one-liner that re-establishes env for the actual run.
 #
 # Layer-1 (paste into cloud startup-command box):
 #   /usr/bin/bash <<'STARTUP'
 #   set -euo pipefail
+#   TARGET_USER="$(getent passwd | awk -F: '$3>=1000 && $3<60000 && $6 ~ /^\/home\// {print $1; exit}')"
 #   export HF_TOKEN="..."   # WARNING: provider logs this line; rotate after run
-#   export REPO_DIR="${HOME}/agent-sched-bench"
-#   [ -d "${REPO_DIR}/.git" ] || /usr/bin/git clone --branch main \
-#     https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
-#   cd "${REPO_DIR}"
-#   /usr/bin/git pull --ff-only origin main
-#   /usr/bin/bash scripts/setup/terminal_bench_server.sh
+#   sudo --preserve-env=HF_TOKEN -Hu "${TARGET_USER}" bash -c '
+#     set -euo pipefail
+#     REPO_DIR="${HOME}/agent-sched-bench"
+#     [ -d "${REPO_DIR}/.git" ] || /usr/bin/git clone --branch main \
+#       https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
+#     cd "${REPO_DIR}"
+#     /usr/bin/git pull --ff-only origin main
+#     /usr/bin/bash scripts/setup/terminal_bench_server.sh
+#   '
 #   STARTUP
 #
-# Layer-2 (manual SSH-in form, equivalent):
+# Layer-2 (manual SSH-in form, equivalent — already non-root):
 #   cd ~/agent-sched-bench
 #   HF_TOKEN=hf_xxx bash scripts/setup/terminal_bench_server.sh
 set -euo pipefail
 
-# Cloud startup-command boxes run as root, but everything we install must
-# live under the human user's home (otherwise SSH-in user cannot access the
-# repo, venv, model cache). If invoked as a fresh root login (no SUDO_USER),
-# move the repo into /home/<user>, chown it, then exec ourselves under that
-# user. Set SETUP_NO_USER_SWITCH=1 to bypass (e.g. single-user root images).
-if [ "$(id -u)" -eq 0 ] && [ -z "${SUDO_USER:-}" ] && [ "${SETUP_NO_USER_SWITCH:-0}" != "1" ]; then
-  _setup_target_user="${SETUP_USER:-$(getent passwd | awk -F: '$3>=1000 && $3<60000 && $6 ~ /^\/home\// {print $1; exit}')}"
-  if [ -n "${_setup_target_user}" ]; then
-    _setup_target_home="$(getent passwd "${_setup_target_user}" | cut -d: -f6)"
-    _setup_script_abs="$(realpath "${BASH_SOURCE[0]}")"
-    _setup_repo_current="$(cd "$(dirname "${_setup_script_abs}")/../.." && pwd)"
-    # If repo was cloned under /root by the startup-command box, relocate
-    # it to ${target_home}/<basename> so the user can manage it post-setup.
-    if [[ "${_setup_repo_current}" == /root/* ]]; then
-      _setup_repo_dest="${_setup_target_home}/$(basename "${_setup_repo_current}")"
-      if [ -e "${_setup_repo_dest}" ]; then
-        echo "[terminal-bench-setup] ${_setup_repo_dest} already exists; refusing to overwrite. Remove it or set SETUP_NO_USER_SWITCH=1." >&2
-        exit 1
-      fi
-      echo "[terminal-bench-setup] relocating repo ${_setup_repo_current} -> ${_setup_repo_dest}"
-      mv "${_setup_repo_current}" "${_setup_repo_dest}"
-      chown -R "${_setup_target_user}:${_setup_target_user}" "${_setup_repo_dest}"
-      _setup_script_abs="${_setup_repo_dest}/scripts/setup/terminal_bench_server.sh"
-    fi
-    echo "[terminal-bench-setup] re-executing as ${_setup_target_user} (was root) via ${_setup_script_abs}"
-    exec sudo \
-      --preserve-env=HF_TOKEN,SETUP_BACKEND,MODEL_ID,INSTALL_TORCH,PREWARM_MODEL,SETUP_DOCKER_FIREWALL,REQUIRE_HF_TOKEN,VENV_PATH,PYTHON_VERSION,HF_HOME,HF_HUB_ENABLE_HF_TRANSFER,TORCH_SPEC,TORCH_INDEX_URL,VLLM_SPEC,SETUP_LOG_DIR,SETUP_LOG_PATH,SETUP_STATUS_PATH,REPO_ROOT,SETUP_NO_USER_SWITCH,SETUP_USER \
-      -Hu "${_setup_target_user}" bash "${_setup_script_abs}" "$@"
-  fi
-  echo "[terminal-bench-setup] WARNING: running as root with no /home user found; continuing as root" >&2
+# This script assumes it runs as a non-root /home user. The Layer-1
+# startup-command box must do the user switch (sudo -Hu <user>) before
+# invoking this script — see docstring above. apt/docker calls below use
+# sudo internally for the few steps that need root.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "[terminal-bench-setup] ERROR: this script must run as a non-root /home user." >&2
+  echo "[terminal-bench-setup]        Wrap your invocation in sudo -Hu <user>." >&2
+  exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
