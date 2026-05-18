@@ -102,6 +102,26 @@ def test_tokenize_chat_with_segments_labels_tool_call_message() -> None:
     assert all(segment["token_start"] < segment["token_end"] for segment in segments)
 
 
+def test_tokenize_chat_with_segments_records_first_seen_call() -> None:
+    tokenizer = _PrefixTokenizer()
+    _encoded, segments, _prompt_text = tokenize_chat_with_segments(
+        tokenizer,
+        [
+            {"role": "user", "content": "Find x."},
+            {"role": "tool", "content": "x=1"},
+        ],
+        first_seen_call_by_message_index={0: 0, 1: 3},
+        default_first_seen_call=4,
+    )
+
+    assert [segment["first_seen_call"] for segment in segments] == [0, 3, 4]
+    assert [segment["first_seen_call_inferred"] for segment in segments] == [
+        False,
+        False,
+        False,
+    ]
+
+
 def test_hf_recording_provider_rejects_forced_tool_choice_before_generation() -> None:
     provider = HFRecordingProvider.__new__(HFRecordingProvider)
 

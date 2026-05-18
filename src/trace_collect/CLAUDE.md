@@ -60,6 +60,7 @@ Internal notes:
 - `LayerCapturer` publishes the post-softmax attention tensor on a per-provider `AttentionBus` (`src/serving/recording/attention_bus.py`). With no subscribers (e.g. `--kv-policy none` / `streaming` / `random`), publish is a no-op and `attention.npz` is byte-identical to the pre-bus path.
 - `h2o` subscribes to that bus at construction time, consumes the same softmax tensor (no re-softmax), accumulates a head-mean cumulative score per layer, and unsubscribes in a `finally` around `model.generate(...)` to avoid leaking subscribers across calls. The score buffer is pre-allocated to `model.config.max_position_embeddings` per layer in fp32 on the attn device.
 - `meta.json` gains an attempt-level `kv_policy` block reflecting the active config. The `prefill_score_bias` field is `true` when `h2o` runs with `prefill_mode="sampled"` (the bus only sees LayerCapturer-sampled prefill rows, so the score accumulator is biased toward those rows). Always `false` for `random` / `streaming` / `none` AND for `h2o` with `prefill_mode="full"`.
+- `meta.json.session_history` records one row per HF chat call with `{call_idx, used_session_cache, lcp, cached_len_before, new_len, delta_len, diverged}`. Use this to distinguish cold prompts, strict-prefix resume prompts, and divergence rebuilds. Each `segments.json` segment also carries `first_seen_call`; provider-generated segments use append-only message-index provenance, while direct capturer callers may get a best-effort fallback marked by `first_seen_call_inferred=true`.
 
 ### KV Cache Eviction Policies
 

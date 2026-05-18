@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import logging
@@ -593,112 +594,114 @@ async def collect_traces(
         top_k=top_k,
         repetition_penalty=repetition_penalty,
     )
-    recording_provider = None
-    recording_server = None
-    if record_internals:
-        # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
-        from serving.recording import HFRecordingProvider, HFRecordingServer
+    with ExitStack() as cleanup_stack:
+        recording_provider = None
+        recording_server = None
+        if record_internals:
+            # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
+            from serving.recording import HFRecordingProvider, HFRecordingServer
 
-        recording_provider = HFRecordingProvider(
-            default_model=model,
-            eviction_config=eviction_config,
-            temperature=temperature if temperature is not None else 0.1,
-            top_p=top_p,
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
-        )
-        recording_server = HFRecordingServer(
-            recording_provider,
-            public_host=_recording_server_public_host(
-                execution_environment=execution_environment,
-                runtime_mode=runtime_mode,
-                container_executable=container_executable,
-            ),
-        )
-    if recording_server is not None:
-        recording_server.__enter__()
-    effective_api_base = recording_server.api_base if recording_server else api_base
-    effective_api_key = "hf-recording" if recording_server else api_key
-    effective_provider_name = "openai" if recording_server else provider_name
-    provider = recording_provider or UnifiedProvider(
-        api_key=api_key,
-        api_base=api_base,
-        default_model=model,
-        **generation_config,
-    )
-    runner = None
-    if runtime_mode == "host_controller":
-        runner = benchmark.build_runner(
-            scaffold=scaffold,
-            provider=provider,
-            workspace_base=run_dir / "_workspace_base",
-            max_iterations=max_iterations,
-            context_window_tokens=max_context_tokens,
-            model=model,
-            provider_name=effective_provider_name,
-            env_key=env_key,
-            api_base=effective_api_base,
-            api_key=effective_api_key,
-            mcp_config=mcp_config,
-            mcp_servers=load_mcp_servers(mcp_config),
-            generation_config=generation_config,
-        )
-
-    tasks = _select_tasks(
-        benchmark.load_tasks(),
-        instance_ids=instance_ids,
-        sample=sample,
-    )
-
-    def make_inner(task: dict[str, Any]):
-        async def inner(ctx: AttemptContext) -> AttemptResult:
-            if ctx.agent_runtime_mode == "task_container_agent":
-                if scaffold != "openclaw":
-                    raise NotImplementedError(
-                        "task-container collection currently supports "
-                        f"scaffold='openclaw', got {scaffold!r}"
-                    )
-                if container_executable is None:
-                    raise ValueError(
-                        "container_executable is required for task-container runs"
-                    )
-                return await _run_openclaw_in_task_container(
-                    ctx=ctx,
-                    task=task,
-                    benchmark=benchmark,
-                    provider_name=effective_provider_name,
-                    api_base=effective_api_base,
-                    api_key=effective_api_key,
-                    model=model,
-                    max_iterations=max_iterations,
-                    generation_config=generation_config,
-                    max_context_tokens=max_context_tokens,
-                    mcp_config=mcp_config,
-                    container_executable=container_executable,
-                    record_internals=record_internals,
+            recording_provider = cleanup_stack.enter_context(
+                HFRecordingProvider(
+                    default_model=model,
+                    eviction_config=eviction_config,
+                    temperature=temperature if temperature is not None else 0.1,
+                    top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
                 )
-
-            assert runner is not None
-            result = await runner.run_task(
-                task,
-                attempt_ctx=ctx,
-                prompt_template=ctx.prompt_template,
             )
-            if not isinstance(result, AttemptResult):
-                raise TypeError(
-                    "benchmark runner returned "
-                    f"{type(result).__name__}, expected AttemptResult"
+            recording_server = cleanup_stack.enter_context(
+                HFRecordingServer(
+                    recording_provider,
+                    public_host=_recording_server_public_host(
+                        execution_environment=execution_environment,
+                        runtime_mode=runtime_mode,
+                        container_executable=container_executable,
+                    ),
                 )
-            if record_internals and result.trace_path is not None:
-                _stamp_trace_run_config(
-                    result.trace_path,
-                    {"record_internals": True},
+            )
+        effective_api_base = recording_server.api_base if recording_server else api_base
+        effective_api_key = "hf-recording" if recording_server else api_key
+        effective_provider_name = "openai" if recording_server else provider_name
+        provider = recording_provider or UnifiedProvider(
+            api_key=api_key,
+            api_base=api_base,
+            default_model=model,
+            **generation_config,
+        )
+        runner = None
+        if runtime_mode == "host_controller":
+            runner = benchmark.build_runner(
+                scaffold=scaffold,
+                provider=provider,
+                workspace_base=run_dir / "_workspace_base",
+                max_iterations=max_iterations,
+                context_window_tokens=max_context_tokens,
+                model=model,
+                provider_name=effective_provider_name,
+                env_key=env_key,
+                api_base=effective_api_base,
+                api_key=effective_api_key,
+                mcp_config=mcp_config,
+                mcp_servers=load_mcp_servers(mcp_config),
+                generation_config=generation_config,
+            )
+
+        tasks = _select_tasks(
+            benchmark.load_tasks(),
+            instance_ids=instance_ids,
+            sample=sample,
+        )
+
+        def make_inner(task: dict[str, Any]):
+            async def inner(ctx: AttemptContext) -> AttemptResult:
+                if ctx.agent_runtime_mode == "task_container_agent":
+                    if scaffold != "openclaw":
+                        raise NotImplementedError(
+                            "task-container collection currently supports "
+                            f"scaffold='openclaw', got {scaffold!r}"
+                        )
+                    if container_executable is None:
+                        raise ValueError(
+                            "container_executable is required for task-container runs"
+                        )
+                    return await _run_openclaw_in_task_container(
+                        ctx=ctx,
+                        task=task,
+                        benchmark=benchmark,
+                        provider_name=effective_provider_name,
+                        api_base=effective_api_base,
+                        api_key=effective_api_key,
+                        model=model,
+                        max_iterations=max_iterations,
+                        generation_config=generation_config,
+                        max_context_tokens=max_context_tokens,
+                        mcp_config=mcp_config,
+                        container_executable=container_executable,
+                        record_internals=record_internals,
+                    )
+
+                assert runner is not None
+                result = await runner.run_task(
+                    task,
+                    attempt_ctx=ctx,
+                    prompt_template=ctx.prompt_template,
                 )
-            return result
+                if not isinstance(result, AttemptResult):
+                    raise TypeError(
+                        "benchmark runner returned "
+                        f"{type(result).__name__}, expected AttemptResult"
+                    )
+                if record_internals and result.trace_path is not None:
+                    _stamp_trace_run_config(
+                        result.trace_path,
+                        {"record_internals": True},
+                    )
+                return result
 
-        return inner
+            return inner
 
-    try:
         return await _run_scaffold_tasks(
             benchmark=benchmark,
             tasks=tasks,
@@ -711,30 +714,6 @@ async def collect_traces(
             inner_factory=make_inner,
             recording_provider=recording_provider,
         )
-    finally:
-        # Shut down HTTP server before releasing provider so no in-flight
-        # request touches a partially-torn-down model.
-        if recording_server is not None:
-            recording_server.__exit__(None, None, None)
-        if recording_provider is not None:
-            # Drop the session KV cache and unsubscribe any H2O bus listener.
-            recording_provider.close()
-            # Release the HF model and all GPU tensors (H2O score buffers,
-            # session cache, etc.) while the CUDA context is still alive.
-            # Without this, Python's interpreter-shutdown GC fires __del__
-            # after CUDA teardown → C++ std::terminate / SIGABRT (exit 134).
-            del recording_provider
-            import gc
-
-            gc.collect()
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-            except Exception:
-                pass
 
 
 def _normalize_openclaw_trace(

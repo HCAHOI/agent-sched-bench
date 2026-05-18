@@ -219,6 +219,7 @@ class LayerCapturer:
         # `finish_attempt`. Provider sets via `set_kv_policy_meta(...)`
         # before `start_attempt`. Default None = `--kv-policy none`.
         self._kv_policy_meta: dict[str, Any] | None = None
+        self._attempt_extra_meta: dict[str, Any] = {}
         # Optional manual override for `config.max_prefill_queries`. None = use
         # the frozen RecordingConfig value. H2O full-prefill scoring no longer
         # uses this path; it streams full rows in bounded chunks below so the
@@ -269,9 +270,14 @@ class LayerCapturer:
         """
         self._kv_policy_meta = dict(meta) if meta is not None else None
 
+    def set_attempt_extra_meta(self, meta: dict[str, Any]) -> None:
+        """Merge provider-owned attempt metadata into the next meta.json write."""
+        self._attempt_extra_meta.update(dict(meta))
+
     def start_attempt(self, recordings_dir: Path) -> None:
         self._attempt_dir = Path(recordings_dir)
         self._attempt_dir.mkdir(parents=True, exist_ok=True)
+        self._attempt_extra_meta = {}
         self._meta = {
             "model": self.model_summary,
             "recording_config": asdict(self.config),
@@ -283,6 +289,8 @@ class LayerCapturer:
     def finish_attempt(self, trace_path: Path | None = None) -> None:
         if self._attempt_dir is None:
             return
+        if self._attempt_extra_meta:
+            self._meta.update(dict(self._attempt_extra_meta))
         if trace_path is not None and trace_path.exists():
             self._align_meta_to_trace(trace_path)
         (self._attempt_dir / "meta.json").write_text(
@@ -341,10 +349,19 @@ class LayerCapturer:
 
         iter_dir = self._attempt_dir / f"iter_{call_idx:04d}"
         iter_dir.mkdir(parents=True, exist_ok=True)
+        session_segments = []
+        for segment in segments:
+            payload = dict(segment)
+            if "first_seen_call" not in payload:
+                payload["first_seen_call"] = int(call_idx)
+                payload["first_seen_call_inferred"] = True
+            else:
+                payload.setdefault("first_seen_call_inferred", False)
+            session_segments.append(payload)
         self._session = {
             "call_idx": call_idx,
             "iter_dir": iter_dir,
-            "segments": [dict(segment) for segment in segments],
+            "segments": session_segments,
             "input_token_count": input_token_count,
             "started_at": time.time(),
             "generated_segment_id": len(segments),
@@ -893,6 +910,8 @@ class LayerCapturer:
                 "token_end": total_tokens,
                 "has_content": bool(output_token_ids),
                 "has_tool_calls": False,
+                "first_seen_call": int(self._session["call_idx"]),
+                "first_seen_call_inferred": False,
             }
         )
         token_ids = token_segment_ids(

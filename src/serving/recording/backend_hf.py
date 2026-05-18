@@ -165,6 +165,11 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return normalized
 
 
+def _message_signature(message: dict[str, Any]) -> str:
+    """Stable signature for detecting when a message index was reused."""
+    return json.dumps(message, ensure_ascii=False, sort_keys=True, default=str)
+
+
 def _apply_chat_template(
     tokenizer: Any,
     messages: list[dict[str, Any]],
@@ -186,6 +191,8 @@ def tokenize_chat_with_segments(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None = None,
+    first_seen_call_by_message_index: dict[int, int] | None = None,
+    default_first_seen_call: int | None = None,
 ) -> tuple[Any, list[dict[str, Any]], str]:
     messages = _normalize_messages(messages)
     full_text = _apply_chat_template(
@@ -287,13 +294,25 @@ def tokenize_chat_with_segments(
         )
         if start >= end:
             continue
-        segments.append(
-            {
-                **segment,
-                "token_start": start,
-                "token_end": end,
-            }
-        )
+        first_seen_call = default_first_seen_call
+        message_index = segment.get("message_index")
+        if (
+            first_seen_call_by_message_index is not None
+            and message_index is not None
+        ):
+            first_seen_call = first_seen_call_by_message_index.get(
+                int(message_index),
+                default_first_seen_call,
+            )
+        payload = {
+            **segment,
+            "token_start": start,
+            "token_end": end,
+        }
+        if first_seen_call is not None:
+            payload["first_seen_call"] = int(first_seen_call)
+            payload["first_seen_call_inferred"] = False
+        segments.append(payload)
     return encoded, segments, full_text
 
 
@@ -507,11 +526,10 @@ class HFRecordingProvider(LLMProvider):
         # decoded tokens from prior calls. (1, T) growing tensor; LCP is
         # computed against this to derive the delta passed to generate().
         self._session_token_ids: Any | None = None
-        # Debug-only audit log populated by _prepare_session_cache. Each entry
-        # is {call_idx, used_session_cache, lcp, cached_len_before, new_len,
-        # delta_len}. Not part of the public API; used by tests to assert that
-        # the strict-prefix path fired correctly.
+        # Attempt-level audit log persisted to meta.json. It distinguishes full
+        # cold prompts, strict-prefix resume prompts, and divergence rebuilds.
         self._session_history: list[dict[str, Any]] = []
+        self._message_first_seen: dict[int, tuple[str, int]] = {}
 
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -587,10 +605,16 @@ class HFRecordingProvider(LLMProvider):
         return self.default_model
 
     def start_attempt(self, recordings_dir: Path) -> None:
+        self._drop_session_cache()
         self._call_idx = 0
+        self._session_history = []
+        self._message_first_seen = {}
         self.capturer.start_attempt(recordings_dir)
 
     def finish_attempt(self, trace_path: Path | None = None) -> None:
+        self.capturer.set_attempt_extra_meta(
+            {"session_history": [dict(item) for item in self._session_history]}
+        )
         self.capturer.finish_attempt(trace_path=trace_path)
 
     def _model_summary(self) -> dict[str, Any]:
@@ -633,6 +657,26 @@ class HFRecordingProvider(LLMProvider):
         if self._torch.cuda.is_available():
             self._torch.cuda.empty_cache()
 
+    def _first_seen_calls_for_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        call_idx: int,
+    ) -> dict[int, int]:
+        first_seen: dict[int, int] = {}
+        live_indices: set[int] = set()
+        for idx, message in enumerate(messages):
+            live_indices.add(idx)
+            signature = _message_signature(message)
+            cached = self._message_first_seen.get(idx)
+            if cached is None or cached[0] != signature:
+                self._message_first_seen[idx] = (signature, call_idx)
+            first_seen[idx] = int(self._message_first_seen[idx][1])
+        for idx in list(self._message_first_seen):
+            if idx not in live_indices:
+                del self._message_first_seen[idx]
+        return first_seen
+
     def _build_session_cache(self) -> BaseEvictionCache:
         assert self._eviction_config is not None
         return build_eviction_cache(
@@ -669,9 +713,20 @@ class HFRecordingProvider(LLMProvider):
         `_session_cache.recorder` and `_session_token_ids` are mutated here and
         in `run_generate`; the lock serialises concurrent `chat()` callers.
         """
-        if self._eviction_config is None:
-            return prompt_ids, False
         new_len = int(prompt_ids.shape[-1])
+        if self._eviction_config is None:
+            self._session_history.append(
+                {
+                    "call_idx": call_idx,
+                    "used_session_cache": False,
+                    "lcp": 0,
+                    "cached_len_before": 0,
+                    "new_len": new_len,
+                    "delta_len": new_len,
+                    "diverged": False,
+                }
+            )
+            return prompt_ids, False
         if self._session_cache is None:
             self._session_cache = self._build_session_cache()
             self._session_token_ids = prompt_ids.clone()
@@ -688,6 +743,7 @@ class HFRecordingProvider(LLMProvider):
                     "cached_len_before": 0,
                     "new_len": new_len,
                     "delta_len": new_len,
+                    "diverged": False,
                 }
             )
             return prompt_ids, True
@@ -716,6 +772,7 @@ class HFRecordingProvider(LLMProvider):
                     "cached_len_before": cached_len,
                     "new_len": new_len,
                     "delta_len": delta_len,
+                    "diverged": False,
                 }
             )
             return prompt_ids[:, lcp:], True
@@ -764,8 +821,34 @@ class HFRecordingProvider(LLMProvider):
         self._session_token_ids = self._torch.cat([prompt_ids, generated], dim=-1)
 
     def close(self) -> None:
-        """Release the session cache and bus subscription."""
+        """Release hooks, session cache, and bus subscriptions."""
         self._drop_session_cache()
+        capturer = getattr(self, "capturer", None)
+        if capturer is not None:
+            capturer.close()
+
+    def __enter__(self) -> "HFRecordingProvider":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        del exc_type, exc, tb
+        self.close()
+        self._session_token_ids = None
+        self._session_cache = None
+        if hasattr(self, "model"):
+            self.model = None
+        if hasattr(self, "tokenizer"):
+            self.tokenizer = None
+        if hasattr(self, "capturer"):
+            self.capturer = None
+        gc.collect()
+        torch = getattr(self, "_torch", None)
+        try:
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except Exception:
+            pass
 
     def __del__(self) -> None:
         try:
@@ -837,10 +920,17 @@ class HFRecordingProvider(LLMProvider):
         self._call_idx += 1
         started_at = time.time()
 
+        normalized_messages = _normalize_messages(messages)
+        first_seen_calls = self._first_seen_calls_for_messages(
+            normalized_messages,
+            call_idx=call_idx,
+        )
         encoded, segments, _prompt_text = tokenize_chat_with_segments(
             self.tokenizer,
-            messages,
+            normalized_messages,
             tools=template_tools,
+            first_seen_call_by_message_index=first_seen_calls,
+            default_first_seen_call=call_idx,
         )
         prompt_ids = (
             encoded.input_ids if hasattr(encoded, "input_ids") else encoded["input_ids"]

@@ -19,6 +19,8 @@ the H2OCache's bus observe() path.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 
 from serving.kv_policies.base import EvictionPolicyConfig
@@ -55,6 +57,14 @@ class _StubTokenizer:
         return [int(tok) for tok in text.split()]
 
 
+class _StubCapturer:
+    def __init__(self) -> None:
+        self.started: list[Path] = []
+
+    def start_attempt(self, recordings_dir: Path) -> None:
+        self.started.append(recordings_dir)
+
+
 def _build_provider(eviction_config: EvictionPolicyConfig | None) -> HFRecordingProvider:
     """Hand-construct a provider so we don't load HF weights."""
     provider = HFRecordingProvider.__new__(HFRecordingProvider)
@@ -62,6 +72,7 @@ def _build_provider(eviction_config: EvictionPolicyConfig | None) -> HFRecording
     provider._session_cache = None
     provider._session_token_ids = None
     provider._session_history = []
+    provider._message_first_seen = {}
     provider._attention_bus = AttentionBus()
     provider.model = _StubModel()
     provider.tokenizer = _StubTokenizer()
@@ -116,6 +127,17 @@ def test_single_chat_equivalent_to_legacy() -> None:
     assert provider._session_cache is not None
     assert provider._session_token_ids is not None
     torch.testing.assert_close(provider._session_token_ids, prompt)
+    assert provider._session_history == [
+        {
+            "call_idx": 0,
+            "used_session_cache": True,
+            "lcp": 0,
+            "cached_len_before": 0,
+            "new_len": 5,
+            "delta_len": 5,
+            "diverged": False,
+        }
+    ]
 
 
 def test_no_eviction_skips_session_cache() -> None:
@@ -126,6 +148,17 @@ def test_no_eviction_skips_session_cache() -> None:
     assert used is False
     torch.testing.assert_close(delta, prompt)
     assert provider._session_cache is None
+    assert provider._session_history == [
+        {
+            "call_idx": 0,
+            "used_session_cache": False,
+            "lcp": 0,
+            "cached_len_before": 0,
+            "new_len": 3,
+            "delta_len": 3,
+            "diverged": False,
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +193,15 @@ def test_consecutive_chats_share_kv_state() -> None:
     torch.testing.assert_close(
         delta_2, torch.tensor([[20, 21, 22]], dtype=torch.long)
     )
+    assert provider._session_history[-1] == {
+        "call_idx": 1,
+        "used_session_cache": True,
+        "lcp": 5,
+        "cached_len_before": 5,
+        "new_len": 8,
+        "delta_len": 3,
+        "diverged": False,
+    }
     # Cache instance is the SAME object — not rebuilt.
     assert provider._session_cache is not None
     cache_after = provider._session_cache
@@ -188,6 +230,80 @@ def test_divergent_prompt_triggers_rebuild() -> None:
     assert provider._session_cache is not None
     assert provider._session_cache is not cache_before
     torch.testing.assert_close(provider._session_token_ids, prompt_2)
+    assert provider._session_history[-1]["diverged"] is True
+    assert provider._session_history[-1]["lcp"] == 2
+
+
+def test_start_attempt_resets_session_cache_between_attempts(tmp_path: Path) -> None:
+    """A provider can span tasks, but KV state must not."""
+    cfg = EvictionPolicyConfig(name="streaming", budget=8, sink_size=1, recent_window=7)
+    provider = _build_provider(cfg)
+    provider.capturer = _StubCapturer()
+
+    provider.start_attempt(tmp_path / "attempt_1" / "recordings")
+    prompt_1 = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    provider._prepare_session_cache(prompt_ids=prompt_1, call_idx=0)
+    provider._extend_session_tokens(prompt_ids=prompt_1, output_ids=[10])
+    assert provider._session_cache is not None
+    assert provider._session_token_ids is not None
+
+    provider.start_attempt(tmp_path / "attempt_2" / "recordings")
+    assert provider._session_cache is None
+    assert provider._session_token_ids is None
+    assert provider._session_history == []
+    assert provider._message_first_seen == {}
+
+    prompt_2 = torch.tensor([[1, 2, 3, 10, 11]], dtype=torch.long)
+    delta, used = provider._prepare_session_cache(prompt_ids=prompt_2, call_idx=0)
+
+    assert used is True
+    torch.testing.assert_close(delta, prompt_2)
+    assert provider._session_history == [
+        {
+            "call_idx": 0,
+            "used_session_cache": True,
+            "lcp": 0,
+            "cached_len_before": 0,
+            "new_len": 5,
+            "delta_len": 5,
+            "diverged": False,
+        }
+    ]
+
+
+def test_message_first_seen_tracks_stable_indices() -> None:
+    """Message provenance survives appended turns and resets on index reuse."""
+    provider = _build_provider(eviction_config=None)
+
+    first = provider._first_seen_calls_for_messages(
+        [{"role": "user", "content": "a"}],
+        call_idx=0,
+    )
+    second = provider._first_seen_calls_for_messages(
+        [
+            {"role": "user", "content": "a"},
+            {"role": "tool", "content": "result"},
+        ],
+        call_idx=1,
+    )
+    replaced = provider._first_seen_calls_for_messages(
+        [{"role": "user", "content": "changed"}],
+        call_idx=2,
+    )
+
+    assert first == {0: 0}
+    assert second == {0: 0, 1: 1}
+    assert replaced == {0: 2}
+
+
+def test_context_manager_releases_provider_refs() -> None:
+    provider = _build_provider(eviction_config=None)
+
+    with provider as active:
+        assert active is provider
+
+    assert provider.model is None
+    assert provider.tokenizer is None
 
 
 # ---------------------------------------------------------------------------

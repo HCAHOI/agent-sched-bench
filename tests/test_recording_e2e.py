@@ -81,6 +81,7 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
             "token_end": 2,
             "has_content": True,
             "has_tool_calls": False,
+            "first_seen_call": 0,
         },
         {
             "role": "user",
@@ -89,6 +90,7 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
             "token_end": 4,
             "has_content": True,
             "has_tool_calls": False,
+            "first_seen_call": 0,
         },
     ]
 
@@ -131,6 +133,21 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
             total_tokens=5,
         )
         capturer.flush(output_token_ids=[42])
+    capturer.set_attempt_extra_meta(
+        {
+            "session_history": [
+                {
+                    "call_idx": 0,
+                    "used_session_cache": False,
+                    "lcp": 0,
+                    "cached_len_before": 0,
+                    "new_len": 4,
+                    "delta_len": 4,
+                    "diverged": False,
+                }
+            ]
+        }
+    )
     capturer.finish_attempt()
 
     call_dir = recordings_dir / "iter_0000"
@@ -143,6 +160,15 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     assert segments_payload["total_tokens"] == 5
     assert len(segments_payload["token_segment_id"]) == 5
     assert segments_payload["segments"][-1]["role"] == "generation"
+    assert [segment["first_seen_call"] for segment in segments_payload["segments"]] == [
+        0,
+        0,
+        0,
+    ]
+    assert [
+        segment["first_seen_call_inferred"]
+        for segment in segments_payload["segments"]
+    ] == [False, False, False]
 
     with np.load(call_dir / "attention.npz") as attention:
         assert int(attention["call_idx"]) == 0
@@ -159,6 +185,7 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     meta = json.loads((recordings_dir / "meta.json").read_text())
     assert meta["iters"][0]["call_idx"] == 0
     assert meta["iters"][0]["attention_records"] == 2
+    assert meta["session_history"][0]["call_idx"] == 0
 
 
 def test_layer_capturer_rejects_model_without_attention_modules() -> None:
@@ -215,6 +242,14 @@ def test_layer_capturer_records_router_gate_hook_without_second_forward(tmp_path
         model.model.layers[0].mlp.gate(torch.zeros(1, 1, 8))
         capturer.flush(output_token_ids=[42])
     capturer.finish_attempt()
+
+    segments_payload = json.loads(
+        (recordings_dir / "iter_0000" / "segments.json").read_text()
+    )
+    assert [
+        segment["first_seen_call_inferred"]
+        for segment in segments_payload["segments"]
+    ] == [True, False]
 
     with np.load(recordings_dir / "iter_0000" / "routing.npz") as routing:
         assert routing["record_path"].tolist() == ["gate", "gate"]

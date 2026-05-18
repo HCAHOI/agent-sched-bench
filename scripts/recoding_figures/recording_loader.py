@@ -217,6 +217,57 @@ def load_iteration_records(
     return records
 
 
+def load_session_history(paths: Sequence[Path]) -> list[dict[str, object]]:
+    """Load attempt-level HF session-cache history joined to iteration dirs.
+
+    Old recordings do not have `meta.json["session_history"]`; those attempts
+    simply contribute no rows.
+    """
+    attempt_dirs = find_attempt_dirs(paths)
+    if not attempt_dirs:
+        raise FileNotFoundError("no attempt directories with recordings were found")
+
+    rows: list[dict[str, object]] = []
+    for attempt_dir in attempt_dirs:
+        recordings_dir = attempt_dir / "recordings"
+        meta_path = recordings_dir / "meta.json"
+        if not meta_path.exists():
+            continue
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        iter_by_call: dict[int, Path] = {}
+        for item in [*meta.get("iters", []), *meta.get("orphan_iters", [])]:
+            call_idx = _optional_int(item.get("call_idx"))
+            if call_idx is None:
+                continue
+            iter_by_call[call_idx] = recordings_dir / str(item.get("dir", ""))
+        for item in meta.get("session_history", []) or []:
+            if not isinstance(item, dict):
+                continue
+            call_idx = _optional_int(item.get("call_idx"))
+            if call_idx is None:
+                continue
+            row: dict[str, object] = {
+                "task": _task_name(attempt_dir),
+                "attempt_dir": attempt_dir,
+                "recordings_dir": recordings_dir,
+                "iter_dir": iter_by_call.get(call_idx),
+                **dict(item),
+                "call_idx": call_idx,
+                "used_session_cache": bool(item.get("used_session_cache")),
+                "diverged": bool(item.get("diverged", False)),
+            }
+            rows.append(row)
+
+    return sorted(
+        rows,
+        key=lambda item: (
+            str(item["task"]),
+            int(item["call_idx"]),
+            str(item["attempt_dir"]),
+        ),
+    )
+
+
 def collect_role_labels(records: Iterable[IterationRecord]) -> list[str]:
     """Collect normalized segment roles in stable display order."""
     observed: set[str] = set()
