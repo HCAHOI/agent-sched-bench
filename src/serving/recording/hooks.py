@@ -169,7 +169,7 @@ def _span_span_matrix(
     segments: list[dict[str, Any]],
     n_segments: int,
     generated_segment_id: int,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Aggregate query-segment by key-segment attention mass per record."""
     if segment_mass.ndim != 2:
         raise ValueError(f"segment_mass must be rank 2, got {segment_mass.shape}")
@@ -189,10 +189,11 @@ def _span_span_matrix(
             f"query_row_offsets must be rank 1, got {query_row_offsets.shape}"
         )
     n_records = max(0, int(query_row_offsets.shape[0]) - 1)
-    matrix = np.zeros((n_records, n_segments, n_segments), dtype=np.float32)
+    raw = np.zeros((n_records, n_segments, n_segments), dtype=np.float32)
     counts = np.zeros((n_records, n_segments), dtype=np.int32)
+    row_sums = np.zeros((n_records, n_segments), dtype=np.float32)
     if n_records == 0 or query_positions.size == 0:
-        return matrix, counts
+        return raw, counts, raw.copy(), row_sums
 
     total_tokens = int(query_positions.max()) + 1
     token_ids = token_segment_ids(
@@ -220,12 +221,17 @@ def _span_span_matrix(
             if row_count <= 0:
                 continue
             counts[record_idx, int(query_segment)] = row_count
-            matrix[record_idx, int(query_segment)] = record_rows[mask].sum(axis=0)
+            raw[record_idx, int(query_segment)] = record_rows[mask].sum(axis=0)
 
-    row_sums = matrix.sum(axis=2, keepdims=True)
-    active = (counts[:, :, None] > 0) & (row_sums > 0)
-    matrix = np.where(active, matrix / np.maximum(row_sums, np.finfo(np.float32).tiny), matrix)
-    return matrix.astype(np.float32, copy=False), counts
+    row_sums = raw.sum(axis=2).astype(np.float32, copy=False)
+    row_sums_expanded = row_sums[:, :, None]
+    active = (counts[:, :, None] > 0) & (row_sums_expanded > 0)
+    normalized = np.where(
+        active,
+        raw / np.maximum(row_sums_expanded, np.finfo(np.float32).tiny),
+        raw,
+    )
+    return normalized.astype(np.float32, copy=False), counts, raw, row_sums
 
 
 def _routing_count_summary(
@@ -235,7 +241,7 @@ def _routing_count_summary(
     n_segments: int,
     n_experts: int,
 ) -> dict[str, np.ndarray | str]:
-    """Discrete top-1 expert counts plus a labeled capacity-overflow proxy."""
+    """Discrete top-k expert assignment counts plus a labeled overflow proxy."""
     import torch
 
     if choices.ndim != 2:
@@ -246,29 +252,34 @@ def _routing_count_summary(
         dtype=torch.int32,
         device=choices.device,
     )
-    if n_tokens > 0 and n_experts > 0 and int(choices.shape[1]) > 0:
-        top1 = choices[:, 0].to(dtype=torch.long)
+    top_k = int(choices.shape[1]) if choices.ndim == 2 else 0
+    if n_tokens > 0 and n_experts > 0 and top_k > 0:
         segment_ids = token_ids[:n_tokens].to(device=choices.device, dtype=torch.long)
-        valid = (
-            (segment_ids >= 0)
-            & (segment_ids < n_segments)
-            & (top1 >= 0)
-            & (top1 < n_experts)
-        )
-        if bool(valid.any()):
+        valid_segments = (segment_ids >= 0) & (segment_ids < n_segments)
+        for rank in range(top_k):
+            experts = choices[:, rank].to(dtype=torch.long)
+            valid = valid_segments & (experts >= 0) & (experts < n_experts)
+            if not bool(valid.any()):
+                continue
             ones = torch.ones(
                 int(valid.sum().item()),
                 dtype=torch.int32,
                 device=choices.device,
             )
-            counts.index_put_((segment_ids[valid], top1[valid]), ones, accumulate=True)
+            counts.index_put_((segment_ids[valid], experts[valid]), ones, accumulate=True)
 
     count_np = _as_numpy(counts).astype(np.int32)
     total_per_expert = count_np.sum(axis=0, dtype=np.int64)
-    capacity = int(np.ceil(float(n_tokens) / float(n_experts))) if n_experts > 0 else 0
+    n_assignments = int(count_np.sum())
+    capacity = (
+        int(np.ceil(float(n_assignments) / float(n_experts)))
+        if n_experts > 0
+        else 0
+    )
     expected_overflow = np.maximum(total_per_expert - capacity, 0).astype(np.int32)
     return {
         "expert_token_count": count_np,
+        "expert_token_count_unit": "topk_assignments",
         "expert_capacity": np.asarray(capacity, dtype=np.int32),
         "expert_expected_overflow_count": expected_overflow,
         "expected_dropped_token_count": np.asarray(
@@ -1270,7 +1281,12 @@ class LayerCapturer:
             topk_indices,
             topk_weights,
         )
-        span_span, span_span_counts = _span_span_matrix(
+        (
+            span_span,
+            span_span_counts,
+            span_span_raw,
+            span_span_row_sums,
+        ) = _span_span_matrix(
             segment_mass=segment_mass,
             query_positions=query_positions.astype(np.int64, copy=False),
             query_row_offsets=query_row_offsets,
@@ -1293,6 +1309,8 @@ class LayerCapturer:
             query_positions=query_positions,
             segment_mass=segment_mass,
             span_span_matrix=span_span,
+            span_span_matrix_raw=span_span_raw,
+            span_span_row_sums=span_span_row_sums,
             span_span_query_counts=span_span_counts,
             topk_storage=np.asarray("dense_and_csr"),
             topk_indices=topk_indices,
@@ -1354,6 +1372,10 @@ class LayerCapturer:
             )
             if records
             else np.zeros((0, n_segments, 0), dtype=np.int32),
+            expert_token_count_unit=np.asarray(
+                [r["expert_token_count_unit"] for r in records],
+                dtype="<U32",
+            ),
             expert_capacity=np.asarray(
                 [int(r["expert_capacity"]) for r in records],
                 dtype=np.int32,

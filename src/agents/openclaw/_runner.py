@@ -65,6 +65,7 @@ def _malformed_tool_call_feedback(tools: ToolRegistry) -> str:
         "Do not omit the <tool_call> wrapper."
     )
 _SNIP_SAFETY_BUFFER = 1024
+_INTERNAL_MESSAGE_ID_KEY = "_openclaw_message_id"
 
 
 def _strip_synthetic_malformed_pairs(
@@ -146,7 +147,8 @@ class AgentRunner:
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
         hook = spec.hook or AgentHook()
-        messages = list(spec.initial_messages)
+        messages = [dict(message) for message in spec.initial_messages]
+        next_message_id = 0
         final_content: str | None = None
         tools_used: list[str] = []
         usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -159,6 +161,10 @@ class AgentRunner:
 
         for iteration in range(spec.max_iterations):
             try:
+                next_message_id = self._ensure_message_ids(
+                    messages,
+                    start=next_message_id,
+                )
                 messages = self._apply_tool_result_budget(spec, messages)
                 messages_for_model = self._snip_history(spec, messages)
             except Exception as exc:
@@ -169,7 +175,10 @@ class AgentRunner:
                     exc,
                 )
                 messages_for_model = messages
-            context = AgentHookContext(iteration=iteration, messages=messages)
+            context = AgentHookContext(
+                iteration=iteration,
+                messages=self._strip_internal_message_ids_from_messages(messages),
+            )
             await hook.before_iteration(context)
             response = await self._request_model(
                 spec, messages_for_model, hook, context
@@ -180,6 +189,7 @@ class AgentRunner:
             context.tool_calls = list(response.tool_calls)
             self._accumulate_usage(usage, raw_usage)
 
+            self._refresh_hook_context_messages(context, messages)
             await hook.after_llm_response(context)
 
             if response.has_tool_calls:
@@ -209,6 +219,7 @@ class AgentRunner:
                     },
                 )
 
+                self._refresh_hook_context_messages(context, messages)
                 await hook.before_execute_tools(context)
 
                 results, new_events, fatal_error = await self._execute_tools(
@@ -227,6 +238,7 @@ class AgentRunner:
                     context.final_content = final_content
                     context.error = error
                     context.stop_reason = stop_reason
+                    self._refresh_hook_context_messages(context, messages)
                     await hook.after_iteration(context)
                     break
                 completed_tool_results: list[dict[str, Any]] = []
@@ -255,6 +267,7 @@ class AgentRunner:
                         "pending_tool_calls": [],
                     },
                 )
+                self._refresh_hook_context_messages(context, messages)
                 await hook.after_iteration(context)
                 continue
 
@@ -293,6 +306,7 @@ class AgentRunner:
                     context.final_content = final_content
                     context.error = error
                     context.stop_reason = stop_reason
+                    self._refresh_hook_context_messages(context, messages)
                     await hook.after_iteration(context)
                     break
 
@@ -334,6 +348,7 @@ class AgentRunner:
                         "content": _malformed_tool_call_feedback(spec.tools),
                     }
                 )
+                self._refresh_hook_context_messages(context, messages)
                 await hook.after_iteration(context)
                 continue
 
@@ -368,6 +383,7 @@ class AgentRunner:
                 context.final_content = final_content
                 context.error = error
                 context.stop_reason = stop_reason
+                self._refresh_hook_context_messages(context, messages)
                 await hook.after_iteration(context)
                 break
             if is_blank_text(clean):
@@ -378,6 +394,7 @@ class AgentRunner:
                 context.final_content = final_content
                 context.error = error
                 context.stop_reason = stop_reason
+                self._refresh_hook_context_messages(context, messages)
                 await hook.after_iteration(context)
                 break
 
@@ -402,6 +419,7 @@ class AgentRunner:
             final_content = clean
             context.final_content = final_content
             context.stop_reason = stop_reason
+            self._refresh_hook_context_messages(context, messages)
             await hook.after_iteration(context)
             break
         else:
@@ -412,7 +430,9 @@ class AgentRunner:
 
         return AgentRunResult(
             final_content=final_content,
-            messages=_strip_synthetic_malformed_pairs(messages),
+            messages=self._strip_internal_message_ids_from_messages(
+                _strip_synthetic_malformed_pairs(messages)
+            ),
             tools_used=tools_used,
             usage=usage,
             stop_reason=stop_reason,
@@ -427,8 +447,13 @@ class AgentRunner:
         *,
         tools: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
+        request_messages = (
+            messages
+            if getattr(self.provider, "preserve_openclaw_message_ids", False)
+            else self._strip_internal_message_ids_from_messages(messages)
+        )
         kwargs: dict[str, Any] = {
-            "messages": messages,
+            "messages": request_messages,
             "tools": tools,
             "model": spec.model,
             "retry_mode": spec.provider_retry_mode,
@@ -616,7 +641,63 @@ class AgentRunner:
     ) -> None:
         callback = spec.checkpoint_callback
         if callback is not None:
-            await callback(payload)
+            await callback(self._strip_internal_ids_from_checkpoint_payload(payload))
+
+    @staticmethod
+    def _ensure_message_ids(messages: list[dict[str, Any]], *, start: int) -> int:
+        next_id = int(start)
+        for message in messages:
+            if _INTERNAL_MESSAGE_ID_KEY in message:
+                continue
+            message[_INTERNAL_MESSAGE_ID_KEY] = f"msg_{next_id}"
+            next_id += 1
+        return next_id
+
+    @staticmethod
+    def _refresh_hook_context_messages(
+        context: AgentHookContext,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        context.messages = AgentRunner._strip_internal_message_ids_from_messages(messages)
+
+    @staticmethod
+    def _strip_internal_message_id(message: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in message.items()
+            if key != _INTERNAL_MESSAGE_ID_KEY
+        }
+
+    @staticmethod
+    def _strip_internal_message_ids_from_messages(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return [AgentRunner._strip_internal_message_id(message) for message in messages]
+
+    @staticmethod
+    def _strip_internal_ids_from_checkpoint_payload(
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        clean = dict(payload)
+        assistant_message = clean.get("assistant_message")
+        if isinstance(assistant_message, dict):
+            clean["assistant_message"] = AgentRunner._strip_internal_message_id(
+                assistant_message
+            )
+        completed = clean.get("completed_tool_results")
+        if isinstance(completed, list):
+            clean["completed_tool_results"] = [
+                AgentRunner._strip_internal_message_id(item)
+                if isinstance(item, dict)
+                else item
+                for item in completed
+            ]
+        messages = clean.get("messages")
+        if isinstance(messages, list) and all(isinstance(item, dict) for item in messages):
+            clean["messages"] = AgentRunner._strip_internal_message_ids_from_messages(
+                messages
+            )
+        return clean
 
     @staticmethod
     def _append_final_message(

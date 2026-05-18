@@ -39,6 +39,7 @@ _LOG = logging.getLogger(__name__)
 _ALLOWED_MSG_KEYS = frozenset(
     {"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"}
 )
+_OPENCLAW_MESSAGE_ID_KEY = "_openclaw_message_id"
 _ALNUM = string.ascii_letters + string.digits
 
 
@@ -140,10 +141,19 @@ def _parse_tool_value(raw_value: str) -> Any:
         return value
 
 
-def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_messages(
+    messages: list[dict[str, Any]],
+    *,
+    preserve_openclaw_message_id: bool = False,
+) -> list[dict[str, Any]]:
+    allowed_keys = (
+        _ALLOWED_MSG_KEYS | {_OPENCLAW_MESSAGE_ID_KEY}
+        if preserve_openclaw_message_id
+        else _ALLOWED_MSG_KEYS
+    )
     sanitized = LLMProvider._sanitize_request_messages(
         LLMProvider._sanitize_empty_content(messages),
-        _ALLOWED_MSG_KEYS,
+        allowed_keys,
     )
     normalized: list[dict[str, Any]] = []
     for message in sanitized:
@@ -167,7 +177,26 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _message_signature(message: dict[str, Any]) -> str:
     """Stable signature for detecting when a message index was reused."""
-    return json.dumps(message, ensure_ascii=False, sort_keys=True, default=str)
+    payload = {
+        key: value
+        for key, value in message.items()
+        if key != _OPENCLAW_MESSAGE_ID_KEY
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _message_provenance_key(message: dict[str, Any]) -> str:
+    message_id = message.get(_OPENCLAW_MESSAGE_ID_KEY)
+    if message_id is not None:
+        return f"openclaw:{message_id}"
+    return f"signature:{_message_signature(message)}"
+
+
+def _strip_openclaw_message_ids(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in message.items() if key != _OPENCLAW_MESSAGE_ID_KEY}
+        for message in messages
+    ]
 
 
 def _apply_chat_template(
@@ -490,6 +519,8 @@ def _hf_max_memory(torch_module: Any) -> dict[int | str, str] | None:
 class HFRecordingProvider(LLMProvider):
     """OpenClaw provider that records HF model internals while generating."""
 
+    preserve_openclaw_message_ids = True
+
     def __init__(
         self,
         *,
@@ -529,7 +560,7 @@ class HFRecordingProvider(LLMProvider):
         # Attempt-level audit log persisted to meta.json. It distinguishes full
         # cold prompts, strict-prefix resume prompts, and divergence rebuilds.
         self._session_history: list[dict[str, Any]] = []
-        self._message_first_seen: dict[int, tuple[str, int]] = {}
+        self._message_first_seen: list[tuple[str, int]] = []
 
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -608,7 +639,7 @@ class HFRecordingProvider(LLMProvider):
         self._drop_session_cache()
         self._call_idx = 0
         self._session_history = []
-        self._message_first_seen = {}
+        self._message_first_seen = []
         self.capturer.start_attempt(recordings_dir)
 
     def finish_attempt(self, trace_path: Path | None = None) -> None:
@@ -663,19 +694,29 @@ class HFRecordingProvider(LLMProvider):
         *,
         call_idx: int,
     ) -> dict[int, int]:
-        first_seen: dict[int, int] = {}
-        live_indices: set[int] = set()
-        for idx, message in enumerate(messages):
-            live_indices.add(idx)
-            signature = _message_signature(message)
-            cached = self._message_first_seen.get(idx)
-            if cached is None or cached[0] != signature:
-                self._message_first_seen[idx] = (signature, call_idx)
-            first_seen[idx] = int(self._message_first_seen[idx][1])
-        for idx in list(self._message_first_seen):
-            if idx not in live_indices:
-                del self._message_first_seen[idx]
-        return first_seen
+        signatures = [_message_provenance_key(message) for message in messages]
+        previous = list(self._message_first_seen)
+        previous_signatures = [signature for signature, _first_seen in previous]
+
+        if previous_signatures == signatures[: len(previous_signatures)]:
+            first_seen_values = [
+                *[first_seen for _signature, first_seen in previous],
+                *[call_idx] * (len(signatures) - len(previous)),
+            ]
+        else:
+            first_seen_values = [call_idx] * len(signatures)
+            previous_idx = len(previous) - 1
+            for current_idx in range(len(signatures) - 1, -1, -1):
+                signature = signatures[current_idx]
+                while previous_idx >= 0 and previous[previous_idx][0] != signature:
+                    previous_idx -= 1
+                if previous_idx < 0:
+                    continue
+                first_seen_values[current_idx] = int(previous[previous_idx][1])
+                previous_idx -= 1
+
+        self._message_first_seen = list(zip(signatures, first_seen_values, strict=True))
+        return dict(enumerate(first_seen_values))
 
     def _build_session_cache(self) -> BaseEvictionCache:
         assert self._eviction_config is not None
@@ -920,9 +961,13 @@ class HFRecordingProvider(LLMProvider):
         self._call_idx += 1
         started_at = time.time()
 
-        normalized_messages = _normalize_messages(messages)
+        normalized_messages_with_ids = _normalize_messages(
+            messages,
+            preserve_openclaw_message_id=True,
+        )
+        normalized_messages = _strip_openclaw_message_ids(normalized_messages_with_ids)
         first_seen_calls = self._first_seen_calls_for_messages(
-            normalized_messages,
+            normalized_messages_with_ids,
             call_idx=call_idx,
         )
         encoded, segments, _prompt_text = tokenize_chat_with_segments(

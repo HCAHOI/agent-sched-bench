@@ -10,6 +10,45 @@ from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.registry import ToolRegistry
 
 
+def test_checkpoint_scrub_preserves_nested_payload_keys() -> None:
+    payload = {
+        "assistant_message": {
+            "role": "assistant",
+            "_openclaw_message_id": "msg_1",
+            "content": {"_openclaw_message_id": "payload_value"},
+        },
+        "completed_tool_results": [
+            {
+                "role": "tool",
+                "_openclaw_message_id": "msg_2",
+                "content": {"_openclaw_message_id": "tool_payload"},
+            }
+        ],
+        "pending_tool_calls": [
+            {
+                "id": "call_1",
+                "function": {
+                    "arguments": {"_openclaw_message_id": "arg_payload"}
+                },
+            }
+        ],
+    }
+
+    clean = AgentRunner._strip_internal_ids_from_checkpoint_payload(payload)
+
+    assert "_openclaw_message_id" not in clean["assistant_message"]
+    assert "_openclaw_message_id" not in clean["completed_tool_results"][0]
+    assert clean["assistant_message"]["content"] == {
+        "_openclaw_message_id": "payload_value"
+    }
+    assert clean["completed_tool_results"][0]["content"] == {
+        "_openclaw_message_id": "tool_payload"
+    }
+    assert clean["pending_tool_calls"][0]["function"]["arguments"] == {
+        "_openclaw_message_id": "arg_payload"
+    }
+
+
 class _FakeProvider(LLMProvider):
     def __init__(self, responses: list[LLMResponse]) -> None:
         super().__init__(api_key="test", api_base="http://test")
@@ -59,12 +98,27 @@ class _ListDirTool(Tool):
         return "ok"
 
 
+class _MessageSnapshotHook(AgentHook):
+    def __init__(self) -> None:
+        self.snapshots: list[list[dict[str, Any]]] = []
+
+    async def before_iteration(self, context: AgentHookContext) -> None:
+        self.snapshots.append([dict(message) for message in context.messages])
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        self.snapshots.append([dict(message) for message in context.messages])
+
+
 def test_runner_reprompts_after_malformed_tool_call_text() -> None:
     asyncio.run(_run_malformed_tool_call_case())
 
 
 def test_runner_preserves_inline_tool_markup_in_final_answer() -> None:
     asyncio.run(_run_inline_tool_markup_final_case())
+
+
+def test_runner_hides_internal_message_ids_from_hooks_and_result() -> None:
+    asyncio.run(_run_internal_message_id_surface_case())
 
 
 async def _run_malformed_tool_call_case() -> None:
@@ -163,6 +217,42 @@ async def _run_inline_tool_markup_final_case() -> None:
         "markup, not an action I need to execute."
     )
     assert len(provider.seen_messages) == 1
+
+
+async def _run_internal_message_id_surface_case() -> None:
+    provider = _FakeProvider(
+        [
+            LLMResponse(
+                content="done",
+                usage={"prompt_tokens": 10, "completion_tokens": 1},
+            )
+        ]
+    )
+    hook = _MessageSnapshotHook()
+
+    result = await AgentRunner(provider).run(
+        AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "Finish."}],
+            tools=ToolRegistry(),
+            hook=hook,
+            model="fake-model",
+            max_iterations=1,
+            max_tool_result_chars=1000,
+        )
+    )
+
+    assert hook.snapshots
+    assert all(
+        "_openclaw_message_id" not in message
+        for snapshot in hook.snapshots
+        for message in snapshot
+    )
+    assert all(
+        "_openclaw_message_id" not in message
+        for request in provider.seen_messages
+        for message in request
+    )
+    assert all("_openclaw_message_id" not in message for message in result.messages)
 
 
 # ---------------------------------------------------------------------------

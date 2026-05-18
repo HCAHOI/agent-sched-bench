@@ -72,7 +72,7 @@ def _build_provider(eviction_config: EvictionPolicyConfig | None) -> HFRecording
     provider._session_cache = None
     provider._session_token_ids = None
     provider._session_history = []
-    provider._message_first_seen = {}
+    provider._message_first_seen = []
     provider._attention_bus = AttentionBus()
     provider.model = _StubModel()
     provider.tokenizer = _StubTokenizer()
@@ -251,7 +251,7 @@ def test_start_attempt_resets_session_cache_between_attempts(tmp_path: Path) -> 
     assert provider._session_cache is None
     assert provider._session_token_ids is None
     assert provider._session_history == []
-    assert provider._message_first_seen == {}
+    assert provider._message_first_seen == []
 
     prompt_2 = torch.tensor([[1, 2, 3, 10, 11]], dtype=torch.long)
     delta, used = provider._prepare_session_cache(prompt_ids=prompt_2, call_idx=0)
@@ -271,8 +271,8 @@ def test_start_attempt_resets_session_cache_between_attempts(tmp_path: Path) -> 
     ]
 
 
-def test_message_first_seen_tracks_stable_indices() -> None:
-    """Message provenance survives appended turns and resets on index reuse."""
+def test_message_first_seen_tracks_appends_and_replacements() -> None:
+    """Message provenance survives appended turns and resets changed turns."""
     provider = _build_provider(eviction_config=None)
 
     first = provider._first_seen_calls_for_messages(
@@ -294,6 +294,81 @@ def test_message_first_seen_tracks_stable_indices() -> None:
     assert first == {0: 0}
     assert second == {0: 0, 1: 1}
     assert replaced == {0: 2}
+
+
+def test_message_first_seen_survives_context_window_snip() -> None:
+    provider = _build_provider(eviction_config=None)
+
+    provider._first_seen_calls_for_messages(
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "a"},
+            {"role": "tool", "content": "result"},
+        ],
+        call_idx=1,
+    )
+    snipped = provider._first_seen_calls_for_messages(
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "tool", "content": "result"},
+        ],
+        call_idx=3,
+    )
+
+    assert snipped == {0: 1, 1: 1}
+
+
+def test_message_first_seen_distinguishes_repeated_messages() -> None:
+    provider = _build_provider(eviction_config=None)
+
+    provider._first_seen_calls_for_messages(
+        [{"role": "user", "content": "continue"}],
+        call_idx=0,
+    )
+    repeated = provider._first_seen_calls_for_messages(
+        [
+            {"role": "user", "content": "continue"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "continue"},
+        ],
+        call_idx=5,
+    )
+    snipped_latest = provider._first_seen_calls_for_messages(
+        [{"role": "user", "content": "continue"}],
+        call_idx=6,
+    )
+
+    assert repeated == {0: 0, 1: 5, 2: 5}
+    assert snipped_latest == {0: 5}
+
+
+def test_message_first_seen_uses_openclaw_message_ids_for_duplicate_snips() -> None:
+    provider = _build_provider(eviction_config=None)
+
+    provider._first_seen_calls_for_messages(
+        [{"role": "user", "content": "continue", "_openclaw_message_id": "m0"}],
+        call_idx=0,
+    )
+    full = provider._first_seen_calls_for_messages(
+        [
+            {"role": "user", "content": "continue", "_openclaw_message_id": "m0"},
+            {"role": "assistant", "content": "ok", "_openclaw_message_id": "m1"},
+            {"role": "user", "content": "continue", "_openclaw_message_id": "m2"},
+            {"role": "assistant", "content": "hmm", "_openclaw_message_id": "m3"},
+            {"role": "user", "content": "continue", "_openclaw_message_id": "m4"},
+        ],
+        call_idx=5,
+    )
+    snipped = provider._first_seen_calls_for_messages(
+        [
+            {"role": "assistant", "content": "ok", "_openclaw_message_id": "m1"},
+            {"role": "user", "content": "continue", "_openclaw_message_id": "m2"},
+        ],
+        call_idx=6,
+    )
+
+    assert full == {0: 0, 1: 5, 2: 5, 3: 5, 4: 5}
+    assert snipped == {0: 5, 1: 5}
 
 
 def test_context_manager_releases_provider_refs() -> None:

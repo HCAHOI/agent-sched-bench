@@ -182,19 +182,26 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
         np.testing.assert_array_equal(decoded_weights, attention["topk_weights"])
         assert attention["topk_csr_offsets"].shape[0] == int(attention["n_query_rows"]) + 1
         span_span = attention["span_span_matrix"]
+        span_span_raw = attention["span_span_matrix_raw"]
+        span_row_sums = attention["span_span_row_sums"]
         span_counts = attention["span_span_query_counts"]
         assert span_span.shape == (2, 3, 3)
+        assert span_span_raw.shape == (2, 3, 3)
+        assert span_row_sums.shape == (2, 3)
         assert span_counts.shape == (2, 3)
         active_rows = span_counts > 0
         assert np.allclose(span_span.sum(axis=-1)[active_rows], 1.0, atol=1e-6)
+        assert np.allclose(span_span_raw.sum(axis=-1), span_row_sums, atol=1e-6)
+        assert np.any(span_span_raw[active_rows] > span_span[active_rows])
 
     with np.load(call_dir / "routing.npz") as routing:
         assert int(routing["n_experts"]) == 3
         assert routing["expert_choice"].shape == (5, 2)
         assert routing["expert_load"].shape == (1, 3, 3)
         assert routing["expert_token_count"].shape == (1, 3, 3)
-        assert int(routing["expert_token_count"].sum()) == 5
-        assert routing["expert_capacity"].tolist() == [2]
+        assert int(routing["expert_token_count"].sum()) == 10
+        assert routing["expert_token_count_unit"].tolist() == ["topk_assignments"]
+        assert routing["expert_capacity"].tolist() == [4]
         assert routing["drop_signal_mode"].tolist() == ["expected_uniform_capacity"]
         assert int(routing["expected_dropped_token_count"][0]) == int(
             routing["expert_expected_overflow_count"][0].sum()
@@ -275,7 +282,11 @@ def test_layer_capturer_records_router_gate_hook_without_second_forward(tmp_path
         assert routing["expert_choice"].shape == (5, 2)
         assert routing["expert_load"].shape == (2, 2, 3)
         assert routing["expert_token_count"].shape == (2, 2, 3)
-        assert routing["expert_token_count"].sum(axis=(1, 2)).tolist() == [4, 1]
+        assert routing["expert_token_count"].sum(axis=(1, 2)).tolist() == [8, 2]
+        assert routing["expert_token_count_unit"].tolist() == [
+            "topk_assignments",
+            "topk_assignments",
+        ]
         assert routing["drop_signal_mode"].tolist() == [
             "expected_uniform_capacity",
             "expected_uniform_capacity",
