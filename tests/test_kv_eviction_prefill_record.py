@@ -12,7 +12,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import pytest
 import torch
 from torch import nn
 
@@ -147,7 +146,7 @@ def test_unbounded_prefill_queries_observes_every_row() -> None:
 
     Default cap (4) sees 4 sampled rows; the override must lift that to all 8.
     """
-    # Baseline cap = 4: select_query_positions evenly spaces the samples.
+    # Baseline cap = 4: select_query_positions keeps one seeded row per window.
     model, capturer = _build_capturer()
     baseline = _record_one_pass(capturer, model, unbounded=False)
     assert len(baseline) == 4

@@ -326,7 +326,7 @@ def test_full_prefill_consumer_gets_chunked_rows_without_uncapping_recording() -
         [0, 1, 2, 3],
         [4, 5, 6, 7],
     ]
-    assert capturer._prefill_records[0]["query_positions"].tolist() == [0, 2, 5, 7]
+    assert capturer._prefill_records[0]["query_positions"].tolist() == [0, 3, 4, 7]
 
 
 # ---------------------------------------------------------------------------

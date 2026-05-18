@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
@@ -31,20 +32,30 @@ def segment_role(message: dict[str, Any]) -> str:
     return role
 
 
-def select_query_positions(query_len: int, max_queries: int) -> list[int]:
+def query_sampling_seed(base_seed: int, call_idx: int) -> str:
+    """Stable per-call seed for bounded prefill query-row sampling."""
+    return f"{int(base_seed)}:{int(call_idx)}"
+
+
+def select_query_positions(
+    query_len: int,
+    max_queries: int,
+    *,
+    seed: int | str = 0,
+) -> list[int]:
     if query_len <= 0:
         raise ValueError(f"query_len must be positive, got {query_len}")
     if max_queries <= 0:
         raise ValueError(f"max_queries must be positive, got {max_queries}")
     if query_len <= max_queries:
         return list(range(query_len))
-    if max_queries == 1:
-        return [query_len - 1]
-    positions = {
-        round(i * (query_len - 1) / (max_queries - 1))
-        for i in range(max_queries)
-    }
-    return sorted(positions)
+    rng = random.Random(seed)
+    positions: list[int] = []
+    for idx in range(max_queries):
+        start = (idx * query_len) // max_queries
+        stop = ((idx + 1) * query_len) // max_queries
+        positions.append(rng.randrange(start, stop))
+    return positions
 
 
 def token_segment_ids(

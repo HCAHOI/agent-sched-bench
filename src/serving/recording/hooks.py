@@ -19,6 +19,7 @@ from serving.recording.recording import (
     expert_load_per_segment,
     heavy_hitter,
     padded_top_k,
+    query_sampling_seed,
     segment_bucket,
     select_query_positions,
     token_segment_ids,
@@ -643,6 +644,9 @@ class LayerCapturer:
             "iter_dir": iter_dir,
             "segments": session_segments,
             "input_token_count": input_token_count,
+            "attention_sampling": self._attention_sampling_metadata(
+                call_idx=call_idx
+            ),
             "started_at": time.time(),
             "generated_segment_id": len(segments),
             "generation": generation if generation is not None else None,
@@ -708,6 +712,42 @@ class LayerCapturer:
 
         return capture
 
+    def _attention_sampling_metadata(
+        self,
+        *,
+        call_idx: int,
+        query_len: int | None = None,
+        sampled_query_count: int | None = None,
+        unbounded: bool = False,
+    ) -> dict[str, Any]:
+        seed = query_sampling_seed(self.config.generation_seed, call_idx)
+        configured_max = int(self.config.max_prefill_queries)
+        if query_len is None or sampled_query_count is None:
+            return {
+                "prefill_query_sampler": "stratified_seeded_jitter",
+                "prefill_query_seed": seed,
+                "configured_max_prefill_queries": configured_max,
+                "effective_max_prefill_queries": configured_max,
+                "unbounded_prefill_queries": False,
+                "prefill_query_count": None,
+                "sampled_prefill_queries": None,
+            }
+
+        all_rows = int(sampled_query_count) == int(query_len)
+        return {
+            "prefill_query_sampler": (
+                "all_rows" if all_rows else "stratified_seeded_jitter"
+            ),
+            "prefill_query_seed": None if all_rows else seed,
+            "configured_max_prefill_queries": configured_max,
+            "effective_max_prefill_queries": None
+            if unbounded
+            else configured_max,
+            "unbounded_prefill_queries": bool(unbounded),
+            "prefill_query_count": int(query_len),
+            "sampled_prefill_queries": int(sampled_query_count),
+        }
+
     def _gate_hook(self, layer: int):
         def capture(module: Any, args: tuple[Any, ...], output: Any) -> None:
             del module, args
@@ -760,7 +800,14 @@ class LayerCapturer:
         row_indices = (
             [0]
             if query_len == 1
-            else select_query_positions(query_len, max_queries)
+            else select_query_positions(
+                query_len,
+                max_queries,
+                seed=query_sampling_seed(
+                    self.config.generation_seed,
+                    int(self._session["call_idx"]),
+                ),
+            )
         )
         key_states = self._key_states(
             module=module,
@@ -775,6 +822,13 @@ class LayerCapturer:
             if query_len == 1 and key_len > self._session["input_token_count"]
             else "prefill"
         )
+        if phase == "prefill":
+            self._session["attention_sampling"] = self._attention_sampling_metadata(
+                call_idx=int(self._session["call_idx"]),
+                query_len=query_len,
+                sampled_query_count=len(row_indices),
+                unbounded=self._max_prefill_queries_override is not None,
+            )
         query_positions = [key_len - query_len + idx for idx in row_indices]
         if (
             phase == "prefill"
@@ -1354,6 +1408,7 @@ class LayerCapturer:
                 "done_sentinel": True,
                 "decode_records_dropped_count": decode_records_dropped,
             },
+            "attention_sampling": dict(self._session["attention_sampling"]),
             "elapsed_s": time.time() - float(self._session["started_at"]),
         }
         generation = self._session.get("generation")
