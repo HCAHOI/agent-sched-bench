@@ -12,6 +12,7 @@ try:
     from metrics import js_divergence, normalized_distribution, pairwise_js
     from recording_loader import (
         LayerDistributionSet,
+        decode_attention_topk,
         derive_moe_record_phases,
         segment_role_indices_for_record,
     )
@@ -23,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - used by local pytest package i
     )
     from scripts.recoding_figures.recording_loader import (
         LayerDistributionSet,
+        decode_attention_topk,
         derive_moe_record_phases,
         segment_role_indices_for_record,
     )
@@ -98,8 +100,9 @@ def load_attention_distance_bucket_distributions(
             record_phases = attention["record_phase"].astype(str)
             offsets = attention["query_row_offsets"].astype(np.int64)
             query_positions = attention["query_positions"].astype(np.int64)
-            topk_indices = attention["topk_indices"].astype(np.int64)
-            topk_weights = attention["topk_weights"].astype(np.float64)
+            topk_indices, topk_weights = decode_attention_topk(attention)
+            topk_indices = topk_indices.astype(np.int64, copy=False)
+            topk_weights = topk_weights.astype(np.float64, copy=False)
 
             layer_sums: dict[int, np.ndarray] = {}
             layer_counts: dict[int, int] = {}
@@ -316,7 +319,8 @@ def load_attention_rank_bucket_distributions(
             record_layers = attention["record_layer"].astype(np.int64)
             record_phases = attention["record_phase"].astype(str)
             offsets = attention["query_row_offsets"].astype(np.int64)
-            topk_weights = attention["topk_weights"].astype(np.float64)
+            _, topk_weights = decode_attention_topk(attention)
+            topk_weights = topk_weights.astype(np.float64, copy=False)
 
             layer_sums: dict[int, np.ndarray] = {}
             layer_counts: dict[int, int] = {}
@@ -550,8 +554,9 @@ def load_attention_context_group_distributions(
             record_phases = attention["record_phase"].astype(str)
             offsets = attention["query_row_offsets"].astype(np.int64)
             query_positions = attention["query_positions"].astype(np.int64)
-            topk_indices = attention["topk_indices"].astype(np.int64)
-            topk_weights = attention["topk_weights"].astype(np.float64)
+            topk_indices, topk_weights = decode_attention_topk(attention)
+            topk_indices = topk_indices.astype(np.int64, copy=False)
+            topk_weights = topk_weights.astype(np.float64, copy=False)
 
             layer_sums: dict[int, np.ndarray] = {}
             layer_counts: dict[int, int] = {}

@@ -29,6 +29,7 @@ from recording_loader import (
     KVEvictionFrame,
     average_layer_matrix,
     collect_role_labels,
+    decode_attention_topk,
     load_attention_distributions,
 )
 
@@ -340,9 +341,9 @@ def aggregate_sink_recent_share_per_layer(
 ) -> dict[int, dict[str, float]]:
     """Per-layer fraction of topk-weight mass in sink/recent/middle key bands.
 
-    Uses `topk_indices` + `topk_weights` from attention.npz. Each
-    record-row contributes weight in proportion to its topk mass; sums
-    are normalized at the end so the three shares add to 1.
+    Uses dense or CSR top-k fields from attention.npz. Each record-row
+    contributes weight in proportion to its top-k mass; sums are normalized at
+    the end so the three shares add to 1.
     """
     per_layer_sums: dict[int, dict[str, float]] = defaultdict(
         lambda: {"sink": 0.0, "recent": 0.0, "middle": 0.0}
@@ -352,13 +353,35 @@ def aggregate_sink_recent_share_per_layer(
         if not path.is_file():
             continue
         with np.load(path) as attn:
-            needed = {"record_layer", "topk_indices", "topk_weights",
-                      "query_row_offsets", "query_positions"}
+            needed = {"record_layer", "query_row_offsets", "query_positions"}
             if not needed.issubset(set(attn.files)):
                 continue
+            topk_fields = {
+                "top_k",
+                "topk_indices",
+                "topk_weights",
+                "topk_csr_offsets",
+                "topk_csr_indices",
+                "topk_csr_weights",
+                "topk_csr_width",
+            }.intersection(set(attn.files))
+            has_dense_topk = {"topk_indices", "topk_weights"}.issubset(set(attn.files))
+            has_csr_topk = {
+                "topk_csr_offsets",
+                "topk_csr_indices",
+                "topk_csr_weights",
+            }.issubset(set(attn.files))
+            if not has_dense_topk and not has_csr_topk:
+                if topk_fields:
+                    raise ValueError(f"{path}: incomplete attention top-k schema")
+                continue
             layers = attn["record_layer"].astype(np.int64)
-            topk_idx = attn["topk_indices"].astype(np.int64)
-            topk_w = attn["topk_weights"].astype(np.float64)
+            try:
+                topk_idx, topk_w = decode_attention_topk(attn)
+            except (KeyError, ValueError) as exc:
+                raise ValueError(f"{path}: invalid attention top-k schema: {exc}") from exc
+            topk_idx = topk_idx.astype(np.int64, copy=False)
+            topk_w = topk_w.astype(np.float64, copy=False)
             offsets = attn["query_row_offsets"].astype(np.int64)
             query_positions = attn["query_positions"].astype(np.int64)
 

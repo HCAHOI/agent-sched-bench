@@ -268,6 +268,146 @@ def load_session_history(paths: Sequence[Path]) -> list[dict[str, object]]:
     )
 
 
+def decode_attention_topk(attention: object) -> tuple[np.ndarray, np.ndarray]:
+    """Return dense `(indices, weights)` top-k rows from dense or CSR schema."""
+    files = set(getattr(attention, "files", []))
+    if not files and hasattr(attention, "keys"):
+        files = set(attention.keys())
+
+    csr_fields = {"topk_csr_offsets", "topk_csr_indices", "topk_csr_weights"}
+    has_any_csr = any(name.startswith("topk_csr_") for name in files)
+    if {"topk_indices", "topk_weights"}.issubset(files):
+        indices = attention["topk_indices"].astype(np.int32, copy=False)
+        weights = attention["topk_weights"].astype(np.float32, copy=False)
+        _validate_dense_topk_arrays(indices, weights)
+        _validate_attention_topk_rows(attention, files, int(indices.shape[0]))
+        if has_any_csr:
+            csr_indices, csr_weights = _decode_attention_topk_csr(
+                attention,
+                files,
+                csr_fields,
+            )
+            if indices.shape != csr_indices.shape or weights.shape != csr_weights.shape:
+                raise ValueError(
+                    "top-k dense and CSR sidecar shapes differ: "
+                    f"{indices.shape}/{weights.shape} vs "
+                    f"{csr_indices.shape}/{csr_weights.shape}"
+                )
+            if not np.array_equal(indices, csr_indices) or not np.allclose(
+                weights,
+                csr_weights,
+                rtol=0.0,
+                atol=0.0,
+            ):
+                raise ValueError("top-k dense and CSR sidecar values differ")
+        return indices, weights
+
+    return _decode_attention_topk_csr(attention, files, csr_fields)
+
+
+def _decode_attention_topk_csr(
+    attention: object,
+    files: set[str],
+    csr_fields: set[str],
+) -> tuple[np.ndarray, np.ndarray]:
+    if not csr_fields.issubset(files):
+        missing = sorted(csr_fields.difference(files))
+        raise KeyError(f"attention top-k fields missing: {missing}")
+
+    offsets = attention["topk_csr_offsets"].astype(np.int64, copy=False)
+    flat_indices = attention["topk_csr_indices"].astype(np.int32, copy=False)
+    flat_weights = attention["topk_csr_weights"].astype(np.float32, copy=False)
+    if offsets.ndim != 1:
+        raise ValueError(f"topk_csr_offsets must be rank 1, got {offsets.shape}")
+    if flat_indices.ndim != 1 or flat_weights.ndim != 1:
+        raise ValueError(
+            "topk_csr_indices and topk_csr_weights must be rank 1, "
+            f"got {flat_indices.shape} and {flat_weights.shape}"
+        )
+    if flat_indices.shape != flat_weights.shape:
+        raise ValueError(
+            f"CSR index/weight length mismatch: {flat_indices.shape} vs {flat_weights.shape}"
+        )
+    if offsets.size == 0:
+        raise ValueError("topk_csr_offsets must contain at least the zero offset")
+    if int(offsets[0]) != 0:
+        raise ValueError("topk_csr_offsets must start at zero")
+    if np.any(np.diff(offsets) < 0):
+        raise ValueError("topk_csr_offsets must be monotonically non-decreasing")
+    if int(offsets[-1]) != int(flat_indices.shape[0]):
+        raise ValueError(
+            f"topk CSR final offset {offsets[-1]} != values {flat_indices.shape[0]}"
+        )
+    if np.any(flat_indices < 0):
+        raise ValueError("topk_csr_indices must be non-negative")
+    if np.any(~np.isfinite(flat_weights)):
+        raise ValueError("topk_csr_weights must be finite")
+    if np.any(flat_weights < 0):
+        raise ValueError("topk_csr_weights must be non-negative")
+
+    n_rows = int(offsets.shape[0]) - 1
+    _validate_attention_topk_rows(attention, files, n_rows)
+    width = _attention_topk_width(attention, files)
+    indices = np.full((n_rows, width), -1, dtype=np.int32)
+    weights = np.zeros((n_rows, width), dtype=np.float32)
+    for row_idx in range(n_rows):
+        start = int(offsets[row_idx])
+        end = int(offsets[row_idx + 1])
+        span_width = end - start
+        if span_width > width:
+            raise ValueError(
+                f"CSR row {row_idx} has width {span_width}, exceeds top_k {width}"
+            )
+        if span_width <= 0:
+            continue
+        indices[row_idx, :span_width] = flat_indices[start:end]
+        weights[row_idx, :span_width] = flat_weights[start:end]
+    return indices, weights
+
+
+def _validate_dense_topk_arrays(indices: np.ndarray, weights: np.ndarray) -> None:
+    if indices.ndim != 2 or weights.ndim != 2:
+        raise ValueError(
+            f"top-k arrays must be rank 2, got {indices.shape} and {weights.shape}"
+        )
+    if indices.shape != weights.shape:
+        raise ValueError(
+            f"top-k index/weight shape mismatch: {indices.shape} vs {weights.shape}"
+        )
+    if np.any(indices < -1):
+        raise ValueError("topk_indices must be non-negative or -1 padding")
+    if np.any(~np.isfinite(weights)):
+        raise ValueError("topk_weights must be finite")
+    if np.any(weights < 0):
+        raise ValueError("topk_weights must be non-negative")
+    if np.any((indices == -1) & (weights != 0)):
+        raise ValueError("topk_indices -1 padding must have zero weight")
+
+
+def _attention_topk_width(attention: object, files: set[str]) -> int:
+    if "top_k" in files:
+        width = int(attention["top_k"])
+    elif "topk_csr_width" in files:
+        width = int(attention["topk_csr_width"])
+    else:
+        raise KeyError("attention top-k CSR schema lacks top_k/topk_csr_width")
+    if width < 0:
+        raise ValueError(f"top-k width must be non-negative, got {width}")
+    return width
+
+
+def _validate_attention_topk_rows(
+    attention: object,
+    files: set[str],
+    n_rows: int,
+) -> None:
+    if "n_query_rows" not in files:
+        return
+    expected = int(attention["n_query_rows"])
+    if n_rows != expected:
+        raise ValueError(f"top-k rows {n_rows} != n_query_rows {expected}")
+
+
 def collect_role_labels(records: Iterable[IterationRecord]) -> list[str]:
     """Collect normalized segment roles in stable display order."""
     observed: set[str] = set()

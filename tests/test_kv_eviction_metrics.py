@@ -329,6 +329,50 @@ def test_aggregate_sink_recent_share_classifies_topk_positions(tmp_path):
     assert layer["recent_share"] == pytest.approx(0.3, abs=1e-6)
 
 
+def test_aggregate_sink_recent_share_reads_csr_topk(tmp_path):
+    iter_dir = tmp_path / "attempt_1" / "recordings" / "iter_0000"
+    iter_dir.mkdir(parents=True)
+    np.savez_compressed(
+        iter_dir / "attention.npz",
+        record_layer=np.asarray([0], dtype=np.int32),
+        record_phase=np.asarray(["prefill"], dtype="U7"),
+        query_row_offsets=np.asarray([0, 1], dtype=np.int64),
+        query_positions=np.asarray([9], dtype=np.int64),
+        top_k=np.asarray(3, dtype=np.int32),
+        topk_csr_offsets=np.asarray([0, 3], dtype=np.int64),
+        topk_csr_indices=np.asarray([0, 4, 8], dtype=np.int32),
+        topk_csr_weights=np.asarray([0.5, 0.2, 0.3], dtype=np.float32),
+        heavy_indices=np.asarray([[0]], dtype=np.int32),
+        n_segments=np.asarray(1, dtype=np.int32),
+    )
+
+    out = aggregate_sink_recent_share_per_layer([_make_record(iter_dir)], sink=2, recent=3)
+
+    assert out[0]["sink_share"] == pytest.approx(0.5, abs=1e-6)
+    assert out[0]["middle_share"] == pytest.approx(0.2, abs=1e-6)
+    assert out[0]["recent_share"] == pytest.approx(0.3, abs=1e-6)
+
+
+def test_aggregate_sink_recent_share_rejects_malformed_topk(tmp_path):
+    iter_dir = tmp_path / "attempt_1" / "recordings" / "iter_0000"
+    iter_dir.mkdir(parents=True)
+    np.savez_compressed(
+        iter_dir / "attention.npz",
+        record_layer=np.asarray([0], dtype=np.int32),
+        record_phase=np.asarray(["prefill"], dtype="U7"),
+        query_row_offsets=np.asarray([0, 1], dtype=np.int64),
+        query_positions=np.asarray([9], dtype=np.int64),
+        top_k=np.asarray(2, dtype=np.int32),
+        topk_csr_offsets=np.asarray([0, 2], dtype=np.int64),
+        topk_csr_indices=np.asarray([-1, 8], dtype=np.int32),
+        topk_csr_weights=np.asarray([0.5, 0.3], dtype=np.float32),
+        n_segments=np.asarray(1, dtype=np.int32),
+    )
+
+    with pytest.raises(ValueError, match="invalid attention top-k schema"):
+        aggregate_sink_recent_share_per_layer([_make_record(iter_dir)], sink=2, recent=3)
+
+
 # ---------------------------------------------------------------------------
 # JS / Jaccard pairings
 # ---------------------------------------------------------------------------

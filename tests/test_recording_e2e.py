@@ -10,6 +10,7 @@ from torch import nn
 from serving.recording import RecordingConfig
 from serving.recording.hooks import LayerCapturer
 from serving.recording.recording import segment_bucket
+from scripts.recoding_figures.recording_loader import decode_attention_topk
 
 
 class _ToyAttention(nn.Module):
@@ -176,11 +177,28 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
         assert attention["query_heads"].shape == attention["query_positions"].shape
         assert np.allclose(attention["segment_mass"].sum(axis=1), 1.0, atol=1e-6)
         assert attention["topk_indices"].shape[1] == 2
+        decoded_indices, decoded_weights = decode_attention_topk(attention)
+        np.testing.assert_array_equal(decoded_indices, attention["topk_indices"])
+        np.testing.assert_array_equal(decoded_weights, attention["topk_weights"])
+        assert attention["topk_csr_offsets"].shape[0] == int(attention["n_query_rows"]) + 1
+        span_span = attention["span_span_matrix"]
+        span_counts = attention["span_span_query_counts"]
+        assert span_span.shape == (2, 3, 3)
+        assert span_counts.shape == (2, 3)
+        active_rows = span_counts > 0
+        assert np.allclose(span_span.sum(axis=-1)[active_rows], 1.0, atol=1e-6)
 
     with np.load(call_dir / "routing.npz") as routing:
         assert int(routing["n_experts"]) == 3
         assert routing["expert_choice"].shape == (5, 2)
         assert routing["expert_load"].shape == (1, 3, 3)
+        assert routing["expert_token_count"].shape == (1, 3, 3)
+        assert int(routing["expert_token_count"].sum()) == 5
+        assert routing["expert_capacity"].tolist() == [2]
+        assert routing["drop_signal_mode"].tolist() == ["expected_uniform_capacity"]
+        assert int(routing["expected_dropped_token_count"][0]) == int(
+            routing["expert_expected_overflow_count"][0].sum()
+        )
 
     meta = json.loads((recordings_dir / "meta.json").read_text())
     assert meta["iters"][0]["call_idx"] == 0
@@ -256,6 +274,12 @@ def test_layer_capturer_records_router_gate_hook_without_second_forward(tmp_path
         assert routing["record_layer"].tolist() == [0, 0]
         assert routing["expert_choice"].shape == (5, 2)
         assert routing["expert_load"].shape == (2, 2, 3)
+        assert routing["expert_token_count"].shape == (2, 2, 3)
+        assert routing["expert_token_count"].sum(axis=(1, 2)).tolist() == [4, 1]
+        assert routing["drop_signal_mode"].tolist() == [
+            "expected_uniform_capacity",
+            "expected_uniform_capacity",
+        ]
 
     meta = json.loads((recordings_dir / "meta.json").read_text())
     assert meta["model"]["router_capture_mode"] == "gate_forward_hook"

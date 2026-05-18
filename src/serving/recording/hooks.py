@@ -130,6 +130,155 @@ def _materialize_array(value: Any) -> np.ndarray:
     return value
 
 
+def _encode_topk_csr(
+    indices: np.ndarray,
+    weights: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Encode padded dense top-k rows as row-wise CSR arrays."""
+    if indices.ndim != 2 or weights.ndim != 2:
+        raise ValueError(
+            f"top-k arrays must be rank 2, got {indices.shape} and {weights.shape}"
+        )
+    if indices.shape != weights.shape:
+        raise ValueError(
+            f"top-k index/weight shape mismatch: {indices.shape} vs {weights.shape}"
+        )
+
+    row_offsets = np.zeros(indices.shape[0] + 1, dtype=np.int64)
+    valid = indices >= 0
+    counts = valid.sum(axis=1, dtype=np.int64)
+    row_offsets[1:] = np.cumsum(counts, dtype=np.int64)
+    if int(row_offsets[-1]) == 0:
+        return (
+            row_offsets,
+            np.zeros((0,), dtype=np.int32),
+            np.zeros((0,), dtype=np.float32),
+        )
+    return (
+        row_offsets,
+        indices[valid].astype(np.int32, copy=False),
+        weights[valid].astype(np.float32, copy=False),
+    )
+
+
+def _span_span_matrix(
+    *,
+    segment_mass: np.ndarray,
+    query_positions: np.ndarray,
+    query_row_offsets: np.ndarray,
+    segments: list[dict[str, Any]],
+    n_segments: int,
+    generated_segment_id: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Aggregate query-segment by key-segment attention mass per record."""
+    if segment_mass.ndim != 2:
+        raise ValueError(f"segment_mass must be rank 2, got {segment_mass.shape}")
+    if segment_mass.shape[1] != n_segments:
+        raise ValueError(
+            f"segment_mass width {segment_mass.shape[1]} != n_segments {n_segments}"
+        )
+    if query_positions.ndim != 1:
+        raise ValueError(f"query_positions must be rank 1, got {query_positions.shape}")
+    if query_positions.shape[0] != segment_mass.shape[0]:
+        raise ValueError(
+            f"query_positions length {query_positions.shape[0]} "
+            f"!= segment_mass rows {segment_mass.shape[0]}"
+        )
+    if query_row_offsets.ndim != 1:
+        raise ValueError(
+            f"query_row_offsets must be rank 1, got {query_row_offsets.shape}"
+        )
+    n_records = max(0, int(query_row_offsets.shape[0]) - 1)
+    matrix = np.zeros((n_records, n_segments, n_segments), dtype=np.float32)
+    counts = np.zeros((n_records, n_segments), dtype=np.int32)
+    if n_records == 0 or query_positions.size == 0:
+        return matrix, counts
+
+    total_tokens = int(query_positions.max()) + 1
+    token_ids = token_segment_ids(
+        total_tokens,
+        segments,
+        generated_segment_id=generated_segment_id,
+    ).numpy()
+    query_segments = np.full(query_positions.shape, -1, dtype=np.int64)
+    valid_positions = (query_positions >= 0) & (query_positions < token_ids.shape[0])
+    query_segments[valid_positions] = token_ids[query_positions[valid_positions]]
+
+    for record_idx in range(n_records):
+        start = int(query_row_offsets[record_idx])
+        end = int(query_row_offsets[record_idx + 1])
+        if end <= start:
+            continue
+        record_segments = query_segments[start:end]
+        record_rows = segment_mass[start:end]
+        valid_segments = record_segments[
+            (record_segments >= 0) & (record_segments < n_segments)
+        ]
+        for query_segment in np.unique(valid_segments):
+            mask = record_segments == int(query_segment)
+            row_count = int(mask.sum())
+            if row_count <= 0:
+                continue
+            counts[record_idx, int(query_segment)] = row_count
+            matrix[record_idx, int(query_segment)] = record_rows[mask].sum(axis=0)
+
+    row_sums = matrix.sum(axis=2, keepdims=True)
+    active = (counts[:, :, None] > 0) & (row_sums > 0)
+    matrix = np.where(active, matrix / np.maximum(row_sums, np.finfo(np.float32).tiny), matrix)
+    return matrix.astype(np.float32, copy=False), counts
+
+
+def _routing_count_summary(
+    choices: Any,
+    token_ids: Any,
+    *,
+    n_segments: int,
+    n_experts: int,
+) -> dict[str, np.ndarray | str]:
+    """Discrete top-1 expert counts plus a labeled capacity-overflow proxy."""
+    import torch
+
+    if choices.ndim != 2:
+        raise ValueError(f"expert choices must be rank 2, got {choices.shape}")
+    n_tokens = int(choices.shape[0])
+    counts = torch.zeros(
+        (n_segments, n_experts),
+        dtype=torch.int32,
+        device=choices.device,
+    )
+    if n_tokens > 0 and n_experts > 0 and int(choices.shape[1]) > 0:
+        top1 = choices[:, 0].to(dtype=torch.long)
+        segment_ids = token_ids[:n_tokens].to(device=choices.device, dtype=torch.long)
+        valid = (
+            (segment_ids >= 0)
+            & (segment_ids < n_segments)
+            & (top1 >= 0)
+            & (top1 < n_experts)
+        )
+        if bool(valid.any()):
+            ones = torch.ones(
+                int(valid.sum().item()),
+                dtype=torch.int32,
+                device=choices.device,
+            )
+            counts.index_put_((segment_ids[valid], top1[valid]), ones, accumulate=True)
+
+    count_np = _as_numpy(counts).astype(np.int32)
+    total_per_expert = count_np.sum(axis=0, dtype=np.int64)
+    capacity = int(np.ceil(float(n_tokens) / float(n_experts))) if n_experts > 0 else 0
+    expected_overflow = np.maximum(total_per_expert - capacity, 0).astype(np.int32)
+    return {
+        "expert_token_count": count_np,
+        "expert_capacity": np.asarray(capacity, dtype=np.int32),
+        "expert_expected_overflow_count": expected_overflow,
+        "expected_dropped_token_count": np.asarray(
+            int(expected_overflow.sum()),
+            dtype=np.int32,
+        ),
+        "drop_signal_mode": "expected_uniform_capacity",
+    }
+
+
 def _synchronize_pending_arrays(records: list[dict[str, Any]]) -> None:
     pending: list[_PendingNumpyArray] = []
     devices: dict[str, Any] = {}
@@ -905,6 +1054,12 @@ class LayerCapturer:
                 n_segments=n_segments,
                 top_k_experts=top_k_experts,
             )
+            routing_counts = _routing_count_summary(
+                choices,
+                token_ids,
+                n_segments=n_segments,
+                n_experts=int(logits.shape[-1]),
+            )
             self._routing_records.append(
                 {
                     "path": ".".join(str(part) for part in path),
@@ -912,6 +1067,7 @@ class LayerCapturer:
                     "expert_choice": _as_numpy(choices).astype(np.int32),
                     "expert_weight": _as_numpy(weights).astype(np.float32),
                     "expert_load": _as_numpy(load).astype(np.float32),
+                    **routing_counts,
                 }
             )
 
@@ -940,6 +1096,12 @@ class LayerCapturer:
             n_segments=n_segments,
             top_k_experts=top_k_experts,
         )
+        routing_counts = _routing_count_summary(
+            choices,
+            token_ids,
+            n_segments=n_segments,
+            n_experts=int(logits.shape[-1]),
+        )
         self._routing_records.append(
             {
                 "path": ".".join(path),
@@ -947,6 +1109,7 @@ class LayerCapturer:
                 "expert_choice": _as_numpy(choices).astype(np.int32),
                 "expert_weight": _as_numpy(weights).astype(np.float32),
                 "expert_load": _as_numpy(load).astype(np.float32),
+                **routing_counts,
             }
         )
 
@@ -1037,7 +1200,7 @@ class LayerCapturer:
             + "\n",
             encoding="utf-8",
         )
-        self._write_attention_npz(iter_dir / "attention.npz", len(segments))
+        self._write_attention_npz(iter_dir / "attention.npz", segments)
         self._write_routing_npz(iter_dir / "routing.npz", len(segments))
         if self._kv_recorder is not None and self._kv_recorder.n_records() > 0:
             # KV eviction npz lives alongside attention.npz / routing.npz so
@@ -1059,7 +1222,8 @@ class LayerCapturer:
         )
         self._session["flushed"] = True
 
-    def _write_attention_npz(self, path: Path, n_segments: int) -> None:
+    def _write_attention_npz(self, path: Path, segments: list[dict[str, Any]]) -> None:
+        n_segments = len(segments)
         records = [*self._prefill_records, *self._decode_records.to_list()]
         _synchronize_pending_arrays(records)
         offsets = [0]
@@ -1067,6 +1231,53 @@ class LayerCapturer:
             offsets.append(offsets[-1] + int(record["segment_mass"].shape[0]))
         n_rows = offsets[-1]
         k = self.config.attention_top_k
+        query_row_offsets = np.asarray(offsets, dtype=np.int64)
+        query_heads = (
+            np.concatenate([r["query_heads"] for r in records])
+            if records
+            else np.zeros((0,), dtype=np.int32)
+        )
+        query_positions = (
+            np.concatenate([r["query_positions"] for r in records])
+            if records
+            else np.zeros((0,), dtype=np.int32)
+        )
+        segment_mass = (
+            np.concatenate(
+                [_materialize_array(r["segment_mass"]) for r in records],
+                axis=0,
+            )
+            if records
+            else np.zeros((0, n_segments), dtype=np.float32)
+        )
+        topk_indices = (
+            np.concatenate(
+                [_materialize_array(r["topk_indices"]) for r in records],
+                axis=0,
+            )
+            if records
+            else np.zeros((0, k), dtype=np.int32)
+        )
+        topk_weights = (
+            np.concatenate(
+                [_materialize_array(r["topk_weights"]) for r in records],
+                axis=0,
+            )
+            if records
+            else np.zeros((0, k), dtype=np.float32)
+        )
+        topk_csr_offsets, topk_csr_indices, topk_csr_weights = _encode_topk_csr(
+            topk_indices,
+            topk_weights,
+        )
+        span_span, span_span_counts = _span_span_matrix(
+            segment_mass=segment_mass,
+            query_positions=query_positions.astype(np.int64, copy=False),
+            query_row_offsets=query_row_offsets,
+            segments=segments,
+            n_segments=n_segments,
+            generated_segment_id=int(self._session["generated_segment_id"]),
+        )
         np.savez_compressed(
             path,
             call_idx=np.asarray(self._session["call_idx"], dtype=np.int32),
@@ -1077,33 +1288,19 @@ class LayerCapturer:
             record_decode_step=np.asarray(
                 [r["decode_step"] for r in records], dtype=np.int32
             ),
-            query_row_offsets=np.asarray(offsets, dtype=np.int64),
-            query_heads=np.concatenate([r["query_heads"] for r in records])
-            if records
-            else np.zeros((0,), dtype=np.int32),
-            query_positions=np.concatenate(
-                [r["query_positions"] for r in records]
-            )
-            if records
-            else np.zeros((0,), dtype=np.int32),
-            segment_mass=np.concatenate(
-                [_materialize_array(r["segment_mass"]) for r in records],
-                axis=0,
-            )
-            if records
-            else np.zeros((0, n_segments), dtype=np.float32),
-            topk_indices=np.concatenate(
-                [_materialize_array(r["topk_indices"]) for r in records],
-                axis=0,
-            )
-            if records
-            else np.zeros((0, k), dtype=np.int32),
-            topk_weights=np.concatenate(
-                [_materialize_array(r["topk_weights"]) for r in records],
-                axis=0,
-            )
-            if records
-            else np.zeros((0, k), dtype=np.float32),
+            query_row_offsets=query_row_offsets,
+            query_heads=query_heads,
+            query_positions=query_positions,
+            segment_mass=segment_mass,
+            span_span_matrix=span_span,
+            span_span_query_counts=span_span_counts,
+            topk_storage=np.asarray("dense_and_csr"),
+            topk_indices=topk_indices,
+            topk_weights=topk_weights,
+            topk_csr_offsets=topk_csr_offsets,
+            topk_csr_indices=topk_csr_indices,
+            topk_csr_weights=topk_csr_weights,
+            topk_csr_width=np.asarray(k, dtype=np.int32),
             heavy_indices=np.stack(
                 [_materialize_array(r["heavy_indices"]) for r in records],
                 axis=0,
@@ -1151,4 +1348,28 @@ class LayerCapturer:
             expert_load=np.stack([r["expert_load"] for r in records], axis=0)
             if records
             else np.zeros((0, n_segments, 0), dtype=np.float32),
+            expert_token_count=np.stack(
+                [r["expert_token_count"] for r in records],
+                axis=0,
+            )
+            if records
+            else np.zeros((0, n_segments, 0), dtype=np.int32),
+            expert_capacity=np.asarray(
+                [int(r["expert_capacity"]) for r in records],
+                dtype=np.int32,
+            ),
+            expert_expected_overflow_count=np.stack(
+                [r["expert_expected_overflow_count"] for r in records],
+                axis=0,
+            )
+            if records
+            else np.zeros((0, 0), dtype=np.int32),
+            expected_dropped_token_count=np.asarray(
+                [int(r["expected_dropped_token_count"]) for r in records],
+                dtype=np.int32,
+            ),
+            drop_signal_mode=np.asarray(
+                [r["drop_signal_mode"] for r in records],
+                dtype="<U32",
+            ),
         )
