@@ -38,6 +38,12 @@ def _append_synthetic(recorder: KVEvictionRecorder, n_layers: int, n_steps: int)
             include_score = (step + layer) % 2 == 0
             score_index = [layer + step, layer + step + 1] if include_score else None
             score_value = [0.9, 0.1] if include_score else None
+            score_evicted_index = evicted[:2] if include_score else None
+            score_evicted_value = (
+                [0.3 + float(layer), 0.2 + float(step)][: len(score_evicted_index)]
+                if score_evicted_index is not None
+                else None
+            )
             recorder.append(
                 step=-1 if step == 0 else step - 1,
                 layer=layer,
@@ -50,6 +56,8 @@ def _append_synthetic(recorder: KVEvictionRecorder, n_layers: int, n_steps: int)
                 evict_reason="prefill_compaction" if step == 0 else "over_budget",
                 score_topk_index=score_index,
                 score_topk_value=score_value,
+                score_evicted_index=score_evicted_index,
+                score_evicted_value=score_evicted_value,
             )
             total += 1
     return total
@@ -82,6 +90,9 @@ def test_recorder_roundtrip(tmp_path) -> None:
             "evict_reason",
             "score_topk_index",
             "score_topk_value",
+            "score_evicted_offsets",
+            "score_evicted_index",
+            "score_evicted_value",
         }
         assert expected_keys.issubset(keys), f"missing keys: {expected_keys - keys}"
 
@@ -107,6 +118,9 @@ def test_recorder_roundtrip(tmp_path) -> None:
         assert data["evicted_indices"].dtype == np.int32
         assert data["score_topk_index"].dtype == np.int32
         assert data["score_topk_value"].dtype == np.float32
+        assert data["score_evicted_offsets"].dtype == np.int64
+        assert data["score_evicted_index"].dtype == np.int32
+        assert data["score_evicted_value"].dtype == np.float32
         assert data["record_phase"].dtype == np.dtype("U7")
         assert data["evict_reason"].dtype == np.dtype("U16")
 
@@ -140,6 +154,12 @@ def test_recorder_roundtrip(tmp_path) -> None:
         assert math.isclose(float(val[present_row, 0]), 0.9, rel_tol=1e-6)
         assert int(idx[absent_row, 0]) == -1
         assert math.isnan(float(val[absent_row, 0]))
+
+        score_offsets = data["score_evicted_offsets"]
+        assert score_offsets.shape == (expected_rows + 1,)
+        assert int(score_offsets[0]) == 0
+        assert int(score_offsets[-1]) == data["score_evicted_index"].shape[0]
+        assert data["score_evicted_index"].shape == data["score_evicted_value"].shape
 
 
 def test_recorder_empty_write_behavior(tmp_path) -> None:

@@ -26,7 +26,13 @@ import torch
 from serving.kv_policies.base import EvictionPolicyConfig
 from serving.kv_policies.h2o import H2OCache
 from serving.recording.attention_bus import AttentionBus
-from serving.recording.backend_hf import HFRecordingProvider, _longest_common_prefix
+from serving.recording.backend_hf import (
+    HFRecordingProvider,
+    _generation_metadata,
+    _generation_seed,
+    _longest_common_prefix,
+)
+from serving.recording.recording import RecordingConfig
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +66,20 @@ class _StubTokenizer:
 class _StubCapturer:
     def __init__(self) -> None:
         self.started: list[Path] = []
+        self.finish_calls: list[Path | None] = []
+        self.closed = False
 
     def start_attempt(self, recordings_dir: Path) -> None:
         self.started.append(recordings_dir)
+
+    def set_attempt_extra_meta(self, meta: dict) -> None:
+        self.extra_meta = dict(meta)
+
+    def finish_attempt(self, trace_path: Path | None = None) -> None:
+        self.finish_calls.append(trace_path)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _build_provider(eviction_config: EvictionPolicyConfig | None) -> HFRecordingProvider:
@@ -77,6 +94,7 @@ def _build_provider(eviction_config: EvictionPolicyConfig | None) -> HFRecording
     provider.model = _StubModel()
     provider.tokenizer = _StubTokenizer()
     provider._torch = torch
+    provider.capturer = _StubCapturer()
     return provider
 
 
@@ -89,6 +107,48 @@ def test_lcp_strict_prefix() -> None:
     a = torch.tensor([10, 20, 30], dtype=torch.long)
     b = torch.tensor([10, 20, 30, 40, 50], dtype=torch.long)
     assert _longest_common_prefix(a, b) == 3
+
+
+def test_generation_seed_is_stable_per_call() -> None:
+    assert _generation_seed(100, 0) == 100
+    assert _generation_seed(100, 7) == 107
+
+
+def test_generation_metadata_records_resolved_sampling_params() -> None:
+    meta = _generation_metadata(
+        seed=123,
+        temperature=0.1,
+        top_p=0.8,
+        top_k=20,
+        repetition_penalty=1.05,
+    )
+
+    assert meta == {
+        "seed": 123,
+        "do_sample": True,
+        "temperature": 0.1,
+        "top_p": 0.8,
+        "top_k": 20,
+        "repetition_penalty": 1.05,
+    }
+
+
+def test_model_summary_records_runtime_versions() -> None:
+    provider = _build_provider(None)
+    provider.default_model = "stub-model"
+    provider.config = RecordingConfig()
+    provider._captures_router_logits = False
+
+    summary = provider._model_summary()
+
+    assert summary["name"] == "stub-model"
+    assert "torch_version" in summary
+    assert "transformers_version" in summary
+    assert "accelerate_version" in summary
+    assert "torch_cuda_version" in summary
+    assert "cuda_available" in summary
+    assert "nvidia_driver_version" in summary
+    assert "hf_model_commit_hash" in summary
 
 
 def test_lcp_divergent() -> None:
@@ -269,6 +329,16 @@ def test_start_attempt_resets_session_cache_between_attempts(tmp_path: Path) -> 
             "diverged": False,
         }
     ]
+
+
+def test_provider_exit_defensively_finishes_attempt() -> None:
+    provider = _build_provider(None)
+    capturer = provider.capturer
+
+    provider.__exit__(None, None, None)
+
+    assert capturer.finish_calls == [None]
+    assert capturer.closed is True
 
 
 def test_message_first_seen_tracks_appends_and_replacements() -> None:

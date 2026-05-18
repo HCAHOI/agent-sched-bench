@@ -35,6 +35,8 @@ class _Row:
     # h2o-only; None on non-h2o policies.
     score_topk_index: list[int] | None = None
     score_topk_value: list[float] | None = None
+    score_evicted_index: list[int] | None = None
+    score_evicted_value: list[float] | None = None
 
 
 @dataclass
@@ -59,12 +61,20 @@ class KVEvictionRecorder:
         evict_reason: str,
         score_topk_index: list[int] | None = None,
         score_topk_value: list[float] | None = None,
+        score_evicted_index: list[int] | None = None,
+        score_evicted_value: list[float] | None = None,
     ) -> None:
         if pre_len - post_len != len(evicted_indices):
             raise ValueError(
                 f"recorder invariant violated: pre_len={pre_len}, "
                 f"post_len={post_len}, evicted={len(evicted_indices)}"
             )
+        if score_evicted_index is not None and score_evicted_value is not None:
+            if len(score_evicted_index) != len(score_evicted_value):
+                raise ValueError(
+                    "score_evicted_index/value length mismatch: "
+                    f"{len(score_evicted_index)} vs {len(score_evicted_value)}"
+                )
         self._rows.append(
             _Row(
                 step=int(step),
@@ -81,6 +91,16 @@ class KVEvictionRecorder:
                 ),
                 score_topk_value=(
                     list(score_topk_value) if score_topk_value is not None else None
+                ),
+                score_evicted_index=(
+                    list(score_evicted_index)
+                    if score_evicted_index is not None
+                    else None
+                ),
+                score_evicted_value=(
+                    list(score_evicted_value)
+                    if score_evicted_value is not None
+                    else None
                 ),
             )
         )
@@ -118,6 +138,15 @@ class KVEvictionRecorder:
         )
 
         score_topk_index, score_topk_value = _build_score_topk(self._rows)
+        (
+            score_evicted_offsets,
+            score_evicted_index,
+            score_evicted_value,
+        ) = _build_score_csr(
+            self._rows,
+            index_attr="score_evicted_index",
+            value_attr="score_evicted_value",
+        )
 
         np.savez_compressed(
             npz_path,
@@ -136,6 +165,9 @@ class KVEvictionRecorder:
             evict_reason=evict_reason,
             score_topk_index=score_topk_index,
             score_topk_value=score_topk_value,
+            score_evicted_offsets=score_evicted_offsets,
+            score_evicted_index=score_evicted_index,
+            score_evicted_value=score_evicted_value,
         )
 
 
@@ -179,3 +211,48 @@ def _build_score_topk(rows: list[_Row]) -> tuple[np.ndarray, np.ndarray]:
                 r.score_topk_value, dtype=np.float32
             )
     return index, value
+
+
+def _build_score_csr(
+    rows: list[_Row],
+    *,
+    index_attr: str,
+    value_attr: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build CSR arrays for variable-width score diagnostics."""
+    offsets = np.zeros(len(rows) + 1, dtype=np.int64)
+    per_row_index: list[list[int]] = []
+    per_row_value: list[list[float]] = []
+    for row in rows:
+        indices = getattr(row, index_attr)
+        values = getattr(row, value_attr)
+        if indices is None:
+            row_indices: list[int] = []
+            row_values: list[float] = []
+        else:
+            row_indices = list(indices)
+            if values is None:
+                row_values = [float("nan")] * len(row_indices)
+            else:
+                row_values = list(values)
+            if len(row_indices) != len(row_values):
+                raise ValueError(
+                    f"{index_attr}/{value_attr} length mismatch: "
+                    f"{len(row_indices)} vs {len(row_values)}"
+                )
+        per_row_index.append(row_indices)
+        per_row_value.append(row_values)
+        offsets[len(per_row_index)] = offsets[len(per_row_index) - 1] + len(row_indices)
+
+    total = int(offsets[-1])
+    flat_index = np.empty(total, dtype=np.int32)
+    flat_value = np.empty(total, dtype=np.float32)
+    cursor = 0
+    for row_indices, row_values in zip(per_row_index, per_row_value, strict=True):
+        if not row_indices:
+            continue
+        n = len(row_indices)
+        flat_index[cursor : cursor + n] = np.asarray(row_indices, dtype=np.int32)
+        flat_value[cursor : cursor + n] = np.asarray(row_values, dtype=np.float32)
+        cursor += n
+    return offsets, flat_index, flat_value

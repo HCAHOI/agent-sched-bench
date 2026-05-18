@@ -121,6 +121,9 @@ _KV_EVICTION_NPZ_KEYS = {
     "evict_reason",
     "score_topk_index",
     "score_topk_value",
+    "score_evicted_offsets",
+    "score_evicted_index",
+    "score_evicted_value",
 }
 
 
@@ -220,8 +223,9 @@ def test_load_kv_eviction_skipped_for_none_policy_recording(tmp_path):
         "no eviction config => no kv_eviction.npz on disk"
     )
 
-    # `_has_recording_files` softening: attention.npz / routing.npz /
-    # segments.json alone must register the iter as valid.
+    # Wave 4 completion contract: attention/routing/segments plus .done must
+    # register the iter as valid even when kv_eviction.npz is absent.
+    assert (iter_dir / ".done").is_file()
     attempts = find_attempt_dirs([attempt_dir])
     assert attempts == [attempt_dir]
     records = load_iteration_records([attempt_dir])
@@ -238,3 +242,6 @@ def test_load_kv_eviction_skipped_for_none_policy_recording(tmp_path):
     assert frame.evicted_indices.shape == (0,)
     assert frame.score_topk_index.shape == (0, 0)
     assert frame.score_topk_value.shape == (0, 0)
+    assert frame.score_evicted_offsets.shape == (1,)
+    assert frame.score_evicted_index.shape == (0,)
+    assert frame.score_evicted_value.shape == (0,)

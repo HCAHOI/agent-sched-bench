@@ -17,6 +17,7 @@ class RecordingConfig:
     model_dtype: str = "bfloat16"
     device_map: str = "auto"
     trust_remote_code: bool = True
+    generation_seed: int = 0
 
 
 def segment_role(message: dict[str, Any]) -> str:
@@ -161,15 +162,22 @@ class DecodeRingBuffer:
         if maxlen <= 0:
             raise ValueError(f"maxlen must be positive, got {maxlen}")
         self._items: deque[dict[str, Any]] = deque(maxlen=maxlen)
+        self._dropped = 0
 
     def append(self, item: dict[str, Any]) -> None:
+        if len(self._items) == self._items.maxlen:
+            self._dropped += 1
         self._items.append(item)
 
     def clear(self) -> None:
         self._items.clear()
+        self._dropped = 0
 
     def to_list(self) -> list[dict[str, Any]]:
         return list(self._items)
+
+    def dropped_count(self) -> int:
+        return int(self._dropped)
 
     def __len__(self) -> int:
         return len(self._items)

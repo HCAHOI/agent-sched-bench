@@ -30,7 +30,12 @@ from kv_eviction_metrics import (  # noqa: E402
     js_divergence,
     load_segments_by_iter_dir,
 )
-from recording_loader import IterationRecord, KVEvictionFrame  # noqa: E402
+from recording_loader import (  # noqa: E402
+    IterationRecord,
+    KVEvictionFrame,
+    _has_recording_files,
+    load_kv_eviction,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +281,44 @@ def _make_record(iter_dir: Path) -> IterationRecord:
     )
 
 
+def test_load_kv_eviction_decodes_evicted_h2o_scores(tmp_path):
+    iter_dir = tmp_path / "attempt_1" / "recordings" / "iter_0000"
+    iter_dir.mkdir(parents=True)
+    np.savez_compressed(
+        iter_dir / "kv_eviction.npz",
+        call_idx=np.asarray(0, dtype=np.int32),
+        policy_name=np.asarray("h2o", dtype="U16"),
+        record_step=np.asarray([-1, 0], dtype=np.int32),
+        record_layer=np.asarray([0, 0], dtype=np.int32),
+        record_phase=np.asarray(["prefill", "decode"], dtype="U7"),
+        pre_len=np.asarray([8, 5], dtype=np.int32),
+        post_len=np.asarray([4, 4], dtype=np.int32),
+        budget=np.asarray([4, 4], dtype=np.int32),
+        kept_offsets=np.asarray([0, 4, 8], dtype=np.int64),
+        kept_indices=np.asarray([0, 3, 6, 7, 0, 2, 3, 4], dtype=np.int32),
+        evicted_offsets=np.asarray([0, 4, 5], dtype=np.int64),
+        evicted_indices=np.asarray([1, 2, 4, 5, 1], dtype=np.int32),
+        evict_reason=np.asarray(["over_budget", "over_budget"], dtype="U16"),
+        score_topk_index=np.asarray([[3, 6], [2, -1]], dtype=np.int32),
+        score_topk_value=np.asarray([[0.9, 0.8], [0.7, np.nan]], dtype=np.float32),
+        score_evicted_offsets=np.asarray([0, 4, 5], dtype=np.int64),
+        score_evicted_index=np.asarray([1, 2, 4, 5, 1], dtype=np.int32),
+        score_evicted_value=np.asarray([0.1, 0.2, 0.3, 0.4, 0.05], dtype=np.float32),
+    )
+
+    frame = load_kv_eviction([_make_record(iter_dir)])
+
+    assert frame.n_rows == 2
+    assert frame.score_evicted_offsets.tolist() == [0, 4, 5]
+    assert frame.score_evicted_index.tolist() == [1, 2, 4, 5, 1]
+    assert frame.score_evicted_per_row[0].tolist() == [1, 2, 4, 5]
+    assert frame.score_evicted_per_row[1].tolist() == [1]
+    np.testing.assert_allclose(
+        frame.score_evicted_value_per_row[0],
+        np.asarray([0.1, 0.2, 0.3, 0.4], dtype=np.float32),
+    )
+
+
 def test_aggregate_heavy_hitters_unions_per_layer(tmp_path):
     iter_a = tmp_path / "attempt_1" / "recordings" / "iter_0000"
     iter_a.mkdir(parents=True)
@@ -418,3 +461,25 @@ def test_load_segments_by_iter_dir(tmp_path):
     out = load_segments_by_iter_dir([record])
     assert str(iter_dir) in out
     assert out[str(iter_dir)]["segments"][0]["role"] == "user"
+
+
+def test_has_recording_files_requires_completion_sentinel(tmp_path):
+    iter_dir = tmp_path / "iter_0000"
+    iter_dir.mkdir(parents=True)
+    (iter_dir / "attention.npz").write_bytes(b"not-used")
+    (iter_dir / "routing.npz").write_bytes(b"not-used")
+    (iter_dir / "segments.json").write_text(
+        json.dumps({"complete": True}),
+        encoding="utf-8",
+    )
+
+    assert not _has_recording_files(iter_dir)
+
+    (iter_dir / ".done").write_text("complete\n", encoding="utf-8")
+    assert _has_recording_files(iter_dir)
+
+    (iter_dir / "segments.json").write_text(
+        json.dumps({"complete": False}),
+        encoding="utf-8",
+    )
+    assert not _has_recording_files(iter_dir)

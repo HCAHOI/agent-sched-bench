@@ -462,6 +462,24 @@ class H2OCache(BaseEvictionCache):
         keep_set.update(range(middle_end, key_len))
         keep = sorted(keep_set)
         evict = sorted(set(range(key_len)) - keep_set)
+        score_evicted_index = [
+            int(idx) for idx in evict if middle_start <= int(idx) < middle_end
+        ]
+        if score_evicted_index:
+            evicted_local_idx = torch.as_tensor(
+                [idx - middle_start for idx in score_evicted_index],
+                dtype=torch.long,
+                device=middle_scores.device,
+            )
+            score_evicted_value = [
+                float(v)
+                for v in middle_scores.index_select(0, evicted_local_idx)
+                .detach()
+                .cpu()
+                .tolist()
+            ]
+        else:
+            score_evicted_value = []
 
         return EvictionDecision(
             keep_indices=keep,
@@ -470,6 +488,8 @@ class H2OCache(BaseEvictionCache):
             policy_state={
                 "score_topk_index": score_topk_index,
                 "score_topk_value": score_topk_value,
+                "score_evicted_index": score_evicted_index,
+                "score_evicted_value": score_evicted_value,
             },
         )
 

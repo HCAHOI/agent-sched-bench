@@ -118,6 +118,8 @@ def test_h2o_evicts_lowest_score() -> None:
     # Score values match the cumulative head-mean we accumulated.
     # Each peak got 10.0 across all heads -> mean = 10.0 (one query row).
     assert all(abs(v - 10.0) < 1e-5 for v in state["score_topk_value"])
+    assert state["score_evicted_index"] == [1, 2, 4, 5, 6, 8]
+    assert all(abs(v) < 1e-5 for v in state["score_evicted_value"])
 
 
 def test_h2o_under_budget_no_eviction() -> None:
@@ -457,6 +459,9 @@ def test_h2o_update_defers_over_budget_prefill_until_observe() -> None:
     assert set(row.kept_indices) == {0, 3, 7, 9}
     assert row.score_topk_index is not None
     assert set(row.score_topk_index) == {3, 7}
+    assert row.score_evicted_index == [1, 2, 4, 5, 6, 8]
+    assert row.score_evicted_value is not None
+    assert all(abs(v) < 1e-5 for v in row.score_evicted_value)
 
 
 def test_h2o_full_prefill_waits_for_final_chunk_before_compacting() -> None:

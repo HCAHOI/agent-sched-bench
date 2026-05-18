@@ -9,7 +9,7 @@ from torch import nn
 
 from serving.recording import RecordingConfig
 from serving.recording.hooks import LayerCapturer
-from serving.recording.recording import segment_bucket
+from serving.recording.recording import DecodeRingBuffer, segment_bucket
 from scripts.recoding_figures.recording_loader import decode_attention_topk
 
 
@@ -61,6 +61,20 @@ class _ToyModel(nn.Module):
         self.model.layers[0].mlp.gate = nn.Linear(8, 3, bias=False)
 
 
+def test_decode_ring_buffer_counts_dropped_records() -> None:
+    buffer = DecodeRingBuffer(maxlen=2)
+
+    buffer.append({"idx": 0})
+    buffer.append({"idx": 1})
+    buffer.append({"idx": 2})
+
+    assert buffer.dropped_count() == 1
+    assert [item["idx"] for item in buffer.to_list()] == [1, 2]
+    buffer.clear()
+    assert buffer.dropped_count() == 0
+    assert buffer.to_list() == []
+
+
 def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     model = _ToyModel()
     capturer = LayerCapturer(
@@ -99,6 +113,14 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
         call_idx=0,
         segments=segments,
         input_token_count=4,
+        generation={
+            "seed": 123,
+            "do_sample": True,
+            "temperature": 0.1,
+            "top_p": None,
+            "top_k": None,
+            "repetition_penalty": None,
+        },
     ):
         attn = model.model.layers[0].self_attn
         cos4 = torch.ones(1, 4, 4, dtype=torch.float32)
@@ -155,9 +177,11 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     assert (call_dir / "attention.npz").exists()
     assert (call_dir / "routing.npz").exists()
     assert (call_dir / "segments.json").exists()
+    assert (call_dir / ".done").exists()
 
     segments_payload = json.loads((call_dir / "segments.json").read_text())
     assert segments_payload["call_idx"] == 0
+    assert segments_payload["complete"] is True
     assert segments_payload["total_tokens"] == 5
     assert len(segments_payload["token_segment_id"]) == 5
     assert segments_payload["segments"][-1]["role"] == "generation"
@@ -198,6 +222,8 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
         assert int(routing["n_experts"]) == 3
         assert routing["expert_choice"].shape == (5, 2)
         assert routing["expert_load"].shape == (1, 3, 3)
+        assert routing["record_phase"].tolist() == ["mixed"]
+        assert routing["record_decode_step"].tolist() == [-1]
         assert routing["expert_token_count"].shape == (1, 3, 3)
         assert int(routing["expert_token_count"].sum()) == 10
         assert routing["expert_token_count_unit"].tolist() == ["topk_assignments"]
@@ -210,6 +236,20 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     meta = json.loads((recordings_dir / "meta.json").read_text())
     assert meta["iters"][0]["call_idx"] == 0
     assert meta["iters"][0]["attention_records"] == 2
+    assert meta["iters"][0]["decode_records_dropped_count"] == 0
+    assert meta["iters"][0]["recording_integrity"] == {
+        "complete": True,
+        "done_sentinel": True,
+        "decode_records_dropped_count": 0,
+    }
+    assert meta["iters"][0]["generation"] == {
+        "seed": 123,
+        "do_sample": True,
+        "temperature": 0.1,
+        "top_p": None,
+        "top_k": None,
+        "repetition_penalty": None,
+    }
     assert meta["session_history"][0]["call_idx"] == 0
 
 
@@ -279,6 +319,8 @@ def test_layer_capturer_records_router_gate_hook_without_second_forward(tmp_path
     with np.load(recordings_dir / "iter_0000" / "routing.npz") as routing:
         assert routing["record_path"].tolist() == ["gate", "gate"]
         assert routing["record_layer"].tolist() == [0, 0]
+        assert routing["record_phase"].tolist() == ["prefill", "decode"]
+        assert routing["record_decode_step"].tolist() == [-1, 0]
         assert routing["expert_choice"].shape == (5, 2)
         assert routing["expert_load"].shape == (2, 2, 3)
         assert routing["expert_token_count"].shape == (2, 2, 3)
@@ -294,6 +336,135 @@ def test_layer_capturer_records_router_gate_hook_without_second_forward(tmp_path
 
     meta = json.loads((recordings_dir / "meta.json").read_text())
     assert meta["model"]["router_capture_mode"] == "gate_forward_hook"
+
+
+def test_layer_capturer_maps_cached_prefill_gate_rows_to_input_suffix(tmp_path) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(attention_top_k=2, decode_window=2),
+        model_summary={
+            "name": "toy",
+            "num_experts_per_tok": 2,
+        },
+    )
+    recordings_dir = tmp_path / "recordings"
+    capturer.start_attempt(recordings_dir)
+    segments = [
+        {
+            "role": "system",
+            "message_index": 0,
+            "token_start": 0,
+            "token_end": 2,
+            "has_content": True,
+            "has_tool_calls": False,
+        },
+        {
+            "role": "tool_result",
+            "message_index": 1,
+            "token_start": 2,
+            "token_end": 4,
+            "has_content": True,
+            "has_tool_calls": False,
+        },
+        {
+            "role": "user",
+            "message_index": 2,
+            "token_start": 4,
+            "token_end": 6,
+            "has_content": True,
+            "has_tool_calls": False,
+        },
+    ]
+
+    with capturer.recording_session(
+        call_idx=0,
+        segments=segments,
+        input_token_count=6,
+    ):
+        model.model.layers[0].self_attn(
+            torch.zeros(1, 1, 8),
+            position_embeddings=(
+                torch.ones(1, 1, 4, dtype=torch.float32),
+                torch.zeros(1, 1, 4, dtype=torch.float32),
+            ),
+            past_key_values=_FakeCache(torch.zeros(1, 1, 6, 4)),
+        )
+        model.model.layers[0].mlp.gate(torch.zeros(1, 1, 8))
+        capturer.flush(output_token_ids=[42])
+    capturer.finish_attempt()
+
+    with np.load(recordings_dir / "iter_0000" / "routing.npz") as routing:
+        assert routing["record_phase"].tolist() == ["prefill"]
+        assert routing["record_decode_step"].tolist() == [-1]
+        assert routing["expert_token_count"][0].sum(axis=1).tolist() == [0, 0, 2, 0]
+
+
+def test_record_router_logits_maps_single_cached_prefill_row_to_input_suffix(
+    tmp_path,
+) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(attention_top_k=2, decode_window=2),
+        model_summary={
+            "name": "toy",
+            "num_experts_per_tok": 2,
+        },
+    )
+    recordings_dir = tmp_path / "recordings"
+    capturer.start_attempt(recordings_dir)
+    segments = [
+        {
+            "role": "system",
+            "message_index": 0,
+            "token_start": 0,
+            "token_end": 2,
+            "has_content": True,
+            "has_tool_calls": False,
+        },
+        {
+            "role": "tool_result",
+            "message_index": 1,
+            "token_start": 2,
+            "token_end": 4,
+            "has_content": True,
+            "has_tool_calls": False,
+        },
+        {
+            "role": "user",
+            "message_index": 2,
+            "token_start": 4,
+            "token_end": 6,
+            "has_content": True,
+            "has_tool_calls": False,
+        },
+    ]
+
+    with capturer.recording_session(
+        call_idx=0,
+        segments=segments,
+        input_token_count=6,
+    ):
+        model.model.layers[0].self_attn(
+            torch.zeros(1, 1, 8),
+            position_embeddings=(
+                torch.ones(1, 1, 4, dtype=torch.float32),
+                torch.zeros(1, 1, 4, dtype=torch.float32),
+            ),
+            past_key_values=_FakeCache(torch.zeros(1, 1, 6, 4)),
+        )
+        capturer.record_router_logits(
+            SimpleNamespace(router_logits=((torch.zeros(1, 3),),)),
+            total_tokens=7,
+        )
+        capturer.flush(output_token_ids=[42])
+    capturer.finish_attempt()
+
+    with np.load(recordings_dir / "iter_0000" / "routing.npz") as routing:
+        assert routing["record_phase"].tolist() == ["prefill"]
+        assert routing["record_decode_step"].tolist() == [-1]
+        assert routing["expert_token_count"][0].sum(axis=1).tolist() == [0, 0, 2, 0]
 
 
 def test_layer_capturer_clears_records_after_failed_session(tmp_path) -> None:

@@ -108,7 +108,12 @@ def test_tokenize_chat_with_segments_records_first_seen_call() -> None:
         tokenizer,
         [
             {"role": "user", "content": "Find x."},
-            {"role": "tool", "content": "x=1"},
+            {
+                "role": "tool",
+                "content": "x=1",
+                "tool_call_id": "call_1",
+                "name": "search",
+            },
         ],
         first_seen_call_by_message_index={0: 0, 1: 3},
         default_first_seen_call=4,
@@ -120,6 +125,9 @@ def test_tokenize_chat_with_segments_records_first_seen_call() -> None:
         False,
         False,
     ]
+    assert segments[1]["role"] == "tool_result"
+    assert segments[1]["tool_call_id"] == "call_1"
+    assert segments[1]["name"] == "search"
 
 
 def test_hf_recording_provider_rejects_forced_tool_choice_before_generation() -> None:

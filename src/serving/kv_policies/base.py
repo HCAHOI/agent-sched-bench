@@ -180,6 +180,8 @@ class BaseEvictionCache(DynamicCache):
             evict_reason=decision.reason,
             score_topk_index=policy_state.get("score_topk_index"),
             score_topk_value=policy_state.get("score_topk_value"),
+            score_evicted_index=policy_state.get("score_evicted_index"),
+            score_evicted_value=policy_state.get("score_evicted_value"),
         )
 
     def _post_evict_hook(self, layer_idx: int, decision: EvictionDecision) -> None:

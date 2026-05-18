@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -462,6 +463,8 @@ class LayerCapturer:
         self._prefill_records: list[dict[str, Any]] = []
         self._decode_records = DecodeRingBuffer(config.decode_window)
         self._routing_records: list[dict[str, Any]] = []
+        self._routing_seen_prefill: set[int] = set()
+        self._routing_decode_steps: dict[int, int] = {}
         self._meta: dict[str, Any] = {}
         self._attention_suspended = 0
         # KV eviction recorder is per-call; lifecycle is owned by the caller
@@ -598,6 +601,7 @@ class LayerCapturer:
         call_idx: int,
         segments: list[dict[str, Any]],
         input_token_count: int,
+        generation: dict[str, Any] | None = None,
     ) -> Iterator[None]:
         if self._attempt_dir is None:
             raise RuntimeError("start_attempt() must be called before recording")
@@ -605,7 +609,6 @@ class LayerCapturer:
             raise RuntimeError("nested recording sessions are not supported")
 
         iter_dir = self._attempt_dir / f"iter_{call_idx:04d}"
-        iter_dir.mkdir(parents=True, exist_ok=True)
         session_segments = []
         for segment in segments:
             payload = dict(segment)
@@ -622,17 +625,22 @@ class LayerCapturer:
             "input_token_count": input_token_count,
             "started_at": time.time(),
             "generated_segment_id": len(segments),
+            "generation": dict(generation) if generation is not None else None,
             "flushed": False,
         }
         self._prefill_records = []
         self._decode_records.clear()
         self._routing_records = []
+        self._routing_seen_prefill.clear()
+        self._routing_decode_steps.clear()
         try:
             yield
         except BaseException:
             self._prefill_records = []
             self._decode_records.clear()
             self._routing_records = []
+            self._routing_seen_prefill.clear()
+            self._routing_decode_steps.clear()
             self._session = None
             raise
         finally:
@@ -1037,6 +1045,41 @@ class LayerCapturer:
         )
         return scores.masked_fill(blocked, torch.finfo(scores.dtype).min)
 
+    def _advance_routing_step(self, layer: int, *, n_tokens: int) -> tuple[str, int]:
+        if layer < 0:
+            return "mixed", -1
+        if n_tokens > 1 or layer not in self._routing_seen_prefill:
+            self._routing_seen_prefill.add(layer)
+            self._routing_decode_steps[layer] = 0
+            return "prefill", -1
+        step = self._routing_decode_steps.get(layer, 0)
+        self._routing_decode_steps[layer] = step + 1
+        return "decode", step
+
+    def _advance_routing_decode_step(self, layer: int) -> tuple[str, int]:
+        if layer < 0:
+            return "mixed", -1
+        step = self._routing_decode_steps.get(layer, 0)
+        self._routing_seen_prefill.add(layer)
+        self._routing_decode_steps[layer] = step + 1
+        return "decode", step
+
+    def _routing_phase_for_logits(
+        self,
+        *,
+        layer: int,
+        n_tokens: int,
+        total_tokens: int,
+        nested_path: tuple[int, ...],
+    ) -> tuple[str, int]:
+        assert self._session is not None
+        input_tokens = int(self._session["input_token_count"])
+        if n_tokens == int(total_tokens):
+            return "mixed", -1
+        if n_tokens <= input_tokens:
+            return self._advance_routing_step(layer, n_tokens=n_tokens)
+        return "mixed", -1
+
     def record_router_logits(self, outputs: Any, *, total_tokens: int) -> None:
         router_logits = getattr(outputs, "router_logits", None)
         if router_logits is None and isinstance(outputs, dict):
@@ -1054,10 +1097,18 @@ class LayerCapturer:
             if tensor.ndim < 2:
                 continue
             logits = tensor.reshape(-1, tensor.shape[-1])
+            layer = int(path[-1]) if path else -1
+            phase, decode_step = self._routing_phase_for_logits(
+                layer=layer,
+                n_tokens=int(logits.shape[0]),
+                total_tokens=total_tokens,
+                nested_path=path,
+            )
             token_ids = self._routing_token_ids(
                 n_tokens=int(logits.shape[0]),
                 total_tokens=total_tokens,
                 nested_path=path,
+                phase=phase,
             ).to(device=logits.device)
             choices, weights, load = expert_load_per_segment(
                 logits,
@@ -1074,7 +1125,9 @@ class LayerCapturer:
             self._routing_records.append(
                 {
                     "path": ".".join(str(part) for part in path),
-                    "layer": int(path[-1]) if path else -1,
+                    "layer": layer,
+                    "phase": phase,
+                    "decode_step": decode_step,
                     "expert_choice": _as_numpy(choices).astype(np.int32),
                     "expert_weight": _as_numpy(weights).astype(np.float32),
                     "expert_load": _as_numpy(load).astype(np.float32),
@@ -1098,7 +1151,14 @@ class LayerCapturer:
             or 1
         )
         logits = tensor.reshape(-1, tensor.shape[-1])
-        token_ids = self._gate_token_ids(n_tokens=int(logits.shape[0])).to(
+        phase, decode_step = self._advance_routing_step(
+            layer=layer,
+            n_tokens=int(logits.shape[0]),
+        )
+        token_ids = self._gate_token_ids(
+            n_tokens=int(logits.shape[0]),
+            phase=phase,
+        ).to(
             device=logits.device
         )
         choices, weights, load = expert_load_per_segment(
@@ -1117,6 +1177,8 @@ class LayerCapturer:
             {
                 "path": ".".join(path),
                 "layer": layer,
+                "phase": phase,
+                "decode_step": decode_step,
                 "expert_choice": _as_numpy(choices).astype(np.int32),
                 "expert_weight": _as_numpy(weights).astype(np.float32),
                 "expert_load": _as_numpy(load).astype(np.float32),
@@ -1124,15 +1186,22 @@ class LayerCapturer:
             }
         )
 
-    def _gate_token_ids(self, *, n_tokens: int):
+    def _current_input_token_ids(self, *, n_tokens: int):
         assert self._session is not None
         input_tokens = int(self._session["input_token_count"])
-        if n_tokens == input_tokens:
-            return token_segment_ids(
-                input_tokens,
-                self._session["segments"],
-                generated_segment_id=None,
+        if n_tokens < 0 or n_tokens > input_tokens:
+            raise ValueError(
+                f"cannot map {n_tokens} routing rows onto {input_tokens} input tokens"
             )
+        token_ids = token_segment_ids(
+            input_tokens,
+            self._session["segments"],
+            generated_segment_id=None,
+        )
+        return token_ids[input_tokens - n_tokens : input_tokens]
+
+    def _generated_token_ids(self, *, n_tokens: int):
+        assert self._session is not None
 
         import torch
 
@@ -1142,8 +1211,26 @@ class LayerCapturer:
             dtype=torch.long,
         )
 
-    def _routing_token_ids(self, *, n_tokens: int, total_tokens: int, nested_path: tuple[int, ...]):
+    def _gate_token_ids(self, *, n_tokens: int, phase: str):
+        if phase == "prefill":
+            return self._current_input_token_ids(n_tokens=n_tokens)
+        if phase == "decode":
+            return self._generated_token_ids(n_tokens=n_tokens)
+        return self._generated_token_ids(n_tokens=n_tokens)
+
+    def _routing_token_ids(
+        self,
+        *,
+        n_tokens: int,
+        total_tokens: int,
+        nested_path: tuple[int, ...],
+        phase: str,
+    ):
         assert self._session is not None
+        if phase == "prefill":
+            return self._current_input_token_ids(n_tokens=n_tokens)
+        if phase == "decode":
+            return self._generated_token_ids(n_tokens=n_tokens)
         if n_tokens == total_tokens:
             return token_segment_ids(
                 total_tokens,
@@ -1151,11 +1238,7 @@ class LayerCapturer:
                 generated_segment_id=self._session["generated_segment_id"],
             )
         if len(nested_path) >= 2 and n_tokens <= 1:
-            import torch
-
-            return torch.full(
-                (n_tokens,), self._session["generated_segment_id"], dtype=torch.long
-            )
+            return self._generated_token_ids(n_tokens=n_tokens)
         return self._token_ids_for_key_len(n_tokens)
 
     def _iter_tensors(self, value: Any, path: tuple[int, ...] = ()):
@@ -1193,44 +1276,70 @@ class LayerCapturer:
             segments,
             generated_segment_id=self._session["generated_segment_id"],
         ).tolist()
+        decode_records_dropped = self._decode_records.dropped_count()
 
         iter_dir: Path = self._session["iter_dir"]
-        (iter_dir / "segments.json").write_text(
-            json.dumps(
-                {
-                    "call_idx": self._session["call_idx"],
-                    "input_tokens": input_tokens,
-                    "output_tokens": len(output_token_ids),
-                    "total_tokens": total_tokens,
-                    "segments": segments,
-                    "token_segment_id": token_ids,
-                },
-                ensure_ascii=False,
-                indent=2,
+        tmp_dir = iter_dir.with_name(f".{iter_dir.name}.tmp-{time.time_ns()}")
+        tmp_dir.mkdir(parents=True)
+        try:
+            (tmp_dir / "segments.json").write_text(
+                json.dumps(
+                    {
+                        "call_idx": self._session["call_idx"],
+                        "input_tokens": input_tokens,
+                        "output_tokens": len(output_token_ids),
+                        "total_tokens": total_tokens,
+                        "complete": True,
+                        "segments": segments,
+                        "token_segment_id": token_ids,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
             )
-            + "\n",
-            encoding="utf-8",
-        )
-        self._write_attention_npz(iter_dir / "attention.npz", segments)
-        self._write_routing_npz(iter_dir / "routing.npz", len(segments))
-        if self._kv_recorder is not None and self._kv_recorder.n_records() > 0:
-            # KV eviction npz lives alongside attention.npz / routing.npz so
-            # downstream loaders can join on (call_idx, layer, decode_step).
-            self._kv_recorder.write(iter_dir / "kv_eviction.npz")
-        self._meta["iters"].append(
-            {
-                "call_idx": self._session["call_idx"],
-                "dir": iter_dir.name,
-                "input_tokens": input_tokens,
-                "output_tokens": len(output_token_ids),
-                "total_tokens": total_tokens,
-                "n_segments": len(segments),
-                "attention_records": len(self._prefill_records)
-                + len(self._decode_records),
-                "routing_records": len(self._routing_records),
-                "elapsed_s": time.time() - float(self._session["started_at"]),
-            }
-        )
+            self._write_attention_npz(tmp_dir / "attention.npz", segments)
+            self._write_routing_npz(tmp_dir / "routing.npz", len(segments))
+            if self._kv_recorder is not None and self._kv_recorder.n_records() > 0:
+                # KV eviction npz lives alongside attention.npz / routing.npz so
+                # downstream loaders can join on (call_idx, layer, decode_step).
+                self._kv_recorder.write(tmp_dir / "kv_eviction.npz")
+            (tmp_dir / ".done").write_text("complete\n", encoding="utf-8")
+
+            if iter_dir.exists():
+                if (iter_dir / ".done").exists():
+                    raise FileExistsError(
+                        f"complete iter directory already exists: {iter_dir}"
+                    )
+                shutil.rmtree(iter_dir)
+            tmp_dir.replace(iter_dir)
+        except BaseException:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+
+        iter_meta = {
+            "call_idx": self._session["call_idx"],
+            "dir": iter_dir.name,
+            "input_tokens": input_tokens,
+            "output_tokens": len(output_token_ids),
+            "total_tokens": total_tokens,
+            "n_segments": len(segments),
+            "attention_records": len(self._prefill_records)
+            + len(self._decode_records),
+            "routing_records": len(self._routing_records),
+            "decode_records_dropped_count": decode_records_dropped,
+            "recording_integrity": {
+                "complete": True,
+                "done_sentinel": True,
+                "decode_records_dropped_count": decode_records_dropped,
+            },
+            "elapsed_s": time.time() - float(self._session["started_at"]),
+        }
+        generation = self._session.get("generation")
+        if generation is not None:
+            iter_meta["generation"] = dict(generation)
+        self._meta["iters"].append(iter_meta)
         self._session["flushed"] = True
 
     def _write_attention_npz(self, path: Path, segments: list[dict[str, Any]]) -> None:
@@ -1351,6 +1460,11 @@ class LayerCapturer:
             n_experts=np.asarray(n_experts, dtype=np.int32),
             top_k_experts=np.asarray(top_k, dtype=np.int32),
             record_layer=np.asarray([r["layer"] for r in records], dtype=np.int32),
+            record_phase=np.asarray([r["phase"] for r in records], dtype="U7"),
+            record_decode_step=np.asarray(
+                [r["decode_step"] for r in records],
+                dtype=np.int32,
+            ),
             record_path=np.asarray([r["path"] for r in records]),
             token_row_offsets=np.asarray(token_offsets, dtype=np.int64),
             expert_choice=np.concatenate(

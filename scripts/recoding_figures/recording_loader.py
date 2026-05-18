@@ -126,6 +126,18 @@ class KVEvictionFrame:
     score_topk_value: np.ndarray = field(  # (R, k) float32
         default_factory=lambda: np.empty((0, 0), dtype=np.float32)
     )
+    # H2O diagnostic scores for every evicted middle-token assignment.
+    score_evicted_offsets: np.ndarray = field(
+        default_factory=lambda: np.zeros(1, dtype=np.int64)
+    )
+    score_evicted_index: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int32)
+    )
+    score_evicted_value: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.float32)
+    )
+    score_evicted_per_row: list[np.ndarray] = field(default_factory=list)
+    score_evicted_value_per_row: list[np.ndarray] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -805,6 +817,9 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
         "evicted_offsets_per_call": [],
         "score_index_per_call": [],
         "score_value_per_call": [],
+        "score_evicted_offsets_per_call": [],
+        "score_evicted_index_per_call": [],
+        "score_evicted_value_per_call": [],
     }
 
     for record in records:
@@ -848,6 +863,15 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
             columns["score_value_per_call"].append(
                 data["score_topk_value"].astype(np.float32)
             )
+            columns["score_evicted_offsets_per_call"].append(
+                data["score_evicted_offsets"].astype(np.int64)
+            )
+            columns["score_evicted_index_per_call"].append(
+                data["score_evicted_index"].astype(np.int32)
+            )
+            columns["score_evicted_value_per_call"].append(
+                data["score_evicted_value"].astype(np.float32)
+            )
 
     if not columns["record_step"]:
         return KVEvictionFrame(
@@ -871,6 +895,11 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
             evicted_per_row=[],
             score_topk_index=np.empty((0, 0), dtype=np.int32),
             score_topk_value=np.empty((0, 0), dtype=np.float32),
+            score_evicted_offsets=np.zeros(1, dtype=np.int64),
+            score_evicted_index=np.empty(0, dtype=np.int32),
+            score_evicted_value=np.empty(0, dtype=np.float32),
+            score_evicted_per_row=[],
+            score_evicted_value_per_row=[],
         )
 
     # Per-call CSR offsets concatenated end-to-end need their `[1:]` slice
@@ -883,6 +912,11 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
     kept_flat: list[np.ndarray] = []
     evicted_offsets_global: list[int] = [0]
     evicted_flat: list[np.ndarray] = []
+    score_evicted_per_row: list[np.ndarray] = []
+    score_evicted_value_per_row: list[np.ndarray] = []
+    score_evicted_offsets_global: list[int] = [0]
+    score_evicted_index_flat: list[np.ndarray] = []
+    score_evicted_value_flat: list[np.ndarray] = []
 
     for k_off, k_idx, e_off, e_idx in zip(
         columns["kept_offsets_per_call"],
@@ -903,6 +937,24 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
         for r in range(n):
             evicted_offsets_global.append(base_e + int(e_off[r + 1]))
         evicted_flat.append(e_idx)
+
+    for s_off, s_idx, s_val in zip(
+        columns["score_evicted_offsets_per_call"],
+        columns["score_evicted_index_per_call"],
+        columns["score_evicted_value_per_call"],
+        strict=True,
+    ):
+        n = int(s_off.shape[0]) - 1
+        for r in range(n):
+            start = int(s_off[r])
+            end = int(s_off[r + 1])
+            score_evicted_per_row.append(s_idx[start:end].copy())
+            score_evicted_value_per_row.append(s_val[start:end].copy())
+        base = score_evicted_offsets_global[-1]
+        for r in range(n):
+            score_evicted_offsets_global.append(base + int(s_off[r + 1]))
+        score_evicted_index_flat.append(s_idx)
+        score_evicted_value_flat.append(s_val)
 
     score_widths = [arr.shape[1] for arr in columns["score_index_per_call"]]
     max_k = max(score_widths) if score_widths else 0
@@ -956,6 +1008,19 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
             if score_value_blocks
             else np.empty((0, max_k), dtype=np.float32)
         ),
+        score_evicted_offsets=np.asarray(score_evicted_offsets_global, dtype=np.int64),
+        score_evicted_index=(
+            np.concatenate(score_evicted_index_flat)
+            if score_evicted_index_flat
+            else np.empty(0, dtype=np.int32)
+        ),
+        score_evicted_value=(
+            np.concatenate(score_evicted_value_flat)
+            if score_evicted_value_flat
+            else np.empty(0, dtype=np.float32)
+        ),
+        score_evicted_per_row=score_evicted_per_row,
+        score_evicted_value_per_row=score_evicted_value_per_row,
     )
 
 
@@ -1029,14 +1094,22 @@ def _task_name(attempt_dir: Path) -> str:
 
 def _has_recording_files(iter_dir: Path) -> bool:
     # `kv_eviction.npz` is intentionally NOT required: it is only emitted when
-    # an eviction policy is configured (`--kv-policy {streaming,h2o,random}`),
-    # and old recordings predate the artifact entirely. `load_kv_eviction()`
-    # returns an empty frame on iter dirs without it.
-    return (
-        (iter_dir / "attention.npz").is_file()
+    # an eviction policy is configured (`--kv-policy {streaming,h2o,random}`).
+    # Wave 4 requires both a completion sentinel and a complete segments payload;
+    # incomplete or pre-sentinel iter dirs are skipped.
+    segments_path = iter_dir / "segments.json"
+    if not (
+        (iter_dir / ".done").is_file()
+        and (iter_dir / "attention.npz").is_file()
         and (iter_dir / "routing.npz").is_file()
-        and (iter_dir / "segments.json").is_file()
-    )
+        and segments_path.is_file()
+    ):
+        return False
+    try:
+        payload = json.loads(segments_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(payload.get("complete"))
 
 
 def _call_idx_from_iter_dir(iter_dir: Path) -> int:

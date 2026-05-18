@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import importlib.metadata
 import json
 import logging
 import os
 import secrets
 import string
+import subprocess
 import sys
 import threading
 import time
@@ -41,6 +43,7 @@ _ALLOWED_MSG_KEYS = frozenset(
 )
 _OPENCLAW_MESSAGE_ID_KEY = "_openclaw_message_id"
 _ALNUM = string.ascii_letters + string.digits
+_MAX_TORCH_SEED = (2**63) - 1
 
 
 def _short_tool_id() -> str:
@@ -56,6 +59,19 @@ def _message_has_content(message: dict[str, Any]) -> bool:
     if isinstance(content, list):
         return bool(content)
     return True
+
+
+def _message_segment_metadata(message: dict[str, Any]) -> dict[str, Any]:
+    """Metadata retained on token segments for downstream provenance joins."""
+    payload: dict[str, Any] = {
+        "has_content": _message_has_content(message),
+        "has_tool_calls": bool(message.get("tool_calls")),
+    }
+    for key in ("tool_call_id", "name"):
+        value = message.get(key)
+        if value is not None:
+            payload[key] = str(value)
+    return payload
 
 
 def _token_count(encoded: Any) -> int:
@@ -264,8 +280,7 @@ def tokenize_chat_with_segments(
                     "message_index": idx,
                     "char_start": previous_end,
                     "char_end": previous_end,  # end filled by next aligned prefix
-                    "has_content": _message_has_content(message),
-                    "has_tool_calls": bool(message.get("tool_calls")),
+                    **_message_segment_metadata(message),
                     "_pending": True,
                 }
             )
@@ -289,8 +304,7 @@ def tokenize_chat_with_segments(
                     "message_index": idx,
                     "char_start": previous_end,
                     "char_end": end,
-                    "has_content": _message_has_content(message),
-                    "has_tool_calls": bool(message.get("tool_calls")),
+                    **_message_segment_metadata(message),
                 }
             )
         previous_end = end
@@ -489,6 +503,62 @@ def _positive_int_env(name: str) -> int | None:
     return value
 
 
+def _package_version(name: str) -> str | None:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _nvidia_driver_version() -> str | None:
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=driver_version",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        value = line.strip()
+        if value:
+            return value
+    return None
+
+
+def _generation_seed(base_seed: int, call_idx: int) -> int:
+    seed = int(base_seed) + int(call_idx)
+    return seed % _MAX_TORCH_SEED
+
+
+def _generation_metadata(
+    *,
+    seed: int,
+    temperature: float,
+    top_p: float | None,
+    top_k: int | None,
+    repetition_penalty: float | None,
+) -> dict[str, Any]:
+    return {
+        "seed": int(seed),
+        "do_sample": bool(float(temperature) > 0),
+        "temperature": float(temperature),
+        "top_p": None if top_p is None else float(top_p),
+        "top_k": None if top_k is None else int(top_k),
+        "repetition_penalty": (
+            None if repetition_penalty is None else float(repetition_penalty)
+        ),
+    }
+
+
 def _longest_common_prefix(a: Any, b: Any) -> int:
     """Length of the longest matching prefix between two 1-D token id tensors."""
     n = int(min(a.shape[0], b.shape[0]))
@@ -650,6 +720,7 @@ class HFRecordingProvider(LLMProvider):
 
     def _model_summary(self) -> dict[str, Any]:
         cfg = self.model.config
+        torch = self._torch
         return {
             "name": self.default_model,
             "architectures": list(getattr(cfg, "architectures", []) or []),
@@ -663,6 +734,15 @@ class HFRecordingProvider(LLMProvider):
             or getattr(cfg, "num_experts_per_token", None),
             "record_router_logits": self._captures_router_logits,
             "recording_config": asdict(self.config),
+            "hf_model_commit_hash": getattr(cfg, "_commit_hash", None),
+            "torch_version": getattr(torch, "__version__", None),
+            "transformers_version": _package_version("transformers"),
+            "accelerate_version": _package_version("accelerate"),
+            "torch_cuda_version": getattr(getattr(torch, "version", None), "cuda", None),
+            "cuda_available": bool(torch.cuda.is_available()),
+            "nvidia_driver_version": _nvidia_driver_version()
+            if torch.cuda.is_available()
+            else None,
         }
 
     def _model_has_router_logits(self) -> bool:
@@ -873,6 +953,10 @@ class HFRecordingProvider(LLMProvider):
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         del exc_type, exc, tb
+        try:
+            self.finish_attempt()
+        except Exception:
+            _LOG.exception("defensive finish_attempt() failed during provider exit")
         self.close()
         self._session_token_ids = None
         self._session_cache = None
@@ -987,10 +1071,21 @@ class HFRecordingProvider(LLMProvider):
 
         def run_generate() -> tuple[str, list[int]]:
             input_tensor = delta_ids.to(self._input_device())
+            seed = _generation_seed(self.config.generation_seed, call_idx)
+            self._torch.manual_seed(seed)
+            if self._torch.cuda.is_available():
+                self._torch.cuda.manual_seed_all(seed)
+            generation_meta = _generation_metadata(
+                seed=seed,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+            )
             generation_kwargs: dict[str, Any] = {
                 "input_ids": input_tensor,
                 "max_new_tokens": max(1, int(max_tokens)),
-                "do_sample": temperature > 0,
+                "do_sample": bool(generation_meta["do_sample"]),
                 "return_dict_in_generate": False,
                 "pad_token_id": self.tokenizer.eos_token_id,
             }
@@ -1058,6 +1153,7 @@ class HFRecordingProvider(LLMProvider):
                     call_idx=call_idx,
                     segments=segments,
                     input_token_count=input_token_count,
+                    generation=generation_meta,
                 ),
                 prefill_ctx,
             ):
@@ -1141,6 +1237,9 @@ class HFRecordingServer:
                 try:
                     length = int(self.headers.get("content-length", "0"))
                     payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    extra_body = payload.get("extra_body")
+                    if not isinstance(extra_body, dict):
+                        extra_body = {}
                     response = asyncio.run(
                         provider.chat(
                             messages=payload.get("messages") or [],
@@ -1149,9 +1248,14 @@ class HFRecordingServer:
                             max_tokens=int(payload.get("max_tokens") or 4096),
                             temperature=float(payload.get("temperature") or 0.0),
                             top_p=_optional_float(payload.get("top_p")),
-                            top_k=_optional_int(payload.get("top_k")),
+                            top_k=_optional_int(
+                                payload.get("top_k", extra_body.get("top_k"))
+                            ),
                             repetition_penalty=_optional_float(
-                                payload.get("repetition_penalty")
+                                payload.get(
+                                    "repetition_penalty",
+                                    extra_body.get("repetition_penalty"),
+                                )
                             ),
                             reasoning_effort=payload.get("reasoning_effort"),
                             tool_choice=payload.get("tool_choice"),
