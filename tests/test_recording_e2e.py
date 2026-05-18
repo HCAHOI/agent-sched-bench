@@ -261,6 +261,49 @@ def test_layer_capturer_records_router_gate_hook_without_second_forward(tmp_path
     assert meta["model"]["router_capture_mode"] == "gate_forward_hook"
 
 
+def test_layer_capturer_clears_records_after_failed_session(tmp_path) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(attention_top_k=2, decode_window=2),
+        model_summary={"name": "toy"},
+    )
+    capturer.start_attempt(tmp_path / "recordings")
+    segments = [
+        {
+            "role": "user",
+            "message_index": 0,
+            "token_start": 0,
+            "token_end": 4,
+            "has_content": True,
+            "has_tool_calls": False,
+        }
+    ]
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with capturer.recording_session(
+            call_idx=0,
+            segments=segments,
+            input_token_count=4,
+        ):
+            model.model.layers[0].self_attn(
+                torch.zeros(1, 4, 8),
+                position_embeddings=(
+                    torch.ones(1, 4, 4, dtype=torch.float32),
+                    torch.zeros(1, 4, 4, dtype=torch.float32),
+                ),
+                past_key_values=_FakeCache(torch.zeros(1, 1, 4, 4)),
+            )
+            assert capturer._prefill_records
+            raise RuntimeError("boom")
+
+    assert capturer._prefill_records == []
+    assert len(capturer._decode_records) == 0
+    assert capturer._routing_records == []
+
+
 def test_layer_capturer_aligns_meta_iters_to_trace_actions(tmp_path) -> None:
     model = _ToyModel()
     capturer = LayerCapturer(

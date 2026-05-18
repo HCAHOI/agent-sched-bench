@@ -6,7 +6,7 @@ import json
 import re
 import time
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
 
@@ -50,6 +50,103 @@ def _gate_layer_index(module_name: str) -> int | None:
 
 def _as_numpy(tensor: Any) -> np.ndarray:
     return tensor.detach().cpu().numpy()
+
+
+@dataclass(frozen=True)
+class _PendingNumpyArray:
+    """CPU-staged tensor whose NumPy view is materialized at flush time."""
+
+    tensor: Any
+    dtype: np.dtype
+    source_device: Any | None
+    _synchronized: bool = False
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return tuple(int(dim) for dim in self.tensor.shape)
+
+    def mark_synchronized(self) -> None:
+        object.__setattr__(self, "_synchronized", True)
+
+    def synchronize(self) -> None:
+        if self.source_device is None or self._synchronized:
+            return
+        import torch
+
+        torch.cuda.synchronize(self.source_device)
+        self.mark_synchronized()
+
+    def materialize(self) -> np.ndarray:
+        self.synchronize()
+        array = self.tensor.numpy()
+        if array.dtype != self.dtype:
+            return array.astype(self.dtype, copy=False)
+        return array
+
+    def __array__(self, dtype: Any = None) -> np.ndarray:
+        array = self.materialize()
+        if dtype is None:
+            return array
+        return array.astype(dtype, copy=False)
+
+    def astype(self, *args: Any, **kwargs: Any) -> np.ndarray:
+        return self.materialize().astype(*args, **kwargs)
+
+    def copy(self) -> np.ndarray:
+        return self.materialize().copy()
+
+
+def _stage_numpy(tensor: Any, dtype: Any) -> _PendingNumpyArray:
+    import torch
+
+    np_dtype = np.dtype(dtype)
+    torch_dtype = {
+        np.dtype(np.float32): torch.float32,
+        np.dtype(np.int32): torch.int32,
+    }.get(np_dtype)
+    staged = tensor.detach()
+    if torch_dtype is not None and staged.dtype != torch_dtype:
+        staged = staged.to(dtype=torch_dtype)
+    source_device = staged.device if staged.device.type == "cuda" else None
+    if source_device is not None:
+        cpu_tensor = torch.empty_like(
+            staged,
+            device=torch.device("cpu"),
+            pin_memory=True,
+        )
+        cpu_tensor.copy_(staged, non_blocking=True)
+    else:
+        cpu_tensor = staged.to(device=torch.device("cpu"))
+    return _PendingNumpyArray(
+        cpu_tensor,
+        np_dtype,
+        source_device,
+    )
+
+
+def _materialize_array(value: Any) -> np.ndarray:
+    if isinstance(value, _PendingNumpyArray):
+        return value.materialize()
+    return value
+
+
+def _synchronize_pending_arrays(records: list[dict[str, Any]]) -> None:
+    pending: list[_PendingNumpyArray] = []
+    devices: dict[str, Any] = {}
+    for record in records:
+        for value in record.values():
+            if isinstance(value, _PendingNumpyArray) and value.source_device is not None:
+                pending.append(value)
+                devices[str(value.source_device)] = value.source_device
+    if not devices:
+        return
+
+    import torch
+
+    for device in devices.values():
+        torch.cuda.synchronize(device)
+    for value in pending:
+        value.mark_synchronized()
 
 
 def _arg_or_kw(
@@ -373,6 +470,9 @@ class LayerCapturer:
         try:
             yield
         except BaseException:
+            self._prefill_records = []
+            self._decode_records.clear()
+            self._routing_records = []
             self._session = None
             raise
         finally:
@@ -533,11 +633,11 @@ class LayerCapturer:
             "query_positions": np.tile(
                 np.asarray(query_positions, dtype=np.int32), n_heads
             ),
-            "segment_mass": _as_numpy(segment_mass).astype(np.float32),
-            "topk_indices": _as_numpy(top_indices).astype(np.int32),
-            "topk_weights": _as_numpy(top_weights).astype(np.float32),
-            "heavy_indices": _as_numpy(hitter_indices[0]).astype(np.int32),
-            "heavy_weights": _as_numpy(hitter_weights[0]).astype(np.float32),
+            "segment_mass": _stage_numpy(segment_mass, np.float32),
+            "topk_indices": _stage_numpy(top_indices, np.int32),
+            "topk_weights": _stage_numpy(top_weights, np.float32),
+            "heavy_indices": _stage_numpy(hitter_indices[0], np.int32),
+            "heavy_weights": _stage_numpy(hitter_weights[0], np.float32),
         }
         if phase == "decode":
             self._decode_records.append(record)
@@ -961,6 +1061,7 @@ class LayerCapturer:
 
     def _write_attention_npz(self, path: Path, n_segments: int) -> None:
         records = [*self._prefill_records, *self._decode_records.to_list()]
+        _synchronize_pending_arrays(records)
         offsets = [0]
         for record in records:
             offsets.append(offsets[-1] + int(record["segment_mass"].shape[0]))
@@ -985,19 +1086,34 @@ class LayerCapturer:
             )
             if records
             else np.zeros((0,), dtype=np.int32),
-            segment_mass=np.concatenate([r["segment_mass"] for r in records], axis=0)
+            segment_mass=np.concatenate(
+                [_materialize_array(r["segment_mass"]) for r in records],
+                axis=0,
+            )
             if records
             else np.zeros((0, n_segments), dtype=np.float32),
-            topk_indices=np.concatenate([r["topk_indices"] for r in records], axis=0)
+            topk_indices=np.concatenate(
+                [_materialize_array(r["topk_indices"]) for r in records],
+                axis=0,
+            )
             if records
             else np.zeros((0, k), dtype=np.int32),
-            topk_weights=np.concatenate([r["topk_weights"] for r in records], axis=0)
+            topk_weights=np.concatenate(
+                [_materialize_array(r["topk_weights"]) for r in records],
+                axis=0,
+            )
             if records
             else np.zeros((0, k), dtype=np.float32),
-            heavy_indices=np.stack([r["heavy_indices"] for r in records], axis=0)
+            heavy_indices=np.stack(
+                [_materialize_array(r["heavy_indices"]) for r in records],
+                axis=0,
+            )
             if records
             else np.zeros((0, k), dtype=np.int32),
-            heavy_weights=np.stack([r["heavy_weights"] for r in records], axis=0)
+            heavy_weights=np.stack(
+                [_materialize_array(r["heavy_weights"]) for r in records],
+                axis=0,
+            )
             if records
             else np.zeros((0, k), dtype=np.float32),
             n_query_rows=np.asarray(n_rows, dtype=np.int64),
