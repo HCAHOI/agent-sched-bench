@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -95,6 +96,12 @@ def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _synchronize_cuda_devices(torch_module: Any) -> None:
+    """Synchronize each visible CUDA device before reading cross-device metrics."""
+    for device_idx in range(int(torch_module.cuda.device_count())):
+        torch_module.cuda.synchronize(device_idx)
 
 
 def _token_boundary_for_char(
@@ -971,7 +978,7 @@ class HFRecordingProvider(LLMProvider):
         try:
             if torch is not None and torch.cuda.is_available():
                 torch.cuda.empty_cache()
-                torch.cuda.synchronize()
+                _synchronize_cuda_devices(torch)
         except Exception:
             pass
 
@@ -1012,7 +1019,16 @@ class HFRecordingProvider(LLMProvider):
                 finish_reason="error",
                 extra={"error_type": "unsupported_tool_choice"},
             )
-        with self._chat_lock:
+        if not self._chat_lock.acquire(blocking=False):
+            return LLMResponse(
+                content=(
+                    "Error: HF recording provider supports one in-flight chat call; "
+                    "the server is already generating."
+                ),
+                finish_reason="error",
+                extra={"error_type": "concurrent_request"},
+            )
+        try:
             return await self._chat_locked(
                 messages=messages,
                 tools=tools,
@@ -1027,6 +1043,8 @@ class HFRecordingProvider(LLMProvider):
                 ),
                 tool_choice=tool_choice,
             )
+        finally:
+            self._chat_lock.release()
 
     async def _chat_locked(
         self,
@@ -1140,13 +1158,33 @@ class HFRecordingProvider(LLMProvider):
                 generation_kwargs["attention_mask"] = self._torch.ones_like(
                     input_tensor
                 )
-            from contextlib import nullcontext
-
             # H2O full-prefill scoring is handled inside LayerCapturer in
             # bounded chunks and delivered only to full-prefill consumers. Do
             # not lift the recording sample cap here; doing so would materialize
             # a full QxK attention tensor and can OOM on long prompts.
             prefill_ctx = nullcontext()
+            cuda_event_elapsed_ms: float | None = None
+            cuda_peak_allocated: dict[str, int] | None = None
+            cuda_peak_reserved: dict[str, int] | None = None
+            start_event = None
+            end_event = None
+            event_device = (
+                input_tensor.device
+                if getattr(input_tensor, "device", None) is not None
+                and input_tensor.device.type == "cuda"
+                else None
+            )
+            cuda_available = bool(self._torch.cuda.is_available())
+            if cuda_available:
+                for device_idx in range(int(self._torch.cuda.device_count())):
+                    self._torch.cuda.reset_peak_memory_stats(device_idx)
+                if event_device is not None:
+                    with self._torch.cuda.device(event_device):
+                        start_event = self._torch.cuda.Event(enable_timing=True)
+                        end_event = self._torch.cuda.Event(enable_timing=True)
+                        start_event.record()
+                _synchronize_cuda_devices(self._torch)
+            generate_started = time.perf_counter()
             with (
                 self._torch.no_grad(),
                 self.capturer.recording_session(
@@ -1158,6 +1196,44 @@ class HFRecordingProvider(LLMProvider):
                 prefill_ctx,
             ):
                 sequences = self.model.generate(**generation_kwargs)
+                if cuda_available:
+                    if end_event is not None and event_device is not None:
+                        with self._torch.cuda.device(event_device):
+                            end_event.record()
+                    _synchronize_cuda_devices(self._torch)
+                generation_meta["generate_wall_ms"] = (
+                    time.perf_counter() - generate_started
+                ) * 1000.0
+                if (
+                    start_event is not None
+                    and end_event is not None
+                    and event_device is not None
+                ):
+                    cuda_event_elapsed_ms = float(start_event.elapsed_time(end_event))
+                    generation_meta["cuda_event_elapsed_ms"] = cuda_event_elapsed_ms
+                    generation_meta["cuda_event_device"] = str(event_device)
+                else:
+                    generation_meta["cuda_event_elapsed_ms"] = None
+                    generation_meta["cuda_event_device"] = None
+                if cuda_available:
+                    cuda_peak_allocated = {
+                        str(device_idx): int(
+                            self._torch.cuda.max_memory_allocated(device_idx)
+                        )
+                        for device_idx in range(int(self._torch.cuda.device_count()))
+                    }
+                    cuda_peak_reserved = {
+                        str(device_idx): int(
+                            self._torch.cuda.max_memory_reserved(device_idx)
+                        )
+                        for device_idx in range(int(self._torch.cuda.device_count()))
+                    }
+                generation_meta["cuda_peak_memory_allocated_bytes_by_device"] = (
+                    cuda_peak_allocated
+                )
+                generation_meta["cuda_peak_memory_reserved_bytes_by_device"] = (
+                    cuda_peak_reserved
+                )
                 # `sequences` shape depends on whether session cache was
                 # active: with `past_key_values`, HF returns just the new
                 # tokens (delta + generated); without, full prompt + generated.

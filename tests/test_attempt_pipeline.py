@@ -202,6 +202,43 @@ def test_run_attempt_finishes_recording_after_trace_copy(tmp_path: Path) -> None
     assert recording_provider.finish_trace_exists is True
 
 
+def test_run_attempt_checks_recording_partition_when_recording_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+    recording_provider = _RecordingProvider()
+    preflight_paths: list[Path] = []
+
+    def fake_preflight(path: Path, min_free_gb: float) -> float:
+        del min_free_gb
+        preflight_paths.append(path)
+        return 123.0
+
+    monkeypatch.setattr("trace_collect.attempt_pipeline.preflight_disk", fake_preflight)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="Submitted",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=30.0,
+            container_executable="docker",
+            recording_provider=recording_provider,
+        )
+    )
+
+    assert preflight_paths[:2] == [ctx.run_dir, ctx.attempt_dir / "recordings"]
+
+
 def test_run_attempt_finishes_recording_if_trace_copy_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

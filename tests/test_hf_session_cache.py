@@ -19,7 +19,10 @@ the H2OCache's bus observe() path.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -31,8 +34,10 @@ from serving.recording.backend_hf import (
     _generation_metadata,
     _generation_seed,
     _longest_common_prefix,
+    _synchronize_cuda_devices,
 )
 from serving.recording.recording import RecordingConfig
+from agents.openclaw.providers.base import LLMResponse
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +117,24 @@ def test_lcp_strict_prefix() -> None:
 def test_generation_seed_is_stable_per_call() -> None:
     assert _generation_seed(100, 0) == 100
     assert _generation_seed(100, 7) == 107
+
+
+def test_synchronize_cuda_devices_targets_each_visible_device() -> None:
+    class _FakeCuda:
+        def __init__(self) -> None:
+            self.synced: list[int] = []
+
+        def device_count(self) -> int:
+            return 2
+
+        def synchronize(self, device_idx: int) -> None:
+            self.synced.append(device_idx)
+
+    fake_torch = SimpleNamespace(cuda=_FakeCuda())
+
+    _synchronize_cuda_devices(fake_torch)
+
+    assert fake_torch.cuda.synced == [0, 1]
 
 
 def test_generation_metadata_records_resolved_sampling_params() -> None:
@@ -339,6 +362,38 @@ def test_provider_exit_defensively_finishes_attempt() -> None:
 
     assert capturer.finish_calls == [None]
     assert capturer.closed is True
+
+
+def test_hf_recording_provider_rejects_concurrent_chat() -> None:
+    async def drive() -> None:
+        provider = HFRecordingProvider.__new__(HFRecordingProvider)
+        provider._chat_lock = threading.Lock()
+        provider.generation = SimpleNamespace(
+            top_p=None,
+            top_k=None,
+            repetition_penalty=None,
+        )
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def fake_chat_locked(**_kwargs):
+            entered.set()
+            await release.wait()
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        provider._chat_locked = fake_chat_locked
+
+        first = asyncio.create_task(provider.chat(messages=[]))
+        await entered.wait()
+        second = await provider.chat(messages=[])
+        release.set()
+        first_response = await first
+
+        assert first_response.content == "ok"
+        assert second.finish_reason == "error"
+        assert second.extra["error_type"] == "concurrent_request"
+
+    asyncio.run(drive())
 
 
 def test_message_first_seen_tracks_appends_and_replacements() -> None:

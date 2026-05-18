@@ -565,6 +565,7 @@ class LayerCapturer:
         original_iters = [dict(item) for item in self._meta.get("iters", [])]
         aligned: list[dict[str, Any]] = []
         orphaned: list[dict[str, Any]] = []
+        missing_recording_iters: list[dict[str, Any]] = []
         trace_call_by_idx: dict[int, dict[str, Any]] = {}
         alignment_source = "unavailable"
         if trace_indices is not None:
@@ -582,15 +583,34 @@ class LayerCapturer:
                 item["trace_iteration"] = None
                 item["trace_alignment_status"] = "orphan_no_llm_action"
                 orphaned.append(item)
+        recorded_call_idxs = {
+            int(item.get("call_idx", -1))
+            for item in original_iters
+            if item.get("call_idx") is not None
+        }
+        for trace_idx, trace_call in sorted(trace_call_by_idx.items()):
+            if int(trace_idx) in recorded_call_idxs:
+                continue
+            missing_recording_iters.append(
+                {
+                    "call_idx": int(trace_idx),
+                    "trace_action_id": trace_call.get("action_id"),
+                    "trace_iteration": trace_call.get("iteration"),
+                    "trace_alignment_status": "missing_recording_iter",
+                }
+            )
         self._meta["iters"] = aligned
         if orphaned:
             self._meta["orphan_iters"] = orphaned
+        if missing_recording_iters:
+            self._meta["missing_recording_iters"] = missing_recording_iters
         self._meta["alignment"] = {
             "trace_path": str(trace_path),
             "trace_llm_actions": len(trace_calls),
             "recording_iters": len(original_iters),
             "aligned_iters": len(aligned),
             "orphan_iters": len(orphaned),
+            "missing_recording_iters": len(missing_recording_iters),
             "alignment_source": alignment_source,
         }
 
@@ -625,7 +645,7 @@ class LayerCapturer:
             "input_token_count": input_token_count,
             "started_at": time.time(),
             "generated_segment_id": len(segments),
-            "generation": dict(generation) if generation is not None else None,
+            "generation": generation if generation is not None else None,
             "flushed": False,
         }
         self._prefill_records = []

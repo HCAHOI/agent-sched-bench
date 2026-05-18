@@ -265,6 +265,14 @@ async def run_attempt(
     try:
         free_gb = preflight_disk(ctx.run_dir, min_free_disk_gb)
         logger.info("disk preflight ok: %.2f GB free at %s", free_gb, ctx.run_dir)
+        if recording_provider is not None:
+            recordings_dir = ctx.attempt_dir / "recordings"
+            recording_free_gb = preflight_disk(recordings_dir, min_free_disk_gb)
+            logger.info(
+                "recording disk preflight ok: %.2f GB free at %s",
+                recording_free_gb,
+                recordings_dir,
+            )
     except DiskSpaceError as exc:
         logger.error("disk preflight failed: %s", exc)
         raise
