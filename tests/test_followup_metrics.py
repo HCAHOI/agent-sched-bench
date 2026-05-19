@@ -115,8 +115,10 @@ def test_context_group_loader_assigns_recent_gen_boundary(tmp_path) -> None:
         record_phase=np.asarray(["decode"]),
         query_row_offsets=np.asarray([0, 1], dtype=np.int64),
         query_positions=np.asarray([300], dtype=np.int64),
-        topk_indices=np.asarray([[0, 10, 44, 43]], dtype=np.int64),
-        topk_weights=np.asarray([[0.1, 0.2, 0.3, 0.4]], dtype=np.float64),
+        top_k=np.asarray(4, dtype=np.int32),
+        topk_csr_offsets=np.asarray([0, 4], dtype=np.int64),
+        topk_csr_indices=np.asarray([0, 10, 44, 43], dtype=np.int32),
+        topk_csr_weights=np.asarray([0.1, 0.2, 0.3, 0.4], dtype=np.float16),
     )
     record = SimpleNamespace(iter_dir=iter_dir)
 
@@ -129,6 +131,7 @@ def test_context_group_loader_assigns_recent_gen_boundary(tmp_path) -> None:
     np.testing.assert_allclose(
         dataset.distributions[0][0],
         np.asarray([0.1, 0.2, 0.3, 0.4]),
+        atol=1e-3,
     )
     assert dataset.observation_counts[0][0] == 1.0
 
@@ -150,8 +153,10 @@ def test_context_group_loader_marks_zero_mass_as_missing(tmp_path) -> None:
         record_phase=np.asarray(["decode"]),
         query_row_offsets=np.asarray([0, 1], dtype=np.int64),
         query_positions=np.asarray([1], dtype=np.int64),
-        topk_indices=np.asarray([[0]], dtype=np.int64),
-        topk_weights=np.asarray([[0.0]], dtype=np.float64),
+        top_k=np.asarray(1, dtype=np.int32),
+        topk_csr_offsets=np.asarray([0, 1], dtype=np.int64),
+        topk_csr_indices=np.asarray([0], dtype=np.int32),
+        topk_csr_weights=np.asarray([0.0], dtype=np.float16),
     )
     record = SimpleNamespace(iter_dir=iter_dir)
 

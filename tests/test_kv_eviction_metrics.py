@@ -258,14 +258,25 @@ def _make_attention_npz(
     heavy_indices: np.ndarray,
     n_segments: int = 1,
 ) -> None:
+    if topk_indices.ndim != 2 or topk_indices.shape != topk_weights.shape:
+        raise ValueError("topk_indices/topk_weights must be aligned rank-2 arrays")
+    width = int(topk_indices.shape[1])
+    valid = topk_indices >= 0
+    counts = valid.sum(axis=1, dtype=np.int64)
+    csr_offsets = np.zeros(int(topk_indices.shape[0]) + 1, dtype=np.int64)
+    csr_offsets[1:] = np.cumsum(counts, dtype=np.int64)
+    csr_indices = topk_indices[valid].astype(np.int32)
+    csr_weights = topk_weights[valid].astype(np.float16)
     np.savez_compressed(
         path,
         record_layer=np.asarray(record_layers, dtype=np.int32),
         record_phase=np.asarray(record_phases, dtype="U7"),
         query_row_offsets=np.asarray(query_row_offsets, dtype=np.int64),
         query_positions=np.asarray(query_positions, dtype=np.int64),
-        topk_indices=topk_indices.astype(np.int32),
-        topk_weights=topk_weights.astype(np.float32),
+        top_k=np.asarray(width, dtype=np.int32),
+        topk_csr_offsets=csr_offsets,
+        topk_csr_indices=csr_indices,
+        topk_csr_weights=csr_weights,
         heavy_indices=heavy_indices.astype(np.int32),
         n_segments=np.asarray(n_segments, dtype=np.int32),
     )
@@ -367,9 +378,9 @@ def test_aggregate_sink_recent_share_classifies_topk_positions(tmp_path):
     )
     out = aggregate_sink_recent_share_per_layer([_make_record(iter_dir)], sink=2, recent=3)
     layer = out[0]
-    assert layer["sink_share"] == pytest.approx(0.5, abs=1e-6)
-    assert layer["middle_share"] == pytest.approx(0.2, abs=1e-6)
-    assert layer["recent_share"] == pytest.approx(0.3, abs=1e-6)
+    assert layer["sink_share"] == pytest.approx(0.5, abs=1e-3)
+    assert layer["middle_share"] == pytest.approx(0.2, abs=1e-3)
+    assert layer["recent_share"] == pytest.approx(0.3, abs=1e-3)
 
 
 def test_aggregate_sink_recent_share_reads_csr_topk(tmp_path):

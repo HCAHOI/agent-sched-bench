@@ -85,8 +85,8 @@ var  = (1/Q) Σ_q Var_{k ∈ S_q}(A_{q,k})   （population variance）
 - **每条 record 的元信息**：layer 索引 / phase（prefill/decode）/ decode_step
 - **每行（query）的内容**：
   - 该 query 在 prompt 里的绝对位置
-  - 该行 attention 在所有 segment 上的归一化质量 `segment_mass[N, S]`
-  - top-k key 位置 + 权重（dense 和 CSR 两种存储）
+  - 该行 attention 在所有 segment 上的归一化质量 `segment_mass[N, S]`（fp16）
+  - top-k key 位置 + 权重（CSR 存储；`topk_csr_weights` fp16）
 - **每条 record 聚合**：heavy-hitter（该 record 所有采样行平均后的 top-k）
 - **每次 chat 聚合**：span × span attention 矩阵（normalized + raw + row_sums + 计数）
 
@@ -96,7 +96,7 @@ var  = (1/Q) Σ_q Var_{k ∈ S_q}(A_{q,k})   （population variance）
 
 每条 record 对应一个 (layer, phase, decode_step) 的路由快照。
 
-- 每个 token 选了哪几个专家、各自权重（top-k）
+- 每个 token 选了哪几个专家、各自权重（top-k；`expert_weight` fp16）
 - 每个 segment × 每个专家的负载（加权 + 原始 token 计数）
 - 该 record 的 capacity / 预期溢出 token 数 / 预期被丢 token 数
 - drop signal 模式（当前是 expected_uniform_capacity，不是真实 drop）

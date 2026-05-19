@@ -154,12 +154,12 @@ def _encode_topk_csr(
         return (
             row_offsets,
             np.zeros((0,), dtype=np.int32),
-            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float16),
         )
     return (
         row_offsets,
         indices[valid].astype(np.int32, copy=False),
-        weights[valid].astype(np.float32, copy=False),
+        weights[valid].astype(np.float16, copy=False),
     )
 
 
@@ -1743,14 +1743,12 @@ class LayerCapturer:
             query_row_offsets=query_row_offsets,
             query_heads=query_heads,
             query_positions=query_positions,
-            segment_mass=segment_mass,
+            segment_mass=segment_mass.astype(np.float16, copy=False),
             span_span_matrix=span_span,
             span_span_matrix_raw=span_span_raw,
             span_span_row_sums=span_span_row_sums,
             span_span_query_counts=span_span_counts,
-            topk_storage=np.asarray("dense_and_csr"),
-            topk_indices=topk_indices,
-            topk_weights=topk_weights,
+            topk_storage=np.asarray("csr"),
             topk_csr_offsets=topk_csr_offsets,
             topk_csr_indices=topk_csr_indices,
             topk_csr_weights=topk_csr_weights,
@@ -1800,11 +1798,13 @@ class LayerCapturer:
             )
             if records
             else np.zeros((0, 0), dtype=np.int32),
-            expert_weight=np.concatenate(
-                [r["expert_weight"] for r in records], axis=0
-            )
-            if records
-            else np.zeros((0, 0), dtype=np.float32),
+            expert_weight=(
+                np.concatenate(
+                    [r["expert_weight"] for r in records], axis=0
+                ).astype(np.float16, copy=False)
+                if records
+                else np.zeros((0, 0), dtype=np.float16)
+            ),
             expert_load=np.stack([r["expert_load"] for r in records], axis=0)
             if records
             else np.zeros((0, n_segments, 0), dtype=np.float32),

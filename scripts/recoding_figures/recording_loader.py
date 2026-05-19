@@ -281,39 +281,12 @@ def load_session_history(paths: Sequence[Path]) -> list[dict[str, object]]:
 
 
 def decode_attention_topk(attention: object) -> tuple[np.ndarray, np.ndarray]:
-    """Return dense `(indices, weights)` top-k rows from dense or CSR schema."""
+    """Return dense `(indices, weights)` top-k rows from the CSR schema."""
     files = set(getattr(attention, "files", []))
     if not files and hasattr(attention, "keys"):
         files = set(attention.keys())
 
     csr_fields = {"topk_csr_offsets", "topk_csr_indices", "topk_csr_weights"}
-    has_any_csr = any(name.startswith("topk_csr_") for name in files)
-    if {"topk_indices", "topk_weights"}.issubset(files):
-        indices = attention["topk_indices"].astype(np.int32, copy=False)
-        weights = attention["topk_weights"].astype(np.float32, copy=False)
-        _validate_dense_topk_arrays(indices, weights)
-        _validate_attention_topk_rows(attention, files, int(indices.shape[0]))
-        if has_any_csr:
-            csr_indices, csr_weights = _decode_attention_topk_csr(
-                attention,
-                files,
-                csr_fields,
-            )
-            if indices.shape != csr_indices.shape or weights.shape != csr_weights.shape:
-                raise ValueError(
-                    "top-k dense and CSR sidecar shapes differ: "
-                    f"{indices.shape}/{weights.shape} vs "
-                    f"{csr_indices.shape}/{csr_weights.shape}"
-                )
-            if not np.array_equal(indices, csr_indices) or not np.allclose(
-                weights,
-                csr_weights,
-                rtol=0.0,
-                atol=0.0,
-            ):
-                raise ValueError("top-k dense and CSR sidecar values differ")
-        return indices, weights
-
     return _decode_attention_topk_csr(attention, files, csr_fields)
 
 
@@ -375,25 +348,6 @@ def _decode_attention_topk_csr(
         indices[row_idx, :span_width] = flat_indices[start:end]
         weights[row_idx, :span_width] = flat_weights[start:end]
     return indices, weights
-
-
-def _validate_dense_topk_arrays(indices: np.ndarray, weights: np.ndarray) -> None:
-    if indices.ndim != 2 or weights.ndim != 2:
-        raise ValueError(
-            f"top-k arrays must be rank 2, got {indices.shape} and {weights.shape}"
-        )
-    if indices.shape != weights.shape:
-        raise ValueError(
-            f"top-k index/weight shape mismatch: {indices.shape} vs {weights.shape}"
-        )
-    if np.any(indices < -1):
-        raise ValueError("topk_indices must be non-negative or -1 padding")
-    if np.any(~np.isfinite(weights)):
-        raise ValueError("topk_weights must be finite")
-    if np.any(weights < 0):
-        raise ValueError("topk_weights must be non-negative")
-    if np.any((indices == -1) & (weights != 0)):
-        raise ValueError("topk_indices -1 padding must have zero weight")
 
 
 def _attention_topk_width(attention: object, files: set[str]) -> int:

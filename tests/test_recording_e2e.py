@@ -198,12 +198,20 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     with np.load(call_dir / "attention.npz") as attention:
         assert int(attention["call_idx"]) == 0
         assert attention["segment_mass"].shape[1] == 3
+        assert attention["segment_mass"].dtype == np.float16
         assert attention["query_heads"].shape == attention["query_positions"].shape
-        assert np.allclose(attention["segment_mass"].sum(axis=1), 1.0, atol=1e-6)
-        assert attention["topk_indices"].shape[1] == 2
+        assert np.allclose(
+            attention["segment_mass"].astype(np.float32).sum(axis=1),
+            1.0,
+            atol=1e-3,
+        )
+        assert "topk_indices" not in attention.files
+        assert "topk_weights" not in attention.files
+        assert attention["topk_csr_indices"].dtype == np.int32
+        assert attention["topk_csr_weights"].dtype == np.float16
         decoded_indices, decoded_weights = decode_attention_topk(attention)
-        np.testing.assert_array_equal(decoded_indices, attention["topk_indices"])
-        np.testing.assert_array_equal(decoded_weights, attention["topk_weights"])
+        assert decoded_indices.shape[1] == 2
+        assert decoded_weights.dtype == np.float32
         assert attention["topk_csr_offsets"].shape[0] == int(attention["n_query_rows"]) + 1
         span_span = attention["span_span_matrix"]
         span_span_raw = attention["span_span_matrix_raw"]
@@ -240,6 +248,7 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     with np.load(call_dir / "routing.npz") as routing:
         assert int(routing["n_experts"]) == 3
         assert routing["expert_choice"].shape == (5, 2)
+        assert routing["expert_weight"].dtype == np.float16
         assert routing["expert_load"].shape == (1, 3, 3)
         assert routing["record_phase"].tolist() == ["mixed"]
         assert routing["record_decode_step"].tolist() == [-1]
