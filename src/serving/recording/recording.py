@@ -19,6 +19,11 @@ class RecordingConfig:
     device_map: str = "auto"
     trust_remote_code: bool = True
     generation_seed: int = 0
+    # Layers for which per-head per-span attention stats are captured.
+    # Empty tuple disables the feature. Must all be < num_hidden_layers.
+    # Recommended for real models: (0, 6, 12, 18, 24, 30, 36, 47)
+    # Layer 47 is the last attention layer in Qwen3-Coder-30B (retrieval/copy heads concentrate there).
+    per_head_stats_layers: tuple[int, ...] = ()
 
 
 def segment_role(message: dict[str, Any]) -> str:

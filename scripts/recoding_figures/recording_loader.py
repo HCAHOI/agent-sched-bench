@@ -1024,6 +1024,36 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
     )
 
 
+def load_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
+    """Load per-head per-span attention stats from one iter directory.
+
+    Returns a dict with 10 keys matching the attention.npz schema:
+      head_stats_layers                    [L_s]               i32
+      head_span_mean_prefill               [L_s, query_head, S]  fp16  (NaN where no keys)
+      head_span_var_prefill                [L_s, query_head, S]  fp32  (NaN where no keys)
+      head_span_query_count                scalar              i32  (prefill query rows sampled)
+      head_span_mean_decode                [L_s, T_max, query_head, S]  fp16  (NaN where no keys)
+      head_span_var_decode                 [L_s, T_max, query_head, S]  fp32  (NaN where no keys)
+      head_span_decode_step                [L_s, T_max]        i32
+      head_span_decode_n                   [L_s]               i32
+      head_span_kept_token_count_prefill   [L_s, S]            i32
+      head_span_kept_token_count_decode    [L_s, T_max, S]     i32
+    """
+    with np.load(iter_dir / "attention.npz") as data:
+        return {
+            "head_stats_layers": data["head_stats_layers"].astype(np.int32),
+            "head_span_mean_prefill": data["head_span_mean_prefill"].astype(np.float16),
+            "head_span_var_prefill": data["head_span_var_prefill"].astype(np.float32),
+            "head_span_query_count": data["head_span_query_count"].astype(np.int32),
+            "head_span_mean_decode": data["head_span_mean_decode"].astype(np.float16),
+            "head_span_var_decode": data["head_span_var_decode"].astype(np.float32),
+            "head_span_decode_step": data["head_span_decode_step"].astype(np.int32),
+            "head_span_decode_n": data["head_span_decode_n"].astype(np.int32),
+            "head_span_kept_token_count_prefill": data["head_span_kept_token_count_prefill"].astype(np.int32),
+            "head_span_kept_token_count_decode": data["head_span_kept_token_count_decode"].astype(np.int32),
+        }
+
+
 def average_layer_matrix(
     dataset: LayerDistributionSet,
     *,

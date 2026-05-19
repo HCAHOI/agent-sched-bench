@@ -468,6 +468,10 @@ class LayerCapturer:
         self._routing_decode_steps: dict[int, int] = {}
         self._meta: dict[str, Any] = {}
         self._attention_suspended = 0
+        # Per-head span stats accumulators. Keyed by (layer_idx, phase, decode_step).
+        # Values: {"mean_sum": [H, S], "var_sum": [H, S], "n_queries": int}
+        self._head_stats: dict[tuple[int, str, int], dict[str, Any]] = {}
+        self._head_stats_n_segments: int = 0
         # KV eviction recorder is per-call; lifecycle is owned by the caller
         # (HFRecordingProvider in step 3+) which swaps it before each
         # `recording_session()`. LayerCapturer only flushes whatever the
@@ -489,10 +493,13 @@ class LayerCapturer:
 
         n_attention_modules = 0
         n_gate_modules = 0
+        layer_indices: list[int] = []
         for name, module in model.named_modules():
             layer = _layer_index(name)
             if layer is not None:
                 n_attention_modules += 1
+                if layer >= 0:
+                    layer_indices.append(layer)
                 self._handles.append(
                     module.register_forward_hook(self._hook(layer), with_kwargs=True)
                 )
@@ -502,6 +509,13 @@ class LayerCapturer:
                 self._handles.append(module.register_forward_hook(self._gate_hook(gate_layer)))
         if n_attention_modules == 0:
             raise ValueError("no attention modules matched '.layers.<n>.self_attn'")
+        if config.per_head_stats_layers and layer_indices:
+            num_hidden_layers = max(layer_indices) + 1
+            invalid = [i for i in config.per_head_stats_layers if i >= num_hidden_layers]
+            assert not invalid, (
+                f"per_head_stats_layers contains indices >= num_hidden_layers "
+                f"({num_hidden_layers}): {invalid}"
+            )
         self.model_summary["router_capture_mode"] = (
             "gate_forward_hook" if n_gate_modules else "none"
         )
@@ -657,6 +671,8 @@ class LayerCapturer:
         self._routing_records = []
         self._routing_seen_prefill.clear()
         self._routing_decode_steps.clear()
+        self._head_stats = {}
+        self._head_stats_n_segments = len(segments) + 1
         try:
             yield
         except BaseException:
@@ -830,11 +846,24 @@ class LayerCapturer:
                 unbounded=self._max_prefill_queries_override is not None,
             )
         query_positions = [key_len - query_len + idx for idx in row_indices]
-        if (
+        capture_head_stats = (
+            layer >= 0
+            and bool(self.config.per_head_stats_layers)
+            and layer in self.config.per_head_stats_layers
+        )
+        if capture_head_stats and phase == "prefill":
+            existing = self._head_stats.get((layer, "prefill", 0))
+            if existing is not None and existing["n_queries"] > 0:
+                raise RuntimeError(
+                    f"layer {layer}: second prefill capture detected — "
+                    "multi-prefill per session is unsupported for per-head stats"
+                )
+        use_full_prefill_bus = (
             phase == "prefill"
             and self._attention_bus is not None
             and self._attention_bus.has_full_prefill_consumers()
-        ):
+        )
+        if use_full_prefill_bus:
             attn_rows = self._full_prefill_attention_rows(
                 module=module,
                 hidden_states=hidden_states,
@@ -843,9 +872,13 @@ class LayerCapturer:
                 key_states=key_states,
                 row_indices=row_indices,
                 layer=layer,
+                capture_head_stats=capture_head_stats,
+                token_ids_full=self._token_ids_for_key_len(key_len),
+                n_segments=self._session["generated_segment_id"] + 1,
             )
+            attn_full_sampled = None
         else:
-            attn_rows = self._sampled_attention_rows(
+            attn_full_sampled, attn_rows = self._sampled_attention_rows(
                 module=module,
                 hidden_states=hidden_states,
                 position_embeddings=position_embeddings,
@@ -857,6 +890,27 @@ class LayerCapturer:
             )
         token_ids = self._token_ids_for_key_len(key_len).to(device=attn_rows.device)
         n_segments = self._session["generated_segment_id"] + 1
+
+        if capture_head_stats and not use_full_prefill_bus:
+            if phase == "decode":
+                if key_len <= self._session["input_token_count"]:
+                    raise RuntimeError(
+                        f"layer {layer}: decode attention at key_len={key_len} <= "
+                        f"input_token_count={self._session['input_token_count']}; "
+                        "unexpected KV boundary for per-head stats"
+                    )
+                decode_step = key_len - self._session["input_token_count"] - 1
+            else:
+                decode_step = 0
+            # attn_full_sampled: [1, H, Q, K] — already computed by _sampled_attention_rows
+            self._accumulate_head_stats(
+                layer_idx=layer,
+                phase=phase,
+                decode_step=decode_step,
+                attn=attn_full_sampled[0],
+                token_ids=token_ids,
+                n_segments=n_segments,
+            )
 
         segment_mass = segment_bucket(attn_rows, token_ids, n_segments)
         top_indices, top_weights = padded_top_k(attn_rows, self.config.attention_top_k)
@@ -886,6 +940,73 @@ class LayerCapturer:
         else:
             self._prefill_records.append(record)
 
+    def _accumulate_head_stats(
+        self,
+        *,
+        layer_idx: int,
+        phase: str,
+        decode_step: int,
+        attn: Any,
+        token_ids: Any,
+        n_segments: int,
+    ) -> None:
+        import torch
+
+        # Fix 7: guard against segment count changing mid-session.
+        if self._head_stats and n_segments != self._head_stats_n_segments:
+            raise RuntimeError(
+                f"segment count changed mid-session: expected "
+                f"{self._head_stats_n_segments}, got {n_segments}"
+            )
+
+        # attn: [H, Q, K]
+        H = int(attn.shape[0])
+        Q = int(attn.shape[1])
+        K = int(attn.shape[2])
+        S = n_segments
+        key_ids = token_ids[:K].to(device=attn.device, dtype=torch.long)
+        key_float = attn.detach().to(dtype=torch.float32)
+
+        if phase == "prefill":
+            key = (layer_idx, "prefill", 0)
+            entry = self._head_stats.get(key)
+            if entry is None:
+                entry = {
+                    "mean_sum": torch.zeros((H, S), dtype=torch.float32, device=attn.device),
+                    "var_sum": torch.zeros((H, S), dtype=torch.float32, device=attn.device),
+                    # kept_count_sum[s] = sum of mask.sum() across all query rows for segment s
+                    "kept_count_sum": torch.zeros(S, dtype=torch.int32, device=attn.device),
+                    "n_queries": 0,
+                }
+                self._head_stats[key] = entry
+            for s in range(S):
+                mask = key_ids == s
+                if not bool(mask.any()):
+                    continue
+                vals = key_float[:, :, mask]  # [H, Q, |S|]
+                entry["mean_sum"][:, s] += vals.mean(dim=-1).sum(dim=-1)
+                entry["var_sum"][:, s] += vals.var(dim=-1, unbiased=False).sum(dim=-1)
+                # mask.sum() counts key positions in this segment; same for all Q rows
+                entry["kept_count_sum"][s] += int(mask.sum().item()) * Q
+            entry["n_queries"] = entry["n_queries"] + Q
+        else:
+            key = (layer_idx, "decode", decode_step)
+            entry_new: dict[str, Any] = {
+                "mean": torch.zeros((H, S), dtype=torch.float32, device=attn.device),
+                "var": torch.zeros((H, S), dtype=torch.float32, device=attn.device),
+                # kept_count[s] = number of key positions in segment s at this decode step
+                "kept_count": torch.zeros(S, dtype=torch.int32, device=attn.device),
+            }
+            for s in range(S):
+                mask = key_ids == s
+                if not bool(mask.any()):
+                    continue
+                vals = key_float[:, :, mask]  # [H, 1, |S|]
+                entry_new["mean"][:, s] = vals.mean(dim=-1).squeeze(-1)
+                entry_new["var"][:, s] = vals.var(dim=-1, unbiased=False).squeeze(-1)
+                entry_new["kept_count"][s] = int(mask.sum().item())
+            self._head_stats[key] = entry_new
+
     def _key_states(
         self,
         *,
@@ -914,7 +1035,8 @@ class LayerCapturer:
         query_positions: list[int],
         layer: int,
         full_prefill: bool = False,
-    ) -> Any:
+    ) -> tuple[Any, Any]:
+        """Return (attn_full, attn_rows) where attn_full is [1, H, Q, K] pre-head-mean."""
         attn = self._attention_tensor(
             module=module,
             hidden_states=hidden_states,
@@ -931,7 +1053,7 @@ class LayerCapturer:
             key_len=int(key_states.shape[-2]),
             full_prefill=full_prefill,
         )
-        return attn[0].reshape(attn.shape[1] * len(row_indices), int(key_states.shape[-2]))
+        return attn, attn[0].reshape(attn.shape[1] * len(row_indices), int(key_states.shape[-2]))
 
     def _full_prefill_attention_rows(
         self,
@@ -943,6 +1065,9 @@ class LayerCapturer:
         key_states: Any,
         row_indices: list[int],
         layer: int,
+        capture_head_stats: bool = False,
+        token_ids_full: Any = None,
+        n_segments: int = 0,
     ) -> Any:
         """Publish all prefill rows to full-prefill consumers in bounded chunks.
 
@@ -950,6 +1075,9 @@ class LayerCapturer:
         full `(heads, query_len, key_len)` attention tensor at once. We retain
         only the normal sampled rows for `attention.npz`, preserving the bounded
         recording footprint.
+
+        When capture_head_stats=True, accumulates per-head stats inline from
+        each chunk's already-computed attention tensor (no extra GPU work).
         """
         import torch
 
@@ -961,6 +1089,7 @@ class LayerCapturer:
         selected: dict[int, Any] = {}
         selected_set = set(int(idx) for idx in row_indices)
         base_position = key_len - query_len
+        token_ids_dev: Any = None
 
         for start in range(0, query_len, chunk_size):
             stop = min(query_len, start + chunk_size)
@@ -982,6 +1111,17 @@ class LayerCapturer:
                 key_len=key_len,
                 full_prefill=True,
             )
+            if capture_head_stats:
+                if token_ids_dev is None:
+                    token_ids_dev = token_ids_full.to(device=attn.device)
+                self._accumulate_head_stats(
+                    layer_idx=layer,
+                    phase="prefill",
+                    decode_step=0,
+                    attn=attn[0],
+                    token_ids=token_ids_dev,
+                    n_segments=n_segments,
+                )
             local_selected = [
                 (row, row - start) for row in chunk_rows if row in selected_set
             ]
@@ -1414,8 +1554,119 @@ class LayerCapturer:
         generation = self._session.get("generation")
         if generation is not None:
             iter_meta["generation"] = dict(generation)
+        iter_meta["per_head_stats_layers"] = list(self.config.per_head_stats_layers)
         self._meta["iters"].append(iter_meta)
         self._session["flushed"] = True
+
+    def _build_head_span_arrays(
+        self, n_segments: int
+    ) -> dict[str, np.ndarray]:
+        import torch
+
+        layers = sorted(self.config.per_head_stats_layers)
+        L_s = len(layers)
+        # Determine H from any stored entry, fall back to 0 if nothing recorded
+        H = 0
+        for entry in self._head_stats.values():
+            tensor = entry.get("mean_sum") if "mean_sum" in entry else entry.get("mean")
+            if tensor is not None:
+                H = int(tensor.shape[0])
+                break
+        S = n_segments
+
+        # Prefill arrays — NaN where no key positions contributed (Fix 1)
+        prefill_mean = np.full((L_s, H, S), np.nan, dtype=np.float32)
+        prefill_var = np.full((L_s, H, S), np.nan, dtype=np.float32)
+        prefill_query_count = np.int32(0)
+        # kept_count_prefill[L_s, S]: total key positions summed over all Q rows (Fix 2)
+        prefill_kept_count = np.zeros((L_s, S), dtype=np.int32)
+
+        for li, layer in enumerate(layers):
+            key = (layer, "prefill", 0)
+            entry = self._head_stats.get(key)
+            if entry is None or entry["n_queries"] == 0:
+                continue
+            n = int(entry["n_queries"])
+            mean_sum = entry["mean_sum"]
+            var_sum = entry["var_sum"]
+            kept_count_sum = entry["kept_count_sum"]
+            if isinstance(mean_sum, torch.Tensor):
+                mean_sum = mean_sum.detach().cpu().numpy()
+            if isinstance(var_sum, torch.Tensor):
+                var_sum = var_sum.detach().cpu().numpy()
+            if isinstance(kept_count_sum, torch.Tensor):
+                kept_count_sum = kept_count_sum.detach().cpu().numpy()
+            # Only fill cells that had at least one key position; rest stay NaN
+            has_keys = kept_count_sum > 0  # [S]
+            mean_divided = mean_sum / n  # [H, S]
+            var_divided = var_sum / n    # [H, S]
+            for s in range(S):
+                if has_keys[s]:
+                    prefill_mean[li, :, s] = mean_divided[:, s].astype(np.float16).astype(np.float32)
+                    prefill_var[li, :, s] = var_divided[:, s]
+            prefill_kept_count[li] = kept_count_sum
+            prefill_query_count = np.int32(n)
+
+        # Decode arrays: find T_max per layer
+        decode_keys_by_layer: dict[int, list[int]] = {layer: [] for layer in layers}
+        for key in self._head_stats:
+            l_idx, phase, step = key
+            if phase == "decode" and l_idx in decode_keys_by_layer:
+                decode_keys_by_layer[l_idx].append(step)
+
+        decode_counts = [len(decode_keys_by_layer[l]) for l in layers]
+        T_max = max(decode_counts) if decode_counts else 0
+
+        # NaN-initialize decode mean/var — cells with no key positions stay NaN (Fix 1)
+        if T_max > 0:
+            decode_mean = np.full((L_s, T_max, H, S), np.nan, dtype=np.float32)
+            decode_var = np.full((L_s, T_max, H, S), np.nan, dtype=np.float32)
+            decode_step_arr = np.full((L_s, T_max), -1, dtype=np.int32)
+            decode_kept_count = np.zeros((L_s, T_max, S), dtype=np.int32)
+        else:
+            decode_mean = np.full((L_s, 0, H, S), np.nan, dtype=np.float32)
+            decode_var = np.full((L_s, 0, H, S), np.nan, dtype=np.float32)
+            decode_step_arr = np.zeros((L_s, 0), dtype=np.int32)
+            decode_kept_count = np.zeros((L_s, 0, S), dtype=np.int32)
+        decode_n = np.asarray(decode_counts, dtype=np.int32)
+
+        for li, layer in enumerate(layers):
+            steps = sorted(decode_keys_by_layer[layer])
+            for ti, step in enumerate(steps):
+                key = (layer, "decode", step)
+                entry = self._head_stats.get(key)
+                if entry is None:
+                    continue
+                mean_arr = entry["mean"]
+                var_arr = entry["var"]
+                kept_count_arr = entry["kept_count"]
+                if isinstance(mean_arr, torch.Tensor):
+                    mean_arr = mean_arr.detach().cpu().numpy()
+                if isinstance(var_arr, torch.Tensor):
+                    var_arr = var_arr.detach().cpu().numpy()
+                if isinstance(kept_count_arr, torch.Tensor):
+                    kept_count_arr = kept_count_arr.detach().cpu().numpy()
+                has_keys = kept_count_arr > 0  # [S]
+                for s in range(S):
+                    if has_keys[s]:
+                        decode_mean[li, ti, :, s] = mean_arr[:, s].astype(np.float16).astype(np.float32)
+                        decode_var[li, ti, :, s] = var_arr[:, s]
+                decode_kept_count[li, ti] = kept_count_arr
+                decode_step_arr[li, ti] = step
+
+        return {
+            "head_stats_layers": np.asarray(layers, dtype=np.int32),
+            "head_span_mean_prefill": prefill_mean.astype(np.float16),
+            "head_span_var_prefill": prefill_var.astype(np.float32),
+            "head_span_query_count": prefill_query_count,
+            "head_span_mean_decode": decode_mean.astype(np.float16),
+            "head_span_var_decode": decode_var.astype(np.float32),
+            "head_span_decode_step": decode_step_arr,
+            "head_span_decode_n": decode_n,
+            # Fix 2: denominator sidecars
+            "head_span_kept_token_count_prefill": prefill_kept_count,
+            "head_span_kept_token_count_decode": decode_kept_count,
+        }
 
     def _write_attention_npz(self, path: Path, segments: list[dict[str, Any]]) -> None:
         n_segments = len(segments)
@@ -1478,6 +1729,7 @@ class LayerCapturer:
             n_segments=n_segments,
             generated_segment_id=int(self._session["generated_segment_id"]),
         )
+        head_span_arrays = self._build_head_span_arrays(n_segments)
         np.savez_compressed(
             path,
             call_idx=np.asarray(self._session["call_idx"], dtype=np.int32),
@@ -1516,6 +1768,7 @@ class LayerCapturer:
             if records
             else np.zeros((0, k), dtype=np.float32),
             n_query_rows=np.asarray(n_rows, dtype=np.int64),
+            **head_span_arrays,
         )
 
     def _write_routing_npz(self, path: Path, n_segments: int) -> None:

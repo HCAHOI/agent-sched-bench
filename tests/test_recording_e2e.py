@@ -217,6 +217,25 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
         assert np.allclose(span_span.sum(axis=-1)[active_rows], 1.0, atol=1e-6)
         assert np.allclose(span_span_raw.sum(axis=-1), span_row_sums, atol=1e-6)
         assert np.any(span_span_raw[active_rows] > span_span[active_rows])
+        # head-span fields present with L_s == len(per_head_stats_layers)
+        L_s = len(capturer.config.per_head_stats_layers)
+        assert attention["head_stats_layers"].shape == (L_s,)
+        assert attention["head_span_mean_prefill"].shape[0] == L_s
+        assert attention["head_span_var_prefill"].shape[0] == L_s
+        assert attention["head_span_mean_decode"].shape[0] == L_s
+        assert attention["head_span_var_decode"].shape[0] == L_s
+        assert attention["head_span_decode_step"].shape[0] == L_s
+        assert attention["head_span_decode_n"].shape == (L_s,)
+        assert attention["head_span_query_count"].ndim == 0
+        # Fix 2: kept-count sidecar fields have shape (L_s, S) and (L_s, T_max, S)
+        kc_prefill = attention["head_span_kept_token_count_prefill"]
+        kc_decode = attention["head_span_kept_token_count_decode"]
+        assert kc_prefill.ndim == 2 and kc_prefill.shape[0] == L_s
+        assert kc_decode.ndim == 3 and kc_decode.shape[0] == L_s
+        # S dimension must be consistent across all head-span arrays
+        assert kc_prefill.shape[1] == attention["head_span_mean_prefill"].shape[-1]
+        assert kc_decode.shape[2] == attention["head_span_mean_prefill"].shape[-1]
+        assert kc_decode.shape[1] == attention["head_span_mean_decode"].shape[1]
 
     with np.load(call_dir / "routing.npz") as routing:
         assert int(routing["n_experts"]) == 3
@@ -237,6 +256,8 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
     assert meta["iters"][0]["call_idx"] == 0
     assert meta["iters"][0]["attention_records"] == 2
     assert meta["iters"][0]["decode_records_dropped_count"] == 0
+    # Fix 6: per_head_stats_layers echoed into meta
+    assert meta["iters"][0]["per_head_stats_layers"] == list(capturer.config.per_head_stats_layers)
     assert meta["iters"][0]["recording_integrity"] == {
         "complete": True,
         "done_sentinel": True,
