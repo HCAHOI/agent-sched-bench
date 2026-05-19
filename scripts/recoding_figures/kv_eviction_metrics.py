@@ -341,9 +341,9 @@ def aggregate_sink_recent_share_per_layer(
 ) -> dict[int, dict[str, float]]:
     """Per-layer fraction of topk-weight mass in sink/recent/middle key bands.
 
-    Uses dense or CSR top-k fields from attention.npz. Each record-row
-    contributes weight in proportion to its top-k mass; sums are normalized at
-    the end so the three shares add to 1.
+    Uses CSR top-k fields from attention.npz. Each record-row contributes
+    weight in proportion to its top-k mass; sums are normalized at the end
+    so the three shares add to 1.
     """
     per_layer_sums: dict[int, dict[str, float]] = defaultdict(
         lambda: {"sink": 0.0, "recent": 0.0, "middle": 0.0}
@@ -356,23 +356,14 @@ def aggregate_sink_recent_share_per_layer(
             needed = {"record_layer", "query_row_offsets", "query_positions"}
             if not needed.issubset(set(attn.files)):
                 continue
-            topk_fields = {
-                "top_k",
-                "topk_indices",
-                "topk_weights",
+            csr_fields = {
                 "topk_csr_offsets",
                 "topk_csr_indices",
                 "topk_csr_weights",
-                "topk_csr_width",
-            }.intersection(set(attn.files))
-            has_dense_topk = {"topk_indices", "topk_weights"}.issubset(set(attn.files))
-            has_csr_topk = {
-                "topk_csr_offsets",
-                "topk_csr_indices",
-                "topk_csr_weights",
-            }.issubset(set(attn.files))
-            if not has_dense_topk and not has_csr_topk:
-                if topk_fields:
+            }
+            has_csr_topk = csr_fields.issubset(set(attn.files))
+            if not has_csr_topk:
+                if any(name.startswith("topk_csr_") for name in attn.files):
                     raise ValueError(f"{path}: incomplete attention top-k schema")
                 continue
             layers = attn["record_layer"].astype(np.int64)
