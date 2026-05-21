@@ -222,6 +222,57 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--sparse-attn",
+        choices=["none", "sliding"],
+        default="none",
+        help=(
+            "Sparse attention method used by the HF recording backend. "
+            "`none` (default) leaves attention dense. `sliding` masks each "
+            "query so it attends only to the first `--sparse-attn-sink-size` "
+            "tokens plus the last `--sparse-attn-recent-window` tokens. "
+            "Mutually exclusive with --kv-policy and requires --record-internals."
+        ),
+    )
+    parser.add_argument(
+        "--sparse-attn-sink-size",
+        type=int,
+        default=4,
+        help=(
+            "Sink-prefix length kept attended for `sliding`. Default 4. "
+            "Ignored when --sparse-attn != sliding."
+        ),
+    )
+    parser.add_argument(
+        "--sparse-attn-recent-window",
+        type=int,
+        default=256,
+        help=(
+            "Recent-window length kept attended for `sliding`. Default 256. "
+            "Ignored when --sparse-attn != sliding."
+        ),
+    )
+    parser.add_argument(
+        "--sparse-attn-config",
+        type=str,
+        default=None,
+        help=(
+            "Optional YAML file (e.g. configs/sparse_attention/sliding.yaml) "
+            "carrying a flat map of SparseAttentionConfig fields. CLI flags "
+            "overlay yaml using the same rules as --kv-config."
+        ),
+    )
+    parser.add_argument(
+        "--sparse-attn-record",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "Whether to write `sparse_attention.npz` recordings. Default "
+            "`on`. `off` runs the method but skips the per-call recorder "
+            "allocation and npz write. Meaningful only when --sparse-attn "
+            "!= none."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -487,6 +538,17 @@ def _run_collect(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    sparse_attn_active = (
+        args.sparse_attn != "none" or args.sparse_attn_config is not None
+    )
+    if sparse_attn_active and not args.record_internals:
+        print(
+            "ERROR: --sparse-attn / --sparse-attn-config requires "
+            "--record-internals (sparse attention only applies to the HF "
+            "recording backend).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if args.record_internals:
         os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
 
@@ -511,9 +573,19 @@ def _run_collect(args: argparse.Namespace) -> None:
     from agents.benchmarks import get_benchmark_class
     from agents.benchmarks.base import BenchmarkConfig
     from serving.kv_policies.config import load_eviction_config
+    from serving.sparse_attention.config import (
+        load_sparse_attention_config,
+        validate_attention_method_exclusivity,
+    )
     from trace_collect.collector import collect_traces
 
     eviction_config = load_eviction_config(args)
+    try:
+        sparse_attention_config = load_sparse_attention_config(args)
+        validate_attention_method_exclusivity(eviction_config, sparse_attention_config)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     benchmark_yaml = REPO_ROOT / "configs" / "benchmarks" / f"{args.benchmark}.yaml"
     if not benchmark_yaml.exists():
@@ -547,6 +619,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             min_free_disk_gb=args.min_free_disk_gb,
             record_internals=args.record_internals,
             eviction_config=eviction_config,
+            sparse_attention_config=sparse_attention_config,
         )
     )
     print(f"Traces written to: {run_dir}/")

@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     # Lazy: avoid forcing transformers import via kv_policies at module load.
     from serving.kv_policies.recorder import KVEvictionRecorder
     from serving.recording.attention_bus import AttentionBus
+    from serving.sparse_attention.base import BaseSparseAttention
+    from serving.sparse_attention.recorder import SparseAttentionRecorder
 
 
 _LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)\.self_attn$")
@@ -455,6 +457,7 @@ class LayerCapturer:
         model_summary: dict[str, Any],
         kv_recorder: "KVEvictionRecorder | None" = None,
         attention_bus: "AttentionBus | None" = None,
+        sparse_attention: "BaseSparseAttention | None" = None,
     ) -> None:
         self.config = config
         self.model_summary = dict(model_summary)
@@ -484,12 +487,24 @@ class LayerCapturer:
         # `finish_attempt`. Provider sets via `set_kv_policy_meta(...)`
         # before `start_attempt`. Default None = `--kv-policy none`.
         self._kv_policy_meta: dict[str, Any] | None = None
+        # Symmetric slot for sparse_attention (see set_sparse_attention_meta).
+        self._sparse_attention_meta: dict[str, Any] | None = None
         self._attempt_extra_meta: dict[str, Any] = {}
         # Optional manual override for `config.max_prefill_queries`. None = use
         # the frozen RecordingConfig value. H2O full-prefill scoring no longer
         # uses this path; it streams full rows in bounded chunks below so the
         # recording sample cap stays intact.
         self._max_prefill_queries_override: int | None = None
+
+        # Sparse attention method instance (one per provider) + per-call
+        # recorder. Pre-hooks read both via closure-bound getters so the
+        # provider can swap the recorder between calls without re-registering
+        # hooks. When `sparse_attention is None`, no pre-hooks are installed.
+        self._sparse_attention: "BaseSparseAttention | None" = sparse_attention
+        self._sparse_recorder: "SparseAttentionRecorder | None" = None
+        # Append counter for `record_step`; recorder receives a globally-
+        # monotone step id within the call. Cleared on each recorder swap.
+        self._sparse_step_counter: int = 0
 
         n_attention_modules = 0
         n_gate_modules = 0
@@ -509,6 +524,21 @@ class LayerCapturer:
                 self._handles.append(module.register_forward_hook(self._gate_hook(gate_layer)))
         if n_attention_modules == 0:
             raise ValueError("no attention modules matched '.layers.<n>.self_attn'")
+        # Sparse-attention pre-hooks are installed only when an active method
+        # is configured. Each closure binds (layer_idx, method-getter,
+        # recorder-getter, session-getter) so swapping the recorder per call
+        # does not require unregistering anything.
+        if self._sparse_attention is not None:
+            for name, module in model.named_modules():
+                layer = _layer_index(name)
+                if layer is None or layer < 0:
+                    continue
+                self._handles.append(
+                    module.register_forward_pre_hook(
+                        self._sparse_pre_hook(layer),
+                        with_kwargs=True,
+                    )
+                )
         if config.per_head_stats_layers and layer_indices:
             num_hidden_layers = max(layer_indices) + 1
             invalid = [i for i in config.per_head_stats_layers if i >= num_hidden_layers]
@@ -536,6 +566,24 @@ class LayerCapturer:
         """Swap the KV recorder. Caller (provider) drives the per-call lifecycle."""
         self._kv_recorder = recorder
 
+    def sparse_recorder(self) -> "SparseAttentionRecorder | None":
+        """Currently-attached sparse-attention recorder, or None."""
+        return self._sparse_recorder
+
+    def set_sparse_recorder(
+        self, recorder: "SparseAttentionRecorder | None"
+    ) -> None:
+        """Swap the sparse-attention recorder. Caller drives per-call lifecycle.
+
+        Resetting the step counter here keeps `record_step` monotone within
+        this recorder's lifetime; it is NOT joinable to
+        `kv_eviction.npz.record_step` because the two recorders fire at
+        different attention-pipeline stages and are mutually exclusive at
+        runtime (one always has zero rows).
+        """
+        self._sparse_recorder = recorder
+        self._sparse_step_counter = 0
+
     def set_kv_policy_meta(self, meta: dict[str, Any] | None) -> None:
         """Stash the attempt-level KV policy summary for `meta.json`.
 
@@ -544,6 +592,15 @@ class LayerCapturer:
         than per call. Pass None for `--kv-policy none`.
         """
         self._kv_policy_meta = dict(meta) if meta is not None else None
+
+    def set_sparse_attention_meta(self, meta: dict[str, Any] | None) -> None:
+        """Stash the attempt-level sparse-attention summary for `meta.json`.
+
+        Mirrors `set_kv_policy_meta` so the `sparse_attention` block sits
+        next to `kv_policy` in the rendered meta. Pass None for
+        `--sparse-attn none`.
+        """
+        self._sparse_attention_meta = dict(meta) if meta is not None else None
 
     def set_attempt_extra_meta(self, meta: dict[str, Any]) -> None:
         """Merge provider-owned attempt metadata into the next meta.json write."""
@@ -560,6 +617,8 @@ class LayerCapturer:
         }
         if getattr(self, "_kv_policy_meta", None) is not None:
             self._meta["kv_policy"] = dict(self._kv_policy_meta)
+        if getattr(self, "_sparse_attention_meta", None) is not None:
+            self._meta["sparse_attention"] = dict(self._sparse_attention_meta)
 
     def finish_attempt(self, trace_path: Path | None = None) -> None:
         if self._attempt_dir is None:
@@ -727,6 +786,128 @@ class LayerCapturer:
             self._capture_sampled_attention(layer, module, args, kwargs)
 
         return capture
+
+    def _sparse_pre_hook(self, layer: int):
+        """Pre-forward hook that ORs the sparse mask onto `attention_mask`.
+
+        Bound once per layer at construction; closure-captures `layer`. The
+        method instance and recorder live on `self` so the provider can swap
+        the recorder per-call without re-registering hooks. Returns
+        `(args, kwargs)` so the modified attention_mask reaches the wrapped
+        forward. A None session (no `recording_session()` active) still
+        applies the mask — the sparsity is part of the model semantics, not
+        a recording concern.
+        """
+
+        def pre_hook(
+            module: Any,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+            del module
+            method = self._sparse_attention
+            if method is None:
+                return args, kwargs
+            hidden_states = _arg_or_kw(args, kwargs, 0, "hidden_states")
+            if hidden_states is None or hidden_states.ndim != 3:
+                # Not a path we know how to mask; leave the forward untouched.
+                return args, kwargs
+            query_len = int(hidden_states.shape[-2])
+            past_key_values = _arg_or_kw(
+                args,
+                kwargs,
+                3,
+                "past_key_values",
+                default=kwargs.get("past_key_value"),
+            )
+            cached_len = 0
+            if past_key_values is not None:
+                try:
+                    cached_len = int(past_key_values.get_seq_length(layer))
+                except (AttributeError, TypeError):
+                    cached = _cached_key_states(past_key_values, layer)
+                    cached_len = 0 if cached is None else int(cached.shape[-2])
+            key_len = cached_len + query_len
+            # Phase rule mirrors LayerCapturer's: prefill if multi-token or
+            # no session yet; decode if single-token AFTER input was consumed.
+            input_tokens = (
+                int(self._session["input_token_count"]) if self._session else 0
+            )
+            if query_len == 1 and key_len > input_tokens:
+                phase = "decode"
+                decode_step = max(0, key_len - input_tokens - 1)
+            else:
+                phase = "prefill"
+                decode_step = -1
+            sparse_mask = method.build_additive_mask(
+                layer_idx=layer,
+                query_len=query_len,
+                key_len=key_len,
+                phase=phase,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+            # Qwen3 decoder layers call self_attn with pure kwargs beyond
+            # `hidden_states`; if a future HF version starts passing
+            # attention_mask positionally, `existing is None` here will let
+            # the materialize-fresh branch fire and overwrite the wrong
+            # arg, surfacing fast in tests rather than silently corrupting.
+            existing = kwargs.get("attention_mask")
+            if existing is not None:
+                # Cast/broadcast onto the existing mask's device/dtype so the
+                # downstream `scores + mask` stays in a single dtype. We
+                # `expand` rather than `broadcast_to` so the resulting tensor
+                # carries the same query-dim as the existing mask (the
+                # downstream LayerCapturer relies on `mask.shape[-2] ==
+                # query_len` to slice sampled rows).
+                if existing.ndim == 4 and existing.shape[-2] >= 1:
+                    sparse_for_add = sparse_mask.to(
+                        device=existing.device, dtype=existing.dtype
+                    ).expand(-1, -1, existing.shape[-2], -1)
+                else:
+                    sparse_for_add = sparse_mask.to(
+                        device=existing.device, dtype=existing.dtype
+                    )
+                kwargs["attention_mask"] = existing + sparse_for_add
+            else:
+                # No upstream attention_mask (HF's SDPA path may rely on its
+                # implicit causal mask). Materialise a [1,1,Q,K] sparse-only
+                # mask so the LayerCapturer's `mask.shape[-2] == query_len`
+                # contract is satisfied without depending on broadcast.
+                kwargs["attention_mask"] = sparse_mask.expand(
+                    1, 1, query_len, key_len
+                ).contiguous()
+            recorder = self._sparse_recorder
+            # Apply mask semantics always, but only RECORD rows while a real
+            # chat session is active. Warmup forwards (session is None) have
+            # no `input_token_count`, so the phase derived above is unreliable
+            # (Q==1 warmup forwards would be misfiled as "decode"); dropping
+            # the row avoids corrupting `sparse_attention.npz` semantics.
+            if recorder is not None and self._session is not None:
+                kept = (
+                    method.kept_count(key_len)
+                    if hasattr(method, "kept_count")
+                    else key_len
+                )
+                extras = method.record_metadata(
+                    layer_idx=layer,
+                    phase=phase,
+                    decode_step=decode_step,
+                )
+                recorder.append(
+                    step=self._sparse_step_counter,
+                    layer=layer,
+                    phase=phase,
+                    decode_step=decode_step,
+                    query_len=query_len,
+                    key_len=key_len,
+                    kept_count=int(kept),
+                    extras=extras,
+                )
+                self._sparse_step_counter += 1
+            return args, kwargs
+
+        return pre_hook
 
     def _attention_sampling_metadata(
         self,
@@ -1519,6 +1700,15 @@ class LayerCapturer:
                 # KV eviction npz lives alongside attention.npz / routing.npz so
                 # downstream loaders can join on (call_idx, layer, decode_step).
                 self._kv_recorder.write(tmp_dir / "kv_eviction.npz")
+            sparse_records = (
+                self._sparse_recorder.n_records()
+                if self._sparse_recorder is not None
+                else 0
+            )
+            if self._sparse_recorder is not None and sparse_records > 0:
+                # Sparse attention npz mirrors kv_eviction.npz placement so the
+                # two artifacts share the same per-iter directory contract.
+                self._sparse_recorder.write(tmp_dir / "sparse_attention.npz")
             (tmp_dir / ".done").write_text("complete\n", encoding="utf-8")
 
             if iter_dir.exists():
@@ -1551,6 +1741,12 @@ class LayerCapturer:
             "attention_sampling": dict(self._session["attention_sampling"]),
             "elapsed_s": time.time() - float(self._session["started_at"]),
         }
+        if self._sparse_attention is not None:
+            # Only annotate the integrity block when sparse attention is wired
+            # so existing recording-only test fixtures stay byte-stable.
+            iter_meta["recording_integrity"]["sparse_attention_records"] = int(
+                sparse_records
+            )
         generation = self._session.get("generation")
         if generation is not None:
             iter_meta["generation"] = dict(generation)

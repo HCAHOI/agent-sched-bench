@@ -10,7 +10,8 @@ attempt_NNNN/
     ├── segments.json
     ├── attention.npz
     ├── routing.npz          ← 仅 MoE 模型
-    └── kv_eviction.npz      ← 仅当 KV policy 在录制
+    ├── kv_eviction.npz      ← 仅当 KV policy 在录制（与下条互斥）
+    └── sparse_attention.npz ← 仅当 sparse attention method 在录制
 ```
 
 ---
@@ -100,6 +101,25 @@ var  = (1/Q) Σ_q Var_{k ∈ S_q}(A_{q,k})   （population variance）
 - 每个 segment × 每个专家的负载（加权 + 原始 token 计数）
 - 该 record 的 capacity / 预期溢出 token 数 / 预期被丢 token 数
 - drop signal 模式（当前是 expected_uniform_capacity，不是真实 drop）
+
+---
+
+## `sparse_attention.npz` — sparse attention 决策（仅当 method 在录制）
+
+每行对应一次 `(call_idx, layer, phase, decode_step)` 的 mask 决策。`kv_eviction`
+与 `sparse_attention` 互斥；同一 attempt 内至多出现其中之一。
+
+- **元数据**：`method_name`（`sliding` / 未来扩展）
+- **行键**：`record_step`（运行内全局自增）/ `record_layer` / `record_phase`
+  （`prefill` / `decode`）/ `record_decode_step`（prefill = -1）
+- **形状**：`query_len`（forward 行数）/ `key_len`（mask 作用的 key 长度）
+- **稀疏度**：`kept_count`（未屏蔽 key 位置数）/ `density`（fp16，
+  `kept_count / key_len`；key_len=0 时为 0）
+- **method 自定义字段**：`extras_json` U-string 列，per-row JSON
+  序列化的 method metadata；sliding 例：`{"sink_size": 4, "recent_window": 256}`
+
+attempt 级 `meta.json["sparse_attention"]` 与 `kv_policy` 并列；iter 级
+`recording_integrity["sparse_attention_records"]` 给出当 iter 该 npz 的行数。
 
 ---
 

@@ -34,6 +34,13 @@ from serving.kv_policies.recorder import KVEvictionRecorder
 from serving.recording.attention_bus import AttentionBus
 from serving.recording.hooks import LayerCapturer
 from serving.recording.recording import RecordingConfig, segment_role
+from serving.sparse_attention import (
+    BaseSparseAttention,
+    SparseAttentionConfig,
+    SparseAttentionRecorder,
+    build_sparse_attention,
+)
+from serving.sparse_attention.config import validate_attention_method_exclusivity
 
 
 _LOG = logging.getLogger(__name__)
@@ -606,11 +613,16 @@ class HFRecordingProvider(LLMProvider):
         api_key: str | None = None,
         api_base: str | None = None,
         eviction_config: EvictionPolicyConfig | None = None,
+        sparse_attention_config: SparseAttentionConfig | None = None,
         temperature: float = 0.1,
         top_p: float | None = None,
         top_k: int | None = None,
         repetition_penalty: float | None = None,
     ) -> None:
+        # Belt-and-suspenders: the CLI layer also validates exclusivity, but
+        # any caller bypassing CLI (notebook, test, direct construction)
+        # must hit the same gate. Cheap to evaluate before any model load.
+        validate_attention_method_exclusivity(eviction_config, sparse_attention_config)
         super().__init__(api_key=api_key, api_base=api_base)
         self.default_model = default_model
         self.config = config or RecordingConfig()
@@ -629,6 +641,11 @@ class HFRecordingProvider(LLMProvider):
         # stays free of transformers `Cache` instantiation. None when no
         # eviction policy is configured.
         self._eviction_config = eviction_config
+        self._sparse_attention_config = sparse_attention_config
+        # Method instance is built once per provider (it carries no per-call
+        # state for sliding). The recorder is swapped per call via
+        # LayerCapturer.set_sparse_recorder().
+        self._sparse_attention: BaseSparseAttention | None = None
         self._session_cache: BaseEvictionCache | None = None
         # Token IDs currently materialised in the session cache, including any
         # decoded tokens from prior calls. (1, T) growing tensor; LCP is
@@ -667,11 +684,18 @@ class HFRecordingProvider(LLMProvider):
         # leaves it with zero subscribers, which makes it a no-op dispatch
         # and preserves attention.npz byte-equality vs the pre-step-5 path.
         self._attention_bus = AttentionBus()
+        if self._sparse_attention_config is not None:
+            self._sparse_attention = build_sparse_attention(
+                self._sparse_attention_config,
+                num_layers=int(self.model.config.num_hidden_layers),
+                recorder=None,
+            )
         self.capturer = LayerCapturer(
             self.model,
             config=self.config,
             model_summary=self._model_summary(),
             attention_bus=self._attention_bus,
+            sparse_attention=self._sparse_attention,
         )
         # Attempt-level KV policy summary lands in meta.json. The
         # `prefill_score_bias` flag is the explicit warning that H2O's score
@@ -679,6 +703,28 @@ class HFRecordingProvider(LLMProvider):
         # (plan E12 — recording bias). False for non-h2o policies; analysis
         # code can branch on it.
         self.capturer.set_kv_policy_meta(self._kv_policy_meta_payload())
+        self.capturer.set_sparse_attention_meta(
+            self._sparse_attention_meta_payload()
+        )
+
+    def _sparse_attention_meta_payload(self) -> dict[str, Any] | None:
+        """Build the attempt-level sparse_attention block for meta.json.
+
+        Returns None when no sparse method is configured. Otherwise mirrors
+        the serialisable subset of `SparseAttentionConfig`. Per-method
+        knobs that don't apply to the active method are emitted as-is from
+        the dataclass (a `random_evict`-style approach) so the meta stays
+        debuggable without growing a per-method projection.
+        """
+        cfg = self._sparse_attention_config
+        if cfg is None:
+            return None
+        return {
+            "method": cfg.name,
+            "sink_size": int(cfg.sink_size),
+            "recent_window": int(cfg.recent_window),
+            "record": bool(cfg.record),
+        }
 
     def _kv_policy_meta_payload(self) -> dict[str, Any] | None:
         """Build the attempt-level kv_policy block for meta.json.
@@ -1158,6 +1204,20 @@ class HFRecordingProvider(LLMProvider):
                 generation_kwargs["attention_mask"] = self._torch.ones_like(
                     input_tensor
                 )
+            # Per-call sparse-attention recorder swap mirrors the KV recorder
+            # pattern. Both subsystems are mutually exclusive at construction
+            # time, so at most one of (kv_recorder, sparse_recorder) is ever
+            # non-None within a single call.
+            sparse_recorder: SparseAttentionRecorder | None = None
+            if (
+                self._sparse_attention_config is not None
+                and self._sparse_attention_config.record
+            ):
+                sparse_recorder = SparseAttentionRecorder(
+                    call_idx=call_idx,
+                    method_name=self._sparse_attention_config.name,
+                )
+            self.capturer.set_sparse_recorder(sparse_recorder)
             # H2O full-prefill scoring is handled inside LayerCapturer in
             # bounded chunks and delivered only to full-prefill consumers. Do
             # not lift the recording sample cap here; doing so would materialize
@@ -1249,6 +1309,10 @@ class HFRecordingProvider(LLMProvider):
             if self._session_cache is not None:
                 # Detach recorder so the next call's recorder swap is clean.
                 self._session_cache.recorder = None
+            # Symmetric detach for sparse recorder; pre-hook reads via
+            # capturer attribute, so clearing here keeps a stale recorder
+            # from being touched between calls.
+            self.capturer.set_sparse_recorder(None)
             text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
             self._extend_session_tokens(prompt_ids=prompt_ids, output_ids=output_ids)
             return text, output_ids

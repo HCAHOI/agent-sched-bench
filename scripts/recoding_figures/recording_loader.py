@@ -978,6 +978,141 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
     )
 
 
+@dataclass
+class SparseAttentionFrame:
+    """Per-row sparse attention audit, flattened across iterations.
+
+    Mirrors `KVEvictionFrame`: scalar columns are 1-D arrays of length R;
+    `extras_per_row` carries the lazily-decoded JSON `extras_json` column so
+    callers can branch on method-specific fields without re-parsing.
+    """
+
+    n_rows: int
+    task: np.ndarray
+    call_idx: np.ndarray
+    iter_dir: np.ndarray
+    method_name: np.ndarray
+    record_step: np.ndarray
+    record_layer: np.ndarray
+    record_phase: np.ndarray
+    record_decode_step: np.ndarray
+    query_len: np.ndarray
+    key_len: np.ndarray
+    kept_count: np.ndarray
+    density: np.ndarray
+    extras_json: np.ndarray
+    extras_per_row: list[dict[str, object]] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return self.n_rows == 0
+
+
+def load_sparse_attention(records: Sequence[IterationRecord]) -> SparseAttentionFrame:
+    """Load per-row sparse-attention audit frames across all iter dirs.
+
+    Each `sparse_attention.npz` is appended along its R axis (one row per
+    `(layer, phase, decode_step)` mask decision). Iterations missing the
+    npz are skipped silently — the artifact is only emitted when
+    `--sparse-attn != none` and `--sparse-attn-record on`.
+
+    Returns an empty `SparseAttentionFrame` (n_rows=0, all columns 0-length)
+    when no records carry the npz. Raises only on malformed npz, never on
+    missing.
+    """
+    columns: dict[str, list[np.ndarray]] = {
+        "task": [],
+        "call_idx": [],
+        "iter_dir": [],
+        "method_name": [],
+        "record_step": [],
+        "record_layer": [],
+        "record_phase": [],
+        "record_decode_step": [],
+        "query_len": [],
+        "key_len": [],
+        "kept_count": [],
+        "density": [],
+        "extras_json": [],
+    }
+
+    for record in records:
+        npz_path = record.iter_dir / "sparse_attention.npz"
+        if not npz_path.is_file():
+            continue
+        with np.load(npz_path, allow_pickle=True) as data:
+            n = int(data["record_step"].shape[0])
+            if n == 0:
+                continue
+            columns["task"].append(np.full(n, record.task, dtype=object))
+            columns["call_idx"].append(
+                np.full(n, int(record.call_idx), dtype=np.int32)
+            )
+            columns["iter_dir"].append(
+                np.full(n, str(record.iter_dir), dtype=object)
+            )
+            columns["method_name"].append(
+                np.full(n, str(data["method_name"]), dtype="U16")
+            )
+            columns["record_step"].append(data["record_step"].astype(np.int32))
+            columns["record_layer"].append(data["record_layer"].astype(np.int32))
+            columns["record_phase"].append(data["record_phase"].astype("U7"))
+            columns["record_decode_step"].append(
+                data["record_decode_step"].astype(np.int32)
+            )
+            columns["query_len"].append(data["query_len"].astype(np.int32))
+            columns["key_len"].append(data["key_len"].astype(np.int32))
+            columns["kept_count"].append(data["kept_count"].astype(np.int32))
+            columns["density"].append(data["density"].astype(np.float16))
+            # `extras_json` is an object array of JSON strings; promote to a
+            # uniform-dtype U column on read so downstream code can slice
+            # without paying for object-array semantics.
+            columns["extras_json"].append(
+                np.asarray([str(x) for x in data["extras_json"]], dtype=object)
+            )
+
+    if not columns["record_step"]:
+        return SparseAttentionFrame(
+            n_rows=0,
+            task=np.empty(0, dtype=object),
+            call_idx=np.empty(0, dtype=np.int32),
+            iter_dir=np.empty(0, dtype=object),
+            method_name=np.empty(0, dtype="U16"),
+            record_step=np.empty(0, dtype=np.int32),
+            record_layer=np.empty(0, dtype=np.int32),
+            record_phase=np.empty(0, dtype="U7"),
+            record_decode_step=np.empty(0, dtype=np.int32),
+            query_len=np.empty(0, dtype=np.int32),
+            key_len=np.empty(0, dtype=np.int32),
+            kept_count=np.empty(0, dtype=np.int32),
+            density=np.empty(0, dtype=np.float16),
+            extras_json=np.empty(0, dtype=object),
+            extras_per_row=[],
+        )
+
+    extras_json_all = np.concatenate(columns["extras_json"])
+    extras_per_row: list[dict[str, object]] = [
+        json.loads(str(entry)) if entry else {} for entry in extras_json_all
+    ]
+    return SparseAttentionFrame(
+        n_rows=sum(int(arr.shape[0]) for arr in columns["record_step"]),
+        task=np.concatenate(columns["task"]),
+        call_idx=np.concatenate(columns["call_idx"]),
+        iter_dir=np.concatenate(columns["iter_dir"]),
+        method_name=np.concatenate(columns["method_name"]),
+        record_step=np.concatenate(columns["record_step"]),
+        record_layer=np.concatenate(columns["record_layer"]),
+        record_phase=np.concatenate(columns["record_phase"]),
+        record_decode_step=np.concatenate(columns["record_decode_step"]),
+        query_len=np.concatenate(columns["query_len"]),
+        key_len=np.concatenate(columns["key_len"]),
+        kept_count=np.concatenate(columns["kept_count"]),
+        density=np.concatenate(columns["density"]),
+        extras_json=extras_json_all,
+        extras_per_row=extras_per_row,
+    )
+
+
 def load_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
     """Load per-head per-span attention stats from one iter directory.
 

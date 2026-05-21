@@ -47,6 +47,7 @@ from trace_collect.runtime.task_container import (
 if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
     from serving.kv_policies.base import EvictionPolicyConfig
+    from serving.sparse_attention.base import SparseAttentionConfig
 
 logger = logging.getLogger(__name__)
 _DOCKER_HOST_GATEWAY = "172.17.0.1"
@@ -564,6 +565,7 @@ async def collect_traces(
     min_free_disk_gb: float = 30.0,
     record_internals: bool = False,
     eviction_config: "EvictionPolicyConfig | None" = None,
+    sparse_attention_config: "SparseAttentionConfig | None" = None,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     if record_internals and scaffold != "openclaw":
@@ -605,6 +607,7 @@ async def collect_traces(
                 HFRecordingProvider(
                     default_model=model,
                     eviction_config=eviction_config,
+                    sparse_attention_config=sparse_attention_config,
                     temperature=temperature if temperature is not None else 0.1,
                     top_p=top_p,
                     top_k=top_k,
