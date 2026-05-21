@@ -91,6 +91,13 @@ var  = (1/Q) Σ_q Var_{k ∈ S_q}(A_{q,k})   （population variance）
 - **每条 record 聚合**：heavy-hitter（该 record 所有采样行平均后的 top-k）
 - **每次 chat 聚合**：span × span attention 矩阵（normalized + raw + row_sums + 计数）
 
+**与 sparse_attention 的交互**：当 sparse_attention method 在录制时，sparse
+pre-hook 会在 softmax 前向 mask cell 注入 `-inf`，所以这里抓到的 post-softmax
+`attn` 在被 sparse mask 屏蔽的位置上是 HARD ZERO，而 dense 跑同样的 query 不会
+出现这种零值。下游消费 `segment_mass` / `topk_*` 的代码在 sliding-window 录制
+下应预期 middle-token span 上的 mass 为 0。逐层逐步 keep-set 见
+`sparse_attention.npz`。
+
 ---
 
 ## `routing.npz` — MoE 专家路由（仅 MoE 模型）

@@ -563,7 +563,11 @@ class LayerCapturer:
         return self._kv_recorder
 
     def set_kv_recorder(self, recorder: "KVEvictionRecorder | None") -> None:
-        """Swap the KV recorder. Caller (provider) drives the per-call lifecycle."""
+        """Swap the KV recorder. Caller (provider) drives the per-call lifecycle.
+
+        Not thread-safe; assumes HF inference runs single-threaded per provider
+        (the project's actual usage).
+        """
         self._kv_recorder = recorder
 
     def sparse_recorder(self) -> "SparseAttentionRecorder | None":
@@ -580,6 +584,9 @@ class LayerCapturer:
         `kv_eviction.npz.record_step` because the two recorders fire at
         different attention-pipeline stages and are mutually exclusive at
         runtime (one always has zero rows).
+
+        Not thread-safe; assumes HF inference runs single-threaded per
+        provider (the project's actual usage).
         """
         self._sparse_recorder = recorder
         self._sparse_step_counter = 0
@@ -854,6 +861,8 @@ class LayerCapturer:
             # arg, surfacing fast in tests rather than silently corrupting.
             existing = kwargs.get("attention_mask")
             if existing is not None:
+                import torch
+
                 # Cast/broadcast onto the existing mask's device/dtype so the
                 # downstream `scores + mask` stays in a single dtype. We
                 # `expand` rather than `broadcast_to` so the resulting tensor
@@ -868,7 +877,18 @@ class LayerCapturer:
                     sparse_for_add = sparse_mask.to(
                         device=existing.device, dtype=existing.dtype
                     )
-                kwargs["attention_mask"] = existing + sparse_for_add
+                # Sparse mask is a "force-mask" not a weighted decrement:
+                # positions already masked by the upstream causal mask plus
+                # sparse should stay at finfo.min, not double-saturate to
+                # -inf which can overflow fp16 and produce NaN in some SDPA
+                # backends.
+                neg_inf = torch.finfo(existing.dtype).min
+                sparse_masked = sparse_for_add < 0
+                kwargs["attention_mask"] = torch.where(
+                    sparse_masked,
+                    torch.full_like(existing, neg_inf),
+                    existing,
+                )
             else:
                 # No upstream attention_mask (HF's SDPA path may rely on its
                 # implicit causal mask). Materialise a [1,1,Q,K] sparse-only

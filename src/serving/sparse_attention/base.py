@@ -29,7 +29,12 @@ class SparseAttentionConfig:
 
     name: Literal["none", "sliding"]
     record: bool = False
+    # Default sink_size=4 follows StreamingLLM (Xiao et al. 2024,
+    # arXiv:2309.17453): the first few tokens carry the "attention sink"
+    # that prevents softmax-distribution collapse when the middle is masked.
     sink_size: int = 4  # sliding
+    # 256 is a reasonable default for short-context smoke tests; tune per
+    # model and workload. Not anchored to any specific paper.
     recent_window: int = 256  # sliding
 
 
