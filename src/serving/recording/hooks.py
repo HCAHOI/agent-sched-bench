@@ -505,6 +505,8 @@ class LayerCapturer:
         # Append counter for `record_step`; recorder receives a globally-
         # monotone step id within the call. Cleared on each recorder swap.
         self._sparse_step_counter: int = 0
+        self._sparse_layer_indices: tuple[int, ...] = ()
+        self._sparse_hook_counts_by_layer: dict[int, int] = {}
 
         n_attention_modules = 0
         n_gate_modules = 0
@@ -524,6 +526,7 @@ class LayerCapturer:
                 self._handles.append(module.register_forward_hook(self._gate_hook(gate_layer)))
         if n_attention_modules == 0:
             raise ValueError("no attention modules matched '.layers.<n>.self_attn'")
+        self._sparse_layer_indices = tuple(sorted(set(layer_indices)))
         # Sparse-attention pre-hooks are installed only when an active method
         # is configured. Each closure binds (layer_idx, method-getter,
         # recorder-getter, session-getter) so swapping the recorder per call
@@ -590,6 +593,9 @@ class LayerCapturer:
         """
         self._sparse_recorder = recorder
         self._sparse_step_counter = 0
+        self._sparse_hook_counts_by_layer = {
+            int(layer): 0 for layer in self._sparse_layer_indices
+        }
 
     def set_kv_policy_meta(self, meta: dict[str, Any] | None) -> None:
         """Stash the attempt-level KV policy summary for `meta.json`.
@@ -854,49 +860,56 @@ class LayerCapturer:
                 device=hidden_states.device,
                 dtype=hidden_states.dtype,
             )
-            # Qwen3 decoder layers call self_attn with pure kwargs beyond
-            # `hidden_states`; if a future HF version starts passing
-            # attention_mask positionally, `existing is None` here will let
-            # the materialize-fresh branch fire and overwrite the wrong
-            # arg, surfacing fast in tests rather than silently corrupting.
-            existing = kwargs.get("attention_mask")
-            if existing is not None:
-                import torch
+            observe_only = bool(method.observe_only)
+            if not observe_only:
+                # Qwen3 decoder layers call self_attn with pure kwargs beyond
+                # `hidden_states`; if a future HF version starts passing
+                # attention_mask positionally, `existing is None` here will let
+                # the materialize-fresh branch fire and overwrite the wrong
+                # arg, surfacing fast in tests rather than silently corrupting.
+                existing = kwargs.get("attention_mask")
+                if existing is not None:
+                    import torch
 
-                # Cast/broadcast onto the existing mask's device/dtype so the
-                # downstream `scores + mask` stays in a single dtype. We
-                # `expand` rather than `broadcast_to` so the resulting tensor
-                # carries the same query-dim as the existing mask (the
-                # downstream LayerCapturer relies on `mask.shape[-2] ==
-                # query_len` to slice sampled rows).
-                if existing.ndim == 4 and existing.shape[-2] >= 1:
-                    sparse_for_add = sparse_mask.to(
-                        device=existing.device, dtype=existing.dtype
-                    ).expand(-1, -1, existing.shape[-2], -1)
-                else:
-                    sparse_for_add = sparse_mask.to(
-                        device=existing.device, dtype=existing.dtype
+                    # Cast/broadcast onto the existing mask's device/dtype so the
+                    # downstream `scores + mask` stays in a single dtype. We
+                    # `expand` rather than `broadcast_to` so the resulting tensor
+                    # carries the same query-dim as the existing mask (the
+                    # downstream LayerCapturer relies on `mask.shape[-2] ==
+                    # query_len` to slice sampled rows).
+                    if existing.ndim == 4 and existing.shape[-2] >= 1:
+                        sparse_for_add = sparse_mask.to(
+                            device=existing.device, dtype=existing.dtype
+                        ).expand(-1, -1, existing.shape[-2], -1)
+                    else:
+                        sparse_for_add = sparse_mask.to(
+                            device=existing.device, dtype=existing.dtype
+                        )
+                    # Sparse mask is a "force-mask" not a weighted decrement:
+                    # positions already masked by the upstream causal mask plus
+                    # sparse should stay at finfo.min, not double-saturate to
+                    # -inf which can overflow fp16 and produce NaN in some SDPA
+                    # backends.
+                    neg_inf = torch.finfo(existing.dtype).min
+                    sparse_masked = sparse_for_add < 0
+                    kwargs["attention_mask"] = torch.where(
+                        sparse_masked,
+                        torch.full_like(existing, neg_inf),
+                        existing,
                     )
-                # Sparse mask is a "force-mask" not a weighted decrement:
-                # positions already masked by the upstream causal mask plus
-                # sparse should stay at finfo.min, not double-saturate to
-                # -inf which can overflow fp16 and produce NaN in some SDPA
-                # backends.
-                neg_inf = torch.finfo(existing.dtype).min
-                sparse_masked = sparse_for_add < 0
-                kwargs["attention_mask"] = torch.where(
-                    sparse_masked,
-                    torch.full_like(existing, neg_inf),
-                    existing,
+                else:
+                    # No upstream attention_mask (HF's SDPA path may rely on its
+                    # implicit causal mask). Materialise a [1,1,Q,K] sparse-only
+                    # mask so the LayerCapturer's `mask.shape[-2] == query_len`
+                    # contract is satisfied without depending on broadcast.
+                    kwargs["attention_mask"] = sparse_mask.expand(
+                        1, 1, query_len, key_len
+                    ).contiguous()
+            # else: observe_only — kwargs["attention_mask"] left untouched; SDPA uses implicit causal.
+            if self._session is not None:
+                self._sparse_hook_counts_by_layer[layer] = (
+                    self._sparse_hook_counts_by_layer.get(layer, 0) + 1
                 )
-            else:
-                # No upstream attention_mask (HF's SDPA path may rely on its
-                # implicit causal mask). Materialise a [1,1,Q,K] sparse-only
-                # mask so the LayerCapturer's `mask.shape[-2] == query_len`
-                # contract is satisfied without depending on broadcast.
-                kwargs["attention_mask"] = sparse_mask.expand(
-                    1, 1, query_len, key_len
-                ).contiguous()
             recorder = self._sparse_recorder
             # Apply mask semantics always, but only RECORD rows while a real
             # chat session is active. Warmup forwards (session is None) have
@@ -914,6 +927,19 @@ class LayerCapturer:
                     phase=phase,
                     decode_step=decode_step,
                 )
+                effective_counter = getattr(
+                    method, "effective_kept_count_sum", None
+                )
+                if callable(effective_counter):
+                    effective_kept = int(
+                        effective_counter(query_len=query_len, key_len=key_len)
+                    )
+                    extras = dict(extras)
+                    extras["effective_kept_count_sum"] = effective_kept
+                    denom = int(query_len) * int(key_len)
+                    extras["effective_density"] = (
+                        float(effective_kept) / float(denom) if denom > 0 else 0.0
+                    )
                 recorder.append(
                     step=self._sparse_step_counter,
                     layer=layer,
@@ -928,6 +954,38 @@ class LayerCapturer:
             return args, kwargs
 
         return pre_hook
+
+    def _sparse_attention_integrity(self, *, sparse_records: int) -> dict[str, Any]:
+        """Build sparse-attention hook/recording integrity metadata."""
+        counts = [
+            int(self._sparse_hook_counts_by_layer.get(layer, 0))
+            for layer in self._sparse_layer_indices
+        ]
+        hook_invocations = int(sum(counts))
+        recording_enabled = self._sparse_recorder is not None
+        expected_records = hook_invocations if recording_enabled else 0
+        observed_layers = sum(1 for count in counts if count > 0)
+        min_hooks = min(counts) if counts else 0
+        max_hooks = max(counts) if counts else 0
+        return {
+            "sparse_attention_recording_enabled": bool(recording_enabled),
+            "sparse_attention_observe_only": bool(
+                self._sparse_attention.observe_only
+                if self._sparse_attention is not None
+                else False
+            ),
+            "sparse_attention_records": int(sparse_records),
+            "sparse_attention_expected_records": int(expected_records),
+            "sparse_attention_records_match_expected": bool(
+                int(sparse_records) == int(expected_records)
+            ),
+            "sparse_attention_expected_layers": int(len(counts)),
+            "sparse_attention_observed_layers": int(observed_layers),
+            "sparse_attention_hook_invocations": hook_invocations,
+            "sparse_attention_hooks_per_layer_min": int(min_hooks),
+            "sparse_attention_hooks_per_layer_max": int(max_hooks),
+            "sparse_attention_hooks_balanced": bool(min_hooks == max_hooks),
+        }
 
     def _attention_sampling_metadata(
         self,
@@ -1764,8 +1822,8 @@ class LayerCapturer:
         if self._sparse_attention is not None:
             # Only annotate the integrity block when sparse attention is wired
             # so existing recording-only test fixtures stay byte-stable.
-            iter_meta["recording_integrity"]["sparse_attention_records"] = int(
-                sparse_records
+            iter_meta["recording_integrity"].update(
+                self._sparse_attention_integrity(sparse_records=sparse_records)
             )
         generation = self._session.get("generation")
         if generation is not None:
@@ -1830,7 +1888,7 @@ class LayerCapturer:
             if phase == "decode" and l_idx in decode_keys_by_layer:
                 decode_keys_by_layer[l_idx].append(step)
 
-        decode_counts = [len(decode_keys_by_layer[l]) for l in layers]
+        decode_counts = [len(decode_keys_by_layer[layer_id]) for layer_id in layers]
         T_max = max(decode_counts) if decode_counts else 0
 
         # NaN-initialize decode mean/var — cells with no key positions stay NaN (Fix 1)

@@ -724,6 +724,7 @@ class HFRecordingProvider(LLMProvider):
             "sink_size": int(cfg.sink_size),
             "recent_window": int(cfg.recent_window),
             "record": bool(cfg.record),
+            "observe_only": bool(cfg.observe_only),
         }
 
     def _kv_policy_meta_payload(self) -> dict[str, Any] | None:

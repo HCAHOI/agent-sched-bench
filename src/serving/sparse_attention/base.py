@@ -36,6 +36,7 @@ class SparseAttentionConfig:
     # 256 is a reasonable default for short-context smoke tests; tune per
     # model and workload. Not anchored to any specific paper.
     recent_window: int = 256  # sliding
+    observe_only: bool = False  # run full attention; record what sparse WOULD select
 
 
 class BaseSparseAttention(Protocol):
@@ -46,12 +47,14 @@ class BaseSparseAttention(Protocol):
     (when recording) appends one row of `record_metadata` to the recorder.
 
     `build_additive_mask` returns a tensor broadcastable to `[B, H, Q, K]`
-    where 0 means "attend" and `-inf` means "mask". HF's upstream causal mask
-    is applied separately by the SDPA path; implementations only encode the
-    sparsity pattern, not causality.
+    where 0 means "attend" and `-inf` means "mask". The recording pre-hook
+    always passes a non-None attention mask to HF attention; methods must
+    therefore include the causal upper-triangular cut themselves for Q > 1
+    prefill masks.
     """
 
     name: str
+    observe_only: bool
 
     def build_additive_mask(
         self,

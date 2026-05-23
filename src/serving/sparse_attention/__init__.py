@@ -39,7 +39,8 @@ def build_sparse_attention(
     if name == "sliding":
         from serving.sparse_attention.sliding import SlidingWindowSparseAttention
 
-        return SlidingWindowSparseAttention.from_config(config)
+        method = SlidingWindowSparseAttention.from_config(config)
+        return method
     if name == "none":
         raise ValueError(
             "build_sparse_attention should not be called when method is disabled "

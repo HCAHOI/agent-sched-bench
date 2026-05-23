@@ -29,6 +29,7 @@ _CLI_TO_FIELD = {
     "sparse_attn_sink_size": "sink_size",
     "sparse_attn_recent_window": "recent_window",
     "sparse_attn_record": "record",
+    "sparse_attn_observe_only": "observe_only",
 }
 
 _FIELD_COERCERS = {
@@ -36,6 +37,7 @@ _FIELD_COERCERS = {
     "sink_size": int,
     "recent_window": int,
     "record": lambda v: v if isinstance(v, bool) else str(v).lower() in {"on", "true", "1", "yes"},
+    "observe_only": lambda v: v if isinstance(v, bool) else str(v).lower() in {"on", "true", "1", "yes"},
 }
 
 
@@ -102,6 +104,7 @@ def load_sparse_attention_config(
         "sparse_attn_sink_size": 4,
         "sparse_attn_recent_window": 256,
         "sparse_attn_record": "on",
+        "sparse_attn_observe_only": False,
     }
 
     merged: dict[str, Any] = dict(base)
@@ -173,10 +176,12 @@ def validate_attention_method_exclusivity(
     Either or both arguments may be None; only the kv+sparse double-on
     case raises.
     """
+    if sparse_config is not None and sparse_config.observe_only:
+        return
     if kv_config is not None and sparse_config is not None:
         raise ValueError(
-            "kv_policy and sparse_attention are mutually exclusive; "
-            f"got kv_policy={getattr(kv_config, 'name', kv_config)!r} and "
-            f"sparse_attention={sparse_config.name!r}. Pick exactly one. "
-            "Disable one with --kv-policy none or --sparse-attn none."
+            "kv_policy and sparse_attention are mutually exclusive when sparse is in enforce mode. "
+            "Use --sparse-attn-observe-only to enable side-channel recording alongside kv eviction. "
+            f"Got kv_policy={getattr(kv_config, 'name', kv_config)!r} and "
+            f"sparse_attention={sparse_config.name!r}."
         )

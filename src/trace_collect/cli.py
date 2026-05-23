@@ -273,6 +273,11 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--sparse-attn-observe-only",
+        action="store_true",
+        help="Record sparse selection without enforcing it (compatible with --kv-policy).",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
