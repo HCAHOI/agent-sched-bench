@@ -166,8 +166,25 @@ def test_sparse_attn_sliding_e2e(tmp_path):
     meta_path = attempt_dir / "recordings" / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta.get("sparse_attention", {}).get("method") == "sliding"
-    assert "sparse_attention_records" in meta["iters"][0]["recording_integrity"]
-    assert meta["iters"][0]["recording_integrity"]["sparse_attention_records"] > 0
+    integrity = meta["iters"][0]["recording_integrity"]
+    assert integrity["sparse_attention_recording_enabled"] is True
+    assert integrity["sparse_attention_records"] > 0
+    assert (
+        integrity["sparse_attention_records"]
+        == integrity["sparse_attention_expected_records"]
+    )
+    assert integrity["sparse_attention_records_match_expected"] is True
+    assert integrity["sparse_attention_expected_layers"] == num_layers
+    assert integrity["sparse_attention_observed_layers"] == num_layers
+    assert (
+        integrity["sparse_attention_hook_invocations"]
+        == integrity["sparse_attention_records"]
+    )
+    assert integrity["sparse_attention_hooks_per_layer_min"] > 0
+    assert integrity["sparse_attention_hooks_per_layer_max"] >= (
+        integrity["sparse_attention_hooks_per_layer_min"]
+    )
+    assert integrity["sparse_attention_hooks_balanced"] is True
 
     attempts = find_attempt_dirs([attempt_dir])
     assert attempts == [attempt_dir]
@@ -185,9 +202,11 @@ def test_sparse_attn_sliding_e2e(tmp_path):
     assert float(densities.min()) < 1.0, (
         f"all rows had density == 1.0; mask was inactive (min={float(densities.min())})"
     )
-    # extras_per_row round-trip from JSON. sliding's record_metadata returns
-    # {} since sink_size / recent_window already live in meta.json.
-    assert frame.extras_per_row[0] == {}
+    # extras_per_row round-trips compact effective-mask metadata. The static
+    # sliding knobs still live once in meta.json; per-row extras carry only
+    # query/key-dependent summaries.
+    assert "effective_kept_count_sum" in frame.extras_per_row[0]
+    assert "effective_density" in frame.extras_per_row[0]
 
     # Generation divergence: the sliding mask must actually reach the kernel
     # and change the logits enough to flip at least one decoded token vs the

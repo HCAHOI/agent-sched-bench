@@ -39,7 +39,7 @@ class SlidingWindowSparseAttention:
 
     name = "sliding"
 
-    def __init__(self, sink_size: int, recent_window: int) -> None:
+    def __init__(self, sink_size: int, recent_window: int, observe_only: bool = False) -> None:
         if sink_size < 0:
             raise ValueError(
                 f"SlidingWindowSparseAttention requires sink_size >= 0; "
@@ -57,10 +57,11 @@ class SlidingWindowSparseAttention:
             )
         self.sink_size = int(sink_size)
         self.recent_window = int(recent_window)
+        self.observe_only = bool(observe_only)
 
     @classmethod
     def from_config(cls, config: SparseAttentionConfig) -> "SlidingWindowSparseAttention":
-        return cls(sink_size=config.sink_size, recent_window=config.recent_window)
+        return cls(sink_size=config.sink_size, recent_window=config.recent_window, observe_only=config.observe_only)
 
     def build_additive_mask(
         self,
@@ -130,6 +131,50 @@ class SlidingWindowSparseAttention:
             return key_len
         return sink + (key_len - recent_start)
 
+    def effective_kept_count_sum(self, *, query_len: int, key_len: int) -> int:
+        """Number of sparse-and-causal visible `(query, key)` cells.
+
+        `kept_count()` is a key-uniform summary of the sliding sparsity
+        pattern. During prefill, causal masking additionally removes future
+        keys per query row, so the effective count must sum across query rows.
+        """
+        if query_len < 1:
+            raise ValueError(f"query_len must be >= 1; got {query_len!r}")
+        if key_len <= 0:
+            return 0
+
+        sink = min(self.sink_size, key_len)
+        recent_start = max(0, key_len - self.recent_window)
+        offset = key_len - query_len
+        if recent_start <= sink:
+            return _causal_visible_interval_sum(
+                start=0,
+                end=key_len,
+                offset=offset,
+                query_len=query_len,
+            )
+        return _causal_visible_interval_sum(
+            start=0,
+            end=sink,
+            offset=offset,
+            query_len=query_len,
+        ) + _causal_visible_interval_sum(
+            start=recent_start,
+            end=key_len,
+            offset=offset,
+            query_len=query_len,
+        )
+
+    def effective_density(self, *, query_len: int, key_len: int) -> float:
+        """Fraction of sparse-and-causal visible `(query, key)` cells."""
+        if query_len < 1:
+            raise ValueError(f"query_len must be >= 1; got {query_len!r}")
+        if key_len <= 0:
+            return 0.0
+        return float(
+            self.effective_kept_count_sum(query_len=query_len, key_len=key_len)
+        ) / float(query_len * key_len)
+
     def record_metadata(
         self,
         *,
@@ -144,3 +189,34 @@ class SlidingWindowSparseAttention:
         # recorder serialises the literal "{}" string and the column stays
         # schema-stable.
         return {}
+
+
+def _causal_visible_interval_sum(
+    *,
+    start: int,
+    end: int,
+    offset: int,
+    query_len: int,
+) -> int:
+    """Sum visible keys in `[start, end)` over causal query rows.
+
+    Query row `q` is at absolute position `offset + q`, so it can see keys
+    `k <= offset + q`. This returns:
+    `sum_q |{k in [start, end): k <= offset + q}|`.
+    """
+    if query_len <= 0 or end <= start:
+        return 0
+    length = end - start
+    # Per-row visible count is clamp((offset + q + 1) - start, 0, length).
+    base = offset + 1 - start
+    partial_start = max(0, -base + 1)
+    partial_end = min(query_len, length - base)
+    total = 0
+    if partial_start < partial_end:
+        n_partial = partial_end - partial_start
+        q_sum = (partial_start + partial_end - 1) * n_partial // 2
+        total += base * n_partial + q_sum
+    full_start = max(0, length - base)
+    if full_start < query_len:
+        total += length * (query_len - full_start)
+    return int(total)

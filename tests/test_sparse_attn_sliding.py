@@ -138,6 +138,51 @@ def test_record_metadata_is_empty() -> None:
     assert meta == {}
 
 
+def test_effective_density_decode_matches_key_uniform_density() -> None:
+    method = SlidingWindowSparseAttention(sink_size=2, recent_window=4)
+    key_len = 10
+    expected_kept = method.kept_count(key_len)
+
+    assert method.effective_kept_count_sum(query_len=1, key_len=key_len) == expected_kept
+    assert method.effective_density(query_len=1, key_len=key_len) == pytest.approx(
+        expected_kept / key_len
+    )
+
+
+def test_effective_density_prefill_includes_causal_cut() -> None:
+    method = SlidingWindowSparseAttention(sink_size=2, recent_window=4)
+    query_len = key_len = 8
+    # Sparse keep set is {0, 1, 4, 5, 6, 7}. Causal rows see:
+    # q0: 1, q1: 2, q2: 2, q3: 2, q4: 3, q5: 4, q6: 5, q7: 6.
+    expected_sum = 25
+
+    assert method.kept_count(key_len) == 6
+    assert method.effective_kept_count_sum(
+        query_len=query_len, key_len=key_len
+    ) == expected_sum
+    assert method.effective_density(
+        query_len=query_len, key_len=key_len
+    ) == pytest.approx(expected_sum / (query_len * key_len))
+    assert method.effective_density(query_len=query_len, key_len=key_len) < (
+        method.kept_count(key_len) / key_len
+    )
+
+
+def test_effective_density_all_attend_prefill_still_causal() -> None:
+    method = SlidingWindowSparseAttention(sink_size=4, recent_window=8)
+    query_len = key_len = 10
+    expected_lower_triangle = key_len * (key_len + 1) // 2
+
+    assert method.kept_count(key_len) == key_len
+    assert method.effective_kept_count_sum(
+        query_len=query_len, key_len=key_len
+    ) == expected_lower_triangle
+    assert method.effective_density(
+        query_len=query_len, key_len=key_len
+    ) == pytest.approx(expected_lower_triangle / (query_len * key_len))
+    assert method.effective_density(query_len=query_len, key_len=key_len) < 1.0
+
+
 def test_sliding_mask_is_strictly_causal_at_prefill() -> None:
     """At prefill (Q>1) the additive mask MUST be strictly causal per-row.
 

@@ -11,13 +11,14 @@ method-agnostic at the cost of a JSON-decode step on the read path. The
 artifact is small (one row per (layer, phase, step)) so CSR /
 pre-allocation is not warranted.
 
-`density` semantics: for key-uniform methods (sliding), density is exact
-because every query row in the same forward sees the same key mask, so
-`kept_count / key_len` is the literal mask density. For future per-query
-methods (Quest, MInference, etc.) `kept_count` should be the MEAN kept
-count across query rows, and `density` accordingly the mean per-row keep
-fraction; per-row breakdowns belong in `extras_json` so the top-level
-schema stays method-agnostic.
+`density` semantics: for key-uniform methods (sliding), density describes
+the sparse key pattern before the causal cut. During prefill, the true
+sparse-and-causal visible-cell fraction is query-row dependent and belongs
+in `extras_json` (for sliding: `effective_kept_count_sum` and
+`effective_density`). For future per-query methods (Quest, MInference, etc.)
+`kept_count` should be the MEAN kept count across query rows, and `density`
+accordingly the mean per-row keep fraction; per-row breakdowns belong in
+`extras_json` so the top-level schema stays method-agnostic.
 """
 
 from __future__ import annotations

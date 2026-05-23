@@ -14,11 +14,16 @@ and on future per-query methods (Quest, MInference) that mask aggressively.
 
 from __future__ import annotations
 
+import json
+
+import numpy as np
+import pytest
 import torch
 from torch import nn
 
 from serving.recording import RecordingConfig
 from serving.recording.hooks import LayerCapturer
+from serving.sparse_attention.recorder import SparseAttentionRecorder
 from serving.sparse_attention.sliding import SlidingWindowSparseAttention
 
 
@@ -116,3 +121,64 @@ def test_sparse_attn_pre_hook_handles_fp16_additive_overflow() -> None:
     witness = float(out[0, 0, 1, 3])
     assert witness == neg_inf_fp16
     assert witness != float("-inf")
+
+
+def test_sparse_attn_pre_hook_records_effective_prefill_density(tmp_path) -> None:
+    capturer = _make_capturer()
+    recorder = SparseAttentionRecorder(call_idx=0, method_name="sliding")
+    capturer.set_sparse_recorder(recorder)
+    capturer._session = {
+        "call_idx": 0,
+        "input_token_count": 8,
+    }
+    pre_hook = capturer._sparse_pre_hook(layer=0)
+
+    hidden_states = torch.zeros((1, 8, 8), dtype=torch.float32)
+    _args, new_kwargs = pre_hook(
+        module=capturer,
+        args=(hidden_states,),
+        kwargs={},
+    )
+
+    assert new_kwargs["attention_mask"].shape == (1, 1, 8, 8)
+    assert recorder.n_records() == 1
+
+    npz_path = tmp_path / "sparse_attention.npz"
+    recorder.write(npz_path)
+    method = SlidingWindowSparseAttention(sink_size=2, recent_window=4)
+    with np.load(npz_path, allow_pickle=True) as data:
+        extras = json.loads(str(data["extras_json"][0]))
+        assert int(data["kept_count"][0]) == method.kept_count(8)
+        assert extras["effective_kept_count_sum"] == method.effective_kept_count_sum(
+            query_len=8,
+            key_len=8,
+        )
+        assert extras["effective_density"] == pytest.approx(
+            method.effective_density(query_len=8, key_len=8)
+        )
+        assert extras["effective_density"] < float(data["density"][0])
+
+    integrity = capturer._sparse_attention_integrity(sparse_records=1)
+    assert integrity["sparse_attention_recording_enabled"] is True
+    assert integrity["sparse_attention_records"] == 1
+    assert integrity["sparse_attention_expected_records"] == 1
+    assert integrity["sparse_attention_records_match_expected"] is True
+    assert integrity["sparse_attention_expected_layers"] == 1
+    assert integrity["sparse_attention_observed_layers"] == 1
+    assert integrity["sparse_attention_hooks_balanced"] is True
+
+
+def test_sparse_attn_integrity_reports_recording_disabled() -> None:
+    capturer = _make_capturer()
+    capturer.set_sparse_recorder(None)
+    capturer._sparse_hook_counts_by_layer[0] = 2
+
+    integrity = capturer._sparse_attention_integrity(sparse_records=0)
+
+    assert integrity["sparse_attention_recording_enabled"] is False
+    assert integrity["sparse_attention_records"] == 0
+    assert integrity["sparse_attention_expected_records"] == 0
+    assert integrity["sparse_attention_records_match_expected"] is True
+    assert integrity["sparse_attention_hook_invocations"] == 2
+    assert integrity["sparse_attention_expected_layers"] == 1
+    assert integrity["sparse_attention_observed_layers"] == 1
