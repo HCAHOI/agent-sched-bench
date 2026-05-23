@@ -188,22 +188,53 @@ class BlockTopKSparseAttention:
         if not candidates:
             return [], []
 
+        # Build block_to_positions on CPU (needed for the final ranked_positions list)
         block_to_positions: dict[int, list[int]] = {}
         for pos in candidates:
-            block_to_positions.setdefault(block_id_for_position(pos, self.block_size), []).append(pos)
+            block_to_positions.setdefault(
+                block_id_for_position(pos, self.block_size), []
+            ).append(pos)
 
-        block_scores: list[tuple[float, int]] = []
-        for block_id, positions in block_to_positions.items():
-            idx = torch.as_tensor(positions, dtype=torch.long, device=token_scores.device)
-            values = token_scores.index_select(0, idx)
-            value = values.mean() if self.score_reduction == "mean" else values.max()
-            block_scores.append((float(value.detach().cpu().item()), int(block_id)))
-        block_scores.sort(key=lambda item: (-item[0], item[1]))
+        # Vectorize per-block score: one H2D transfer of candidates, one scatter_reduce
+        # on GPU, one D2H of [num_unique_blocks] scores. No per-block .item() sync.
+        candidates_t = torch.as_tensor(
+            candidates, dtype=torch.long, device=token_scores.device
+        )
+        block_ids_t = candidates_t // int(self.block_size)               # [Nc]
+        unique_blocks, inverse = torch.unique(
+            block_ids_t, return_inverse=True
+        )  # [Nb], [Nc]
+        nb = int(unique_blocks.shape[0])
+        cand_scores = token_scores.index_select(0, candidates_t)         # [Nc]
+        if self.score_reduction == "max":
+            block_scores_t = torch.full(
+                (nb,), float("-inf"),
+                device=token_scores.device, dtype=cand_scores.dtype,
+            )
+            block_scores_t = block_scores_t.scatter_reduce(
+                0, inverse, cand_scores, reduce="amax", include_self=True
+            )
+        else:  # mean
+            sums = torch.zeros(
+                (nb,), device=token_scores.device, dtype=cand_scores.dtype
+            )
+            counts = torch.zeros(
+                (nb,), device=token_scores.device, dtype=cand_scores.dtype
+            )
+            sums = sums.scatter_add(0, inverse, cand_scores)
+            counts = counts.scatter_add(0, inverse, torch.ones_like(cand_scores))
+            block_scores_t = sums / counts
+
+        # One sync: pull both scores and block ids in two cheap transfers.
+        scores_cpu = block_scores_t.detach().cpu().tolist()
+        blocks_cpu = unique_blocks.detach().cpu().tolist()
+        # Preserve old tie-break: sort by score descending, block_id ascending on ties.
+        ordered = sorted(zip(scores_cpu, blocks_cpu), key=lambda item: (-item[0], item[1]))
         ranked_positions: list[int] = []
         selected_blocks: list[int] = []
-        for _score, block_id in block_scores:
-            selected_blocks.append(block_id)
-            ranked_positions.extend(block_to_positions[block_id])
+        for _score, block_id in ordered:
+            selected_blocks.append(int(block_id))
+            ranked_positions.extend(block_to_positions[int(block_id)])
         return ranked_positions, selected_blocks
 
     def _record(

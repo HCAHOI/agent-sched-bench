@@ -176,40 +176,75 @@ class QuestSparseAttention:
 
         page_to_positions: dict[int, list[int]] = {}
         for pos in candidates:
-            page_to_positions.setdefault(block_id_for_position(pos, self.block_size), []).append(pos)
+            page_to_positions.setdefault(
+                block_id_for_position(pos, self.block_size), []
+            ).append(pos)
 
-        q = q_states
-        page_scores: list[tuple[float, int]] = []
-        for page_id, positions in page_to_positions.items():
-            idx = torch.as_tensor(positions, dtype=torch.long, device=key_states.device)
-            page_keys = key_states.index_select(-2, idx)
-            page_min = page_keys.amin(dim=-2)
-            page_max = page_keys.amax(dim=-2)
-            n_kv_heads = int(page_min.shape[1])
-            n_query_heads = int(q.shape[1])
-            if n_query_heads % n_kv_heads != 0:
-                raise ValueError(
-                    f"query heads must be divisible by kv heads: {n_query_heads} vs {n_kv_heads}"
-                )
-            q_for_kv = q.reshape(
-                q.shape[0],
-                n_kv_heads,
-                n_query_heads // n_kv_heads,
-                q.shape[-2],
-                q.shape[-1],
+        # Validate head-shape contract once before vectorization.
+        n_kv_heads = int(key_states.shape[1])
+        n_query_heads = int(q_states.shape[1])
+        if n_query_heads % n_kv_heads != 0:
+            raise ValueError(
+                f"query heads must be divisible by kv heads: {n_query_heads} vs {n_kv_heads}"
             )
-            positive = torch.clamp(q_for_kv, min=0)
-            negative = torch.clamp(q_for_kv, max=0)
-            upper = (positive * page_max.unsqueeze(2).unsqueeze(3)).sum(dim=-1)
-            upper = upper + (negative * page_min.unsqueeze(2).unsqueeze(3)).sum(dim=-1)
-            value = upper.mean() if self.score_reduction == "mean" else upper.max()
-            page_scores.append((float(value.detach().cpu().item()), int(page_id)))
-        page_scores.sort(key=lambda item: (-item[0], item[1]))
+
+        # Vectorize: build per-candidate keys, scatter_reduce by page_id over the
+        # position axis to get per-page min/max key envelopes; then einsum upper-bound
+        # scores across all pages in one shot.
+        candidates_t = torch.as_tensor(
+            candidates, dtype=torch.long, device=key_states.device
+        )
+        page_ids_t = candidates_t // int(self.block_size)                  # [Nc]
+        unique_pages, inverse = torch.unique(
+            page_ids_t, return_inverse=True
+        )                                                                  # [Np], [Nc]
+        np_pages = int(unique_pages.shape[0])
+        cand_keys = key_states.index_select(-2, candidates_t)  # [B, H_kv, Nc, D]
+        B, _, _, head_dim = cand_keys.shape
+        inv_exp = inverse.view(1, 1, -1, 1).expand(B, n_kv_heads, -1, head_dim)
+
+        page_min = torch.full(
+            (B, n_kv_heads, np_pages, head_dim), float("inf"),
+            device=key_states.device, dtype=cand_keys.dtype,
+        )
+        page_min = page_min.scatter_reduce(
+            2, inv_exp, cand_keys, reduce="amin", include_self=True
+        )
+        page_max = torch.full(
+            (B, n_kv_heads, np_pages, head_dim), float("-inf"),
+            device=key_states.device, dtype=cand_keys.dtype,
+        )
+        page_max = page_max.scatter_reduce(
+            2, inv_exp, cand_keys, reduce="amax", include_self=True
+        )
+
+        q_for_kv = q_states.reshape(
+            q_states.shape[0],
+            n_kv_heads,
+            n_query_heads // n_kv_heads,
+            q_states.shape[-2],
+            q_states.shape[-1],
+        )  # [B, H_kv, G, T, D]
+        positive = torch.clamp(q_for_kv, min=0)
+        negative = torch.clamp(q_for_kv, max=0)
+        # upper[b, p, h, g, t] = sum_d positive[b,h,g,t,d] * page_max[b,h,p,d]
+        #                      + sum_d negative[b,h,g,t,d] * page_min[b,h,p,d]
+        upper = torch.einsum("bhgtd,bhpd->bphgt", positive, page_max)
+        upper = upper + torch.einsum("bhgtd,bhpd->bphgt", negative, page_min)
+        # Reduce per page: collapse all other dims into a single scalar per page.
+        if self.score_reduction == "mean":
+            page_scores_t = upper.mean(dim=(0, 2, 3, 4))   # [Np]
+        else:
+            page_scores_t = upper.amax(dim=(0, 2, 3, 4))   # [Np]
+
+        scores_cpu = page_scores_t.detach().cpu().tolist()
+        pages_cpu = unique_pages.detach().cpu().tolist()
+        ordered = sorted(zip(scores_cpu, pages_cpu), key=lambda item: (-item[0], item[1]))
         ranked_positions: list[int] = []
         selected_pages: list[int] = []
-        for _score, page_id in page_scores:
-            selected_pages.append(page_id)
-            ranked_positions.extend(page_to_positions[page_id])
+        for _score, page_id in ordered:
+            selected_pages.append(int(page_id))
+            ranked_positions.extend(page_to_positions[int(page_id)])
         return ranked_positions, selected_pages
 
     def _record(
