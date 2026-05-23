@@ -811,6 +811,13 @@ class LayerCapturer:
                 context=context,
             )
             observe_only = bool(method.observe_only)
+            assert sparse_mask is not None or observe_only, (
+                f"build_additive_mask returned None in enforce mode "
+                f"(method={method.name!r}, layer={layer}, phase={phase!r}, "
+                f"query_len={query_len}, key_len={key_len}). The None return "
+                "is reserved for observe-only; enforce mode must materialize "
+                "the sparse mask tensor."
+            )
             if sparse_mask is not None and not observe_only:
                 # Qwen3 decoder layers call self_attn with pure kwargs beyond
                 # `hidden_states`; if a future HF version starts passing
@@ -855,7 +862,8 @@ class LayerCapturer:
                     kwargs["attention_mask"] = sparse_mask.expand(
                         1, 1, query_len, key_len
                     ).contiguous()
-            # else: observe_only OR method returned None — kwargs["attention_mask"] left untouched; SDPA uses implicit causal.
+            # else: observe_only — sparse_mask is None by contract;
+            # kwargs["attention_mask"] left untouched, SDPA uses implicit causal.
             if self._session is not None:
                 self._sparse_hook_counts_by_layer[layer] = (
                     self._sparse_hook_counts_by_layer.get(layer, 0) + 1
