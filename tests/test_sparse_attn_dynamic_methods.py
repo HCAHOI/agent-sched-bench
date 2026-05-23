@@ -204,6 +204,28 @@ def test_block_topk_decode_requires_context() -> None:
         )
 
 
+def test_heavy_hitter_subscribes_to_full_prefill_bus() -> None:
+    """Regression for round-2 review #1.
+
+    Decode mask decisions for heavy_hitter rank middle keys by historical
+    post-softmax attention. If the bus only delivers sampled prefill rows
+    (max_prefill_queries=80 by default), the rank buffer is built from a
+    biased subset and decode selections degenerate toward sink+recent
+    fallback. The fix is the class-level `prefill_observe_mode = "full"`
+    which opts heavy_hitter into the full-prefill bus path.
+
+    A future refactor that flips it back to "sampled" silently corrupts
+    every observe-only heavy_hitter trace; this test pins the contract.
+    """
+    from serving.sparse_attention.heavy_hitter import HeavyHitterSparseAttention
+
+    assert HeavyHitterSparseAttention.prefill_observe_mode == "full", (
+        "heavy_hitter must subscribe to full-prefill bus; sampled mode "
+        "leaves the score buffer built from a 80-row subset and decode "
+        "selections fall back to sink+recent."
+    )
+
+
 def test_heavy_hitter_reset_state_clears_scores() -> None:
     bus = AttentionBus()
     method = HeavyHitterSparseAttention(

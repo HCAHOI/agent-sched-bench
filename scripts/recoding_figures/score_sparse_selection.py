@@ -66,10 +66,7 @@ def reconstruct_keep_set(
     if method_name in {"heavy_hitter", "block_topk", "quest"}:
         extras = extras or {}
         reason = str(extras.get("selection_reason", ""))
-        phase_scope = str(extras.get("phase_scope", "decode_only"))
-        if reason in {"phase_dense", "prefill_dense"} or (
-            phase_scope == "decode_only" and reason in {"phase_dense", "prefill_dense"}
-        ):
+        if reason in {"phase_dense", "prefill_dense"}:
             return np.arange(key_len, dtype=np.int32)
     sink = min(method_params.sink_size, key_len)
     recent_start = max(0, key_len - method_params.recent_window)

@@ -10,7 +10,7 @@ unmodified cache.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     import torch
@@ -42,6 +42,14 @@ class SparseAttentionConfig:
     score_reduction: Literal["max", "mean"] = "max"  # block/page score reduction
     phase_scope: Literal["decode_only"] = "decode_only"
 
+    def __post_init__(self) -> None:
+        if self.observe_only and not self.record:
+            raise ValueError(
+                "observe_only=True requires record=True; otherwise the run "
+                "is a no-op with no recording (every layer's pre-hook would "
+                "build the would-be mask and immediately discard it)."
+            )
+
 
 @dataclass(frozen=True)
 class SparseAttentionContext:
@@ -54,6 +62,7 @@ class SparseAttentionContext:
     attention_mask: Any
 
 
+@runtime_checkable
 class BaseSparseAttention(Protocol):
     """Protocol every sparse attention method must satisfy.
 

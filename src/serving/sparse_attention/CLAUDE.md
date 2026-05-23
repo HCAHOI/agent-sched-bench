@@ -76,7 +76,9 @@ Research integrity 边界：
 - `block_topk` / `quest` 只使用 forward 前可得的 Q/K states，不读取当前
   forward 的 post-softmax attention。
 - `heavy_hitter` 只使用历史已观察分数；当前 step 的 attention 会在 mask 决策
-  之后才发布到 bus。
+  之后才发布到 bus。`prefill_observe_mode = "full"` 保证 score buffer 覆盖
+  prefill 所有 query row（完整 full-prefill bus path），避免只用 80-row
+  sampled subset 导致 decode 选择退化。
 - 当前 HF backend 仍是 research/recording backend；SDPA 加 mask 不等于真实
   sparse kernel 加速。
 

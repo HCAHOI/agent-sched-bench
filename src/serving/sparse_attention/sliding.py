@@ -177,6 +177,9 @@ class SlidingWindowSparseAttention:
             self.effective_kept_count_sum(query_len=query_len, key_len=key_len)
         ) / float(query_len * key_len)
 
+    def reset_state(self) -> None:
+        """No-op: sliding window is stateless."""
+
     def record_metadata(
         self,
         *,

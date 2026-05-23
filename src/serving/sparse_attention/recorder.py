@@ -133,6 +133,12 @@ class SparseAttentionRecorder:
             dtype=object,
         )
 
+        if len(self.method_name) > 16:
+            raise ValueError(
+                f"method_name {self.method_name!r} exceeds the 16-char npz column "
+                "width. Either rename the method shorter or widen the U16 dtype "
+                "(both writer here and loader in recording_loader.py)."
+            )
         np.savez_compressed(
             npz_path,
             call_idx=np.asarray(self.call_idx, dtype=np.int32),

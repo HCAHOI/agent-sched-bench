@@ -57,8 +57,13 @@ class QuestSparseAttention:
 
     @classmethod
     def from_config(cls, config: SparseAttentionConfig) -> "QuestSparseAttention":
+        if config.budget is None:
+            raise ValueError(
+                f"{cls.__name__} requires SparseAttentionConfig.budget to be set "
+                f"(method={config.name!r})"
+            )
         return cls(
-            budget=int(config.budget) if config.budget is not None else None,  # type: ignore[arg-type]
+            budget=int(config.budget),
             sink_size=config.sink_size,
             recent_window=config.recent_window,
             block_size=config.block_size,
@@ -219,6 +224,9 @@ class QuestSparseAttention:
             "selected_middle_count": len(selected_middle or []),
             "selected_middle_indices": [int(x) for x in (selected_middle or [])],
         }
+
+    def reset_state(self) -> None:
+        """No-op: quest computes its keep set fresh each decode step."""
 
     def kept_count(self, key_len: int) -> int:
         del key_len

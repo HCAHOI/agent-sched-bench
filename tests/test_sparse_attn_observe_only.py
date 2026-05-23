@@ -183,7 +183,7 @@ def test_enforce_mode_still_writes_back_mask() -> None:
 def test_validator_allows_kv_plus_observe_only() -> None:
     kv_cfg = EvictionPolicyConfig(name="h2o", budget=256)
     sp_cfg = SparseAttentionConfig(
-        name="sliding", sink_size=4, recent_window=8, observe_only=True
+        name="sliding", sink_size=4, recent_window=8, observe_only=True, record=True
     )
     validate_attention_method_exclusivity(kv_cfg, sp_cfg)  # must not raise
 

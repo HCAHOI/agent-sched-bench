@@ -25,7 +25,7 @@ class HeavyHitterSparseAttention:
 
     name = "heavy_hitter"
     always_active = True
-    prefill_observe_mode = "sampled"
+    prefill_observe_mode = "full"
 
     def __init__(
         self,
@@ -82,8 +82,13 @@ class HeavyHitterSparseAttention:
         num_layers: int,
         attention_bus: "AttentionBus",
     ) -> "HeavyHitterSparseAttention":
+        if config.budget is None:
+            raise ValueError(
+                f"{cls.__name__} requires SparseAttentionConfig.budget to be set "
+                f"(method={config.name!r})"
+            )
         return cls(
-            budget=int(config.budget) if config.budget is not None else None,  # type: ignore[arg-type]
+            budget=int(config.budget),
             sink_size=config.sink_size,
             recent_window=config.recent_window,
             block_size=config.block_size,
