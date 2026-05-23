@@ -267,17 +267,20 @@ def _routing_count_summary(
     if n_tokens > 0 and n_experts > 0 and top_k > 0:
         segment_ids = token_ids[:n_tokens].to(device=choices.device, dtype=torch.long)
         valid_segments = (segment_ids >= 0) & (segment_ids < n_segments)
+        # Hoist scalar-one outside the rank loop; index_put_ broadcasts a 0-d
+        # value across the index set, so we don't need to materialize per-rank
+        # `ones` and can skip the `.any()` / `.sum().item()` GPU->CPU syncs.
+        scalar_one = torch.ones((), dtype=torch.int32, device=choices.device)
         for rank in range(top_k):
             experts = choices[:, rank].to(dtype=torch.long)
             valid = valid_segments & (experts >= 0) & (experts < n_experts)
-            if not bool(valid.any()):
-                continue
-            ones = torch.ones(
-                int(valid.sum().item()),
-                dtype=torch.int32,
-                device=choices.device,
+            # `index_put_` on empty index tensors is a safe no-op; scalar 1
+            # broadcasts across the index set, so the count is unnecessary.
+            counts.index_put_(
+                (segment_ids[valid], experts[valid]),
+                scalar_one,
+                accumulate=True,
             )
-            counts.index_put_((segment_ids[valid], experts[valid]), ones, accumulate=True)
 
     count_np = _as_numpy(counts).astype(np.int32)
     total_per_expert = count_np.sum(axis=0, dtype=np.int64)
@@ -1560,9 +1563,9 @@ class LayerCapturer:
                     "layer": layer,
                     "phase": phase,
                     "decode_step": decode_step,
-                    "expert_choice": _as_numpy(choices).astype(np.int32),
-                    "expert_weight": _as_numpy(weights).astype(np.float32),
-                    "expert_load": _as_numpy(load).astype(np.float32),
+                    "expert_choice": _stage_numpy(choices, np.int32),
+                    "expert_weight": _stage_numpy(weights, np.float32),
+                    "expert_load": _stage_numpy(load, np.float32),
                     **routing_counts,
                 }
             )
@@ -2004,6 +2007,9 @@ class LayerCapturer:
 
     def _write_routing_npz(self, path: Path, n_segments: int) -> None:
         records = self._routing_records
+        # Bulk-flush pending GPU stages once per device; subsequent
+        # `_materialize_array` calls below become sync-free numpy reads.
+        _synchronize_pending_arrays(records)
         token_offsets = [0]
         n_experts = 0
         top_k = 0
@@ -2027,18 +2033,20 @@ class LayerCapturer:
             record_path=np.asarray([r["path"] for r in records]),
             token_row_offsets=np.asarray(token_offsets, dtype=np.int64),
             expert_choice=np.concatenate(
-                [r["expert_choice"] for r in records], axis=0
+                [_materialize_array(r["expert_choice"]) for r in records], axis=0
             )
             if records
             else np.zeros((0, 0), dtype=np.int32),
             expert_weight=(
                 np.concatenate(
-                    [r["expert_weight"] for r in records], axis=0
+                    [_materialize_array(r["expert_weight"]) for r in records], axis=0
                 ).astype(np.float16, copy=False)
                 if records
                 else np.zeros((0, 0), dtype=np.float16)
             ),
-            expert_load=np.stack([r["expert_load"] for r in records], axis=0)
+            expert_load=np.stack(
+                [_materialize_array(r["expert_load"]) for r in records], axis=0
+            )
             if records
             else np.zeros((0, n_segments, 0), dtype=np.float32),
             expert_token_count=np.stack(
