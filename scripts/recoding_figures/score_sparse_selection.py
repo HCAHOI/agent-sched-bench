@@ -159,6 +159,7 @@ def _per_query_rows_for_iter(
     ) as sp:
         sp_lookup = _build_sparse_key_lookup({k: sp[k] for k in sp.files})
         sp_key_len = sp["key_len"].astype(np.int32)
+        sp_kept_count = sp["kept_count"].astype(np.int32)
         sp_extras = sp["extras_json"]
 
         record_layer = att["record_layer"].astype(np.int32)
@@ -194,6 +195,21 @@ def _per_query_rows_for_iter(
                 key_len=key_len,
                 extras=extras,
             )
+            recorded_kept = int(sp_kept_count[sp_idx])
+            if int(keep_arr.shape[0]) != recorded_kept:
+                # Reconstruct disagreeing with the runtime-recorded kept_count
+                # means meta.json config and the runtime sparse method drifted,
+                # OR `reconstruct_keep_set` and the method's own `kept_count`
+                # have inconsistent semantics for this case. Either silently
+                # produces wrong mass/recall numbers; refuse to score.
+                raise ValueError(
+                    f"{iter_dir / 'sparse_attention.npz'} row {sp_idx}: "
+                    f"reconstructed keep_set size {int(keep_arr.shape[0])} != "
+                    f"recorded kept_count {recorded_kept} at "
+                    f"(layer={layer}, phase={phase}, dstep={dstep}, key_len={key_len}). "
+                    "Likely cause: meta.json sparse_attention block diverged from "
+                    "the method config used at runtime, or extras_json schema mismatch."
+                )
             keep_set = set(int(x) for x in keep_arr)
 
             q_lo = int(query_row_offsets[r])

@@ -448,3 +448,32 @@ def test_scoring_raises_on_missing_sparse_row(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="no matching row in sparse_attention.npz"):
         score_attempts(attempt_dirs=[attempt], recall_ks=(8,))
+
+
+def test_scoring_raises_on_kept_count_drift(tmp_path: Path) -> None:
+    """If runtime-recorded kept_count disagrees with reconstruct_keep_set, refuse to score.
+
+    Simulates meta.json sparse_attention block diverging from the actual
+    method config used at runtime (e.g. somebody hand-edited meta.json, or
+    the method changed sink_size between record and meta write). Scoring
+    must raise rather than silently produce wrong mass/recall numbers.
+    """
+    attention_records = [
+        {
+            "layer": 0, "phase": "prefill", "decode_step": -1,
+            "queries": [{"position": 7, "head": 0, "topk_indices": [0], "topk_weights": [1.0]}],
+        },
+    ]
+    # meta.json (via _make_attempt) says sink=2, recent=3 -> reconstructed
+    # keep_set has size 5 for key_len=8. We forge kept_count=99 in the npz
+    # to force the disagreement.
+    sparse_records = [
+        {"layer": 0, "phase": "prefill", "decode_step": -1,
+         "query_len": 8, "key_len": 8, "kept_count": 99},
+    ]
+    attempt = _make_attempt(
+        tmp_path, name="kept_count_drift", sink_size=2, recent_window=3,
+        attention_records=attention_records, sparse_records=sparse_records,
+    )
+    with pytest.raises(ValueError, match="reconstructed keep_set size"):
+        score_attempts(attempt_dirs=[attempt], recall_ks=(8,))

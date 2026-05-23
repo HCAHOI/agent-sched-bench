@@ -129,6 +129,17 @@ def test_observe_only_does_not_change_generation(tmp_path):
             "sparse recorder must have at least one row per layer (prefill); "
             f"got {int(data['record_layer'].shape[0])} for {observe_layers} layers"
         )
+        # Sliding (sink=4, recent=8) on a ~360-char prompt must mask middle
+        # tokens — otherwise sliding degenerates to dense and the
+        # baseline==observe equality below proves nothing about observe-only's
+        # no-op contract (it would hold trivially for any no-op sparse mask).
+        densities = data["density"].astype(np.float32)
+        assert float(densities.min()) < 1.0, (
+            f"all rows had density == 1.0; sliding had no opportunity to mask "
+            f"(min density={float(densities.min())}). Either the prompt was "
+            "too short or sink+recent covered the full key range — the e2e "
+            "guarantee then degenerates to a tautology."
+        )
 
     meta_path = observe_dir / "recordings" / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
