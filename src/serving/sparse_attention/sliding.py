@@ -83,6 +83,9 @@ class SlidingWindowSparseAttention:
         if key_len < 0:
             raise ValueError(f"key_len must be >= 0; got {key_len!r}")
 
+        if self.observe_only:
+            return None
+
         # Build a 1D key-mask first (same sparsity set for every query row).
         keep = torch.zeros(key_len, dtype=torch.bool, device=device)
         sink = min(self.sink_size, key_len)

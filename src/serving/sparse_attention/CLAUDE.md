@@ -20,7 +20,7 @@ class BaseSparseAttention(Protocol):
     name: str
     observe_only: bool
     def build_additive_mask(*, layer_idx, query_len, key_len, phase,
-                            decode_step, device, dtype, context) -> torch.Tensor: ...
+                            decode_step, device, dtype, context) -> torch.Tensor | None: ...
     def record_metadata(*, layer_idx, phase, decode_step) -> dict: ...
 ```
 
@@ -114,10 +114,16 @@ generation 退化成 hallucination。Observe-only 让我们**不毁掉 generatio
 offline cross-reference 计算 selection 质量（见
 `scripts/recoding_figures/score_sparse_selection.py`）。
 
-Pre-hook 在 observe-only 下仍 build `sparse_mask` 并 record `kept_count` /
-`density` / `extras_json`（recorder schema 完全不变；observe 与 enforce
-写出的 `.npz` 二进制兼容）。区别只在是否把 mask 写回 kwargs。Recording
-完整性字段 `sparse_attention_observe_only` 让 loader 端可分流两种 trace。
+Pre-hook 在 observe-only 下：method 自己在 `build_additive_mask` 内先更新
+record state（`_last_kept_count` / `_last_metadata`），然后 `return None`
+跳过 `[1,1,Q,K]` tensor 物化。Hook 看到 None 后短路 writeback。Recorder
+仍正常 append（`kept_count` / `density` / `extras_json` 二进制不变）。
+区别是 prefill 不再每层白构造 ~5GB fp16 tensor —— 实测让 block_topk 在
+fix-git 长 context 上从 220s/turn 降到 ~60-80s/turn（接近
+`--record-internals` baseline）。
+
+Recording 完整性字段 `sparse_attention_observe_only` 让 loader 端可分流两种
+trace。
 
 ---
 

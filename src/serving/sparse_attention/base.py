@@ -91,8 +91,8 @@ class BaseSparseAttention(Protocol):
         device: "torch.device",
         dtype: "torch.dtype",
         context: SparseAttentionContext | None = None,
-    ) -> "torch.Tensor":
-        """Return additive sparsity mask broadcastable to [B, H, Q, K]."""
+    ) -> "torch.Tensor | None":
+        """Returns the additive mask, or `None` when `self.observe_only=True` to skip [1,1,Q,K] tensor allocation. The pre-hook must not write back when None is returned."""
 
     def record_metadata(
         self,

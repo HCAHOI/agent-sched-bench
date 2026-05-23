@@ -147,16 +147,22 @@ class HeavyHitterSparseAttention:
         del decode_step, context
         if key_len <= 0:
             self._record(kept=[], reason="empty")
+            if self.observe_only:
+                return None
             return dense_or_causal_mask(
                 query_len=query_len, key_len=key_len, device=device, dtype=dtype
             )
         if self.phase_scope == "decode_only" and phase != "decode":
             self._record(kept=range(key_len), reason="phase_dense")
+            if self.observe_only:
+                return None
             return dense_or_causal_mask(
                 query_len=query_len, key_len=key_len, device=device, dtype=dtype
             )
         if query_len != 1:
             self._record(kept=range(key_len), reason="prefill_dense")
+            if self.observe_only:
+                return None
             return dense_or_causal_mask(
                 query_len=query_len, key_len=key_len, device=device, dtype=dtype
             )
@@ -177,6 +183,8 @@ class HeavyHitterSparseAttention:
         )
         keep.update(selected_middle)
         self._record(kept=keep, reason=reason, selected_middle=selected_middle)
+        if self.observe_only:
+            return None
         return additive_mask_from_keep(
             keep_indices=keep,
             query_len=query_len,
