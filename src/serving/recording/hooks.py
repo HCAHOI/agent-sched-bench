@@ -24,6 +24,13 @@ from serving.recording.recording import (
     select_query_positions,
     token_segment_ids,
 )
+from serving.sparse_attention.base import SparseAttentionContext
+from serving.sparse_attention.state import (
+    apply_rotary_to_states as _apply_rotary_to_states,
+    cached_key_states as _cached_key_states,
+    current_query_states as _current_query_states,
+    project_key_states as _project_key_states,
+)
 
 if TYPE_CHECKING:
     # Lazy: avoid forcing transformers import via kv_policies at module load.
@@ -324,77 +331,6 @@ def _arg_or_kw(
     if len(args) > index:
         return args[index]
     return kwargs.get(name, default)
-
-
-def _project_query_states(module: Any, hidden_states: Any) -> Any:
-    input_shape = hidden_states.shape[:-1]
-    hidden_shape = (*input_shape, -1, module.head_dim)
-    return module.q_norm(module.q_proj(hidden_states).reshape(hidden_shape)).transpose(1, 2)
-
-
-def _project_key_states(module: Any, hidden_states: Any) -> Any:
-    input_shape = hidden_states.shape[:-1]
-    hidden_shape = (*input_shape, -1, module.head_dim)
-    return module.k_norm(module.k_proj(hidden_states).reshape(hidden_shape)).transpose(1, 2)
-
-
-def _apply_rotary_to_states(states: Any, position_embeddings: tuple[Any, Any]) -> Any:
-    import torch
-
-    cos, sin = position_embeddings
-    cos = cos.unsqueeze(1)
-    sin = sin.unsqueeze(1)
-    left = states[..., : states.shape[-1] // 2]
-    right = states[..., states.shape[-1] // 2 :]
-    rotated = torch.cat((-right, left), dim=-1)
-    return (states * cos) + (rotated * sin)
-
-
-def _select_rotary_positions(
-    position_embeddings: tuple[Any, Any],
-    row_indices: list[int],
-) -> tuple[Any, Any]:
-    import torch
-
-    index: Any | None = None
-    selected = []
-    for tensor in position_embeddings:
-        if index is None:
-            index = torch.as_tensor(row_indices, dtype=torch.long, device=tensor.device)
-        selected.append(tensor.index_select(-2, index))
-    return selected[0], selected[1]
-
-
-def _nonempty_tensor(value: Any) -> Any | None:
-    if value is None or not hasattr(value, "numel"):
-        return None
-    if int(value.numel()) == 0:
-        return None
-    return value
-
-
-def _cached_key_states(past_key_values: Any, layer_idx: int) -> Any | None:
-    if past_key_values is None:
-        return None
-    try:
-        return _nonempty_tensor(past_key_values[layer_idx][0])
-    except (AttributeError, KeyError, IndexError, TypeError):
-        pass
-
-    layers = getattr(past_key_values, "layers", None)
-    if layers is not None:
-        try:
-            return _nonempty_tensor(getattr(layers[layer_idx], "keys", None))
-        except (IndexError, TypeError):
-            pass
-
-    key_cache = getattr(past_key_values, "key_cache", None)
-    if key_cache is not None:
-        try:
-            return _nonempty_tensor(key_cache[layer_idx])
-        except (IndexError, TypeError):
-            pass
-    return None
 
 
 def _load_trace_llm_calls(trace_path: Path) -> list[dict[str, Any]]:
@@ -817,7 +753,6 @@ class LayerCapturer:
             args: tuple[Any, ...],
             kwargs: dict[str, Any],
         ) -> tuple[tuple[Any, ...], dict[str, Any]]:
-            del module
             method = self._sparse_attention
             if method is None:
                 return args, kwargs
@@ -825,6 +760,12 @@ class LayerCapturer:
             if hidden_states is None or hidden_states.ndim != 3:
                 # Not a path we know how to mask; leave the forward untouched.
                 return args, kwargs
+            position_embeddings = _arg_or_kw(
+                args, kwargs, 1, "position_embeddings", default=None
+            )
+            upstream_attention_mask = _arg_or_kw(
+                args, kwargs, 2, "attention_mask", default=kwargs.get("attention_mask")
+            )
             query_len = int(hidden_states.shape[-2])
             past_key_values = _arg_or_kw(
                 args,
@@ -852,13 +793,22 @@ class LayerCapturer:
             else:
                 phase = "prefill"
                 decode_step = -1
+            context = SparseAttentionContext(
+                module=module,
+                hidden_states=hidden_states,
+                position_embeddings=position_embeddings,
+                past_key_values=past_key_values,
+                attention_mask=upstream_attention_mask,
+            )
             sparse_mask = method.build_additive_mask(
                 layer_idx=layer,
                 query_len=query_len,
                 key_len=key_len,
                 phase=phase,
+                decode_step=decode_step,
                 device=hidden_states.device,
                 dtype=hidden_states.dtype,
+                context=context,
             )
             observe_only = bool(method.observe_only)
             if not observe_only:
@@ -1406,10 +1356,11 @@ class LayerCapturer:
     ) -> Any:
         import torch
 
-        q_states = _project_query_states(module, hidden_states[:, row_indices, :])
-        q_states = _apply_rotary_to_states(
-            q_states,
-            _select_rotary_positions(position_embeddings, row_indices),
+        q_states = _current_query_states(
+            module=module,
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            row_indices=row_indices,
         )
         key_len = int(key_states.shape[-2])
         n_kv_heads = int(key_states.shape[1])

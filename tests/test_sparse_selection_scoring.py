@@ -31,7 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.recoding_figures.score_sparse_selection import (  # noqa: E402
-    SlidingParams,
+    SparseParams,
     reconstruct_keep_set,
     score_attempts,
 )
@@ -103,7 +103,10 @@ def _write_sparse_npz(
             [r["kept_count"] / max(r["key_len"], 1) for r in records],
             dtype=np.float16,
         ),
-        "extras_json": np.array(["{}"] * n, dtype=object),
+        "extras_json": np.array(
+            [json.dumps(r.get("extras", {}), sort_keys=True) for r in records],
+            dtype=object,
+        ),
     }
     np.savez_compressed(iter_dir / "sparse_attention.npz", **payload)
 
@@ -114,13 +117,14 @@ def _write_meta_and_segments(
     sink_size: int,
     recent_window: int,
     iter_dir: Path,
+    method: str = "sliding",
 ) -> None:
     recordings_dir = attempt_dir / "recordings"
     recordings_dir.mkdir(parents=True, exist_ok=True)
     meta = {
         "model": {"name": "toy"},
         "sparse_attention": {
-            "method": "sliding",
+            "method": method,
             "sink_size": sink_size,
             "recent_window": recent_window,
             "record": True,
@@ -162,15 +166,20 @@ def _make_attempt(
     recent_window: int,
     attention_records: list[dict],
     sparse_records: list[dict],
+    method: str = "sliding",
 ) -> Path:
     attempt_dir = tmp_path / name
     iter_dir = attempt_dir / "recordings" / "iter_0000"
     iter_dir.mkdir(parents=True, exist_ok=True)
     _write_meta_and_segments(
-        attempt_dir, sink_size=sink_size, recent_window=recent_window, iter_dir=iter_dir
+        attempt_dir,
+        sink_size=sink_size,
+        recent_window=recent_window,
+        iter_dir=iter_dir,
+        method=method,
     )
     _write_attention_npz(iter_dir, records=attention_records)
-    _write_sparse_npz(iter_dir, records=sparse_records)
+    _write_sparse_npz(iter_dir, records=sparse_records, method=method)
     # Empty routing.npz: loader's `_has_recording_files` gate requires the
     # file to exist for every iter, even when the model isn't MoE.
     np.savez_compressed(iter_dir / "routing.npz", call_idx=np.int32(0))
@@ -183,22 +192,44 @@ def _make_attempt(
 
 
 def test_reconstruct_keep_set_sliding_basic() -> None:
-    params = SlidingParams(sink_size=2, recent_window=3)
+    params = SparseParams(sink_size=2, recent_window=3)
     keep = reconstruct_keep_set(method_name="sliding", method_params=params, key_len=8)
     # sink {0,1} ∪ recent {5,6,7}
     assert set(keep.tolist()) == {0, 1, 5, 6, 7}
 
 
 def test_reconstruct_keep_set_full_when_window_exceeds_key_len() -> None:
-    params = SlidingParams(sink_size=4, recent_window=10)
+    params = SparseParams(sink_size=4, recent_window=10)
     keep = reconstruct_keep_set(method_name="sliding", method_params=params, key_len=8)
     assert set(keep.tolist()) == set(range(8))
 
 
 def test_reconstruct_keep_set_rejects_unknown_method() -> None:
-    params = SlidingParams(sink_size=2, recent_window=2)
+    params = SparseParams(sink_size=2, recent_window=2)
     with pytest.raises(NotImplementedError):
-        reconstruct_keep_set(method_name="quest", method_params=params, key_len=8)
+        reconstruct_keep_set(method_name="unknown", method_params=params, key_len=8)
+
+
+def test_reconstruct_keep_set_dynamic_uses_selected_middle_indices() -> None:
+    params = SparseParams(sink_size=1, recent_window=2)
+    keep = reconstruct_keep_set(
+        method_name="quest",
+        method_params=params,
+        key_len=8,
+        extras={"selected_middle_indices": [3, 4]},
+    )
+    assert set(keep.tolist()) == {0, 3, 4, 6, 7}
+
+
+def test_reconstruct_keep_set_dynamic_prefill_dense_reason() -> None:
+    params = SparseParams(sink_size=1, recent_window=1)
+    keep = reconstruct_keep_set(
+        method_name="quest",
+        method_params=params,
+        key_len=8,
+        extras={"selection_reason": "phase_dense", "phase_scope": "decode_only"},
+    )
+    assert set(keep.tolist()) == set(range(8))
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +336,50 @@ def test_scoring_partial_coverage_recall_at_k(tmp_path: Path) -> None:
     assert row["recall_at_2"] == pytest.approx(0.5)
     # recall@4: of first 4 [7,3,4,0], 2 in keep -> 0.5
     assert row["recall_at_4"] == pytest.approx(0.5)
+
+
+def test_scoring_dynamic_prefill_dense_keeps_all_topk(tmp_path: Path) -> None:
+    """Decode-only dynamic methods should score prefill dense fallback as dense."""
+    attention_records = [
+        {
+            "layer": 0,
+            "phase": "prefill",
+            "decode_step": -1,
+            "queries": [
+                {
+                    "position": 7,
+                    "head": 0,
+                    "topk_indices": [2, 3, 4],
+                    "topk_weights": [0.5, 0.3, 0.2],
+                },
+            ],
+        }
+    ]
+    sparse_records = [
+        {
+            "layer": 0,
+            "phase": "prefill",
+            "decode_step": -1,
+            "query_len": 8,
+            "key_len": 8,
+            "kept_count": 8,
+            "extras": {"selection_reason": "phase_dense", "phase_scope": "decode_only"},
+        },
+    ]
+    attempt = _make_attempt(
+        tmp_path,
+        name="dynamic_prefill_dense",
+        sink_size=1,
+        recent_window=1,
+        attention_records=attention_records,
+        sparse_records=sparse_records,
+        method="quest",
+    )
+    df = score_attempts(attempt_dirs=[attempt], recall_ks=(8,))
+    row = df.row(0, named=True)
+    assert row["mass_in_keep_set"] == pytest.approx(1.0, abs=1e-3)
+    assert row["recall_at_8"] == pytest.approx(1.0)
+    assert row["keep_set_size"] == 8
 
 
 def test_scoring_multi_layer_multi_query(tmp_path: Path) -> None:

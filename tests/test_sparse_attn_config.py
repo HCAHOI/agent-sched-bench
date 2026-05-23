@@ -65,6 +65,48 @@ def test_cli_only_sliding_with_overrides() -> None:
     assert cfg.record is False
 
 
+def test_cli_only_block_topk_requires_budget() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="requires `budget`"):
+        load_sparse_attention_config(_ns(sparse_attn="block_topk"))
+
+
+def test_cli_only_dynamic_method_with_budget() -> None:
+    cfg = load_sparse_attention_config(
+        _ns(
+            sparse_attn="quest",
+            sparse_attn_budget=1024,
+            sparse_attn_block_size=32,
+            sparse_attn_score_reduction="mean",
+        )
+    )
+    assert cfg is not None
+    assert cfg.name == "quest"
+    assert cfg.budget == 1024
+    assert cfg.block_size == 32
+    assert cfg.score_reduction == "mean"
+    assert cfg.phase_scope == "decode_only"
+
+
+def test_dynamic_budget_must_cover_sink_recent() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="budget >= sink_size"):
+        load_sparse_attention_config(
+            _ns(
+                sparse_attn="heavy_hitter",
+                sparse_attn_budget=4,
+                sparse_attn_sink_size=2,
+                sparse_attn_recent_window=8,
+            )
+        )
+
+
+def test_streaming_alias_uses_sliding_knobs() -> None:
+    cfg = load_sparse_attention_config(_ns(sparse_attn="streaming"))
+    assert cfg is not None
+    assert cfg.name == "streaming"
+    assert cfg.sink_size == 4
+    assert cfg.recent_window == 256
+
+
 def test_cli_negative_sink_raises() -> None:
     with pytest.raises(argparse.ArgumentTypeError, match="non-negative"):
         load_sparse_attention_config(

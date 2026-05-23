@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from serving.sparse_attention.base import SparseAttentionConfig
+from serving.sparse_attention.base import SparseAttentionConfig, SparseAttentionContext
 
 if TYPE_CHECKING:
     import torch
@@ -70,10 +70,12 @@ class SlidingWindowSparseAttention:
         query_len: int,
         key_len: int,
         phase: str,
+        decode_step: int = -1,
         device: "torch.device",
         dtype: "torch.dtype",
+        context: SparseAttentionContext | None = None,
     ) -> "torch.Tensor":
-        del layer_idx, phase  # method is head/layer-uniform
+        del layer_idx, phase, decode_step, context  # method is head/layer-uniform
         import torch
 
         if query_len < 1:

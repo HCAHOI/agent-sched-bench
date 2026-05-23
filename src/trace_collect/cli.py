@@ -223,13 +223,14 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--sparse-attn",
-        choices=["none", "sliding"],
+        choices=["none", "sliding", "streaming", "heavy_hitter", "block_topk", "quest"],
         default="none",
         help=(
             "Sparse attention method used by the HF recording backend. "
-            "`none` (default) leaves attention dense. `sliding` masks each "
-            "query so it attends only to the first `--sparse-attn-sink-size` "
-            "tokens plus the last `--sparse-attn-recent-window` tokens. "
+            "`none` (default) leaves attention dense. `sliding`/`streaming` "
+            "keep the first `--sparse-attn-sink-size` tokens plus the last "
+            "`--sparse-attn-recent-window` tokens. Dynamic methods require "
+            "`--sparse-attn-budget` or YAML `budget:`. "
             "Mutually exclusive with --kv-policy and requires --record-internals."
         ),
     )
@@ -276,6 +277,36 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sparse-attn-observe-only",
         action="store_true",
         help="Record sparse selection without enforcing it (compatible with --kv-policy).",
+    )
+    parser.add_argument(
+        "--sparse-attn-budget",
+        type=int,
+        default=None,
+        help=(
+            "Token budget for dynamic sparse attention methods "
+            "(`heavy_hitter`, `block_topk`, `quest`)."
+        ),
+    )
+    parser.add_argument(
+        "--sparse-attn-block-size",
+        type=int,
+        default=16,
+        help="Block/page size for `block_topk` and `quest`. Default 16.",
+    )
+    parser.add_argument(
+        "--sparse-attn-score-reduction",
+        choices=["max", "mean"],
+        default="max",
+        help="How to reduce token scores into block/page scores. Default max.",
+    )
+    parser.add_argument(
+        "--sparse-attn-phase-scope",
+        choices=["decode_only"],
+        default="decode_only",
+        help=(
+            "Where dynamic methods enforce sparse masks. Only decode_only is "
+            "currently supported; prefill remains dense causal."
+        ),
     )
     parser.add_argument(
         "--verbose",

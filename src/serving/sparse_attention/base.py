@@ -21,13 +21,13 @@ class SparseAttentionConfig:
     """User-facing config for a sparse attention method.
 
     Method-specific knobs sit alongside the shared ones (`name`, `record`).
-    Currently only `sliding` consumes `sink_size` / `recent_window`; future
-    methods may grow per-method fields here. Frozen to match
+    `sliding` / `streaming` consume only `sink_size` / `recent_window`.
+    Dynamic methods use `budget` plus optional block/page knobs. Frozen to match
     `EvictionPolicyConfig`'s contract — providers stash a single config and
     pass it into the factory.
     """
 
-    name: Literal["none", "sliding"]
+    name: Literal["none", "sliding", "streaming", "heavy_hitter", "block_topk", "quest"]
     record: bool = False
     # Default sink_size=4 follows StreamingLLM (Xiao et al. 2024,
     # arXiv:2309.17453): the first few tokens carry the "attention sink"
@@ -37,6 +37,21 @@ class SparseAttentionConfig:
     # model and workload. Not anchored to any specific paper.
     recent_window: int = 256  # sliding
     observe_only: bool = False  # run full attention; record what sparse WOULD select
+    budget: int | None = None  # dynamic methods
+    block_size: int = 16  # block_topk / quest page size
+    score_reduction: Literal["max", "mean"] = "max"  # block/page score reduction
+    phase_scope: Literal["decode_only"] = "decode_only"
+
+
+@dataclass(frozen=True)
+class SparseAttentionContext:
+    """Forward state available to query-aware sparse attention methods."""
+
+    module: Any
+    hidden_states: Any
+    position_embeddings: tuple[Any, Any] | None
+    past_key_values: Any
+    attention_mask: Any
 
 
 class BaseSparseAttention(Protocol):
@@ -63,8 +78,10 @@ class BaseSparseAttention(Protocol):
         query_len: int,
         key_len: int,
         phase: str,
+        decode_step: int = -1,
         device: "torch.device",
         dtype: "torch.dtype",
+        context: SparseAttentionContext | None = None,
     ) -> "torch.Tensor":
         """Return additive sparsity mask broadcastable to [B, H, Q, K]."""
 
@@ -76,3 +93,6 @@ class BaseSparseAttention(Protocol):
         decode_step: int,
     ) -> dict[str, Any]:
         """Per-call metadata recorded alongside the (layer, phase, step) row."""
+
+    def reset_state(self) -> None:
+        """Optional lifecycle hook called at attempt/call boundaries."""

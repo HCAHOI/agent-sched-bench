@@ -689,6 +689,7 @@ class HFRecordingProvider(LLMProvider):
                 self._sparse_attention_config,
                 num_layers=int(self.model.config.num_hidden_layers),
                 recorder=None,
+                attention_bus=self._attention_bus,
             )
         self.capturer = LayerCapturer(
             self.model,
@@ -725,6 +726,10 @@ class HFRecordingProvider(LLMProvider):
             "recent_window": int(cfg.recent_window),
             "record": bool(cfg.record),
             "observe_only": bool(cfg.observe_only),
+            "budget": int(cfg.budget) if cfg.budget is not None else None,
+            "block_size": int(cfg.block_size),
+            "score_reduction": str(cfg.score_reduction),
+            "phase_scope": str(cfg.phase_scope),
         }
 
     def _kv_policy_meta_payload(self) -> dict[str, Any] | None:
@@ -761,6 +766,10 @@ class HFRecordingProvider(LLMProvider):
 
     def start_attempt(self, recordings_dir: Path) -> None:
         self._drop_session_cache()
+        if self._sparse_attention is not None and hasattr(
+            self._sparse_attention, "reset_state"
+        ):
+            self._sparse_attention.reset_state()
         self._call_idx = 0
         self._session_history = []
         self._message_first_seen = []
@@ -1219,6 +1228,10 @@ class HFRecordingProvider(LLMProvider):
                     method_name=self._sparse_attention_config.name,
                 )
             self.capturer.set_sparse_recorder(sparse_recorder)
+            if self._sparse_attention is not None and hasattr(
+                self._sparse_attention, "reset_state"
+            ):
+                self._sparse_attention.reset_state()
             # H2O full-prefill scoring is handled inside LayerCapturer in
             # bounded chunks and delivered only to full-prefill consumers. Do
             # not lift the recording sample cap here; doing so would materialize

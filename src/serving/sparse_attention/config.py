@@ -30,6 +30,10 @@ _CLI_TO_FIELD = {
     "sparse_attn_recent_window": "recent_window",
     "sparse_attn_record": "record",
     "sparse_attn_observe_only": "observe_only",
+    "sparse_attn_budget": "budget",
+    "sparse_attn_block_size": "block_size",
+    "sparse_attn_score_reduction": "score_reduction",
+    "sparse_attn_phase_scope": "phase_scope",
 }
 
 _FIELD_COERCERS = {
@@ -38,7 +42,14 @@ _FIELD_COERCERS = {
     "recent_window": int,
     "record": lambda v: v if isinstance(v, bool) else str(v).lower() in {"on", "true", "1", "yes"},
     "observe_only": lambda v: v if isinstance(v, bool) else str(v).lower() in {"on", "true", "1", "yes"},
+    "budget": int,
+    "block_size": int,
+    "score_reduction": str,
+    "phase_scope": str,
 }
+
+_DYNAMIC_METHODS = {"heavy_hitter", "block_topk", "quest"}
+_VALID_NAMES = {"none", "sliding", "streaming", *_DYNAMIC_METHODS}
 
 
 def _allowed_fields() -> set[str]:
@@ -105,6 +116,10 @@ def load_sparse_attention_config(
         "sparse_attn_recent_window": 256,
         "sparse_attn_record": "on",
         "sparse_attn_observe_only": False,
+        "sparse_attn_budget": None,
+        "sparse_attn_block_size": 16,
+        "sparse_attn_score_reduction": "max",
+        "sparse_attn_phase_scope": "decode_only",
     }
 
     merged: dict[str, Any] = dict(base)
@@ -126,30 +141,83 @@ def load_sparse_attention_config(
     name = merged.get("name", "none")
     if name == "none":
         return None
+    if name not in _VALID_NAMES:
+        raise argparse.ArgumentTypeError(
+            f"sparse attention method {name!r} is unsupported; "
+            f"choose one of {sorted(_VALID_NAMES)}"
+        )
 
-    if name == "sliding":
+    if name in {"sliding", "streaming"}:
         if "sink_size" not in merged:
             raise argparse.ArgumentTypeError(
-                "sparse attention 'sliding' requires `sink_size` "
+                f"sparse attention {name!r} requires `sink_size` "
                 "(set via --sparse-attn-sink-size or YAML `sink_size:`)"
             )
         if "recent_window" not in merged:
             raise argparse.ArgumentTypeError(
-                "sparse attention 'sliding' requires `recent_window` "
+                f"sparse attention {name!r} requires `recent_window` "
                 "(set via --sparse-attn-recent-window or YAML `recent_window:`)"
             )
         sink = int(merged["sink_size"])
         recent = int(merged["recent_window"])
         if sink < 0 or recent < 0:
             raise argparse.ArgumentTypeError(
-                f"sparse attention 'sliding' requires non-negative "
+                f"sparse attention {name!r} requires non-negative "
                 f"sink_size and recent_window; got sink_size={sink!r}, "
                 f"recent_window={recent!r}"
             )
         if sink + recent <= 0:
             raise argparse.ArgumentTypeError(
-                "sparse attention 'sliding' requires sink_size + recent_window > 0"
+                f"sparse attention {name!r} requires sink_size + recent_window > 0"
             )
+    elif name in _DYNAMIC_METHODS:
+        budget = merged.get("budget")
+        if budget is None:
+            raise argparse.ArgumentTypeError(
+                f"sparse attention {name!r} requires `budget` "
+                "(set via --sparse-attn-budget or YAML `budget:`)"
+            )
+        budget_int = int(budget)
+        sink = int(merged.get("sink_size", 4))
+        recent = int(merged.get("recent_window", 256))
+        block = int(merged.get("block_size", 16))
+        score_reduction = str(merged.get("score_reduction", "max"))
+        phase_scope = str(merged.get("phase_scope", "decode_only"))
+        if budget_int <= 0:
+            raise argparse.ArgumentTypeError(
+                f"sparse attention {name!r} requires budget > 0 (got {budget!r})"
+            )
+        if sink < 0 or recent < 0:
+            raise argparse.ArgumentTypeError(
+                f"sparse attention {name!r} requires non-negative "
+                f"sink_size and recent_window; got sink_size={sink!r}, "
+                f"recent_window={recent!r}"
+            )
+        if budget_int < sink + recent:
+            raise argparse.ArgumentTypeError(
+                f"sparse attention {name!r} requires budget >= sink_size + "
+                f"recent_window ({budget_int} < {sink} + {recent})"
+            )
+        if block <= 0:
+            raise argparse.ArgumentTypeError(
+                f"sparse attention {name!r} requires block_size > 0 (got {block!r})"
+            )
+        if score_reduction not in {"max", "mean"}:
+            raise argparse.ArgumentTypeError(
+                f"sparse attention {name!r} requires score_reduction in "
+                f"{{'max', 'mean'}}; got {score_reduction!r}"
+            )
+        if phase_scope != "decode_only":
+            raise argparse.ArgumentTypeError(
+                f"sparse attention {name!r} currently supports only "
+                f"phase_scope='decode_only'; got {phase_scope!r}"
+            )
+        merged["budget"] = budget_int
+        merged["sink_size"] = sink
+        merged["recent_window"] = recent
+        merged["block_size"] = block
+        merged["score_reduction"] = score_reduction
+        merged["phase_scope"] = phase_scope
 
     allowed = _allowed_fields()
     kwargs: dict[str, Any] = {}

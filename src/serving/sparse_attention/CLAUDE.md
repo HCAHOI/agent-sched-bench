@@ -20,7 +20,7 @@ class BaseSparseAttention(Protocol):
     name: str
     observe_only: bool
     def build_additive_mask(*, layer_idx, query_len, key_len, phase,
-                            device, dtype) -> torch.Tensor: ...
+                            decode_step, device, dtype, context) -> torch.Tensor: ...
     def record_metadata(*, layer_idx, phase, decode_step) -> dict: ...
 ```
 
@@ -54,17 +54,47 @@ cut，避免 query row 看到 future tokens。
 当 `sink_size + recent_window >= key_len`，两段已覆盖全长度，等效 dense
 attention。
 
+`streaming` 是 `sliding` 的 CLI/YAML alias，语义相同。
+
+---
+
+## dynamic decode methods
+
+第一批动态方法都默认 `phase_scope: decode_only`：prefill 返回 dense causal
+mask，decode 才做 sparse selection。这样避免在 prefill 中 materialize 或记录
+大规模 per-query keep set，也避免把 full dense attention 事后 top-k 伪装成
+可 enforce 的方法。
+
+| method | 选择信号 | keep set |
+|--------|----------|----------|
+| `heavy_hitter` | 之前 forward 通过 `AttentionBus` 发布的 post-softmax attention 累积分数 | sink + recent + top middle token |
+| `block_topk` | 当前 query 与 cached/current K 的 pre-softmax QK logits | sink + recent + top contiguous blocks，按 budget 截断 |
+| `quest` | Quest-style KV page min/max envelope 对当前 query 的上界估计 | sink + recent + top pages，按 budget 截断 |
+
+Research integrity 边界：
+
+- `block_topk` / `quest` 只使用 forward 前可得的 Q/K states，不读取当前
+  forward 的 post-softmax attention。
+- `heavy_hitter` 只使用历史已观察分数；当前 step 的 attention 会在 mask 决策
+  之后才发布到 bus。
+- 当前 HF backend 仍是 research/recording backend；SDPA 加 mask 不等于真实
+  sparse kernel 加速。
+
 ---
 
 ## SparseAttentionConfig（frozen dataclass）
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `name` | `"none" \| "sliding"` | — | 必填 |
+| `name` | `"none" \| "sliding" \| "streaming" \| "heavy_hitter" \| "block_topk" \| "quest"` | — | 必填 |
 | `record` | bool | `False` | 是否写 `sparse_attention.npz` |
 | `observe_only` | bool | `False` | True = 旁路只录，不改 attention_mask；可与 KV eviction 共存 |
-| `sink_size` | int | `4` | sliding 专属；其他 method 忽略 |
-| `recent_window` | int | `256` | sliding 专属 |
+| `sink_size` | int | `4` | sink-prefix 长度 |
+| `recent_window` | int | `256` | recent-tail 长度 |
+| `budget` | int \| null | `null` | dynamic method 必填；总 keep token 目标上限 |
+| `block_size` | int | `16` | `block_topk` block / `quest` page size |
+| `score_reduction` | `"max" \| "mean"` | `"max"` | block/page score 聚合 |
+| `phase_scope` | `"decode_only"` | `"decode_only"` | dynamic method 目前只支持 decode sparse |
 
 ---
 
@@ -98,7 +128,9 @@ Pre-hook 在 observe-only 下仍 build `sparse_mask` 并 record `kept_count` /
 3. `--sparse-attn none`（argparse 默认）**不会**清掉 YAML 提供的 `name`
 
 CLI flag：
-- `--sparse-attn {none,sliding}` / `--sparse-attn-sink-size N` / `--sparse-attn-recent-window N`
+- `--sparse-attn {none,sliding,streaming,heavy_hitter,block_topk,quest}` / `--sparse-attn-sink-size N` / `--sparse-attn-recent-window N`
+- `--sparse-attn-budget N` / `--sparse-attn-block-size N`
+- `--sparse-attn-score-reduction {max,mean}` / `--sparse-attn-phase-scope decode_only`
 - `--sparse-attn-record` / `--no-sparse-attn-record`
 - `--sparse-attn-observe-only`（store_true；observe 模式开关）
 - `--sparse-attn-config PATH`
@@ -112,6 +144,19 @@ record: true
 observe_only: true     # 与 --kv-policy h2o 共存时必须开
 ```
 
+```yaml
+# configs/sparse_attention/quest_b1024.yaml
+name: quest
+budget: 1024
+sink_size: 4
+recent_window: 256
+block_size: 16
+score_reduction: max
+phase_scope: decode_only
+record: true
+observe_only: true
+```
+
 ---
 
 ## `sparse_attention.npz` schema（per-call 写盘）
@@ -121,7 +166,7 @@ observe_only: true     # 与 --kv-policy h2o 共存时必须开
 | 字段 | 形状 | dtype | 含义 |
 |------|------|-------|------|
 | `call_idx` | scalar | i32 | 写盘时的 chat 编号 |
-| `method_name` | scalar | U16 | `sliding`（未来扩展时多值） |
+| `method_name` | scalar | U16 | sparse method name |
 | `record_step` | `[R]` | i32 | append 时的 row index（运行内全局） |
 | `record_layer` | `[R]` | i32 | 层号 |
 | `record_phase` | `[R]` | U7 | `prefill` / `decode` |
@@ -149,8 +194,11 @@ observe_only: true     # 与 --kv-policy h2o 共存时必须开
 更小，即使 sliding window 已覆盖全 key，causal lower triangle 仍会让
 `effective_density < 1.0`。
 
-future per-query method 若要 per-row density / kept-count 等扩展信息，走
-`extras_json`，不动顶层 schema。Loader 端可懒解码。
+dynamic method 的 `extras_json` 记录 `budget` / `phase_scope` /
+`selection_reason` / `selected_middle_count` / `selected_middle_indices`，以及
+`block_topk.selected_blocks` 或 `quest.selected_pages`。这些字段支持
+`scripts/recoding_figures/score_sparse_selection.py` 在 observe-only trace 上
+重建 keep set；仍不写 raw dense mask。
 
 ---
 
@@ -164,7 +212,11 @@ attempt 级与 `kv_policy` block 并列新增：
   "sink_size": 4,
   "recent_window": 256,
   "record": true,
-  "observe_only": false
+  "observe_only": false,
+  "budget": null,
+  "block_size": 16,
+  "score_reduction": "max",
+  "phase_scope": "decode_only"
 }
 ```
 
@@ -193,8 +245,8 @@ recall@k / mass coverage"分析；enforce 跑出来的 `attention.npz` 在被 ma
 
 ## 不做（明确边界）
 
-- 不实现 Quest / MInference / DuoAttention / NSA（留下一轮 PR）
+- 不实现 MInference / DuoAttention / NSA（留下一轮 PR）
 - 不和 `kv_policies` 组合（互斥强制）
-- 不写完整 mask 到 npz（density / effective_density 等统计足够；如需要 raw
-  mask 再单开 debug flag）
-- 不动 `LayerCapturer` 的 POST-softmax hook
+- 不写完整 mask 到 npz（density / effective_density / selected indices 等
+  统计足够；如需要 raw mask 再单开 debug flag）
+- 不承诺 HF SDPA 下的 sparse kernel speedup

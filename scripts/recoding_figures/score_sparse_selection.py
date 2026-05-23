@@ -14,11 +14,8 @@ The whole comparison is meaningful only when the trace was collected with
 unmasked attention distribution — enforced sparse traces have hard zeros
 exactly where the sparse mask cut, which would make this trivially perfect.
 
-Currently dispatches keep-set reconstruction only for `method_name=="sliding"`
-because it's the only method whose keep set is fully recoverable from
-attempt-level config + per-row `key_len`. Future per-query methods (Quest,
-MInference) will need per-query selected indices in the recorder's
-`extras_json` column; the dispatch point is `reconstruct_keep_set()` below.
+Dynamic decode methods reconstruct their keep set from attempt-level
+sink/recent config plus per-row `extras_json["selected_middle_indices"]`.
 """
 
 from __future__ import annotations
@@ -44,7 +41,7 @@ from scripts.recoding_figures.recording_loader import (  # noqa: E402
 
 
 @dataclass(frozen=True)
-class SlidingParams:
+class SparseParams:
     sink_size: int
     recent_window: int
 
@@ -52,23 +49,28 @@ class SlidingParams:
 def reconstruct_keep_set(
     *,
     method_name: str,
-    method_params: SlidingParams,
+    method_params: SparseParams,
     key_len: int,
+    extras: dict[str, object] | None = None,
 ) -> np.ndarray:
     """Return sorted unique key positions kept by `method_name` for this key_len.
 
-    Output is `np.int32`. Sliding is the only registered method; future
-    methods raise NotImplementedError so we surface the gap loudly rather
-    than computing a wrong score.
+    Output is `np.int32`.
     """
-    if method_name != "sliding":
+    if method_name not in {"sliding", "streaming", "heavy_hitter", "block_topk", "quest"}:
         raise NotImplementedError(
-            f"keep-set reconstruction for method {method_name!r} requires "
-            "per-query indices in extras_json (not implemented yet); only "
-            "'sliding' is supported by this scoring script."
+            f"keep-set reconstruction for method {method_name!r} is not implemented"
         )
     if key_len <= 0:
         return np.empty(0, dtype=np.int32)
+    if method_name in {"heavy_hitter", "block_topk", "quest"}:
+        extras = extras or {}
+        reason = str(extras.get("selection_reason", ""))
+        phase_scope = str(extras.get("phase_scope", "decode_only"))
+        if reason in {"phase_dense", "prefill_dense"} or (
+            phase_scope == "decode_only" and reason in {"phase_dense", "prefill_dense"}
+        ):
+            return np.arange(key_len, dtype=np.int32)
     sink = min(method_params.sink_size, key_len)
     recent_start = max(0, key_len - method_params.recent_window)
     keep = np.zeros(key_len, dtype=bool)
@@ -76,6 +78,24 @@ def reconstruct_keep_set(
         keep[:sink] = True
     if method_params.recent_window > 0:
         keep[recent_start:] = True
+    if method_name in {"heavy_hitter", "block_topk", "quest"}:
+        if extras is None:
+            raise ValueError(
+                f"method {method_name!r} requires extras_json selected_middle_indices"
+            )
+        raw_selected = extras.get("selected_middle_indices")
+        if raw_selected is None:
+            raise ValueError(
+                f"method {method_name!r} extras_json missing selected_middle_indices"
+            )
+        if not isinstance(raw_selected, list):
+            raise ValueError(
+                f"method {method_name!r} selected_middle_indices must be a list"
+            )
+        for item in raw_selected:
+            pos = int(item)
+            if 0 <= pos < key_len:
+                keep[pos] = True
     return np.nonzero(keep)[0].astype(np.int32)
 
 
@@ -93,8 +113,8 @@ def _read_meta_sparse_block(attempt_dir: Path) -> dict[str, object]:
     return sparse_block
 
 
-def _sliding_params_from_meta(meta_block: dict[str, object]) -> SlidingParams:
-    return SlidingParams(
+def _sparse_params_from_meta(meta_block: dict[str, object]) -> SparseParams:
+    return SparseParams(
         sink_size=int(meta_block["sink_size"]),
         recent_window=int(meta_block["recent_window"]),
     )
@@ -126,7 +146,7 @@ def _per_query_rows_for_iter(
     call_idx: int,
     iter_dir: Path,
     method_name: str,
-    method_params: SlidingParams,
+    method_params: SparseParams,
     recall_ks: tuple[int, ...],
 ) -> Iterable[dict[str, object]]:
     att_path = iter_dir / "attention.npz"
@@ -139,6 +159,7 @@ def _per_query_rows_for_iter(
     ) as sp:
         sp_lookup = _build_sparse_key_lookup({k: sp[k] for k in sp.files})
         sp_key_len = sp["key_len"].astype(np.int32)
+        sp_extras = sp["extras_json"]
 
         record_layer = att["record_layer"].astype(np.int32)
         record_phase = att["record_phase"]
@@ -166,10 +187,12 @@ def _per_query_rows_for_iter(
                     "matching row in sparse_attention.npz"
                 )
             key_len = int(sp_key_len[sp_idx])
+            extras = json.loads(str(sp_extras[sp_idx]))
             keep_arr = reconstruct_keep_set(
                 method_name=method_name,
                 method_params=method_params,
                 key_len=key_len,
+                extras=extras,
             )
             keep_set = set(int(x) for x in keep_arr)
 
@@ -233,7 +256,7 @@ def score_attempts(
     for attempt_dir, recs in by_attempt.items():
         meta_block = _read_meta_sparse_block(attempt_dir)
         method_name = str(meta_block.get("method", "sliding"))
-        method_params = _sliding_params_from_meta(meta_block)
+        method_params = _sparse_params_from_meta(meta_block)
         for rec in recs:
             rows.extend(
                 _per_query_rows_for_iter(
@@ -281,7 +304,7 @@ def _render_markdown(
     global_row: pl.DataFrame,
     recall_ks: tuple[int, ...],
     method_name: str,
-    method_params: SlidingParams,
+    method_params: SparseParams,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# Sparse Selection Scoring — `{method_name}`")
@@ -374,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     # with the same sparse config — typical for a sweep).
     meta_block = _read_meta_sparse_block(attempt_dirs[0])
     method_name = str(meta_block.get("method", "sliding"))
-    method_params = _sliding_params_from_meta(meta_block)
+    method_params = _sparse_params_from_meta(meta_block)
 
     per_layer_phase, global_row = summarize(df, args.recall_k)
     md = _render_markdown(
