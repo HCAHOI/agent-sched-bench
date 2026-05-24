@@ -1012,7 +1012,7 @@ class HFRecordingProvider(LLMProvider):
             actual = int(self._session_cache.get_seq_length(0))
             assert expected == actual, (
                 f"session_token_ids ({expected}) != DynamicCache seq_len "
-                f"({actual}); _extend_session_tokens / generate desync — "
+                f"({actual}); _extend_session_tokens / generate desync -- "
                 "refusing to proceed with potentially mis-positioned KV"
             )
         new_ids = prompt_ids[0]
@@ -1087,7 +1087,21 @@ class HFRecordingProvider(LLMProvider):
         ).unsqueeze(0)
         # O(N²) cat per call; acceptable for agent-loop scales (≤100 turns ×
         # ≤32K tokens). Future: track only the suffix delta.
-        self._session_token_ids = self._torch.cat([prompt_ids, generated], dim=-1)
+        combined = self._torch.cat([prompt_ids, generated], dim=-1)
+        if isinstance(self._session_cache, BaseEvictionCache):
+            # Eviction policies intentionally let physical KV length lag
+            # behind logical token history (evicted slots reduce physical
+            # without erasing token ids). Keep the full logical sequence.
+            self._session_token_ids = combined
+        else:
+            # Plain DynamicCache: logical == physical except for the off-by-
+            # one inherent to HF generate(). The LAST generated token
+            # (typically EOS, or the max_new_tokens cutoff token) is the
+            # OUTPUT of the last forward, not an INPUT, so its KV is not in
+            # the cache. Truncate session_token_ids to the cache's actual
+            # physical length so the desync invariant holds on the next call.
+            cache_len = int(self._session_cache.get_seq_length(0))
+            self._session_token_ids = combined[..., :cache_len]
 
     def close(self) -> None:
         """Release hooks, session cache, and bus subscriptions."""
