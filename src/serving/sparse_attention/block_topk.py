@@ -25,6 +25,10 @@ class BlockTopKSparseAttention:
 
     name = "block_topk"
     observe_only: bool
+    # Scores are recomputed at decode from current Q vs full cached + delta K,
+    # so cache reuse is safe — the K state seen at decode is identical whether
+    # we re-prefilled the full prompt or resumed from a strict-prefix delta.
+    requires_full_prefill = False
 
     def __init__(
         self,

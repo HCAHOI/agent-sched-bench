@@ -877,14 +877,26 @@ class HFRecordingProvider(LLMProvider):
         self._message_first_seen = list(zip(signatures, first_seen_values, strict=True))
         return dict(enumerate(first_seen_values))
 
-    def _build_session_cache(self) -> DynamicCache:
-        """Build a fresh KV cache for the current session.
+    def _build_session_cache(self) -> DynamicCache | None:
+        """Build a fresh KV cache for the current session, or None to skip it.
+
+        Returns None when the active sparse method declares
+        `requires_full_prefill=True` (heavy_hitter needs every prefill token's
+        attention to land in the AttentionBus — session cache delta-prefill
+        would skip the cached prefix and silently degrade selection to
+        streaming-LLM). Callers must treat None like the env-var-disabled
+        path: pass the full prompt each call with no past_key_values.
 
         Eviction config → policy-specific `BaseEvictionCache` subclass
         (h2o / streaming / random). No eviction → plain `DynamicCache` for
         sparse-only or bare baseline runs, which still benefit from LCP-based
         delta prefill across consecutive chat() calls.
         """
+        if (
+            self._sparse_attention is not None
+            and getattr(self._sparse_attention, "requires_full_prefill", False)
+        ):
+            return None
         if self._eviction_config is None:
             return DynamicCache()
         return build_eviction_cache(
@@ -909,6 +921,27 @@ class HFRecordingProvider(LLMProvider):
         self._session_cache = None
         self._session_token_ids = None
 
+    def _record_disabled_session_history(
+        self, *, call_idx: int, new_len: int
+    ) -> None:
+        """Append the audit-log entry for a 'no session cache this call' path.
+
+        Used by both the env-var escape hatch and the per-method opt-out
+        (`requires_full_prefill=True`). Mirrors the legacy pre-default-on
+        accounting: `used_session_cache=False`, `lcp=0`, `delta_len=new_len`.
+        """
+        self._session_history.append(
+            {
+                "call_idx": call_idx,
+                "used_session_cache": False,
+                "lcp": 0,
+                "cached_len_before": 0,
+                "new_len": new_len,
+                "delta_len": new_len,
+                "diverged": False,
+            }
+        )
+
     def _prepare_session_cache(
         self, *, prompt_ids: Any, call_idx: int
     ) -> tuple[Any, bool]:
@@ -929,24 +962,26 @@ class HFRecordingProvider(LLMProvider):
         # prompt every call, no past_key_values supplied). Document usage with
         # OMC_DISABLE_SESSION_CACHE=1; default behavior is enabled.
         if _session_cache_disabled():
-            self._session_history.append(
-                {
-                    "call_idx": call_idx,
-                    "used_session_cache": False,
-                    "lcp": 0,
-                    "cached_len_before": 0,
-                    "new_len": new_len,
-                    "delta_len": new_len,
-                    "diverged": False,
-                }
+            self._record_disabled_session_history(
+                call_idx=call_idx, new_len=new_len
             )
             return prompt_ids, False
         # Session cache benefits any multi-call workflow with shared prefix
         # (sparse_attention runs, bare baseline, eviction policies). Not gated
         # on eviction policy any more — see commit message for the per-turn
-        # latency motivation.
+        # latency motivation. Methods that declare requires_full_prefill=True
+        # (heavy_hitter) opt out via `_build_session_cache()` returning None.
         if self._session_cache is None:
-            self._session_cache = self._build_session_cache()
+            candidate = self._build_session_cache()
+            if candidate is None:
+                # Per-method opt-out: behaves like the env-var-disabled path.
+                # `_session_cache` stays None so `_extend_session_tokens` and
+                # the eviction-only hooks in `run_generate` all short-circuit.
+                self._record_disabled_session_history(
+                    call_idx=call_idx, new_len=new_len
+                )
+                return prompt_ids, False
+            self._session_cache = candidate
             self._session_token_ids = prompt_ids.clone()
             _LOG.debug(
                 "session cache built (call_idx=%d, prompt_len=%d)",
@@ -967,6 +1002,19 @@ class HFRecordingProvider(LLMProvider):
             return prompt_ids, True
         assert self._session_token_ids is not None
         cached_ids = self._session_token_ids[0]
+        # Desync gate for plain DynamicCache: logical token IDs we track must
+        # equal the cache's physical seq_len. Eviction caches deliberately
+        # diverge (post-evict phys_kv_len < logical len), so we skip the assert
+        # for that branch — `_chat_locked` already plumbs phys vs logical
+        # lengths explicitly for mask / cache_position.
+        if not isinstance(self._session_cache, BaseEvictionCache):
+            expected = int(self._session_token_ids.shape[-1])
+            actual = int(self._session_cache.get_seq_length(0))
+            assert expected == actual, (
+                f"session_token_ids ({expected}) != DynamicCache seq_len "
+                f"({actual}); _extend_session_tokens / generate desync — "
+                "refusing to proceed with potentially mis-positioned KV"
+            )
         new_ids = prompt_ids[0]
         lcp = _longest_common_prefix(cached_ids, new_ids)
         cached_len = int(cached_ids.shape[0])

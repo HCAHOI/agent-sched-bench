@@ -26,6 +26,13 @@ class HeavyHitterSparseAttention:
     name = "heavy_hitter"
     always_active = True
     prefill_observe_mode = "full"
+    # Correctness depends on every prefill token's attention reaching the
+    # AttentionBus so `_scores` accumulates per-key history. With session KV
+    # delta-prefill the cached prefix is skipped → bus never sees those rows →
+    # `_rank_middle_positions` returns [] → decode silently degrades to
+    # streaming-LLM. The HF backend reads this flag and refuses to build a
+    # session cache when it is True (see `_build_session_cache`).
+    requires_full_prefill = True
 
     def __init__(
         self,
@@ -64,9 +71,11 @@ class HeavyHitterSparseAttention:
     def reset_state(self) -> None:
         """Clear historical scores at sparse-call boundaries.
 
-        Sparse-attention runs do not currently use a session KV cache, so each
-        HF chat call replays the full prompt. Carrying scores across calls
-        would double-count replayed context and leak state across tasks.
+        Heavy-hitter sets `requires_full_prefill = True`, which forces the HF
+        backend to skip session KV cache delta-prefill — every chat() call
+        re-prefills the full prompt and the AttentionBus sees every key
+        position. Carrying scores across calls would therefore double-count
+        replayed context, so we reset at each call boundary.
         """
         for idx in range(len(self._scores)):
             self._scores[idx] = None

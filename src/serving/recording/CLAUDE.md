@@ -21,7 +21,7 @@ attempt_NNNN/
 - **模型信息**：HF model 名 / commit hash / 层数 / 头数 / 专家数 / 是否 MoE
 - **运行环境**：torch / transformers / accelerate 版本 / CUDA 版本 / NVIDIA driver 版本
 - **KV policy 配置**：policy 名 / budget / sink_size / recent_window / heavy_ratio / seed / prefill_mode / `prefill_score_bias`(只在 H2O+sampled prefill 才 True)
-- **session_history**：每次 chat() 是否复用了上一次的 KV cache，命中前缀长度，是否触发 cache 重建
+- **session_history**：每次 chat() 是否复用了上一次的 KV cache，命中前缀长度，是否触发 cache 重建。`used_session_cache=True` 表示当次调用挂了 `past_key_values`；False 出现在三种情况：(1) 环境变量 `OMC_DISABLE_SESSION_CACHE=1` 关闭；(2) 当前 sparse method 声明 `requires_full_prefill=True`（目前只有 `heavy_hitter` —— 它的 score buffer 必须看到每个 prefill token 才能选 top-k）；(3) 第一次 build 之前还没有 cache 可用。**注意**：commit 7d8db25 之后 bare baseline / sliding / block_topk / quest / 所有 eviction policy 都默认开启 session cache，所以这个 flag 不再能用来区分"是否有 eviction policy"——要判别 eviction 看 `kv_policy` 块或 `kv_eviction.npz` artifact，要判别 sparse method 看 `sparse_attention` 块。
 - **iters[]**：每次 chat() 调用的汇总
   - 输入 / 输出 / 总 token 数
   - 段数 / attention record 数 / routing record 数

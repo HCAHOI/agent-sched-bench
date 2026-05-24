@@ -38,6 +38,9 @@ class SlidingWindowSparseAttention:
     """Sink-prefix + recent-tail sparse attention."""
 
     name = "sliding"
+    # Stateless: keep set depends only on (sink_size, recent_window, key_len),
+    # so session KV cache reuse is safe — no per-step accumulator to corrupt.
+    requires_full_prefill = False
 
     def __init__(self, sink_size: int, recent_window: int, observe_only: bool = False) -> None:
         if sink_size < 0:

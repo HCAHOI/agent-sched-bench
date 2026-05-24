@@ -161,7 +161,14 @@ def test_layer_capturer_writes_attention_routing_and_segments(tmp_path) -> None:
             "session_history": [
                 {
                     "call_idx": 0,
-                    "used_session_cache": False,
+                    # Post-`perf(backend_hf)`: session KV cache is default-on
+                    # for all configs (sparse / baseline / eviction), so the
+                    # first-call audit log records True. Downstream loaders
+                    # that previously used this flag to distinguish
+                    # eviction-only traces must instead inspect the
+                    # `sparse_attention` / `kv_policy` blocks in meta.json or
+                    # the presence of `kv_eviction.npz` artifacts.
+                    "used_session_cache": True,
                     "lcp": 0,
                     "cached_len_before": 0,
                     "new_len": 4,

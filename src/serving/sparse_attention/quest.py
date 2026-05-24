@@ -25,6 +25,10 @@ class QuestSparseAttention:
 
     name = "quest"
     observe_only: bool
+    # Page envelopes (min/max) are computed at decode from the full cached + delta
+    # K state, so cache reuse is safe — same K seen whether we re-prefilled or
+    # resumed.
+    requires_full_prefill = False
 
     def __init__(
         self,

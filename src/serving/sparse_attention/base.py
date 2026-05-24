@@ -75,10 +75,19 @@ class BaseSparseAttention(Protocol):
     always passes a non-None attention mask to HF attention; methods must
     therefore include the causal upper-triangular cut themselves for Q > 1
     prefill masks.
+
+    `requires_full_prefill` is True when the method's correctness depends on
+    every prefill token's attention landing in the AttentionBus (e.g.,
+    heavy_hitter accumulates per-key historical scores). When True, the HF
+    backend MUST NOT enable session KV cache delta-prefill — every chat()
+    call must re-prefill the full prompt so the bus sees every key position.
+    Stateless / decode-recomputed methods (sliding, block_topk, quest) set
+    this False and benefit from cross-call KV reuse.
     """
 
     name: str
     observe_only: bool
+    requires_full_prefill: bool
 
     def build_additive_mask(
         self,
