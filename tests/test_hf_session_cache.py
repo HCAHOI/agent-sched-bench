@@ -91,6 +91,8 @@ def _build_provider(eviction_config: EvictionPolicyConfig | None) -> HFRecording
     """Hand-construct a provider so we don't load HF weights."""
     provider = HFRecordingProvider.__new__(HFRecordingProvider)
     provider._eviction_config = eviction_config
+    provider._sparse_attention_config = None
+    provider._sparse_attention = None
     provider._session_cache = None
     provider._session_token_ids = None
     provider._session_history = []
@@ -223,18 +225,28 @@ def test_single_chat_equivalent_to_legacy() -> None:
     ]
 
 
-def test_no_eviction_skips_session_cache() -> None:
-    """`eviction_config is None`: passthrough to legacy path."""
+def test_no_eviction_still_builds_session_cache() -> None:
+    """`eviction_config is None` now also gets a (plain DynamicCache) session
+    cache so consecutive chat() calls can resume past_key_values via LCP delta
+    prefill. This is the post-`perf(backend_hf)` decoupling — sparse and
+    baseline runs benefit from the same cross-call KV reuse as eviction runs.
+    """
+    from transformers import DynamicCache
+
+    from serving.kv_policies.base import BaseEvictionCache
+
     provider = _build_provider(eviction_config=None)
     prompt = torch.tensor([[1, 2, 3]], dtype=torch.long)
     delta, used = provider._prepare_session_cache(prompt_ids=prompt, call_idx=0)
-    assert used is False
+    assert used is True
     torch.testing.assert_close(delta, prompt)
-    assert provider._session_cache is None
+    assert isinstance(provider._session_cache, DynamicCache)
+    # Plain DynamicCache — not an eviction subclass.
+    assert not isinstance(provider._session_cache, BaseEvictionCache)
     assert provider._session_history == [
         {
             "call_idx": 0,
-            "used_session_cache": False,
+            "used_session_cache": True,
             "lcp": 0,
             "cached_len_before": 0,
             "new_len": 3,
@@ -242,6 +254,22 @@ def test_no_eviction_skips_session_cache() -> None:
             "diverged": False,
         }
     ]
+
+
+def test_env_var_disables_session_cache(monkeypatch) -> None:
+    """OMC_DISABLE_SESSION_CACHE=1 short-circuits to the legacy path even with
+    an eviction policy configured. This is the byte-equality validation escape
+    hatch — default is enabled.
+    """
+    monkeypatch.setenv("OMC_DISABLE_SESSION_CACHE", "1")
+    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+    provider = _build_provider(cfg)
+    prompt = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    delta, used = provider._prepare_session_cache(prompt_ids=prompt, call_idx=0)
+    assert used is False
+    torch.testing.assert_close(delta, prompt)
+    assert provider._session_cache is None
+    assert provider._session_history[-1]["used_session_cache"] is False
 
 
 # ---------------------------------------------------------------------------

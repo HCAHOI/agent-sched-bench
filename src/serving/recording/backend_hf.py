@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import json_repair
+from transformers import DynamicCache
 
 from agents.openclaw.providers.base import (
     GenerationSettings,
@@ -52,6 +53,18 @@ _ALLOWED_MSG_KEYS = frozenset(
 _OPENCLAW_MESSAGE_ID_KEY = "_openclaw_message_id"
 _ALNUM = string.ascii_letters + string.digits
 _MAX_TORCH_SEED = (2**63) - 1
+# Debug escape hatch for byte-equality validation: when set to a truthy value
+# the provider falls back to the pre-default-on path (fresh prompt every call,
+# no session-shared KV cache, no LCP delta). Use only to A/B verify that
+# enabling the session cache produces identical greedy decodes — default is
+# enabled. Sparse/eviction policies that *require* a session cache will still
+# build one when their config is provided.
+_SESSION_CACHE_DISABLED_ENV = "OMC_DISABLE_SESSION_CACHE"
+
+
+def _session_cache_disabled() -> bool:
+    raw = os.environ.get(_SESSION_CACHE_DISABLED_ENV, "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _short_tool_id() -> str:
@@ -638,15 +651,18 @@ class HFRecordingProvider(LLMProvider):
         # Session-shared cache lives across chat() calls so H2O score buffers,
         # streaming-LLM windows, and eviction state accumulate over the
         # provider's lifetime. Built lazily on first call so the constructor
-        # stays free of transformers `Cache` instantiation. None when no
-        # eviction policy is configured.
+        # stays free of transformers `Cache` instantiation. The cache type is
+        # `BaseEvictionCache` when an eviction policy is configured and a plain
+        # `DynamicCache` otherwise — the latter still benefits any multi-call
+        # workflow with shared prefix (sparse_attention runs, bare baseline)
+        # because HF can resume `past_key_values` from the previous call.
         self._eviction_config = eviction_config
         self._sparse_attention_config = sparse_attention_config
         # Method instance is built once per provider (it carries no per-call
         # state for sliding). The recorder is swapped per call via
         # LayerCapturer.set_sparse_recorder().
         self._sparse_attention: BaseSparseAttention | None = None
-        self._session_cache: BaseEvictionCache | None = None
+        self._session_cache: DynamicCache | None = None
         # Token IDs currently materialised in the session cache, including any
         # decoded tokens from prior calls. (1, T) growing tensor; LCP is
         # computed against this to derive the delta passed to generate().
@@ -861,8 +877,16 @@ class HFRecordingProvider(LLMProvider):
         self._message_first_seen = list(zip(signatures, first_seen_values, strict=True))
         return dict(enumerate(first_seen_values))
 
-    def _build_session_cache(self) -> BaseEvictionCache:
-        assert self._eviction_config is not None
+    def _build_session_cache(self) -> DynamicCache:
+        """Build a fresh KV cache for the current session.
+
+        Eviction config → policy-specific `BaseEvictionCache` subclass
+        (h2o / streaming / random). No eviction → plain `DynamicCache` for
+        sparse-only or bare baseline runs, which still benefit from LCP-based
+        delta prefill across consecutive chat() calls.
+        """
+        if self._eviction_config is None:
+            return DynamicCache()
         return build_eviction_cache(
             self._eviction_config,
             num_layers=int(self.model.config.num_hidden_layers),
@@ -875,7 +899,9 @@ class HFRecordingProvider(LLMProvider):
         cache = self._session_cache
         if cache is None:
             return
-        if cache.requires_attention():
+        # Plain DynamicCache (sparse / baseline runs) has no bus subscription;
+        # only BaseEvictionCache subclasses need an unsubscribe attempt.
+        if isinstance(cache, BaseEvictionCache) and cache.requires_attention():
             try:
                 self._attention_bus.unsubscribe(cache)
             except ValueError:
@@ -898,7 +924,11 @@ class HFRecordingProvider(LLMProvider):
         in `run_generate`; the lock serialises concurrent `chat()` callers.
         """
         new_len = int(prompt_ids.shape[-1])
-        if self._eviction_config is None:
+        # Debug escape hatch: env-var bypass for byte-equality A/B validation.
+        # When set, behaves identically to the pre-default-on code path (full
+        # prompt every call, no past_key_values supplied). Document usage with
+        # OMC_DISABLE_SESSION_CACHE=1; default behavior is enabled.
+        if _session_cache_disabled():
             self._session_history.append(
                 {
                     "call_idx": call_idx,
@@ -911,6 +941,10 @@ class HFRecordingProvider(LLMProvider):
                 }
             )
             return prompt_ids, False
+        # Session cache benefits any multi-call workflow with shared prefix
+        # (sparse_attention runs, bare baseline, eviction policies). Not gated
+        # on eviction policy any more — see commit message for the per-turn
+        # latency motivation.
         if self._session_cache is None:
             self._session_cache = self._build_session_cache()
             self._session_token_ids = prompt_ids.clone()
@@ -986,7 +1020,10 @@ class HFRecordingProvider(LLMProvider):
         return prompt_ids, True
 
     def _extend_session_tokens(self, *, prompt_ids: Any, output_ids: list[int]) -> None:
-        if self._eviction_config is None:
+        # No session cache means nothing to extend (escape hatch or already
+        # dropped). The cache is the source of truth for whether we should
+        # bother tracking token state.
+        if self._session_cache is None:
             return
         # Append raw generated token ids to prompt_ids. Note: for models with
         # chain-of-thought generation (e.g. Qwen3 <think>…</think>), the raw
@@ -1171,33 +1208,38 @@ class HFRecordingProvider(LLMProvider):
                 generation_kwargs["top_k"] = int(top_k)
             if repetition_penalty is not None:
                 generation_kwargs["repetition_penalty"] = float(repetition_penalty)
-            # KV eviction injection: a session-shared cache lives across
-            # chat() calls. When no policy is configured, generate() falls
-            # back to its stock DynamicCache and behaves identically to the
-            # pre-session-cache path (no delta-input either; `delta_ids` ==
-            # `prompt_ids` in that branch).
+            # KV recorder is only built for the eviction-policy branch; sparse
+            # and bare-baseline runs leave it None. The session cache itself is
+            # shared across all branches so consecutive chat() calls can resume
+            # past_key_values via LCP-based delta prefill.
             kv_recorder: KVEvictionRecorder | None = None
-            if self._eviction_config is not None:
+            if self._eviction_config is not None and self._eviction_config.record:
                 # `record=False` runs the policy but skips both the
                 # KVEvictionRecorder allocation AND the capturer.flush() npz
                 # write; the cache mechanics still run.
-                if self._eviction_config.record:
-                    kv_recorder = KVEvictionRecorder(
-                        call_idx=call_idx,
-                        policy_name=self._eviction_config.name,
-                    )
-                self.capturer.set_kv_recorder(kv_recorder)
+                kv_recorder = KVEvictionRecorder(
+                    call_idx=call_idx,
+                    policy_name=self._eviction_config.name,
+                )
+            self.capturer.set_kv_recorder(kv_recorder)
+            if used_session_cache:
                 assert self._session_cache is not None
-                self._session_cache.recorder = kv_recorder
-                # Step counters reset per call; physical KV slots and score
-                # buffers persist.
-                self._session_cache.notify_new_call(call_idx)
+                # `recorder` / `notify_new_call` are policy-only hooks; plain
+                # DynamicCache (sparse / baseline session cache) doesn't expose
+                # them. Guard via isinstance so we don't AttributeError when
+                # session cache runs without an eviction policy.
+                if isinstance(self._session_cache, BaseEvictionCache):
+                    self._session_cache.recorder = kv_recorder
+                    # Step counters reset per call; physical KV slots and score
+                    # buffers persist.
+                    self._session_cache.notify_new_call(call_idx)
                 generation_kwargs["past_key_values"] = self._session_cache
                 # phys_kv_len: physical slots after eviction (attention_mask width).
                 # logical_kv_len: absolute conversation position of delta[0] (RoPE).
                 # These diverge after eviction; using phys for RoPE silently
                 # corrupts embeddings. Explicit cache_position also sidesteps
-                # HF's arange(delta_len)[past_length:] empty-tensor crash.
+                # HF's arange(delta_len)[past_length:] empty-tensor crash. For
+                # plain DynamicCache the two lengths coincide (no eviction).
                 phys_kv_len = self._session_cache.get_seq_length(0)
                 delta_len = int(delta_ids.shape[-1])
                 logical_kv_len = int(prompt_ids.shape[-1]) - delta_len
@@ -1209,8 +1251,8 @@ class HFRecordingProvider(LLMProvider):
                     logical_kv_len, logical_kv_len + delta_len, dtype=self._torch.long
                 ).to(self._input_device())
             else:
-                # No policy: stock DynamicCache, full prompt each call.
-                self.capturer.set_kv_recorder(None)
+                # Escape hatch (OMC_DISABLE_SESSION_CACHE=1): stock DynamicCache,
+                # full prompt each call. Matches the pre-default-on path exactly.
                 generation_kwargs["attention_mask"] = self._torch.ones_like(
                     input_tensor
                 )
@@ -1320,8 +1362,9 @@ class HFRecordingProvider(LLMProvider):
                         sequences[0, input_token_count:].detach().cpu().tolist()
                     )
                 self.capturer.flush(output_token_ids=output_ids)
-            if self._session_cache is not None:
+            if isinstance(self._session_cache, BaseEvictionCache):
                 # Detach recorder so the next call's recorder swap is clean.
+                # Only eviction caches carry a `recorder` slot.
                 self._session_cache.recorder = None
             # Symmetric detach for sparse recorder; pre-hook reads via
             # capturer attribute, so clearing here keeps a stale recorder
