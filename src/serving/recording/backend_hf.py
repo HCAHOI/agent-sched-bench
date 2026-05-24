@@ -1331,11 +1331,13 @@ class HFRecordingProvider(LLMProvider):
             self._extend_session_tokens(prompt_ids=prompt_ids, output_ids=output_ids)
             return text, output_ids
 
+        # Pre-clear is defensive against fragmentation accumulated by the
+        # previous chat; the next chat's pre-clear will sweep what THIS chat
+        # leaves behind, so a post-clear here is pure overhead (each call
+        # forces a `cuda.empty_cache()` + `gc.collect()` + sync, hidden
+        # ~50-200ms / call on 30B-A3B FP8).
         self._clear_cuda_cache()
-        try:
-            text, output_ids = await asyncio.to_thread(run_generate)
-        finally:
-            self._clear_cuda_cache()
+        text, output_ids = await asyncio.to_thread(run_generate)
         content, tool_calls = parse_text_tool_calls(text)
         elapsed_ms = (time.time() - started_at) * 1000.0
         return LLMResponse(
