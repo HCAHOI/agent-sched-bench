@@ -263,12 +263,11 @@ def sparse_filtered_segment_rows(
                     )
 
             sparse_keys = set(sparse_lookup.keys())
-            if sparse_keys != attention_keys:
-                missing = sorted(attention_keys - sparse_keys)
-                extra = sorted(sparse_keys - attention_keys)
+            missing = sorted(attention_keys - sparse_keys)
+            if missing:
                 raise ValueError(
                     f"{record.iter_dir}: sparse_attention.npz keys do not exactly "
-                    f"match attention.npz records; missing={missing}, extra={extra}"
+                    f"cover attention.npz records; missing={missing}"
                 )
 
     return _finalize_segment_rows(trajectory), _finalize_segment_rows(

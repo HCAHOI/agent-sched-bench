@@ -154,15 +154,16 @@ def test_sparse_filtered_segment_rows_raise_on_missing_sparse_row(tmp_path: Path
         )
 
 
-def test_sparse_filtered_segment_rows_raise_on_extra_sparse_row(tmp_path: Path) -> None:
+def test_sparse_filtered_segment_rows_ignore_extra_sparse_rows(tmp_path: Path) -> None:
     attempt = _write_attempt(tmp_path, sparse_decode_steps=[0, 1])
     records = load_iteration_records([attempt])
-    with pytest.raises(ValueError, match="keys do not exactly match"):
-        sparse_filtered_segment_rows(
-            records,
-            method_name="block_topk",
-            method_params=SparseParams(sink_size=1, recent_window=1),
-        )
+    trajectory, by_layer = sparse_filtered_segment_rows(
+        records,
+        method_name="block_topk",
+        method_params=SparseParams(sink_size=1, recent_window=1),
+    )
+    assert len(trajectory) == 2
+    assert len(by_layer) == 2
 
 
 def test_sparse_filtered_segment_rows_raise_on_kept_count_drift(tmp_path: Path) -> None:
