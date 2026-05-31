@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from serving.kv_policies.base import EvictionPolicyConfig
@@ -422,6 +424,66 @@ def test_hf_recording_provider_rejects_concurrent_chat() -> None:
         assert second.extra["error_type"] == "concurrent_request"
 
     asyncio.run(drive())
+
+
+def test_hf_recording_provider_wait_until_idle_timeout() -> None:
+    provider = HFRecordingProvider.__new__(HFRecordingProvider)
+    provider._chat_lock = threading.Lock()
+    provider._chat_lock.acquire()
+
+    try:
+        with pytest.raises(
+            TimeoutError,
+            match="timed out waiting for HF recording provider to become idle",
+        ):
+            provider.wait_until_idle(timeout_s=0.001)
+    finally:
+        provider._chat_lock.release()
+
+
+def test_hf_recording_provider_wait_until_idle_blocks_until_release() -> None:
+    class _ObservedLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self.acquire_entered = threading.Event()
+
+        def hold(self) -> None:
+            self._lock.acquire()
+
+        def acquire(self, *args, **kwargs) -> bool:
+            self.acquire_entered.set()
+            return self._lock.acquire(*args, **kwargs)
+
+        def release(self) -> None:
+            self._lock.release()
+
+    provider = HFRecordingProvider.__new__(HFRecordingProvider)
+    observed_lock = _ObservedLock()
+    observed_lock.hold()
+    provider._chat_lock = observed_lock
+    done = threading.Event()
+    errors: list[BaseException] = []
+
+    def wait_for_idle() -> None:
+        try:
+            provider.wait_until_idle(timeout_s=1.0)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    waiter = threading.Thread(target=wait_for_idle)
+    waiter.start()
+    assert observed_lock.acquire_entered.wait(timeout=1.0)
+    assert not done.is_set()
+    time.sleep(0.01)
+    assert not done.is_set()
+
+    observed_lock.release()
+    waiter.join(timeout=1.0)
+
+    assert done.is_set()
+    assert errors == []
 
 
 def test_message_first_seen_tracks_appends_and_replacements() -> None:

@@ -253,6 +253,18 @@ def _container_is_inspectable(
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+async def _wait_for_recording_provider_idle(
+    recording_provider: Any,
+    *,
+    phase: str,
+) -> None:
+    wait_until_idle = getattr(recording_provider, "wait_until_idle", None)
+    if not callable(wait_until_idle):
+        return
+    logger.info("waiting for recording provider idle before %s", phase)
+    await asyncio.to_thread(wait_until_idle)
+
+
 async def run_attempt(
     ctx: AttemptContext,
     *,
@@ -262,6 +274,13 @@ async def run_attempt(
     recording_provider: Any | None = None,
 ) -> AttemptResult:
     """Execute one scaffold attempt and write its artifacts."""
+    if recording_provider is not None:
+        await _wait_for_recording_provider_idle(
+            recording_provider,
+            phase="start_attempt",
+        )
+        ctx.start_time = datetime.now(tz=timezone.utc)
+
     try:
         free_gb = preflight_disk(ctx.run_dir, min_free_disk_gb)
         logger.info("disk preflight ok: %.2f GB free at %s", free_gb, ctx.run_dir)
@@ -331,6 +350,11 @@ async def run_attempt(
         inner_error = exc
         logger.exception("scaffold inner raised: %s", exc)
     finally:
+        if recording_provider is not None:
+            await _wait_for_recording_provider_idle(
+                recording_provider,
+                phase="attempt finalization",
+            )
         stop_watcher.set()
         if watcher_task is not None:
             try:

@@ -791,6 +791,20 @@ class HFRecordingProvider(LLMProvider):
         self._message_first_seen = []
         self.capturer.start_attempt(recordings_dir)
 
+    def wait_until_idle(self, timeout_s: float | None = None) -> None:
+        """Wait until no chat generation is holding the provider lock."""
+        if timeout_s is not None and timeout_s < 0:
+            raise ValueError(f"timeout_s must be non-negative, got {timeout_s}")
+        if timeout_s is None:
+            acquired = self._chat_lock.acquire()
+        else:
+            acquired = self._chat_lock.acquire(timeout=timeout_s)
+        if not acquired:
+            raise TimeoutError(
+                "timed out waiting for HF recording provider to become idle"
+            )
+        self._chat_lock.release()
+
     def finish_attempt(self, trace_path: Path | None = None) -> None:
         self.capturer.set_attempt_extra_meta(
             {"session_history": [dict(item) for item in self._session_history]}
