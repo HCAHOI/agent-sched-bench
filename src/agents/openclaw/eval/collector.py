@@ -49,6 +49,9 @@ class ResultCollector:
             except asyncio.CancelledError:
                 break
 
+            if msg.metadata.get("_openclaw_tool_message"):
+                continue
+
             session_key = f"{msg.channel}:{msg.chat_id}"
             # Coalesce: accumulate content for the same session_key
             prev = self._results.get(session_key, "")

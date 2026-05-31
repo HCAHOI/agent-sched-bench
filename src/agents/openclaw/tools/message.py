@@ -106,16 +106,16 @@ class MessageTool(Tool):
         if not self._send_callback:
             return "Error: Message sending not configured"
 
+        metadata: dict[str, Any] = {"_openclaw_tool_message": True}
+        if message_id:
+            metadata["message_id"] = message_id
+
         msg = OutboundMessage(
             channel=channel,
             chat_id=chat_id,
             content=content,
             media=media or [],
-            metadata={
-                "message_id": message_id,
-            }
-            if message_id
-            else {},
+            metadata=metadata,
         )
 
         try:
