@@ -24,7 +24,6 @@ import argparse
 import json
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -38,62 +37,10 @@ from scripts.recoding_figures.recording_loader import (  # noqa: E402
     find_attempt_dirs,
     load_iteration_records,
 )
-
-
-@dataclass(frozen=True)
-class SparseParams:
-    sink_size: int
-    recent_window: int
-
-
-def reconstruct_keep_set(
-    *,
-    method_name: str,
-    method_params: SparseParams,
-    key_len: int,
-    extras: dict[str, object] | None = None,
-) -> np.ndarray:
-    """Return sorted unique key positions kept by `method_name` for this key_len.
-
-    Output is `np.int32`.
-    """
-    if method_name not in {"sliding", "streaming", "heavy_hitter", "block_topk", "quest"}:
-        raise NotImplementedError(
-            f"keep-set reconstruction for method {method_name!r} is not implemented"
-        )
-    if key_len <= 0:
-        return np.empty(0, dtype=np.int32)
-    if method_name in {"heavy_hitter", "block_topk", "quest"}:
-        extras = extras or {}
-        reason = str(extras.get("selection_reason", ""))
-        if reason in {"phase_dense", "prefill_dense"}:
-            return np.arange(key_len, dtype=np.int32)
-    sink = min(method_params.sink_size, key_len)
-    recent_start = max(0, key_len - method_params.recent_window)
-    keep = np.zeros(key_len, dtype=bool)
-    if sink > 0:
-        keep[:sink] = True
-    if method_params.recent_window > 0:
-        keep[recent_start:] = True
-    if method_name in {"heavy_hitter", "block_topk", "quest"}:
-        if extras is None:
-            raise ValueError(
-                f"method {method_name!r} requires extras_json selected_middle_indices"
-            )
-        raw_selected = extras.get("selected_middle_indices")
-        if raw_selected is None:
-            raise ValueError(
-                f"method {method_name!r} extras_json missing selected_middle_indices"
-            )
-        if not isinstance(raw_selected, list):
-            raise ValueError(
-                f"method {method_name!r} selected_middle_indices must be a list"
-            )
-        for item in raw_selected:
-            pos = int(item)
-            if 0 <= pos < key_len:
-                keep[pos] = True
-    return np.nonzero(keep)[0].astype(np.int32)
+from scripts.recoding_figures.sparse_keep_sets import (  # noqa: E402
+    SparseParams,
+    reconstruct_keep_set,
+)
 
 
 def _read_meta_sparse_block(attempt_dir: Path) -> dict[str, object]:

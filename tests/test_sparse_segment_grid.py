@@ -18,7 +18,7 @@ from scripts.recoding_figures.plot_sparse_segment_grid import (  # noqa: E402
     sparse_filtered_segment_rows,
 )
 from scripts.recoding_figures.recording_loader import load_iteration_records  # noqa: E402
-from scripts.recoding_figures.score_sparse_selection import SparseParams  # noqa: E402
+from scripts.recoding_figures.sparse_keep_sets import SparseParams  # noqa: E402
 
 
 def _write_attempt(

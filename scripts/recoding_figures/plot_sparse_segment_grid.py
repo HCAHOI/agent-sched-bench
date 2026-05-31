@@ -29,7 +29,7 @@ from scripts.recoding_figures.recording_loader import (  # noqa: E402
     find_attempt_dirs,
     load_iteration_records,
 )
-from scripts.recoding_figures.score_sparse_selection import (  # noqa: E402
+from scripts.recoding_figures.sparse_keep_sets import (  # noqa: E402
     SparseParams,
     reconstruct_keep_set,
 )
