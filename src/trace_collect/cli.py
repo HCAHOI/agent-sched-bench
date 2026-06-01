@@ -309,6 +309,18 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--per-head-stats-layers",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated layer indices (e.g. 0,6,12,18,24,30,36,47) for "
+            "which to capture per-head within-segment attention mean/variance "
+            "into attention.npz head_span_* arrays. Accepts the preset token "
+            "'qwen3-coder-30b' (= 0,6,12,18,24,30,36,47) or its alias "
+            "'default'. Empty/omitted = disabled. Requires --record-internals."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -539,6 +551,35 @@ def main() -> None:
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+_PER_HEAD_STATS_PRESETS: dict[str, tuple[int, ...]] = {
+    "qwen3-coder-30b": (0, 6, 12, 18, 24, 30, 36, 47),
+    "default": (0, 6, 12, 18, 24, 30, 36, 47),
+}
+
+
+def _parse_per_head_stats_layers(value: str | None) -> tuple[int, ...]:
+    """Resolve --per-head-stats-layers into a sorted tuple of layer indices.
+
+    Accepts a preset token (case-insensitive) or a comma-separated integer
+    list. Empty/None disables the feature (empty tuple). Out-of-range checks
+    against the model's layer count happen later in the recording stack.
+    """
+    if value is None:
+        return ()
+    token = value.strip()
+    if token == "":
+        return ()
+    preset = _PER_HEAD_STATS_PRESETS.get(token.lower())
+    if preset is not None:
+        return preset
+    layers = tuple(int(part) for part in token.split(",") if part.strip() != "")
+    if not layers:
+        raise ValueError(f"--per-head-stats-layers parsed to no layers: {value!r}")
+    if any(layer < 0 for layer in layers):
+        raise ValueError("--per-head-stats-layers indices must be non-negative")
+    return tuple(sorted(set(layers)))
+
+
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -584,6 +625,20 @@ def _run_collect(args: argparse.Namespace) -> None:
             "recording backend).",
             file=sys.stderr,
         )
+        sys.exit(2)
+    if args.per_head_stats_layers and not args.record_internals:
+        print(
+            "ERROR: --per-head-stats-layers requires --record-internals "
+            "(per-head span stats only apply to the HF recording backend).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        per_head_stats_layers = _parse_per_head_stats_layers(
+            args.per_head_stats_layers
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
     if args.record_internals:
         os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
@@ -656,6 +711,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             record_internals=args.record_internals,
             eviction_config=eviction_config,
             sparse_attention_config=sparse_attention_config,
+            per_head_stats_layers=per_head_stats_layers,
         )
     )
     print(f"Traces written to: {run_dir}/")

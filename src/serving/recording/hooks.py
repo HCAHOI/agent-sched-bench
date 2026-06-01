@@ -484,10 +484,15 @@ class LayerCapturer:
         if config.per_head_stats_layers and layer_indices:
             num_hidden_layers = max(layer_indices) + 1
             invalid = [i for i in config.per_head_stats_layers if i >= num_hidden_layers]
-            assert not invalid, (
-                f"per_head_stats_layers contains indices >= num_hidden_layers "
-                f"({num_hidden_layers}): {invalid}"
-            )
+            if invalid:
+                # Fail loud at construction (not a strippable assert): a typo'd
+                # layer index would otherwise never match the capture gate and
+                # silently record empty head_span arrays, which downstream reads
+                # as "feature disabled" rather than "bad layer index".
+                raise ValueError(
+                    f"per_head_stats_layers contains indices >= num_hidden_layers "
+                    f"({num_hidden_layers}): {invalid}"
+                )
         self.model_summary["router_capture_mode"] = (
             "gate_forward_hook" if n_gate_modules else "none"
         )

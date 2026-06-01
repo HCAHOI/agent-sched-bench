@@ -566,6 +566,7 @@ async def collect_traces(
     record_internals: bool = False,
     eviction_config: "EvictionPolicyConfig | None" = None,
     sparse_attention_config: "SparseAttentionConfig | None" = None,
+    per_head_stats_layers: tuple[int, ...] = (),
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     if record_internals and scaffold != "openclaw":
@@ -601,11 +602,18 @@ async def collect_traces(
         recording_server = None
         if record_internals:
             # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
-            from serving.recording import HFRecordingProvider, HFRecordingServer
+            from serving.recording import (
+                HFRecordingProvider,
+                HFRecordingServer,
+                RecordingConfig,
+            )
 
             recording_provider = cleanup_stack.enter_context(
                 HFRecordingProvider(
                     default_model=model,
+                    config=RecordingConfig(
+                        per_head_stats_layers=tuple(per_head_stats_layers)
+                    ),
                     eviction_config=eviction_config,
                     sparse_attention_config=sparse_attention_config,
                     temperature=temperature if temperature is not None else 0.1,
