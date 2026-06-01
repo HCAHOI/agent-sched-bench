@@ -361,6 +361,20 @@ def test_build_head_span_grid_end_to_end(tmp_path: Path) -> None:
     assert "within_segment_attention_std" in traj
 
 
+def test_build_head_span_grid_per_layer_pdf(tmp_path: Path) -> None:
+    attempt_dir = _make_attempt(tmp_path, per_head_stats_layers=(0,))
+    out_dir = tmp_path / "out"
+    summary = build_head_span_segment_grids(
+        inputs=[attempt_dir], output_dir=out_dir, split_by_task=True, per_layer=True
+    )
+    group = summary["groups"][0]
+    assert group["per_layer_pdf"] is not None
+    pdf = out_dir / group["per_layer_pdf"]
+    assert pdf.is_file() and pdf.stat().st_size > 0
+    # per-layer single-layer render also lands under per_layer/
+    assert (out_dir / group["output_dir"] / "per_layer" / "layer_00" / "segment_head_span_grid.png").is_file()
+
+
 def test_build_head_span_grid_raises_without_stats(tmp_path: Path) -> None:
     attempt_dir = _make_attempt(tmp_path, per_head_stats_layers=())
     with pytest.raises(ValueError, match="no per-head span stats"):

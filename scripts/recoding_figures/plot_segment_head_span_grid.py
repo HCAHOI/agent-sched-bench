@@ -88,6 +88,15 @@ def main() -> None:
         default=True,
         help="Write one grid per task. Default: true.",
     )
+    parser.add_argument(
+        "--per-layer",
+        action="store_true",
+        help=(
+            "Also emit segment_head_span_per_layer.pdf: one page per recorded "
+            "layer (same 2x2 grid), to compare the within-segment mean/std grid "
+            "across layers. Color scales are per-page (per layer)."
+        ),
+    )
     args = parser.parse_args()
 
     layers = _parse_layer_arg(args.layers)
@@ -99,6 +108,7 @@ def main() -> None:
         max_iters=args.max_iters,
         split_by_task=args.split_by_task,
         decode_reduce=args.decode_reduce,
+        per_layer=args.per_layer,
     )
     print(json.dumps(_json_ready(summary), indent=2, sort_keys=True))
 
@@ -118,6 +128,7 @@ def build_head_span_segment_grids(
     max_iters: int | None = None,
     split_by_task: bool = True,
     decode_reduce: str = "pool_steps",
+    per_layer: bool = False,
 ) -> dict[str, Any]:
     """Build within-segment mean/std grids for one or more attempt paths."""
     if decode_reduce not in DECODE_REDUCE_MODES:
@@ -174,6 +185,17 @@ def build_head_span_segment_grids(
             decode_reduce=decode_reduce,
         )
         plot_summary = _portable_plot_summary(plot_summary, artifact_root=output_dir)
+        per_layer_pdf = None
+        if per_layer:
+            per_layer_pdf = _artifact_relative_path(
+                _render_per_layer_pdf(
+                    group_records,
+                    layers_used=layers_used,
+                    group_dir=group_dir,
+                    decode_reduce=decode_reduce,
+                ),
+                output_dir,
+            )
         group_summary = {
             "label": label,
             "output_dir": _artifact_relative_path(group_dir, output_dir),
@@ -183,6 +205,7 @@ def build_head_span_segment_grids(
             "n_trajectory_rows": len(trajectory_rows),
             "n_layer_rows": len(layer_rows),
             "layers_used": layers_used,
+            "per_layer_pdf": per_layer_pdf,
             "role_counts": _role_counts(summary_rows),
             "plot": plot_summary,
         }
@@ -506,6 +529,56 @@ def _column(rows: Sequence[dict[str, Any]], key: str) -> np.ndarray:
         [np.nan if row.get(key) is None else float(row[key]) for row in rows],
         dtype=np.float64,
     )
+
+
+def _render_per_layer_pdf(
+    group_records,
+    *,
+    layers_used: Sequence[int],
+    group_dir: Path,
+    decode_reduce: str,
+) -> Path:
+    """Render one within-segment grid per layer into a multi-page PDF.
+
+    One page per recorded layer, same 2x2 layout, so layers can be compared by
+    flipping pages. Reuses the standard single-layer render (layers=[L]) then
+    stitches the PNGs into a multi-page PDF. Color scales are per-page (per
+    layer) — compare patterns across pages; use the per-layer CV/summary CSVs
+    for absolute magnitude.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    per_layer_dir = group_dir / "per_layer"
+    pages: list[tuple[int, Path]] = []
+    for layer in layers_used:
+        rows, _layer_rows, _used = head_span_segment_rows(
+            group_records, layers=[layer], decode_reduce=decode_reduce
+        )
+        if not rows:
+            continue
+        summary = _head_span_summary_rows(rows)
+        stem = per_layer_dir / f"layer_{int(layer):02d}" / "segment_head_span_grid"
+        _plot_head_span_grid(rows, summary, stem, layers_used=[layer], decode_reduce=decode_reduce)
+        pages.append((int(layer), stem.with_suffix(".png")))
+
+    pdf_path = group_dir / "segment_head_span_per_layer.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for layer, png in pages:
+            img = plt.imread(png)
+            height, width = img.shape[0], img.shape[1]
+            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
+            ax = fig.add_axes([0, 0, 1, 0.96])
+            ax.imshow(img)
+            ax.axis("off")
+            fig.suptitle(
+                f"layer {layer} - within-segment mean (top) / std (bottom), prefill | decode",
+                fontsize=11,
+                y=0.995,
+            )
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+    return pdf_path
 
 
 def _plot_head_span_grid(
