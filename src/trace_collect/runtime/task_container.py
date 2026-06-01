@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import ssl
 import subprocess
 import shutil
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -37,8 +35,6 @@ _ARCH_ALIASES = {
 _CONTAINER_PYTHON_CANDIDATES = (
     "/usr/bin/python3",
     "/usr/bin/python",
-    "/opt/conda/bin/python",
-    "/opt/conda/envs/ML/bin/python",
     "python3",
     "python",
 )
@@ -159,15 +155,6 @@ def _normalize_arch(raw: str | None) -> str | None:
     return _ARCH_ALIASES.get(raw.lower(), raw.lower())
 
 
-def _host_linux_platform() -> str | None:
-    if platform.system() != "Linux":
-        return None
-    arch = _normalize_arch(platform.machine())
-    if arch is None:
-        return None
-    return f"linux/{arch}"
-
-
 def _inspect_image_platform(
     image: str,
     *,
@@ -201,53 +188,29 @@ def _inspect_image_platform(
     return f"{os_name.lower()}/{norm_arch}"
 
 
-def current_container_python_runtime() -> str:
-    """Host-side Python; must run with conda env ML active."""
-    if os.environ.get("CONDA_DEFAULT_ENV") != "ML":
-        raise RuntimeError(
-            "must run inside conda env 'ML' (got "
-            f"CONDA_DEFAULT_ENV={os.environ.get('CONDA_DEFAULT_ENV')!r}); "
-            "run `conda activate ML` or use scripts/setup/bootstrap.sh"
-        )
-    return sys.executable
-
-
 def task_container_runtime_dir(attempt_dir: Path, scaffold: str) -> Path:
     return attempt_dir.resolve() / RUNTIME_ROOTNAME / scaffold
 
 
-def project_mount_args(
-    attempt_dir: Path,
-    *,
-    include_host_system_mounts: bool | None = None,
-) -> list[str]:
-    """Return extra `podman run` args for parity mode."""
+def project_mount_args(attempt_dir: Path) -> list[str]:
+    """Return extra `podman run` args mounting the attempt dir + repo root.
 
+    The container runs its own Python via the bootstrap path, so only the
+    attempt dir (recordings + bootstrapped site-dir) and the repo (our source)
+    are mounted — no host system dirs.
+    """
     task_container_runtime_dir(attempt_dir, "bootstrap").mkdir(
         parents=True, exist_ok=True
     )
     repo_root = REPO_ROOT.resolve()
     attempt_dir = attempt_dir.resolve()
     args: list[str] = []
-    mounts: list[tuple[Path, bool]] = [
-        (attempt_dir, False),
-        (repo_root, False),
-    ]
-    if include_host_system_mounts is None:
-        include_host_system_mounts = platform.system() == "Linux"
-    if include_host_system_mounts:
-        for raw in ("/usr", "/lib", "/lib64", "/etc", "/bin", "/sbin", "/tmp", "/var"):
-            path = Path(raw)
-            if path.exists():
-                mounts.append((path, raw not in {"/tmp", "/var"}))
-
     seen: set[Path] = set()
-    for path, read_only in mounts:
+    for path in (attempt_dir, repo_root):
         if path in seen:
             continue
         seen.add(path)
-        suffix = ":ro" if read_only else ""
-        args.extend(["-v", f"{path}:{path}{suffix}"])
+        args.extend(["-v", f"{path}:{path}"])
     return args
 
 
@@ -261,28 +224,9 @@ def resolve_task_container_exec_config(
         image,
         container_executable=container_executable,
     )
-    host_platform = _host_linux_platform()
-    use_host_runtime = host_platform is not None and (
-        image_platform is None or image_platform == host_platform
-    )
-    start_args = list(
-        project_mount_args(
-            attempt_dir,
-            include_host_system_mounts=use_host_runtime,
-        )
-    )
+    start_args = list(project_mount_args(attempt_dir))
     if image_platform is not None:
         start_args = ["--platform", image_platform, *start_args]
-
-    if use_host_runtime:
-        return TaskContainerExecConfig(
-            runtime=current_container_python_runtime(),
-            pythonpath=_DEFAULT_RUNTIME_PYTHONPATH,
-            start_extra_args=tuple(start_args),
-            bootstrap=False,
-            bootstrap_site_dir=None,
-            image_platform=image_platform,
-        )
 
     site_dir = task_container_runtime_dir(attempt_dir, "bootstrap") / "pydeps"
     return TaskContainerExecConfig(
@@ -440,7 +384,7 @@ def preflight_task_container_runtime(
     pythonpath: str | None = None,
     container_executable: str,
 ) -> TaskContainerPreflightProof:
-    effective_runtime = runtime or current_container_python_runtime()
+    effective_runtime = runtime or _CONTAINER_SYSTEM_PYTHON
     runtime_dir = task_container_runtime_dir(attempt_dir, "preflight")
     import_list = imports or [
         "trace_collect.runtime.entrypoint",
@@ -487,7 +431,7 @@ def run_task_container_agent(
     pythonpath: str | None = None,
     container_executable: str,
 ) -> TaskContainerRunResult:
-    effective_runtime = runtime or current_container_python_runtime()
+    effective_runtime = runtime or _CONTAINER_SYSTEM_PYTHON
     raw_stdout_path = Path(request["raw_stdout_path"])
     raw_stderr_path = Path(request["raw_stderr_path"])
     raw_stdout_path.parent.mkdir(parents=True, exist_ok=True)

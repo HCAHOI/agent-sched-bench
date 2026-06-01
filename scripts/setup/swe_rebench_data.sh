@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Download SWE-rebench (filtered split) and write to data/swe-rebench/tasks.json.
 #
-# Usage:
-#   conda activate ML
+# Usage (run inside the project venv created by terminal_bench_server.sh):
+#   source .venv/bin/activate
 #   ./scripts/setup/swe_rebench_data.sh
 #
 # Env vars:

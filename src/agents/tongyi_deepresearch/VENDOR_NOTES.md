@@ -122,7 +122,7 @@ wall time is still attributed). If future research needs visibility into the
 extractor latency distribution, the adapter can patch vendor_tool_visit's
 inner `OpenAI` import the same way the main ReAct loop patches it.
 
-## Import smoke (conda env `ML`, command `PYTHONPATH=src conda run -n ML python -c "import <module>"`)
+## Import smoke (installed in the project `.venv`, command `PYTHONPATH=src python -c "import <module>"`)
 
 | Module | Phase B (pre-patch) | Phase C (post-patch) |
 |--------|---------------------|----------------------|
@@ -135,7 +135,7 @@ inner `OpenAI` import the same way the main ReAct loop patches it.
 
 ### Qwen-agent dep status (resolved in Phase C)
 
-`qwen-agent==0.0.34` is installed in conda env `ML` (newer than R3's original
+`qwen-agent==0.0.34` is installed in the project `.venv` (newer than R3's original
 `==0.0.26` pin; API-compatible based on successful vendor import). Pre-mortem
 scenario #1 (dep conflict) did not fire. No install/pin adjustments needed
 for downstream phases.

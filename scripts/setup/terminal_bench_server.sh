@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ephemeral cloud-GPU setup for Terminal-Bench + OpenClaw runs.
 #
-# Uses uv directly (no conda) — see CLAUDE.md "Runtime entry points".
+# The single setup entry point: uv + .venv, no conda. See CLAUDE.md "Environment".
 # Verified on Ubuntu 22.04 + RTX 6000 Ada (fresh instance, 64.247.196.218),
 # total ~2 min: project deps 5s + torch 30s + 30 GB FP8 snapshot 60s.
 #

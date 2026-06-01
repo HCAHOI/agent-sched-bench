@@ -12,7 +12,7 @@ Drives `HFRecordingProvider.chat()` directly (no docker / no MCP) to confirm:
      the end of the run (sink-region high, tail high, middle uneven).
 
 Run:
-    conda run -n ML python scripts/spikes/step6_h2o_smoke.py
+    python scripts/spikes/step6_h2o_smoke.py
 """
 
 from __future__ import annotations

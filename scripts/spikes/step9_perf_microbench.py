@@ -15,7 +15,7 @@ the statistics. Results land in `scripts/spikes/step9_perf_results.md`
 (rendered markdown table) and are also echoed to stdout.
 
 Run:
-    conda run -n ML python scripts/spikes/step9_perf_microbench.py
+    python scripts/spikes/step9_perf_microbench.py
 
 Knobs (CLI flags, all optional):
     --runs N           Number of measured runs per config (default 5)

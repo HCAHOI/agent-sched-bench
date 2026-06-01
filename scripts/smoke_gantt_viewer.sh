@@ -12,10 +12,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PORT="${GANTT_VIEWER_PORT:-8765}"
-# Project uses conda env "ML" — activate it before running, or override PYTHON_BIN.
+# Project uses .venv — run `source .venv/bin/activate` before running, or override PYTHON_BIN.
 PYTHON_BIN="${PYTHON_BIN:-python}"
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "PYTHON_BIN='$PYTHON_BIN' not found; activate your conda ML env or set PYTHON_BIN" >&2
+  echo "PYTHON_BIN='$PYTHON_BIN' not found; activate the project .venv or set PYTHON_BIN" >&2
   exit 1
 fi
 

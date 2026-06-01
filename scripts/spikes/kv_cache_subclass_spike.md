@@ -12,7 +12,7 @@
 | Python            | 3.13.5  |
 | `transformers`    | 4.57.6  |
 | `torch`           | 2.10.0  |
-| Conda env         | `ML`    |
+| Python env        | project `.venv` |
 | Device            | CPU (Darwin) |
 | Model used        | `HuggingFaceTB/SmolLM-135M` (primary, no fallback needed) |
 | `num_hidden_layers` | 30 |

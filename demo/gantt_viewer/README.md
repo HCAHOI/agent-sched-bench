@@ -43,14 +43,14 @@ demo/gantt_viewer/
 
 ## Prerequisites
 
-- Conda env "ML" active (`conda activate ML` — see project root README)
+- Project `.venv` active (`source .venv/bin/activate` — see project root README)
 - Node/npm available for the frontend
 
 Recommended setup:
 
 ```bash
-conda activate ML
-pip install -e ".[dev,gantt-viewer]"
+source .venv/bin/activate
+uv pip install -e ".[dev,gantt-viewer]"
 make gantt-viewer-install
 ```
 
@@ -82,7 +82,7 @@ HTML snapshots:
 
 ```bash
 make gantt-viewer-build
-PYTHONPATH=src:. conda run -n ML python -m trace_collect.cli gantt-export \
+PYTHONPATH=src:. python -m trace_collect.cli gantt-export \
   --preset swe-rebench-glm-openclaw-100 \
   --group all \
   --output-dir results/gantt-viewer

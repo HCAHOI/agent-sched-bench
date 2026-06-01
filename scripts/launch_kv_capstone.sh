@@ -16,7 +16,7 @@
 #   INSTANCE_ID - terminal-bench task id (default: jsonl-aggregator)
 #   MODEL_ID    - HF model id/path (default: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8;
 #                 FP8 fits on 80 GB / 48 GB cards — bf16 30B-A3B needs 96 GB)
-#   ENV_BIN     - conda env bin dir holding python + the `tb` console script
+#   ENV_BIN     - venv bin dir holding python + the `tb` console script
 #                 (default: dir of `which python`)
 #   HF_HOME     - HuggingFace cache dir (default: $HOME/hf_cache)
 #   HF_RECORDING_MAX_GPU_MEMORY_GIB - cap for backend_hf (default: 90)
@@ -58,9 +58,9 @@ OPENCLAW_TOP_P="${OPENCLAW_TOP_P:-0.8}"
 OPENCLAW_TOP_K="${OPENCLAW_TOP_K:-20}"
 OPENCLAW_REPETITION_PENALTY="${OPENCLAW_REPETITION_PENALTY:-1.05}"
 
-# Conda env bin must be on PATH so terminal-bench's `tb` console script
+# The venv bin must be on PATH so terminal-bench's `tb` console script
 # resolves (TerminalBenchRunner._preflight greps PATH for it). Calling
-# `${ENV_BIN}/python` directly skips activation, so PATH must be patched.
+# `${ENV_BIN}/python` directly without patching PATH would miss `tb`.
 ENV_BIN="${ENV_BIN:-$(dirname "$(command -v python)")}"
 export PATH="$ENV_BIN:${PATH}"
 

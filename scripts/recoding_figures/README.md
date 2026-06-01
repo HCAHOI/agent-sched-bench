@@ -10,7 +10,7 @@ first three method-driving figures:
 Example:
 
 ```bash
-conda run -n ML python scripts/recoding_figures/make_figures.py \
+python scripts/recoding_figures/make_figures.py \
   traces/terminal-bench/Qwen_Qwen3-Coder-30B-A3B-Instruct/<run>/<task>/attempt_1 \
   --output-dir docs/recording_figures/<run>/<task>
 ```

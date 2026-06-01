@@ -19,22 +19,16 @@ The goal is to produce **publishable, reproducible, and scientifically rigorous*
 
 ## Environment
 
-Two runtime entry points (pick by host type, not preference):
+**Single entry point** — `uv` with a `.venv` at the repo root, via
+`bash scripts/setup/terminal_bench_server.sh`. Produces a Python 3.12 env with
+the project deps (pyproject is the spec). Verified ~2 min on a fresh
+Ubuntu 22.04 + GPU instance. No conda. After setup, activate with
+`source .venv/bin/activate`.
 
-1. **Persistent dev hosts** (Mac, x86 research server, anything you SSH back
-   into next week): conda env "ML" (Python 3.12) via
-   `bash scripts/setup/bootstrap.sh`. Do not create ad-hoc `.venv` or
-   `pip install` on these hosts — `bootstrap.sh` is the single source of
-   truth for the conda flow.
-2. **Ephemeral cloud GPU instances** (vast.ai, runpod, lambda, etc. — boxes
-   that get destroyed after one experiment): `uv` directly via
-   `bash scripts/setup/terminal_bench_server.sh`. Uses `.venv` at repo root.
-   Verified ~2 min total on a fresh Ubuntu 22.04 + GPU instance (vs ~25 min
-   for the conda path). No conda, no miniconda footprint.
-
-Both paths produce a Python 3.12 env with the same project deps (pyproject
-is the spec; the two entry points only differ in env manager + package
-installer). Don't mix them on a single host.
+There is no conda flow. Task-container agent runs (swe-rebench / swe-bench)
+do not need the host interpreter mounted: each task container bootstraps its
+own Python (≥3.11) in-container — see
+`src/trace_collect/runtime/task_container.py`.
 
 ---
 

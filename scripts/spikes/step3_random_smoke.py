@@ -5,7 +5,7 @@ drives `HFRecordingProvider.chat()` directly to confirm a `kv_eviction.npz`
 lands on disk with the right policy_name and per-layer × per-step row count.
 
 Run:
-    conda run -n ML python scripts/spikes/step3_random_smoke.py
+    python scripts/spikes/step3_random_smoke.py
 """
 
 from __future__ import annotations

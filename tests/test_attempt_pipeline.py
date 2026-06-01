@@ -129,7 +129,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
             total_tokens=98088,
             runtime_proof={
                 "container_id": "fake_container_id_xyz",
-                "python_executable": "/opt/conda/envs/ML/bin/python",
+                "python_executable": "/usr/bin/python3",
             },
         )
 
@@ -177,7 +177,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert results["model"] == "qwen-plus-latest"
     assert results["agent_runtime_mode"] == "task_container_agent"
     assert (
-        results["runtime_proof"]["python_executable"] == "/opt/conda/envs/ML/bin/python"
+        results["runtime_proof"]["python_executable"] == "/usr/bin/python3"
     )
     assert "container_stdout" not in results
     assert "resource_samples" not in results

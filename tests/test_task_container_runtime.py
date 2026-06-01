@@ -14,7 +14,6 @@ from trace_collect.runtime.task_container import (
     TaskContainerExecConfig,
     TaskContainerRunResult,
     bootstrap_task_container_python,
-    current_container_python_runtime,
     preflight_task_container_runtime,
     project_mount_args,
     resolve_task_container_exec_config,
@@ -33,43 +32,10 @@ def test_project_mount_args_include_attempt_dir_and_repo(
     assert str((Path(__file__).resolve().parents[1]).resolve()) in joined
 
 
-def test_project_mount_args_skip_host_system_mounts_off_linux(
+def test_resolve_task_container_exec_config_uses_bootstrap(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "trace_collect.runtime.task_container.platform.system",
-        lambda: "Darwin",
-    )
-
-    joined = " ".join(project_mount_args(tmp_path / "attempt"))
-    assert "/etc:/etc:ro" not in joined
-    assert "/usr:/usr:ro" not in joined
-
-
-def test_current_container_python_runtime_returns_sys_executable_under_conda_ml(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
-    import sys
-
-    assert current_container_python_runtime() == sys.executable
-
-
-def test_current_container_python_runtime_requires_conda_ml(monkeypatch):
-    monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
-    with pytest.raises(RuntimeError, match="conda env 'ML'"):
-        current_container_python_runtime()
-
-
-def test_resolve_task_container_exec_config_bootstraps_on_cross_platform(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "trace_collect.runtime.task_container.platform.system",
-        lambda: "Darwin",
-    )
     monkeypatch.setattr(
         "trace_collect.runtime.task_container._inspect_image_platform",
         lambda image, *, container_executable: "linux/amd64",
@@ -104,7 +70,7 @@ def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> Non
     def fake_run(*args, **kwargs):
         class Result:
             returncode = 0
-            stdout = "/opt/conda/envs/ML/bin/python\n"
+            stdout = "/usr/bin/python3\n"
             stderr = ""
 
         return Result()
@@ -117,7 +83,7 @@ def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> Non
         container_executable="docker",
     )
 
-    assert resolved.runtime == "/opt/conda/envs/ML/bin/python"
+    assert resolved.runtime == "/usr/bin/python3"
     assert resolved.pythonpath == exec_config.pythonpath
 
 
@@ -162,7 +128,7 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
     monkeypatch,
 ) -> None:
     exec_config = TaskContainerExecConfig(
-        runtime="/opt/conda/envs/ML/bin/python",
+        runtime="/usr/bin/python3",
         pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
         start_extra_args=(),
         bootstrap=True,
@@ -211,7 +177,7 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
     )
 
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
-    assert "/opt/conda/envs/ML/bin/python" in seen["cmd"]
+    assert "/usr/bin/python3" in seen["cmd"]
     input_script = str(seen["input"])
     for requirement in OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS:
         assert requirement in input_script
@@ -429,8 +395,8 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
                         "container_id": "cid-1",
                         "hostname": "host-a",
                         "cwd": "/testbed",
-                        "python_executable": "/opt/conda/envs/ML/bin/python",
-                        "python_prefix": "/opt/conda/envs/ML",
+                        "python_executable": "/usr/bin/python3",
+                        "python_prefix": "/usr",
                         "project_root": "/repo",
                         "sys_path": ["/repo/src"],
                     },
@@ -461,7 +427,7 @@ def test_preflight_task_container_runtime_reads_runtime_proof(
     )
 
     assert proof.container_id == "cid-1"
-    assert proof.python_executable == "/opt/conda/envs/ML/bin/python"
+    assert proof.python_executable == "/usr/bin/python3"
     assert Path(str(seen["result_path"])).is_absolute()
     assert Path(str(seen["writable_probe"])).is_absolute()
     assert Path(str(seen["result_path"])) == result_path
@@ -605,7 +571,6 @@ def test_run_task_container_agent_prefers_explicit_success_over_patch(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
     result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
     stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
     stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
@@ -660,7 +625,6 @@ def test_run_task_container_agent_timeout_writes_partial_logs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
     result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
     stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
     stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
@@ -708,7 +672,6 @@ def test_preflight_task_container_runtime_passes_container_executable_to_exec(
     monkeypatch,
     container_executable: str,
 ) -> None:
-    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ML")
     seen: dict[str, object] = {}
     result_path = (
         tmp_path / "attempt" / "_task_container_runtime" / "preflight" / "result.json"

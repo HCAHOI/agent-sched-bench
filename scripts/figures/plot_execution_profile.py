@@ -2,11 +2,11 @@
 """Plot execution-time distribution and phase breakdown from results.json files.
 
 Examples:
-    conda run -n ML python scripts/plot_execution_profile.py \
+    python scripts/plot_execution_profile.py \
       --cohort "Claude Code Haiku=traces/swe-rebench/claude-code-haiku::haiku" \
       --output output/figures/cc_haiku_execution_profile.png
 
-    conda run -n ML python scripts/plot_execution_profile.py \
+    python scripts/plot_execution_profile.py \
       --cohort "Claude Code Haiku=traces/swe-rebench/claude-code-haiku::haiku" \
       --cohort "OpenClaw Haiku=tmp/openclaw-two-models/traces/swe-rebench/anthropic-claude-haiku-4.5::anthropic/claude-haiku-4.5" \
       --output output/figures/cc_vs_openclaw_haiku_execution_profile.png

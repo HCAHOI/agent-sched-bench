@@ -7,7 +7,7 @@ the StreamingLLM keep pattern (`[0..sink-1] ∪ [tail-recent..tail-1]`) — or
 records no eviction when the prefix-only call stays under budget.
 
 Run:
-    conda run -n ML python scripts/spikes/step4_streaming_smoke.py
+    python scripts/spikes/step4_streaming_smoke.py
 
 Generation-quality note
 -----------------------

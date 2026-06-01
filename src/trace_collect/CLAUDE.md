@@ -166,6 +166,11 @@ the benchmark plugin's `image_name_for(task)`.
 - Image prep: source image → fixed image (permission corrections, cached)
 - Environment passthrough: `HTTP_PROXY`, `HTTPS_PROXY`, `PIP_INDEX_URL`, etc.
 - Network mode: defaults to host; override via `--network-mode`
+- **task_container_agent runtime (swe-rebench / swe-bench): no conda, no host
+  Python mount.** The agent runs on the container's OWN Python — `task_container.py`
+  bootstraps `OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS` into a mounted site-dir and
+  probes for an interpreter **≥ 3.11**. The task container MUST ship Python ≥ 3.11;
+  the probe raises loudly (no silent fallback) if none is found.
 
 ### Checkpointing / Resume
 

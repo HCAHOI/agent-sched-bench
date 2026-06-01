@@ -2,7 +2,7 @@
 """Plot REAL-mode execution-time distribution and tool/LLM breakdown.
 
 Examples:
-    conda run -n ML python scripts/figures/plot_execution_profile_real.py \
+    python scripts/figures/plot_execution_profile_real.py \
       --cohort "OpenClaw GLM Arm=traces/swe-rebench/swe-rebench-arm-10-tasks-openclaw-glm-docker-100::z-ai/glm-5.1" \
       --output output/figures/openclaw_glm_arm_execution_profile_real.png
 """

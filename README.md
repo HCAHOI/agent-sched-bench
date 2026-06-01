@@ -32,13 +32,14 @@ agent-sched-bench/
 
 ## Development Workflow
 
-All Python invocations run inside conda env "ML" (Python 3.12). On a fresh
-server, run `bash scripts/setup/bootstrap.sh` once — it installs miniconda,
-creates env ML, installs deps, and runs a 1-task terminal-bench smoke. Do
-not create `.venv` or `pip install` ad hoc.
+All Python runs inside the project `.venv` (Python 3.12, managed by `uv`). On a
+fresh server, run `bash scripts/setup/terminal_bench_server.sh` once — it
+installs `uv`, creates `.venv` at the repo root, installs deps, prewarms the
+model, validates the terminal-bench benchmark loads, and prints a ready-to-run
+smoke command. Then activate the venv:
 
 ```bash
-conda activate ML
+source .venv/bin/activate
 make help    # list all targets
 make test    # run pytest
 make lint    # ruff
@@ -51,7 +52,7 @@ task. The CLI requires an explicit `--provider` and `--model` and loads
 benchmark specifics from `configs/benchmarks/<slug>.yaml`.
 
 ```bash
-conda activate ML
+source .venv/bin/activate
 make download-swe-rebench         # or download-swebench-verified
 make setup-swe-rebench-repos      # or setup-swebench-repos
 PYTHONPATH=src python -m trace_collect.cli \
