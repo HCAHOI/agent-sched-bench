@@ -246,8 +246,8 @@ setup_python_env() {
   local py="${VENV_PATH}/bin/python"
   [ -x "${py}" ] || fatal "venv python missing at ${py}"
 
-  log "installing project (editable) + dev extras"
-  uv pip install --python "${py}" -e ".[dev]"
+  log "installing project (editable) + dev/figures extras"
+  uv pip install --python "${py}" -e ".[dev,figures]"
   log "installing huggingface_hub[hf_transfer] for parallel HF downloads"
   uv pip install --python "${py}" "huggingface_hub[hf_transfer]>=0.30,<1.0"
 }
