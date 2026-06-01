@@ -27,6 +27,9 @@
 #   HF_HUB_ENABLE_HF_TRANSFER                 (default: 1; Rust parallel downloader)
 #   REQUIRE_HF_TOKEN  — fail if HF_TOKEN unset (default: 1; private-repo users)
 #   SETUP_DOCKER_FIREWALL — iptables INPUT changes (default: 0; opt-in)
+#   SETUP_DOCKER_DNS      — set docker daemon DNS so task-image builds can
+#                           apt-get (default: 1; restarts docker at setup time)
+#   DOCKER_BUILD_DNS      — comma-sep resolvers (default: 8.8.8.8,1.1.1.1)
 #
 # Two-layer startup design (do NOT confuse them):
 #
@@ -96,6 +99,8 @@ VLLM_SPEC="${VLLM_SPEC:-vllm}"
 HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 REQUIRE_HF_TOKEN="${REQUIRE_HF_TOKEN:-1}"
 SETUP_DOCKER_FIREWALL="${SETUP_DOCKER_FIREWALL:-0}"
+SETUP_DOCKER_DNS="${SETUP_DOCKER_DNS:-1}"
+DOCKER_BUILD_DNS="${DOCKER_BUILD_DNS:-8.8.8.8,1.1.1.1}"
 
 log()   { printf '[terminal-bench-setup] %s\n' "$*"; }
 fatal() { printf '[terminal-bench-setup] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -214,6 +219,40 @@ configure_docker_bridge_firewall() {
     iptables -C INPUT -i br-+ -p tcp -j ACCEPT 2>/dev/null || \
       iptables -I INPUT 1 -i br-+ -p tcp -j ACCEPT
   ' || log "warning: iptables update failed; set HF_RECORDING_PUBLIC_HOST manually if containers cannot reach the host"
+}
+
+configure_docker_build_dns() {
+  # Terminal-Bench builds each task image locally (docker compose build), and
+  # those RUN steps (apt-get install ...) need DNS. On cloud hosts the default
+  # bridge build network has no working resolver (host uses a systemd-resolved
+  # stub), so apt fails with "Temporary failure resolving". Point the daemon at
+  # public resolvers so builds can resolve. swe-rebench is unaffected (it pulls
+  # prebuilt images), but terminal-bench cannot run without this.
+  [ "${SETUP_DOCKER_DNS}" = "1" ] || { log "skipping docker DNS config (SETUP_DOCKER_DNS=0)"; return 0; }
+  local daemon_json="/etc/docker/daemon.json"
+  local dns_csv="${DOCKER_BUILD_DNS:-8.8.8.8,1.1.1.1}"
+  local dns_arr
+  dns_arr="$(printf '%s' "$dns_csv" | jq -R 'split(",")')"
+  local existing merged
+  existing="$(as_root cat "$daemon_json" 2>/dev/null)"
+  [ -n "${existing}" ] || existing='{}'
+  if printf '%s' "$existing" | jq -e '(.dns // []) | length > 0' >/dev/null 2>&1; then
+    log "docker daemon DNS already configured; skipping"
+    return 0
+  fi
+  merged="$(printf '%s' "$existing" | jq --argjson dns "$dns_arr" '. + {dns: $dns}')" \
+    || { log "warning: failed to merge docker daemon.json; leaving it untouched"; return 0; }
+  log "configuring docker daemon DNS (${dns_csv}) for task-image builds"
+  printf '%s\n' "$merged" | as_root tee "$daemon_json" >/dev/null
+  as_root systemctl restart docker >/dev/null 2>&1 \
+    || as_root service docker restart >/dev/null 2>&1 || true
+  local i
+  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  if docker info >/dev/null 2>&1; then
+    log "docker restarted with DNS ${dns_csv}"
+  else
+    log "warning: docker not ready after DNS restart; check 'systemctl status docker'"
+  fi
 }
 
 install_uv() {
@@ -404,6 +443,7 @@ EOF
 install_system_packages
 ensure_docker_usable
 configure_docker_bridge_firewall
+configure_docker_build_dns
 install_uv
 setup_python_env
 install_backend
