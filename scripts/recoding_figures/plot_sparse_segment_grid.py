@@ -113,9 +113,11 @@ def build_sparse_segment_grids(
             summary_rows,
             group_dir / "segment_attention_sparse_filtered_grid",
         )
+        plot_summary = _portable_plot_summary(plot_summary, artifact_root=output_dir)
         group_summary = {
             "label": label,
-            "output_dir": str(group_dir),
+            "output_dir": _artifact_relative_path(group_dir, output_dir),
+            "runtime_output_dir": str(group_dir),
             "n_records": len(group_records),
             "n_segments": len(summary_rows),
             "n_trajectory_rows": len(trajectory_rows),
@@ -145,6 +147,28 @@ def build_sparse_segment_grids(
         encoding="utf-8",
     )
     return run_summary
+
+
+def _portable_plot_summary(
+    plot_summary: dict[str, Any],
+    *,
+    artifact_root: Path,
+) -> dict[str, Any]:
+    portable = dict(plot_summary)
+    for key in ("grid_png", "grid_pdf"):
+        if key not in plot_summary:
+            continue
+        runtime_path = Path(str(plot_summary[key]))
+        portable[f"runtime_{key}"] = str(runtime_path)
+        portable[key] = _artifact_relative_path(runtime_path, artifact_root)
+    return portable
+
+
+def _artifact_relative_path(path: Path, root: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def sparse_filtered_segment_rows(
@@ -408,10 +432,15 @@ def _segments_for_record(
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for segment_idx, segment in enumerate(segments):
-        role = str(segment.get("role") or "other")
+        raw_role = str(segment.get("role") or "other")
         first_seen_call = _int_field(segment, "first_seen_call", default=record.call_idx)
         if int(record.call_idx) < first_seen_call:
             continue
+        role, canonical_first_seen_call, identity_kind = _canonical_segment_role_call(
+            raw_role,
+            first_seen_call=first_seen_call,
+            record_call_idx=int(record.call_idx),
+        )
         token_start = _int_field(segment, "token_start", default=0)
         token_end = _int_field(segment, "token_end", default=token_start)
         token_count = max(0, token_end - token_start)
@@ -422,9 +451,10 @@ def _segments_for_record(
             segment,
             task=record.task,
             role=role,
-            first_seen_call=first_seen_call,
+            first_seen_call=canonical_first_seen_call,
             message_index=message_index,
             segment_idx=segment_idx,
+            identity_kind=identity_kind,
         )
         existing = metadata.get(segment_id)
         if existing is None:
@@ -436,7 +466,7 @@ def _segments_for_record(
                 "role": role,
                 "tool_call_id": segment.get("tool_call_id"),
                 "tool_name": segment.get("name"),
-                "first_seen_call": first_seen_call,
+                "first_seen_call": canonical_first_seen_call,
                 "first_seen_call_inferred": bool(segment.get("first_seen_call_inferred", False)),
                 "message_index": message_index,
                 "has_content": bool(segment.get("has_content", False)),
@@ -444,6 +474,17 @@ def _segments_for_record(
                 "initial_token_count": token_count,
             }
             metadata[segment_id] = existing
+        else:
+            existing["has_content"] = bool(existing["has_content"]) or bool(
+                segment.get("has_content", False)
+            )
+            existing["has_tool_calls"] = bool(existing["has_tool_calls"]) or bool(
+                segment.get("has_tool_calls", False)
+            )
+            if existing.get("tool_call_id") is None and segment.get("tool_call_id") is not None:
+                existing["tool_call_id"] = segment.get("tool_call_id")
+            if existing.get("tool_name") is None and segment.get("name") is not None:
+                existing["tool_name"] = segment.get("name")
         items.append(
             {
                 **existing,
@@ -456,6 +497,19 @@ def _segments_for_record(
     return items
 
 
+def _canonical_segment_role_call(
+    role: str,
+    *,
+    first_seen_call: int,
+    record_call_idx: int,
+) -> tuple[str, int, str]:
+    if role == "generation":
+        return "assistant_call", record_call_idx, "generated_assistant"
+    if role == "assistant_call" and first_seen_call > 0:
+        return "assistant_call", first_seen_call - 1, "replayed_assistant_generation"
+    return role, first_seen_call, "prompt_segment"
+
+
 def _segment_identity(
     segment: dict[str, Any],
     *,
@@ -464,9 +518,12 @@ def _segment_identity(
     first_seen_call: int,
     message_index: int,
     segment_idx: int,
+    identity_kind: str,
 ) -> tuple[str, str]:
     if role == "tool_result" and segment.get("tool_call_id"):
         return f"{task}:tool_result:{segment['tool_call_id']}", "task_tool_call_id"
+    if identity_kind in {"generated_assistant", "replayed_assistant_generation"}:
+        return f"{task}:assistant_call:call{first_seen_call}", "task_assistant_call"
     return (
         f"{task}:{role}:call{first_seen_call}:message{message_index}:segment{segment_idx}",
         "task_segment",
@@ -735,16 +792,23 @@ def _plot_segment_attention_grid(
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
+    missing_color = "#cfcfcf"
+    cell_boundary_color = "#ffffff"
+    major_boundary_color = "#222222"
     phases = ("prefill", "decode")
     segment_order = [str(row["segment_id"]) for row in summary_rows]
     segment_to_row = {segment_id: idx for idx, segment_id in enumerate(segment_order)}
-    max_age = max(int(row["age"]) for row in trajectory_rows)
+    observed_iters = [int(row["observed_call_idx"]) for row in trajectory_rows]
+    min_iter = min(observed_iters)
+    max_iter = max(observed_iters)
+    iter_values = list(range(min_iter, max_iter + 1))
+    iter_to_col = {iter_idx: col for col, iter_idx in enumerate(iter_values)}
     share_matrices = {
-        phase: np.full((len(segment_order), max_age + 1), np.nan, dtype=np.float64)
+        phase: np.full((len(segment_order), len(iter_values)), np.nan, dtype=np.float64)
         for phase in phases
     }
     ratio_matrices = {
-        phase: np.full((len(segment_order), max_age + 1), np.nan, dtype=np.float64)
+        phase: np.full((len(segment_order), len(iter_values)), np.nan, dtype=np.float64)
         for phase in phases
     }
     for row in trajectory_rows:
@@ -754,25 +818,25 @@ def _plot_segment_attention_grid(
         row_idx = segment_to_row.get(str(row["segment_id"]))
         if row_idx is None:
             continue
-        age = int(row["age"])
+        col_idx = iter_to_col[int(row["observed_call_idx"])]
         share = _optional_float(row["visible_attention_share_mean"])
         ratio = _optional_float(row["visible_attention_over_baseline"])
         if share is not None:
-            share_matrices[phase][row_idx, age] = share * 100.0
+            share_matrices[phase][row_idx, col_idx] = share * 100.0
         if ratio is not None and ratio > 0:
-            ratio_matrices[phase][row_idx, age] = float(np.log2(ratio))
+            ratio_matrices[phase][row_idx, col_idx] = float(np.log2(ratio))
 
     labels = [_segment_plot_label(row) for row in summary_rows]
     share_cmap = LinearSegmentedColormap.from_list(
         "asb_sparse_segment_share",
-        ["#f7f4ed", "#d8d1c7", "#9faf9b", "#4f7771"],
+        ["#fffaf0", "#fee391", "#fdae61", "#e34a33", "#7f0000"],
     )
     ratio_cmap = LinearSegmentedColormap.from_list(
         "asb_sparse_segment_ratio",
-        ["#b88c8c", "#f3eee8", "#7f8f84"],
+        ["#2166ac", "#f7f7f7", "#b2182b"],
     )
-    share_cmap.set_bad("#ece7df")
-    ratio_cmap.set_bad("#ece7df")
+    share_cmap.set_bad(missing_color)
+    ratio_cmap.set_bad(missing_color)
     finite_share = np.concatenate(
         [matrix[np.isfinite(matrix)] for matrix in share_matrices.values()]
     )
@@ -784,7 +848,7 @@ def _plot_segment_attention_grid(
     ratio_abs = float(np.percentile(np.abs(finite_ratio), 95)) if finite_ratio.size else 1.0
     ratio_abs = max(ratio_abs, 0.25)
 
-    width = max(11.0, min(18.0, 6.8 + 0.42 * (max_age + 1)))
+    width = max(11.0, min(18.0, 6.8 + 0.42 * len(iter_values)))
     height = max(8.5, min(22.0, 2.8 + 0.30 * len(segment_order)))
     fig, axes = plt.subplots(
         2,
@@ -792,8 +856,18 @@ def _plot_segment_attention_grid(
         figsize=(width, height),
         sharex=True,
         sharey=True,
-        constrained_layout=True,
+        constrained_layout=False,
     )
+    fig.patch.set_facecolor("white")
+    fig.subplots_adjust(
+        left=0.09,
+        right=0.88,
+        bottom=0.075,
+        top=0.955,
+        hspace=0.055,
+        wspace=0.035,
+    )
+    turn_boundaries = _segment_turn_boundaries(summary_rows)
     images = []
     for col, phase in enumerate(phases):
         images.append(
@@ -815,7 +889,7 @@ def _plot_segment_attention_grid(
         )
         axes[0, col].set_title(f"{phase}: retained recorded attention share")
         axes[1, col].set_title(f"{phase}: retained attention / visible-token baseline")
-        axes[1, col].set_xlabel("age in LLM calls since first visible")
+        axes[1, col].set_xlabel("recording iter / LLM call index")
     for row_idx in range(2):
         axes[row_idx, 0].set_ylabel("segment")
         axes[row_idx, 0].set_yticks(range(len(labels)))
@@ -824,19 +898,48 @@ def _plot_segment_attention_grid(
     for ax in axes.ravel():
         ax.tick_params(axis="x", labelsize=7)
         ax.tick_params(axis="y", length=0)
-        ax.set_xticks(range(max_age + 1))
-        ax.set_xticklabels([str(age) for age in range(max_age + 1)])
-        ax.set_xlim(-0.5, max_age + 0.5)
+        tick_cols = _integer_tick_positions(iter_values, max_labels=32)
+        ax.set_xticks(tick_cols)
+        ax.set_xticklabels([str(iter_values[col]) for col in tick_cols])
+        ax.set_xlim(-0.5, len(iter_values) - 0.5)
+        ax.set_facecolor(missing_color)
+        ax.set_xticks(np.arange(-0.5, len(iter_values) + 0.5, 1.0), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(labels) + 0.5, 1.0), minor=True)
+        ax.grid(
+            which="minor",
+            color=cell_boundary_color,
+            linewidth=0.28,
+            alpha=0.72,
+        )
+        ax.tick_params(which="minor", bottom=False, left=False)
+        first_major = min_iter - (min_iter % 5)
+        for iter_idx in range(first_major, max_iter + 6, 5):
+            if iter_idx < min_iter:
+                continue
+            ax.axvline(
+                iter_to_col.get(iter_idx, len(iter_values)) - 0.5,
+                color=major_boundary_color,
+                linewidth=0.45,
+                alpha=0.45,
+            )
+        for row_boundary in turn_boundaries:
+            ax.axhline(
+                row_boundary - 0.5,
+                color=major_boundary_color,
+                linewidth=0.55,
+                alpha=0.60,
+            )
     cbar_share = fig.colorbar(images[0], ax=axes[0, :], fraction=0.025, pad=0.012)
     cbar_share.set_label("retained recorded attention share (%)")
     cbar_ratio = fig.colorbar(images[1], ax=axes[1, :], fraction=0.025, pad=0.012)
     cbar_ratio.set_label("log2(retained attention / token baseline)")
     fig.text(
         0.01,
-        0.002,
-        "Each row is one concrete segment. Missing cells mean the segment is not yet visible "
-        "or that phase has no recorded rows. Values are dense recorded top-k mass retained "
-        "by the runtime sparse keep set, not renormalized sparse-softmax mass.",
+        0.018,
+        "Columns are recording iters / full LLM-call contexts. Gray = not visible "
+        "or not covered by recorded query rows. Thin white lines = cells; dark lines = "
+        "5-iter intervals and new first-seen-call groups. Values are retained dense "
+        "top-k mass, not renormalized sparse-softmax mass.",
         fontsize=7,
         color="#555555",
     )
@@ -848,10 +951,37 @@ def _plot_segment_attention_grid(
         "grid_png": str(output_stem.with_suffix(".png")),
         "grid_pdf": str(output_stem.with_suffix(".pdf")),
         "n_segments": len(segment_order),
-        "max_age": max_age,
+        "x_axis": "recording_iter",
+        "min_iter": min_iter,
+        "max_iter": max_iter,
+        "n_iters": len(iter_values),
         "share_vmax_percentile_95": share_vmax,
         "ratio_log2_abs_percentile_95": ratio_abs,
+        "missing_color": missing_color,
     }
+
+
+def _integer_tick_positions(values: Sequence[int], *, max_labels: int) -> list[int]:
+    """Column positions for readable integer tick labels."""
+    if len(values) <= max_labels:
+        return list(range(len(values)))
+    step = max(1, math.ceil(len(values) / max_labels))
+    positions = list(range(0, len(values), step))
+    if positions[-1] != len(values) - 1:
+        positions.append(len(values) - 1)
+    return positions
+
+
+def _segment_turn_boundaries(rows: Sequence[dict[str, Any]]) -> list[int]:
+    """Row indices where a new first-seen call starts."""
+    boundaries: list[int] = []
+    previous_call: int | None = None
+    for idx, row in enumerate(rows):
+        current_call = int(row["first_seen_call"])
+        if previous_call is not None and current_call != previous_call:
+            boundaries.append(idx)
+        previous_call = current_call
+    return boundaries
 
 
 def _segment_plot_label(row: dict[str, Any]) -> str:
@@ -887,12 +1017,15 @@ def _summary_markdown(summary: dict[str, Any], sparse_meta: dict[str, Any]) -> s
         "- Top row: dense recorded top-k attention mass retained by the runtime sparse keep set.",
         "- Bottom row: log2(retained attention divided by dense visible-token baseline).",
         "- Left column: prefill. Right column: decode.",
+        "- X-axis: recording iter / LLM call index; each column is one full context.",
+        "- Assistant output is canonicalized as `assistant_call`: the current iter's generated output and the next iter's replayed assistant/tool-call message share one row.",
         "",
         "## Caveat",
         "",
         "This is a counterfactual retained-mass diagnostic over observe-only artifacts. "
         "It does not rerun inference with sparse attention and does not renormalize "
-        "post-sparse softmax mass.",
+        "post-sparse softmax mass. Gray cells mean not visible or not covered by "
+        "recorded query rows.",
         "",
     ]
     return "\n".join(lines)
@@ -965,7 +1098,7 @@ def _optional_int(value: Any) -> int | None:
 
 
 def _optional_float(value: Any) -> float | None:
-    if value is None:
+    if value is None or value == "":
         return None
     result = float(value)
     if not math.isfinite(result):

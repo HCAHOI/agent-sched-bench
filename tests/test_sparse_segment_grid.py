@@ -189,5 +189,6 @@ def test_build_sparse_segment_grids_writes_per_task_outputs(tmp_path: Path) -> N
     summary = build_sparse_segment_grids(inputs=[attempt], output_dir=output_dir)
     group = summary["groups"][0]
     assert group["label"] == "task-a"
-    assert Path(group["plot"]["grid_png"]).is_file()
+    # grid_png is recorded relative to output_dir by _portable_plot_summary.
+    assert (output_dir / group["plot"]["grid_png"]).is_file()
     assert (output_dir / "task-a" / "segment_attention_sparse_filtered_trajectory.csv").is_file()
