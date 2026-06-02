@@ -27,9 +27,11 @@
 #   HF_HUB_ENABLE_HF_TRANSFER                 (default: 1; Rust parallel downloader)
 #   REQUIRE_HF_TOKEN  — fail if HF_TOKEN unset (default: 1; private-repo users)
 #   SETUP_DOCKER_FIREWALL — iptables INPUT changes (default: 0; opt-in)
-#   SETUP_DOCKER_DNS      — set docker daemon DNS so task-image builds can
-#                           apt-get (default: 1; restarts docker at setup time)
-#   DOCKER_BUILD_DNS      — comma-sep resolvers (default: 8.8.8.8,1.1.1.1)
+#   SETUP_DOCKER_DNS      — repoint /etc/resolv.conf off the systemd-resolved
+#                           stub so docker BUILDs (terminal-bench task images)
+#                           can resolve DNS (default: 1; no docker restart)
+#   DOCKER_BUILD_DNS      — static-fallback resolvers if no systemd uplink file
+#                           (default: 8.8.8.8,1.1.1.1)
 #
 # Two-layer startup design (do NOT confuse them):
 #
@@ -222,36 +224,38 @@ configure_docker_bridge_firewall() {
 }
 
 configure_docker_build_dns() {
-  # Terminal-Bench builds each task image locally (docker compose build), and
-  # those RUN steps (apt-get install ...) need DNS. On cloud hosts the default
-  # bridge build network has no working resolver (host uses a systemd-resolved
-  # stub), so apt fails with "Temporary failure resolving". Point the daemon at
-  # public resolvers so builds can resolve. swe-rebench is unaffected (it pulls
-  # prebuilt images), but terminal-bench cannot run without this.
-  [ "${SETUP_DOCKER_DNS}" = "1" ] || { log "skipping docker DNS config (SETUP_DOCKER_DNS=0)"; return 0; }
-  local daemon_json="/etc/docker/daemon.json"
-  local dns_csv="${DOCKER_BUILD_DNS:-8.8.8.8,1.1.1.1}"
-  local dns_arr
-  dns_arr="$(printf '%s' "$dns_csv" | jq -R 'split(",")')"
-  local existing merged
-  existing="$(as_root cat "$daemon_json" 2>/dev/null)"
-  [ -n "${existing}" ] || existing='{}'
-  if printf '%s' "$existing" | jq -e '(.dns // []) | length > 0' >/dev/null 2>&1; then
-    log "docker daemon DNS already configured; skipping"
+  # systemd-resolved publishes a stub resolver at 127.0.0.53 in /etc/resolv.conf.
+  # docker BUILD (buildkit) copies /etc/resolv.conf into build RUN steps AND uses
+  # it to pull base images, but the bridge build namespace cannot reach the host
+  # stub -> "Temporary failure resolving" (apt) / "lookup ghcr.io: i/o timeout"
+  # (base image), so every terminal-bench task-image build fails. swe-rebench is
+  # unaffected (it pulls prebuilt images via the daemon, which CAN reach the stub;
+  # only local builds break). NOTE: a docker daemon.json "dns" entry does NOT fix
+  # this -- buildkit ignores it for build RUN/pull steps.
+  # Fix (systemd-documented): point /etc/resolv.conf at systemd's NON-stub uplink
+  # file, which lists the real resolvers. No docker restart needed (buildkit reads
+  # resolv.conf per build). Idempotent + backed up.
+  [ "${SETUP_DOCKER_DNS}" = "1" ] || { log "skipping docker-build DNS fix (SETUP_DOCKER_DNS=0)"; return 0; }
+  if ! grep -q '127\.0\.0\.53' /etc/resolv.conf 2>/dev/null; then
+    log "docker-build DNS: /etc/resolv.conf is not a systemd stub; no fix needed"
     return 0
   fi
-  merged="$(printf '%s' "$existing" | jq --argjson dns "$dns_arr" '. + {dns: $dns}')" \
-    || { log "warning: failed to merge docker daemon.json; leaving it untouched"; return 0; }
-  log "configuring docker daemon DNS (${dns_csv}) for task-image builds"
-  printf '%s\n' "$merged" | as_root tee "$daemon_json" >/dev/null
-  as_root systemctl restart docker >/dev/null 2>&1 \
-    || as_root service docker restart >/dev/null 2>&1 || true
-  local i
-  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
-  if docker info >/dev/null 2>&1; then
-    log "docker restarted with DNS ${dns_csv}"
+  as_root cp -aL /etc/resolv.conf /etc/resolv.conf.pre-tbsetup 2>/dev/null || true
+  local uplink="/run/systemd/resolve/resolv.conf"
+  if [ -s "${uplink}" ] && grep -q '^nameserver' "${uplink}" 2>/dev/null \
+     && ! grep -q '127\.0\.0\.53' "${uplink}" 2>/dev/null; then
+    log "docker-build DNS: linking /etc/resolv.conf -> ${uplink} (real uplink resolvers)"
+    as_root ln -sf "${uplink}" /etc/resolv.conf
   else
-    log "warning: docker not ready after DNS restart; check 'systemctl status docker'"
+    local dns_csv="${DOCKER_BUILD_DNS:-8.8.8.8,1.1.1.1}"
+    log "docker-build DNS: no systemd uplink file; writing static resolv.conf (${dns_csv})"
+    as_root rm -f /etc/resolv.conf
+    printf 'nameserver %s\n' ${dns_csv//,/ } | as_root tee /etc/resolv.conf >/dev/null
+  fi
+  if getent hosts deb.debian.org >/dev/null 2>&1; then
+    log "docker-build DNS: host resolution OK after fix"
+  else
+    log "warning: still cannot resolve after DNS fix; check 'resolvectl status'"
   fi
 }
 
