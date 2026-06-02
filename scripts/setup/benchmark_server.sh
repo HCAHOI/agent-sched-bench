@@ -59,13 +59,13 @@
 #       https://github.com/HCAHOI/agent-sched-bench.git "${REPO_DIR}"
 #     cd "${REPO_DIR}"
 #     /usr/bin/git pull --ff-only origin main
-#     /usr/bin/bash scripts/setup/terminal_bench_server.sh
+#     /usr/bin/bash scripts/setup/benchmark_server.sh
 #   '
 #   STARTUP
 #
 # Layer-2 (manual SSH-in form, equivalent — already non-root):
 #   cd ~/agent-sched-bench
-#   HF_TOKEN=hf_xxx bash scripts/setup/terminal_bench_server.sh
+#   HF_TOKEN=hf_xxx bash scripts/setup/benchmark_server.sh
 set -euo pipefail
 
 # This script assumes it runs as a non-root /home user. The Layer-1
@@ -365,7 +365,7 @@ PY
   log "HF authenticated as ${who}"
 }
 
-prefetch_terminal_bench() {
+prefetch_benchmark_tasks() {
   log "loading Terminal-Bench registry and pinned dataset"
   PYTHONPATH="${REPO_ROOT}/src:${REPO_ROOT}" "${VENV_PATH}/bin/python" - <<'PY'
 from pathlib import Path
@@ -381,7 +381,7 @@ if not tasks:
 PY
 }
 
-prewarm_model() {
+prefetch_model() {
   [ "${PREWARM_MODEL}" = "1" ] || return 0
   export HF_HOME
   mkdir -p "${HF_HOME}"
@@ -452,7 +452,7 @@ install_uv
 setup_python_env
 install_backend
 configure_huggingface
-prefetch_terminal_bench
-prewarm_model
+prefetch_benchmark_tasks
+prefetch_model
 verify_setup
 print_next_steps

@@ -2,7 +2,7 @@
 
 Subclass `BaseEvictionCache` to implement a specific policy. The base provides
 the recording hook and physical-drop plumbing; subclasses only fill
-`_decide_evict()` (see plan step 3+).
+`_decide_evict()`.
 """
 
 from __future__ import annotations
@@ -197,10 +197,10 @@ class BaseEvictionCache(DynamicCache):
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         """Return keep/evict decision for `layer_idx` given current `key_len`.
 
-        Abstract — step 3+ subclasses implement actual policy logic.
+        Abstract — implemented by policy subclasses.
         """
         raise NotImplementedError(
-            "BaseEvictionCache._decide_evict is abstract; step 3+ subclasses "
+            "BaseEvictionCache._decide_evict is abstract; policy subclasses "
             "(streaming/h2o/random) must implement."
         )
 

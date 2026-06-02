@@ -695,10 +695,9 @@ class HFRecordingProvider(LLMProvider):
         self.model.eval()
         self._torch = torch
         self._captures_router_logits = self._model_has_router_logits()
-        # Per-provider AttentionBus: lives across calls so future strategy
-        # code (H2O in step 6) can subscribe at construction time. Step 5
-        # leaves it with zero subscribers, which makes it a no-op dispatch
-        # and preserves attention.npz byte-equality vs the pre-step-5 path.
+        # Per-provider AttentionBus: lives across calls so the h2o policy can
+        # subscribe at construction time. With zero subscribers it is a no-op
+        # dispatch and preserves attention.npz byte-equality.
         self._attention_bus = AttentionBus()
         if self._sparse_attention_config is not None:
             self._sparse_attention = build_sparse_attention(
@@ -717,8 +716,8 @@ class HFRecordingProvider(LLMProvider):
         # Attempt-level KV policy summary lands in meta.json. The
         # `prefill_score_bias` flag is the explicit warning that H2O's score
         # accumulator only saw the LayerCapturer-sampled prefill rows
-        # (plan E12 — recording bias). False for non-h2o policies; analysis
-        # code can branch on it.
+        # (recording bias). False for non-h2o policies; analysis code can
+        # branch on it.
         self.capturer.set_kv_policy_meta(self._kv_policy_meta_payload())
         self.capturer.set_sparse_attention_meta(
             self._sparse_attention_meta_payload()

@@ -105,7 +105,7 @@ sink_size / recent_window 运行时从 block_topk 实例读（单一真源），
 mean/var 公式同 head_span decode（Q=1）：`mean = (1/|b|)Σ_{k∈b} A_k`，
 `var = Var_{k∈b}(A_k)`。某 rank 在该 step 未被选中（selected_blocks 不足 R_max）→
 该列 NaN + kept_count=0，不写 0（no silent zero-fill）。与 segment head_span 并存、
-互不覆盖。渲染见 `scripts/recoding_figures/plot_segment_head_span_grid.py --mode block`。
+互不覆盖。渲染见 `scripts/recoding_figures/plot_head_span_grid.py --mode block`。
 
 > 分析注意：rank 桶只统计该 block 落在 middle 区(sink/recent 之外)的保留位置。
 > 末位 selected block 若与 recent window 重叠，其 rank 桶仅统计非-recent 部分(recent

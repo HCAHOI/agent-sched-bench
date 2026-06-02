@@ -6,7 +6,7 @@ one downloaded copy of the recordings:
 
   - `sparse`     -> `plot_sparse_segment_grid.build_sparse_segment_grids`
                     (sparse-filtered retained attention share / ratio)
-  - `head_span`  -> `plot_segment_head_span_grid.build_head_span_segment_grids`
+  - `head_span`  -> `plot_head_span_grid.build_head_span_segment_grids`
                     (within-segment attention mean / std)
 
 It downloads only the files the renderer needs, renders on Modal, then uploads
@@ -243,7 +243,7 @@ def _render_grid(config: TargetConfig) -> dict[str, Any]:
             split_by_task=True,
         )
     if config.mode == "head_span":
-        from scripts.recoding_figures.plot_segment_head_span_grid import (
+        from scripts.recoding_figures.plot_head_span_grid import (
             build_head_span_segment_grids,
         )
 

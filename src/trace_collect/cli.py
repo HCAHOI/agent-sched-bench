@@ -216,8 +216,8 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Whether to write `kv_eviction.npz` recordings. Default `on` "
             "preserves the audit trail. `off` runs the policy but skips the "
-            "per-call recorder allocation and npz write — used by step 9 "
-            "perf microbench to isolate eviction overhead from recording "
+            "per-call recorder allocation and npz write — used by the perf "
+            "microbench to isolate eviction overhead from recording "
             "overhead. Meaningful only when --kv-policy != none."
         ),
     )

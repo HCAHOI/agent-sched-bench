@@ -144,7 +144,7 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
             elif field_name not in merged and default_value is not None:
                 # Carry the argparse default into the merged map only when
                 # yaml didn't speak — keeps the dataclass default visible
-                # in CLI-only flows just like step 3.
+                # in CLI-only flows.
                 merged[field_name] = default_value
 
     name = merged.get("name", "none")

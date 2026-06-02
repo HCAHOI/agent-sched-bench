@@ -33,7 +33,7 @@ agent-sched-bench/
 ## Development Workflow
 
 All Python runs inside the project `.venv` (Python 3.12, managed by `uv`). On a
-fresh server, run `bash scripts/setup/terminal_bench_server.sh` once — it
+fresh server, run `bash scripts/setup/benchmark_server.sh` once — it
 installs `uv`, creates `.venv` at the repo root, installs deps, prewarms the
 model, validates the terminal-bench benchmark loads, and prints a ready-to-run
 smoke command. Then activate the venv:

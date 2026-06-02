@@ -1,9 +1,9 @@
 """Pub/sub bus for post-softmax attention tensors.
 
-Step 5 introduces this thin dispatcher so `LayerCapturer._sampled_attention_rows`
-can publish the post-softmax attention tensor exactly once per layer, before
-any reduce/reshape, and let downstream consumers (H2O in step 6) observe the
-same values without re-running `torch.softmax`.
+A thin dispatcher so `LayerCapturer._sampled_attention_rows` can publish the
+post-softmax attention tensor exactly once per layer, before any
+reduce/reshape, and let downstream consumers (the h2o policy) observe the same
+values without re-running `torch.softmax`.
 
 Shape contract
 --------------

@@ -444,13 +444,13 @@ class LayerCapturer:
         # over the [sink, rank1..R_max, recent] bucket axis (see
         # _accumulate_block_head_stats). decode-only by design.
         self._block_head_stats: dict[tuple[int, int], dict[str, Any]] = {}
-        # KV eviction recorder is per-call; lifecycle is owned by the caller
-        # (HFRecordingProvider in step 3+) which swaps it before each
+        # KV eviction recorder is per-call; lifecycle is owned by the
+        # HFRecordingProvider, which swaps it before each
         # `recording_session()`. LayerCapturer only flushes whatever the
         # current recorder buffered when the session ends.
         self._kv_recorder: "KVEvictionRecorder | None" = kv_recorder
-        # Bus is per-provider and lives across calls. None preserves the
-        # pre-step-5 behaviour byte-for-byte (no publish at all).
+        # Bus is per-provider and lives across calls. None means no publish
+        # at all (attention.npz bytes unchanged).
         self._attention_bus: "AttentionBus | None" = attention_bus
         # Attempt-level KV policy summary written to meta.json on
         # `finish_attempt`. Provider sets via `set_kv_policy_meta(...)`
@@ -1638,7 +1638,7 @@ class LayerCapturer:
 
         # Publish post-softmax, pre-reshape: shape is the documented
         # (B, num_q_heads, n_query_rows, key_len) the bus contract requires.
-        # H2O (step 6) consumes this exact tensor; the capturer's own reduce
+        # The h2o policy consumes this exact tensor; the capturer's own reduce
         # below stays unchanged so attention.npz bytes don't move when no
         # subscriber is attached.
         if self._attention_bus is not None:
@@ -1867,8 +1867,6 @@ class LayerCapturer:
     def _gate_token_ids(self, *, n_tokens: int, phase: str):
         if phase == "prefill":
             return self._current_input_token_ids(n_tokens=n_tokens)
-        if phase == "decode":
-            return self._generated_token_ids(n_tokens=n_tokens)
         return self._generated_token_ids(n_tokens=n_tokens)
 
     def _routing_token_ids(

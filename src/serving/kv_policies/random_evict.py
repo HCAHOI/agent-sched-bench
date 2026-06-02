@@ -1,8 +1,8 @@
 """Random KV eviction policy.
 
 Uniform-random eviction over the *entire* current key range. Used as the
-control baseline against which StreamingLLM (step 4) and H2O (step 6) are
-compared in the eviction-policy ablation.
+control baseline against which the StreamingLLM and H2O policies are compared
+in the eviction-policy ablation.
 
 Design choices (locked here so reviewers can audit later policies against the
 same baseline contract):
@@ -14,9 +14,9 @@ same baseline contract):
 
 (b) **Per-layer independent sampling.** Each `_decide_evict(layer_idx, ...)`
     call draws fresh indices from the same per-instance RNG. Layers do *not*
-    share an evict mask. This matches H2O's per-layer eviction semantics in
-    step 6 (every layer sees its own attention scores and evicts independently)
-    so policies remain comparable along the same axis.
+    share an evict mask. This matches H2O's per-layer eviction semantics
+    (every layer sees its own attention scores and evicts independently) so
+    policies remain comparable along the same axis.
 
 Determinism contract: two `RandomEvictCache` instances with the same
 `config.seed` will, when fed the same sequence of `_decide_evict` calls,

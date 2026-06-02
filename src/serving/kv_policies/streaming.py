@@ -19,11 +19,10 @@ and recent-window tokens still see the correct relative offsets among
 themselves. Going the full re-rotation route requires either patching every
 attention layer's `position_embeddings` kwarg via a pre-forward hook or
 re-running RoPE on the cached K tensor at every eviction — both are
-non-trivial engineering and orthogonal to the question this step is trying to
-answer (does our `BaseEvictionCache` plumbing carry a non-random policy
-through HF generate cleanly?). If the smoke shows the naive variant produces
-incoherent text, step 4 escalates to the pre-forward-hook approach (plan
-note E11) — but that's a follow-up, not a defect of this step.
+non-trivial engineering and orthogonal to the question this policy answers
+(does our `BaseEvictionCache` plumbing carry a non-random policy through HF
+generate cleanly?). A RoPE re-rotation variant via pre-forward hook is a
+possible follow-up if the naive variant produces incoherent text.
 
 Reference: https://arxiv.org/abs/2309.17453, GitHub repo
 mit-han-lab/streaming-llm (see the `enable_streaming_llm` patch for the
@@ -65,8 +64,8 @@ class StreamingLLMCache(BaseEvictionCache):
     the policy config; it does **not** read `layer_idx`. Same `key_len` →
     same decision on every layer. This is intentional and contrasts with
     `RandomEvictCache`, where each layer draws a fresh sample from the same
-    RNG, and `H2OCache` (step 6), where each layer's decision depends on its
-    own attention scores.
+    RNG, and `H2OCache`, where each layer's decision depends on its own
+    attention scores.
     """
 
     def __init__(

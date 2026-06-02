@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover - exercised only on torch-less boxes
 requires_torch = pytest.mark.skipif(not _HAS_TORCH, reason="torch not installed")
 requires_mpl = pytest.mark.skipif(not _HAS_MPL, reason="matplotlib not installed")
 
-from scripts.recoding_figures.plot_segment_head_span_grid import (  # noqa: E402
+from scripts.recoding_figures.plot_head_span_grid import (  # noqa: E402
     _bucket_labels,
     _fill_matrices,
     _parse_layer_arg,
@@ -482,7 +482,7 @@ def _block_record(iter_dir: Path, *, task: str = "t0", call_idx: int = 0):
 
 
 def test_block_head_span_rows_pools_buckets(tmp_path: Path) -> None:
-    from scripts.recoding_figures.plot_segment_head_span_grid import block_head_span_rows
+    from scripts.recoding_figures.plot_head_span_grid import block_head_span_rows
 
     # 1 layer, 2 decode steps (step1 is padding), 1 head, R_max=2 -> C=4.
     # bucket cols: [sink, r1, r2, recent].
@@ -528,7 +528,7 @@ def test_block_head_span_rows_pools_buckets(tmp_path: Path) -> None:
 def test_block_head_span_rows_rejects_mismatched_geometry(tmp_path: Path) -> None:
     """P2: pooling across recordings with different block geometry must raise,
     not silently align a shorter recording's `recent` column under a rank label."""
-    from scripts.recoding_figures.plot_segment_head_span_grid import block_head_span_rows
+    from scripts.recoding_figures.plot_head_span_grid import block_head_span_rows
 
     mean_d = np.zeros((1, 1, 1, 4), dtype=np.float64)
     var_d = np.zeros((1, 1, 1, 4), dtype=np.float64)
@@ -552,7 +552,7 @@ def test_block_head_span_rows_rejects_mismatched_geometry(tmp_path: Path) -> Non
 def test_block_head_span_rows_skips_records_without_block_span(tmp_path: Path) -> None:
     """P2: a mixed directory (legacy attention.npz lacking block_span_* arrays +
     newer block recordings) must skip the legacy iters, not crash with KeyError."""
-    from scripts.recoding_figures.plot_segment_head_span_grid import block_head_span_rows
+    from scripts.recoding_figures.plot_head_span_grid import block_head_span_rows
 
     # legacy iter: attention.npz without any block_span_* arrays
     old_dir = tmp_path / "old" / "iter_0000"
@@ -1433,7 +1433,7 @@ def test_build_block_head_span_grid_per_head_summary_json(tmp_path: Path) -> Non
 def test_cli_per_head_flag_parsed_by_argparse() -> None:
     """--per-head flag is accepted by the plot script's argparse."""
     import argparse
-    from scripts.recoding_figures.plot_segment_head_span_grid import main as _  # noqa: F401
+    from scripts.recoding_figures.plot_head_span_grid import main as _  # noqa: F401
 
     parser = argparse.ArgumentParser()
     parser.add_argument("inputs", nargs="+", type=Path)
@@ -1465,7 +1465,7 @@ def test_cli_per_head_flag_parsed_by_argparse() -> None:
 
 def test_cli_per_head_and_per_layer_coexist_in_main_parser() -> None:
     """The actual main() parser accepts --per-head alongside --per-layer without conflict."""
-    import scripts.recoding_figures.plot_segment_head_span_grid as _mod
+    import scripts.recoding_figures.plot_head_span_grid as _mod
 
     # Verify both flags exist on the real parser by introspecting _mod.main.__code__
     # is not reliable; instead we check that build_head_span_segment_grids accepts per_head.

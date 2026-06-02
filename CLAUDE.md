@@ -20,7 +20,7 @@ The goal is to produce **publishable, reproducible, and scientifically rigorous*
 ## Environment
 
 **Single entry point** — `uv` with a `.venv` at the repo root, via
-`bash scripts/setup/terminal_bench_server.sh`. Produces a Python 3.12 env with
+`bash scripts/setup/benchmark_server.sh`. Produces a Python 3.12 env with
 the project deps (pyproject is the spec). Verified ~2 min on a fresh
 Ubuntu 22.04 + GPU instance. No conda. After setup, activate with
 `source .venv/bin/activate`.
