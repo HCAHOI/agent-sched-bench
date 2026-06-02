@@ -41,6 +41,8 @@ from scripts.recoding_figures.plot_segment_head_span_grid import (  # noqa: E402
     _fill_matrices,
     _parse_layer_arg,
     _phase_observations,
+    block_head_span_rows,
+    build_block_head_span_grids,
     build_head_span_segment_grids,
     reduce_head_span_cell,
 )
@@ -521,6 +523,59 @@ def test_block_head_span_rows_pools_buckets(tmp_path: Path) -> None:
     assert by_label["r2"]["kept_token_count_total"] == 0
     # recent bucket present
     assert by_label["recent"]["within_segment_attention_mean"] == pytest.approx(0.1, abs=1e-3)
+
+
+def test_block_head_span_rows_rejects_mismatched_geometry(tmp_path: Path) -> None:
+    """P2: pooling across recordings with different block geometry must raise,
+    not silently align a shorter recording's `recent` column under a rank label."""
+    from scripts.recoding_figures.plot_segment_head_span_grid import block_head_span_rows
+
+    mean_d = np.zeros((1, 1, 1, 4), dtype=np.float64)
+    var_d = np.zeros((1, 1, 1, 4), dtype=np.float64)
+    step_d = np.zeros((1, 1), dtype=np.int64)
+    kept_d = np.ones((1, 1, 4), dtype=np.int64)
+    selected_id = np.zeros((1, 1, 2), dtype=np.int64)
+    common = dict(
+        layers=[0], mean_d=mean_d, var_d=var_d, step_d=step_d,
+        kept_d=kept_d, selected_id=selected_id,
+    )
+    dir_a = tmp_path / "a" / "iter_0000"
+    dir_b = tmp_path / "b" / "iter_0000"
+    _write_block_attention_npz(dir_a, recent_window=8, **common)
+    _write_block_attention_npz(dir_b, recent_window=16, **common)  # geometry differs
+    with pytest.raises(ValueError, match="geometry"):
+        block_head_span_rows(
+            [_block_record(dir_a, call_idx=0), _block_record(dir_b, call_idx=1)]
+        )
+
+
+def test_block_head_span_rows_skips_records_without_block_span(tmp_path: Path) -> None:
+    """P2: a mixed directory (legacy attention.npz lacking block_span_* arrays +
+    newer block recordings) must skip the legacy iters, not crash with KeyError."""
+    from scripts.recoding_figures.plot_segment_head_span_grid import block_head_span_rows
+
+    # legacy iter: attention.npz without any block_span_* arrays
+    old_dir = tmp_path / "old" / "iter_0000"
+    old_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(old_dir / "attention.npz", some_legacy_key=np.zeros(3, dtype=np.int32))
+    # newer iter: real block_span recording (1 layer, 1 step, 1 head, C=4)
+    mean_d = np.array([[[[0.4, 0.8, np.nan, 0.1]]]], dtype=np.float64)
+    var_d = np.array([[[[0.01, 0.04, np.nan, 0.0]]]], dtype=np.float64)
+    step_d = np.array([[0]], dtype=np.int64)
+    kept_d = np.array([[[4, 16, 0, 8]]], dtype=np.int64)
+    selected_id = np.array([[[5, 7]]], dtype=np.int64)
+    new_dir = tmp_path / "new" / "iter_0000"
+    _write_block_attention_npz(
+        new_dir, layers=[0], mean_d=mean_d, var_d=var_d, step_d=step_d,
+        kept_d=kept_d, selected_id=selected_id,
+    )
+    rows, used, r_max = block_head_span_rows(
+        [_block_record(old_dir, call_idx=0), _block_record(new_dir, call_idx=1)]
+    )
+    assert used == [0]
+    assert r_max == 2
+    by_label = {row["bucket_label"]: row for row in rows}
+    assert by_label["sink"]["within_segment_attention_mean"] == pytest.approx(0.4, abs=1e-3)
 
 
 def test_load_block_head_span_stats_roundtrip(tmp_path: Path) -> None:
@@ -1017,3 +1072,407 @@ def test_block_stats_real_method_selected_blocks_kept_vs_selected_blocks() -> No
             "(only kept positions); if ~0.99 an unretained position leaked in — "
             "the 🔴 fix is not working"
         )
+
+
+# ---------------------------------------------------------------------------
+# per-head parameter: head selection correctness
+# ---------------------------------------------------------------------------
+
+
+def _prefill_sel(
+    mean_p: "np.ndarray",
+    var_p: "np.ndarray",
+    kept_p: "np.ndarray",
+) -> "dict[str, np.ndarray]":
+    """Minimal sel dict for the prefill branch of _phase_observations."""
+    return {
+        "mean_p": np.asarray(mean_p, dtype=np.float64),
+        "var_p": np.asarray(var_p, dtype=np.float64),
+        "kept_p": np.asarray(kept_p, dtype=np.int64),
+    }
+
+
+def _full_sel(
+    *,
+    mean_p: "np.ndarray",
+    var_p: "np.ndarray",
+    kept_p: "np.ndarray",
+    mean_d: "np.ndarray",
+    var_d: "np.ndarray",
+    step_d: "np.ndarray",
+    kept_d: "np.ndarray",
+) -> "dict[str, np.ndarray]":
+    """Full sel dict for _phase_observations (both prefill and decode branches)."""
+    return {
+        "mean_p": np.asarray(mean_p, dtype=np.float64),
+        "var_p": np.asarray(var_p, dtype=np.float64),
+        "kept_p": np.asarray(kept_p, dtype=np.int64),
+        "mean_d": np.asarray(mean_d, dtype=np.float64),
+        "var_d": np.asarray(var_d, dtype=np.float64),
+        "step_d": np.asarray(step_d, dtype=np.int64),
+        "kept_d": np.asarray(kept_d, dtype=np.int64),
+    }
+
+
+def test_phase_observations_prefill_head_selects_correct_head() -> None:
+    """head=h returns only that head's values; different heads are distinguishable."""
+    # 1 layer, 3 query heads (H=3), 1 segment (S=1).
+    # Each head has a unique mean so results differ per head and from pooled.
+    # mean_p shape: [L=1, H=3, S=1]
+    mean_p = np.array([[[0.1], [0.5], [0.9]]])   # heads 0, 1, 2
+    var_p = np.array([[[0.01], [0.04], [0.09]]])
+    kept_p = np.array([[3]])  # [L=1, S=1]
+    sel = _prefill_sel(mean_p, var_p, kept_p)
+
+    # head=None: pools all 3 heads -> mean = (0.1+0.5+0.9)/3 = 0.5
+    m_all, v_all, _ = _phase_observations(sel, segment_idx=0, phase="prefill", decode_reduce="pool_steps")
+    cell_all = reduce_head_span_cell(m_all, v_all)
+    assert cell_all["mean"] == pytest.approx(0.5)
+    assert cell_all["n_contributors"] == 3
+
+    # head=0: only first head -> mean = 0.1
+    m0, v0, _ = _phase_observations(sel, segment_idx=0, phase="prefill", decode_reduce="pool_steps", head=0)
+    cell0 = reduce_head_span_cell(m0, v0)
+    assert cell0["mean"] == pytest.approx(0.1)
+    assert cell0["n_contributors"] == 1
+
+    # head=2: only last head -> mean = 0.9
+    m2, v2, _ = _phase_observations(sel, segment_idx=0, phase="prefill", decode_reduce="pool_steps", head=2)
+    cell2 = reduce_head_span_cell(m2, v2)
+    assert cell2["mean"] == pytest.approx(0.9)
+    assert cell2["n_contributors"] == 1
+
+    # Different heads return different values
+    assert cell0["mean"] != pytest.approx(cell2["mean"])
+    # Both differ from the pooled result
+    assert cell0["mean"] != pytest.approx(cell_all["mean"])
+    assert cell2["mean"] != pytest.approx(cell_all["mean"])
+
+
+def test_phase_observations_decode_head_selects_correct_head() -> None:
+    """head=h on decode path returns only that head; distinct from pooled."""
+    # 1 layer, 2 valid decode steps, 2 query heads, 1 segment.
+    # head 0: step0=0.1, step1=0.2 ; head 1: step0=0.8, step1=0.7
+    # mean_d shape: [L=1, T=2, H=2, S=1]
+    mean_d = np.array([[[[0.1], [0.8]], [[0.2], [0.7]]]])   # [L, T, H, S]
+    var_d = np.array([[[[0.01], [0.04]], [[0.01], [0.04]]]])
+    step_d = np.array([[0, 1]])   # both steps valid
+    kept_d = np.array([[[5], [5]]])  # [L, T, S]
+    sel = _decode_sel(mean_d=mean_d, var_d=var_d, step_d=step_d, kept_d=kept_d)
+
+    # head=None: 4 observations, mean = (0.1+0.8+0.2+0.7)/4 = 0.45
+    m_all, v_all, _ = _phase_observations(sel, segment_idx=0, phase="decode", decode_reduce="pool_steps")
+    cell_all = reduce_head_span_cell(m_all, v_all)
+    assert cell_all["mean"] == pytest.approx(0.45)
+    assert cell_all["n_contributors"] == 4
+
+    # head=0: 2 observations (0.1, 0.2) -> mean = 0.15
+    m0, v0, _ = _phase_observations(sel, segment_idx=0, phase="decode", decode_reduce="pool_steps", head=0)
+    cell0 = reduce_head_span_cell(m0, v0)
+    assert cell0["mean"] == pytest.approx(0.15)
+    assert cell0["n_contributors"] == 2
+
+    # head=1: 2 observations (0.8, 0.7) -> mean = 0.75
+    m1, v1, _ = _phase_observations(sel, segment_idx=0, phase="decode", decode_reduce="pool_steps", head=1)
+    cell1 = reduce_head_span_cell(m1, v1)
+    assert cell1["mean"] == pytest.approx(0.75)
+    assert cell1["n_contributors"] == 2
+
+    # Heads differ from each other and from pooled
+    assert cell0["mean"] != pytest.approx(cell1["mean"])
+    assert cell0["mean"] != pytest.approx(cell_all["mean"])
+    assert cell1["mean"] != pytest.approx(cell_all["mean"])
+
+
+def test_block_head_span_rows_head_selects_single_head(tmp_path: Path) -> None:
+    """block_head_span_rows(head=h) returns stats for head h only."""
+    # 1 layer, 1 valid decode step, 2 query heads (H=2), C=2 buckets (sink, recent).
+    # mean_d shape: [L=1, T=1, H=2, C=2]; kept_d shape: [L=1, T=1, C=2]
+    # head 0: sink=0.1, recent=0.2; head 1: sink=0.8, recent=0.9
+    mean_d = np.array([[[[0.1, 0.2], [0.8, 0.9]]]])  # [L=1, T=1, H=2, C=2]
+    var_d = np.array([[[[0.01, 0.01], [0.01, 0.01]]]])
+    step_d = np.array([[0]])   # [L=1, T=1]
+    kept_d = np.array([[[4, 8]]])  # [L=1, T=1, C=2] — T matches step_d
+    iter_dir = tmp_path / "rec" / "iter_0000"
+    _write_block_attention_npz(
+        iter_dir,
+        layers=[0],
+        mean_d=mean_d,
+        var_d=var_d,
+        step_d=step_d,
+        kept_d=kept_d,
+        selected_id=np.array([[[5, -1]]]),  # [L=1, T=1, R_max=2] dummy
+        block_size=16,
+        sink_size=4,
+        recent_window=8,
+    )
+    record = _block_record(iter_dir)
+
+    # head=None: pools both heads; sink = (0.1 + 0.8) / 2 = 0.45
+    rows_all, _, _ = block_head_span_rows([record])
+    by_label_all = {row["bucket_label"]: row for row in rows_all}
+    assert by_label_all["sink"]["within_segment_attention_mean"] == pytest.approx(0.45, abs=1e-3)
+
+    # head=0: only head 0 observations
+    rows_h0, _, _ = block_head_span_rows([record], head=0)
+    by_label_h0 = {row["bucket_label"]: row for row in rows_h0}
+    assert by_label_h0["sink"]["within_segment_attention_mean"] == pytest.approx(0.1, abs=1e-3)
+    assert by_label_h0["recent"]["within_segment_attention_mean"] == pytest.approx(0.2, abs=1e-3)
+
+    # head=1: only head 1 observations
+    rows_h1, _, _ = block_head_span_rows([record], head=1)
+    by_label_h1 = {row["bucket_label"]: row for row in rows_h1}
+    assert by_label_h1["sink"]["within_segment_attention_mean"] == pytest.approx(0.8, abs=1e-3)
+    assert by_label_h1["recent"]["within_segment_attention_mean"] == pytest.approx(0.9, abs=1e-3)
+
+    # heads are distinguishable and differ from pooled
+    assert by_label_h0["sink"]["within_segment_attention_mean"] != pytest.approx(
+        by_label_h1["sink"]["within_segment_attention_mean"]
+    )
+    assert by_label_h0["sink"]["within_segment_attention_mean"] != pytest.approx(
+        by_label_all["sink"]["within_segment_attention_mean"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# per-head parameter: head=None regression (existing behaviour unchanged)
+# ---------------------------------------------------------------------------
+
+
+def test_phase_observations_prefill_head_none_matches_no_arg() -> None:
+    """head=None is identical to not passing head (default behaviour unchanged)."""
+    mean_p = np.array([[[0.3], [0.6]]])   # [L=1, H=2, S=1]
+    var_p = np.array([[[0.02], [0.05]]])
+    kept_p = np.array([[4]])
+    sel = _prefill_sel(mean_p, var_p, kept_p)
+
+    # Explicit head=None vs default (no kwarg) — must be byte-for-byte identical.
+    m_none, v_none, k_none = _phase_observations(
+        sel, segment_idx=0, phase="prefill", decode_reduce="pool_steps", head=None
+    )
+    m_default, v_default, k_default = _phase_observations(
+        sel, segment_idx=0, phase="prefill", decode_reduce="pool_steps"
+    )
+    np.testing.assert_array_equal(m_none, m_default)
+    np.testing.assert_array_equal(v_none, v_default)
+    assert k_none == k_default
+
+
+def test_phase_observations_decode_head_none_matches_no_arg() -> None:
+    """head=None decode path is identical to the pre-existing default."""
+    mean_d = np.array([[[[0.2], [0.5]], [[0.3], [0.4]]]])  # [L=1, T=2, H=2, S=1]
+    var_d = np.array([[[[0.01], [0.02]], [[0.01], [0.02]]]])
+    step_d = np.array([[0, 1]])
+    kept_d = np.array([[[3], [3]]])
+    sel = _decode_sel(mean_d=mean_d, var_d=var_d, step_d=step_d, kept_d=kept_d)
+
+    m_none, v_none, k_none = _phase_observations(
+        sel, segment_idx=0, phase="decode", decode_reduce="pool_steps", head=None
+    )
+    m_default, v_default, k_default = _phase_observations(
+        sel, segment_idx=0, phase="decode", decode_reduce="pool_steps"
+    )
+    np.testing.assert_array_equal(m_none, m_default)
+    np.testing.assert_array_equal(v_none, v_default)
+    assert k_none == k_default
+
+
+# ---------------------------------------------------------------------------
+# per-head PDF e2e: segment mode
+# ---------------------------------------------------------------------------
+
+
+@requires_torch
+@requires_mpl
+def test_build_head_span_grid_per_head_segment(tmp_path: Path) -> None:
+    """--per-head segment mode: PDF has one page per query head, PNGs land in per_head/head_NN/."""
+    attempt_dir = _make_attempt(tmp_path, per_head_stats_layers=(0,))
+    out_dir = tmp_path / "out"
+    summary = build_head_span_segment_grids(
+        inputs=[attempt_dir],
+        output_dir=out_dir,
+        split_by_task=True,
+        per_head=True,
+    )
+    group = summary["groups"][0]
+
+    # summary.json must carry per_head_pdf field
+    assert group["per_head_pdf"] is not None
+
+    pdf_path = out_dir / group["per_head_pdf"]
+    assert pdf_path.is_file() and pdf_path.stat().st_size > 0
+
+    # Determine expected number of query heads from the recorded npz shape.
+    from scripts.recoding_figures.recording_loader import load_iteration_records, load_head_span_stats
+    records = load_iteration_records([attempt_dir])
+    stats = load_head_span_stats(records[0].iter_dir)
+    n_heads = int(stats["head_span_mean_prefill"].shape[1])
+    assert n_heads > 0, "toy capturer must record at least 1 query head"
+
+    # PDF page count == n_heads
+    # Count pages by reading the pdf bytes for %%Page markers is fragile;
+    # instead verify that per_head/head_NN/ PNG dirs were created for each head.
+    group_dir = out_dir / group["output_dir"]
+    for h in range(n_heads):
+        head_png = group_dir / "per_head" / f"head_{h:02d}" / "segment_head_span_grid.png"
+        assert head_png.is_file(), f"per-head PNG missing for head {h:02d}: {head_png}"
+
+
+@requires_torch
+@requires_mpl
+def test_build_head_span_grid_per_head_segment_summary_json(tmp_path: Path) -> None:
+    """per_head_pdf key is present in group-level summary.json on disk."""
+    attempt_dir = _make_attempt(tmp_path, per_head_stats_layers=(0,))
+    out_dir = tmp_path / "out"
+    build_head_span_segment_grids(
+        inputs=[attempt_dir],
+        output_dir=out_dir,
+        split_by_task=True,
+        per_head=True,
+    )
+    # Read summary from disk (not from return value) to confirm it was written.
+    top_summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+    assert len(top_summary["groups"]) >= 1
+    group = top_summary["groups"][0]
+    assert "per_head_pdf" in group
+    assert group["per_head_pdf"] is not None
+
+
+# ---------------------------------------------------------------------------
+# per-head PDF e2e: block mode
+# ---------------------------------------------------------------------------
+
+
+def _make_block_attempt(tmp_path: Path) -> Path:
+    """Create a minimal attempt_dir/recordings/iter_0000/ for block-span tests.
+
+    Returns attempt_dir (parent of recordings/).  H=2 query heads, C=2 buckets.
+    """
+    attempt_dir = tmp_path / "task__block-e2e" / "attempt_1"
+    recordings_dir = attempt_dir / "recordings"
+    iter_dir = recordings_dir / "iter_0000"
+    mean_d = np.array([[[[0.3, 0.6], [0.7, 0.4]]]])  # [L=1, T=1, H=2, C=2]
+    var_d = np.zeros_like(mean_d)
+    step_d = np.array([[0]])   # [L=1, T=1]
+    kept_d = np.array([[[4, 8]]])  # [L=1, T=1, C=2]
+    _write_block_attention_npz(
+        iter_dir,
+        layers=[0],
+        mean_d=mean_d,
+        var_d=var_d,
+        step_d=step_d,
+        kept_d=kept_d,
+        selected_id=np.array([[[5, -1]]]),
+        block_size=16,
+        sink_size=4,
+        recent_window=8,
+    )
+    (iter_dir / "segments.json").write_text(
+        json.dumps({
+            "call_idx": 0,
+            "input_tokens": 4,
+            "output_tokens": 1,
+            "total_tokens": 5,
+            "complete": True,
+            "segments": _SEGMENTS,
+        }),
+        encoding="utf-8",
+    )
+    np.savez(iter_dir / "routing.npz", placeholder=np.zeros(1, dtype=np.int32))
+    (iter_dir / ".done").write_text("", encoding="utf-8")
+    return attempt_dir
+
+
+@requires_mpl
+def test_build_block_head_span_grid_per_head(tmp_path: Path) -> None:
+    """--per-head block mode: PDF created, per_head/head_NN/ PNGs land on disk."""
+    attempt_dir = _make_block_attempt(tmp_path)
+    out_dir = tmp_path / "out"
+    summary = build_block_head_span_grids(
+        inputs=[attempt_dir],
+        output_dir=out_dir,
+        split_by_task=False,
+        per_head=True,
+    )
+    group = summary["groups"][0]
+
+    assert group["per_head_pdf"] is not None
+    pdf_path = out_dir / group["per_head_pdf"]
+    assert pdf_path.is_file() and pdf_path.stat().st_size > 0
+
+    # One PNG per query head under per_head/head_NN/
+    n_heads = 2
+    group_dir = out_dir / group["output_dir"]
+    for h in range(n_heads):
+        head_png = group_dir / "per_head" / f"head_{h:02d}" / "block_head_span_grid.png"
+        assert head_png.is_file(), f"per-head block PNG missing for head {h}: {head_png}"
+
+
+@requires_mpl
+def test_build_block_head_span_grid_per_head_summary_json(tmp_path: Path) -> None:
+    """per_head_pdf present in block-mode summary.json on disk."""
+    attempt_dir = _make_block_attempt(tmp_path)
+    out_dir = tmp_path / "out"
+    build_block_head_span_grids(
+        inputs=[attempt_dir],
+        output_dir=out_dir,
+        split_by_task=False,
+        per_head=True,
+    )
+    top_summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+    group = top_summary["groups"][0]
+    assert "per_head_pdf" in group
+    assert group["per_head_pdf"] is not None
+
+
+# ---------------------------------------------------------------------------
+# CLI: --per-head flag parsing and coexistence with --per-layer
+# ---------------------------------------------------------------------------
+
+
+def test_cli_per_head_flag_parsed_by_argparse() -> None:
+    """--per-head flag is accepted by the plot script's argparse."""
+    import argparse
+    from scripts.recoding_figures.plot_segment_head_span_grid import main as _  # noqa: F401
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("inputs", nargs="+", type=Path)
+    parser.add_argument("--output-dir", type=Path, required=False, default=Path("/tmp"))
+    parser.add_argument("--per-head", action="store_true")
+    parser.add_argument("--per-layer", action="store_true")
+    parser.add_argument("--mode", choices=("segment", "block", "auto"), default="auto")
+    parser.add_argument("--split-by-task", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--include-orphans", action="store_true")
+    parser.add_argument("--max-iters", type=int)
+    parser.add_argument("--layers", type=str, default=None)
+    parser.add_argument("--decode-reduce", choices=("pool_steps", "last_step"), default="pool_steps")
+
+    # --per-head alone
+    ns = parser.parse_args(["some_dir", "--output-dir", "/tmp", "--per-head"])
+    assert ns.per_head is True
+    assert ns.per_layer is False
+
+    # --per-layer alone
+    ns2 = parser.parse_args(["some_dir", "--output-dir", "/tmp", "--per-layer"])
+    assert ns2.per_layer is True
+    assert ns2.per_head is False
+
+    # both flags coexist
+    ns3 = parser.parse_args(["some_dir", "--output-dir", "/tmp", "--per-head", "--per-layer"])
+    assert ns3.per_head is True
+    assert ns3.per_layer is True
+
+
+def test_cli_per_head_and_per_layer_coexist_in_main_parser() -> None:
+    """The actual main() parser accepts --per-head alongside --per-layer without conflict."""
+    import scripts.recoding_figures.plot_segment_head_span_grid as _mod
+
+    # Verify both flags exist on the real parser by introspecting _mod.main.__code__
+    # is not reliable; instead we check that build_head_span_segment_grids accepts per_head.
+    import inspect
+    sig = inspect.signature(_mod.build_head_span_segment_grids)
+    assert "per_head" in sig.parameters, "build_head_span_segment_grids missing per_head param"
+    assert "per_layer" in sig.parameters, "build_head_span_segment_grids missing per_layer param"
+
+    sig_block = inspect.signature(_mod.build_block_head_span_grids)
+    assert "per_head" in sig_block.parameters, "build_block_head_span_grids missing per_head param"

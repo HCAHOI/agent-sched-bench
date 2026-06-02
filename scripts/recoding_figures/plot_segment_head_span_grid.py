@@ -109,6 +109,16 @@ def main() -> None:
             "across layers. Color scales are per-page (per layer)."
         ),
     )
+    parser.add_argument(
+        "--per-head",
+        action="store_true",
+        help=(
+            "Also emit a per-head PDF: one page per query head, each page "
+            "showing the same grid as the main figure but restricted to that "
+            "single head (no cross-head pooling). Works for both segment and "
+            "block modes. Color scales are per-page (per head)."
+        ),
+    )
     args = parser.parse_args()
 
     layers = _parse_layer_arg(args.layers)
@@ -123,6 +133,7 @@ def main() -> None:
             include_orphans=args.include_orphans,
             max_iters=args.max_iters,
             split_by_task=args.split_by_task,
+            per_head=args.per_head,
         )
     else:
         summary = build_head_span_segment_grids(
@@ -134,6 +145,7 @@ def main() -> None:
             split_by_task=args.split_by_task,
             decode_reduce=args.decode_reduce,
             per_layer=args.per_layer,
+            per_head=args.per_head,
         )
     print(json.dumps(_json_ready(summary), indent=2, sort_keys=True))
 
@@ -174,6 +186,7 @@ def build_head_span_segment_grids(
     split_by_task: bool = True,
     decode_reduce: str = "pool_steps",
     per_layer: bool = False,
+    per_head: bool = False,
 ) -> dict[str, Any]:
     """Build within-segment mean/std grids for one or more attempt paths."""
     if decode_reduce not in DECODE_REDUCE_MODES:
@@ -241,6 +254,17 @@ def build_head_span_segment_grids(
                 ),
                 output_dir,
             )
+        per_head_pdf = None
+        if per_head:
+            per_head_pdf = _artifact_relative_path(
+                _render_per_head_pdf_segment(
+                    group_records,
+                    layers_used=layers_used,
+                    group_dir=group_dir,
+                    decode_reduce=decode_reduce,
+                ),
+                output_dir,
+            )
         group_summary = {
             "label": label,
             "output_dir": _artifact_relative_path(group_dir, output_dir),
@@ -251,6 +275,7 @@ def build_head_span_segment_grids(
             "n_layer_rows": len(layer_rows),
             "layers_used": layers_used,
             "per_layer_pdf": per_layer_pdf,
+            "per_head_pdf": per_head_pdf,
             "role_counts": _role_counts(summary_rows),
             "plot": plot_summary,
         }
@@ -289,23 +314,32 @@ def block_head_span_rows(
     records: Sequence[IterationRecord],
     *,
     layers: Sequence[int] | None = None,
+    head: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[int], int]:
     """Pool per-selected-block decode stats into (layer, bucket) cells.
 
-    Returns (rows, layers_used, r_max). Each row is one (layer, bucket): the
-    decode mean/var observations across all iters, decode steps, and heads are
-    flattened and reduced with ``reduce_head_span_cell`` (mean = nanmean,
-    std = sqrt(nanmean(var))). NaN buckets (no kept key) drop out of the reduce.
+    Returns (rows, layers_used, r_max). Each row is one (layer, bucket).
+
+    ``head=None`` pools all query heads (default, existing behaviour unchanged).
+    ``head=h`` restricts to query head ``h`` only — used by the per-head PDF
+    where each page shows one head without cross-head averaging.
     """
-    # Pool per (layer_idx, bucket_col): list of mean/var observation arrays.
     pooled_mean: dict[tuple[int, int], list[np.ndarray]] = {}
     pooled_var: dict[tuple[int, int], list[np.ndarray]] = {}
     kept_total: dict[tuple[int, int], int] = {}
     layers_used: list[int] | None = None
+    geom_ref: tuple[int, int, int, int] | None = None  # (block_size, sink, recent, C)
     r_max = 0
 
     for record in sorted(records, key=lambda item: (item.task, item.call_idx)):
-        stats = load_block_head_span_stats(record.iter_dir)
+        try:
+            stats = load_block_head_span_stats(record.iter_dir)
+        except (KeyError, FileNotFoundError, OSError, ValueError):
+            # Mixed directory: skip iters predating block_span fields or with a
+            # truncated/corrupt npz, mirroring _has_block_span. Newer block
+            # recordings still plot; build_block_head_span_grids raises a
+            # controlled error if nothing usable remains.
+            continue
         available = [int(layer) for layer in stats["block_span_layers"].tolist()]
         if not available:
             continue
@@ -328,7 +362,26 @@ def block_head_span_rows(
         step_d = stats["block_span_decode_step"]  # [L,T]
         kept_d = stats["block_span_kept_token_count_decode"]  # [L,T,C]
         C = int(mean_d.shape[3]) if mean_d.ndim == 4 else 0
-        r_max = max(r_max, C - 2 if C >= 2 else 0)
+        # Bucket columns are pooled by raw index and the `recent` bucket sits at
+        # the last column (C-1). Pooling across recordings with different block
+        # geometry would misalign `recent` (and rank spans) under a wrong label,
+        # silently corrupting the grid — so require identical geometry instead of
+        # max()-ing r_max across heterogeneous layouts.
+        geom = (
+            int(stats["block_span_block_size"]),
+            int(stats["block_span_sink_size"]),
+            int(stats["block_span_recent_window"]),
+            C,
+        )
+        if geom_ref is None:
+            geom_ref = geom
+            r_max = C - 2 if C >= 2 else 0
+        elif geom != geom_ref:
+            raise ValueError(
+                f"{record.iter_dir}: block_span geometry (block_size, sink, "
+                f"recent, C)={geom} differs from earlier iters {geom_ref}; "
+                "pooling across incompatible bucket layouts would misalign columns"
+            )
         for layer in selected_layers:
             li = available.index(layer)
             valid = step_d[li] >= 0  # [T]
@@ -336,8 +389,16 @@ def block_head_span_rows(
                 continue
             for col in range(C):
                 key = (int(layer), col)
-                pooled_mean.setdefault(key, []).append(mean_d[li, valid, :, col].ravel())
-                pooled_var.setdefault(key, []).append(var_d[li, valid, :, col].ravel())
+                if head is None:
+                    # pool all heads: [T_valid, H] -> ravel
+                    obs_mean = mean_d[li, valid, :, col].ravel()
+                    obs_var = var_d[li, valid, :, col].ravel()
+                else:
+                    # single head: [T_valid] (head slice keeps 1-D)
+                    obs_mean = mean_d[li, valid, head, col]
+                    obs_var = var_d[li, valid, head, col]
+                pooled_mean.setdefault(key, []).append(obs_mean)
+                pooled_var.setdefault(key, []).append(obs_var)
                 kept_total[key] = kept_total.get(key, 0) + int(kept_d[li, valid, col].sum())
 
     used = list(layers_used or [])
@@ -372,6 +433,7 @@ def build_block_head_span_grids(
     include_orphans: bool = False,
     max_iters: int | None = None,
     split_by_task: bool = True,
+    per_head: bool = False,
 ) -> dict[str, Any]:
     """Build per-selected-block within-block mean/std grids (block_topk decode)."""
     records = load_iteration_records(
@@ -410,6 +472,17 @@ def build_block_head_span_grids(
             r_max=r_max,
         )
         plot_summary = _portable_plot_summary(plot_summary, artifact_root=output_dir)
+        per_head_pdf = None
+        if per_head:
+            per_head_pdf = _artifact_relative_path(
+                _render_per_head_pdf_block(
+                    group_records,
+                    layers_used=layers_used,
+                    group_dir=group_dir,
+                    r_max=r_max,
+                ),
+                output_dir,
+            )
         group_summary = {
             "label": label,
             "output_dir": _artifact_relative_path(group_dir, output_dir),
@@ -418,6 +491,7 @@ def build_block_head_span_grids(
             "n_layers": len(layers_used),
             "r_max": r_max,
             "layers_used": layers_used,
+            "per_head_pdf": per_head_pdf,
             "plot": plot_summary,
         }
         (group_dir / "summary.json").write_text(
@@ -580,8 +654,14 @@ def head_span_segment_rows(
     *,
     layers: Sequence[int] | None = None,
     decode_reduce: str = "pool_steps",
+    head: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[int]]:
-    """Return trajectory rows, per-layer rows, and the effective layer list."""
+    """Return trajectory rows, per-layer rows, and the effective layer list.
+
+    ``head=None`` pools all query heads (default, existing behaviour unchanged).
+    ``head=h`` restricts observations to query head ``h`` only; useful for the
+    per-head PDF where each page shows one head without cross-head averaging.
+    """
     trajectory: list[dict[str, Any]] = []
     by_layer: list[dict[str, Any]] = []
     metadata: dict[str, dict[str, Any]] = {}
@@ -632,7 +712,8 @@ def head_span_segment_rows(
             base["layers_used"] = list(selected_layers)
             for phase in ("prefill", "decode"):
                 means, variances, kept = _phase_observations(
-                    sel, segment_idx=s, phase=phase, decode_reduce=decode_reduce
+                    sel, segment_idx=s, phase=phase, decode_reduce=decode_reduce,
+                    head=head,
                 )
                 cell = reduce_head_span_cell(means, variances)
                 trajectory.append(
@@ -642,7 +723,8 @@ def head_span_segment_rows(
                 layer_sel = _select_layers(stats, [pos])
                 for phase in ("prefill", "decode"):
                     means, variances, kept = _phase_observations(
-                        layer_sel, segment_idx=s, phase=phase, decode_reduce=decode_reduce
+                        layer_sel, segment_idx=s, phase=phase, decode_reduce=decode_reduce,
+                        head=head,
                     )
                     cell = reduce_head_span_cell(means, variances)
                     by_layer.append(
@@ -677,17 +759,35 @@ def _phase_observations(
     segment_idx: int,
     phase: str,
     decode_reduce: str,
+    head: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
+    """Extract mean/var observations for one (segment, phase).
+
+    ``head=None`` pools all query heads (existing behaviour, unchanged).
+    ``head=h`` selects a single query head; the returned arrays are the same
+    shape as the pooled case except the head axis has size 1, so
+    ``reduce_head_span_cell`` receives per-step/layer observations for that
+    head alone.
+    """
     s = segment_idx
     if phase == "prefill":
-        means = sel["mean_p"][:, :, s]
-        variances = sel["var_p"][:, :, s]
+        # mean_p / var_p: [L, H, S]
+        if head is None:
+            means = sel["mean_p"][:, :, s]       # [L, H]
+            variances = sel["var_p"][:, :, s]
+        else:
+            means = sel["mean_p"][:, head:head + 1, s]     # [L, 1]
+            variances = sel["var_p"][:, head:head + 1, s]
         kept = int(sel["kept_p"][:, s].sum())
         return means.ravel(), variances.ravel(), kept
 
-    # decode: [L, T, H] for segment s
-    mean_d = sel["mean_d"][:, :, :, s]
-    var_d = sel["var_d"][:, :, :, s]
+    # decode: mean_d / var_d: [L, T, H, S]
+    if head is None:
+        mean_d = sel["mean_d"][:, :, :, s]   # [L, T, H]
+        var_d = sel["var_d"][:, :, :, s]
+    else:
+        mean_d = sel["mean_d"][:, :, head:head + 1, s]  # [L, T, 1]
+        var_d = sel["var_d"][:, :, head:head + 1, s]
     step_d = sel["step_d"]  # [L, T]
     kept_d = sel["kept_d"]  # [L, T, S]
     if mean_d.shape[1] == 0:
@@ -698,10 +798,10 @@ def _phase_observations(
         means = np.where(valid[:, :, None], mean_d, np.nan)
         variances = np.where(valid[:, :, None], var_d, np.nan)
         return means.ravel(), variances.ravel(), kept
-    # last_step: one observation per (layer, head) at the latest valid step
-    n_layers, _, n_heads = mean_d.shape
-    means = np.full((n_layers, n_heads), np.nan, dtype=np.float64)
-    variances = np.full((n_layers, n_heads), np.nan, dtype=np.float64)
+    # last_step: one observation per (layer, [head]) at the latest valid step
+    n_layers, _, n_h = mean_d.shape
+    means = np.full((n_layers, n_h), np.nan, dtype=np.float64)
+    variances = np.full((n_layers, n_h), np.nan, dtype=np.float64)
     for layer_pos in range(n_layers):
         valid_t = np.where(valid[layer_pos])[0]
         if valid_t.size == 0:
@@ -869,6 +969,128 @@ def _render_per_layer_pdf(
             ax.axis("off")
             fig.suptitle(
                 f"layer {layer} - within-segment mean (top) / std (bottom), prefill | decode",
+                fontsize=11,
+                y=0.995,
+            )
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+    return pdf_path
+
+
+def _n_query_heads_segment(records: Sequence[IterationRecord]) -> int:
+    """Read query-head count from the first available npz (head_span shape[1])."""
+    for record in records:
+        try:
+            stats = load_head_span_stats(record.iter_dir)
+        except (KeyError, FileNotFoundError, OSError):
+            continue
+        # head_span_mean_prefill: [L_s, query_head, S]
+        h = int(stats["head_span_mean_prefill"].shape[1])
+        if h > 0:
+            return h
+    return 0
+
+
+def _n_query_heads_block(records: Sequence[IterationRecord]) -> int:
+    """Read query-head count from the first available block npz (block_span shape[2])."""
+    for record in records:
+        try:
+            stats = load_block_head_span_stats(record.iter_dir)
+        except (KeyError, FileNotFoundError, OSError, ValueError):
+            continue
+        # block_span_mean_decode: [L_s, T_max, query_head, C]
+        arr = stats["block_span_mean_decode"]
+        if arr.ndim == 4:
+            h = int(arr.shape[2])
+            if h > 0:
+                return h
+    return 0
+
+
+def _render_per_head_pdf_segment(
+    group_records: Sequence[IterationRecord],
+    *,
+    layers_used: Sequence[int],
+    group_dir: Path,
+    decode_reduce: str,
+) -> Path:
+    """Render one within-segment grid per query head into a multi-page PDF.
+
+    One page per query head, same 2×2 layout as the main segment grid but
+    restricted to that head (no cross-head pooling). Mirrors
+    ``_render_per_layer_pdf``.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    n_heads = _n_query_heads_segment(group_records)
+    per_head_dir = group_dir / "per_head"
+    pages: list[tuple[int, Path]] = []
+    for h in range(n_heads):
+        rows, _layer_rows, _used = head_span_segment_rows(
+            group_records, layers=list(layers_used), decode_reduce=decode_reduce, head=h
+        )
+        if not rows:
+            continue
+        summary = _head_span_summary_rows(rows)
+        stem = per_head_dir / f"head_{h:02d}" / "segment_head_span_grid"
+        _plot_head_span_grid(rows, summary, stem, layers_used=layers_used, decode_reduce=decode_reduce)
+        pages.append((h, stem.with_suffix(".png")))
+
+    pdf_path = group_dir / "segment_head_span_per_head.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for h, png in pages:
+            img = plt.imread(png)
+            height, width = img.shape[0], img.shape[1]
+            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
+            ax = fig.add_axes([0, 0, 1, 0.96])
+            ax.imshow(img)
+            ax.axis("off")
+            fig.suptitle(
+                f"head {h:02d} - within-segment mean (top) / std (bottom), prefill | decode",
+                fontsize=11,
+                y=0.995,
+            )
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+    return pdf_path
+
+
+def _render_per_head_pdf_block(
+    group_records: Sequence[IterationRecord],
+    *,
+    layers_used: Sequence[int],
+    group_dir: Path,
+    r_max: int,
+) -> Path:
+    """Render one block-span grid per query head into a multi-page PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    n_heads = _n_query_heads_block(group_records)
+    per_head_dir = group_dir / "per_head"
+    pages: list[tuple[int, Path]] = []
+    for h in range(n_heads):
+        rows, _used, _rm = block_head_span_rows(
+            group_records, layers=list(layers_used), head=h
+        )
+        if not rows:
+            continue
+        stem = per_head_dir / f"head_{h:02d}" / "block_head_span_grid"
+        _plot_block_head_span_grid(rows, stem, layers_used=layers_used, r_max=r_max)
+        pages.append((h, stem.with_suffix(".png")))
+
+    pdf_path = group_dir / "block_head_span_per_head.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for h, png in pages:
+            img = plt.imread(png)
+            height, width = img.shape[0], img.shape[1]
+            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
+            ax = fig.add_axes([0, 0, 1, 0.96])
+            ax.imshow(img)
+            ax.axis("off")
+            fig.suptitle(
+                f"head {h:02d} - within-block mean (top) / std (bottom)",
                 fontsize=11,
                 y=0.995,
             )
