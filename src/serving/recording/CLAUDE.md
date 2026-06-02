@@ -78,6 +78,39 @@ var  = (1/Q) Σ_q Var_{k ∈ S_q}(A_{q,k})   （population variance）
 
 `head_span_kept_token_count_prefill[l, s]` = Σ_q mask_q.sum()，是 NaN 判断的直接分母证据，用于区分"head 不关注此 span"和"此 span 被 KV 驱逐至近零 key presence"。
 
+### per-selected-block within-block 统计字段（decode-only sidecar）
+
+仅当 `RecordingConfig.per_head_block_stats=True`（CLI `--per-head-block-stats`）
+且 active sparse method 为 `block_topk` 时填充；否则各数组首维=0（形状稳定，镜像
+head_span 空数组约定）。回答的研究问题：block_topk 凭 pre-softmax QK 选出的 block，
+块内 post-softmax attention 是否又强（mean）又集中（低 std）。复用同一组采样层
+（`per_head_stats_layers`，CLI 校验两者同开）。
+
+bucket 列序固定：`col 0 = sink`，`col 1..R_max = selection rank 1..R_max`，
+`col R_max+1 = recent`。`R_max = ceil(budget / block_size)`（ceiling 除法，覆盖
+partial 尾块；Python: `-(-budget // block_size)`），`C = R_max + 2`。block_size /
+sink_size / recent_window 运行时从 block_topk 实例读（单一真源），不新增 config。
+
+| 字段 | 形状 | dtype | 含义 |
+|---|---|---|---|
+| `block_span_layers` | `[L_s]` | i32 | 采样层索引（= `head_stats_layers`） |
+| `block_span_mean_decode` | `[L_s, T_max, query_head, C]` | fp16 | 各 (层,step,head,bucket) 块内 attn 均值；无 key 的 cell = NaN |
+| `block_span_var_decode` | `[L_s, T_max, query_head, C]` | fp32 | 块内 token 间方差（population）；无 key = NaN |
+| `block_span_decode_step` | `[L_s, T_max]` | i32 | 各层实际 decode step 索引（-1 pad） |
+| `block_span_decode_n` | `[L_s]` | i32 | 各层 decode step 数（T_max = 跨层最大） |
+| `block_span_selected_block_id` | `[L_s, T_max, R_max]` | i32 | 各 rank 对应的实际 block_id（-1 pad），供回推位置 |
+| `block_span_kept_token_count_decode` | `[L_s, T_max, C]` | i32 | 各 bucket 实际参与累积的 key 数（NaN 判据分母） |
+| `block_span_block_size` / `block_span_sink_size` / `block_span_recent_window` | scalar | i32 | 来自 block_topk 实例 |
+
+mean/var 公式同 head_span decode（Q=1）：`mean = (1/|b|)Σ_{k∈b} A_k`，
+`var = Var_{k∈b}(A_k)`。某 rank 在该 step 未被选中（selected_blocks 不足 R_max）→
+该列 NaN + kept_count=0，不写 0（no silent zero-fill）。与 segment head_span 并存、
+互不覆盖。渲染见 `scripts/recoding_figures/plot_segment_head_span_grid.py --mode block`。
+
+> 分析注意：rank 桶只统计该 block 落在 middle 区(sink/recent 之外)的保留位置。
+> 末位 selected block 若与 recent window 重叠，其 rank 桶仅统计非-recent 部分(recent
+> 位置归入 recent 桶，不双计)——读到末位 rank 桶 kept_count 偏低属正常，非数据缺失。
+
 
 
 每条 record 对应一个 (layer, prefill 或 decode step) 的采样快照。

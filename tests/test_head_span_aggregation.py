@@ -7,28 +7,52 @@ attempt directory via LayerCapturer and renders the grid headless.
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 
-import matplotlib
+# matplotlib / torch are optional on the analysis box: the pure-numpy reducer and
+# CLI gate tests must still run there. Rendering / LayerCapturer tests skip when
+# their dependency is missing rather than failing module collection.
+try:
+    import matplotlib
 
-matplotlib.use("Agg")
+    matplotlib.use("Agg")
+    _HAS_MPL = True
+except ImportError:  # pragma: no cover - torch-less / mpl-less analysis boxes
+    _HAS_MPL = False
 
-from serving.recording import RecordingConfig
-from serving.recording.hooks import LayerCapturer
+try:
+    import torch  # noqa: F401
 
-from scripts.recoding_figures.plot_segment_head_span_grid import (
+    _HAS_TORCH = True
+except ImportError:  # pragma: no cover - exercised only on torch-less boxes
+    torch = None
+    _HAS_TORCH = False
+
+requires_torch = pytest.mark.skipif(not _HAS_TORCH, reason="torch not installed")
+requires_mpl = pytest.mark.skipif(not _HAS_MPL, reason="matplotlib not installed")
+
+from scripts.recoding_figures.plot_segment_head_span_grid import (  # noqa: E402
+    _bucket_labels,
     _fill_matrices,
     _parse_layer_arg,
     _phase_observations,
     build_head_span_segment_grids,
     reduce_head_span_cell,
 )
-from trace_collect.cli import _parse_per_head_stats_layers, _run_collect, parse_collect_args
+from trace_collect.cli import (  # noqa: E402
+    _parse_per_head_stats_layers,
+    _run_collect,
+    parse_collect_args,
+)
+
+if _HAS_TORCH:
+    from serving.recording import RecordingConfig
+    from serving.recording.hooks import LayerCapturer
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +207,7 @@ def test_per_head_flag_requires_record_internals() -> None:
     assert excinfo.value.code == 2
 
 
+@requires_torch
 def test_recording_config_empty_tuple_is_default() -> None:
     assert RecordingConfig(per_head_stats_layers=()) == RecordingConfig()
 
@@ -230,41 +255,41 @@ def test_fill_matrices_places_values_in_expected_cells() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _ToyAttention(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.layer_idx = 0
-        self.head_dim = 4
-        self.num_key_value_groups = 1
-        self.scaling = 0.5
-        self.q_proj = torch.nn.Linear(8, 4, bias=False)
-        self.k_proj = torch.nn.Linear(8, 4, bias=False)
-        self.q_norm = torch.nn.Identity()
-        self.k_norm = torch.nn.Identity()
+if _HAS_TORCH:
 
-    def forward(self, hidden_states, position_embeddings, attention_mask=None, past_key_values=None):
-        del position_embeddings, attention_mask, past_key_values
-        return hidden_states, None
+    class _ToyAttention(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.layer_idx = 0
+            self.head_dim = 4
+            self.num_key_value_groups = 1
+            self.scaling = 0.5
+            self.q_proj = torch.nn.Linear(8, 4, bias=False)
+            self.k_proj = torch.nn.Linear(8, 4, bias=False)
+            self.q_norm = torch.nn.Identity()
+            self.k_norm = torch.nn.Identity()
 
+        def forward(self, hidden_states, position_embeddings, attention_mask=None, past_key_values=None):
+            del position_embeddings, attention_mask, past_key_values
+            return hidden_states, None
 
-class _FakeCache:
-    def __init__(self, key_states: torch.Tensor) -> None:
-        self.key_states = key_states
+    class _FakeCache:
+        def __init__(self, key_states: "torch.Tensor") -> None:
+            self.key_states = key_states
 
-    def __getitem__(self, layer_idx: int):
-        if layer_idx != 0:
-            raise KeyError(layer_idx)
-        return self.key_states, None
+        def __getitem__(self, layer_idx: int):
+            if layer_idx != 0:
+                raise KeyError(layer_idx)
+            return self.key_states, None
 
-
-class _ToyModel(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.model = torch.nn.Module()
-        self.model.layers = torch.nn.ModuleList([torch.nn.Module()])
-        self.model.layers[0].self_attn = _ToyAttention()
-        self.model.layers[0].mlp = torch.nn.Module()
-        self.model.layers[0].mlp.gate = torch.nn.Linear(8, 3, bias=False)
+    class _ToyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = torch.nn.Module()
+            self.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+            self.model.layers[0].self_attn = _ToyAttention()
+            self.model.layers[0].mlp = torch.nn.Module()
+            self.model.layers[0].mlp.gate = torch.nn.Linear(8, 3, bias=False)
 
 
 _SEGMENTS = [
@@ -340,6 +365,7 @@ def _make_attempt(tmp_path: Path, *, per_head_stats_layers: tuple[int, ...]) -> 
     return attempt_dir
 
 
+@requires_torch
 def test_build_head_span_grid_end_to_end(tmp_path: Path) -> None:
     attempt_dir = _make_attempt(tmp_path, per_head_stats_layers=(0,))
     out_dir = tmp_path / "out"
@@ -361,6 +387,7 @@ def test_build_head_span_grid_end_to_end(tmp_path: Path) -> None:
     assert "within_segment_attention_std" in traj
 
 
+@requires_torch
 def test_build_head_span_grid_per_layer_pdf(tmp_path: Path) -> None:
     attempt_dir = _make_attempt(tmp_path, per_head_stats_layers=(0,))
     out_dir = tmp_path / "out"
@@ -375,6 +402,7 @@ def test_build_head_span_grid_per_layer_pdf(tmp_path: Path) -> None:
     assert (out_dir / group["output_dir"] / "per_layer" / "layer_00" / "segment_head_span_grid.png").is_file()
 
 
+@requires_torch
 def test_build_head_span_grid_raises_without_stats(tmp_path: Path) -> None:
     attempt_dir = _make_attempt(tmp_path, per_head_stats_layers=())
     with pytest.raises(ValueError, match="no per-head span stats"):
@@ -385,6 +413,7 @@ def test_build_head_span_grid_raises_without_stats(tmp_path: Path) -> None:
         )
 
 
+@requires_torch
 def test_out_of_range_layer_raises_at_record_time(tmp_path: Path) -> None:
     """A layer index >= num_hidden_layers must fail loud at capturer build."""
     with pytest.raises(ValueError, match="num_hidden_layers"):
@@ -392,4 +421,599 @@ def test_out_of_range_layer_raises_at_record_time(tmp_path: Path) -> None:
             _ToyModel(),  # toy model exposes a single attention layer (index 0)
             config=RecordingConfig(per_head_stats_layers=(5,)),
             model_summary={"name": "toy"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# block_span bucket labels + reducer (pure numpy)
+# ---------------------------------------------------------------------------
+
+
+def test_bucket_labels_layout() -> None:
+    # C = R_max + 2 columns: sink, r1..rR_max, recent.
+    assert _bucket_labels(0) == ["sink", "recent"]
+    assert _bucket_labels(3) == ["sink", "r1", "r2", "r3", "recent"]
+
+
+def _write_block_attention_npz(
+    iter_dir: Path,
+    *,
+    layers: list[int],
+    mean_d: np.ndarray,
+    var_d: np.ndarray,
+    step_d: np.ndarray,
+    kept_d: np.ndarray,
+    selected_id: np.ndarray,
+    block_size: int = 16,
+    sink_size: int = 4,
+    recent_window: int = 8,
+) -> None:
+    """Write a minimal attention.npz carrying only the block_span_* arrays."""
+    iter_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        iter_dir / "attention.npz",
+        block_span_layers=np.asarray(layers, dtype=np.int32),
+        block_span_mean_decode=mean_d.astype(np.float16),
+        block_span_var_decode=var_d.astype(np.float32),
+        block_span_decode_step=step_d.astype(np.int32),
+        block_span_decode_n=np.asarray(
+            [int((step_d[i] >= 0).sum()) for i in range(len(layers))], dtype=np.int32
+        ),
+        block_span_selected_block_id=selected_id.astype(np.int32),
+        block_span_kept_token_count_decode=kept_d.astype(np.int32),
+        block_span_block_size=np.int32(block_size),
+        block_span_sink_size=np.int32(sink_size),
+        block_span_recent_window=np.int32(recent_window),
+    )
+
+
+def _block_record(iter_dir: Path, *, task: str = "t0", call_idx: int = 0):
+    from scripts.recoding_figures.recording_loader import IterationRecord
+
+    return IterationRecord(
+        task=task,
+        attempt_dir=iter_dir.parent,
+        recordings_dir=iter_dir.parent,
+        iter_dir=iter_dir,
+        call_idx=call_idx,
+    )
+
+
+def test_block_head_span_rows_pools_buckets(tmp_path: Path) -> None:
+    from scripts.recoding_figures.plot_segment_head_span_grid import block_head_span_rows
+
+    # 1 layer, 2 decode steps (step1 is padding), 1 head, R_max=2 -> C=4.
+    # bucket cols: [sink, r1, r2, recent].
+    mean_d = np.array(
+        [[[[0.4, 0.8, np.nan, 0.1]], [[9.9, 9.9, 9.9, 9.9]]]], dtype=np.float64
+    )  # [L=1, T=2, H=1, C=4]
+    var_d = np.array(
+        [[[[0.01, 0.04, np.nan, 0.0]], [[9.9, 9.9, 9.9, 9.9]]]], dtype=np.float64
+    )
+    step_d = np.array([[0, -1]], dtype=np.int64)  # second step is padding
+    kept_d = np.array([[[4, 16, 0, 8], [0, 0, 0, 0]]], dtype=np.int64)  # [L,T,C]
+    selected_id = np.array([[[5, 7], [-1, -1]]], dtype=np.int64)  # [L,T,R_max=2]
+    iter_dir = tmp_path / "rec" / "iter_0000"
+    _write_block_attention_npz(
+        iter_dir,
+        layers=[0],
+        mean_d=mean_d,
+        var_d=var_d,
+        step_d=step_d,
+        kept_d=kept_d,
+        selected_id=selected_id,
+    )
+    rows, used, r_max = block_head_span_rows([_block_record(iter_dir)])
+    assert used == [0]
+    assert r_max == 2
+    by_label = {row["bucket_label"]: row for row in rows}
+    # sink bucket: single finite observation 0.4, var 0.01 -> std sqrt(0.01)
+    assert by_label["sink"]["within_segment_attention_mean"] == pytest.approx(0.4, abs=1e-3)
+    assert by_label["sink"]["within_segment_attention_std"] == pytest.approx(0.1, abs=1e-3)
+    assert by_label["sink"]["n_contributors"] == 1
+    assert by_label["sink"]["kept_token_count_total"] == 4
+    # r1 bucket: 0.8 mean (the padding step is dropped via step_d == -1)
+    assert by_label["r1"]["within_segment_attention_mean"] == pytest.approx(0.8, abs=1e-3)
+    assert by_label["r1"]["kept_token_count_total"] == 16
+    # r2 bucket: no key at this step (NaN) -> reduces to None, kept 0
+    assert by_label["r2"]["within_segment_attention_mean"] is None
+    assert by_label["r2"]["n_contributors"] == 0
+    assert by_label["r2"]["kept_token_count_total"] == 0
+    # recent bucket present
+    assert by_label["recent"]["within_segment_attention_mean"] == pytest.approx(0.1, abs=1e-3)
+
+
+def test_load_block_head_span_stats_roundtrip(tmp_path: Path) -> None:
+    from scripts.recoding_figures.recording_loader import load_block_head_span_stats
+
+    mean_d = np.zeros((1, 1, 1, 4), dtype=np.float64)
+    var_d = np.zeros((1, 1, 1, 4), dtype=np.float64)
+    step_d = np.zeros((1, 1), dtype=np.int64)
+    kept_d = np.ones((1, 1, 4), dtype=np.int64)
+    selected_id = np.zeros((1, 1, 2), dtype=np.int64)
+    iter_dir = tmp_path / "rec" / "iter_0000"
+    _write_block_attention_npz(
+        iter_dir,
+        layers=[3],
+        mean_d=mean_d,
+        var_d=var_d,
+        step_d=step_d,
+        kept_d=kept_d,
+        selected_id=selected_id,
+        block_size=16,
+        sink_size=4,
+        recent_window=8,
+    )
+    stats = load_block_head_span_stats(iter_dir)
+    assert stats["block_span_layers"].tolist() == [3]
+    assert stats["block_span_block_size"] == 16
+    assert stats["block_span_sink_size"] == 4
+    assert stats["block_span_recent_window"] == 8
+    assert stats["block_span_mean_decode"].shape == (1, 1, 1, 4)
+
+
+# ---------------------------------------------------------------------------
+# CLI gate for --per-head-block-stats (numpy-only path; no torch needed)
+# ---------------------------------------------------------------------------
+
+
+def _block_stats_args(extra: list[str]) -> "argparse.Namespace":
+    base = [
+        "--provider", "dashscope",
+        "--model", "m",
+        "--scaffold", "openclaw",
+        "--mcp-config", "none",
+        "--record-internals",
+        "--per-head-block-stats",
+    ]
+    return parse_collect_args(base + extra)
+
+
+def test_block_stats_requires_block_topk(monkeypatch) -> None:
+    # block_topk not selected -> ValueError-equivalent exit(2), before torch import.
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "x")
+    args = _block_stats_args(["--per-head-stats-layers", "0,6"])  # sparse-attn defaults none
+    with pytest.raises(SystemExit) as excinfo:
+        _run_collect(args)
+    assert excinfo.value.code == 2
+
+
+def test_block_stats_requires_layers(monkeypatch) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "x")
+    args = _block_stats_args(
+        ["--sparse-attn", "block_topk", "--sparse-attn-budget", "512"]
+    )  # valid block_topk, but no --per-head-stats-layers
+    with pytest.raises(SystemExit) as excinfo:
+        _run_collect(args)
+    assert excinfo.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# block accumulator + npz build (torch)
+# ---------------------------------------------------------------------------
+
+
+class _StubBlockTopK:
+    """Minimal block_topk stand-in exposing the geometry the accumulator reads."""
+
+    name = "block_topk"
+
+    def __init__(self, *, budget: int, block_size: int, sink_size: int, recent_window: int) -> None:
+        self.budget = budget
+        self.block_size = block_size
+        self.sink_size = sink_size
+        self.recent_window = recent_window
+
+
+@requires_torch
+def test_accumulate_block_head_stats_buckets(tmp_path: Path) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=True),
+        model_summary={"name": "toy"},
+    )
+    # budget=32, block_size=16 -> R_max=ceil(32/16)=2, C=4 (sink, r1, r2, recent).
+    method = _StubBlockTopK(budget=32, block_size=16, sink_size=4, recent_window=8)
+    capturer._sparse_attention = method  # type: ignore[attr-defined]
+    K = 48
+    # 1 head, Q=1, K keys. Give each key a known value so bucket means are exact.
+    attn = torch.zeros(1, 1, K, dtype=torch.float32)
+    attn[0, 0, :4] = 0.5          # sink positions 0..3
+    attn[0, 0, 16:32] = 0.2       # block id 1 (rank r1) — all 16 positions kept
+    attn[0, 0, 32:48] = 0.0       # block id 2 region; but recent window covers tail 8
+    attn[0, 0, K - 8:] = 0.7      # recent window (overwrites tail of block 2)
+    # Use new tuple cache format: (selected_blocks_kept, kept_positions_set).
+    # All 16 positions of block 1 are kept; all 16 of block 2 are kept.
+    capturer._block_select_cache[(0, 0)] = (
+        [1, 2],
+        frozenset(range(16, 48)),  # positions 16..47 all kept
+    )
+    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    entry = capturer._block_head_stats[(0, 0)]
+    mean = entry["mean"].numpy()  # [H=1, C=4]
+    kept = entry["kept_count"].numpy()
+    # sink mean = 0.5 over 4 keys
+    assert mean[0, 0] == pytest.approx(0.5, abs=1e-3)
+    assert kept[0] == 4
+    # r1 (block 1, pos 16..31): all 16 kept, all 0.2 -> mean 0.2
+    assert mean[0, 1] == pytest.approx(0.2, abs=1e-3)
+    assert kept[1] == 16
+    # r2 (block 2, pos 32..47): all 16 in kept_set; recent (40..47)=0.7, rest=0.0
+    assert kept[2] == 16
+    # recent mean = 0.7 over last 8 keys (pos 40..47)
+    assert mean[0, 3] == pytest.approx(0.7, abs=1e-3)
+    assert kept[3] == 8
+    assert entry["selected_block_id"] == [1, 2]
+
+
+@requires_torch
+def test_accumulate_block_head_stats_partial_block_intersect(tmp_path: Path) -> None:
+    """🔴 fix: partial block — only kept positions count, not the full block range.
+
+    Self-consistent fixture (reviewer-corrected):
+      budget=6, block_size=4, sink=1, recent=1, K=12.
+      middle = pos 1..10 (10 positions). budget slots = 6-2 = 4.
+      selected_blocks_kept = [1, 2] (score order):
+        block1 = pos [4,8) -> kept_set ∩ block1 = {4}       (1 position)
+        block2 = pos [8,12) -> kept_set ∩ block2 = {8, 9}   (2 positions)
+      kept_set = {4, 8, 9} (only these three middle positions retained after cap).
+
+    Expected bucket layout (R_max = ceil(6/4) = 2, C = 4):
+      col 0 sink:   pos 0           -> kept=1, mean=attn[0]
+      col 1 rank1:  block1 ∩ {4}   -> kept=1, mean=attn[4]
+      col 2 rank2:  block2 ∩ {8,9} -> kept=2, mean=(attn[8]+attn[9])/2
+      col 3 recent: pos 11          -> kept=1, mean=attn[11]
+
+    The critical correctness property: col 1 must NOT include pos 5,6,7
+    (they are in block1's range but absent from kept_set). If the old
+    full-block-range bug were present, col 1 kept would be 4, not 1.
+    """
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=True),
+        model_summary={"name": "toy"},
+    )
+    method = _StubBlockTopK(budget=6, block_size=4, sink_size=1, recent_window=1)
+    capturer._sparse_attention = method  # type: ignore[attr-defined]
+    K = 12
+    attn = torch.zeros(1, 1, K, dtype=torch.float32)
+    attn[0, 0, 0] = 0.1    # sink
+    attn[0, 0, 4] = 0.7    # block1, the ONE kept position
+    attn[0, 0, 5] = 0.99   # block1 range, NOT in kept_set — must NOT be counted
+    attn[0, 0, 6] = 0.99   # block1 range, NOT in kept_set
+    attn[0, 0, 7] = 0.99   # block1 range, NOT in kept_set
+    attn[0, 0, 8] = 0.9    # block2, kept
+    attn[0, 0, 9] = 0.8    # block2, kept
+    attn[0, 0, 11] = 0.05  # recent (pos K-1 = 11)
+    capturer._block_select_cache[(0, 0)] = (
+        [1, 2],
+        frozenset([4, 8, 9]),  # only these three middle positions retained
+    )
+    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    entry = capturer._block_head_stats[(0, 0)]
+    mean = entry["mean"].numpy()
+    kept = entry["kept_count"].numpy()
+    # sink
+    assert kept[0] == 1
+    assert mean[0, 0] == pytest.approx(0.1, abs=1e-3)
+    # rank1 = block1, ONLY pos 4 is in kept_set -> kept=1, mean=0.7
+    # (if old bug: kept=4, mean=(0.7+0.99*3)/4 ≈ 0.92 — fail message says this)
+    assert kept[1] == 1, (
+        f"rank1 kept={kept[1]}, expected 1 (only pos 4); "
+        f"if 4 the full-block-range bug is present (pos 5,6,7 leaked in)"
+    )
+    assert mean[0, 1] == pytest.approx(0.7, abs=1e-3)
+    # rank2 = block2, pos 8+9 kept -> kept=2, mean=0.85
+    assert kept[2] == 2
+    assert mean[0, 2] == pytest.approx(0.85, abs=1e-3)
+    # recent
+    assert kept[3] == 1
+    assert mean[0, 3] == pytest.approx(0.05, abs=1e-3)
+
+
+@requires_torch
+def test_accumulate_block_head_stats_missing_rank_is_nan(tmp_path: Path) -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=True),
+        model_summary={"name": "toy"},
+    )
+    method = _StubBlockTopK(budget=32, block_size=16, sink_size=4, recent_window=8)
+    capturer._sparse_attention = method  # type: ignore[attr-defined]
+    K = 48
+    attn = torch.full((1, 1, K), 0.3, dtype=torch.float32)
+    # Only rank1 selected; rank2 absent. kept_set = block1 positions 16..31.
+    capturer._block_select_cache[(0, 0)] = (
+        [1],
+        frozenset(range(16, 32)),
+    )
+    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    entry = capturer._block_head_stats[(0, 0)]
+    mean = entry["mean"].numpy()
+    kept = entry["kept_count"].numpy()
+    # r2 column (index 2) has no selected block -> NaN, kept 0 (no silent zero).
+    assert np.isnan(mean[0, 2])
+    assert kept[2] == 0
+    assert entry["selected_block_id"] == [1, -1]
+
+
+@requires_torch
+def test_accumulate_block_head_stats_missing_cache_raises() -> None:
+    """Missing cache entry (wiring bug) must raise loud, not silently return []."""
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=True),
+        model_summary={"name": "toy"},
+    )
+    method = _StubBlockTopK(budget=32, block_size=16, sink_size=4, recent_window=8)
+    capturer._sparse_attention = method  # type: ignore[attr-defined]
+    attn = torch.full((1, 1, 48), 0.3, dtype=torch.float32)
+    # No cache entry for (layer=0, decode_step=0) — simulates wiring bug.
+    with pytest.raises(RuntimeError, match="no cache entry"):
+        capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=48)
+
+
+@requires_torch
+def test_build_block_head_span_arrays_shapes() -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=True),
+        model_summary={"name": "toy"},
+    )
+    # budget=32, block_size=16 -> ceil(32/16)=2=R_max, C=4.
+    method = _StubBlockTopK(budget=32, block_size=16, sink_size=4, recent_window=8)
+    capturer._sparse_attention = method  # type: ignore[attr-defined]
+    K = 48
+    attn = torch.full((1, 1, K), 0.3, dtype=torch.float32)
+    capturer._block_select_cache[(0, 0)] = ([1, 2], frozenset(range(16, 48)))
+    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    arrays = capturer._build_block_head_span_arrays()
+    # R_max=ceil(32/16)=2 -> C=4.
+    assert arrays["block_span_layers"].tolist() == [0]
+    assert arrays["block_span_mean_decode"].shape == (1, 1, 1, 4)
+    assert arrays["block_span_var_decode"].shape == (1, 1, 1, 4)
+    assert arrays["block_span_decode_step"].tolist() == [[0]]
+    assert arrays["block_span_decode_n"].tolist() == [1]
+    assert arrays["block_span_selected_block_id"].shape == (1, 1, 2)
+    assert arrays["block_span_selected_block_id"][0, 0].tolist() == [1, 2]
+    assert arrays["block_span_kept_token_count_decode"].shape == (1, 1, 4)
+    assert int(arrays["block_span_block_size"]) == 16
+    assert int(arrays["block_span_sink_size"]) == 4
+    assert int(arrays["block_span_recent_window"]) == 8
+
+
+@requires_torch
+def test_build_block_head_span_arrays_non_divisible_budget_shapes() -> None:
+    """🔴 regression: non-divisible budget must not crash npz write (ceil vs floor).
+
+    budget=5, block_size=4  ->  floor=1, ceil=2.  Old code used floor in
+    _build_block_head_span_arrays while the accumulator already used ceil,
+    making kept_arr shape [ceil+2]=[4] != expected [floor+2]=[3], which raises
+    ValueError on the broadcast at block_kept[li,ti]=kept_arr.
+    """
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=True),
+        model_summary={"name": "toy"},
+    )
+    # budget=5, block_size=4 -> floor=1, ceil=2; R_max must be ceil=2, C=4.
+    method = _StubBlockTopK(budget=5, block_size=4, sink_size=1, recent_window=1)
+    capturer._sparse_attention = method  # type: ignore[attr-defined]
+    K = 12
+    attn = torch.full((1, 1, K), 0.3, dtype=torch.float32)
+    # Provide a valid cache entry so the accumulator succeeds.
+    capturer._block_select_cache[(0, 0)] = ([1], frozenset(range(4, 8)))
+    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    # Must not raise — this was the crash site.
+    arrays = capturer._build_block_head_span_arrays()
+    r_max_ceil = 2  # ceil(5/4)
+    C = r_max_ceil + 2  # 4
+    assert arrays["block_span_mean_decode"].shape == (1, 1, 1, C), (
+        f"shape {arrays['block_span_mean_decode'].shape} != (1,1,1,{C}); "
+        "floor/ceil mismatch would give shape[3]=3 here"
+    )
+    assert arrays["block_span_selected_block_id"].shape == (1, 1, r_max_ceil), (
+        f"selected_block_id last dim {arrays['block_span_selected_block_id'].shape[-1]} "
+        f"!= r_max_ceil={r_max_ceil}"
+    )
+    assert arrays["block_span_kept_token_count_decode"].shape == (1, 1, C)
+
+
+@requires_torch
+def test_build_block_head_span_arrays_disabled_is_empty() -> None:
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=False),
+        model_summary={"name": "toy"},
+    )
+    arrays = capturer._build_block_head_span_arrays()
+    assert arrays["block_span_layers"].shape[0] == 0
+    assert arrays["block_span_mean_decode"].shape[0] == 0
+    assert arrays["block_span_var_decode"].shape[0] == 0
+    assert arrays["block_span_decode_step"].shape[0] == 0
+    assert arrays["block_span_selected_block_id"].shape[0] == 0
+    assert arrays["block_span_kept_token_count_decode"].shape[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Integration: real BlockTopKSparseAttention → record_metadata → accumulator
+# This test exercises the full chain that the stub tests cannot cover: it
+# verifies that selected_blocks_kept correctly excludes budget-truncated blocks,
+# and that the intersect-with-kept_set fix prevents unretained keys from
+# polluting rank-bucket statistics.
+# ---------------------------------------------------------------------------
+
+
+@requires_torch
+def test_block_stats_real_method_selected_blocks_kept_vs_selected_blocks() -> None:
+    """Integration: real BlockTopKSparseAttention, budget truncation case.
+
+    Config: budget=5, block_size=4, sink=1, recent=1, key=9.
+    Middle positions: 1..7 (8 positions, 2 full blocks of 4).
+    budget slots for middle = budget - sink - recent = 3.
+    So only 3 middle positions are kept.
+
+    We engineer QK scores so block1 (pos 4..7) wins rank1 and block2 (pos 0..3
+    clipped to middle=1..3 -> pos 1,2,3) wins rank2.  After cap: only 3 slots,
+    so selected_middle has exactly 3 positions.  The old code would have used
+    raw selected_blocks (all ranked blocks, possibly more than budget allows),
+    polluting buckets with unretained positions.
+
+    Assertions:
+    - selected_blocks_kept only contains block ids with ≥1 kept position
+    - rank-bucket kept_count matches len(positions in that block ∩ kept_set)
+    - no block outside selected_blocks_kept appears in the cache
+    """
+    from serving.sparse_attention.block_topk import BlockTopKSparseAttention
+
+    budget = 5
+    block_size = 4
+    sink_size = 1
+    recent_window = 1
+    method = BlockTopKSparseAttention(
+        budget=budget,
+        block_size=block_size,
+        sink_size=sink_size,
+        recent_window=recent_window,
+        observe_only=True,
+    )
+
+    K = 9
+    head_dim = 4
+    # hidden_size = n_heads * head_dim = 1 * 4 = 4 (one query head, one kv head).
+    # project_query_states: q_proj([B,Q,4]) -> [B,Q,4], reshape -> [B,Q,1,4],
+    # transpose -> [B,1,Q,4].  Identity weights keep scores deterministic.
+    hidden_size = head_dim
+
+    # The current decode token is hidden[0,0,:] = [1,0,0,0].
+    # full_key_states_for_pre_hook concatenates the cached K-1 keys with the
+    # single current-token projected key, yielding K total keys.
+    hidden = torch.zeros(1, 1, hidden_size)
+    hidden[0, 0, 0] = 1.0  # Q = [1, 0, 0, 0]
+
+    # Cache holds K-1 keys so that cat(cached, current) = K keys.
+    # Block scoring: block1 = pos [4,8), block2 = pos [1,4).  We want block1
+    # to score higher so rank1=block1, rank2=block2.
+    # Key vectors: pos 4..7 -> first dim 1.0 (high score with Q=[1,0,0,0]);
+    #              pos 1..3 -> first dim 0.1 (low score).
+    # Key for current token (pos K-1=8, i.e. recent) -> first dim 0.0.
+    cached_keys = torch.zeros(1, 1, K - 1, head_dim)  # [B=1, Hkv=1, K-1, D]
+    cached_keys[0, 0, 4:8, 0] = 1.0   # pos 4..7: block1, high score
+    cached_keys[0, 0, 1:4, 0] = 0.1   # pos 1..3: block2 (middle of block0), low score
+
+    from serving.sparse_attention.base import SparseAttentionContext
+
+    # Module with nn.Linear identity projections so project_query_states /
+    # project_key_states work correctly:
+    #   q_proj([B,Q,H]) -> [B,Q,H]; reshape(*shape[:-1],-1,head_dim) -> [B,Q,1,4];
+    #   transpose(1,2) -> [B,1,Q,4].
+    class _IntegrationModule:
+        layer_idx = 0
+        num_key_value_groups = 1
+        head_dim = 4  # class scope can't see the function-local; keep in sync with head_dim above
+        scaling = 1.0
+
+        def __init__(self) -> None:
+            # Identity weight: out=in=hidden_size, no bias.
+            self.q_proj = torch.nn.Linear(hidden_size, hidden_size, bias=False)
+            self.k_proj = torch.nn.Linear(hidden_size, hidden_size, bias=False)
+            torch.nn.init.eye_(self.q_proj.weight)
+            torch.nn.init.eye_(self.k_proj.weight)
+            self.q_norm = torch.nn.Identity()
+            self.k_norm = torch.nn.Identity()
+
+    class _SimpleCache:
+        def __getitem__(self, _layer_idx: int):
+            # Return (key_states, value_states) matching HF cache protocol.
+            return cached_keys, None
+
+        def get_seq_length(self, _layer_idx: int) -> int:
+            return int(cached_keys.shape[2])
+
+    module = _IntegrationModule()
+    # position_embeddings: cos=ones, sin=zeros -> rotary is identity (no rotation).
+    # Shape [B, Q, D] for the single decode token.
+    pos_emb = (torch.ones(1, 1, head_dim), torch.zeros(1, 1, head_dim))
+    ctx = SparseAttentionContext(
+        module=module,
+        hidden_states=hidden,
+        position_embeddings=pos_emb,
+        past_key_values=_SimpleCache(),
+        attention_mask=None,
+    )
+    method.build_additive_mask(
+        layer_idx=0,
+        query_len=1,
+        key_len=K,
+        phase="decode",
+        decode_step=0,
+        device=hidden.device,
+        dtype=hidden.dtype,
+        context=ctx,
+    )
+    meta = method.record_metadata(layer_idx=0, phase="decode", decode_step=0)
+
+    # Core assertion: selected_blocks may have more entries than budget allows;
+    # selected_blocks_kept must only contain blocks with ≥1 position in
+    # selected_middle_indices.
+    kept_positions = set(meta["selected_middle_indices"])
+    assert "selected_blocks_kept" in meta, "selected_blocks_kept missing from metadata"
+    for b in meta["selected_blocks_kept"]:
+        block_positions = set(range(b * block_size, (b + 1) * block_size))
+        assert block_positions & kept_positions, (
+            f"block {b} in selected_blocks_kept has no position in "
+            f"selected_middle_indices={sorted(kept_positions)}; "
+            "this is the 🔴 bug: an unretained block leaked into the ranking"
+        )
+
+    # selected_blocks_kept must be a subset of selected_blocks (same order).
+    assert set(meta["selected_blocks_kept"]).issubset(set(meta["selected_blocks"])), (
+        "selected_blocks_kept contains a block not in selected_blocks"
+    )
+
+    # Verify the accumulator uses selected_blocks_kept + kept_set correctly.
+    # Build a LayerCapturer and inject cache as the pre-hook would have done.
+    model = _ToyModel()
+    capturer = LayerCapturer(
+        model,
+        config=RecordingConfig(per_head_stats_layers=(0,), per_head_block_stats=True),
+        model_summary={"name": "toy"},
+    )
+    capturer._sparse_attention = method  # type: ignore[attr-defined]
+
+    # Assign the cache exactly as the pre-hook does.
+    capturer._block_select_cache[(0, 0)] = (
+        meta["selected_blocks_kept"],
+        frozenset(meta["selected_middle_indices"]),
+    )
+
+    # Attention tensor: high value only at positions NOT in kept_set, to expose
+    # the bug if unretained positions slip into a bucket.
+    attn = torch.full((1, 1, K), 0.99, dtype=torch.float32)
+    for p in kept_positions:
+        attn[0, 0, p] = 0.01   # kept positions get low value
+    attn[0, 0, :sink_size] = 0.5
+    attn[0, 0, K - recent_window:] = 0.3
+
+    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    entry = capturer._block_head_stats[(0, 0)]
+    mean = entry["mean"].numpy()
+    kept_cnt = entry["kept_count"].numpy()
+
+    # For every rank bucket that has a selected block, all counted positions must
+    # be in kept_positions_set (mean should be ~0.01, NOT ~0.99).
+    for r_idx, b in enumerate(meta["selected_blocks_kept"]):
+        col = r_idx + 1
+        assert kept_cnt[col] > 0, f"rank{r_idx+1} (block {b}) has zero kept_count"
+        assert mean[0, col] == pytest.approx(0.01, abs=1e-2), (
+            f"rank{r_idx+1} (block {b}) mean={mean[0, col]:.4f}, expected ~0.01 "
+            "(only kept positions); if ~0.99 an unretained position leaked in — "
+            "the 🔴 fix is not working"
         )

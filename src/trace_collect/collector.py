@@ -567,6 +567,7 @@ async def collect_traces(
     eviction_config: "EvictionPolicyConfig | None" = None,
     sparse_attention_config: "SparseAttentionConfig | None" = None,
     per_head_stats_layers: tuple[int, ...] = (),
+    per_head_block_stats: bool = False,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     if record_internals and scaffold != "openclaw":
@@ -612,7 +613,8 @@ async def collect_traces(
                 HFRecordingProvider(
                     default_model=model,
                     config=RecordingConfig(
-                        per_head_stats_layers=tuple(per_head_stats_layers)
+                        per_head_stats_layers=tuple(per_head_stats_layers),
+                        per_head_block_stats=bool(per_head_block_stats),
                     ),
                     eviction_config=eviction_config,
                     sparse_attention_config=sparse_attention_config,

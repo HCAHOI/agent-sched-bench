@@ -24,6 +24,12 @@ class RecordingConfig:
     # Recommended for real models: (0, 6, 12, 18, 24, 30, 36, 47)
     # Layer 47 is the last attention layer in Qwen3-Coder-30B (retrieval/copy heads concentrate there).
     per_head_stats_layers: tuple[int, ...] = ()
+    # When True, additionally capture per-selected-block within-block attention
+    # mean/std at decode (bucket axis = [sink, rank1..R_max, recent]). Only valid
+    # with an active block_topk sparse method and non-empty per_head_stats_layers;
+    # the CLI gate enforces both. block_size/sink/recent are read at runtime from
+    # the sparse method instance (single source of truth), not duplicated here.
+    per_head_block_stats: bool = False
 
 
 def segment_role(message: dict[str, Any]) -> str:

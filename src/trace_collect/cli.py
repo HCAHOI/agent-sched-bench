@@ -321,6 +321,17 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--per-head-block-stats",
+        action="store_true",
+        help=(
+            "Additionally capture per-selected-block within-block attention "
+            "mean/std at decode into attention.npz block_span_* arrays (bucket "
+            "axis = sink | selection rank 1..R_max | recent). Requires "
+            "--record-internals, --sparse-attn block_topk (resolved), and a "
+            "non-empty --per-head-stats-layers."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -640,6 +651,34 @@ def _run_collect(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
+
+    # Per-selected-block within-block stats require the block_topk method (its
+    # selection ranking IS the bucket axis) AND recorded layers to aggregate
+    # over. Validate eagerly (no silent fallback) using a torch-free sparse
+    # config resolution so the misconfig surfaces before model load. The main
+    # resolution + exclusivity check below re-derives the config for collection.
+    if args.per_head_block_stats:
+        from serving.sparse_attention.config import load_sparse_attention_config
+
+        block_sparse_config = load_sparse_attention_config(args)
+        method_name = (
+            block_sparse_config.name if block_sparse_config is not None else "none"
+        )
+        if method_name != "block_topk":
+            print(
+                "ERROR: --per-head-block-stats requires --sparse-attn block_topk "
+                f"(resolved method: {method_name!r}).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if not per_head_stats_layers:
+            print(
+                "ERROR: --per-head-block-stats requires a non-empty "
+                "--per-head-stats-layers (which layers to record block stats for).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
     if args.record_internals:
         os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
 
@@ -712,6 +751,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             eviction_config=eviction_config,
             sparse_attention_config=sparse_attention_config,
             per_head_stats_layers=per_head_stats_layers,
+            per_head_block_stats=args.per_head_block_stats,
         )
     )
     print(f"Traces written to: {run_dir}/")

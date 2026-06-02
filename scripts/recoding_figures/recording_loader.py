@@ -1143,6 +1143,42 @@ def load_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
         }
 
 
+def load_block_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
+    """Load per-selected-block within-block decode stats from one iter dir.
+
+    Decode-only companion to ``load_head_span_stats``. The bucket axis C =
+    R_max + 2 is laid out as [sink, selection rank 1..R_max, recent]. Arrays are
+    empty (leading axis 0) when the run was recorded without
+    ``--per-head-block-stats``.
+
+      block_span_layers                  [L_s]                  i32
+      block_span_mean_decode             [L_s, T_max, H, C]     fp16 (NaN no key)
+      block_span_var_decode              [L_s, T_max, H, C]     fp32 (NaN no key)
+      block_span_decode_step             [L_s, T_max]           i32  (-1 pad)
+      block_span_decode_n                [L_s]                  i32
+      block_span_selected_block_id       [L_s, T_max, R_max]    i32  (-1 pad)
+      block_span_kept_token_count_decode [L_s, T_max, C]        i32
+      block_span_block_size              scalar                 i32
+      block_span_sink_size               scalar                 i32
+      block_span_recent_window           scalar                 i32
+    """
+    with np.load(iter_dir / "attention.npz") as data:
+        return {
+            "block_span_layers": data["block_span_layers"].astype(np.int32),
+            "block_span_mean_decode": data["block_span_mean_decode"].astype(np.float16),
+            "block_span_var_decode": data["block_span_var_decode"].astype(np.float32),
+            "block_span_decode_step": data["block_span_decode_step"].astype(np.int32),
+            "block_span_decode_n": data["block_span_decode_n"].astype(np.int32),
+            "block_span_selected_block_id": data["block_span_selected_block_id"].astype(np.int32),
+            "block_span_kept_token_count_decode": data[
+                "block_span_kept_token_count_decode"
+            ].astype(np.int32),
+            "block_span_block_size": int(data["block_span_block_size"]),
+            "block_span_sink_size": int(data["block_span_sink_size"]),
+            "block_span_recent_window": int(data["block_span_recent_window"]),
+        }
+
+
 def average_layer_matrix(
     dataset: LayerDistributionSet,
     *,

@@ -251,6 +251,18 @@ class BlockTopKSparseAttention:
     ) -> None:
         kept_list = [int(x) for x in kept]
         self._last_kept_count = len(set(kept_list))
+        # selected_blocks_kept: selected_blocks order (score rank) filtered to
+        # blocks that have at least one position in selected_middle. This is the
+        # correct input for the block-stats accumulator — selected_blocks may
+        # contain more blocks than cap_middle_selection actually retained (budget
+        # truncation), so using raw selected_blocks would include unretained keys.
+        middle_set = set(int(p) for p in (selected_middle or []))
+        kept_block_ids: set[int] = set()
+        for p in middle_set:
+            kept_block_ids.add(block_id_for_position(p, self.block_size))
+        selected_blocks_kept = [
+            b for b in (selected_blocks or []) if b in kept_block_ids
+        ]
         self._last_metadata = {
             "budget": self.budget,
             "block_size": self.block_size,
@@ -258,6 +270,7 @@ class BlockTopKSparseAttention:
             "phase_scope": self.phase_scope,
             "selection_reason": reason,
             "selected_blocks": list(selected_blocks or []),
+            "selected_blocks_kept": selected_blocks_kept,
             "selected_middle_count": len(selected_middle or []),
             "selected_middle_indices": [int(x) for x in (selected_middle or [])],
         }

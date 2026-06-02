@@ -35,6 +35,7 @@ if str(_REPO_ROOT) not in sys.path:
 from scripts.recoding_figures.recording_loader import (  # noqa: E402
     IterationRecord,
     find_attempt_dirs,
+    load_block_head_span_stats,
     load_head_span_stats,
     load_iteration_records,
 )
@@ -61,6 +62,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="+", type=Path, help="attempt, task, or run directories")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("segment", "block", "auto"),
+        default="auto",
+        help=(
+            "segment = within-segment role buckets (head_span_*). block = "
+            "per-selected-block buckets sink|r1..rR|recent (block_span_*, "
+            "block_topk decode only). auto = block if block_span_* populated "
+            "else segment. Default auto."
+        ),
+    )
     parser.add_argument("--include-orphans", action="store_true")
     parser.add_argument("--max-iters", type=int)
     parser.add_argument(
@@ -100,17 +112,50 @@ def main() -> None:
     args = parser.parse_args()
 
     layers = _parse_layer_arg(args.layers)
-    summary = build_head_span_segment_grids(
-        inputs=args.inputs,
-        output_dir=args.output_dir,
-        layers=layers,
-        include_orphans=args.include_orphans,
-        max_iters=args.max_iters,
-        split_by_task=args.split_by_task,
-        decode_reduce=args.decode_reduce,
-        per_layer=args.per_layer,
-    )
+    mode = args.mode
+    if mode == "auto":
+        mode = "block" if _has_block_span(args.inputs, include_orphans=args.include_orphans, max_iters=args.max_iters) else "segment"
+    if mode == "block":
+        summary = build_block_head_span_grids(
+            inputs=args.inputs,
+            output_dir=args.output_dir,
+            layers=layers,
+            include_orphans=args.include_orphans,
+            max_iters=args.max_iters,
+            split_by_task=args.split_by_task,
+        )
+    else:
+        summary = build_head_span_segment_grids(
+            inputs=args.inputs,
+            output_dir=args.output_dir,
+            layers=layers,
+            include_orphans=args.include_orphans,
+            max_iters=args.max_iters,
+            split_by_task=args.split_by_task,
+            decode_reduce=args.decode_reduce,
+            per_layer=args.per_layer,
+        )
     print(json.dumps(_json_ready(summary), indent=2, sort_keys=True))
+
+
+def _has_block_span(
+    inputs: Sequence[Path], *, include_orphans: bool, max_iters: int | None
+) -> bool:
+    """True if any iter has populated block_span_* arrays (non-empty layer axis)."""
+    records = load_iteration_records(
+        inputs, include_orphans=include_orphans, max_iters=max_iters
+    )
+    for record in records:
+        try:
+            stats = load_block_head_span_stats(record.iter_dir)
+        except (KeyError, FileNotFoundError, OSError, ValueError):
+            # Mixed directory: some iters may pre-date block_span fields, or
+            # have a truncated/corrupt npz. Skip rather than treating the entire
+            # input as segment-mode.
+            continue
+        if int(stats["block_span_layers"].size) > 0:
+            return True
+    return False
 
 
 def _parse_layer_arg(value: str | None) -> list[int] | None:
@@ -233,6 +278,257 @@ def build_head_span_segment_grids(
         encoding="utf-8",
     )
     return run_summary
+
+
+def _bucket_labels(r_max: int) -> list[str]:
+    """Fixed bucket column labels: sink | r1..rR_max | recent."""
+    return ["sink", *[f"r{r}" for r in range(1, r_max + 1)], "recent"]
+
+
+def block_head_span_rows(
+    records: Sequence[IterationRecord],
+    *,
+    layers: Sequence[int] | None = None,
+) -> tuple[list[dict[str, Any]], list[int], int]:
+    """Pool per-selected-block decode stats into (layer, bucket) cells.
+
+    Returns (rows, layers_used, r_max). Each row is one (layer, bucket): the
+    decode mean/var observations across all iters, decode steps, and heads are
+    flattened and reduced with ``reduce_head_span_cell`` (mean = nanmean,
+    std = sqrt(nanmean(var))). NaN buckets (no kept key) drop out of the reduce.
+    """
+    # Pool per (layer_idx, bucket_col): list of mean/var observation arrays.
+    pooled_mean: dict[tuple[int, int], list[np.ndarray]] = {}
+    pooled_var: dict[tuple[int, int], list[np.ndarray]] = {}
+    kept_total: dict[tuple[int, int], int] = {}
+    layers_used: list[int] | None = None
+    r_max = 0
+
+    for record in sorted(records, key=lambda item: (item.task, item.call_idx)):
+        stats = load_block_head_span_stats(record.iter_dir)
+        available = [int(layer) for layer in stats["block_span_layers"].tolist()]
+        if not available:
+            continue
+        selected_layers = list(layers) if layers is not None else list(available)
+        missing = [layer for layer in selected_layers if layer not in available]
+        if missing:
+            raise ValueError(
+                f"{record.iter_dir}: requested layers not recorded in block_span: "
+                f"{missing} (available: {available})"
+            )
+        if layers_used is None:
+            layers_used = selected_layers
+        elif selected_layers != layers_used:
+            raise ValueError(
+                f"{record.iter_dir}: block_span layer set {selected_layers} differs "
+                f"from earlier iters {layers_used}; recordings are inconsistent"
+            )
+        mean_d = stats["block_span_mean_decode"].astype(np.float64)  # [L,T,H,C]
+        var_d = stats["block_span_var_decode"].astype(np.float64)
+        step_d = stats["block_span_decode_step"]  # [L,T]
+        kept_d = stats["block_span_kept_token_count_decode"]  # [L,T,C]
+        C = int(mean_d.shape[3]) if mean_d.ndim == 4 else 0
+        r_max = max(r_max, C - 2 if C >= 2 else 0)
+        for layer in selected_layers:
+            li = available.index(layer)
+            valid = step_d[li] >= 0  # [T]
+            if not bool(valid.any()):
+                continue
+            for col in range(C):
+                key = (int(layer), col)
+                pooled_mean.setdefault(key, []).append(mean_d[li, valid, :, col].ravel())
+                pooled_var.setdefault(key, []).append(var_d[li, valid, :, col].ravel())
+                kept_total[key] = kept_total.get(key, 0) + int(kept_d[li, valid, col].sum())
+
+    used = list(layers_used or [])
+    rows: list[dict[str, Any]] = []
+    for layer in used:
+        for col in range(r_max + 2):
+            key = (int(layer), col)
+            means = (
+                np.concatenate(pooled_mean[key]) if key in pooled_mean else np.empty(0)
+            )
+            variances = (
+                np.concatenate(pooled_var[key]) if key in pooled_var else np.empty(0)
+            )
+            cell = reduce_head_span_cell(means, variances)
+            rows.append(
+                {
+                    "layer": int(layer),
+                    "bucket_col": col,
+                    "bucket_label": _bucket_labels(r_max)[col],
+                    "kept_token_count_total": int(kept_total.get(key, 0)),
+                    **_cell_columns(cell),
+                }
+            )
+    return rows, used, r_max
+
+
+def build_block_head_span_grids(
+    *,
+    inputs: Sequence[Path],
+    output_dir: Path,
+    layers: Sequence[int] | None = None,
+    include_orphans: bool = False,
+    max_iters: int | None = None,
+    split_by_task: bool = True,
+) -> dict[str, Any]:
+    """Build per-selected-block within-block mean/std grids (block_topk decode)."""
+    records = load_iteration_records(
+        inputs, include_orphans=include_orphans, max_iters=max_iters
+    )
+    attempt_dirs = find_attempt_dirs(inputs)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if split_by_task:
+        by_task: dict[str, list[IterationRecord]] = {}
+        for record in records:
+            by_task.setdefault(record.task, []).append(record)
+        groups = [
+            (task, task_records, output_dir / _safe_name(task))
+            for task, task_records in sorted(by_task.items())
+        ]
+    else:
+        groups = [("all_tasks", records, output_dir)]
+
+    group_summaries = []
+    r_max_global: int | None = None
+    layers_used_global: list[int] | None = None
+    for label, group_records, group_dir in groups:
+        rows, layers_used, r_max = block_head_span_rows(group_records, layers=layers)
+        if not rows:
+            raise ValueError(f"{label}: no block_span observations were found")
+        if layers_used_global is None:
+            layers_used_global = layers_used
+            r_max_global = r_max
+        group_dir.mkdir(parents=True, exist_ok=True)
+        _write_csv(group_dir / "block_head_span_by_layer.csv", rows)
+        plot_summary = _plot_block_head_span_grid(
+            rows,
+            group_dir / "block_head_span_grid",
+            layers_used=layers_used,
+            r_max=r_max,
+        )
+        plot_summary = _portable_plot_summary(plot_summary, artifact_root=output_dir)
+        group_summary = {
+            "label": label,
+            "output_dir": _artifact_relative_path(group_dir, output_dir),
+            "runtime_output_dir": str(group_dir),
+            "n_records": len(group_records),
+            "n_layers": len(layers_used),
+            "r_max": r_max,
+            "layers_used": layers_used,
+            "plot": plot_summary,
+        }
+        (group_dir / "summary.json").write_text(
+            json.dumps(_json_ready(group_summary), indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        group_summaries.append(group_summary)
+
+    run_summary = {
+        "inputs": [str(path) for path in inputs],
+        "attempt_dirs": [str(path) for path in attempt_dirs],
+        "metric": "within_block_attention_mean_std",
+        "mode": "block",
+        "layers_used": layers_used_global,
+        "r_max": r_max_global,
+        "split_by_task": split_by_task,
+        "groups": group_summaries,
+    }
+    (output_dir / "summary.json").write_text(
+        json.dumps(_json_ready(run_summary), indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return run_summary
+
+
+def _plot_block_head_span_grid(
+    rows: Sequence[dict[str, Any]],
+    output_stem: Path,
+    *,
+    layers_used: Sequence[int],
+    r_max: int,
+) -> dict[str, Any]:
+    """Render a layer x bucket grid: top = within-block mean, bottom = std."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    labels = _bucket_labels(r_max)
+    n_buckets = len(labels)
+    layer_to_row = {int(layer): idx for idx, layer in enumerate(layers_used)}
+    n_layers = len(layers_used)
+
+    mean_mat = np.full((n_layers, n_buckets), np.nan, dtype=np.float64)
+    std_mat = np.full((n_layers, n_buckets), np.nan, dtype=np.float64)
+    for row in rows:
+        li = layer_to_row.get(int(row["layer"]))
+        col = int(row["bucket_col"])
+        if li is None or col >= n_buckets:
+            continue
+        if row["within_segment_attention_mean"] is not None:
+            mean_mat[li, col] = float(row["within_segment_attention_mean"])
+        if row["within_segment_attention_std"] is not None:
+            std_mat[li, col] = float(row["within_segment_attention_std"])
+
+    # Drop bucket columns with no data in any layer (e.g. ranks never selected).
+    have_data = ~np.all(np.isnan(mean_mat), axis=0)
+    keep_cols = [c for c in range(n_buckets) if have_data[c]]
+    if keep_cols:
+        mean_mat = mean_mat[:, keep_cols]
+        std_mat = std_mat[:, keep_cols]
+        labels = [labels[c] for c in keep_cols]
+
+    missing_color = "#cfcfcf"
+    mean_cmap = LinearSegmentedColormap.from_list(
+        "asb_block_mean", ["#fffaf0", "#fee391", "#fdae61", "#e34a33", "#7f0000"]
+    )
+    std_cmap = LinearSegmentedColormap.from_list(
+        "asb_block_std", ["#f7fcf0", "#bae4bc", "#7bccc4", "#2b8cbe", "#084081"]
+    )
+    mean_cmap.set_bad(missing_color)
+    std_cmap.set_bad(missing_color)
+
+    def _vmax(mat: np.ndarray) -> float:
+        finite = mat[np.isfinite(mat)]
+        return max(float(np.percentile(finite, 95)) if finite.size else 1.0, 1e-6)
+
+    mean_vmax = _vmax(mean_mat)
+    std_vmax = _vmax(std_mat)
+
+    width = max(6.0, min(16.0, 2.5 + 0.5 * len(labels)))
+    height = max(4.0, min(18.0, 2.0 + 0.45 * max(1, n_layers)))
+    fig, axes = plt.subplots(2, 1, figsize=(width, height), sharex=True)
+    fig.patch.set_facecolor("white")
+    ylabels = [str(int(layer)) for layer in layers_used]
+    for ax, mat, cmap, vmax, title in (
+        (axes[0], mean_mat, mean_cmap, mean_vmax, "within-block attention mean"),
+        (axes[1], std_mat, std_cmap, std_vmax, "within-block attention std (pooled)"),
+    ):
+        im = ax.imshow(mat, aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax)
+        ax.set_title(title)
+        ax.set_ylabel("layer")
+        ax.set_yticks(range(n_layers))
+        ax.set_yticklabels(ylabels, fontsize=7)
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(labels, fontsize=7, rotation=90)
+        ax.set_facecolor(missing_color)
+        fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
+    axes[1].set_xlabel("bucket (sink | selection rank | recent)")
+    fig.tight_layout()
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    plt.close(fig)
+    return {
+        "grid_png": str(output_stem.with_suffix(".png")),
+        "grid_pdf": str(output_stem.with_suffix(".pdf")),
+        "n_layers": n_layers,
+        "buckets": labels,
+        "mean_vmax_percentile_95": mean_vmax,
+        "std_vmax_percentile_95": std_vmax,
+        "missing_color": missing_color,
+    }
 
 
 def reduce_head_span_cell(means: np.ndarray, variances: np.ndarray) -> dict[str, Any]:

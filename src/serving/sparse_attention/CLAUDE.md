@@ -82,6 +82,18 @@ Research integrity 边界：
 - 当前 HF backend 仍是 research/recording backend；SDPA 加 mask 不等于真实
   sparse kernel 加速。
 
+### block_topk + head_span 合体录制（`--per-head-block-stats`）
+
+开 `--per-head-block-stats`（须同时 `--sparse-attn block_topk` 且非空
+`--per-head-stats-layers`，CLI no-silent-fallback 校验）时，recording 在 decode
+阶段额外按 block_topk 的 selection rank 统计**块内 post-softmax attention 的
+mean/std**（bucket = sink | rank1..R_max | recent）。selection 仍用 pre-softmax
+QK，统计用 post-softmax attention，二者本就分离，不触碰 research-integrity 边界。
+sparse pre-hook 把当层 `selected_blocks` 缓存进 `_block_select_cache[(layer,
+decode_step)]`，同 forward 内的 attention-capture hook 据此建桶。落盘字段见
+`serving/recording/CLAUDE.md` 的 `block_span_*` 段（block_size/sink/recent 从本
+method 实例读，不新增 config）。
+
 ---
 
 ## SparseAttentionConfig（frozen dataclass）

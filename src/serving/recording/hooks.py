@@ -63,6 +63,20 @@ def _as_numpy(tensor: Any) -> np.ndarray:
     return tensor.detach().cpu().numpy()
 
 
+def _is_block_topk(method: Any) -> bool:
+    """True iff `method` is the block_topk sparse-attention method.
+
+    Identified by name plus the block-geometry attributes the block-stats
+    accumulator reads (budget / block_size / sink_size / recent_window). The
+    attribute check guards against a future name collision silently feeding a
+    method with no block geometry into the accumulator.
+    """
+    return getattr(method, "name", None) == "block_topk" and all(
+        hasattr(method, attr)
+        for attr in ("budget", "block_size", "sink_size", "recent_window")
+    )
+
+
 @dataclass(frozen=True)
 class _PendingNumpyArray:
     """CPU-staged tensor whose NumPy view is materialized at flush time."""
@@ -414,6 +428,22 @@ class LayerCapturer:
         # Values: {"mean_sum": [H, S], "var_sum": [H, S], "n_queries": int}
         self._head_stats: dict[tuple[int, str, int], dict[str, Any]] = {}
         self._head_stats_n_segments: int = 0
+        # block_topk kept-block info cached per (layer, decode_step) during the
+        # sparse pre-hook so the attention-capture hook (same forward, runs after)
+        # can build per-rank within-block masks restricted to actually-retained
+        # positions. Each value is (selected_blocks_kept, kept_positions_set):
+        #   selected_blocks_kept — score-ranked block ids with ≥1 kept position
+        #   kept_positions_set   — frozenset of selected_middle_indices (the exact
+        #                          positions budget-cap retained)
+        # Cleared each recording_session; bounded by _trim_block_select_cache.
+        self._block_select_cache: dict[
+            tuple[int, int], tuple[list[int], frozenset[int]]
+        ] = {}
+        # Per-selected-block within-block decode stats, keyed by
+        # (layer_idx, decode_step). Values mirror _head_stats decode entries but
+        # over the [sink, rank1..R_max, recent] bucket axis (see
+        # _accumulate_block_head_stats). decode-only by design.
+        self._block_head_stats: dict[tuple[int, int], dict[str, Any]] = {}
         # KV eviction recorder is per-call; lifecycle is owned by the caller
         # (HFRecordingProvider in step 3+) which swaps it before each
         # `recording_session()`. LayerCapturer only flushes whatever the
@@ -689,6 +719,8 @@ class LayerCapturer:
         self._routing_decode_steps.clear()
         self._head_stats = {}
         self._head_stats_n_segments = len(segments) + 1
+        self._block_select_cache = {}
+        self._block_head_stats = {}
         try:
             yield
         except BaseException:
@@ -818,6 +850,32 @@ class LayerCapturer:
                 dtype=hidden_states.dtype,
                 context=context,
             )
+            # Cache block_topk's kept-block ranking so the attention-capture
+            # hook (same module forward, fires AFTER this pre-hook) can build
+            # per-rank within-block masks that are restricted to actually-kept
+            # positions. We cache (selected_blocks_kept, kept_positions_set):
+            #   - selected_blocks_kept: score-ranked block ids filtered to blocks
+            #     that have ≥1 position in selected_middle (i.e. post-budget-cap).
+            #     This avoids including blocks that were ranked but then dropped
+            #     by cap_middle_selection — using raw selected_blocks would
+            #     pollute rank columns with unretained keys.
+            #   - kept_positions_set: frozenset of selected_middle_indices used
+            #     to intersect each rank bucket mask so partial blocks only count
+            #     their actually-retained positions (not the full block range).
+            if (
+                self.config.per_head_block_stats
+                and self._session is not None
+                and phase == "decode"
+                and _is_block_topk(method)
+            ):
+                meta = method.record_metadata(
+                    layer_idx=layer, phase=phase, decode_step=decode_step
+                )
+                self._block_select_cache[(layer, decode_step)] = (
+                    [int(b) for b in meta.get("selected_blocks_kept", [])],
+                    frozenset(int(p) for p in meta.get("selected_middle_indices", [])),
+                )
+                self._trim_block_select_cache()
             observe_only = bool(method.observe_only)
             assert sparse_mask is not None or observe_only, (
                 f"build_additive_mask returned None in enforce mode "
@@ -1136,6 +1194,20 @@ class LayerCapturer:
                 token_ids=token_ids,
                 n_segments=n_segments,
             )
+            # Per-selected-block within-block stats run alongside the segment
+            # stats (the user wants both). decode-only, block_topk-only; the
+            # pre-hook already cached selected_blocks for (layer, decode_step).
+            if (
+                phase == "decode"
+                and self.config.per_head_block_stats
+                and _is_block_topk(self._sparse_attention)
+            ):
+                self._accumulate_block_head_stats(
+                    layer_idx=layer,
+                    decode_step=decode_step,
+                    attn=attn_full_sampled[0],
+                    key_len=key_len,
+                )
 
         segment_mass = segment_bucket(attn_rows, token_ids, n_segments)
         top_indices, top_weights = padded_top_k(attn_rows, self.config.attention_top_k)
@@ -1231,6 +1303,147 @@ class LayerCapturer:
                 entry_new["var"][:, s] = vals.var(dim=-1, unbiased=False).squeeze(-1)
                 entry_new["kept_count"][s] = int(mask.sum().item())
             self._head_stats[key] = entry_new
+
+    def _trim_block_select_cache(self) -> None:
+        """Bound `_block_select_cache` to the active decode-ring step window.
+
+        block_topk recomputes its keep set every decode step, so a long
+        generation would otherwise accumulate one entry per (layer, step)
+        unboundedly. The decode ring keeps the most recent `decode_window`
+        steps; we mirror that horizon here. The block-stats accumulator runs in
+        the same forward as the pre-hook that fills this cache, so an entry is
+        always consumed before it is evicted.
+        """
+        window = max(1, int(self.config.decode_window))
+        if not self._block_select_cache:
+            return
+        max_step = max(step for _layer, step in self._block_select_cache)
+        cutoff = max_step - window
+        if cutoff < 0:
+            return
+        stale = [key for key in self._block_select_cache if key[1] <= cutoff]
+        for key in stale:
+            del self._block_select_cache[key]
+
+    def _accumulate_block_head_stats(
+        self,
+        *,
+        layer_idx: int,
+        decode_step: int,
+        attn: Any,
+        key_len: int,
+    ) -> None:
+        """Accumulate per-selected-block within-block attention mean/std (decode).
+
+        Bucket axis is `[sink, rank1..R_max, recent]`:
+          - col 0          : sink prefix  (pos < sink_size)
+          - col 1..R_max   : selection rank r — only positions in the rank's
+                             block range AND in kept_positions_set (the exact
+                             set cap_middle_selection retained). This ensures we
+                             never include keys that were block_topk-ranked but
+                             not actually retained after budget truncation, and
+                             that partial blocks only count kept positions.
+          - col R_max + 1  : recent window (pos >= key_len - recent_window)
+
+        `R_max = ceil(budget / block_size)` — one extra slot covers the partial
+        trailing block common at real budgets. Trailing rank columns with no
+        selected block stay NaN (kept_count 0), never zero-filled.
+
+        `attn` is `[H, 1, K]` (query head count H under GQA, Q == 1).
+
+        Raises if called without a valid (layer_idx, decode_step) cache entry —
+        a missing entry means the pre-hook wiring is broken, which is a bug, not
+        a "no blocks selected" condition (that would produce an empty kept_set).
+        """
+        import torch
+
+        method = self._sparse_attention
+        if not _is_block_topk(method):
+            raise RuntimeError(
+                "block-stats accumulation requires an active block_topk method; "
+                f"got {getattr(method, 'name', None)!r}"
+            )
+        block_size = int(method.block_size)
+        sink_size = int(method.sink_size)
+        recent_window = int(method.recent_window)
+        budget = int(method.budget)
+        # ceil division: covers the partial trailing block (no data = NaN, harmless).
+        r_max = -(-budget // block_size)
+        n_buckets = r_max + 2  # sink + R_max ranks + recent
+
+        H = int(attn.shape[0])
+        K = int(attn.shape[2])
+        if K != int(key_len):
+            raise RuntimeError(
+                f"block-stats key_len mismatch: attn K={K}, reported key_len={key_len}"
+            )
+        attn_f = attn.detach().to(dtype=torch.float32)
+        pos = torch.arange(K, device=attn.device)
+
+        cache_entry = self._block_select_cache.get((layer_idx, decode_step))
+        if cache_entry is None:
+            # Missing entry = wiring bug (pre-hook should always fill this before
+            # the capture hook fires in the same forward pass). Fail loud.
+            raise RuntimeError(
+                f"block-stats: no cache entry for (layer={layer_idx}, "
+                f"decode_step={decode_step}). The pre-hook must populate "
+                "_block_select_cache before the attention-capture hook runs."
+            )
+        selected_blocks_kept, kept_positions_set = cache_entry
+
+        # Build a boolean tensor of kept positions once; rank masks AND into it
+        # so partial blocks only count retained keys.
+        if kept_positions_set:
+            kept_pos_t = torch.tensor(
+                sorted(kept_positions_set), dtype=torch.long, device=attn.device
+            )
+            kept_bool = torch.zeros(K, dtype=torch.bool, device=attn.device)
+            # clamp against K in case metadata carries stale indices
+            valid = kept_pos_t[kept_pos_t < K]
+            if valid.numel() > 0:
+                kept_bool[valid] = True
+        else:
+            kept_bool = torch.zeros(K, dtype=torch.bool, device=attn.device)
+
+        mean = torch.full((H, n_buckets), float("nan"), dtype=torch.float32, device=attn.device)
+        var = torch.full((H, n_buckets), float("nan"), dtype=torch.float32, device=attn.device)
+        kept_count = torch.zeros(n_buckets, dtype=torch.int32, device=attn.device)
+        # block id per rank column (1-based rank -> col 1..R_max); -1 = no block.
+        selected_block_id = [-1] * r_max
+
+        # Bucket 0: sink (not subject to budget truncation — always kept).
+        bucket_masks: list[Any] = [pos < sink_size]
+        # Buckets 1..R_max: rank r uses the block range intersected with kept_bool.
+        for r in range(r_max):
+            if r < len(selected_blocks_kept):
+                b = int(selected_blocks_kept[r])
+                selected_block_id[r] = b
+                start = b * block_size
+                block_range = (pos >= start) & (pos < start + block_size)
+                # Intersect with actually-retained positions: fixes the 🔴 bug where
+                # block-range mask alone includes positions beyond budget cap.
+                bucket_masks.append(block_range & kept_bool)
+            else:
+                bucket_masks.append(torch.zeros(K, dtype=torch.bool, device=attn.device))
+        # Bucket R_max+1: recent window (always kept by construction).
+        bucket_masks.append(pos >= (K - recent_window))
+
+        for col, mask in enumerate(bucket_masks):
+            if not bool(mask.any()):
+                continue
+            vals = attn_f[:, :, mask]  # [H, 1, |bucket|]
+            mean[:, col] = vals.mean(dim=-1).squeeze(-1)
+            var[:, col] = vals.var(dim=-1, unbiased=False).squeeze(-1)
+            kept_count[col] = int(mask.sum().item())
+
+        self._block_head_stats[(layer_idx, decode_step)] = {
+            "mean": mean,
+            "var": var,
+            "kept_count": kept_count,
+            "selected_block_id": selected_block_id,
+            "n_buckets": n_buckets,
+            "r_max": r_max,
+        }
 
     def _key_states(
         self,
@@ -1909,6 +2122,97 @@ class LayerCapturer:
             "head_span_kept_token_count_decode": decode_kept_count,
         }
 
+    def _build_block_head_span_arrays(self) -> dict[str, np.ndarray]:
+        """Build decode-only per-selected-block within-block stat arrays.
+
+        Mirrors `_build_head_span_arrays`'s decode branch, but the last axis is
+        the fixed bucket layout `[sink, rank1..R_max, recent]` (C = R_max + 2)
+        instead of segment roles. When `per_head_block_stats` is disabled every
+        array has a 0-size leading axis (shape-stable, like the empty head_span
+        convention). NaN marks buckets with no kept key at a (layer, step, head);
+        the matching kept-count array is the explicit NaN denominator.
+        """
+        import torch
+
+        disabled = not self.config.per_head_block_stats
+        layers = sorted(self.config.per_head_stats_layers)
+        L_s = 0 if disabled else len(layers)
+
+        method = self._sparse_attention
+        if disabled or not _is_block_topk(method):
+            block_size = sink_size = recent_window = 0
+            r_max = 0
+        else:
+            block_size = int(method.block_size)
+            sink_size = int(method.sink_size)
+            recent_window = int(method.recent_window)
+            r_max = -(-int(method.budget) // block_size)
+        C = r_max + 2 if not disabled else 0
+
+        # Query-head count from any stored entry (decode mean is [H, C]).
+        H = 0
+        for entry in self._block_head_stats.values():
+            H = int(entry["mean"].shape[0])
+            break
+
+        decode_keys_by_layer: dict[int, list[int]] = {layer: [] for layer in layers}
+        for (l_idx, step) in self._block_head_stats:
+            if l_idx in decode_keys_by_layer:
+                decode_keys_by_layer[l_idx].append(step)
+        decode_counts = [len(decode_keys_by_layer[layer]) for layer in layers]
+        T_max = max(decode_counts) if (decode_counts and not disabled) else 0
+
+        block_mean = np.full((L_s, T_max, H, C), np.nan, dtype=np.float32)
+        block_var = np.full((L_s, T_max, H, C), np.nan, dtype=np.float32)
+        block_step = np.full((L_s, T_max), -1, dtype=np.int32)
+        block_kept = np.zeros((L_s, T_max, C), dtype=np.int32)
+        block_selected_id = np.full((L_s, T_max, r_max), -1, dtype=np.int32)
+        block_decode_n = np.asarray(decode_counts if not disabled else [], dtype=np.int32)
+
+        if not disabled:
+            for li, layer in enumerate(layers):
+                steps = sorted(decode_keys_by_layer[layer])
+                for ti, step in enumerate(steps):
+                    entry = self._block_head_stats.get((layer, step))
+                    if entry is None:
+                        continue
+                    mean_arr = entry["mean"]
+                    var_arr = entry["var"]
+                    kept_arr = entry["kept_count"]
+                    if isinstance(mean_arr, torch.Tensor):
+                        mean_arr = mean_arr.detach().cpu().numpy()
+                    if isinstance(var_arr, torch.Tensor):
+                        var_arr = var_arr.detach().cpu().numpy()
+                    if isinstance(kept_arr, torch.Tensor):
+                        kept_arr = kept_arr.detach().cpu().numpy()
+                    has_keys = kept_arr > 0  # [C]
+                    for col in range(C):
+                        if has_keys[col]:
+                            block_mean[li, ti, :, col] = (
+                                mean_arr[:, col].astype(np.float16).astype(np.float32)
+                            )
+                            block_var[li, ti, :, col] = var_arr[:, col]
+                    block_kept[li, ti] = kept_arr
+                    block_step[li, ti] = step
+                    block_selected_id[li, ti] = np.asarray(
+                        entry["selected_block_id"], dtype=np.int32
+                    )
+
+        return {
+            "block_span_layers": np.asarray(
+                layers if not disabled else [], dtype=np.int32
+            ),
+            "block_span_mean_decode": block_mean.astype(np.float16),
+            "block_span_var_decode": block_var.astype(np.float32),
+            "block_span_decode_step": block_step,
+            "block_span_decode_n": block_decode_n,
+            "block_span_selected_block_id": block_selected_id,
+            "block_span_kept_token_count_decode": block_kept,
+            "block_span_block_size": np.int32(block_size),
+            "block_span_sink_size": np.int32(sink_size),
+            "block_span_recent_window": np.int32(recent_window),
+        }
+
     def _write_attention_npz(self, path: Path, segments: list[dict[str, Any]]) -> None:
         n_segments = len(segments)
         records = [*self._prefill_records, *self._decode_records.to_list()]
@@ -1971,6 +2275,7 @@ class LayerCapturer:
             generated_segment_id=int(self._session["generated_segment_id"]),
         )
         head_span_arrays = self._build_head_span_arrays(n_segments)
+        block_head_span_arrays = self._build_block_head_span_arrays()
         np.savez_compressed(
             path,
             call_idx=np.asarray(self._session["call_idx"], dtype=np.int32),
@@ -2008,6 +2313,7 @@ class LayerCapturer:
             else np.zeros((0, k), dtype=np.float32),
             n_query_rows=np.asarray(n_rows, dtype=np.int64),
             **head_span_arrays,
+            **block_head_span_arrays,
         )
 
     def _write_routing_npz(self, path: Path, n_segments: int) -> None:
