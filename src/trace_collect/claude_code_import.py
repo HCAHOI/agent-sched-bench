@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 SCAFFOLD_LABEL = "claude-code"
 V5_FORMAT_VERSION = 5
 _TOOL_RESULT_MAX_CHARS = 8000  # storage cap; viewer truncates display separately
+_SNIFF_MAX_RECORDS = 20
 
 # Distinguishes native Claude Code filenames from copied ``trace.jsonl`` files.
 _UUID_RE = re.compile(
@@ -86,8 +87,6 @@ def _harvest_session_metadata(session_path: Path) -> dict[str, Any]:
 
 def looks_like_claude_code_session(
     session_path: Path,
-    *,
-    max_records: int = 20,
 ) -> bool:
     """Best-effort sniff for raw Claude Code session JSONL."""
 
@@ -112,7 +111,7 @@ def looks_like_claude_code_session(
                 return True
 
             seen_records += 1
-            if seen_records >= max_records:
+            if seen_records >= _SNIFF_MAX_RECORDS:
                 return False
 
     return False
@@ -327,8 +326,6 @@ def _convert_session_records(
                     "llm_content": llm_content_preview,
                     # Backfill: Claude-specific fields preserved under data.*
                     "message_id": message.get("id", ""),
-                    # records since CC CLI 2.1.96). Empty string when
-                    # absent so the schema is stable across versions.
                     "request_id": record.get("requestId", "") or "",
                     "cache_read_tokens": usage.get("cache_read_input_tokens", 0) or 0,
                     "cache_creation_tokens": usage.get(

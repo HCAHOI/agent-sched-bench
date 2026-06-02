@@ -56,8 +56,13 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
 )
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "")
+def mcp_config_label(mcp_config: str | None) -> str | None:
+    """Map ``--mcp-config`` to the value stored in trace metadata."""
+    if mcp_config is None:
+        return None
+    if mcp_config == "none":
+        return "none"
+    return Path(mcp_config).name
 
 
 @dataclass
@@ -115,9 +120,6 @@ def start_task_container(
     network_mode: str = "host",
 ) -> str:
     """Launch the task container and return its id."""
-    import os
-    import subprocess
-
     home_dir = os.environ.get("HOME", "/root")
     cmd = [
         executable,
@@ -153,8 +155,6 @@ def start_task_container(
 
 def stop_task_container(container_id: str, *, executable: str) -> str:
     """Capture container logs then stop and remove it. Returns log text."""
-    import subprocess
-
     logs_text = ""
     try:
         logs = subprocess.run(
@@ -495,7 +495,6 @@ async def run_attempt(
             recording_provider.finish_attempt(
                 trace_path=trace_path if trace_path and trace_path.exists() else None
             )
-
 
     trace_file = ctx.attempt_dir / attempt_layout.TRACE_FILENAME
     if result is not None and result.tool_calls:

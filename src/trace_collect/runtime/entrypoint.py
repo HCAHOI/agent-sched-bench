@@ -41,6 +41,10 @@ def _runtime_proof(container_id: str | None = None) -> dict[str, Any]:
     }
 
 
+def _agent_runtime_proof(request: dict[str, Any]) -> dict[str, Any]:
+    return {**_runtime_proof(request.get("container_id")), "agent_runtime_mode": request.get("agent_runtime_mode", "task_container_agent")}
+
+
 def _write_result(result_path: str, payload: dict[str, Any]) -> None:
     path = Path(result_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,12 +157,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         "total_llm_ms": total_llm_ms,
         "total_tool_ms": total_tool_ms,
         "total_tokens": total_tokens,
-        "runtime_proof": {
-            **_runtime_proof(request.get("container_id")),
-            "agent_runtime_mode": request.get(
-                "agent_runtime_mode", "task_container_agent"
-            ),
-        },
+        "runtime_proof": _agent_runtime_proof(request),
     }
     _write_result(request["result_path"], payload)
     return payload
@@ -203,12 +202,7 @@ def main() -> None:
                     "total_llm_ms": None,
                     "total_tool_ms": None,
                     "total_tokens": None,
-                    "runtime_proof": {
-                        **_runtime_proof(request.get("container_id")),
-                        "agent_runtime_mode": request.get(
-                            "agent_runtime_mode", "task_container_agent"
-                        ),
-                    },
+                    "runtime_proof": _agent_runtime_proof(request),
                 },
             )
         raise

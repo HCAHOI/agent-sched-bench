@@ -50,9 +50,7 @@ def main(argv: list[str] | None = None) -> int:
                 _ = engine.generate([prompt], sampling_params=_sampling_params(completion_tokens))
                 # record_step() runs inside the timed region. profile-gpu is
                 # explicitly NOT a timing benchmark (hook overhead pollutes
-                # latency); ts_end here is for ordering only. If you swap the
-                # measurement callback for peak-tracking with reset_peak_*,
-                # consider moving record_step() outside the timed region.
+                # latency); ts_end here is for ordering only.
                 profiler.record_step()
                 ts_end = time.time()
                 step = profiler.steps[-1]

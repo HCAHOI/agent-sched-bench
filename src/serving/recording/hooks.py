@@ -108,18 +108,6 @@ class _PendingNumpyArray:
             return array.astype(self.dtype, copy=False)
         return array
 
-    def __array__(self, dtype: Any = None) -> np.ndarray:
-        array = self.materialize()
-        if dtype is None:
-            return array
-        return array.astype(dtype, copy=False)
-
-    def astype(self, *args: Any, **kwargs: Any) -> np.ndarray:
-        return self.materialize().astype(*args, **kwargs)
-
-    def copy(self) -> np.ndarray:
-        return self.materialize().copy()
-
 
 def _stage_numpy(tensor: Any, dtype: Any) -> _PendingNumpyArray:
     import torch
@@ -1472,7 +1460,6 @@ class LayerCapturer:
         row_indices: list[int],
         query_positions: list[int],
         layer: int,
-        full_prefill: bool = False,
     ) -> tuple[Any, Any]:
         """Return (attn_full, attn_rows) where attn_full is [1, H, Q, K] pre-head-mean."""
         attn = self._attention_tensor(
@@ -1489,7 +1476,7 @@ class LayerCapturer:
             attn=attn,
             query_positions=query_positions,
             key_len=int(key_states.shape[-2]),
-            full_prefill=full_prefill,
+            full_prefill=False,
         )
         return attn, attn[0].reshape(attn.shape[1] * len(row_indices), int(key_states.shape[-2]))
 
@@ -1709,21 +1696,12 @@ class LayerCapturer:
         self._routing_decode_steps[layer] = step + 1
         return "decode", step
 
-    def _advance_routing_decode_step(self, layer: int) -> tuple[str, int]:
-        if layer < 0:
-            return "mixed", -1
-        step = self._routing_decode_steps.get(layer, 0)
-        self._routing_seen_prefill.add(layer)
-        self._routing_decode_steps[layer] = step + 1
-        return "decode", step
-
     def _routing_phase_for_logits(
         self,
         *,
         layer: int,
         n_tokens: int,
         total_tokens: int,
-        nested_path: tuple[int, ...],
     ) -> tuple[str, int]:
         assert self._session is not None
         input_tokens = int(self._session["input_token_count"])
@@ -1755,7 +1733,6 @@ class LayerCapturer:
                 layer=layer,
                 n_tokens=int(logits.shape[0]),
                 total_tokens=total_tokens,
-                nested_path=path,
             )
             token_ids = self._routing_token_ids(
                 n_tokens=int(logits.shape[0]),

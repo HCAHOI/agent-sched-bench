@@ -54,11 +54,10 @@ _OPENCLAW_MESSAGE_ID_KEY = "_openclaw_message_id"
 _ALNUM = string.ascii_letters + string.digits
 _MAX_TORCH_SEED = (2**63) - 1
 # Debug escape hatch for byte-equality validation: when set to a truthy value
-# the provider falls back to the pre-default-on path (fresh prompt every call,
-# no session-shared KV cache, no LCP delta). Use only to A/B verify that
-# enabling the session cache produces identical greedy decodes — default is
-# enabled. Sparse/eviction policies that *require* a session cache will still
-# build one when their config is provided.
+# the provider sends the full prompt every call with no past_key_values and no
+# LCP delta. Use only to A/B verify that the session cache produces identical
+# greedy decodes — default is enabled. Sparse/eviction policies that *require*
+# a session cache will still build one when their config is provided.
 _SESSION_CACHE_DISABLED_ENV = "OMC_DISABLE_SESSION_CACHE"
 
 
@@ -940,8 +939,8 @@ class HFRecordingProvider(LLMProvider):
         """Append the audit-log entry for a 'no session cache this call' path.
 
         Used by both the env-var escape hatch and the per-method opt-out
-        (`requires_full_prefill=True`). Mirrors the legacy pre-default-on
-        accounting: `used_session_cache=False`, `lcp=0`, `delta_len=new_len`.
+        (`requires_full_prefill=True`). Records the disabled-cache accounting:
+        `used_session_cache=False`, `lcp=0`, `delta_len=new_len`.
         """
         self._session_history.append(
             {
@@ -971,9 +970,8 @@ class HFRecordingProvider(LLMProvider):
         """
         new_len = int(prompt_ids.shape[-1])
         # Debug escape hatch: env-var bypass for byte-equality A/B validation.
-        # When set, behaves identically to the pre-default-on code path (full
-        # prompt every call, no past_key_values supplied). Document usage with
-        # OMC_DISABLE_SESSION_CACHE=1; default behavior is enabled.
+        # When set: full prompt every call, no past_key_values supplied.
+        # Document usage with OMC_DISABLE_SESSION_CACHE=1; default is enabled.
         if _session_cache_disabled():
             self._record_disabled_session_history(
                 call_idx=call_idx, new_len=new_len
@@ -1327,7 +1325,7 @@ class HFRecordingProvider(LLMProvider):
                 ).to(self._input_device())
             else:
                 # Escape hatch (OMC_DISABLE_SESSION_CACHE=1): stock DynamicCache,
-                # full prompt each call. Matches the pre-default-on path exactly.
+                # full prompt each call, no past_key_values.
                 generation_kwargs["attention_mask"] = self._torch.ones_like(
                     input_tensor
                 )

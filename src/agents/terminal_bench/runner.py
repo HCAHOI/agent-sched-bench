@@ -16,7 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from trace_collect.attempt_pipeline import AttemptContext, AttemptResult
+from trace_collect.attempt_pipeline import (
+    AttemptContext,
+    AttemptResult,
+    mcp_config_label,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,7 +103,7 @@ class TerminalBenchRunner:
             or self.DEFAULT_TB_PROCESS_CLEANUP_GRACE_SEC
         )
         self.mcp_config = self._resolve_mcp_config(mcp_config)
-        self.mcp_config_label = self._mcp_config_label(mcp_config)
+        self.mcp_config_label = mcp_config_label(mcp_config)
         self._install_global_signal_handlers()
 
     async def run_openclaw_task(
@@ -867,11 +871,3 @@ class TerminalBenchRunner:
         if mcp_config in {None, "none"}:
             return None
         return str(Path(mcp_config).expanduser().resolve())
-
-    @staticmethod
-    def _mcp_config_label(mcp_config: str | None) -> str | None:
-        if mcp_config is None:
-            return None
-        if mcp_config == "none":
-            return "none"
-        return Path(mcp_config).name

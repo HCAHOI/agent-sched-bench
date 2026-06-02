@@ -82,8 +82,8 @@ def token_segment_ids(
     fill = -1 if generated_segment_id is None else generated_segment_id
     ids = torch.full((total_tokens,), fill, dtype=torch.long)
     for idx, segment in enumerate(segments):
-        start = int(segment.get("token_start", segment.get("start", 0)))
-        end = int(segment.get("token_end", segment.get("end", 0)))
+        start = int(segment.get("token_start", 0))
+        end = int(segment.get("token_end", 0))
         if start < 0 or end < start:
             raise ValueError(f"invalid segment bounds: {segment}")
         if start >= total_tokens:

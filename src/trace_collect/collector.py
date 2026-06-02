@@ -32,6 +32,7 @@ from harness.container_image_prep import (
 from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
+    mcp_config_label,
     run_attempt,
     start_task_container,
     stop_task_container,
@@ -72,15 +73,6 @@ def _recording_server_public_host(
 _ATTEMPT_DIR_NAME_RE = re.compile(r"^attempt_(\d+)$")
 
 
-def _mcp_config_label(mcp_config: str | None) -> str | None:
-    """Map ``--mcp-config`` to the value stored in trace metadata."""
-    if mcp_config is None:
-        return None
-    if mcp_config == "none":
-        return "none"
-    return Path(mcp_config).name
-
-
 def load_mcp_servers(mcp_config: str | None) -> dict:
     """Parse a ``--mcp-config`` argument into ``dict[str, MCPServerConfig]``."""
     if mcp_config is None or mcp_config == "none":
@@ -111,12 +103,6 @@ def load_mcp_servers(mcp_config: str | None) -> dict:
             )
         servers[name] = MCPServerConfig.model_validate(entry)
     return servers
-
-
-def _read_text_if_exists(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _generation_config(
@@ -966,7 +952,7 @@ async def _run_openclaw_in_task_container(
             api_base=api_base,
             max_iterations=max_iterations,
             instance_id=ctx.instance_id,
-            mcp_config_label=_mcp_config_label(mcp_config),
+            mcp_config_label=mcp_config_label(mcp_config),
             prompt_template=ctx.prompt_template,
             agent_runtime_mode=ctx.agent_runtime_mode,
             runtime_proof=runtime_proof,

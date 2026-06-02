@@ -760,10 +760,6 @@ def _run_collect(args: argparse.Namespace) -> None:
         print(f"Results written to: {results_path}")
 
 
-def _resolve_simulate_output_dir(args: argparse.Namespace) -> Path:
-    """Return the base dir; structured subpath is resolved by simulator.simulate() when at default."""
-    return Path(args.output_dir)
-
 
 def _run_simulate(args: argparse.Namespace) -> None:
     logging.basicConfig(
@@ -783,7 +779,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "source_trace": Path(args.source_trace) if args.source_trace else None,
         "trace_manifest": Path(args.trace_manifest) if args.trace_manifest else None,
         "task_source": Path(args.task_source),
-        "output_dir": _resolve_simulate_output_dir(args),
+        "output_dir": Path(args.output_dir),
         "mode": args.mode,
         "container_executable": args.container,
         "network_mode": args.network_mode,
@@ -839,7 +835,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     gpu_tracking_kwargs: dict = {}
-    if getattr(args, "gpu_tracking", "off") == "on":
+    if args.gpu_tracking == "on":
         from harness.vllm_startup_parser import parse_startup_log_file
 
         gpu_baseline = parse_startup_log_file(args.vllm_startup_log)

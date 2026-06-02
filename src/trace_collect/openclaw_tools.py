@@ -18,24 +18,21 @@ def _unwrap_tool_args(
     *,
     tool_name: str | None,
     tool_args_json: str,
-) -> tuple[str | None, dict[str, Any], bool]:
-    """Return (resolved_tool_name, params, is_nested_openclaw_style)."""
-    try:
-        parsed = json.loads(tool_args_json or "{}")
-    except json.JSONDecodeError:
-        raise
+) -> tuple[str | None, dict[str, Any]]:
+    """Return (resolved_tool_name, params)."""
+    parsed = json.loads(tool_args_json or "{}")
     if not isinstance(parsed, dict):
-        return tool_name, {}, False
+        return tool_name, {}
 
     if tool_name and isinstance(parsed.get(tool_name), dict):
-        return tool_name, parsed[tool_name], True
+        return tool_name, parsed[tool_name]
 
     if len(parsed) == 1:
         only_name, only_value = next(iter(parsed.items()))
         if isinstance(only_value, dict):
-            return (tool_name or only_name), only_value, True
+            return (tool_name or only_name), only_value
 
-    return tool_name, parsed, False
+    return tool_name, parsed
 
 
 def _resolve_exec_timeout_s(params: dict[str, Any]) -> float:
@@ -435,7 +432,7 @@ async def execute_trace_tool(
 ) -> tuple[str, bool, float | None]:
     """Execute one trace tool call via the persistent in-container agent."""
 
-    resolved_name, params, _nested = _unwrap_tool_args(
+    resolved_name, params = _unwrap_tool_args(
         tool_name=tool_name,
         tool_args_json=tool_args_json,
     )
