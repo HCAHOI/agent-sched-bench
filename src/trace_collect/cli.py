@@ -562,9 +562,10 @@ def main() -> None:
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+_QWEN3_CODER_30B_LAYERS: tuple[int, ...] = (0, 6, 12, 18, 24, 30, 36, 47)
 _PER_HEAD_STATS_PRESETS: dict[str, tuple[int, ...]] = {
-    "qwen3-coder-30b": (0, 6, 12, 18, 24, 30, 36, 47),
-    "default": (0, 6, 12, 18, 24, 30, 36, 47),
+    "qwen3-coder-30b": _QWEN3_CODER_30B_LAYERS,
+    "default": _QWEN3_CODER_30B_LAYERS,
 }
 
 

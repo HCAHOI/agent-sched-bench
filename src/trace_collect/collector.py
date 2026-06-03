@@ -7,7 +7,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import logging
 import os
-import re
 import shutil
 import time
 from dataclasses import asdict, dataclass
@@ -33,7 +32,9 @@ from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
     mcp_config_label,
+    next_attempt_number_in,
     run_attempt,
+    sanitize_path_segment,
     start_task_container,
     stop_task_container,
 )
@@ -68,9 +69,6 @@ def _recording_server_public_host(
     ):
         return _DOCKER_HOST_GATEWAY
     return None
-
-
-_ATTEMPT_DIR_NAME_RE = re.compile(r"^attempt_(\d+)$")
 
 
 def load_mcp_servers(mcp_config: str | None) -> dict:
@@ -154,7 +152,7 @@ class CollectedTaskResult:
 def build_run_dir(benchmark: "Benchmark", model: str) -> Path:
     """Build run directory from benchmark plugin config: ``trace_root/model/ts/``."""
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
-    safe_model = model.replace("/", "-").replace(":", "-")
+    safe_model = sanitize_path_segment(model)
     return benchmark.config.trace_root / safe_model / ts
 
 
@@ -185,19 +183,7 @@ def load_completed_ids(run_dir: Path) -> set[str]:
 
 def next_attempt_number(run_dir: Path, instance_id: str) -> int:
     """Return the next attempt index for ``run_dir/instance_id``."""
-    instance_dir = run_dir / instance_id
-    if not instance_dir.exists():
-        return 1
-
-    max_attempt = 0
-    for child in instance_dir.iterdir():
-        if not child.is_dir():
-            continue
-        match = _ATTEMPT_DIR_NAME_RE.fullmatch(child.name)
-        if match is None:
-            continue
-        max_attempt = max(max_attempt, int(match.group(1)))
-    return max_attempt + 1
+    return next_attempt_number_in(run_dir / instance_id)
 
 
 def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) -> None:
@@ -715,6 +701,12 @@ async def collect_traces(
         )
 
 
+def _set_run_config(merged: dict[str, Any], key: str, value: Any) -> None:
+    run_config = merged.get("run_config") or {}
+    run_config[key] = value
+    merged["run_config"] = run_config
+
+
 def _normalize_openclaw_trace(
     src: Path,
     dst: Path,
@@ -778,17 +770,11 @@ def _normalize_openclaw_trace(
     merged["trace_format_version"] = 5
     merged["execution_environment"] = execution_environment
     if mcp_config_label is not None:
-        run_config = merged.get("run_config") or {}
-        run_config["mcp_config"] = mcp_config_label
-        merged["run_config"] = run_config
+        _set_run_config(merged, "mcp_config", mcp_config_label)
     if record_internals:
-        run_config = merged.get("run_config") or {}
-        run_config["record_internals"] = True
-        merged["run_config"] = run_config
+        _set_run_config(merged, "record_internals", True)
     if generation_config:
-        run_config = merged.get("run_config") or {}
-        run_config["generation"] = dict(generation_config)
-        merged["run_config"] = run_config
+        _set_run_config(merged, "generation", dict(generation_config))
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, "w", encoding="utf-8") as f:

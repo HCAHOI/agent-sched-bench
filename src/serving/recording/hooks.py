@@ -1711,6 +1711,29 @@ class LayerCapturer:
             return self._advance_routing_step(layer, n_tokens=n_tokens)
         return "mixed", -1
 
+    def _append_routing_record(
+        self,
+        *,
+        path_str: str,
+        layer: int,
+        phase: str,
+        decode_step: int,
+        expert_choice: Any,
+        expert_weight: Any,
+        expert_load: Any,
+        routing_counts: dict,
+    ) -> None:
+        self._routing_records.append({
+            "path": path_str,
+            "layer": layer,
+            "phase": phase,
+            "decode_step": decode_step,
+            "expert_choice": expert_choice,
+            "expert_weight": expert_weight,
+            "expert_load": expert_load,
+            **routing_counts,
+        })
+
     def record_router_logits(self, outputs: Any, *, total_tokens: int) -> None:
         router_logits = getattr(outputs, "router_logits", None)
         if router_logits is None and isinstance(outputs, dict):
@@ -1719,11 +1742,7 @@ class LayerCapturer:
             return
 
         n_segments = self._session["generated_segment_id"] + 1
-        top_k_experts = int(
-            self.model_summary.get("num_experts_per_tok")
-            or self.model_summary.get("num_experts_per_token")
-            or 1
-        )
+        top_k_experts = self._top_k_experts()
         for path, tensor in self._iter_tensors(router_logits):
             if tensor.ndim < 2:
                 continue
@@ -1752,18 +1771,24 @@ class LayerCapturer:
                 n_segments=n_segments,
                 n_experts=int(logits.shape[-1]),
             )
-            self._routing_records.append(
-                {
-                    "path": ".".join(str(part) for part in path),
-                    "layer": layer,
-                    "phase": phase,
-                    "decode_step": decode_step,
-                    "expert_choice": _stage_numpy(choices, np.int32),
-                    "expert_weight": _stage_numpy(weights, np.float32),
-                    "expert_load": _stage_numpy(load, np.float32),
-                    **routing_counts,
-                }
+            self._append_routing_record(
+                path_str=".".join(str(part) for part in path),
+                layer=layer,
+                phase=phase,
+                decode_step=decode_step,
+                expert_choice=_stage_numpy(choices, np.int32),
+                expert_weight=_stage_numpy(weights, np.float32),
+                expert_load=_stage_numpy(load, np.float32),
+                routing_counts=routing_counts,
             )
+
+    def _top_k_experts(self) -> int:
+        """Top-k experts per token from the model summary (fallback 1)."""
+        return int(
+            self.model_summary.get("num_experts_per_tok")
+            or self.model_summary.get("num_experts_per_token")
+            or 1
+        )
 
     def _record_router_tensor(
         self,
@@ -1775,11 +1800,7 @@ class LayerCapturer:
         if self._session is None or tensor is None or tensor.ndim < 2:
             return
         n_segments = self._session["generated_segment_id"] + 1
-        top_k_experts = int(
-            self.model_summary.get("num_experts_per_tok")
-            or self.model_summary.get("num_experts_per_token")
-            or 1
-        )
+        top_k_experts = self._top_k_experts()
         logits = tensor.reshape(-1, tensor.shape[-1])
         phase, decode_step = self._advance_routing_step(
             layer=layer,
@@ -1803,17 +1824,15 @@ class LayerCapturer:
             n_segments=n_segments,
             n_experts=int(logits.shape[-1]),
         )
-        self._routing_records.append(
-            {
-                "path": ".".join(path),
-                "layer": layer,
-                "phase": phase,
-                "decode_step": decode_step,
-                "expert_choice": _as_numpy(choices).astype(np.int32),
-                "expert_weight": _as_numpy(weights).astype(np.float32),
-                "expert_load": _as_numpy(load).astype(np.float32),
-                **routing_counts,
-            }
+        self._append_routing_record(
+            path_str=".".join(path),
+            layer=layer,
+            phase=phase,
+            decode_step=decode_step,
+            expert_choice=_as_numpy(choices).astype(np.int32),
+            expert_weight=_as_numpy(weights).astype(np.float32),
+            expert_load=_as_numpy(load).astype(np.float32),
+            routing_counts=routing_counts,
         )
 
     def _current_input_token_ids(self, *, n_tokens: int):

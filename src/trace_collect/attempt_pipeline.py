@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -54,6 +55,29 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "NANOBOT_STREAM_IDLE_TIMEOUT_S",
     "OPENCLAW_LLM_TIMEOUT_S",
 )
+
+
+_ATTEMPT_DIR_RE = re.compile(r"^attempt_(\d+)$")
+
+
+def next_attempt_number_in(instance_dir: Path) -> int:
+    """Return the next attempt_<N> index for a pre-joined instance dir."""
+    if not instance_dir.exists():
+        return 1
+    max_attempt = 0
+    for child in instance_dir.iterdir():
+        if not child.is_dir():
+            continue
+        match = _ATTEMPT_DIR_RE.fullmatch(child.name)
+        if match is None:
+            continue
+        max_attempt = max(max_attempt, int(match.group(1)))
+    return max_attempt + 1
+
+
+def sanitize_path_segment(value: str) -> str:
+    """Replace path-hostile chars (/ and :) with '-' for one path segment."""
+    return value.replace("/", "-").replace(":", "-")
 
 
 def mcp_config_label(mcp_config: str | None) -> str | None:

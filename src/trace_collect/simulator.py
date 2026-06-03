@@ -4,7 +4,6 @@ import asyncio
 import dataclasses
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,7 +20,12 @@ from harness.scheduler_hooks import GpuBaseline
 from harness.trace_logger import TraceLogger
 from llm_call import create_async_openai_client
 from trace_collect import attempt_layout
-from trace_collect.attempt_pipeline import start_task_container, stop_task_container
+from trace_collect.attempt_pipeline import (
+    next_attempt_number_in,
+    sanitize_path_segment,
+    start_task_container,
+    stop_task_container,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -233,23 +237,7 @@ def _iteration_count(actions: list[dict[str, Any]]) -> int:
 
 
 def _sanitize_run_label(value: str) -> str:
-    return value.replace("/", "-").replace(":", "-").replace(" ", "-")
-
-
-_ATTEMPT_DIR_RE = re.compile(r"^attempt_(\d+)$")
-
-
-def _next_attempt_number(instance_dir: Path) -> int:
-    if not instance_dir.exists():
-        return 1
-    max_n = 0
-    for child in instance_dir.iterdir():
-        if not child.is_dir():
-            continue
-        match = _ATTEMPT_DIR_RE.fullmatch(child.name)
-        if match:
-            max_n = max(max_n, int(match.group(1)))
-    return max_n + 1
+    return sanitize_path_segment(value).replace(" ", "-")
 
 
 def _arrival_tag(arrival_mode: str, arrival_rate_per_s: float | None) -> str:
@@ -310,6 +298,27 @@ def _coerce_timestamp(
         raise SimulateError(
             f"{source_trace} action {action_id!r} is missing a numeric {field}"
         ) from exc
+
+
+def _coerce_action_bounds(
+    action: dict[str, Any],
+    *,
+    source_trace: Path,
+) -> tuple[float, float]:
+    action_id = str(action.get("action_id", ""))
+    ts_start = _coerce_timestamp(
+        action.get("ts_start"),
+        field="ts_start",
+        source_trace=source_trace,
+        action_id=action_id,
+    )
+    ts_end = _coerce_timestamp(
+        action.get("ts_end"),
+        field="ts_end",
+        source_trace=source_trace,
+        action_id=action_id,
+    )
+    return ts_start, ts_end
 
 
 def _load_trace_session(
@@ -436,18 +445,7 @@ def _validate_loaded_sessions(
 
         for action in session.actions:
             action_id = str(action.get("action_id", ""))
-            ts_start = _coerce_timestamp(
-                action.get("ts_start"),
-                field="ts_start",
-                source_trace=session.source_trace,
-                action_id=action_id,
-            )
-            ts_end = _coerce_timestamp(
-                action.get("ts_end"),
-                field="ts_end",
-                source_trace=session.source_trace,
-                action_id=action_id,
-            )
+            ts_start, ts_end = _coerce_action_bounds(action, source_trace=session.source_trace)
             if ts_end < ts_start:
                 raise SimulateError(
                     f"{session.source_trace} action {action_id!r} has ts_end < ts_start"
@@ -950,18 +948,7 @@ async def _replay_cloud_model_session(
         action_type = str(action.get("action_type", ""))
         iteration = int(action.get("iteration", 0))
         data = action.get("data", {})
-        action_ts_start = _coerce_timestamp(
-            action.get("ts_start"),
-            field="ts_start",
-            source_trace=loaded.source_trace,
-            action_id=action_id,
-        )
-        action_ts_end = _coerce_timestamp(
-            action.get("ts_end"),
-            field="ts_end",
-            source_trace=loaded.source_trace,
-            action_id=action_id,
-        )
+        action_ts_start, action_ts_end = _coerce_action_bounds(action, source_trace=loaded.source_trace)
         source_duration_s = max(0.0, action_ts_end - action_ts_start)
 
         await _sleep_until_offset(
@@ -1240,7 +1227,7 @@ async def simulate(
 
         for prepared in prepared_sessions:
             instance_dir = output_path / prepared.loaded.agent_id
-            attempt_n = _next_attempt_number(instance_dir)
+            attempt_n = next_attempt_number_in(instance_dir)
             task_dir = instance_dir / f"attempt_{attempt_n}"
             task_dir.mkdir(parents=True, exist_ok=True)
             prepared.task_output_dir = task_dir

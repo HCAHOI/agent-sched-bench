@@ -371,10 +371,6 @@ def exec_task_container_entrypoint(
     )
 
 
-def read_task_container_result(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def preflight_task_container_runtime(
     *,
     container_id: str,
@@ -417,7 +413,7 @@ def preflight_task_container_runtime(
             "task-container preflight failed: "
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
-    payload = read_task_container_result(runtime_dir / "result.json")
+    payload = json.loads((runtime_dir / "result.json").read_text(encoding="utf-8"))
     proof = payload.get("runtime_proof") or {}
     return TaskContainerPreflightProof(**proof)
 
@@ -479,7 +475,7 @@ def run_task_container_agent(
             "task-container run failed: "
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
-    payload = read_task_container_result(Path(request["result_path"]))
+    payload = json.loads(Path(request["result_path"]).read_text(encoding="utf-8"))
     success = payload.get("success")
     if success is None:
         success = bool(payload.get("model_patch"))
