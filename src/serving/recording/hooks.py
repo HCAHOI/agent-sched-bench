@@ -143,6 +143,74 @@ def _materialize_array(value: Any) -> np.ndarray:
     return value
 
 
+def _segment_decode_stats(
+    attn_f: Any,
+    key_ids: Any,
+    n_segments: int,
+    *,
+    restrict: Any = None,
+) -> tuple[Any, Any, Any]:
+    """Per-(head, segment) population mean/var and kept-key count for one decode step.
+
+    `attn_f` is `[H, 1, K]` float32 post-softmax attention; `key_ids[k]` is the
+    segment id of key position k. `restrict`, when given, is a `[K]` bool mask
+    AND-ed into each segment mask (e.g. block_topk's kept positions) so the stats
+    cover only those keys. Segments with no (kept) key keep mean/var 0 and
+    kept_count 0 — the count is the NaN denominator the build step gates on.
+    """
+    import torch
+
+    H = int(attn_f.shape[0])
+    S = int(n_segments)
+    mean = torch.zeros((H, S), dtype=torch.float32, device=attn_f.device)
+    var = torch.zeros((H, S), dtype=torch.float32, device=attn_f.device)
+    kept = torch.zeros(S, dtype=torch.int32, device=attn_f.device)
+    for s in range(S):
+        mask = key_ids == s
+        if restrict is not None:
+            mask = mask & restrict
+        if not bool(mask.any()):
+            continue
+        vals = attn_f[:, :, mask]  # [H, 1, |mask|]
+        mean[:, s] = vals.mean(dim=-1).squeeze(-1)
+        var[:, s] = vals.var(dim=-1, unbiased=False).squeeze(-1)
+        kept[s] = int(mask.sum().item())
+    return mean, var, kept
+
+
+def _fill_nan_gated_decode(
+    mean_dst: np.ndarray,
+    var_dst: np.ndarray,
+    kept_dst: np.ndarray,
+    li: int,
+    ti: int,
+    mean_src: Any,
+    var_src: Any,
+    kept_src: Any,
+) -> None:
+    """Copy one decode step's per-(head, col) mean/var into the `[L, T, H, N]`
+    grids, NaN-gated by kept count. Columns with 0 kept keys are left at the
+    grid's initial NaN; `kept_dst[li, ti]` records the count (the NaN
+    denominator). `*_src` may be torch tensors or numpy arrays.
+    """
+    import torch
+
+    def _np(value: Any) -> np.ndarray:
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().numpy()
+        return value
+
+    mean_arr = _np(mean_src)
+    var_arr = _np(var_src)
+    kept_arr = _np(kept_src)
+    has_keys = kept_arr > 0
+    for col in range(int(kept_arr.shape[0])):
+        if has_keys[col]:
+            mean_dst[li, ti, :, col] = mean_arr[:, col].astype(np.float16).astype(np.float32)
+            var_dst[li, ti, :, col] = var_arr[:, col]
+    kept_dst[li, ti] = kept_arr
+
+
 def _encode_topk_csr(
     indices: np.ndarray,
     weights: np.ndarray,
@@ -1195,6 +1263,8 @@ class LayerCapturer:
                     decode_step=decode_step,
                     attn=attn_full_sampled[0],
                     key_len=key_len,
+                    token_ids=token_ids,
+                    n_segments=n_segments,
                 )
 
         segment_mass = segment_bucket(attn_rows, token_ids, n_segments)
@@ -1275,22 +1345,12 @@ class LayerCapturer:
                 entry["kept_count_sum"][s] += int(mask.sum().item()) * Q
             entry["n_queries"] = entry["n_queries"] + Q
         else:
-            key = (layer_idx, "decode", decode_step)
-            entry_new: dict[str, Any] = {
-                "mean": torch.zeros((H, S), dtype=torch.float32, device=attn.device),
-                "var": torch.zeros((H, S), dtype=torch.float32, device=attn.device),
-                # kept_count[s] = number of key positions in segment s at this decode step
-                "kept_count": torch.zeros(S, dtype=torch.int32, device=attn.device),
+            mean, var, kept_count = _segment_decode_stats(key_float, key_ids, S)
+            self._head_stats[(layer_idx, "decode", decode_step)] = {
+                "mean": mean,
+                "var": var,
+                "kept_count": kept_count,
             }
-            for s in range(S):
-                mask = key_ids == s
-                if not bool(mask.any()):
-                    continue
-                vals = key_float[:, :, mask]  # [H, 1, |S|]
-                entry_new["mean"][:, s] = vals.mean(dim=-1).squeeze(-1)
-                entry_new["var"][:, s] = vals.var(dim=-1, unbiased=False).squeeze(-1)
-                entry_new["kept_count"][s] = int(mask.sum().item())
-            self._head_stats[key] = entry_new
 
     def _trim_block_select_cache(self) -> None:
         """Bound `_block_select_cache` to the active decode-ring step window.
@@ -1320,6 +1380,8 @@ class LayerCapturer:
         decode_step: int,
         attn: Any,
         key_len: int,
+        token_ids: Any,
+        n_segments: int,
     ) -> None:
         """Accumulate per-selected-block within-block attention mean/std (decode).
 
@@ -1367,6 +1429,7 @@ class LayerCapturer:
             )
         attn_f = attn.detach().to(dtype=torch.float32)
         pos = torch.arange(K, device=attn.device)
+        key_ids = token_ids[:K].to(device=attn.device, dtype=torch.long)
 
         cache_entry = self._block_select_cache.get((layer_idx, decode_step))
         if cache_entry is None:
@@ -1398,6 +1461,10 @@ class LayerCapturer:
         kept_count = torch.zeros(n_buckets, dtype=torch.int32, device=attn.device)
         # block id per rank column (1-based rank -> col 1..R_max); -1 = no block.
         selected_block_id = [-1] * r_max
+        # Per selected block: (seg_lo, seg_hi) over its full token range. A block
+        # is a contiguous token range, so it spans a contiguous segment range;
+        # (-1, -1) marks an unused rank.
+        seg_range = [[-1, -1] for _ in range(r_max)]
 
         # Bucket 0: sink (not subject to budget truncation — always kept).
         bucket_masks: list[Any] = [pos < sink_size]
@@ -1408,6 +1475,9 @@ class LayerCapturer:
                 selected_block_id[r] = b
                 start = b * block_size
                 block_range = (pos >= start) & (pos < start + block_size)
+                if bool(block_range.any()):
+                    segs_b = key_ids[block_range]
+                    seg_range[r] = [int(segs_b.min().item()), int(segs_b.max().item())]
                 # Intersect with actually-retained positions: fixes the 🔴 bug where
                 # block-range mask alone includes positions beyond budget cap.
                 bucket_masks.append(block_range & kept_bool)
@@ -1424,11 +1494,23 @@ class LayerCapturer:
             var[:, col] = vals.var(dim=-1, unbiased=False).squeeze(-1)
             kept_count[col] = int(mask.sum().item())
 
+        # Per-segment decomposition of the selected-middle kept positions. Each
+        # kept key belongs to exactly one segment, so a block straddling two
+        # segments splits cleanly across them — no "primary segment" guess, no
+        # double counting. Reuses the head_span decode aggregator.
+        seg_mean, seg_var, seg_kept = _segment_decode_stats(
+            attn_f, key_ids, n_segments, restrict=kept_bool
+        )
+
         self._block_head_stats[(layer_idx, decode_step)] = {
             "mean": mean,
             "var": var,
             "kept_count": kept_count,
             "selected_block_id": selected_block_id,
+            "seg_mean": seg_mean,
+            "seg_var": seg_var,
+            "seg_kept": seg_kept,
+            "seg_range": seg_range,
             "n_buckets": n_buckets,
             "r_max": r_max,
         }
@@ -2081,25 +2163,13 @@ class LayerCapturer:
         for li, layer in enumerate(layers):
             steps = sorted(decode_keys_by_layer[layer])
             for ti, step in enumerate(steps):
-                key = (layer, "decode", step)
-                entry = self._head_stats.get(key)
+                entry = self._head_stats.get((layer, "decode", step))
                 if entry is None:
                     continue
-                mean_arr = entry["mean"]
-                var_arr = entry["var"]
-                kept_count_arr = entry["kept_count"]
-                if isinstance(mean_arr, torch.Tensor):
-                    mean_arr = mean_arr.detach().cpu().numpy()
-                if isinstance(var_arr, torch.Tensor):
-                    var_arr = var_arr.detach().cpu().numpy()
-                if isinstance(kept_count_arr, torch.Tensor):
-                    kept_count_arr = kept_count_arr.detach().cpu().numpy()
-                has_keys = kept_count_arr > 0  # [S]
-                for s in range(S):
-                    if has_keys[s]:
-                        decode_mean[li, ti, :, s] = mean_arr[:, s].astype(np.float16).astype(np.float32)
-                        decode_var[li, ti, :, s] = var_arr[:, s]
-                decode_kept_count[li, ti] = kept_count_arr
+                _fill_nan_gated_decode(
+                    decode_mean, decode_var, decode_kept_count, li, ti,
+                    entry["mean"], entry["var"], entry["kept_count"],
+                )
                 decode_step_arr[li, ti] = step
 
         return {
@@ -2126,8 +2196,6 @@ class LayerCapturer:
         convention). NaN marks buckets with no kept key at a (layer, step, head);
         the matching kept-count array is the explicit NaN denominator.
         """
-        import torch
-
         disabled = not self.config.per_head_block_stats
         layers = sorted(self.config.per_head_stats_layers)
         L_s = 0 if disabled else len(layers)
@@ -2163,6 +2231,18 @@ class LayerCapturer:
         block_selected_id = np.full((L_s, T_max, r_max), -1, dtype=np.int32)
         block_decode_n = np.asarray(decode_counts if not disabled else [], dtype=np.int32)
 
+        # Segment-decomposition grids (last axis = S segments) over the selected-
+        # middle kept positions; mirror the bucket grids above. S is read off any
+        # stored entry's seg_mean ([H, S]); 0 when disabled / no decode steps.
+        S = 0
+        for entry in self._block_head_stats.values():
+            S = int(entry["seg_mean"].shape[1])
+            break
+        block_seg_mean = np.full((L_s, T_max, H, S), np.nan, dtype=np.float32)
+        block_seg_var = np.full((L_s, T_max, H, S), np.nan, dtype=np.float32)
+        block_seg_kept = np.zeros((L_s, T_max, S), dtype=np.int32)
+        block_seg_range = np.full((L_s, T_max, r_max, 2), -1, dtype=np.int32)
+
         if not disabled:
             for li, layer in enumerate(layers):
                 steps = sorted(decode_keys_by_layer[layer])
@@ -2170,26 +2250,20 @@ class LayerCapturer:
                     entry = self._block_head_stats.get((layer, step))
                     if entry is None:
                         continue
-                    mean_arr = entry["mean"]
-                    var_arr = entry["var"]
-                    kept_arr = entry["kept_count"]
-                    if isinstance(mean_arr, torch.Tensor):
-                        mean_arr = mean_arr.detach().cpu().numpy()
-                    if isinstance(var_arr, torch.Tensor):
-                        var_arr = var_arr.detach().cpu().numpy()
-                    if isinstance(kept_arr, torch.Tensor):
-                        kept_arr = kept_arr.detach().cpu().numpy()
-                    has_keys = kept_arr > 0  # [C]
-                    for col in range(C):
-                        if has_keys[col]:
-                            block_mean[li, ti, :, col] = (
-                                mean_arr[:, col].astype(np.float16).astype(np.float32)
-                            )
-                            block_var[li, ti, :, col] = var_arr[:, col]
-                    block_kept[li, ti] = kept_arr
+                    _fill_nan_gated_decode(
+                        block_mean, block_var, block_kept, li, ti,
+                        entry["mean"], entry["var"], entry["kept_count"],
+                    )
                     block_step[li, ti] = step
                     block_selected_id[li, ti] = np.asarray(
                         entry["selected_block_id"], dtype=np.int32
+                    )
+                    _fill_nan_gated_decode(
+                        block_seg_mean, block_seg_var, block_seg_kept, li, ti,
+                        entry["seg_mean"], entry["seg_var"], entry["seg_kept"],
+                    )
+                    block_seg_range[li, ti] = np.asarray(
+                        entry["seg_range"], dtype=np.int32
                     )
 
         return {
@@ -2202,6 +2276,10 @@ class LayerCapturer:
             "block_span_decode_n": block_decode_n,
             "block_span_selected_block_id": block_selected_id,
             "block_span_kept_token_count_decode": block_kept,
+            "block_span_seg_mean_decode": block_seg_mean.astype(np.float16),
+            "block_span_seg_var_decode": block_seg_var.astype(np.float32),
+            "block_span_seg_kept_token_count_decode": block_seg_kept,
+            "block_span_selected_block_seg_range": block_seg_range,
             "block_span_block_size": np.int32(block_size),
             "block_span_sink_size": np.int32(sink_size),
             "block_span_recent_window": np.int32(recent_window),

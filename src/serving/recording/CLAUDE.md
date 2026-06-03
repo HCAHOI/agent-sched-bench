@@ -100,6 +100,10 @@ sink_size / recent_window 运行时从 block_topk 实例读（单一真源），
 | `block_span_decode_n` | `[L_s]` | i32 | 各层 decode step 数（T_max = 跨层最大） |
 | `block_span_selected_block_id` | `[L_s, T_max, R_max]` | i32 | 各 rank 对应的实际 block_id（-1 pad），供回推位置 |
 | `block_span_kept_token_count_decode` | `[L_s, T_max, C]` | i32 | 各 bucket 实际参与累积的 key 数（NaN 判据分母） |
+| `block_span_seg_mean_decode` | `[L_s, T_max, query_head, S]` | fp16 | 选中-middle 块 kept 位置按 (层,step,head,segment) 的块内 attn 均值；无 kept key = NaN |
+| `block_span_seg_var_decode` | `[L_s, T_max, query_head, S]` | fp32 | 同上方差（population）；无 kept key = NaN |
+| `block_span_seg_kept_token_count_decode` | `[L_s, T_max, S]` | i32 | 各 (层,step,segment) 的 kept-key 数（seg 分解 NaN 判据分母） |
+| `block_span_selected_block_seg_range` | `[L_s, T_max, R_max, 2]` | i32 | 各 rank block 整体 token 范围覆盖的连续 segment 区间 (seg_lo, seg_hi)；未用 rank=(-1,-1) |
 | `block_span_block_size` / `block_span_sink_size` / `block_span_recent_window` | scalar | i32 | 来自 block_topk 实例 |
 
 mean/var 公式同 head_span decode（Q=1）：`mean = (1/|b|)Σ_{k∈b} A_k`，
@@ -110,6 +114,15 @@ mean/var 公式同 head_span decode（Q=1）：`mean = (1/|b|)Σ_{k∈b} A_k`，
 > 分析注意：rank 桶只统计该 block 落在 middle 区(sink/recent 之外)的保留位置。
 > 末位 selected block 若与 recent window 重叠，其 rank 桶仅统计非-recent 部分(recent
 > 位置归入 recent 桶，不双计)——读到末位 rank 桶 kept_count 偏低属正常，非数据缺失。
+
+> segment 分解(`block_span_seg_*`)：把"被 block_topk 选中的 middle 块"的 kept 位置按
+> segment 拆分。每个 kept key 恰属一个 segment，跨段 block 自然把各位置分摊到对应
+> segment 列——无"主段"假设、无双计。范围**仅含 selected-middle**(不含 sink/recent；
+> 后者是固定首/尾位置，可由位置平凡映射到段)。mean/var 公式同 head_span decode，复用同一
+> 聚合器，只是把段掩码与 kept 掩码求交。`block_span_selected_block_seg_range[...,r,:]` 给出
+> 第 r 个选中块**整体** token 范围覆盖的连续 segment 区间 [seg_lo, seg_hi]，回答"每个 block
+> 在哪个 segment"(块连续⇒段连续)；它用整块范围而非仅 kept 位置，故与上面按 kept 聚合的
+> seg 统计互补。
 
 
 
