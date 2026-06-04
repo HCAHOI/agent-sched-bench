@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import gc
 import importlib.metadata
 import json
@@ -53,6 +54,11 @@ _ALLOWED_MSG_KEYS = frozenset(
 _OPENCLAW_MESSAGE_ID_KEY = "_openclaw_message_id"
 _ALNUM = string.ascii_letters + string.digits
 _MAX_TORCH_SEED = (2**63) - 1
+_CLIENT_DISCONNECT_ERRNOS = {
+    errno.EPIPE,
+    errno.ECONNRESET,
+    errno.ECONNABORTED,
+}
 # Debug escape hatch for byte-equality validation: when set to a truthy value
 # the provider sends the full prompt every call with no past_key_values and no
 # LCP delta. Use only to A/B verify that the session cache produces identical
@@ -64,6 +70,10 @@ _SESSION_CACHE_DISABLED_ENV = "OMC_DISABLE_SESSION_CACHE"
 def _session_cache_disabled() -> bool:
     raw = os.environ.get(_SESSION_CACHE_DISABLED_ENV, "")
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_client_disconnect(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and exc.errno in _CLIENT_DISCONNECT_ERRNOS
 
 
 def _short_tool_id() -> str:
@@ -1504,7 +1514,7 @@ class HFRecordingServer:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 if self.path not in {"/v1/chat/completions", "/chat/completions"}:
-                    self.send_error(404)
+                    self._send_error_or_ignore_disconnect(404)
                     return
                 try:
                     length = int(self.headers.get("content-length", "0"))
@@ -1534,12 +1544,7 @@ class HFRecordingServer:
                         )
                     )
                     body = self._response_body(response)
-                    raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("content-type", "application/json")
-                    self.send_header("content-length", str(len(raw)))
-                    self.end_headers()
-                    self.wfile.write(raw)
+                    self._send_json_or_ignore_disconnect(200, body)
                 except Exception as exc:
                     import traceback
 
@@ -1548,10 +1553,43 @@ class HFRecordingServer:
                         f"{traceback.format_exc()}\n"
                     )
                     sys.stderr.flush()
-                    self.send_error(500, str(exc)[:200])
+                    self._send_error_or_ignore_disconnect(500, str(exc)[:200])
 
             def log_message(self, _format: str, *args: Any) -> None:
                 return
+
+            def _send_json_or_ignore_disconnect(
+                self, status: int, body: dict[str, Any]
+            ) -> None:
+                raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                try:
+                    self.send_response(status)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                except OSError as exc:
+                    if _is_client_disconnect(exc):
+                        _LOG.debug(
+                            "HFRecordingServer client disconnected while writing "
+                            "HTTP response"
+                        )
+                        return
+                    raise
+
+            def _send_error_or_ignore_disconnect(
+                self, code: int, message: str | None = None
+            ) -> None:
+                try:
+                    self.send_error(code, message)
+                except OSError as exc:
+                    if _is_client_disconnect(exc):
+                        _LOG.debug(
+                            "HFRecordingServer client disconnected while writing "
+                            "HTTP error response"
+                        )
+                        return
+                    raise
 
             @staticmethod
             def _response_body(response: LLMResponse) -> dict[str, Any]:
