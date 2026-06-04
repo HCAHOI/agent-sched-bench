@@ -957,7 +957,19 @@ class LayerCapturer:
                 # the materialize-fresh branch fire and overwrite the wrong
                 # arg, surfacing fast in tests rather than silently corrupting.
                 existing = kwargs.get("attention_mask")
-                if existing is not None:
+                # Only merge into the upstream mask when it is a 4-D FLOAT
+                # additive mask: finfo() below requires a float dtype and the
+                # merge assumes additive (-inf) semantics. HF can instead hand us
+                # a 2-D int/bool padding mask (seen on cached-decode steps of the
+                # FP8 Qwen3-MoE path), where torch.finfo(int dtype) raises. Under
+                # --record-internals (batch=1, no padding) such a mask carries no
+                # information, so fall through to the materialize-fresh sparse
+                # mask below instead of crashing.
+                if (
+                    existing is not None
+                    and existing.is_floating_point()
+                    and existing.ndim == 4
+                ):
                     import torch
 
                     # Cast/broadcast onto the existing mask's device/dtype so the
@@ -987,8 +999,9 @@ class LayerCapturer:
                         existing,
                     )
                 else:
-                    # No upstream attention_mask (HF's SDPA path may rely on its
-                    # implicit causal mask). Materialise a [1,1,Q,K] sparse-only
+                    # No usable 4-D float additive mask upstream (either none at
+                    # all — SDPA's implicit causal path — or a 2-D int/bool
+                    # padding mask). Materialise a [1,1,Q,K] sparse-only float
                     # mask so the LayerCapturer's `mask.shape[-2] == query_len`
                     # contract is satisfied without depending on broadcast.
                     kwargs["attention_mask"] = sparse_mask.expand(
