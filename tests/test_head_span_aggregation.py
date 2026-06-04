@@ -684,7 +684,10 @@ def test_accumulate_block_head_stats_buckets(tmp_path: Path) -> None:
         [1, 2],
         frozenset(range(16, 48)),  # positions 16..47 all kept
     )
-    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    capturer._accumulate_block_head_stats(
+        layer_idx=0, decode_step=0, attn=attn, key_len=K,
+        token_ids=torch.zeros(K, dtype=torch.long), n_segments=1,
+    )
     entry = capturer._block_head_stats[(0, 0)]
     mean = entry["mean"].numpy()  # [H=1, C=4]
     kept = entry["kept_count"].numpy()
@@ -746,7 +749,10 @@ def test_accumulate_block_head_stats_partial_block_intersect(tmp_path: Path) -> 
         [1, 2],
         frozenset([4, 8, 9]),  # only these three middle positions retained
     )
-    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    capturer._accumulate_block_head_stats(
+        layer_idx=0, decode_step=0, attn=attn, key_len=K,
+        token_ids=torch.zeros(K, dtype=torch.long), n_segments=1,
+    )
     entry = capturer._block_head_stats[(0, 0)]
     mean = entry["mean"].numpy()
     kept = entry["kept_count"].numpy()
@@ -785,7 +791,10 @@ def test_accumulate_block_head_stats_missing_rank_is_nan(tmp_path: Path) -> None
         [1],
         frozenset(range(16, 32)),
     )
-    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    capturer._accumulate_block_head_stats(
+        layer_idx=0, decode_step=0, attn=attn, key_len=K,
+        token_ids=torch.zeros(K, dtype=torch.long), n_segments=1,
+    )
     entry = capturer._block_head_stats[(0, 0)]
     mean = entry["mean"].numpy()
     kept = entry["kept_count"].numpy()
@@ -809,7 +818,10 @@ def test_accumulate_block_head_stats_missing_cache_raises() -> None:
     attn = torch.full((1, 1, 48), 0.3, dtype=torch.float32)
     # No cache entry for (layer=0, decode_step=0) — simulates wiring bug.
     with pytest.raises(RuntimeError, match="no cache entry"):
-        capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=48)
+        capturer._accumulate_block_head_stats(
+            layer_idx=0, decode_step=0, attn=attn, key_len=48,
+            token_ids=torch.zeros(48, dtype=torch.long), n_segments=1,
+        )
 
 
 @requires_torch
@@ -825,8 +837,16 @@ def test_build_block_head_span_arrays_shapes() -> None:
     capturer._sparse_attention = method  # type: ignore[attr-defined]
     K = 48
     attn = torch.full((1, 1, K), 0.3, dtype=torch.float32)
+    # 2 segments split at pos 24 (seg0=0..23, seg1=24..47) to exercise the
+    # block_span_seg_* decomposition: block1 (pos 16..31) straddles seg0+seg1,
+    # block2 (pos 32..47) is wholly in seg1.
+    token_ids = torch.zeros(K, dtype=torch.long)
+    token_ids[24:] = 1
     capturer._block_select_cache[(0, 0)] = ([1, 2], frozenset(range(16, 48)))
-    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    capturer._accumulate_block_head_stats(
+        layer_idx=0, decode_step=0, attn=attn, key_len=K,
+        token_ids=token_ids, n_segments=2,
+    )
     arrays = capturer._build_block_head_span_arrays()
     # R_max=ceil(32/16)=2 -> C=4.
     assert arrays["block_span_layers"].tolist() == [0]
@@ -840,6 +860,16 @@ def test_build_block_head_span_arrays_shapes() -> None:
     assert int(arrays["block_span_block_size"]) == 16
     assert int(arrays["block_span_sink_size"]) == 4
     assert int(arrays["block_span_recent_window"]) == 8
+    # segment decomposition (S=2): shapes mirror the bucket grids with S last
+    assert arrays["block_span_seg_mean_decode"].shape == (1, 1, 1, 2)
+    assert arrays["block_span_seg_var_decode"].shape == (1, 1, 1, 2)
+    assert arrays["block_span_seg_kept_token_count_decode"].shape == (1, 1, 2)
+    assert arrays["block_span_selected_block_seg_range"].shape == (1, 1, 2, 2)
+    # kept = range(16,48): seg0 keeps 16..23 (8), seg1 keeps 24..47 (24)
+    assert arrays["block_span_seg_kept_token_count_decode"][0, 0].tolist() == [8, 24]
+    # seg_range over full block range: block1 (16..31) spans seg0+seg1 -> [0,1];
+    # block2 (32..47) wholly in seg1 -> [1,1]
+    assert arrays["block_span_selected_block_seg_range"][0, 0].tolist() == [[0, 1], [1, 1]]
 
 
 @requires_torch
@@ -864,7 +894,10 @@ def test_build_block_head_span_arrays_non_divisible_budget_shapes() -> None:
     attn = torch.full((1, 1, K), 0.3, dtype=torch.float32)
     # Provide a valid cache entry so the accumulator succeeds.
     capturer._block_select_cache[(0, 0)] = ([1], frozenset(range(4, 8)))
-    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    capturer._accumulate_block_head_stats(
+        layer_idx=0, decode_step=0, attn=attn, key_len=K,
+        token_ids=torch.zeros(K, dtype=torch.long), n_segments=1,
+    )
     # Must not raise — this was the crash site.
     arrays = capturer._build_block_head_span_arrays()
     r_max_ceil = 2  # ceil(5/4)
@@ -895,6 +928,10 @@ def test_build_block_head_span_arrays_disabled_is_empty() -> None:
     assert arrays["block_span_decode_step"].shape[0] == 0
     assert arrays["block_span_selected_block_id"].shape[0] == 0
     assert arrays["block_span_kept_token_count_decode"].shape[0] == 0
+    assert arrays["block_span_seg_mean_decode"].shape[0] == 0
+    assert arrays["block_span_seg_var_decode"].shape[0] == 0
+    assert arrays["block_span_seg_kept_token_count_decode"].shape[0] == 0
+    assert arrays["block_span_selected_block_seg_range"].shape[0] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1057,7 +1094,10 @@ def test_block_stats_real_method_selected_blocks_kept_vs_selected_blocks() -> No
     attn[0, 0, :sink_size] = 0.5
     attn[0, 0, K - recent_window:] = 0.3
 
-    capturer._accumulate_block_head_stats(layer_idx=0, decode_step=0, attn=attn, key_len=K)
+    capturer._accumulate_block_head_stats(
+        layer_idx=0, decode_step=0, attn=attn, key_len=K,
+        token_ids=torch.zeros(K, dtype=torch.long), n_segments=1,
+    )
     entry = capturer._block_head_stats[(0, 0)]
     mean = entry["mean"].numpy()
     kept_cnt = entry["kept_count"].numpy()
