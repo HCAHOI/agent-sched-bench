@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("qwen_agent", reason="Tongyi vendor scaffold requires qwen-agent")
+
 from agents.tongyi_deepresearch.vendor.file_tools.file_parser import (
     FileParserError,
     SingleFileParser,

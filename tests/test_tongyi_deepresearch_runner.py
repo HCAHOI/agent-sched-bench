@@ -16,6 +16,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytest.importorskip("qwen_agent", reason="Tongyi vendor scaffold requires qwen-agent")
+
 from agents.tongyi_deepresearch.runner import TongyiDeepResearchRunner
 from trace_collect.attempt_pipeline import AttemptContext
 
