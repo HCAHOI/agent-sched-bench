@@ -108,6 +108,16 @@ class _PendingNumpyArray:
             return array.astype(self.dtype, copy=False)
         return array
 
+    def __array__(self, dtype: Any = None) -> np.ndarray:
+        # numpy-coercion protocol. Production consumers materialize() explicitly,
+        # but in-memory paths (np.testing.assert_array_equal on un-flushed reduce
+        # output — see test_layer_capturer_bus reduce-equality tests) rely on
+        # np.asarray() finding this. Load-bearing; do not remove.
+        array = self.materialize()
+        if dtype is None:
+            return array
+        return array.astype(dtype, copy=False)
+
 
 def _stage_numpy(tensor: Any, dtype: Any) -> _PendingNumpyArray:
     import torch
