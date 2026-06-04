@@ -23,6 +23,7 @@ class _RecordingConsumer:
     """Test stub that captures every observe() call as kwargs dict."""
 
     always_active: bool = False
+    prefill_observe_mode: str = "sampled"
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def observe(
