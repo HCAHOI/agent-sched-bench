@@ -1158,6 +1158,10 @@ def load_block_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
       block_span_decode_n                [L_s]                  i32
       block_span_selected_block_id       [L_s, T_max, R_max]    i32  (-1 pad)
       block_span_kept_token_count_decode [L_s, T_max, C]        i32
+      block_span_seg_mean_decode         [L_s, T_max, H, S]     fp16 (NaN no key)
+      block_span_seg_var_decode          [L_s, T_max, H, S]     fp32 (NaN no key)
+      block_span_seg_kept_token_count_decode [L_s, T_max, S]    i32
+      block_span_selected_block_seg_range [L_s, T_max, R_max, 2] i32  (-1 pad)
       block_span_block_size              scalar                 i32
       block_span_sink_size               scalar                 i32
       block_span_recent_window           scalar                 i32
@@ -1172,6 +1176,14 @@ def load_block_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
             "block_span_selected_block_id": data["block_span_selected_block_id"].astype(np.int32),
             "block_span_kept_token_count_decode": data[
                 "block_span_kept_token_count_decode"
+            ].astype(np.int32),
+            "block_span_seg_mean_decode": data["block_span_seg_mean_decode"].astype(np.float16),
+            "block_span_seg_var_decode": data["block_span_seg_var_decode"].astype(np.float32),
+            "block_span_seg_kept_token_count_decode": data[
+                "block_span_seg_kept_token_count_decode"
+            ].astype(np.int32),
+            "block_span_selected_block_seg_range": data[
+                "block_span_selected_block_seg_range"
             ].astype(np.int32),
             "block_span_block_size": int(data["block_span_block_size"]),
             "block_span_sink_size": int(data["block_span_sink_size"]),

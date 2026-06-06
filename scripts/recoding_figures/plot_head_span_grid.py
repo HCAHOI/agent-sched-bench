@@ -49,6 +49,7 @@ from scripts.recoding_figures.plot_sparse_segment_grid import (  # noqa: E402
     _portable_plot_summary,
     _role_counts,
     _safe_name,
+    _safe_div,
     _segment_plot_label,
     _segment_turn_boundaries,
     _segments_for_record,
@@ -64,13 +65,16 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--mode",
-        choices=("segment", "block", "auto"),
+        choices=("segment", "block", "block_segment", "block_position", "auto"),
         default="auto",
         help=(
             "segment = within-segment role buckets (head_span_*). block = "
             "per-selected-block buckets sink|r1..rR|recent (block_span_*, "
-            "block_topk decode only). auto = block if block_span_* populated "
-            "else segment. Default auto."
+            "block_topk decode only). block_segment = selected block_topk "
+            "middle tokens mapped back onto segment rows (decode only). "
+            "block_position = selected blocks on the absolute KV token axis "
+            "(block x call) with segment bands (decode only). auto = "
+            "block if block_span_* populated else segment. Default auto."
         ),
     )
     parser.add_argument("--include-orphans", action="store_true")
@@ -133,6 +137,28 @@ def main() -> None:
             include_orphans=args.include_orphans,
             max_iters=args.max_iters,
             split_by_task=args.split_by_task,
+            per_head=args.per_head,
+        )
+    elif mode == "block_segment":
+        summary = build_block_segment_head_span_grids(
+            inputs=args.inputs,
+            output_dir=args.output_dir,
+            layers=layers,
+            include_orphans=args.include_orphans,
+            max_iters=args.max_iters,
+            split_by_task=args.split_by_task,
+            per_layer=args.per_layer,
+            per_head=args.per_head,
+        )
+    elif mode == "block_position":
+        summary = build_block_position_grids(
+            inputs=args.inputs,
+            output_dir=args.output_dir,
+            layers=layers,
+            include_orphans=args.include_orphans,
+            max_iters=args.max_iters,
+            split_by_task=args.split_by_task,
+            per_layer=args.per_layer,
             per_head=args.per_head,
         )
     else:
@@ -515,6 +541,300 @@ def build_block_head_span_grids(
         encoding="utf-8",
     )
     return run_summary
+
+
+def build_block_segment_head_span_grids(
+    *,
+    inputs: Sequence[Path],
+    output_dir: Path,
+    layers: Sequence[int] | None = None,
+    include_orphans: bool = False,
+    max_iters: int | None = None,
+    split_by_task: bool = True,
+    per_layer: bool = False,
+    per_head: bool = False,
+) -> dict[str, Any]:
+    """Build segment grids for block_topk-selected middle tokens.
+
+    Unlike ``build_block_head_span_grids``, the y-axis remains the prompt
+    segment axis. The block_topk-selected middle tokens are attributed back to
+    the segments they occupy, so the figure answers "which segments would the
+    selected blocks cover?" while retaining the per-head attention statistics.
+    """
+    records = load_iteration_records(
+        inputs, include_orphans=include_orphans, max_iters=max_iters
+    )
+    attempt_dirs = find_attempt_dirs(inputs)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if split_by_task:
+        by_task: dict[str, list[IterationRecord]] = {}
+        for record in records:
+            by_task.setdefault(record.task, []).append(record)
+        groups = [
+            (task, task_records, output_dir / _safe_name(task))
+            for task, task_records in sorted(by_task.items())
+        ]
+    else:
+        groups = [("all_tasks", records, output_dir)]
+
+    group_summaries = []
+    layers_used_global: list[int] | None = None
+    for label, group_records, group_dir in groups:
+        trajectory_rows, layer_rows, layers_used = block_segment_head_span_rows(
+            group_records,
+            layers=layers,
+        )
+        if not trajectory_rows:
+            raise ValueError(
+                f"{label}: no block-segment observations were found"
+            )
+        if layers_used_global is None:
+            layers_used_global = layers_used
+        elif layers_used != layers_used_global:
+            raise ValueError(
+                f"{label}: layer set {layers_used} differs from other groups "
+                f"{layers_used_global}; recordings are inconsistent"
+            )
+        summary_rows = _block_segment_summary_rows(trajectory_rows)
+        group_dir.mkdir(parents=True, exist_ok=True)
+        _write_csv(
+            group_dir / "block_segment_head_span_trajectory.csv",
+            trajectory_rows,
+        )
+        _write_csv(group_dir / "block_segment_head_span_by_layer.csv", layer_rows)
+        _write_csv(
+            group_dir / "block_segment_head_span_summary.csv",
+            summary_rows,
+        )
+        plot_summary = _plot_block_segment_head_span_grid(
+            trajectory_rows,
+            summary_rows,
+            group_dir / "block_segment_head_span_grid",
+            layers_used=layers_used,
+        )
+        plot_summary = _portable_plot_summary(plot_summary, artifact_root=output_dir)
+        per_layer_pdf = None
+        if per_layer:
+            per_layer_pdf = _artifact_relative_path(
+                _render_per_layer_pdf_block_segment(
+                    group_records,
+                    layers_used=layers_used,
+                    group_dir=group_dir,
+                ),
+                output_dir,
+            )
+        per_head_pdf = None
+        if per_head:
+            per_head_pdf = _artifact_relative_path(
+                _render_per_head_pdf_block_segment(
+                    group_records,
+                    layers_used=layers_used,
+                    group_dir=group_dir,
+                ),
+                output_dir,
+            )
+        group_summary = {
+            "label": label,
+            "output_dir": _artifact_relative_path(group_dir, output_dir),
+            "runtime_output_dir": str(group_dir),
+            "n_records": len(group_records),
+            "n_segments": len(summary_rows),
+            "n_trajectory_rows": len(trajectory_rows),
+            "n_layer_rows": len(layer_rows),
+            "layers_used": layers_used,
+            "per_layer_pdf": per_layer_pdf,
+            "per_head_pdf": per_head_pdf,
+            "role_counts": _role_counts(summary_rows),
+            "plot": plot_summary,
+        }
+        (group_dir / "summary.json").write_text(
+            json.dumps(_json_ready(group_summary), indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        (group_dir / "summary.md").write_text(
+            _block_segment_summary_markdown(group_summary),
+            encoding="utf-8",
+        )
+        group_summaries.append(group_summary)
+
+    run_summary = {
+        "inputs": [str(path) for path in inputs],
+        "attempt_dirs": [str(path) for path in attempt_dirs],
+        "metric": "block_topk_selected_middle_tokens_by_segment",
+        "mode": "block_segment",
+        "layers_used": layers_used_global,
+        "split_by_task": split_by_task,
+        "groups": group_summaries,
+    }
+    (output_dir / "summary.json").write_text(
+        json.dumps(_json_ready(run_summary), indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return run_summary
+
+
+def block_segment_head_span_rows(
+    records: Sequence[IterationRecord],
+    *,
+    layers: Sequence[int] | None = None,
+    head: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[int]]:
+    """Return segment rows using block_topk-selected middle-token stats.
+
+    ``head=None`` pools all query heads for attention mean/std. Selection share
+    is head-independent because the recorded block_topk keep set is shared
+    across heads for a layer/step.
+    """
+    trajectory: list[dict[str, Any]] = []
+    by_layer: list[dict[str, Any]] = []
+    metadata: dict[str, dict[str, Any]] = {}
+    layers_used: list[int] | None = None
+
+    for record in sorted(records, key=lambda item: (item.task, item.call_idx)):
+        segments_payload = _load_json_required(record.iter_dir / "segments.json")
+        segments = list(segments_payload.get("segments", []))
+        segment_items = _segments_for_record(
+            segments,
+            record=record,
+            metadata=metadata,
+        )
+        if not segment_items:
+            continue
+
+        try:
+            stats = load_block_head_span_stats(record.iter_dir)
+        except (KeyError, FileNotFoundError, OSError, ValueError) as exc:
+            raise ValueError(
+                f"{record.iter_dir}: missing block-segment stats; re-record with "
+                "--per-head-block-stats under block_topk"
+            ) from exc
+        available = [int(layer) for layer in stats["block_span_layers"].tolist()]
+        if not available:
+            raise ValueError(
+                f"{record.iter_dir}: attention.npz has no block_span layers"
+            )
+        selected_layers = list(layers) if layers is not None else list(available)
+        missing = [layer for layer in selected_layers if layer not in available]
+        if missing:
+            raise ValueError(
+                f"{record.iter_dir}: requested layers not recorded in block_span: "
+                f"{missing} (available: {available})"
+            )
+        if layers_used is None:
+            layers_used = selected_layers
+        elif selected_layers != layers_used:
+            raise ValueError(
+                f"{record.iter_dir}: block_span layer set {selected_layers} differs "
+                f"from earlier iters {layers_used}; recordings are inconsistent"
+            )
+        positions = [available.index(layer) for layer in selected_layers]
+        sel = _select_block_segment_layers(stats, positions)
+
+        n_segments = int(sel["seg_mean_d"].shape[3]) if sel["seg_mean_d"].ndim == 4 else 0
+        for item in segment_items:
+            s = int(item["segment_idx"])
+            if s >= n_segments:
+                raise ValueError(
+                    f"{record.iter_dir}: segment index {s} exceeds block_span "
+                    f"segment axis {n_segments}"
+                )
+            base = _trajectory_base(item, record=record)
+            base["n_layers"] = len(selected_layers)
+            base["layers_used"] = list(selected_layers)
+            means, variances, kept, total_kept, valid_steps = (
+                _block_segment_decode_observations(sel, segment_idx=s, head=head)
+            )
+            cell = reduce_head_span_cell(means, variances)
+            trajectory.append(
+                {
+                    **base,
+                    "phase": "decode",
+                    "selected_block_token_count_total": kept,
+                    "selected_block_token_count_denominator": total_kept,
+                    "selected_block_token_share": _safe_div(kept, total_kept),
+                    "valid_layer_decode_steps": valid_steps,
+                    "kept_token_count_total": kept,
+                    **_cell_columns(cell),
+                }
+            )
+
+            for pos, layer in enumerate(selected_layers):
+                layer_sel = _select_block_segment_layer_position(sel, pos)
+                means, variances, kept, total_kept, valid_steps = (
+                    _block_segment_decode_observations(
+                        layer_sel, segment_idx=s, head=head
+                    )
+                )
+                cell = reduce_head_span_cell(means, variances)
+                by_layer.append(
+                    {
+                        **base,
+                        "layer": int(layer),
+                        "phase": "decode",
+                        "selected_block_token_count_total": kept,
+                        "selected_block_token_count_denominator": total_kept,
+                        "selected_block_token_share": _safe_div(kept, total_kept),
+                        "valid_layer_decode_steps": valid_steps,
+                        "kept_token_count_total": kept,
+                        **_cell_columns(cell),
+                    }
+                )
+
+    return trajectory, by_layer, list(layers_used or [])
+
+
+def _select_block_segment_layers(
+    stats: dict[str, np.ndarray],
+    positions: Sequence[int],
+) -> dict[str, np.ndarray]:
+    idx = np.asarray(list(positions), dtype=np.int64)
+    return {
+        "seg_mean_d": stats["block_span_seg_mean_decode"][idx].astype(np.float64),
+        "seg_var_d": stats["block_span_seg_var_decode"][idx].astype(np.float64),
+        "seg_kept_d": stats["block_span_seg_kept_token_count_decode"][idx].astype(np.int64),
+        "step_d": stats["block_span_decode_step"][idx].astype(np.int64),
+    }
+
+
+def _select_block_segment_layer_position(
+    sel: dict[str, np.ndarray],
+    position: int,
+) -> dict[str, np.ndarray]:
+    return {
+        "seg_mean_d": sel["seg_mean_d"][position:position + 1],
+        "seg_var_d": sel["seg_var_d"][position:position + 1],
+        "seg_kept_d": sel["seg_kept_d"][position:position + 1],
+        "step_d": sel["step_d"][position:position + 1],
+    }
+
+
+def _block_segment_decode_observations(
+    sel: dict[str, np.ndarray],
+    *,
+    segment_idx: int,
+    head: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, int, int, int]:
+    """Extract selected-block observations for one segment in decode."""
+    s = segment_idx
+    if head is None:
+        mean_d = sel["seg_mean_d"][:, :, :, s]  # [L, T, H]
+        var_d = sel["seg_var_d"][:, :, :, s]
+    else:
+        mean_d = sel["seg_mean_d"][:, :, head:head + 1, s]  # [L, T, 1]
+        var_d = sel["seg_var_d"][:, :, head:head + 1, s]
+    step_d = sel["step_d"]
+    kept_d = sel["seg_kept_d"]  # [L, T, S]
+    if mean_d.shape[1] == 0:
+        return np.empty(0), np.empty(0), 0, 0, 0
+    valid = step_d >= 0
+    if not bool(valid.any()):
+        return np.empty(0), np.empty(0), 0, 0, 0
+    means = np.where(valid[:, :, None], mean_d, np.nan)
+    variances = np.where(valid[:, :, None], var_d, np.nan)
+    kept = int(kept_d[:, :, s][valid].sum())
+    total_kept = int(kept_d[valid].sum())
+    return means.ravel(), variances.ravel(), kept, total_kept, int(valid.sum())
 
 
 def _plot_block_head_span_grid(
@@ -1099,6 +1419,358 @@ def _render_per_head_pdf_block(
     return pdf_path
 
 
+def _block_segment_summary_rows(
+    trajectory_rows: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in trajectory_rows:
+        grouped.setdefault(str(row["segment_id"]), []).append(dict(row))
+
+    summary_rows: list[dict[str, Any]] = []
+    for rows in grouped.values():
+        first = min(
+            rows,
+            key=lambda row: (
+                str(row["task"]),
+                int(row["first_seen_call"]),
+                int(row["message_index"]),
+            ),
+        )
+        out = {
+            "segment_ordinal": first["segment_ordinal"],
+            "segment_id": first["segment_id"],
+            "identity_source": first["identity_source"],
+            "task": first["task"],
+            "role": first["role"],
+            "tool_call_id": first.get("tool_call_id"),
+            "tool_name": first.get("tool_name"),
+            "first_seen_call": first["first_seen_call"],
+            "first_seen_call_inferred": first["first_seen_call_inferred"],
+            "message_index": first["message_index"],
+            "has_content": first["has_content"],
+            "has_tool_calls": first["has_tool_calls"],
+            "initial_token_count": first["initial_token_count"],
+            "max_observed_age": max(int(row["age"]) for row in rows),
+        }
+        decode_rows = [row for row in rows if row["phase"] == "decode"]
+        out.update(_head_span_phase_summary("decode", decode_rows))
+        shares = _column(decode_rows, "selected_block_token_share")
+        share_peak = _nanargmax_or_none(shares)
+        ages = np.asarray([int(row["age"]) for row in decode_rows], dtype=np.float64)
+        out["mean_decode_selected_block_token_share"] = _nanmean_or_none(shares)
+        out["peak_decode_selected_block_token_share"] = (
+            float(shares[share_peak]) if share_peak is not None else None
+        )
+        out["peak_decode_selected_block_token_share_age"] = (
+            int(ages[share_peak]) if share_peak is not None else None
+        )
+        summary_rows.append(out)
+
+    return sorted(
+        summary_rows,
+        key=lambda row: (
+            str(row["task"]),
+            int(row["first_seen_call"]),
+            int(row["message_index"]),
+            str(row["role"]),
+        ),
+    )
+
+
+def _render_per_layer_pdf_block_segment(
+    group_records: Sequence[IterationRecord],
+    *,
+    layers_used: Sequence[int],
+    group_dir: Path,
+) -> Path:
+    """Render one block-segment grid per recorded layer into a PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    per_layer_dir = group_dir / "per_layer"
+    pages: list[tuple[int, Path]] = []
+    for layer in layers_used:
+        rows, _layer_rows, _used = block_segment_head_span_rows(
+            group_records, layers=[layer]
+        )
+        if not rows:
+            continue
+        summary = _block_segment_summary_rows(rows)
+        stem = per_layer_dir / f"layer_{int(layer):02d}" / "block_segment_head_span_grid"
+        _plot_block_segment_head_span_grid(rows, summary, stem, layers_used=[layer])
+        pages.append((int(layer), stem.with_suffix(".png")))
+
+    pdf_path = group_dir / "block_segment_head_span_per_layer.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for layer, png in pages:
+            img = plt.imread(png)
+            height, width = img.shape[0], img.shape[1]
+            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
+            ax = fig.add_axes([0, 0, 1, 0.96])
+            ax.imshow(img)
+            ax.axis("off")
+            fig.suptitle(
+                f"layer {layer} - block_topk selected tokens mapped to segments",
+                fontsize=11,
+                y=0.995,
+            )
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+    return pdf_path
+
+
+def _render_per_head_pdf_block_segment(
+    group_records: Sequence[IterationRecord],
+    *,
+    layers_used: Sequence[int],
+    group_dir: Path,
+) -> Path:
+    """Render one block-segment grid per query head into a PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    n_heads = _n_query_heads_block(group_records)
+    per_head_dir = group_dir / "per_head"
+    pages: list[tuple[int, Path]] = []
+    for h in range(n_heads):
+        rows, _layer_rows, _used = block_segment_head_span_rows(
+            group_records, layers=list(layers_used), head=h
+        )
+        if not rows:
+            continue
+        summary = _block_segment_summary_rows(rows)
+        stem = per_head_dir / f"head_{h:02d}" / "block_segment_head_span_grid"
+        _plot_block_segment_head_span_grid(rows, summary, stem, layers_used=layers_used)
+        pages.append((h, stem.with_suffix(".png")))
+
+    pdf_path = group_dir / "block_segment_head_span_per_head.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for h, png in pages:
+            img = plt.imread(png)
+            height, width = img.shape[0], img.shape[1]
+            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
+            ax = fig.add_axes([0, 0, 1, 0.96])
+            ax.imshow(img)
+            ax.axis("off")
+            fig.suptitle(
+                f"head {h:02d} - block_topk selected tokens mapped to segments",
+                fontsize=11,
+                y=0.995,
+            )
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+    return pdf_path
+
+
+def _plot_block_segment_head_span_grid(
+    trajectory_rows: Sequence[dict[str, Any]],
+    summary_rows: Sequence[dict[str, Any]],
+    output_stem: Path,
+    *,
+    layers_used: Sequence[int],
+) -> dict[str, Any]:
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    missing_color = "#cfcfcf"
+    cell_boundary_color = "#ffffff"
+    major_boundary_color = "#222222"
+    segment_order = [str(row["segment_id"]) for row in summary_rows]
+    segment_to_row = {segment_id: idx for idx, segment_id in enumerate(segment_order)}
+    observed_iters = [int(row["observed_call_idx"]) for row in trajectory_rows]
+    min_iter = min(observed_iters)
+    max_iter = max(observed_iters)
+    iter_values = list(range(min_iter, max_iter + 1))
+    iter_to_col = {iter_idx: col for col, iter_idx in enumerate(iter_values)}
+
+    share_matrix = _fill_block_segment_matrix(
+        trajectory_rows,
+        segment_to_row=segment_to_row,
+        iter_to_col=iter_to_col,
+        key="selected_block_token_share",
+    )
+    mean_matrix = _fill_block_segment_matrix(
+        trajectory_rows,
+        segment_to_row=segment_to_row,
+        iter_to_col=iter_to_col,
+        key="within_segment_attention_mean",
+    )
+    std_matrix = _fill_block_segment_matrix(
+        trajectory_rows,
+        segment_to_row=segment_to_row,
+        iter_to_col=iter_to_col,
+        key="within_segment_attention_std",
+    )
+
+    labels = [_segment_plot_label(row) for row in summary_rows]
+    share_cmap = LinearSegmentedColormap.from_list(
+        "asb_block_segment_share",
+        ["#f7fbff", "#deebf7", "#9ecae1", "#3182bd", "#08519c"],
+    )
+    mean_cmap = LinearSegmentedColormap.from_list(
+        "asb_block_segment_mean",
+        ["#fffaf0", "#fee391", "#fdae61", "#e34a33", "#7f0000"],
+    )
+    std_cmap = LinearSegmentedColormap.from_list(
+        "asb_block_segment_std",
+        ["#f7fcf0", "#bae4bc", "#7bccc4", "#2b8cbe", "#084081"],
+    )
+    for cmap in (share_cmap, mean_cmap, std_cmap):
+        cmap.set_bad(missing_color)
+    share_vmax = _percentile_vmax({"decode": share_matrix})
+    mean_vmax = _percentile_vmax({"decode": mean_matrix})
+    std_vmax = _percentile_vmax({"decode": std_matrix})
+
+    width = max(11.0, min(18.0, 6.8 + 0.42 * len(iter_values)))
+    height = max(8.5, min(24.0, 3.2 + 0.34 * len(segment_order)))
+    fig, axes = plt.subplots(
+        3, 1, figsize=(width, height), sharex=True, sharey=True, constrained_layout=False
+    )
+    fig.patch.set_facecolor("white")
+    fig.subplots_adjust(
+        left=0.13, right=0.88, bottom=0.085, top=0.965, hspace=0.08
+    )
+    panels = [
+        (
+            axes[0],
+            share_matrix,
+            share_cmap,
+            0.0,
+            share_vmax,
+            "decode: selected block token share by segment",
+            "share of selected middle tokens",
+        ),
+        (
+            axes[1],
+            mean_matrix,
+            mean_cmap,
+            0.0,
+            mean_vmax,
+            "decode: attention mean inside selected block tokens",
+            "mean per-token attention weight",
+        ),
+        (
+            axes[2],
+            std_matrix,
+            std_cmap,
+            0.0,
+            std_vmax,
+            "decode: attention std inside selected block tokens",
+            "pooled within-segment std",
+        ),
+    ]
+    turn_boundaries = _segment_turn_boundaries(summary_rows)
+    for ax, matrix, cmap, vmin, vmax, title, cbar_label in panels:
+        im = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
+        ax.set_title(title)
+        ax.set_ylabel("segment")
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(labels, fontsize=5.5)
+        ax.tick_params(axis="x", labelsize=7)
+        ax.tick_params(axis="y", length=0)
+        tick_cols = _integer_tick_positions(iter_values, max_labels=32)
+        ax.set_xticks(tick_cols)
+        ax.set_xticklabels([str(iter_values[col]) for col in tick_cols])
+        ax.set_xlim(-0.5, len(iter_values) - 0.5)
+        ax.set_facecolor(missing_color)
+        ax.set_xticks(np.arange(-0.5, len(iter_values) + 0.5, 1.0), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(labels) + 0.5, 1.0), minor=True)
+        ax.grid(which="minor", color=cell_boundary_color, linewidth=0.28, alpha=0.72)
+        ax.tick_params(which="minor", bottom=False, left=False)
+        first_major = min_iter - (min_iter % 5)
+        for iter_idx in range(first_major, max_iter + 6, 5):
+            if iter_idx < min_iter:
+                continue
+            ax.axvline(
+                iter_to_col.get(iter_idx, len(iter_values)) - 0.5,
+                color=major_boundary_color,
+                linewidth=0.45,
+                alpha=0.45,
+            )
+        for row_boundary in turn_boundaries:
+            ax.axhline(
+                row_boundary - 0.5,
+                color=major_boundary_color,
+                linewidth=0.55,
+                alpha=0.60,
+            )
+        cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.012)
+        cbar.set_label(cbar_label)
+    axes[-1].set_xlabel("recording iter / LLM call index")
+    fig.text(
+        0.01,
+        0.022,
+        "Decode-only block_topk diagnostic. Top row maps selected middle-token "
+        "blocks back onto prompt segments: each cell is selected tokens in that "
+        "segment divided by all selected middle tokens for the aggregated "
+        f"layer/step records (layers {list(layers_used)}). Middle/bottom rows "
+        "show attention mean/std over those selected tokens; gray means no "
+        "selected block token from that segment.",
+        fontsize=7,
+        color="#555555",
+    )
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    plt.close(fig)
+    return {
+        "grid_png": str(output_stem.with_suffix(".png")),
+        "grid_pdf": str(output_stem.with_suffix(".pdf")),
+        "n_segments": len(segment_order),
+        "x_axis": "recording_iter",
+        "min_iter": min_iter,
+        "max_iter": max_iter,
+        "n_iters": len(iter_values),
+        "selected_share_vmax_percentile_95": share_vmax,
+        "mean_vmax_percentile_95": mean_vmax,
+        "std_vmax_percentile_95": std_vmax,
+        "layers_used": list(layers_used),
+        "missing_color": missing_color,
+    }
+
+
+def _fill_block_segment_matrix(
+    trajectory_rows: Sequence[dict[str, Any]],
+    *,
+    segment_to_row: dict[str, int],
+    iter_to_col: dict[int, int],
+    key: str,
+) -> np.ndarray:
+    matrix = np.full((len(segment_to_row), len(iter_to_col)), np.nan, dtype=np.float64)
+    for row in trajectory_rows:
+        if str(row["phase"]) != "decode":
+            continue
+        row_idx = segment_to_row.get(str(row["segment_id"]))
+        col_idx = iter_to_col.get(int(row["observed_call_idx"]))
+        if row_idx is None or col_idx is None:
+            continue
+        value = row.get(key)
+        if value is not None:
+            matrix[row_idx, col_idx] = float(value)
+    return matrix
+
+
+def _block_segment_summary_markdown(summary: dict[str, Any]) -> str:
+    lines = [
+        "# BlockTopK Selected Blocks by Segment",
+        "",
+        f"- Label: `{summary['label']}`",
+        f"- Output: `{summary['output_dir']}`",
+        f"- Records: `{summary['n_records']}`",
+        f"- Segments analyzed: `{summary['n_segments']}`",
+        f"- Layers aggregated: `{summary['layers_used']}`",
+        "",
+        "## Figure",
+        "",
+        "- Top row: share of block_topk selected middle tokens in each segment.",
+        "- Middle row: attention mean over those selected tokens.",
+        "- Bottom row: pooled attention std over those selected tokens.",
+        "- X-axis: recording iter / LLM call index; block_topk selection is decode-only.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _plot_head_span_grid(
     trajectory_rows: Sequence[dict[str, Any]],
     summary_rows: Sequence[dict[str, Any]],
@@ -1304,6 +1976,735 @@ def _summary_markdown(summary: dict[str, Any], *, decode_reduce: str) -> str:
         "only the layers recorded via --per-head-stats-layers. Gray cells mean the "
         "segment had zero kept key tokens for every selected layer/head at that iter "
         "(not visible yet, or fully evicted under an active sparse/KV policy).",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+# Role -> gutter color for segment bands in the block_position figure. Mirrors
+# the canonical role set in recording_loader.ROLE_ORDER; "other" is the fallback.
+_ROLE_COLORS = {
+    "system": "#8c6bb1",
+    "user": "#41ab5d",
+    "assistant_message": "#fb9a29",
+    "assistant_call": "#d94801",
+    "tool_result": "#2171b5",
+    "gen_prompt": "#969696",
+    "generation": "#cb181d",
+    "meta": "#bcbddc",
+    "other": "#bdbdbd",
+}
+
+
+def build_block_position_grids(
+    *,
+    inputs: Sequence[Path],
+    output_dir: Path,
+    layers: Sequence[int] | None = None,
+    include_orphans: bool = False,
+    max_iters: int | None = None,
+    split_by_task: bool = True,
+    per_layer: bool = False,
+    per_head: bool = False,
+) -> dict[str, Any]:
+    """Build absolute-KV-position grids of block_topk-selected blocks.
+
+    Companion to ``build_block_segment_head_span_grids``: instead of pooling the
+    selected middle tokens onto the segment axis, the y-axis is the absolute KV
+    block (token) position, so the figure shows WHERE on the token axis (and
+    inside which segment band) each selected block sits. Decode-only.
+    """
+    records = load_iteration_records(
+        inputs, include_orphans=include_orphans, max_iters=max_iters
+    )
+    attempt_dirs = find_attempt_dirs(inputs)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if split_by_task:
+        by_task: dict[str, list[IterationRecord]] = {}
+        for record in records:
+            by_task.setdefault(record.task, []).append(record)
+        groups = [
+            (task, task_records, output_dir / _safe_name(task))
+            for task, task_records in sorted(by_task.items())
+        ]
+    else:
+        groups = [("all_tasks", records, output_dir)]
+
+    group_summaries = []
+    layers_used_global: list[int] | None = None
+    for label, group_records, group_dir in groups:
+        trajectory_rows, layer_rows, layers_used, meta = block_position_rows(
+            group_records, layers=layers
+        )
+        if not trajectory_rows:
+            raise ValueError(f"{label}: no block-position observations were found")
+        if layers_used_global is None:
+            layers_used_global = layers_used
+        elif layers_used != layers_used_global:
+            raise ValueError(
+                f"{label}: layer set {layers_used} differs from other groups "
+                f"{layers_used_global}; recordings are inconsistent"
+            )
+        group_dir.mkdir(parents=True, exist_ok=True)
+        _write_csv(group_dir / "block_position_trajectory.csv", trajectory_rows)
+        _write_csv(group_dir / "block_position_by_layer.csv", layer_rows)
+        plot_summary = _plot_block_position_grid(
+            trajectory_rows,
+            group_dir / "block_position_grid",
+            layers_used=layers_used,
+            meta=meta,
+        )
+        plot_summary = _portable_plot_summary(plot_summary, artifact_root=output_dir)
+        per_layer_pdf = None
+        if per_layer:
+            per_layer_pdf = _artifact_relative_path(
+                _render_per_layer_pdf_block_position(
+                    group_records, layers_used=layers_used, group_dir=group_dir
+                ),
+                output_dir,
+            )
+        per_head_pdf = None
+        if per_head:
+            per_head_pdf = _artifact_relative_path(
+                _render_per_head_pdf_block_position(
+                    group_records, layers_used=layers_used, group_dir=group_dir
+                ),
+                output_dir,
+            )
+        group_summary = {
+            "label": label,
+            "output_dir": _artifact_relative_path(group_dir, output_dir),
+            "runtime_output_dir": str(group_dir),
+            "n_records": len(group_records),
+            "n_blocks": meta["n_blocks"],
+            "block_size": meta["block_size"],
+            "sink_size": meta["sink_size"],
+            "recent_window": meta["recent_window"],
+            "r_max": meta["r_max"],
+            "n_trajectory_rows": len(trajectory_rows),
+            "n_layer_rows": len(layer_rows),
+            "layers_used": layers_used,
+            "per_layer_pdf": per_layer_pdf,
+            "per_head_pdf": per_head_pdf,
+            "plot": plot_summary,
+        }
+        (group_dir / "summary.json").write_text(
+            json.dumps(_json_ready(group_summary), indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        (group_dir / "summary.md").write_text(
+            _block_position_summary_markdown(group_summary),
+            encoding="utf-8",
+        )
+        group_summaries.append(group_summary)
+
+    run_summary = {
+        "inputs": [str(path) for path in inputs],
+        "attempt_dirs": [str(path) for path in attempt_dirs],
+        "metric": "block_topk_selected_block_absolute_position",
+        "mode": "block_position",
+        "layers_used": layers_used_global,
+        "split_by_task": split_by_task,
+        "groups": group_summaries,
+    }
+    (output_dir / "summary.json").write_text(
+        json.dumps(_json_ready(run_summary), indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return run_summary
+
+
+def block_position_rows(
+    records: Sequence[IterationRecord],
+    *,
+    layers: Sequence[int] | None = None,
+    head: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[int], dict[str, Any]]:
+    """Per-(call, selected block) rows on the absolute KV block axis.
+
+    For each call, every block_topk-selected MIDDLE block is attributed to its
+    absolute KV position (``block_id`` -> token range ``[b*bs, b*bs+bs)``) and
+    its owning segment (``seg_lo`` from ``block_span_selected_block_seg_range``).
+    ``head=None`` pools query heads; ``head=h`` restricts to one. Returns
+    ``(trajectory_rows, layer_rows, layers_used, meta)`` where ``meta`` carries
+    geometry, the global block-axis extent, per-call key lengths (for the recent
+    staircase) and the latest call's segment bands.
+    """
+    trajectory: list[dict[str, Any]] = []
+    by_layer: list[dict[str, Any]] = []
+    metadata: dict[str, dict[str, Any]] = {}
+    layers_used: list[int] | None = None
+    geom_ref: tuple[int, int, int, int] | None = None
+    block_size = sink_size = recent_window = r_max = 0
+    call_key_len: dict[int, int] = {}
+    max_key_len = 0
+    band_source_call = -1
+    band_items: list[dict[str, Any]] = []
+
+    for record in sorted(records, key=lambda item: (item.task, item.call_idx)):
+        segments_payload = _load_json_required(record.iter_dir / "segments.json")
+        segments = list(segments_payload.get("segments", []))
+        segment_items = _segments_for_record(segments, record=record, metadata=metadata)
+        if not segment_items:
+            continue
+        try:
+            stats = load_block_head_span_stats(record.iter_dir)
+        except (KeyError, FileNotFoundError, OSError, ValueError):
+            # Mixed directory: skip iters predating block_span fields or with a
+            # truncated/corrupt npz, mirroring block_head_span_rows.
+            continue
+        available = [int(layer) for layer in stats["block_span_layers"].tolist()]
+        if not available:
+            continue
+        selected_layers = list(layers) if layers is not None else list(available)
+        missing = [layer for layer in selected_layers if layer not in available]
+        if missing:
+            raise ValueError(
+                f"{record.iter_dir}: requested layers not recorded in block_span: "
+                f"{missing} (available: {available})"
+            )
+        if layers_used is None:
+            layers_used = selected_layers
+        elif selected_layers != layers_used:
+            raise ValueError(
+                f"{record.iter_dir}: block_span layer set {selected_layers} differs "
+                f"from earlier iters {layers_used}; recordings are inconsistent"
+            )
+        mean_arr = stats["block_span_mean_decode"]
+        C = int(mean_arr.shape[3]) if mean_arr.ndim == 4 else 0
+        geom = (
+            int(stats["block_span_block_size"]),
+            int(stats["block_span_sink_size"]),
+            int(stats["block_span_recent_window"]),
+            C,
+        )
+        if geom_ref is None:
+            geom_ref = geom
+            block_size, sink_size, recent_window, _ = geom
+            r_max = C - 2 if C >= 2 else 0
+        elif geom != geom_ref:
+            raise ValueError(
+                f"{record.iter_dir}: block_span geometry {geom} differs from "
+                f"earlier iters {geom_ref}; pooling incompatible bucket layouts "
+                "would misalign the block axis"
+            )
+        positions = [available.index(layer) for layer in selected_layers]
+        idx = np.asarray(positions, dtype=np.int64)
+        mean_d = stats["block_span_mean_decode"][idx].astype(np.float64)
+        var_d = stats["block_span_var_decode"][idx].astype(np.float64)
+        sel_id = stats["block_span_selected_block_id"][idx].astype(np.int64)
+        seg_range = stats["block_span_selected_block_seg_range"][idx].astype(np.int64)
+        step_d = stats["block_span_decode_step"][idx].astype(np.int64)
+        idx2item = {int(it["segment_idx"]): it for it in segment_items}
+
+        key_len = max((int(it["token_end"]) for it in segment_items), default=0)
+        call_key_len[int(record.call_idx)] = key_len
+        max_key_len = max(max_key_len, key_len)
+        if int(record.call_idx) >= band_source_call:
+            band_source_call = int(record.call_idx)
+            band_items = list(segment_items)
+
+        agg, n_valid = _block_position_aggregate(
+            mean_d, var_d, sel_id, seg_range, step_d, head=head
+        )
+        for block_id, cell in agg.items():
+            trajectory.append(
+                _block_position_row(
+                    block_id, cell, n_valid, block_size, r_max,
+                    record=record, idx2item=idx2item,
+                    selected_layers=selected_layers, layer=None,
+                )
+            )
+        for li, layer in enumerate(selected_layers):
+            sl = slice(li, li + 1)
+            agg_l, n_valid_l = _block_position_aggregate(
+                mean_d[sl], var_d[sl], sel_id[sl], seg_range[sl], step_d[sl], head=head
+            )
+            for block_id, cell in agg_l.items():
+                by_layer.append(
+                    _block_position_row(
+                        block_id, cell, n_valid_l, block_size, r_max,
+                        record=record, idx2item=idx2item,
+                        selected_layers=selected_layers, layer=int(layer),
+                    )
+                )
+
+    used = list(layers_used or [])
+    n_blocks = (-(-max_key_len // block_size)) if block_size > 0 else 0
+    bands = _block_position_bands(band_items, block_size) if block_size > 0 else []
+    meta = {
+        "block_size": block_size,
+        "sink_size": sink_size,
+        "recent_window": recent_window,
+        "r_max": r_max,
+        "n_blocks": int(n_blocks),
+        "call_key_len": {int(k): int(v) for k, v in call_key_len.items()},
+        "bands": bands,
+        "band_source_call": band_source_call,
+    }
+    return trajectory, by_layer, used, meta
+
+
+def _block_position_aggregate(
+    mean_d: np.ndarray,
+    var_d: np.ndarray,
+    sel_id: np.ndarray,
+    seg_range: np.ndarray,
+    step_d: np.ndarray,
+    *,
+    head: int | None,
+) -> tuple[dict[int, dict[str, Any]], int]:
+    """Per-block aggregates over one call's (already layer-sliced) arrays.
+
+    Inputs: ``mean_d``/``var_d`` ``[L,T,H,C]``, ``sel_id`` ``[L,T,R_max]``,
+    ``seg_range`` ``[L,T,R_max,2]``, ``step_d`` ``[L,T]``. Returns
+    ``({block_id: aggregates}, n_valid_layer_steps)`` for every block selected at
+    least once. Aggregation mirrors ``reduce_head_span_cell``: ``mean`` = mean of
+    finite per-head means, ``var_pooled`` = mean of finite per-head variances,
+    ``std`` = sqrt(var_pooled), ``cross_head_std`` = population std of the finite
+    means, ``n_contributors`` = finite (head,layer,step,rank) count. The
+    bincount path computes ``cross_head_std`` with a one-pass formula instead of
+    the reference two-pass ``std(ddof=0)``; the two are algebraically identical
+    and agree to ~1e-6 for post-softmax attention in [0, 1] (the only inputs
+    here), trading the reference's large-offset stability for vectorization.
+    """
+    r_max = int(sel_id.shape[2]) if sel_id.ndim == 3 else 0
+    valid = step_d >= 0  # [L, T]
+    n_valid = int(valid.sum())
+    if r_max == 0 or n_valid == 0:
+        return {}, n_valid
+    if head is None:
+        m_sel = mean_d[:, :, :, 1 : r_max + 1]  # [L, T, H, R]
+        v_sel = var_d[:, :, :, 1 : r_max + 1]
+    else:
+        m_sel = mean_d[:, :, head : head + 1, 1 : r_max + 1]  # [L, T, 1, R]
+        v_sel = var_d[:, :, head : head + 1, 1 : r_max + 1]
+    bsel = sel_id[valid]  # [Nv, R]
+    segr = seg_range[valid]  # [Nv, R, 2]
+    msel = m_sel[valid]  # [Nv, H, R]
+    vsel = v_sel[valid]
+    n_steps, n_h, _ = msel.shape
+
+    # hits: count (step, rank) selections per block (head-independent).
+    flat_b = bsel.reshape(-1)
+    sel_mask = flat_b >= 0
+    if not bool(sel_mask.any()):
+        return {}, n_valid
+    n_blocks = int(flat_b[sel_mask].max()) + 1
+    hits = np.bincount(flat_b[sel_mask], minlength=n_blocks)
+    seglo = segr[:, :, 0].reshape(-1)
+    seghi = segr[:, :, 1].reshape(-1)
+    arr_lo = np.full(n_blocks, np.iinfo(np.int64).max, dtype=np.int64)
+    arr_hi = np.full(n_blocks, -1, dtype=np.int64)
+    np.minimum.at(arr_lo, flat_b[sel_mask], seglo[sel_mask])
+    np.maximum.at(arr_hi, flat_b[sel_mask], seghi[sel_mask])
+
+    # per-head contributor stats: broadcast the block id over the head axis so
+    # every (step, head, rank) observation is attributed to its block.
+    b_bcast = np.broadcast_to(bsel[:, None, :], (n_steps, n_h, r_max)).reshape(-1)
+    m_flat = msel.reshape(-1)
+    v_flat = vsel.reshape(-1)
+    in_sel = b_bcast >= 0
+    fin = in_sel & np.isfinite(m_flat) & np.isfinite(v_flat)
+    # total_obs counts this block's selected (step,head,rank) occurrences (not a
+    # global observation count), so n_nan_contributors = selected-but-NaN heads.
+    total_obs = np.bincount(b_bcast[in_sel], minlength=n_blocks)
+    n_contrib = np.bincount(b_bcast[fin], minlength=n_blocks)
+    sum_m = np.bincount(b_bcast[fin], weights=m_flat[fin], minlength=n_blocks)
+    sum_m2 = np.bincount(b_bcast[fin], weights=m_flat[fin] ** 2, minlength=n_blocks)
+    sum_v = np.bincount(b_bcast[fin], weights=v_flat[fin], minlength=n_blocks)
+
+    out: dict[int, dict[str, Any]] = {}
+    for block in np.nonzero(hits)[0]:
+        b = int(block)
+        nc = int(n_contrib[b])
+        if nc > 0:
+            mean = float(sum_m[b] / nc)
+            var_pooled = float(sum_v[b] / nc)
+            std = float(np.sqrt(max(var_pooled, 0.0)))
+            cross = (
+                float(np.sqrt(max(sum_m2[b] / nc - mean * mean, 0.0)))
+                if nc >= 2
+                else 0.0
+            )
+        else:
+            mean = std = var_pooled = cross = None
+        out[b] = {
+            "n_hits": int(hits[b]),
+            "seg_lo": int(arr_lo[b]),
+            "seg_hi": int(arr_hi[b]),
+            "mean": mean,
+            "std": std,
+            "var_pooled": var_pooled,
+            "cross_head_std": cross,
+            "n_contributors": nc,
+            "n_nan_contributors": int(total_obs[b]) - nc,
+        }
+    return out, n_valid
+
+
+def _block_position_row(
+    block_id: int,
+    cell: dict[str, Any],
+    n_valid: int,
+    block_size: int,
+    r_max: int,
+    *,
+    record: IterationRecord,
+    idx2item: dict[int, dict[str, Any]],
+    selected_layers: Sequence[int],
+    layer: int | None,
+) -> dict[str, Any]:
+    seg_lo = int(cell["seg_lo"])
+    seg_hi = int(cell["seg_hi"])
+    owner = idx2item.get(seg_lo, {})
+    row = {
+        "task": record.task,
+        "observed_call_idx": int(record.call_idx),
+        "block_id": int(block_id),
+        "token_start": int(block_id) * block_size,
+        "token_end": int(block_id) * block_size + block_size,
+        "seg_lo": seg_lo,
+        "seg_hi": seg_hi,
+        "straddles": bool(seg_lo != seg_hi),
+        "segment_id": owner.get("segment_id"),
+        "segment_ordinal": owner.get("segment_ordinal"),
+        "role": owner.get("role"),
+        "tool_name": owner.get("tool_name"),
+        "selection_freq": (cell["n_hits"] / n_valid) if n_valid else None,
+        "n_hits": int(cell["n_hits"]),
+        "n_valid_layer_steps": int(n_valid),
+        "r_max": int(r_max),
+        "mean_attn": cell["mean"],
+        "std_attn": cell["std"],
+        "var_pooled": cell["var_pooled"],
+        "cross_head_std": cell["cross_head_std"],
+        "n_contributors": int(cell["n_contributors"]),
+        "n_nan_contributors": int(cell["n_nan_contributors"]),
+        "n_layers": len(selected_layers),
+        "layers_used": list(selected_layers),
+    }
+    if layer is not None:
+        row["layer"] = int(layer)
+    return row
+
+
+def _block_position_bands(
+    segment_items: Sequence[dict[str, Any]], block_size: int
+) -> list[dict[str, Any]]:
+    """Segment bands on the block axis from one call's segments."""
+    bands: list[dict[str, Any]] = []
+    for item in sorted(segment_items, key=lambda x: int(x["token_start"])):
+        token_start = int(item["token_start"])
+        token_end = int(item["token_end"])
+        if token_end <= token_start:
+            continue
+        bands.append(
+            {
+                "block_lo": token_start // block_size,
+                "block_hi": -(-token_end // block_size),  # ceil
+                "label": _segment_plot_label(item),
+                "role": str(item.get("role") or "other"),
+                "segment_ordinal": int(item.get("segment_ordinal", 0)),
+            }
+        )
+    return bands
+
+
+def _plot_block_position_grid(
+    trajectory_rows: Sequence[dict[str, Any]],
+    output_stem: Path,
+    *,
+    layers_used: Sequence[int],
+    meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Render the block(token) x call selection map with segment bands."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.patches import Rectangle
+
+    missing_color = "#cfcfcf"
+    block_size = int(meta["block_size"])
+    sink_size = int(meta["sink_size"])
+    recent_window = int(meta["recent_window"])
+    r_max = int(meta["r_max"])
+    n_blocks = int(meta["n_blocks"])
+    call_key_len = {int(k): int(v) for k, v in meta["call_key_len"].items()}
+    bands = meta["bands"]
+    if not trajectory_rows or n_blocks <= 0 or block_size <= 0:
+        raise ValueError("block_position grid: no selected-block observations")
+
+    observed_iters = [int(row["observed_call_idx"]) for row in trajectory_rows]
+    min_iter = min(observed_iters)
+    max_iter = max(observed_iters)
+    iter_values = list(range(min_iter, max_iter + 1))
+    iter_to_col = {iter_idx: col for col, iter_idx in enumerate(iter_values)}
+    n_cols = len(iter_values)
+
+    freq_matrix = np.full((n_blocks, n_cols), np.nan, dtype=np.float64)
+    mean_matrix = np.full((n_blocks, n_cols), np.nan, dtype=np.float64)
+    for row in trajectory_rows:
+        block_id = int(row["block_id"])
+        col = iter_to_col.get(int(row["observed_call_idx"]))
+        if col is None or not (0 <= block_id < n_blocks):
+            continue
+        if row.get("selection_freq") is not None:
+            freq_matrix[block_id, col] = float(row["selection_freq"])
+        if row.get("mean_attn") is not None:
+            mean_matrix[block_id, col] = float(row["mean_attn"])
+
+    freq_cmap = LinearSegmentedColormap.from_list(
+        "asb_block_position_freq",
+        ["#f7fbff", "#deebf7", "#9ecae1", "#3182bd", "#08519c"],
+    )
+    mean_cmap = LinearSegmentedColormap.from_list(
+        "asb_block_position_mean",
+        ["#fffaf0", "#fee391", "#fdae61", "#e34a33", "#7f0000"],
+    )
+    for cmap in (freq_cmap, mean_cmap):
+        cmap.set_bad(missing_color)
+    freq_vmax = _percentile_vmax({"decode": freq_matrix})
+    mean_vmax = _percentile_vmax({"decode": mean_matrix})
+
+    width = max(11.0, min(20.0, 6.8 + 0.5 * n_cols))
+    height = max(8.5, min(26.0, 2.5 + 0.012 * n_blocks))
+    fig, axes = plt.subplots(1, 2, figsize=(width, height), sharex=True, sharey=True)
+    fig.patch.set_facecolor("white")
+    fig.subplots_adjust(left=0.2, right=0.93, bottom=0.09, top=0.92, wspace=0.07)
+
+    sink_blocks = -(-sink_size // block_size)
+    block_ticks = _integer_tick_positions(list(range(n_blocks)), max_labels=24)
+    panels = [
+        (
+            axes[0], freq_matrix, freq_cmap, freq_vmax,
+            "selection frequency", "selected steps / valid steps", True,
+        ),
+        (
+            axes[1], mean_matrix, mean_cmap, mean_vmax,
+            "attention mean (selected)", "mean per-token attention", False,
+        ),
+    ]
+    for ax, matrix, cmap, vmax, title, cbar_label, with_labels in panels:
+        im = ax.imshow(
+            matrix, aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax, origin="upper"
+        )
+        ax.set_title(title)
+        ax.set_xlabel("recording iter / LLM call index")
+        ax.set_xlim(-0.5, n_cols - 0.5)
+        ax.set_ylim(n_blocks - 0.5, -0.5)
+        tick_cols = _integer_tick_positions(iter_values, max_labels=32)
+        ax.set_xticks(tick_cols)
+        ax.set_xticklabels([str(iter_values[col]) for col in tick_cols], fontsize=7)
+        ax.set_yticks(block_ticks)
+        ax.set_yticklabels([str(b * block_size) for b in block_ticks], fontsize=6)
+        ax.set_facecolor(missing_color)
+        if sink_blocks > 0:
+            ax.axhspan(-0.5, sink_blocks - 0.5, facecolor="#fdbf6f", alpha=0.18, zorder=0)
+        for iter_idx, col in iter_to_col.items():
+            key_len = call_key_len.get(iter_idx)
+            if not key_len:
+                continue
+            frontier = min(-(-key_len // block_size), n_blocks)
+            recent_lo = max(0, (key_len - recent_window) // block_size)
+            if frontier > recent_lo:
+                ax.add_patch(
+                    Rectangle(
+                        (col - 0.5, recent_lo - 0.5), 1.0, frontier - recent_lo,
+                        facecolor="#b2df8a", alpha=0.16, edgecolor="none", zorder=0.5,
+                    )
+                )
+        _draw_block_position_bands(ax, bands, with_labels=with_labels)
+        cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.012)
+        cbar.set_label(cbar_label)
+    axes[0].set_ylabel(f"KV token position (block * {block_size})")
+    fig.suptitle(
+        "block_topk selected blocks on the absolute KV token axis "
+        f"(layers {list(layers_used)}; block_size={block_size}, "
+        f"sink={sink_size}, recent={recent_window})",
+        fontsize=10,
+        y=0.985,
+    )
+    fig.text(
+        0.01,
+        0.012,
+        "Y = absolute KV position (each cell = one block of "
+        f"{block_size} tokens; token 0 / sink at top). X = LLM call (decode steps "
+        "pooled). Left = fraction of valid (layer, step) that selected the block; "
+        "right = mean attention over the block when selected. Orange band = sink, "
+        "green staircase = recent window (both always kept, not block_topk-chosen). "
+        "Gray = block never selected. Segment bands labeled at left.",
+        fontsize=6.5,
+        color="#555555",
+    )
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    plt.close(fig)
+    return {
+        "grid_png": str(output_stem.with_suffix(".png")),
+        "grid_pdf": str(output_stem.with_suffix(".pdf")),
+        "x_axis": "recording_iter",
+        "min_iter": min_iter,
+        "max_iter": max_iter,
+        "n_iters": n_cols,
+        "n_blocks": n_blocks,
+        "block_size": block_size,
+        "sink_size": sink_size,
+        "recent_window": recent_window,
+        "r_max": r_max,
+        "freq_vmax_percentile_95": freq_vmax,
+        "mean_vmax_percentile_95": mean_vmax,
+        "layers_used": list(layers_used),
+        "missing_color": missing_color,
+    }
+
+
+def _draw_block_position_bands(
+    ax: Any, bands: Sequence[dict[str, Any]], *, with_labels: bool
+) -> None:
+    """Overlay segment boundaries, a role-colored left gutter, and labels."""
+    from matplotlib.patches import Rectangle
+
+    major = "#222222"
+    n = len(bands)
+    if n == 0:
+        return
+    label_rows = set(_integer_tick_positions(list(range(n)), max_labels=30))
+    trans = ax.get_yaxis_transform()  # x: axes fraction, y: data coords
+    for i, band in enumerate(bands):
+        block_lo = int(band["block_lo"])
+        block_hi = int(band["block_hi"])
+        ax.axhline(block_lo - 0.5, color=major, linewidth=0.4, alpha=0.5, zorder=2)
+        if not with_labels:
+            continue
+        color = _ROLE_COLORS.get(band["role"], _ROLE_COLORS["other"])
+        ax.add_patch(
+            Rectangle(
+                (-0.045, block_lo - 0.5), 0.02, max(1, block_hi - block_lo),
+                transform=trans, clip_on=False, facecolor=color, edgecolor="none",
+                zorder=3,
+            )
+        )
+        if i in label_rows:
+            ax.text(
+                -0.05,
+                (block_lo + block_hi) / 2.0 - 0.5,
+                band["label"],
+                transform=trans,
+                ha="right",
+                va="center",
+                fontsize=4.5,
+                color="#333333",
+                clip_on=False,
+            )
+    ax.axhline(
+        int(bands[-1]["block_hi"]) - 0.5, color=major, linewidth=0.4, alpha=0.5, zorder=2
+    )
+
+
+def _render_per_layer_pdf_block_position(
+    group_records: Sequence[IterationRecord],
+    *,
+    layers_used: Sequence[int],
+    group_dir: Path,
+) -> Path:
+    """Render one block-position grid per recorded layer into a PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    per_layer_dir = group_dir / "per_layer"
+    pages: list[tuple[int, Path]] = []
+    for layer in layers_used:
+        rows, _layer_rows, _used, meta = block_position_rows(
+            group_records, layers=[layer]
+        )
+        if not rows:
+            continue
+        stem = per_layer_dir / f"layer_{int(layer):02d}" / "block_position_grid"
+        _plot_block_position_grid(rows, stem, layers_used=[layer], meta=meta)
+        pages.append((int(layer), stem.with_suffix(".png")))
+
+    pdf_path = group_dir / "block_position_per_layer.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for layer, png in pages:
+            img = plt.imread(png)
+            height, width = img.shape[0], img.shape[1]
+            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
+            ax = fig.add_axes([0, 0, 1, 0.96])
+            ax.imshow(img)
+            ax.axis("off")
+            fig.suptitle(
+                f"layer {layer} - block_topk selected blocks on KV token axis",
+                fontsize=11,
+                y=0.995,
+            )
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+    return pdf_path
+
+
+def _render_per_head_pdf_block_position(
+    group_records: Sequence[IterationRecord],
+    *,
+    layers_used: Sequence[int],
+    group_dir: Path,
+) -> Path:
+    """Render one block-position grid per query head into a PDF."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    n_heads = _n_query_heads_block(group_records)
+    per_head_dir = group_dir / "per_head"
+    pages: list[tuple[int, Path]] = []
+    for h in range(n_heads):
+        rows, _layer_rows, _used, meta = block_position_rows(
+            group_records, layers=list(layers_used), head=h
+        )
+        if not rows:
+            continue
+        stem = per_head_dir / f"head_{h:02d}" / "block_position_grid"
+        _plot_block_position_grid(rows, stem, layers_used=layers_used, meta=meta)
+        pages.append((h, stem.with_suffix(".png")))
+
+    pdf_path = group_dir / "block_position_per_head.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for h, png in pages:
+            img = plt.imread(png)
+            height, width = img.shape[0], img.shape[1]
+            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
+            ax = fig.add_axes([0, 0, 1, 0.96])
+            ax.imshow(img)
+            ax.axis("off")
+            fig.suptitle(
+                f"head {h:02d} - block_topk selected blocks on KV token axis",
+                fontsize=11,
+                y=0.995,
+            )
+            pdf.savefig(fig, dpi=150)
+            plt.close(fig)
+    return pdf_path
+
+
+def _block_position_summary_markdown(summary: dict[str, Any]) -> str:
+    lines = [
+        "# BlockTopK Selected Blocks on the Absolute KV Token Axis",
+        "",
+        f"- Label: `{summary['label']}`",
+        f"- Output: `{summary['output_dir']}`",
+        f"- Records: `{summary['n_records']}`",
+        f"- Blocks (Y extent): `{summary['n_blocks']}` (block_size=`{summary['block_size']}`)",
+        f"- Sink: `{summary['sink_size']}`; recent window: `{summary['recent_window']}`; r_max: `{summary['r_max']}`",
+        f"- Layers aggregated: `{summary['layers_used']}`",
+        "",
+        "## Figure",
+        "",
+        "- Y axis: absolute KV token position (each cell = one block); token 0 / sink at top.",
+        "- X axis: recording iter / LLM call index; decode steps pooled per call.",
+        "- Left panel: selection frequency = valid (layer,step) selecting the block / all valid (layer,step).",
+        "- Right panel: mean attention over the block's kept tokens when selected.",
+        "- Orange band = sink, green staircase = recent window (always kept, not block_topk-chosen).",
+        "- Segment bands labeled at left; gray = block never selected.",
         "",
     ]
     return "\n".join(lines)
