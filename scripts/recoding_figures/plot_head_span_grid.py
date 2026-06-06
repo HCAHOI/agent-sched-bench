@@ -110,7 +110,9 @@ def main() -> None:
         help=(
             "Also emit segment_head_span_per_layer.pdf: one page per recorded "
             "layer (same 2x2 grid), to compare the within-segment mean/std grid "
-            "across layers. Color scales are per-page (per layer)."
+            "across layers. For block_position this flag is recorded in the "
+            "summary but no PDF is written; use plot_block_position_html.py for "
+            "pooled + per-layer drill-down. Color scales are per-page (per layer)."
         ),
     )
     parser.add_argument(
@@ -119,8 +121,11 @@ def main() -> None:
         help=(
             "Also emit a per-head PDF: one page per query head, each page "
             "showing the same grid as the main figure but restricted to that "
-            "single head (no cross-head pooling). Works for both segment and "
-            "block modes. Color scales are per-page (per head)."
+            "single head (no cross-head pooling). Works for segment, block, "
+            "and block_segment modes. For block_position this flag is recorded "
+            "in the summary but no PDF is written; plot_block_position_html.py "
+            "provides pooled, per-layer, and per-head attention drill-down. "
+            "Color scales are per-page (per head)."
         ),
     )
     args = parser.parse_args()
@@ -370,7 +375,8 @@ def block_head_span_rows(
         if not available:
             continue
         selected_layers = list(layers) if layers is not None else list(available)
-        missing = [layer for layer in selected_layers if layer not in available]
+        layer_to_pos = {layer: pos for pos, layer in enumerate(available)}
+        missing = [layer for layer in selected_layers if layer not in layer_to_pos]
         if missing:
             raise ValueError(
                 f"{record.iter_dir}: requested layers not recorded in block_span: "
@@ -715,7 +721,8 @@ def block_segment_head_span_rows(
                 f"{record.iter_dir}: attention.npz has no block_span layers"
             )
         selected_layers = list(layers) if layers is not None else list(available)
-        missing = [layer for layer in selected_layers if layer not in available]
+        layer_to_pos = {layer: pos for pos, layer in enumerate(available)}
+        missing = [layer for layer in selected_layers if layer not in layer_to_pos]
         if missing:
             raise ValueError(
                 f"{record.iter_dir}: requested layers not recorded in block_span: "
@@ -728,7 +735,7 @@ def block_segment_head_span_rows(
                 f"{record.iter_dir}: block_span layer set {selected_layers} differs "
                 f"from earlier iters {layers_used}; recordings are inconsistent"
             )
-        positions = [available.index(layer) for layer in selected_layers]
+        positions = [layer_to_pos[layer] for layer in selected_layers]
         sel = _select_block_segment_layers(stats, positions)
 
         n_segments = int(sel["seg_mean_d"].shape[3]) if sel["seg_mean_d"].ndim == 4 else 0
@@ -2063,22 +2070,6 @@ def build_block_position_grids(
             meta=meta,
         )
         plot_summary = _portable_plot_summary(plot_summary, artifact_root=output_dir)
-        per_layer_pdf = None
-        if per_layer:
-            per_layer_pdf = _artifact_relative_path(
-                _render_per_layer_pdf_block_position(
-                    group_records, layers_used=layers_used, group_dir=group_dir
-                ),
-                output_dir,
-            )
-        per_head_pdf = None
-        if per_head:
-            per_head_pdf = _artifact_relative_path(
-                _render_per_head_pdf_block_position(
-                    group_records, layers_used=layers_used, group_dir=group_dir
-                ),
-                output_dir,
-            )
         group_summary = {
             "label": label,
             "output_dir": _artifact_relative_path(group_dir, output_dir),
@@ -2092,8 +2083,8 @@ def build_block_position_grids(
             "n_trajectory_rows": len(trajectory_rows),
             "n_layer_rows": len(layer_rows),
             "layers_used": layers_used,
-            "per_layer_pdf": per_layer_pdf,
-            "per_head_pdf": per_head_pdf,
+            "per_layer_requested": bool(per_layer),
+            "per_head_requested": bool(per_head),
             "plot": plot_summary,
         }
         (group_dir / "summary.json").write_text(
@@ -2165,7 +2156,8 @@ def block_position_rows(
         if not available:
             continue
         selected_layers = list(layers) if layers is not None else list(available)
-        missing = [layer for layer in selected_layers if layer not in available]
+        layer_to_pos = {layer: pos for pos, layer in enumerate(available)}
+        missing = [layer for layer in selected_layers if layer not in layer_to_pos]
         if missing:
             raise ValueError(
                 f"{record.iter_dir}: requested layers not recorded in block_span: "
@@ -2196,7 +2188,7 @@ def block_position_rows(
                 f"earlier iters {geom_ref}; pooling incompatible bucket layouts "
                 "would misalign the block axis"
             )
-        positions = [available.index(layer) for layer in selected_layers]
+        positions = [layer_to_pos[layer] for layer in selected_layers]
         idx = np.asarray(positions, dtype=np.int64)
         mean_d = stats["block_span_mean_decode"][idx].astype(np.float64)
         var_d = stats["block_span_var_decode"][idx].astype(np.float64)
@@ -2253,6 +2245,250 @@ def block_position_rows(
     return trajectory, by_layer, used, meta
 
 
+def block_position_rows_by_head(
+    records: Sequence[IterationRecord],
+    *,
+    layers: Sequence[int] | None = None,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[list[dict[str, Any]]],
+    list[dict[int, list[dict[str, Any]]]],
+    list[int],
+    dict[str, Any],
+]:
+    """Return block-position rows for all query heads in one record pass.
+
+    Returns ``(trajectory_rows, layer_rows, per_head_trajectory, per_head_layer,
+    layers_used, meta)``. ``per_head_trajectory[h]`` contains per-row entries
+    for head ``h``; ``per_head_layer[h][layer]`` contains layer-specific entries
+    for head ``h``.
+    """
+    trajectory: list[dict[str, Any]] = []
+    layer_rows: list[dict[str, Any]] = []
+    metadata: dict[str, dict[str, Any]] = {}
+    layers_used: list[int] | None = None
+    geom_ref: tuple[int, int, int, int] | None = None
+    block_size = sink_size = recent_window = r_max = 0
+    call_key_len: dict[int, int] = {}
+    max_key_len = 0
+    band_source_call = -1
+    band_items: list[dict[str, Any]] = []
+
+    n_heads: int | None = None
+    per_head_trajectory: list[list[dict[str, Any]]] = []
+    per_head_layer: list[dict[int, list[dict[str, Any]]]] = []
+    # Recompute all outputs in one pass and avoid re-reading the same recording
+    # artifacts repeatedly for each head.
+    for record in sorted(records, key=lambda item: (item.task, item.call_idx)):
+        segments_payload = _load_json_required(record.iter_dir / "segments.json")
+        segments = list(segments_payload.get("segments", []))
+        segment_items = _segments_for_record(segments, record=record, metadata=metadata)
+        if not segment_items:
+            continue
+        try:
+            stats = load_block_head_span_stats(record.iter_dir)
+        except (KeyError, FileNotFoundError, OSError, ValueError):
+            continue
+        available = [int(layer) for layer in stats["block_span_layers"].tolist()]
+        if not available:
+            continue
+        selected_layers = list(layers) if layers is not None else list(available)
+        layer_to_pos = {layer: pos for pos, layer in enumerate(available)}
+        missing = [layer for layer in selected_layers if layer not in layer_to_pos]
+        if missing:
+            raise ValueError(
+                f"{record.iter_dir}: requested layers not recorded in block_span: "
+                f"{missing} (available: {available})"
+            )
+        if layers_used is None:
+            layers_used = selected_layers
+        elif selected_layers != layers_used:
+            raise ValueError(
+                f"{record.iter_dir}: block_span layer set {selected_layers} differs "
+                f"from earlier iters {layers_used}; recordings are inconsistent"
+            )
+        positions = [layer_to_pos[layer] for layer in selected_layers]
+        idx = np.asarray(positions, dtype=np.int64)
+        mean_d = stats["block_span_mean_decode"][idx].astype(np.float64)
+        var_d = stats["block_span_var_decode"][idx].astype(np.float64)
+        sel_id = stats["block_span_selected_block_id"][idx].astype(np.int64)
+        seg_range = stats["block_span_selected_block_seg_range"][idx].astype(np.int64)
+        step_d = stats["block_span_decode_step"][idx].astype(np.int64)
+        mean_arr = stats["block_span_mean_decode"]
+        C = int(mean_arr.shape[3]) if mean_arr.ndim == 4 else 0
+        geom = (
+            int(stats["block_span_block_size"]),
+            int(stats["block_span_sink_size"]),
+            int(stats["block_span_recent_window"]),
+            C,
+        )
+        if geom_ref is None:
+            geom_ref = geom
+            block_size, sink_size, recent_window, _ = geom
+            r_max = C - 2 if C >= 2 else 0
+        elif geom != geom_ref:
+            raise ValueError(
+                f"{record.iter_dir}: block_span geometry {geom} differs from "
+                f"earlier iters {geom_ref}; pooling incompatible bucket layouts "
+                "would misalign the block axis"
+            )
+
+        n_record_heads = int(mean_d.shape[2])
+        if n_heads is None:
+            n_heads = n_record_heads
+            per_head_trajectory = [[] for _ in range(n_record_heads)]
+            per_head_layer = [
+                {int(layer): [] for layer in selected_layers}
+                for _ in range(n_record_heads)
+            ]
+        elif n_record_heads != n_heads:
+            raise ValueError(
+                f"{record.iter_dir}: block_span query-head count {n_record_heads} "
+                f"differs from earlier {n_heads}; recordings are inconsistent"
+            )
+
+        idx2item = {int(it["segment_idx"]): it for it in segment_items}
+        key_len = max((int(it["token_end"]) for it in segment_items), default=0)
+        call_key_len[int(record.call_idx)] = key_len
+        max_key_len = max(max_key_len, key_len)
+        if int(record.call_idx) >= band_source_call:
+            band_source_call = int(record.call_idx)
+            band_items = list(segment_items)
+
+        agg, n_valid = _block_position_aggregate(
+            mean_d, var_d, sel_id, seg_range, step_d, head=None
+        )
+        for block_id, cell in agg.items():
+            trajectory.append(
+                _block_position_row(
+                    block_id, cell, n_valid, block_size, r_max,
+                    record=record, idx2item=idx2item,
+                    selected_layers=selected_layers, layer=None,
+                )
+            )
+        for li, layer in enumerate(selected_layers):
+            sl = slice(li, li + 1)
+            agg_l, n_valid_l = _block_position_aggregate(
+                mean_d[sl], var_d[sl], sel_id[sl], seg_range[sl], step_d[sl], head=None
+            )
+            for block_id, cell in agg_l.items():
+                layer_rows.append(
+                    _block_position_row(
+                        block_id, cell, n_valid_l, block_size, r_max,
+                        record=record, idx2item=idx2item,
+                        selected_layers=selected_layers, layer=int(layer),
+                    )
+                )
+
+        if n_heads == 0:
+            continue
+        per_head_aggs, n_valid_heads = _block_position_aggregate_per_head(
+            mean_d, var_d, sel_id, seg_range, step_d
+        )
+        for h, agg_h in enumerate(per_head_aggs):
+            for block_id, cell in agg_h.items():
+                per_head_trajectory[h].append(
+                    _block_position_row(
+                        block_id,
+                        cell,
+                        n_valid_heads,
+                        block_size,
+                        r_max,
+                        record=record,
+                        idx2item=idx2item,
+                        selected_layers=selected_layers,
+                        layer=None,
+                    )
+                )
+        for li, layer in enumerate(selected_layers):
+            sl = slice(li, li + 1)
+            per_head_aggs_l, n_valid_l = _block_position_aggregate_per_head(
+                mean_d[sl],
+                var_d[sl],
+                sel_id[sl],
+                seg_range[sl],
+                step_d[sl],
+            )
+            for h, agg_l in enumerate(per_head_aggs_l):
+                for block_id, cell in agg_l.items():
+                    per_head_layer[h].setdefault(int(layer), []).append(
+                        _block_position_row(
+                            block_id,
+                            cell,
+                            n_valid_l,
+                            block_size,
+                            r_max,
+                            record=record,
+                            idx2item=idx2item,
+                            selected_layers=selected_layers,
+                            layer=int(layer),
+                        )
+                    )
+
+    if layers_used is None:
+        layers_used = []
+        n_blocks = 0
+    else:
+        n_blocks = (-(-max_key_len // block_size)) if block_size > 0 else 0
+    bands = _block_position_bands(band_items, block_size) if block_size > 0 else []
+    meta = {
+        "block_size": block_size,
+        "sink_size": sink_size,
+        "recent_window": recent_window,
+        "r_max": r_max,
+        "n_blocks": int(n_blocks),
+        "call_key_len": {int(k): int(v) for k, v in call_key_len.items()},
+        "bands": bands,
+        "band_source_call": band_source_call,
+    }
+
+    # Remove empty layer buckets if any; mirrors existing payload contracts while
+    # preventing sparse call-time assumptions from seeing absent layers.
+    return trajectory, layer_rows, per_head_trajectory, per_head_layer, layers_used, meta
+
+
+def _block_position_selection_index(
+    sel_id: np.ndarray,
+    seg_range: np.ndarray,
+    step_d: np.ndarray,
+) -> tuple[
+    int,
+    int,
+    np.ndarray,
+    np.ndarray | None,
+    int,
+    int,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    """Shared valid-step/block-index state for block-position aggregation."""
+    r_max = int(sel_id.shape[2]) if sel_id.ndim == 3 else 0
+    valid = step_d >= 0  # [L, T]
+    n_valid = int(valid.sum())
+    if r_max == 0 or n_valid == 0:
+        return r_max, n_valid, valid, None, 0, 0, None, None, None
+
+    bsel = sel_id[valid]  # [Nv, R]
+    segr = seg_range[valid]  # [Nv, R, 2]
+    n_steps = int(bsel.shape[0])
+    flat_b = bsel.reshape(-1)
+    sel_mask = flat_b >= 0
+    if not bool(sel_mask.any()):
+        return r_max, n_valid, valid, bsel, n_steps, 0, None, None, None
+
+    n_blocks = int(flat_b[sel_mask].max()) + 1
+    hits = np.bincount(flat_b[sel_mask], minlength=n_blocks)
+    seglo = segr[:, :, 0].reshape(-1)
+    seghi = segr[:, :, 1].reshape(-1)
+    arr_lo = np.full(n_blocks, np.iinfo(np.int64).max, dtype=np.int64)
+    arr_hi = np.full(n_blocks, -1, dtype=np.int64)
+    np.minimum.at(arr_lo, flat_b[sel_mask], seglo[sel_mask])
+    np.maximum.at(arr_hi, flat_b[sel_mask], seghi[sel_mask])
+    return r_max, n_valid, valid, bsel, n_steps, n_blocks, hits, arr_lo, arr_hi
+
+
 def _block_position_aggregate(
     mean_d: np.ndarray,
     var_d: np.ndarray,
@@ -2276,10 +2512,18 @@ def _block_position_aggregate(
     and agree to ~1e-6 for post-softmax attention in [0, 1] (the only inputs
     here), trading the reference's large-offset stability for vectorization.
     """
-    r_max = int(sel_id.shape[2]) if sel_id.ndim == 3 else 0
-    valid = step_d >= 0  # [L, T]
-    n_valid = int(valid.sum())
-    if r_max == 0 or n_valid == 0:
+    (
+        r_max,
+        n_valid,
+        valid,
+        bsel,
+        n_steps,
+        n_blocks,
+        hits,
+        arr_lo,
+        arr_hi,
+    ) = _block_position_selection_index(sel_id, seg_range, step_d)
+    if hits is None or bsel is None or arr_lo is None or arr_hi is None:
         return {}, n_valid
     if head is None:
         m_sel = mean_d[:, :, :, 1 : r_max + 1]  # [L, T, H, R]
@@ -2287,25 +2531,9 @@ def _block_position_aggregate(
     else:
         m_sel = mean_d[:, :, head : head + 1, 1 : r_max + 1]  # [L, T, 1, R]
         v_sel = var_d[:, :, head : head + 1, 1 : r_max + 1]
-    bsel = sel_id[valid]  # [Nv, R]
-    segr = seg_range[valid]  # [Nv, R, 2]
     msel = m_sel[valid]  # [Nv, H, R]
     vsel = v_sel[valid]
-    n_steps, n_h, _ = msel.shape
-
-    # hits: count (step, rank) selections per block (head-independent).
-    flat_b = bsel.reshape(-1)
-    sel_mask = flat_b >= 0
-    if not bool(sel_mask.any()):
-        return {}, n_valid
-    n_blocks = int(flat_b[sel_mask].max()) + 1
-    hits = np.bincount(flat_b[sel_mask], minlength=n_blocks)
-    seglo = segr[:, :, 0].reshape(-1)
-    seghi = segr[:, :, 1].reshape(-1)
-    arr_lo = np.full(n_blocks, np.iinfo(np.int64).max, dtype=np.int64)
-    arr_hi = np.full(n_blocks, -1, dtype=np.int64)
-    np.minimum.at(arr_lo, flat_b[sel_mask], seglo[sel_mask])
-    np.maximum.at(arr_hi, flat_b[sel_mask], seghi[sel_mask])
+    _, n_h, _ = msel.shape
 
     # per-head contributor stats: broadcast the block id over the head axis so
     # every (step, head, rank) observation is attributed to its block.
@@ -2348,6 +2576,95 @@ def _block_position_aggregate(
             "n_contributors": nc,
             "n_nan_contributors": int(total_obs[b]) - nc,
         }
+    return out, n_valid
+
+
+def _block_position_aggregate_per_head(
+    mean_d: np.ndarray,
+    var_d: np.ndarray,
+    sel_id: np.ndarray,
+    seg_range: np.ndarray,
+    step_d: np.ndarray,
+) -> tuple[list[dict[int, dict[str, Any]]], int]:
+    """Per-block aggregates for every query head using one shared selection pass."""
+    n_heads = int(mean_d.shape[2]) if mean_d.ndim == 4 else 0
+    (
+        r_max,
+        n_valid,
+        valid,
+        bsel,
+        n_steps,
+        n_blocks,
+        hits,
+        arr_lo,
+        arr_hi,
+    ) = _block_position_selection_index(sel_id, seg_range, step_d)
+    if n_heads == 0:
+        return [], n_valid
+    out: list[dict[int, dict[str, Any]]] = [{} for _ in range(n_heads)]
+    if hits is None or bsel is None or arr_lo is None or arr_hi is None:
+        return out, n_valid
+
+    msel = mean_d[:, :, :, 1 : r_max + 1][valid]  # [Nv, H, R]
+    vsel = var_d[:, :, :, 1 : r_max + 1][valid]
+    _, n_h, _ = msel.shape
+    if n_h != n_heads:
+        raise ValueError(f"mean_d head axis changed unexpectedly: {n_h} != {n_heads}")
+
+    b_bcast = np.broadcast_to(bsel[:, None, :], (n_steps, n_heads, r_max)).reshape(-1)
+    head_ids = np.broadcast_to(
+        np.arange(n_heads, dtype=np.int64)[None, :, None],
+        (n_steps, n_heads, r_max),
+    ).reshape(-1)
+    m_flat = msel.reshape(-1)
+    v_flat = vsel.reshape(-1)
+    in_sel = b_bcast >= 0
+    fin = in_sel & np.isfinite(m_flat) & np.isfinite(v_flat)
+    combined_in_sel = b_bcast[in_sel] * n_heads + head_ids[in_sel]
+    combined_fin = b_bcast[fin] * n_heads + head_ids[fin]
+    minlength = n_blocks * n_heads
+    total_obs = np.bincount(combined_in_sel, minlength=minlength).reshape(
+        n_blocks, n_heads
+    )
+    n_contrib = np.bincount(combined_fin, minlength=minlength).reshape(
+        n_blocks, n_heads
+    )
+    sum_m = np.bincount(
+        combined_fin, weights=m_flat[fin], minlength=minlength
+    ).reshape(n_blocks, n_heads)
+    sum_m2 = np.bincount(
+        combined_fin, weights=m_flat[fin] ** 2, minlength=minlength
+    ).reshape(n_blocks, n_heads)
+    sum_v = np.bincount(
+        combined_fin, weights=v_flat[fin], minlength=minlength
+    ).reshape(n_blocks, n_heads)
+
+    for block in np.nonzero(hits)[0]:
+        b = int(block)
+        for h in range(n_heads):
+            nc = int(n_contrib[b, h])
+            if nc > 0:
+                mean = float(sum_m[b, h] / nc)
+                var_pooled = float(sum_v[b, h] / nc)
+                std = float(np.sqrt(max(var_pooled, 0.0)))
+                cross = (
+                    float(np.sqrt(max(sum_m2[b, h] / nc - mean * mean, 0.0)))
+                    if nc >= 2
+                    else 0.0
+                )
+            else:
+                mean = std = var_pooled = cross = None
+            out[h][b] = {
+                "n_hits": int(hits[b]),
+                "seg_lo": int(arr_lo[b]),
+                "seg_hi": int(arr_hi[b]),
+                "mean": mean,
+                "std": std,
+                "var_pooled": var_pooled,
+                "cross_head_std": cross,
+                "n_contributors": nc,
+                "n_nan_contributors": int(total_obs[b, h]) - nc,
+            }
     return out, n_valid
 
 
@@ -2419,6 +2736,26 @@ def _block_position_bands(
     return bands
 
 
+def _fill_block_position_matrix(
+    rows: Sequence[dict[str, Any]],
+    *,
+    block_to_row: dict[int, int],
+    call_to_col: dict[int, int],
+    key: str,
+) -> np.ndarray:
+    """Fill a block-position matrix indexed by absolute block and call."""
+    matrix = np.full((len(block_to_row), len(call_to_col)), np.nan, dtype=np.float64)
+    for row in rows:
+        row_idx = block_to_row.get(int(row["block_id"]))
+        col_idx = call_to_col.get(int(row["observed_call_idx"]))
+        if row_idx is None or col_idx is None:
+            continue
+        value = row.get(key)
+        if value is not None:
+            matrix[row_idx, col_idx] = float(value)
+    return matrix
+
+
 def _plot_block_position_grid(
     trajectory_rows: Sequence[dict[str, Any]],
     output_stem: Path,
@@ -2448,18 +2785,20 @@ def _plot_block_position_grid(
     iter_values = list(range(min_iter, max_iter + 1))
     iter_to_col = {iter_idx: col for col, iter_idx in enumerate(iter_values)}
     n_cols = len(iter_values)
+    block_to_row = {block_id: block_id for block_id in range(n_blocks)}
 
-    freq_matrix = np.full((n_blocks, n_cols), np.nan, dtype=np.float64)
-    mean_matrix = np.full((n_blocks, n_cols), np.nan, dtype=np.float64)
-    for row in trajectory_rows:
-        block_id = int(row["block_id"])
-        col = iter_to_col.get(int(row["observed_call_idx"]))
-        if col is None or not (0 <= block_id < n_blocks):
-            continue
-        if row.get("selection_freq") is not None:
-            freq_matrix[block_id, col] = float(row["selection_freq"])
-        if row.get("mean_attn") is not None:
-            mean_matrix[block_id, col] = float(row["mean_attn"])
+    freq_matrix = _fill_block_position_matrix(
+        trajectory_rows,
+        block_to_row=block_to_row,
+        call_to_col=iter_to_col,
+        key="selection_freq",
+    )
+    mean_matrix = _fill_block_position_matrix(
+        trajectory_rows,
+        block_to_row=block_to_row,
+        call_to_col=iter_to_col,
+        key="mean_attn",
+    )
 
     freq_cmap = LinearSegmentedColormap.from_list(
         "asb_block_position_freq",
@@ -2508,7 +2847,15 @@ def _plot_block_position_grid(
         ax.set_yticklabels([str(b * block_size) for b in block_ticks], fontsize=6)
         ax.set_facecolor(missing_color)
         if sink_blocks > 0:
-            ax.axhspan(-0.5, sink_blocks - 0.5, facecolor="#fdbf6f", alpha=0.18, zorder=0)
+            ax.axhspan(
+                -0.5,
+                sink_blocks - 0.5,
+                facecolor="#f28e2b",
+                alpha=0.34,
+                edgecolor="#b85f00",
+                linewidth=0.35,
+                zorder=0.5,
+            )
         for iter_idx, col in iter_to_col.items():
             key_len = call_key_len.get(iter_idx)
             if not key_len:
@@ -2519,7 +2866,11 @@ def _plot_block_position_grid(
                 ax.add_patch(
                     Rectangle(
                         (col - 0.5, recent_lo - 0.5), 1.0, frontier - recent_lo,
-                        facecolor="#b2df8a", alpha=0.16, edgecolor="none", zorder=0.5,
+                        facecolor="#2ca02c",
+                        alpha=0.40,
+                        edgecolor="#1b7f2a",
+                        linewidth=0.25,
+                        zorder=0.6,
                     )
                 )
         _draw_block_position_bands(ax, bands, with_labels=with_labels)
@@ -2539,23 +2890,22 @@ def _plot_block_position_grid(
         "Y = absolute KV position (each cell = one block of "
         f"{block_size} tokens; token 0 / sink at top). X = LLM call (decode steps "
         "pooled). Left = fraction of valid (layer, step) that selected the block; "
-        "right = mean attention over the block when selected. Orange band = sink, "
-        "green staircase = recent window (both always kept, not block_topk-chosen). "
-        "Gray = block never selected. Segment bands labeled at left.",
+        "right = mean attention over the block when selected. Dark orange band = "
+        "sink, dark green staircase = recent window (both always kept, not "
+        "block_topk-chosen). Gray = block never selected. Segment bands labeled "
+        "at left.",
         fontsize=6.5,
         color="#555555",
     )
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    # Higher dpi: the imshow heatmap embeds as a raster in PNG/PDF; with
+    # Higher dpi: the imshow heatmap embeds as a raster in PNG; with
     # ~1000+ block rows a coarse raster looks blurry when zoomed, so render the
     # cells at enough resolution to stay crisp (nearest interpolation keeps the
     # cell edges hard rather than smoothing them into gradients).
     fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
-    fig.savefig(output_stem.with_suffix(".pdf"), dpi=300, bbox_inches="tight")
     plt.close(fig)
     return {
         "grid_png": str(output_stem.with_suffix(".png")),
-        "grid_pdf": str(output_stem.with_suffix(".pdf")),
         "x_axis": "recording_iter",
         "min_iter": min_iter,
         "max_iter": max_iter,
@@ -2613,89 +2963,6 @@ def _draw_block_position_bands(
     ax.axhline(
         int(bands[-1]["block_hi"]) - 0.5, color=major, linewidth=0.4, alpha=0.5, zorder=2
     )
-
-
-def _render_per_layer_pdf_block_position(
-    group_records: Sequence[IterationRecord],
-    *,
-    layers_used: Sequence[int],
-    group_dir: Path,
-) -> Path:
-    """Render one block-position grid per recorded layer into a PDF."""
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
-
-    per_layer_dir = group_dir / "per_layer"
-    pages: list[tuple[int, Path]] = []
-    for layer in layers_used:
-        rows, _layer_rows, _used, meta = block_position_rows(
-            group_records, layers=[layer]
-        )
-        if not rows:
-            continue
-        stem = per_layer_dir / f"layer_{int(layer):02d}" / "block_position_grid"
-        _plot_block_position_grid(rows, stem, layers_used=[layer], meta=meta)
-        pages.append((int(layer), stem.with_suffix(".png")))
-
-    pdf_path = group_dir / "block_position_per_layer.pdf"
-    with PdfPages(pdf_path) as pdf:
-        for layer, png in pages:
-            img = plt.imread(png)
-            height, width = img.shape[0], img.shape[1]
-            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
-            ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img, interpolation="nearest")
-            ax.axis("off")
-            fig.suptitle(
-                f"layer {layer} - block_topk selected blocks on KV token axis",
-                fontsize=11,
-                y=0.995,
-            )
-            pdf.savefig(fig, dpi=150)
-            plt.close(fig)
-    return pdf_path
-
-
-def _render_per_head_pdf_block_position(
-    group_records: Sequence[IterationRecord],
-    *,
-    layers_used: Sequence[int],
-    group_dir: Path,
-) -> Path:
-    """Render one block-position grid per query head into a PDF."""
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
-
-    n_heads = _n_query_heads_block(group_records)
-    per_head_dir = group_dir / "per_head"
-    pages: list[tuple[int, Path]] = []
-    for h in range(n_heads):
-        rows, _layer_rows, _used, meta = block_position_rows(
-            group_records, layers=list(layers_used), head=h
-        )
-        if not rows:
-            continue
-        stem = per_head_dir / f"head_{h:02d}" / "block_position_grid"
-        _plot_block_position_grid(rows, stem, layers_used=layers_used, meta=meta)
-        pages.append((h, stem.with_suffix(".png")))
-
-    pdf_path = group_dir / "block_position_per_head.pdf"
-    with PdfPages(pdf_path) as pdf:
-        for h, png in pages:
-            img = plt.imread(png)
-            height, width = img.shape[0], img.shape[1]
-            fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
-            ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img, interpolation="nearest")
-            ax.axis("off")
-            fig.suptitle(
-                f"head {h:02d} - block_topk selected blocks on KV token axis",
-                fontsize=11,
-                y=0.995,
-            )
-            pdf.savefig(fig, dpi=150)
-            plt.close(fig)
-    return pdf_path
 
 
 def _block_position_summary_markdown(summary: dict[str, Any]) -> str:
