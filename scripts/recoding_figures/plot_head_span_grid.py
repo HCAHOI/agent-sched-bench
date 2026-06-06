@@ -899,7 +899,9 @@ def _plot_block_head_span_grid(
         (axes[0], mean_mat, mean_cmap, mean_vmax, "within-block attention mean"),
         (axes[1], std_mat, std_cmap, std_vmax, "within-block attention std (pooled)"),
     ):
-        im = ax.imshow(mat, aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax)
+        im = ax.imshow(
+            mat, aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax, interpolation="nearest"
+        )
         ax.set_title(title)
         ax.set_ylabel("layer")
         ax.set_yticks(range(n_layers))
@@ -911,8 +913,8 @@ def _plot_block_head_span_grid(
     axes[1].set_xlabel("bucket (sink | selection rank | recent)")
     fig.tight_layout()
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
-    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".pdf"), dpi=300, bbox_inches="tight")
     plt.close(fig)
     return {
         "grid_png": str(output_stem.with_suffix(".png")),
@@ -1285,7 +1287,7 @@ def _render_per_layer_pdf(
             height, width = img.shape[0], img.shape[1]
             fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
             ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img)
+            ax.imshow(img, interpolation="nearest")
             ax.axis("off")
             fig.suptitle(
                 f"layer {layer} - within-segment mean (top) / std (bottom), prefill | decode",
@@ -1364,7 +1366,7 @@ def _render_per_head_pdf_segment(
             height, width = img.shape[0], img.shape[1]
             fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
             ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img)
+            ax.imshow(img, interpolation="nearest")
             ax.axis("off")
             fig.suptitle(
                 f"head {h:02d} - within-segment mean (top) / std (bottom), prefill | decode",
@@ -1407,7 +1409,7 @@ def _render_per_head_pdf_block(
             height, width = img.shape[0], img.shape[1]
             fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
             ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img)
+            ax.imshow(img, interpolation="nearest")
             ax.axis("off")
             fig.suptitle(
                 f"head {h:02d} - within-block mean (top) / std (bottom)",
@@ -1507,7 +1509,7 @@ def _render_per_layer_pdf_block_segment(
             height, width = img.shape[0], img.shape[1]
             fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
             ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img)
+            ax.imshow(img, interpolation="nearest")
             ax.axis("off")
             fig.suptitle(
                 f"layer {layer} - block_topk selected tokens mapped to segments",
@@ -1550,7 +1552,7 @@ def _render_per_head_pdf_block_segment(
             height, width = img.shape[0], img.shape[1]
             fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
             ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img)
+            ax.imshow(img, interpolation="nearest")
             ax.axis("off")
             fig.suptitle(
                 f"head {h:02d} - block_topk selected tokens mapped to segments",
@@ -1661,7 +1663,10 @@ def _plot_block_segment_head_span_grid(
     ]
     turn_boundaries = _segment_turn_boundaries(summary_rows)
     for ax, matrix, cmap, vmin, vmax, title, cbar_label in panels:
-        im = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
+        im = ax.imshow(
+            matrix, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax,
+            interpolation="nearest",
+        )
         ax.set_title(title)
         ax.set_ylabel("segment")
         ax.set_yticks(range(len(labels)))
@@ -1710,8 +1715,8 @@ def _plot_block_segment_head_span_grid(
         color="#555555",
     )
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
-    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".pdf"), dpi=300, bbox_inches="tight")
     plt.close(fig)
     return {
         "grid_png": str(output_stem.with_suffix(".png")),
@@ -1837,12 +1842,14 @@ def _plot_head_span_grid(
     for col, phase in enumerate(phases):
         images.append(
             axes[0, col].imshow(
-                mean_matrices[phase], aspect="auto", cmap=mean_cmap, vmin=0.0, vmax=mean_vmax
+                mean_matrices[phase], aspect="auto", cmap=mean_cmap, vmin=0.0,
+                vmax=mean_vmax, interpolation="nearest"
             )
         )
         images.append(
             axes[1, col].imshow(
-                std_matrices[phase], aspect="auto", cmap=std_cmap, vmin=0.0, vmax=std_vmax
+                std_matrices[phase], aspect="auto", cmap=std_cmap, vmin=0.0,
+                vmax=std_vmax, interpolation="nearest"
             )
         )
         axes[0, col].set_title(f"{phase}: within-segment attention mean")
@@ -1899,8 +1906,8 @@ def _plot_head_span_grid(
         color="#555555",
     )
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
-    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".pdf"), dpi=300, bbox_inches="tight")
     plt.close(fig)
     return {
         "grid_png": str(output_stem.with_suffix(".png")),
@@ -2487,7 +2494,8 @@ def _plot_block_position_grid(
     ]
     for ax, matrix, cmap, vmax, title, cbar_label, with_labels in panels:
         im = ax.imshow(
-            matrix, aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax, origin="upper"
+            matrix, aspect="auto", cmap=cmap, vmin=0.0, vmax=vmax, origin="upper",
+            interpolation="nearest",
         )
         ax.set_title(title)
         ax.set_xlabel("recording iter / LLM call index")
@@ -2538,8 +2546,12 @@ def _plot_block_position_grid(
         color="#555555",
     )
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_stem.with_suffix(".png"), dpi=180, bbox_inches="tight")
-    fig.savefig(output_stem.with_suffix(".pdf"), bbox_inches="tight")
+    # Higher dpi: the imshow heatmap embeds as a raster in PNG/PDF; with
+    # ~1000+ block rows a coarse raster looks blurry when zoomed, so render the
+    # cells at enough resolution to stay crisp (nearest interpolation keeps the
+    # cell edges hard rather than smoothing them into gradients).
+    fig.savefig(output_stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(output_stem.with_suffix(".pdf"), dpi=300, bbox_inches="tight")
     plt.close(fig)
     return {
         "grid_png": str(output_stem.with_suffix(".png")),
@@ -2632,7 +2644,7 @@ def _render_per_layer_pdf_block_position(
             height, width = img.shape[0], img.shape[1]
             fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
             ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img)
+            ax.imshow(img, interpolation="nearest")
             ax.axis("off")
             fig.suptitle(
                 f"layer {layer} - block_topk selected blocks on KV token axis",
@@ -2674,7 +2686,7 @@ def _render_per_head_pdf_block_position(
             height, width = img.shape[0], img.shape[1]
             fig = plt.figure(figsize=(width / 150.0, height / 150.0 + 0.4))
             ax = fig.add_axes([0, 0, 1, 0.96])
-            ax.imshow(img)
+            ax.imshow(img, interpolation="nearest")
             ax.axis("off")
             fig.suptitle(
                 f"head {h:02d} - block_topk selected blocks on KV token axis",
