@@ -144,6 +144,10 @@ class TerminalBenchRunner:
         run_root = attempt_ctx.attempt_dir / "_terminal_bench_run"
         run_id = attempt_ctx.instance_id.replace("/", "_")
         run_root.mkdir(parents=True, exist_ok=True)
+        runtime_task = self._materialize_runtime_task(
+            task=task,
+            run_root=run_root,
+        )
 
         attempt_ctx.mark_container_ready(
             self._expected_client_container_name(
@@ -152,7 +156,7 @@ class TerminalBenchRunner:
             )
         )
         command = self._build_tb_command(
-            task=task,
+            task=runtime_task,
             run_root=run_root,
             run_id=run_id,
             prompt_template=prompt_template,
@@ -168,7 +172,7 @@ class TerminalBenchRunner:
             cwd=repo_root,
             env=env,
             run_root=run_root,
-            task=task,
+            task=runtime_task,
             run_id=run_id,
         )
         if completed.returncode != 0:
@@ -208,6 +212,63 @@ class TerminalBenchRunner:
             summary=summary,
             runtime_proof=proof,
         )
+
+    @staticmethod
+    def _materialize_runtime_task(
+        *,
+        task: dict[str, Any],
+        run_root: Path,
+    ) -> dict[str, Any]:
+        task_id = str(task["task_id"])
+        if Path(task_id).name != task_id:
+            raise ValueError(f"terminal-bench task_id must be a simple name: {task_id}")
+        source_task_dir = Path(
+            str(task.get("task_source_path") or Path(task["dataset_root"]) / task_id)
+        ).expanduser()
+        source_task_dir = source_task_dir.resolve()
+        if not source_task_dir.exists():
+            raise FileNotFoundError(
+                f"terminal-bench task source path does not exist: {source_task_dir}"
+            )
+
+        dataset_root = run_root / "_dataset_no_asciinema"
+        runtime_task_dir = dataset_root / task_id
+        dataset_root_resolved = dataset_root.resolve()
+        runtime_task_dir_resolved = runtime_task_dir.resolve()
+        if (
+            runtime_task_dir_resolved != dataset_root_resolved
+            and dataset_root_resolved not in runtime_task_dir_resolved.parents
+        ):
+            raise ValueError(
+                "terminal-bench runtime task path escaped dataset root: "
+                f"{runtime_task_dir_resolved}"
+            )
+        if runtime_task_dir.exists():
+            shutil.rmtree(runtime_task_dir)
+        shutil.copytree(source_task_dir, runtime_task_dir)
+
+        task_yaml = runtime_task_dir / "task.yaml"
+        if not task_yaml.exists():
+            raise FileNotFoundError(f"terminal-bench task.yaml missing: {task_yaml}")
+        import yaml
+
+        payload = yaml.safe_load(task_yaml.read_text(encoding="utf-8"))
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"terminal-bench task.yaml must be a mapping: {task_yaml}"
+            )
+        payload["disable_asciinema"] = True
+        task_yaml.write_text(
+            yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+        runtime_task = dict(task)
+        runtime_task["dataset_root"] = str(dataset_root)
+        runtime_task["task_source_path"] = str(runtime_task_dir)
+        return runtime_task
 
     @staticmethod
     def _write_tb_process_logs(

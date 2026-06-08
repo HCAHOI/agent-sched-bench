@@ -271,13 +271,19 @@ def test_run_openclaw_task_publishes_terminal_bench_container_name(
 ) -> None:
     runner = _make_runner()
     ctx = _make_ctx(tmp_path)
+    task_dir = tmp_path / "dataset" / "hello-world"
+    task_dir.mkdir(parents=True)
+    (task_dir / "task.yaml").write_text(
+        "instruction: fix it\n",
+        encoding="utf-8",
+    )
     task = {
         "instance_id": "hello-world",
         "task_id": "hello-world",
-        "dataset_root": "/tmp/dataset",
+        "dataset_root": str(tmp_path / "dataset"),
         "task_source_kind": "terminal_bench_registry",
         "task_source_id": "hello-world",
-        "task_source_path": "/tmp/dataset/hello-world",
+        "task_source_path": str(task_dir),
     }
 
     monkeypatch.setattr(
@@ -291,7 +297,10 @@ def test_run_openclaw_task_publishes_terminal_bench_container_name(
         },
     )
 
+    seen: dict[str, object] = {}
+
     def fake_run_tb_process(**kwargs):
+        seen["command"] = kwargs["command"]
         tb_run_path = ctx.attempt_dir / "_terminal_bench_run" / "hello-world"
         tb_run_path.mkdir(parents=True)
         (tb_run_path / "results.json").write_text(
@@ -329,6 +338,20 @@ def test_run_openclaw_task_publishes_terminal_bench_container_name(
     assert ctx.container_id == "hello-world-1-of-1-hello-world"
     metadata = json.loads(result.trace_path.read_text(encoding="utf-8").splitlines()[0])
     assert metadata["execution_environment"] == "container"
+    command = seen["command"]
+    assert isinstance(command, list)
+    dataset_path = command[command.index("--dataset-path") + 1]
+    assert dataset_path == str(
+        ctx.attempt_dir / "_terminal_bench_run" / "_dataset_no_asciinema"
+    )
+    runtime_yaml = (
+        ctx.attempt_dir
+        / "_terminal_bench_run"
+        / "_dataset_no_asciinema"
+        / "hello-world"
+        / "task.yaml"
+    ).read_text(encoding="utf-8")
+    assert "disable_asciinema: true" in runtime_yaml
 
 
 def test_tb_process_timeout_kills_process_group_and_container(
@@ -472,11 +495,15 @@ def test_active_process_cleanup_reaches_async_to_thread_path(
     ctx = _make_ctx(tmp_path)
     task_dir = tmp_path / "tasks" / "hello-world"
     task_dir.mkdir(parents=True)
+    (task_dir / "task.yaml").write_text(
+        "instruction: fix it\n",
+        encoding="utf-8",
+    )
     (task_dir / "docker-compose.yaml").write_text("services: {}\n", encoding="utf-8")
     task = {
         "instance_id": "hello-world",
         "task_id": "hello-world",
-        "dataset_root": "/tmp/dataset",
+        "dataset_root": str(tmp_path / "tasks"),
         "task_source_kind": "terminal_bench_registry",
         "task_source_id": "hello-world",
         "task_source_path": str(task_dir),
@@ -548,13 +575,20 @@ def test_active_process_cleanup_reaches_async_to_thread_path(
 
     assert (54321, signal.SIGTERM) in seen["killpg"]
     docker_commands = [call[0] for call in seen["docker"]]
+    runtime_compose = (
+        ctx.attempt_dir
+        / "_terminal_bench_run"
+        / "_dataset_no_asciinema"
+        / "hello-world"
+        / "docker-compose.yaml"
+    )
     assert [
         "docker",
         "compose",
         "-p",
         "hello-world-1-of-1-hello-world",
         "-f",
-        str((task_dir / "docker-compose.yaml").resolve()),
+        str(runtime_compose.resolve()),
         "down",
         "--remove-orphans",
     ] in docker_commands
