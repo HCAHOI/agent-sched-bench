@@ -62,6 +62,25 @@ def test_build_parser_max_iterations_defaults_to_100() -> None:
     assert args.max_iterations == 100
 
 
+def test_build_parser_rejects_prompt_and_prompt_file(tmp_path: Path) -> None:
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("do something", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            [
+                "--prompt",
+                "do something",
+                "--prompt-file",
+                str(prompt_file),
+                "--provider",
+                "openrouter",
+                "--model",
+                "z-ai/glm-5.1",
+            ]
+        )
+
+
 def test_run_async_forwards_explicit_trace_output(tmp_path: Path) -> None:
     """When ``--trace-output`` is given, the spawned daemon must receive it."""
     workspace = tmp_path / "ws"
@@ -85,6 +104,11 @@ def test_run_async_forwards_explicit_trace_output(tmp_path: Path) -> None:
     assert "--trace-output" in cmd, f"--trace-output missing from daemon argv: {cmd}"
     idx = cmd.index("--trace-output")
     assert cmd[idx + 1] == str(explicit.expanduser().resolve())
+    assert "--prompt" not in cmd
+    assert "--prompt-file" in cmd
+    prompt_path = Path(cmd[cmd.index("--prompt-file") + 1])
+    assert prompt_path.read_text(encoding="utf-8") == "do something"
+    assert all("do something" not in str(part) for part in cmd)
     # spawn_daemon also receives the absolute trace_file so it can persist
     # the path in the PID metadata for --status to recover later.
     assert captured["trace_file"] == explicit.expanduser().resolve()
@@ -139,6 +163,60 @@ def test_run_async_forwards_mcp_config(tmp_path: Path) -> None:
     assert "--mcp-config" in cmd
     idx = cmd.index("--mcp-config")
     assert cmd[idx + 1] == str(mcp_config)
+
+
+def test_run_sync_loads_prompt_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("do something from file", encoding="utf-8")
+    args = build_parser().parse_args(
+        [
+            "--prompt-file",
+            str(prompt_file),
+            "--workspace",
+            str(workspace),
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+            "--quiet",
+        ]
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeRunner:
+        def __init__(
+            self,
+            provider,
+            *,
+            model,
+            max_iterations,
+            extra_hooks,
+            mcp_servers,
+            malformed_retry_budget=3,
+        ):
+            pass
+
+        async def run(self, **kwargs):
+            captured["prompt"] = kwargs["prompt"]
+            return type("Result", (), {"content": "ok", "elapsed_s": 0.1})()
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        "trace_collect.collector.load_mcp_servers",
+        lambda path: {},
+    )
+    monkeypatch.setattr("agents.openclaw._session_runner.SessionRunner", FakeRunner)
+
+    rc = _run_sync(args)
+
+    assert rc == 0
+    assert captured["prompt"] == "do something from file"
 
 
 def test_run_sync_loads_mcp_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

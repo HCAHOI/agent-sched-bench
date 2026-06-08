@@ -101,7 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run the OpenClaw agent on an arbitrary task.",
     )
 
-    parser.add_argument("--prompt", help="Task prompt for the agent.")
+    prompt_group = parser.add_mutually_exclusive_group()
+    prompt_group.add_argument("--prompt", help="Task prompt for the agent.")
+    prompt_group.add_argument(
+        "--prompt-file",
+        help="UTF-8 file containing the task prompt for the agent.",
+    )
     parser.add_argument(
         "--status",
         action="store_true",
@@ -268,7 +273,47 @@ def _resolve_trace_output(
     )
 
 
+def _load_prompt(args: argparse.Namespace) -> str:
+    if args.prompt_file:
+        prompt_path = Path(args.prompt_file).expanduser()
+        try:
+            prompt = prompt_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(
+                f"failed to read --prompt-file {str(prompt_path)!r}: {exc}"
+            ) from exc
+    else:
+        prompt = args.prompt or ""
+
+    if not prompt:
+        raise ValueError("--prompt or --prompt-file must provide a non-empty prompt")
+    return prompt
+
+
+def _materialize_daemon_prompt_file(
+    args: argparse.Namespace,
+    *,
+    workspace: Path,
+    session_id: str,
+) -> Path:
+    prompt = _load_prompt(args)
+    if args.prompt_file:
+        return Path(args.prompt_file).expanduser().resolve()
+
+    prompt_dir = workspace / ".openclaw" / "prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    prompt_file = prompt_dir / f"{session_id}.txt"
+    prompt_file.write_text(prompt, encoding="utf-8")
+    return prompt_file
+
+
 def _run_sync(args: argparse.Namespace) -> int:
+    try:
+        prompt = _load_prompt(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
     llm_config = _resolve_llm_config(args)
 
     from agents.openclaw._session_runner import SessionRunner
@@ -320,12 +365,12 @@ def _run_sync(args: argparse.Namespace) -> int:
     if is_daemon:
         _install_daemon_signal_handlers(args)
 
-    cli_hook._log("START", f'prompt="{args.prompt[:80]}"')
+    cli_hook._log("START", f'prompt="{prompt[:80]}"')
 
     try:
         result = asyncio.run(
             runner.run(
-                prompt=args.prompt,
+                prompt=prompt,
                 workspace=workspace,
                 session_key=session_key,
                 trace_file=trace_file,
@@ -383,6 +428,15 @@ def _run_async(args: argparse.Namespace) -> int:
     session_id = args.session_id or f"oc-{uuid.uuid4().hex[:8]}"
     workspace = Path(args.workspace).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
+    try:
+        prompt_file = _materialize_daemon_prompt_file(
+            args,
+            workspace=workspace,
+            session_id=session_id,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     pid_dir = workspace / ".openclaw" / "pids"
     pid_dir.mkdir(parents=True, exist_ok=True)
@@ -398,8 +452,8 @@ def _run_async(args: argparse.Namespace) -> int:
         "--_daemon",
         "--_pid-file",
         str(pid_file),
-        "--prompt",
-        args.prompt,
+        "--prompt-file",
+        str(prompt_file),
         "--workspace",
         str(workspace),
         "--provider",
@@ -468,9 +522,9 @@ def main() -> None:
     if args.status:
         sys.exit(_run_status(args))
 
-    if not args.prompt:
+    if args.prompt is None and args.prompt_file is None:
         print(
-            "ERROR: --prompt is required (unless using --status).",
+            "ERROR: --prompt or --prompt-file is required (unless using --status).",
             file=sys.stderr,
         )
         build_parser().print_usage(sys.stderr)

@@ -41,6 +41,8 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
 
     TRACE_FILENAME = "openclaw-trace.jsonl"
     VENV_PATH = "/installed-agent/venv"
+    PROMPT_FILENAME = "openclaw-prompt.txt"
+    CONTAINER_PROMPT_PATH = f"/installed-agent/{PROMPT_FILENAME}"
     _WHEEL_CACHE: Path | None = None
     _CONTAINER_LOCAL_API_HOSTS = {
         "127.0.0.1",
@@ -237,6 +239,13 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _wheel_path(self) -> Path:
         return self._build_wheel()
 
+    @classmethod
+    def _write_prompt_file(cls, instruction: str) -> Path:
+        prompt_dir = Path(tempfile.mkdtemp(prefix="openclaw_prompt_"))
+        prompt_path = prompt_dir / cls.PROMPT_FILENAME
+        prompt_path.write_text(instruction, encoding="utf-8")
+        return prompt_path
+
     @staticmethod
     def _bootstrap_dependencies_command() -> str:
         # `container.exec_run(...)` does NOT inherit the tmux session's
@@ -305,12 +314,12 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             return "", shlex.quote(self._api_base)
         return "", '"${OPENCLAW_API_BASE}"'
 
-    def _run_agent_commands(self, instruction: str) -> list[TerminalCommand]:
-        escaped_instruction = shlex.quote(instruction)
+    def _run_agent_commands(self) -> list[TerminalCommand]:
         workspace = shlex.quote(".")
         trace_output = shlex.quote(
             f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.TRACE_FILENAME}"
         )
+        prompt_file = shlex.quote(self.CONTAINER_PROMPT_PATH)
         api_base_prefix, api_base_arg = self._api_base_shell_prefix()
         mcp_flag = ""
         if self._mcp_config_path:
@@ -338,7 +347,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             f"--max-iterations {self._max_iterations} "
             f"{generation_flags}"
             "--quiet "
-            f"--prompt {escaped_instruction}"
+            f"--prompt-file {prompt_file}"
         )
         return [
             TerminalCommand(
@@ -516,8 +525,10 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             if bootstrap.exit_code != 0:
                 return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
 
+            rendered_instruction = self._render_instruction(instruction)
+            prompt_file = self._write_prompt_file(rendered_instruction)
             install_script = self._install_agent_script_path
-            copy_paths = [self._wheel_path, install_script]
+            copy_paths = [self._wheel_path, install_script, prompt_file]
             if self._mcp_config_path:
                 host_mcp_config = Path(self._mcp_config_path).expanduser().resolve()
                 if not host_mcp_config.exists():
@@ -568,8 +579,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             if "INSTALL_FAIL_STATUS" in installation_output.splitlines():
                 return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
 
-            rendered_instruction = self._render_instruction(instruction)
-            for command in self._run_agent_commands(rendered_instruction):
+            for command in self._run_agent_commands():
                 session.send_command(self._command_with_deadline(command, deadline))
         except TimeoutError:
             self._cleanup_timed_out_session(session, logging_dir)

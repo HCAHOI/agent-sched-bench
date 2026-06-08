@@ -82,12 +82,30 @@ def test_run_command_uses_venv_openclaw_and_iteration_limit() -> None:
         env_key="OPENROUTER_API_KEY",
         max_iterations=25,
     )
-    commands = agent._run_agent_commands("hello task")
+    commands = agent._run_agent_commands()
     assert len(commands) == 1
     command = commands[0].command
     assert command.startswith("/installed-agent/venv/bin/openclaw ")
     assert "--max-iterations 25" in command
+    assert "--prompt-file /installed-agent/openclaw-prompt.txt" in command
+    assert "--prompt " not in command
     assert commands[0].max_timeout_sec == float("inf")
+
+
+def test_run_command_does_not_embed_task_prompt() -> None:
+    agent = StubAgent(
+        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        provider_name="openrouter",
+        api_base="https://openrouter.ai/api/v1",
+        api_key="test-key",
+        env_key="OPENROUTER_API_KEY",
+        max_iterations=25,
+    )
+
+    command = agent._run_agent_commands()[0].command
+
+    assert "sqlite" not in command
+    assert "hello task" not in command
 
 
 def test_run_command_uses_configured_agent_timeout() -> None:
@@ -100,7 +118,7 @@ def test_run_command_uses_configured_agent_timeout() -> None:
         max_iterations=25,
         agent_timeout_sec=120,
     )
-    commands = agent._run_agent_commands("hello task")
+    commands = agent._run_agent_commands()
     assert commands[0].max_timeout_sec == 120.0
 
 
@@ -114,7 +132,7 @@ def test_run_command_resolves_host_local_api_base_inside_container() -> None:
         max_iterations=25,
     )
 
-    command = agent._run_agent_commands("hello task")[0].command
+    command = agent._run_agent_commands()[0].command
 
     assert command.startswith("/installed-agent/venv/bin/openclaw ")
     assert '--api-base "${OPENCLAW_API_BASE}"' in command
@@ -135,7 +153,7 @@ def test_run_command_forwards_mcp_config_to_container() -> None:
         max_iterations=25,
         mcp_config_path="/tmp/context7.yaml",
     )
-    command = agent._run_agent_commands("hello task")[0].command
+    command = agent._run_agent_commands()[0].command
     assert "--mcp-config /installed-agent/context7.yaml --workspace ." in command
 
 
@@ -216,7 +234,7 @@ def test_perform_task_cleans_tmux_session_on_agent_timeout(
     )
 
     result = agent.perform_task(
-        "solve it",
+        "solve sqlite query",
         FakeSession(),
         logging_dir=tmp_path,
     )
@@ -240,6 +258,20 @@ def test_perform_task_cleans_tmux_session_on_agent_timeout(
         "pkill -TERM -f '/installed-agent/venv/bin/openclaw'"
         in (cleanup_commands[-1][2])
     )
+    copied_paths = [
+        Path(call[1][2])
+        for call in calls
+        if call[0] == "subprocess.run" and call[1][:2] == ["docker", "cp"]
+    ]
+    prompt_paths = [
+        path for path in copied_paths if path.name == agent.PROMPT_FILENAME
+    ]
+    assert len(prompt_paths) == 1
+    assert prompt_paths[0].read_text(encoding="utf-8") == "solve sqlite query"
+    send_commands = [call[1].command for call in calls if call[0] == "send_command"]
+    assert send_commands
+    assert "--prompt-file /installed-agent/openclaw-prompt.txt" in send_commands[-1]
+    assert "sqlite" not in send_commands[-1]
 
 
 def test_perform_task_cleans_tmux_session_on_bootstrap_timeout(
