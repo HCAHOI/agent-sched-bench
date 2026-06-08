@@ -39,6 +39,16 @@ from agents.openclaw.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 if TYPE_CHECKING:
     from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
+
+try:
+    _BaseExceptionGroup = BaseExceptionGroup
+except NameError:  # Python 3.10 uses the exceptiongroup backport.
+    try:
+        from exceptiongroup import BaseExceptionGroup as _BaseExceptionGroup
+    except ImportError:
+        _BaseExceptionGroup = RuntimeError
+
+
 class _LoopHook(AgentHook):
 
     def __init__(
@@ -570,7 +580,7 @@ class AgentLoop:
         if self._mcp_stack:
             try:
                 await self._mcp_stack.aclose()
-            except (RuntimeError, BaseExceptionGroup):
+            except (RuntimeError, _BaseExceptionGroup):
                 pass
             self._mcp_stack = None
 
