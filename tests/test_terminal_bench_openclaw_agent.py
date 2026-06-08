@@ -85,7 +85,10 @@ def test_run_command_uses_venv_openclaw_and_iteration_limit() -> None:
     commands = agent._run_agent_commands()
     assert len(commands) == 1
     command = commands[0].command
-    assert command.startswith("/installed-agent/venv/bin/openclaw ")
+    assert command.startswith(
+        'OPENROUTER_API_KEY="$(cat /installed-agent/.openclaw-api-key.fifo)" '
+        "/installed-agent/venv/bin/openclaw "
+    )
     assert "--max-iterations 25" in command
     assert "--prompt-file /installed-agent/openclaw-prompt.txt" in command
     assert "--prompt " not in command
@@ -134,7 +137,10 @@ def test_run_command_resolves_host_local_api_base_inside_container() -> None:
 
     command = agent._run_agent_commands()[0].command
 
-    assert command.startswith("/installed-agent/venv/bin/openclaw ")
+    assert command.startswith(
+        'OPENAI_API_KEY="$(cat /installed-agent/.openclaw-api-key.fifo)" '
+        "/installed-agent/venv/bin/openclaw "
+    )
     assert '--api-base "${OPENCLAW_API_BASE}"' in command
     assert "/installed-agent/venv/bin/openclaw " in command
 
@@ -177,10 +183,90 @@ def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -
         env_key="OPENROUTER_API_KEY",
         max_iterations=25,
     )
-    assert agent._env == {
-        "OPENROUTER_API_KEY": "env-key",
-        "OPENCLAW_API_BASE": "https://openrouter.ai/api/v1",
-    }
+    assert agent._api_key == "env-key"
+    assert agent._secret_exec_environment() == {"OPENCLAW_SECRET_VALUE": "env-key"}
+    assert agent._env == {"OPENCLAW_API_BASE": "https://openrouter.ai/api/v1"}
+    assert "env-key" not in agent._create_env_setup_file()
+
+
+def test_perform_task_does_not_embed_api_key_in_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "fake-openrouter-secret"
+    agent = StubAgent(
+        model_name="qwen/qwen3.7-max",
+        provider_name="openrouter",
+        api_base="https://openrouter.ai/api/v1",
+        api_key=secret,
+        env_key="OPENROUTER_API_KEY",
+        max_iterations=25,
+        agent_timeout_sec=120,
+    )
+    calls: list[object] = []
+
+    class FakeContainer:
+        id = "container-id"
+
+        def exec_run(self, cmd, user=None, environment=None, detach=False):
+            calls.append(("exec_run", cmd, user, environment, detach))
+            return SimpleNamespace(exit_code=0, output=b"")
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.container = FakeContainer()
+            self._session_name = "agent"
+
+        def copy_to_container(self, paths, container_dir=None):
+            calls.append(("copy_to_container", paths, container_dir))
+
+        def send_keys(self, keys, **kwargs):
+            calls.append(("send_keys", keys, kwargs))
+
+        def send_command(self, command):
+            calls.append(("send_command", command))
+
+        def capture_pane(self, capture_entire=False):
+            calls.append(("capture_pane", capture_entire))
+            return "installation ok"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(("subprocess.run", cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.subprocess.run",
+        fake_run,
+    )
+
+    result = agent.perform_task(
+        "solve sqlite query",
+        FakeSession(),
+        logging_dir=tmp_path,
+    )
+
+    assert result.failure_mode == FailureMode.NONE
+    assert secret not in agent._create_env_setup_file()
+    command_texts = [
+        repr(call[1])
+        for call in calls
+        if call[0] in {"exec_run", "send_keys", "send_command", "subprocess.run"}
+    ]
+    assert command_texts
+    assert not any(secret in text for text in command_texts)
+    secret_exec_envs = [
+        call[3]
+        for call in calls
+        if call[0] == "exec_run"
+        and call[3] == {"OPENCLAW_SECRET_VALUE": secret}
+    ]
+    assert len(secret_exec_envs) == 1
+    send_commands = [call[1].command for call in calls if call[0] == "send_command"]
+    assert len(send_commands) == 1
+    assert 'OPENROUTER_API_KEY="$(cat /installed-agent/.openclaw-api-key.fifo)"' in (
+        send_commands[0]
+    )
+    assert "--api-base https://openrouter.ai/api/v1" in send_commands[0]
 
 
 def test_perform_task_cleans_tmux_session_on_agent_timeout(
@@ -201,8 +287,8 @@ def test_perform_task_cleans_tmux_session_on_agent_timeout(
     class FakeContainer:
         id = "container-id"
 
-        def exec_run(self, cmd, user=None):
-            calls.append(("exec_run", cmd, user))
+        def exec_run(self, cmd, user=None, environment=None, detach=False):
+            calls.append(("exec_run", cmd, user, environment, detach))
             return SimpleNamespace(exit_code=0, output=b"")
 
     class FakeSession:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -43,6 +44,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     VENV_PATH = "/installed-agent/venv"
     PROMPT_FILENAME = "openclaw-prompt.txt"
     CONTAINER_PROMPT_PATH = f"/installed-agent/{PROMPT_FILENAME}"
+    CONTAINER_SECRET_FIFO_PATH = "/installed-agent/.openclaw-api-key.fifo"
+    _SECRET_EXEC_ENV_KEY = "OPENCLAW_SECRET_VALUE"
+    _SECRET_FIFO_WRITER_TIMEOUT_SEC = 86400.0
     _WHEEL_CACHE: Path | None = None
     _CONTAINER_LOCAL_API_HOSTS = {
         "127.0.0.1",
@@ -79,6 +83,8 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         self._provider_name = provider_name
         self._api_base = api_base
         self._env_key = env_key
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key) is None:
+            raise ValueError(f"env_key must be a valid shell environment name: {env_key!r}")
         self._api_key = api_key or os.environ.get(env_key, "")
         if not self._api_key:
             raise ValueError(
@@ -115,7 +121,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     @property
     def _env(self) -> dict[str, str]:
         env = {
-            self._env_key: self._api_key,
             # Exported here so setup-env.sh can rewrite it (gateway resolution)
             # before the openclaw command consumes it. Keeping the rewrite in
             # setup-env.sh — not as a per-command shell prefix — is what keeps
@@ -130,6 +135,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             if value:
                 env[key] = value
         return env
+
+    def _secret_exec_environment(self) -> dict[str, str]:
+        return {self._SECRET_EXEC_ENV_KEY: self._api_key}
 
     def _create_env_setup_file(self) -> str:
         """Extend the parent's export lines with gateway-resolution logic.
@@ -321,6 +329,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         )
         prompt_file = shlex.quote(self.CONTAINER_PROMPT_PATH)
         api_base_prefix, api_base_arg = self._api_base_shell_prefix()
+        secret_prefix = (
+            f'{self._env_key}="$(cat {shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)})" '
+        )
         mcp_flag = ""
         if self._mcp_config_path:
             mcp_flag = f"--mcp-config {shlex.quote(self._container_mcp_config_path)} "
@@ -336,6 +347,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 f"--repetition-penalty {shlex.quote(str(self._repetition_penalty))} "
             )
         command = (
+            f"{secret_prefix}"
             f"{api_base_prefix}"
             f"{self.VENV_PATH}/bin/openclaw "
             f"--provider {shlex.quote(self._provider_name)} "
@@ -400,14 +412,26 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         deadline: float | None,
         *,
         user: str | None = None,
+        environment: dict[str, str] | None = None,
     ) -> Any:
         if deadline is None:
-            return session.container.exec_run(command, user=user)
+            if environment is None:
+                return session.container.exec_run(command, user=user)
+            return session.container.exec_run(
+                command,
+                user=user,
+                environment=environment,
+            )
         timeout_sec = self._remaining_timeout(deadline)
-        result = session.container.exec_run(
-            ["timeout", f"{timeout_sec:.3f}s", *command],
-            user=user,
-        )
+        wrapped_command = ["timeout", f"{timeout_sec:.3f}s", *command]
+        if environment is None:
+            result = session.container.exec_run(wrapped_command, user=user)
+        else:
+            result = session.container.exec_run(
+                wrapped_command,
+                user=user,
+                environment=environment,
+            )
         if result.exit_code == 124:
             raise TimeoutError(
                 f"Agent timed out after {self._agent_timeout_sec} seconds"
@@ -468,6 +492,52 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                     f"{result.stderr[-2000:]}"
                 )
 
+    def _prepare_secret_fifo(
+        self,
+        session: TmuxSession,
+        deadline: float | None,
+    ) -> None:
+        command = (
+            "set -euo pipefail\n"
+            f"rm -f {shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)}\n"
+            "umask 077\n"
+            f"mkfifo {shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)}\n"
+            f"chmod 600 {shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)}\n"
+        )
+        result = self._exec_run_with_deadline(
+            session,
+            ["bash", "-lc", command],
+            deadline,
+        )
+        if result.exit_code != 0:
+            raise RuntimeError("failed to prepare API key FIFO")
+
+    def _start_secret_fifo_writer(
+        self,
+        session: TmuxSession,
+        deadline: float | None,
+    ) -> None:
+        timeout_sec = (
+            self._remaining_timeout(deadline)
+            if deadline is not None
+            else self._agent_timeout_sec or self._SECRET_FIFO_WRITER_TIMEOUT_SEC
+        )
+        command = [
+            "timeout",
+            f"{timeout_sec:.3f}s",
+            "sh",
+            "-lc",
+            (
+                f"printf '%s' \"${self._SECRET_EXEC_ENV_KEY}\" > "
+                f"{shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)}"
+            ),
+        ]
+        session.container.exec_run(
+            command,
+            environment=self._secret_exec_environment(),
+            detach=True,
+        )
+
     def _cleanup_timed_out_session(
         self,
         session: TmuxSession,
@@ -498,6 +568,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             "pkill -TERM -f '/installed-agent/venv/bin/openclaw' 2>/dev/null || true\n"
             "sleep 2\n"
             "pkill -KILL -f '/installed-agent/venv/bin/openclaw' 2>/dev/null || true\n"
+            f"rm -f {shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)} 2>/dev/null || true\n"
         )
         try:
             session.container.exec_run(["sh", "-lc", cleanup_script])
@@ -557,7 +628,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 ],
                 deadline,
             )
-
             session.send_keys(
                 ["source /installed-agent/setup-env.sh", "Enter"],
                 block=True,
@@ -580,7 +650,14 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
 
             for command in self._run_agent_commands():
+                self._prepare_secret_fifo(session, deadline)
+                self._start_secret_fifo_writer(session, deadline)
                 session.send_command(self._command_with_deadline(command, deadline))
+                self._exec_run_with_deadline(
+                    session,
+                    ["rm", "-f", self.CONTAINER_SECRET_FIFO_PATH],
+                    deadline,
+                )
         except TimeoutError:
             self._cleanup_timed_out_session(session, logging_dir)
             return AgentResult(failure_mode=FailureMode.AGENT_TIMEOUT)
