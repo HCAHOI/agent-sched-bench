@@ -252,6 +252,40 @@ def _encode_topk_csr(
     )
 
 
+def _encode_ragged_csr(
+    index_rows: list[np.ndarray],
+    score_rows: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """CSR-encode variable-length per-row (index, score) lists.
+
+    Unlike `_encode_topk_csr` (padded dense rows), each row here is already its
+    own 1-D array of valid entries — used for the per-head top-R export whose row
+    cardinality differs per (layer, step, head). Returns
+    ``(offsets[n_rows+1], indices, scores)`` with int32 ids and fp16 scores.
+    """
+    if len(index_rows) != len(score_rows):
+        raise ValueError(
+            f"ragged CSR row count mismatch: {len(index_rows)} vs {len(score_rows)}"
+        )
+    n_rows = len(index_rows)
+    offsets = np.zeros(n_rows + 1, dtype=np.int64)
+    for i, row in enumerate(index_rows):
+        offsets[i + 1] = offsets[i] + int(row.shape[0])
+    if int(offsets[-1]) == 0:
+        return (
+            offsets,
+            np.zeros(0, dtype=np.int32),
+            np.zeros(0, dtype=np.float16),
+        )
+    indices = np.concatenate(
+        [r.astype(np.int32, copy=False) for r in index_rows if r.shape[0] > 0]
+    )
+    scores = np.concatenate(
+        [r.astype(np.float16, copy=False) for r in score_rows if r.shape[0] > 0]
+    )
+    return offsets, indices, scores
+
+
 def _span_span_matrix(
     *,
     segment_mass: np.ndarray,
@@ -510,6 +544,11 @@ class LayerCapturer:
         # over the [sink, rank1..R_max, recent] bucket axis (see
         # _accumulate_block_head_stats). decode-only by design.
         self._block_head_stats: dict[tuple[int, int], dict[str, Any]] = {}
+        # Counterfactual per-head top-R block selections from block_topk, staged
+        # by the sparse pre-hook keyed by (layer_idx, decode_step). Each value is
+        # {"block_ids": [[..]*H], "scores": [[..]*H]} (ragged, absolute block ids).
+        # Filled only when record_per_head_topk is on; flushed to attention.npz.
+        self._per_head_topk_cache: dict[tuple[int, int], dict[str, Any]] = {}
         # KV eviction recorder is per-call; lifecycle is owned by the
         # HFRecordingProvider, which swaps it before each
         # `recording_session()`. LayerCapturer only flushes whatever the
@@ -577,6 +616,17 @@ class LayerCapturer:
                         with_kwargs=True,
                     )
                 )
+        # Counterfactual per-head top-k export: flip the block_topk switch ON so
+        # every decode ranking also stages per-head top-R block selections.
+        # Layers reuse per_head_stats_layers; off (rank 0) = zero extra device work.
+        if (
+            config.record_per_head_topk
+            and config.per_head_stats_layers
+            and _is_block_topk(self._sparse_attention)
+        ):
+            self._sparse_attention.export_per_head_topk_rank = int(
+                config.per_head_topk_rank
+            )
         if config.per_head_stats_layers and layer_indices:
             num_hidden_layers = max(layer_indices) + 1
             invalid = [i for i in config.per_head_stats_layers if i >= num_hidden_layers]
@@ -787,6 +837,7 @@ class LayerCapturer:
         self._head_stats_n_segments = len(segments) + 1
         self._block_select_cache = {}
         self._block_head_stats = {}
+        self._per_head_topk_cache = {}
         try:
             yield
         except BaseException:
@@ -942,6 +993,20 @@ class LayerCapturer:
                     frozenset(int(p) for p in meta.get("selected_middle_indices", [])),
                 )
                 self._trim_block_select_cache()
+            # Counterfactual per-head top-R export: stage the per-head block
+            # selections block_topk computed this step. Only for recorded layers
+            # (the method computes scores for ALL layers once the switch is on, so
+            # filter here to keep storage bounded to per_head_stats_layers).
+            if (
+                self.config.record_per_head_topk
+                and self._session is not None
+                and phase == "decode"
+                and _is_block_topk(method)
+                and layer in self.config.per_head_stats_layers
+            ):
+                export = method.per_head_topk_export()
+                if export is not None:
+                    self._per_head_topk_cache[(layer, decode_step)] = export
             observe_only = bool(method.observe_only)
             assert sparse_mask is not None or observe_only, (
                 f"build_additive_mask returned None in enforce mode "
@@ -2308,6 +2373,119 @@ class LayerCapturer:
             "block_span_recent_window": np.int32(recent_window),
         }
 
+    def _build_per_head_topk_arrays(self) -> dict[str, np.ndarray]:
+        """Build CSR arrays for block_topk's counterfactual per-head top-R.
+
+        Decode-only. The CSR row axis is the flattened `(layer_slot, decode_step
+        slot, head)` index — `n_rows = L_s * T_max * H` — so a row's per-head
+        top-R (block_id, score) pairs unpack as
+        ``indices[offsets[row]:offsets[row+1]]``. Rows for unrecorded (step, head)
+        combinations are empty (offset run length 0). block ids are np.int32;
+        scores np.float16 (used only for offline ranking / aggregation, where the
+        fp16 mantissa is ample). When ``record_per_head_topk`` is off every array
+        has a 0-size leading axis (shape-stable, mirroring the head_span empty
+        convention).
+
+        Step coverage: the cache holds EVERY decode step of the call (cleared
+        per call, deliberately NOT trimmed to ``decode_window`` like
+        ``_block_select_cache``) so rows align 1:1 with the full-step
+        ``sparse_attention.npz`` records rather than block_span's decode ring —
+        offline vote-vs-max re-aggregation needs the same step set as the
+        selection log. T_max therefore equals the call's decode step count.
+
+        Storage ≈ L_s × T_max × H × R_ph × 6 bytes (int32 id + fp16 score),
+        upper bound — per-row length is also capped at the candidate-block
+        count nb. Typical agent call (14 layers × ~70 steps × 32 heads × 64
+        rank) ≈ 12 MB; a 500-step generation bounds at ≈ 86 MB. Shrink via
+        ``per_head_topk_rank`` or fewer ``per_head_stats_layers``.
+        """
+        disabled = not self.config.record_per_head_topk
+        layers = sorted(self.config.per_head_stats_layers)
+        L_s = 0 if disabled else len(layers)
+        rank = 0 if disabled else int(self.config.per_head_topk_rank)
+
+        decode_keys_by_layer: dict[int, list[int]] = {layer: [] for layer in layers}
+        for (l_idx, step) in self._per_head_topk_cache:
+            if l_idx in decode_keys_by_layer:
+                decode_keys_by_layer[l_idx].append(step)
+        decode_counts = [len(decode_keys_by_layer[layer]) for layer in layers]
+        T_max = max(decode_counts) if (decode_counts and not disabled) else 0
+
+        # Head count from any stored entry (block_ids is a per-head ragged list).
+        H = 0
+        for entry in self._per_head_topk_cache.values():
+            H = len(entry["block_ids"])
+            break
+
+        decode_step_arr = np.full((L_s, T_max), -1, dtype=np.int32)
+        decode_n = np.asarray(decode_counts if not disabled else [], dtype=np.int32)
+        n_candidate_blocks = np.zeros((L_s, T_max), dtype=np.int32)
+
+        # Gather ragged rows in flattened (li, ti, head) order, then CSR-encode.
+        block_id_rows: list[np.ndarray] = []
+        score_rows: list[np.ndarray] = []
+        n_rows = L_s * T_max * H
+        if not disabled and n_rows > 0:
+            for li, layer in enumerate(layers):
+                steps = sorted(decode_keys_by_layer[layer])
+                # Pad the per-(li) step axis to T_max with empty rows so the CSR
+                # row index stays a clean (li, ti, head) ravel across layers.
+                step_entries: list[tuple[int, dict[str, Any]] | None] = [
+                    (step, self._per_head_topk_cache[(layer, step)]) for step in steps
+                ]
+                step_entries += [None] * (T_max - len(step_entries))
+                for ti, item in enumerate(step_entries):
+                    if item is None:
+                        block_id_rows.extend([np.zeros(0, dtype=np.int32)] * H)
+                        score_rows.extend([np.zeros(0, dtype=np.float16)] * H)
+                        continue
+                    step, entry = item
+                    decode_step_arr[li, ti] = int(step)
+                    ids = entry["block_ids"]
+                    scs = entry["scores"]
+                    if len(ids) != H or len(scs) != H:
+                        raise RuntimeError(
+                            f"per_head_topk head-count mismatch at (layer={layer}, "
+                            f"step={step}): block_ids={len(ids)}, scores={len(scs)}, "
+                            f"expected H={H}"
+                        )
+                    row_card = max((len(r) for r in ids), default=0)
+                    n_candidate_blocks[li, ti] = int(row_card)
+                    for h in range(H):
+                        id_row = np.asarray(ids[h], dtype=np.int32)
+                        sc_row = np.asarray(scs[h], dtype=np.float16)
+                        if id_row.shape != sc_row.shape:
+                            raise RuntimeError(
+                                f"per_head_topk id/score shape mismatch at "
+                                f"(layer={layer}, step={step}, head={h}): "
+                                f"{id_row.shape} vs {sc_row.shape}"
+                            )
+                        if id_row.shape[0] > rank:
+                            raise RuntimeError(
+                                f"per_head_topk row at (layer={layer}, step={step}, "
+                                f"head={h}) has {id_row.shape[0]} entries > "
+                                f"per_head_topk_rank={rank}"
+                            )
+                        block_id_rows.append(id_row)
+                        score_rows.append(sc_row)
+
+        offsets, csr_block_ids, csr_scores = _encode_ragged_csr(
+            block_id_rows, score_rows
+        )
+        return {
+            "per_head_topk_layers": np.asarray(
+                layers if not disabled else [], dtype=np.int32
+            ),
+            "per_head_topk_rank": np.int32(rank),
+            "per_head_topk_head_count": np.int32(H),
+            "per_head_topk_decode_step": decode_step_arr,
+            "per_head_topk_decode_n": decode_n,
+            "per_head_topk_n_candidate_blocks": n_candidate_blocks,
+            "per_head_topk_csr_offsets": offsets,
+            "per_head_topk_csr_block_ids": csr_block_ids,
+            "per_head_topk_csr_scores": csr_scores,
+        }
+
     def _write_attention_npz(self, path: Path, segments: list[dict[str, Any]]) -> None:
         n_segments = len(segments)
         records = [*self._prefill_records, *self._decode_records.to_list()]
@@ -2371,6 +2549,7 @@ class LayerCapturer:
         )
         head_span_arrays = self._build_head_span_arrays(n_segments)
         block_head_span_arrays = self._build_block_head_span_arrays()
+        per_head_topk_arrays = self._build_per_head_topk_arrays()
         np.savez_compressed(
             path,
             call_idx=np.asarray(self._session["call_idx"], dtype=np.int32),
@@ -2409,6 +2588,7 @@ class LayerCapturer:
             n_query_rows=np.asarray(n_rows, dtype=np.int64),
             **head_span_arrays,
             **block_head_span_arrays,
+            **per_head_topk_arrays,
         )
 
     def _write_routing_npz(self, path: Path, n_segments: int) -> None:

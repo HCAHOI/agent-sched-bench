@@ -295,9 +295,12 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--sparse-attn-score-reduction",
-        choices=["max", "mean"],
+        choices=["max", "mean", "vote"],
         default="max",
-        help="How to reduce token scores into block/page scores. Default max.",
+        help=(
+            "How to reduce token scores into block/page scores. Default max. "
+            "'vote' (block_topk only) ranks blocks by cross-head top-B votes."
+        ),
     )
     parser.add_argument(
         "--sparse-attn-phase-scope",
@@ -329,6 +332,26 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
             "axis = sink | selection rank 1..R_max | recent). Requires "
             "--record-internals, --sparse-attn block_topk (resolved), and a "
             "non-empty --per-head-stats-layers."
+        ),
+    )
+    parser.add_argument(
+        "--record-per-head-topk",
+        action="store_true",
+        help=(
+            "Record block_topk's per-head independent top-R block selections at "
+            "decode (the uncensored counterfactual 'what each head would pick "
+            "alone' set) into attention.npz per_head_topk_csr_* arrays. Requires "
+            "--record-internals, --sparse-attn block_topk (resolved), and a "
+            "non-empty --per-head-stats-layers (reused as the recorded layers)."
+        ),
+    )
+    parser.add_argument(
+        "--per-head-topk-rank",
+        type=int,
+        default=64,
+        help=(
+            "Per-head rank cap R_ph for --record-per-head-topk. Default 64 "
+            "(matches the typical middle-block budget). Lower it to cut storage."
         ),
     )
     parser.add_argument(
@@ -658,27 +681,41 @@ def _run_collect(args: argparse.Namespace) -> None:
     # over. Validate eagerly (no silent fallback) using a torch-free sparse
     # config resolution so the misconfig surfaces before model load. The main
     # resolution + exclusivity check below re-derives the config for collection.
-    if args.per_head_block_stats:
+    if args.per_head_block_stats or args.record_per_head_topk:
         from serving.sparse_attention.config import load_sparse_attention_config
 
         block_sparse_config = load_sparse_attention_config(args)
         method_name = (
             block_sparse_config.name if block_sparse_config is not None else "none"
         )
+        # Name the offending flag in the message so a user enabling either knob
+        # without block_topk gets a specific, no-silent-fallback error.
+        offending = (
+            "--per-head-block-stats"
+            if args.per_head_block_stats
+            else "--record-per-head-topk"
+        )
         if method_name != "block_topk":
             print(
-                "ERROR: --per-head-block-stats requires --sparse-attn block_topk "
+                f"ERROR: {offending} requires --sparse-attn block_topk "
                 f"(resolved method: {method_name!r}).",
                 file=sys.stderr,
             )
             sys.exit(2)
         if not per_head_stats_layers:
             print(
-                "ERROR: --per-head-block-stats requires a non-empty "
-                "--per-head-stats-layers (which layers to record block stats for).",
+                f"ERROR: {offending} requires a non-empty --per-head-stats-layers "
+                "(which layers to record for).",
                 file=sys.stderr,
             )
             sys.exit(2)
+    if args.record_per_head_topk and args.per_head_topk_rank <= 0:
+        print(
+            "ERROR: --per-head-topk-rank must be > 0 "
+            f"(got {args.per_head_topk_rank!r}).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     if args.record_internals:
         os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
@@ -753,6 +790,8 @@ def _run_collect(args: argparse.Namespace) -> None:
             sparse_attention_config=sparse_attention_config,
             per_head_stats_layers=per_head_stats_layers,
             per_head_block_stats=args.per_head_block_stats,
+            record_per_head_topk=args.record_per_head_topk,
+            per_head_topk_rank=args.per_head_topk_rank,
         )
     )
     print(f"Traces written to: {run_dir}/")

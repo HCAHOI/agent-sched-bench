@@ -94,6 +94,24 @@ decode_step)]`，同 forward 内的 attention-capture hook 据此建桶。落盘
 `serving/recording/CLAUDE.md` 的 `block_span_*` 段（block_size/sink/recent 从本
 method 实例读，不新增 config）。
 
+### block_topk score_reduction="vote"（跨头投票聚合）
+
+`max`/`mean` 在 head 维折叠后打分；`vote` 在折叠前分支：per-head 块分数
+`[H, Nb]`（batch/q_len 维 amax + per-block scatter amax，head 维批量化）→ 每头给
+自己的 top-B 候选块投票，B = ceil(middle position slots / block_size) = 该步可保留
+的 middle 块数（无新超参；B ≥ nb 会令票饱和、退化为 tie-break，构造上避免）→
+票数为主键，tie-break：跨头 max 分数 desc → block_id asc（确定性）。动机：max
+聚合下单头峰值即可占预算，多数头共同偏好的块反而落选（离线证据：
+`docs/analysis/attention_locality_20260610.md` §6）。
+
+### block_topk per-head counterfactual 录制（`--record-per-head-topk`）
+
+observe-correct 导出：无论 score_reduction 为何，把每头独立 top-R_ph 的
+(block_id, score) 额外落盘（消除"只见池化选中块"的 censoring）。开关关闭时零额外
+计算/显存（不物化 `[H, Nb]`）；开启时 max 路径复用同一 per-head scatter 的跨头
+amax，选择数值不变。字段 schema 与存储估算见 `serving/recording/CLAUDE.md` 的
+`per_head_topk_*` 段。
+
 ---
 
 ## SparseAttentionConfig（frozen dataclass）
@@ -107,7 +125,7 @@ method 实例读，不新增 config）。
 | `recent_window` | int | `256` | recent-tail 长度 |
 | `budget` | int \| null | `null` | dynamic method 必填；总 keep token 目标上限 |
 | `block_size` | int | `16` | `block_topk` block / `quest` page size |
-| `score_reduction` | `"max" \| "mean"` | `"max"` | block/page score 聚合 |
+| `score_reduction` | `"max" \| "mean" \| "vote"` | `"max"` | block/page score 聚合；`vote` 仅 block_topk（其余 method 构造时报错） |
 | `phase_scope` | `"decode_only"` | `"decode_only"` | dynamic method 目前只支持 decode sparse |
 
 ---
@@ -150,7 +168,8 @@ trace。
 CLI flag：
 - `--sparse-attn {none,sliding,streaming,heavy_hitter,block_topk,quest}` / `--sparse-attn-sink-size N` / `--sparse-attn-recent-window N`
 - `--sparse-attn-budget N` / `--sparse-attn-block-size N`
-- `--sparse-attn-score-reduction {max,mean}` / `--sparse-attn-phase-scope decode_only`
+- `--sparse-attn-score-reduction {max,mean,vote}` / `--sparse-attn-phase-scope decode_only`
+- `--record-per-head-topk` / `--per-head-topk-rank N`（block_topk 反事实 per-head 录制；字段 schema 见 `serving/recording/CLAUDE.md`）
 - `--sparse-attn-record` / `--no-sparse-attn-record`
 - `--sparse-attn-observe-only`（store_true；observe 模式开关）
 - `--sparse-attn-config PATH`

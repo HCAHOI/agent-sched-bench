@@ -540,6 +540,8 @@ async def collect_traces(
     sparse_attention_config: "SparseAttentionConfig | None" = None,
     per_head_stats_layers: tuple[int, ...] = (),
     per_head_block_stats: bool = False,
+    record_per_head_topk: bool = False,
+    per_head_topk_rank: int = 64,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     if record_internals and scaffold != "openclaw":
@@ -587,6 +589,8 @@ async def collect_traces(
                     config=RecordingConfig(
                         per_head_stats_layers=tuple(per_head_stats_layers),
                         per_head_block_stats=bool(per_head_block_stats),
+                        record_per_head_topk=bool(record_per_head_topk),
+                        per_head_topk_rank=int(per_head_topk_rank),
                     ),
                     eviction_config=eviction_config,
                     sparse_attention_config=sparse_attention_config,

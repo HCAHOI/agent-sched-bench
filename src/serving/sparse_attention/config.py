@@ -202,10 +202,17 @@ def load_sparse_attention_config(
             raise argparse.ArgumentTypeError(
                 f"sparse attention {name!r} requires block_size > 0 (got {block!r})"
             )
-        if score_reduction not in {"max", "mean"}:
+        # "vote" (cross-head block voting) is block_topk-only: it ranks blocks
+        # by how many query heads independently top-B them. quest scores pages by
+        # a min/max envelope with no per-head block notion, so vote is undefined
+        # there — reject rather than silently coerce.
+        allowed_reductions = {"max", "mean"}
+        if name == "block_topk":
+            allowed_reductions = {"max", "mean", "vote"}
+        if score_reduction not in allowed_reductions:
             raise argparse.ArgumentTypeError(
                 f"sparse attention {name!r} requires score_reduction in "
-                f"{{'max', 'mean'}}; got {score_reduction!r}"
+                f"{sorted(allowed_reductions)}; got {score_reduction!r}"
             )
         if phase_scope != "decode_only":
             raise argparse.ArgumentTypeError(

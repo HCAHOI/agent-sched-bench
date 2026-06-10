@@ -1191,6 +1191,56 @@ def load_block_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
         }
 
 
+def load_per_head_topk(iter_dir: Path) -> dict[str, np.ndarray]:
+    """Load block_topk's counterfactual per-head top-R selections from one iter dir.
+
+    Decode-only. CSR row axis = flattened ``(layer_slot, decode_step slot, head)``
+    with ``n_rows = L_s * T_max * H``; a row's per-head top-R block ids are
+    ``csr_block_ids[offsets[row]:offsets[row+1]]`` (scores aligned). Block ids are
+    absolute (np.int32); scores np.float16 (offline-ranking precision only).
+
+    Returns zero-length arrays when the run predates / disabled
+    ``--record-per-head-topk`` (the keys are simply absent from older
+    attention.npz files — additive write-time contract).
+
+      per_head_topk_layers               [L_s]                  i32
+      per_head_topk_rank                 scalar                 i32
+      per_head_topk_head_count           scalar                 i32
+      per_head_topk_decode_step          [L_s, T_max]           i32 (-1 pad)
+      per_head_topk_decode_n             [L_s]                  i32
+      per_head_topk_n_candidate_blocks   [L_s, T_max]           i32
+      per_head_topk_csr_offsets          [n_rows + 1]           i64
+      per_head_topk_csr_block_ids        [nnz]                  i32
+      per_head_topk_csr_scores           [nnz]                  fp16
+    """
+    with np.load(iter_dir / "attention.npz") as data:
+        if "per_head_topk_csr_offsets" not in data:
+            return {
+                "per_head_topk_layers": np.empty(0, dtype=np.int32),
+                "per_head_topk_rank": 0,
+                "per_head_topk_head_count": 0,
+                "per_head_topk_decode_step": np.empty((0, 0), dtype=np.int32),
+                "per_head_topk_decode_n": np.empty(0, dtype=np.int32),
+                "per_head_topk_n_candidate_blocks": np.empty((0, 0), dtype=np.int32),
+                "per_head_topk_csr_offsets": np.zeros(1, dtype=np.int64),
+                "per_head_topk_csr_block_ids": np.empty(0, dtype=np.int32),
+                "per_head_topk_csr_scores": np.empty(0, dtype=np.float16),
+            }
+        return {
+            "per_head_topk_layers": data["per_head_topk_layers"].astype(np.int32),
+            "per_head_topk_rank": int(data["per_head_topk_rank"]),
+            "per_head_topk_head_count": int(data["per_head_topk_head_count"]),
+            "per_head_topk_decode_step": data["per_head_topk_decode_step"].astype(np.int32),
+            "per_head_topk_decode_n": data["per_head_topk_decode_n"].astype(np.int32),
+            "per_head_topk_n_candidate_blocks": data[
+                "per_head_topk_n_candidate_blocks"
+            ].astype(np.int32),
+            "per_head_topk_csr_offsets": data["per_head_topk_csr_offsets"].astype(np.int64),
+            "per_head_topk_csr_block_ids": data["per_head_topk_csr_block_ids"].astype(np.int32),
+            "per_head_topk_csr_scores": data["per_head_topk_csr_scores"].astype(np.float16),
+        }
+
+
 def average_layer_matrix(
     dataset: LayerDistributionSet,
     *,

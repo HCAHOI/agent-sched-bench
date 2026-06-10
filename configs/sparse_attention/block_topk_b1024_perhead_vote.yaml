@@ -1,0 +1,37 @@
+# Arm B — block_topk cross-head VOTE scoring + per-head counterfactual top-k.
+#
+# Identical to Arm A (block_topk_b1024_perhead_max.yaml) except score_reduction
+# is "vote": instead of folding 32 query heads with a max before scoring blocks,
+# each head independently picks its own top-B candidate blocks (B = the middle
+# budget this step can fill) and a block's vote count is the primary rank key
+# (ties: cross-head max score desc, then block id asc). This directly targets
+# the head-max pathology where blocks no single head strongly attends to still
+# win budget because one head's outlier logit dominates the pool.
+#
+# Expected readout: vote's kept set should drop "no-head-consensus" blocks that
+# head-max retained; the analysis script's vote-vs-max selection-set Jaccard and
+# complementary-block role breakdown quantify exactly which blocks get swapped.
+# Per-head recording is on so this arm ALSO yields the uncensored per-head
+# disagreement metrics (same as Arm A) — one run, both signals.
+#
+# Recording knobs are CLI flags (see Arm A header). Run with:
+#
+#   python -m trace_collect.cli \
+#     --provider ... --model ... --scaffold openclaw --benchmark ... \
+#     --record-internals \
+#     --sparse-attn-config configs/sparse_attention/block_topk_b1024_perhead_vote.yaml \
+#     --per-head-stats-layers 0,4,9,13,16,18,20,22,25,27,32,38,43,47 \
+#     --record-per-head-topk --per-head-topk-rank 64
+#
+# --per-head-stats-layers rationale identical to Arm A: 14-layer densified
+#   mid-stack sample (uniform coverage + L14–22 densification around the L18
+#   head-divergence peak).
+name: block_topk
+budget: 1024
+sink_size: 4
+recent_window: 256
+block_size: 16
+score_reduction: vote
+phase_scope: decode_only
+record: true
+observe_only: true

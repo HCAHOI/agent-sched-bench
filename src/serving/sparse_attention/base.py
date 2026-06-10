@@ -39,7 +39,9 @@ class SparseAttentionConfig:
     observe_only: bool = False  # run full attention; record what sparse WOULD select
     budget: int | None = None  # dynamic methods
     block_size: int = 16  # block_topk / quest page size
-    score_reduction: Literal["max", "mean"] = "max"  # block/page score reduction
+    # block/page score reduction. "vote" is block_topk-only (cross-head block
+    # voting); validated in serving.sparse_attention.config.
+    score_reduction: Literal["max", "mean", "vote"] = "max"
     phase_scope: Literal["decode_only"] = "decode_only"
 
     def __post_init__(self) -> None:

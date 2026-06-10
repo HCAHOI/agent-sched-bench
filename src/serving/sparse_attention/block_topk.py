@@ -58,6 +58,19 @@ class BlockTopKSparseAttention:
         self.observe_only = bool(observe_only)
         self._last_kept_count = 0
         self._last_metadata: dict[str, Any] = {}
+        # Per-head top-R export staged by the last `_rank_middle_positions`;
+        # consumed by the recording hook. None when export is off or no
+        # candidates. Shape: {"block_ids": [[..]*H], "scores": [[..]*H]}.
+        self._last_per_head_topk: dict[str, Any] | None = None
+        # Vote-distribution summary from the last vote-reduction ranking; None
+        # for max/mean. Recorded into `_last_metadata` for offline read.
+        self._last_vote_summary: dict[str, int] | None = None
+        # Set by the recording hook at install time (RecordingConfig
+        # .record_per_head_topk). When > 0, every decode ranking also exports
+        # the per-head top-`export_per_head_topk_rank` (block_id, score) pairs
+        # into `_last_metadata["per_head_topk_*"]` regardless of score_reduction.
+        # Default 0 = no extra per-head [H, Nb] materialization (zero cost).
+        self.export_per_head_topk_rank: int = 0
 
     @classmethod
     def from_config(cls, config: SparseAttentionConfig) -> "BlockTopKSparseAttention":
@@ -116,10 +129,20 @@ class BlockTopKSparseAttention:
                 "cannot silently fall back to dense attention"
             )
 
+        keep = sink_recent_keep_indices(
+            key_len=key_len,
+            sink_size=self.sink_size,
+            recent_window=self.recent_window,
+        )
+        # Middle budget in token positions: how many middle slots this step can
+        # fill after sink/recent claim their share. The vote path converts this
+        # to a BLOCK budget (ceil(middle_slots / block_size)) at its call site.
+        middle_slots = max(0, min(self.budget, key_len) - len(keep))
         ranked_middle, selected_blocks = self._rank_middle_positions(
             context=context,
             layer_idx=layer_idx,
             key_len=key_len,
+            middle_slots=middle_slots,
         )
         selected_middle = cap_middle_selection(
             key_len=key_len,
@@ -127,11 +150,6 @@ class BlockTopKSparseAttention:
             sink_size=self.sink_size,
             recent_window=self.recent_window,
             ranked_middle=ranked_middle,
-        )
-        keep = sink_recent_keep_indices(
-            key_len=key_len,
-            sink_size=self.sink_size,
-            recent_window=self.recent_window,
         )
         keep.update(selected_middle)
         self._record(
@@ -151,7 +169,12 @@ class BlockTopKSparseAttention:
         )
 
     def _rank_middle_positions(
-        self, *, context: SparseAttentionContext, layer_idx: int, key_len: int
+        self,
+        *,
+        context: SparseAttentionContext,
+        layer_idx: int,
+        key_len: int,
+        middle_slots: int,
     ) -> tuple[list[int], list[int]]:
         import torch
 
@@ -185,11 +208,12 @@ class BlockTopKSparseAttention:
         scores = torch.matmul(grouped_q, key_states.unsqueeze(2).transpose(-1, -2))
         scores = scores.reshape(q_states.shape[0], n_query_heads, q_states.shape[-2], key_len)
         scores = scores * float(getattr(context.module, "scaling", q_states.shape[-1] ** -0.5))
-        token_scores = scores.amax(dim=(0, 1, 2))
         candidates = middle_indices(
             key_len=key_len, sink_size=self.sink_size, recent_window=self.recent_window
         )
         if not candidates:
+            self._last_per_head_topk = None
+            self._last_vote_summary = None
             return [], []
 
         # Build block_to_positions on CPU (needed for the final ranked_positions list)
@@ -202,44 +226,177 @@ class BlockTopKSparseAttention:
         # Vectorize per-block score: one H2D transfer of candidates, one scatter_reduce
         # on GPU, one D2H of [num_unique_blocks] scores. No per-block .item() sync.
         candidates_t = torch.as_tensor(
-            candidates, dtype=torch.long, device=token_scores.device
+            candidates, dtype=torch.long, device=scores.device
         )
         block_ids_t = candidates_t // int(self.block_size)               # [Nc]
         unique_blocks, inverse = torch.unique(
             block_ids_t, return_inverse=True
         )  # [Nb], [Nc]
         nb = int(unique_blocks.shape[0])
-        cand_scores = token_scores.index_select(0, candidates_t)         # [Nc]
-        if self.score_reduction == "max":
-            block_scores_t = torch.full(
-                (nb,), float("-inf"),
-                device=token_scores.device, dtype=cand_scores.dtype,
-            )
-            block_scores_t = block_scores_t.scatter_reduce(
-                0, inverse, cand_scores, reduce="amax", include_self=True
-            )
-        else:  # mean
-            sums = torch.zeros(
-                (nb,), device=token_scores.device, dtype=cand_scores.dtype
-            )
-            counts = torch.zeros(
-                (nb,), device=token_scores.device, dtype=cand_scores.dtype
-            )
-            sums = sums.scatter_add(0, inverse, cand_scores)
-            counts = counts.scatter_add(0, inverse, torch.ones_like(cand_scores))
-            block_scores_t = sums / counts
 
-        # One sync: pull both scores and block ids in two cheap transfers.
-        scores_cpu = block_scores_t.detach().cpu().tolist()
-        blocks_cpu = unique_blocks.detach().cpu().tolist()
-        # Preserve old tie-break: sort by score descending, block_id ascending on ties.
-        ordered = sorted(zip(scores_cpu, blocks_cpu), key=lambda item: (-item[0], item[1]))
+        # Per-head block scores [H, Nb] are only materialized when the active
+        # reduction is "vote" OR the recording hook asked for per-head export.
+        # Otherwise we stay on the single-vector head-max path (no [H, Nb] cost).
+        need_per_head = self.score_reduction == "vote" or self.export_per_head_topk_rank > 0
+        per_head_block_scores: Any = None
+        cross_head_max_block_scores: Any = None
+        if need_per_head:
+            # token scores per head: fold batch + q_len with amax -> [H, K].
+            token_scores_h = scores.amax(dim=(0, 2))                     # [H, K]
+            cand_scores_h = token_scores_h.index_select(1, candidates_t)  # [H, Nc]
+            per_head_block_scores = self._scatter_block_amax(
+                cand_scores_h, inverse, nb
+            )  # [H, Nb]
+            # cross-head max block score reused as the vote tie-break and the
+            # max-equivalent ranking (avoids a second scatter for the max arm).
+            cross_head_max_block_scores = per_head_block_scores.amax(dim=0)  # [Nb]
+
+        if self.export_per_head_topk_rank > 0:
+            self._last_per_head_topk = self._build_per_head_topk(
+                per_head_block_scores=per_head_block_scores,
+                unique_blocks=unique_blocks,
+            )
+        else:
+            self._last_per_head_topk = None
+
+        if self.score_reduction == "vote":
+            # Vote budget is in BLOCKS: ceil(middle position slots / block_size)
+            # = the number of middle blocks the final selection can keep. Raw
+            # position slots would exceed the candidate count, let every head
+            # vote for everything, and collapse vote onto the max tie-break.
+            ordered = self._vote_order(
+                per_head_block_scores=per_head_block_scores,
+                cross_head_max_block_scores=cross_head_max_block_scores,
+                unique_blocks=unique_blocks,
+                top_b=-(-middle_slots // self.block_size),
+            )
+        else:
+            if self.score_reduction == "max" and cross_head_max_block_scores is not None:
+                block_scores_t = cross_head_max_block_scores
+            else:
+                cand_scores = scores.amax(dim=(0, 1, 2)).index_select(0, candidates_t)
+                block_scores_t = self._reduce_block_scores(cand_scores, inverse, nb)
+            scores_cpu = block_scores_t.detach().cpu().tolist()
+            blocks_cpu = unique_blocks.detach().cpu().tolist()
+            # Preserve tie-break: sort by score descending, block_id ascending on ties.
+            ordered = sorted(
+                zip(scores_cpu, blocks_cpu), key=lambda item: (-item[0], item[1])
+            )
+            ordered = [int(block_id) for _score, block_id in ordered]
+
         ranked_positions: list[int] = []
         selected_blocks: list[int] = []
-        for _score, block_id in ordered:
+        for block_id in ordered:
             selected_blocks.append(int(block_id))
             ranked_positions.extend(block_to_positions[int(block_id)])
         return ranked_positions, selected_blocks
+
+    def _reduce_block_scores(self, cand_scores: Any, inverse: Any, nb: int) -> Any:
+        """Reduce candidate token scores into per-block scores (max | mean)."""
+        import torch
+
+        if self.score_reduction == "max":
+            block_scores_t = torch.full(
+                (nb,), float("-inf"), device=cand_scores.device, dtype=cand_scores.dtype
+            )
+            return block_scores_t.scatter_reduce(
+                0, inverse, cand_scores, reduce="amax", include_self=True
+            )
+        sums = torch.zeros((nb,), device=cand_scores.device, dtype=cand_scores.dtype)
+        counts = torch.zeros((nb,), device=cand_scores.device, dtype=cand_scores.dtype)
+        sums = sums.scatter_add(0, inverse, cand_scores)
+        counts = counts.scatter_add(0, inverse, torch.ones_like(cand_scores))
+        return sums / counts
+
+    @staticmethod
+    def _scatter_block_amax(cand_scores_h: Any, inverse: Any, nb: int) -> Any:
+        """Per-head block amax: [H, Nc] candidate scores -> [H, Nb] block scores.
+
+        Head dim is batched (no per-head Python loop); the same `inverse`
+        (candidate -> unique-block index) maps every head's candidates in one
+        scatter_reduce over the last axis.
+        """
+        import torch
+
+        h = int(cand_scores_h.shape[0])
+        index = inverse.unsqueeze(0).expand(h, -1)                       # [H, Nc]
+        out = torch.full(
+            (h, nb), float("-inf"), device=cand_scores_h.device, dtype=cand_scores_h.dtype
+        )
+        return out.scatter_reduce(1, index, cand_scores_h, reduce="amax", include_self=True)
+
+    def _vote_order(
+        self,
+        *,
+        per_head_block_scores: Any,
+        cross_head_max_block_scores: Any,
+        unique_blocks: Any,
+        top_b: int,
+    ) -> list[int]:
+        """Rank blocks by cross-head votes.
+
+        Each head votes for its own top-`top_b` candidate blocks; a block's vote
+        count is the primary key. Ties break by cross-head max score (desc) then
+        block_id (asc) for determinism. `top_b` is this step's middle budget in
+        BLOCKS (ceil of position slots / block_size, capped to the candidate
+        count below) — a head never votes for more blocks than the selection
+        could keep. That cap is what gives votes discriminative power: with
+        top_b >= nb every head votes for everything and the ranking degenerates
+        to the tie-break.
+        """
+        import torch
+
+        nb = int(per_head_block_scores.shape[1])
+        b = max(0, min(int(top_b), nb))
+        if b == 0:
+            votes_t = torch.zeros(nb, dtype=torch.long, device=per_head_block_scores.device)
+        else:
+            # Per head, indices of its top-b blocks; scatter +1 vote each. One
+            # bincount over the flattened [H*b] index set — no per-head sync.
+            top_idx = per_head_block_scores.topk(b, dim=1).indices            # [H, b]
+            votes_t = torch.bincount(top_idx.reshape(-1), minlength=nb)        # [Nb]
+        votes_cpu = votes_t.detach().cpu().tolist()
+        max_cpu = cross_head_max_block_scores.detach().cpu().tolist()
+        blocks_cpu = unique_blocks.detach().cpu().tolist()
+        ordered = sorted(
+            zip(votes_cpu, max_cpu, blocks_cpu),
+            key=lambda item: (-item[0], -item[1], item[2]),
+        )
+        nonzero = [v for v in votes_cpu if v > 0]
+        self._last_vote_summary = {
+            "n_candidate_blocks": int(nb),
+            "vote_top_b": int(b),
+            "blocks_with_votes": len(nonzero),
+            "max_votes": max(votes_cpu) if votes_cpu else 0,
+            # True when every head votes for every candidate (b >= nb): votes
+            # carry no signal and the order falls back to the max tie-break.
+            # Legitimate when candidates are scarcer than the budget; an offline
+            # check on this flag catches any future config that re-saturates.
+            "saturated": bool(b >= nb),
+        }
+        return [int(block_id) for _votes, _score, block_id in ordered]
+
+    def _build_per_head_topk(
+        self, *, per_head_block_scores: Any, unique_blocks: Any
+    ) -> dict[str, list[list[int]] | list[list[float]]] | None:
+        """Export per-head top-R (block_id, score) for offline counterfactuals.
+
+        Returns ragged python lists (one inner list per head) so the recording
+        hook can CSR-encode them; block ids map through `unique_blocks` back to
+        absolute block ids. R is capped at the candidate-block count. One D2H of
+        the [H, R] topk indices/values; no per-head loop on device.
+        """
+        if per_head_block_scores is None:
+            return None
+        h, nb = per_head_block_scores.shape
+        r = max(0, min(int(self.export_per_head_topk_rank), int(nb)))
+        if r == 0:
+            return {"block_ids": [[] for _ in range(int(h))], "scores": [[] for _ in range(int(h))]}
+        top = per_head_block_scores.topk(r, dim=1)                       # values/indices [H, R]
+        abs_blocks = unique_blocks.index_select(0, top.indices.reshape(-1)).reshape(int(h), r)
+        block_ids = abs_blocks.detach().cpu().tolist()
+        scores = top.values.detach().cpu().tolist()
+        return {"block_ids": block_ids, "scores": scores}
 
     def _record(
         self,
@@ -274,6 +431,8 @@ class BlockTopKSparseAttention:
             "selected_middle_count": len(selected_middle or []),
             "selected_middle_indices": [int(x) for x in (selected_middle or [])],
         }
+        if self.score_reduction == "vote" and self._last_vote_summary is not None:
+            self._last_metadata["vote_summary"] = dict(self._last_vote_summary)
 
     def reset_state(self) -> None:
         """No-op: block_topk computes its keep set fresh each decode step."""
@@ -291,6 +450,15 @@ class BlockTopKSparseAttention:
     ) -> dict[str, Any]:
         del layer_idx, phase, decode_step
         return dict(self._last_metadata)
+
+    def per_head_topk_export(self) -> dict[str, Any] | None:
+        """Per-head top-R (block_id, score) from the last decode ranking.
+
+        Returns None when `export_per_head_topk_rank == 0` or no middle
+        candidates existed. The recording hook reads this right after
+        `build_additive_mask` and CSR-encodes it; block ids are absolute.
+        """
+        return self._last_per_head_topk
 
 
 __all__ = ["BlockTopKSparseAttention"]

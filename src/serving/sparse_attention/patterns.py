@@ -34,10 +34,15 @@ def validate_sparse_budget(
         )
     if block_size <= 0:
         raise ValueError(f"{method_name} requires block_size > 0; got {block_size!r}")
-    if score_reduction not in {"max", "mean"}:
+    if score_reduction not in {"max", "mean", "vote"}:
         raise ValueError(
-            f"{method_name} requires score_reduction in {{'max', 'mean'}}; "
+            f"{method_name} requires score_reduction in {{'max', 'mean', 'vote'}}; "
             f"got {score_reduction!r}"
+        )
+    if score_reduction == "vote" and method_name != "block_topk":
+        raise ValueError(
+            "score_reduction='vote' is implemented only by block_topk; "
+            f"got method {method_name!r}"
         )
     if phase_scope != "decode_only":
         raise ValueError(

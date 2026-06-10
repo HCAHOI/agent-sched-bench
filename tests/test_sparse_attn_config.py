@@ -87,6 +87,30 @@ def test_cli_only_dynamic_method_with_budget() -> None:
     assert cfg.phase_scope == "decode_only"
 
 
+def test_block_topk_accepts_vote_reduction() -> None:
+    cfg = load_sparse_attention_config(
+        _ns(
+            sparse_attn="block_topk",
+            sparse_attn_budget=1024,
+            sparse_attn_score_reduction="vote",
+        )
+    )
+    assert cfg is not None
+    assert cfg.name == "block_topk"
+    assert cfg.score_reduction == "vote"
+
+
+def test_vote_reduction_rejected_for_quest() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="score_reduction"):
+        load_sparse_attention_config(
+            _ns(
+                sparse_attn="quest",
+                sparse_attn_budget=1024,
+                sparse_attn_score_reduction="vote",
+            )
+        )
+
+
 def test_dynamic_budget_must_cover_sink_recent() -> None:
     with pytest.raises(argparse.ArgumentTypeError, match="budget >= sink_size"):
         load_sparse_attention_config(

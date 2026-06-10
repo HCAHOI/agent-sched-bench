@@ -30,6 +30,20 @@ class RecordingConfig:
     # the CLI gate enforces both. block_size/sink/recent are read at runtime from
     # the sparse method instance (single source of truth), not duplicated here.
     per_head_block_stats: bool = False
+    # When True, record block_topk's per-head independent top-`per_head_topk_rank`
+    # block selections at each decode step (the counterfactual "what would each
+    # head pick alone" set, uncensored by pooling). Reuses per_head_stats_layers
+    # for the layer set (empty = nothing recorded). Only meaningful with an active
+    # block_topk method; the CLI gate enforces it. The sparse method computes the
+    # per-head block scores regardless of score_reduction when this is on; off =
+    # zero extra compute / GPU memory (no [H, n_blocks] materialization).
+    record_per_head_topk: bool = False
+    # Per-head rank cap R_ph for record_per_head_topk. Default 64 sits ABOVE the
+    # typical middle-block budget (≈48 at budget=1024/block_size=16) so the export
+    # cap is never the binding constraint; per-step rows are capped at the
+    # candidate-block count nb anyway. Lower it in YAML to cut storage
+    # (≈ layers × decode_steps × H × R_ph × 6 bytes per call, see hooks).
+    per_head_topk_rank: int = 64
 
 
 def segment_role(message: dict[str, Any]) -> str:

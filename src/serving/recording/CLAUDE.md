@@ -124,6 +124,35 @@ mean/var 公式同 head_span decode（Q=1）：`mean = (1/|b|)Σ_{k∈b} A_k`，
 > 在哪个 segment"(块连续⇒段连续)；它用整块范围而非仅 kept 位置，故与上面按 kept 聚合的
 > seg 统计互补。
 
+### block_topk per-head counterfactual top-R（`--record-per-head-topk`）
+
+仅当 `RecordingConfig.record_per_head_topk=True`（CLI `--record-per-head-topk`，须同
+`--sparse-attn block_topk` + 非空 `--per-head-stats-layers`，no-silent-fallback 校验）
+时填充；关闭时所有数组首维为 0（shape-stable，同 head_span 空约定）。Decode-only、
+observe-correct：per-head 块分数仅在开关开启时额外物化，max/mean 的实际选择不变
+（max 路径复用同一 per-head scatter 的跨头 amax，数学等价、数值不变）。
+
+| 字段 | 形状 | dtype | 含义 |
+|------|------|-------|------|
+| `per_head_topk_layers` | `[L_s]` | i32 | 采样层（= `per_head_stats_layers`） |
+| `per_head_topk_rank` | scalar | i32 | R_ph 上限（行长 ≤ min(R_ph, 该步候选块数)） |
+| `per_head_topk_head_count` | scalar | i32 | query head 数 H |
+| `per_head_topk_decode_step` | `[L_s, T_max]` | i32 | 各层实际 decode step（-1 pad） |
+| `per_head_topk_decode_n` | `[L_s]` | i32 | 各层 decode step 数 |
+| `per_head_topk_n_candidate_blocks` | `[L_s, T_max]` | i32 | 该 step 的候选 middle 块数 nb |
+| `per_head_topk_csr_offsets` | `[L_s·T_max·H + 1]` | i64 | CSR 行偏移；行轴 = 展平 `(layer_slot, step_slot, head)`，未录组合为空行 |
+| `per_head_topk_csr_block_ids` | `[NNZ]` | i32 | 各行 top-R 块 id（行内按该头分数降序） |
+| `per_head_topk_csr_scores` | `[NNZ]` | fp16 | 对应 pre-softmax 块分数（仅离线排序/聚合用） |
+
+Step 覆盖：**全 decode 步**（per-call 清空、故意不随 `decode_window` ring trim），与
+`sparse_attention.npz` 的全步行 1:1 对齐（离线 vote-vs-max 重聚合需要与选择日志相同的
+step 集合）；T_max = 该 call 的 decode 步数。存储 ≈ `L_s × T_max × H × R_ph × 6B` 上界
+（行长另被候选块数 nb cap）：典型 agent call（14 层 × ~70 步 × 32 头 × 64 rank）≈ 12
+MB/call，500 步长生成上界 ≈ 86 MB/call；用 `--per-head-topk-rank` 或减少采样层控制。消费端：
+`scripts/recoding_figures/analyze_per_head_topk.py`（per-head Jaccard / union 覆盖 /
+n90 / 共识核心 / vote-vs-max 离线重聚合）。动机：消除"只见池化选中块"的 censoring
+（docs/analysis/attention_locality_20260610.md §6 的下界限制）。
+
 
 
 每条 record 对应一个 (layer, prefill 或 decode step) 的采样快照。
