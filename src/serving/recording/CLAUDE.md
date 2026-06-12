@@ -42,6 +42,15 @@ attempt_NNNN/
   - `tool_call_id` 和 `name`（tool 调用 / 结果的溯源 id）
   - `has_content`, `has_tool_calls`
   - `first_seen_call`（这段最早出现在哪次 chat 中）
+  - `exit_code` / `tool_error`（**仅 `role == "tool"` 段**；用于 agent-event-gated
+    KV 分析）。`exit_code`：exec-family 工具结果里 `Exit code: <N>` 行解析出的整数，
+    保守解析（取最后一个匹配行；无匹配 / 非字符串 / 被截断 → None，**绝不猜 0**）。
+    `tool_error`：失败标志——`exit_code != 0` 为 True，`exit_code == 0` 为 False；
+    无 exit_code 时退回首个非空行是否以 `Error` 开头（所有 OpenClaw 工具的失败约定）。
+    无任何可判信号 → None。observe-only：只读消息已有文本，不改 agent 行为/消息内容；
+    serving 系统在推理时本就看到同样的 tool result，故 inference-time-legitimate。
+    可选键：非 tool 段不写，旧读端（均用 dict.get）不受影响。解析见
+    `recording.parse_tool_exit_code` / `recording.detect_tool_error`。
 - `token_segment_id[]`：每个 token 属于哪个 segment_id
 
 ---

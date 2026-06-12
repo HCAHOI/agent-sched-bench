@@ -35,7 +35,12 @@ from serving.kv_policies.base import BaseEvictionCache, EvictionPolicyConfig
 from serving.kv_policies.recorder import KVEvictionRecorder
 from serving.recording.attention_bus import AttentionBus
 from serving.recording.hooks import LayerCapturer
-from serving.recording.recording import RecordingConfig, segment_role
+from serving.recording.recording import (
+    RecordingConfig,
+    detect_tool_error,
+    parse_tool_exit_code,
+    segment_role,
+)
 from serving.sparse_attention import (
     BaseSparseAttention,
     SparseAttentionConfig,
@@ -101,6 +106,17 @@ def _message_segment_metadata(message: dict[str, Any]) -> dict[str, Any]:
         value = message.get(key)
         if value is not None:
             payload[key] = str(value)
+    # Tool-outcome labels (exec exit code + failure flag) for the
+    # agent-event-gated KV analysis. Optional keys: written only for tool-result
+    # messages where a signal is detectable; absent/unknown stays None so old
+    # readers (all use dict.get on segments) and the analysis cannot confuse
+    # "unknown" with "success". Plain metadata, bytes-scale per segment.
+    if message.get("role") == "tool":
+        exit_code = parse_tool_exit_code(message.get("content"))
+        payload["exit_code"] = exit_code
+        payload["tool_error"] = detect_tool_error(
+            message.get("content"), exit_code=exit_code
+        )
     return payload
 
 

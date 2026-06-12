@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import re
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
@@ -55,6 +56,58 @@ def segment_role(message: dict[str, Any]) -> str:
     if role == "tool":
         return "tool_result"
     return role
+
+
+# OpenClaw's exec tool (implemented in agents/openclaw/tools/shell.py) appends a
+# literal "Exit code: <N>" line to every command result; this is the only
+# structured exit signal in the tool-result string. The recorder sees the same
+# string the serving system receives at inference time, so this parse is
+# inference-time-legitimate.
+_EXIT_CODE_PATTERN = re.compile(r"(?m)^\s*Exit code:\s*(-?\d+)\s*$")
+# Tool failure marker shared across all OpenClaw tools: a result whose first
+# non-blank line starts with "Error" (e.g. "Error:", "Error executing command:",
+# "Error reading file:"). Conservative — matched only at the start so an "Error"
+# substring mid-output does not trigger a false positive.
+_TOOL_ERROR_PATTERN = re.compile(r"^\s*Error\b")
+
+
+def parse_tool_exit_code(content: Any) -> int | None:
+    """Extract an exec-style exit code from a tool-result string.
+
+    Returns the integer following the last ``Exit code: <N>`` line, or None when
+    no such line exists (non-exec tools, truncated-away tail, unparseable). Never
+    guesses 0 — absence stays None so downstream cannot mistake "unknown" for
+    "success". The serving system receives this same result text as the tool runs,
+    so reading it is inference-time-legitimate (no oracle/hindsight signal).
+    """
+    if not isinstance(content, str) or not content:
+        return None
+    matches = _EXIT_CODE_PATTERN.findall(content)
+    if not matches:
+        return None
+    return int(matches[-1])
+
+
+def detect_tool_error(content: Any, *, exit_code: int | None = None) -> bool | None:
+    """Best-effort failure flag for a tool result.
+
+    True when ``exit_code`` is nonzero, or when the result string's first non-blank
+    line starts with ``Error`` (the convention every OpenClaw tool follows for
+    failures). False when an exit code of 0 is present or the result is a non-empty
+    string with no error marker. None when there is no string content and no exit
+    code to judge from. Over-budget results persisted to disk (content replaced by
+    a "[tool output persisted]" head preview) carry no error marker and therefore
+    yield False (no-error-signal), not None. Observe-only: derived from the result
+    text already in the message, never altering it.
+    """
+    if exit_code is not None:
+        if exit_code != 0:
+            return True
+        # exit_code == 0 is an explicit success signal from an exec tool.
+        return False
+    if not isinstance(content, str) or not content:
+        return None
+    return bool(_TOOL_ERROR_PATTERN.match(content))
 
 
 def query_sampling_seed(base_seed: int, call_idx: int) -> str:
