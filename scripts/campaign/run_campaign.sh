@@ -423,8 +423,17 @@ cmd_run() {
   ST_BOOT_ID="$(current_boot_id)"
   ST_STATE="running"
 
-  # Queue identity: anchor on this runner's absolute path (per plan).
-  write_pidfile "$campaign_pid" "$campaign_meta" "$$" "$SELF_PATH"
+  # Queue identity: anchor on this runner's BASENAME, not its absolute path.
+  # The live queue cmdline is `bash <somepath>run_campaign.sh run --tasks ...`,
+  # where <somepath> mirrors HOW the script was invoked (relative when launched
+  # as `bash scripts/campaign/run_campaign.sh`, absolute when launched as
+  # `bash /abs/run_campaign.sh`). Anchoring on the absolute $SELF_PATH only
+  # matched the absolute-launch form and produced a false `reused` for the
+  # relative-launch form documented in the README's deploy recipe. The basename
+  # `run_campaign.sh` appears on the cmdline regardless of launch form and is
+  # specific enough to reject unrelated PIDs (no other process runs a file with
+  # this basename).
+  write_pidfile "$campaign_pid" "$campaign_meta" "$$" "$(basename "$SELF_PATH")"
 
   # Trap: on any exit, clear the current-task pid file and finalize status.
   # shellcheck disable=SC2317

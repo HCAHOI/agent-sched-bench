@@ -92,6 +92,43 @@ write_pidfile "$PF3" "$MF3" "$SLEEP_PID" "this-anchor-cannot-match-a-sleep-cmdli
 check "$(verify_pid "$PF3" "$MF3")" "reused" "verify_pid reused for non-matching cmdline anchor"
 kill -KILL "$SLEEP_PID" 2>/dev/null; wait "$SLEEP_PID" 2>/dev/null; SLEEP_PID=""
 
+# Relative-launch anchor regression (the e55c5f7 false-`reused` bug): a queue
+# launched via a RELATIVE path (`bash scripts/campaign/run_campaign.sh run ...`)
+# has a live cmdline carrying that relative path, but the OLD code recorded the
+# anchor as the runner's ABSOLUTE path, so the cmdline-contains-anchor step (4)
+# failed -> false `reused` even though the queue was alive-and-ours. The fix
+# records the BASENAME, which is on the cmdline under any launch form. We model
+# a real relative launch: copy the dummy under WORK, then launch it with a
+# RELATIVE path from WORK so its /proc cmdline (ps args) holds `./relq.sh`.
+RELDIR="${WORK}/reldir"
+mkdir -p "$RELDIR"
+cp "$SLEEPCMD" "${RELDIR}/relq.sh"
+chmod +x "${RELDIR}/relq.sh"
+# Launch via a relative path (cd into RELDIR so argv[0] is the relative form).
+( cd "$RELDIR" && exec ./relq.sh 30 ) &
+REL_PID=$!
+SLEEP_PID="$REL_PID"   # registered for cleanup
+REL_CMD="$(proc_cmdline "$REL_PID")"
+# Confirm the live cmdline is the RELATIVE form (no leading abs path component).
+if printf '%s' "$REL_CMD" | grep -q 'relq.sh' && ! printf '%s' "$REL_CMD" | grep -q "${RELDIR}/relq.sh"; then
+  pass "relative-launch dummy has relative-form cmdline (./relq.sh, not abs)"
+else
+  fail "relative-launch dummy has relative-form cmdline (got: $REL_CMD)"
+fi
+RELPF="${WORK}/rel.pid"; RELMF="${WORK}/rel.meta"
+# Record the anchor the way the FIXED runner does: the basename of the abs path.
+ABS_RELQ="${RELDIR}/relq.sh"
+write_pidfile "$RELPF" "$RELMF" "$REL_PID" "$(basename "$ABS_RELQ")"
+check "$(verify_pid "$RELPF" "$RELMF")" "alive-and-ours" \
+  "verify_pid alive-and-ours for relative-launch queue (basename anchor)"
+# Prove the test exercises the bug: the OLD absolute-path anchor would mismatch
+# the relative cmdline and (wrongly) report reused.
+RELMF_ABS="${WORK}/rel_abs.meta"
+write_pidfile "$RELPF" "$RELMF_ABS" "$REL_PID" "$ABS_RELQ"
+check "$(verify_pid "$RELPF" "$RELMF_ABS")" "reused" \
+  "OLD absolute-path anchor falsely reports reused on relative launch (bug repro)"
+kill -KILL "$REL_PID" 2>/dev/null; wait "$REL_PID" 2>/dev/null; SLEEP_PID=""
+
 # No pgrep/pkill anywhere in the runner.
 if grep -nE 'pgrep|pkill' "$RUNNER" >/dev/null 2>&1; then
   fail "no pgrep/pkill in run_campaign.sh"
