@@ -1,0 +1,26 @@
+# Example campaign task list (TSV, tab-separated). ONE row = ONE
+# `python -m trace_collect.cli` invocation. Lines starting with '#' and blank
+# lines are skipped.
+#
+# columns:  task_id <TAB> benchmark <TAB> extra_cli_args
+#   task_id        human label used for logs/<task_id>.log and PID identity.
+#   benchmark      plugin slug (swe-rebench | terminal-bench). The runner
+#                  APPENDS `--benchmark <benchmark>` to the command, so do NOT
+#                  put --benchmark in extra_cli_args.
+#   extra_cli_args everything AFTER `python -m trace_collect.cli` EXCEPT
+#                  --benchmark, copied from the arm's `invocation:` block in
+#                  configs/recording_campaigns/agent_event_kv_step_level.yaml.
+#
+# The runner prepends `python -m ${TRACE_CLI_MODULE:-trace_collect.cli}` and
+# appends `--benchmark <benchmark>`. Verify the expansion before deploying:
+#   bash scripts/campaign/run_campaign.sh run --tasks scripts/campaign/tasks.example.tsv --print-cmd
+#
+# Placeholders <P> (provider) and <M> (model) are filled per deployment. Arm C's
+# second model is an explicit user TODO (manifest line 96) — left as <M> here.
+#
+# --- Arm A: block_topk head-max pooling + per-head counterfactual export ---
+A_max__beeware	swe-rebench	--provider <P> --model Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 --scaffold openclaw --mcp-config configs/mcp/context7.yaml --record-internals --sparse-attn-config configs/sparse_attention/block_topk_b1024_perhead_max.yaml --per-head-stats-layers 0,4,9,13,16,18,20,22,25,27,32,38,43,47 --record-per-head-topk --per-head-topk-rank 64 --instance-ids beeware__briefcase-817
+# --- Arm B: cross-head vote scoring + per-head export ---
+B_vote__beeware	swe-rebench	--provider <P> --model Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 --scaffold openclaw --mcp-config configs/mcp/context7.yaml --record-internals --sparse-attn-config configs/sparse_attention/block_topk_b1024_perhead_vote.yaml --per-head-stats-layers 0,4,9,13,16,18,20,22,25,27,32,38,43,47 --record-per-head-topk --per-head-topk-rank 64 --instance-ids beeware__briefcase-817
+# --- Arm C: external-validity replication on a second model (model = user TODO) ---
+C_max__cartpole	terminal-bench	--provider <P> --model <M> --scaffold openclaw --mcp-config configs/mcp/context7.yaml --record-internals --sparse-attn-config configs/sparse_attention/block_topk_b1024_perhead_max.yaml --per-head-stats-layers <TODO_LAYERS_FOR_MODEL_DEPTH> --record-per-head-topk --per-head-topk-rank 64 --instance-ids cartpole-rl-training
