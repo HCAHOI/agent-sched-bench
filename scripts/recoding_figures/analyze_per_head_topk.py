@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,7 +58,6 @@ TOP_K_VALUES: tuple[int, ...] = (8, 16, 32, 64)  # per-head counterfactual budge
 CONSENSUS_K: int = 16                            # k for the consensus-core metric
 CONSENSUS_FRAC: float = 0.75                     # >= 75% of heads must agree
 N90_MASS: float = 0.90                           # selection-signal coverage target
-MAX_JACCARD_PAIRS: int = 496                     # 32 heads -> C(32,2)=496 (use all)
 
 
 @dataclass(frozen=True)
@@ -169,6 +169,61 @@ def _topk_set(blocks: np.ndarray, scores: np.ndarray, k: int) -> set[int]:
     return set(int(b) for b in blocks[:k])
 
 
+def _topk_membership(
+    head_blocks: list[np.ndarray], k: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Boolean [H, U] top-k membership matrix over the union candidate blocks.
+
+    Column u corresponds to ``candidates[u]``, the u-th distinct block id
+    appearing in any head's top-k (ascending); entry [h, u] is True iff head h's
+    top-k (its first <= k score-sorted blocks) contains that block. Rows are
+    already score-sorted, so the top-k is the leading slice — identical to
+    ``_topk_set``. Returns (membership, sizes, candidates) where sizes[h] is the
+    distinct-block count in head h's top-k (head block ids are unique per row).
+    """
+    H = len(head_blocks)
+    topk_blocks = [b[:k] for b in head_blocks]
+    lengths = np.fromiter((tb.shape[0] for tb in topk_blocks), dtype=np.int64, count=H)
+    if not lengths.any():
+        return (
+            np.zeros((H, 0), dtype=bool),
+            np.zeros(H, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+    flat_blocks = np.concatenate(topk_blocks).astype(np.int64)
+    head_idx = np.repeat(np.arange(H), lengths)
+    candidates = np.unique(flat_blocks)
+    col_idx = np.searchsorted(candidates, flat_blocks)
+    membership = np.zeros((H, candidates.shape[0]), dtype=bool)
+    membership[head_idx, col_idx] = True
+    sizes = membership.sum(axis=1).astype(np.int64)
+    return membership, sizes, candidates
+
+
+def _pairwise_jaccard_stats(membership: np.ndarray, sizes: np.ndarray) -> tuple[float, float]:
+    """(mean, median) Jaccard over upper-triangle head pairs with a non-empty union.
+
+    ``inter = M @ M.T`` gives |A_i ∩ A_j| for the boolean membership matrix M;
+    |A_i ∪ A_j| = sizes_i + sizes_j - inter. Pairs whose union is empty (both
+    heads contributed no top-k blocks) are excluded, mirroring the per-pair
+    ``if head_sets[i] or head_sets[j]`` guard in the scalar reference. Integer
+    intersection/union counts make the ratio exact vs. the set-based path.
+    """
+    H = membership.shape[0]
+    if H < 2:
+        return float("nan"), float("nan")
+    iu = np.triu_indices(H, k=1)
+    if membership.shape[1] == 0:
+        return float("nan"), float("nan")
+    inter = (membership.astype(np.int64) @ membership.T.astype(np.int64))[iu]
+    union = sizes[iu[0]] + sizes[iu[1]] - inter
+    valid = union > 0
+    if not bool(valid.any()):
+        return float("nan"), float("nan")
+    jac = inter[valid] / union[valid]
+    return float(np.mean(jac)), float(np.median(jac))
+
+
 def _jaccard(a: set[int], b: set[int]) -> float:
     union = a | b
     if not union:
@@ -250,22 +305,18 @@ def _step_rows(
 ) -> list[dict]:
     """One metric row per (task, call, layer, step, k) plus k-agnostic columns."""
     n_heads = len(step.head_blocks)
-    pairs = [(i, j) for i in range(n_heads) for j in range(i + 1, n_heads)]
-    if len(pairs) > MAX_JACCARD_PAIRS:
-        pairs = pairs[:MAX_JACCARD_PAIRS]
 
     n90_vals = [
         _n90(sc) for sc in step.head_scores if sc.shape[0] > 0
     ]
     n90_mean = float(np.mean(n90_vals)) if n90_vals else float("nan")
 
-    # Consensus core at CONSENSUS_K.
-    votes_c: dict[int, int] = defaultdict(int)
-    for blocks, scores in zip(step.head_blocks, step.head_scores):
-        for blk in _topk_set(blocks, scores, CONSENSUS_K):
-            votes_c[blk] += 1
+    # Consensus core at CONSENSUS_K: per-block cross-head top-k vote count >=
+    # threshold, computed as the column sums of the boolean membership matrix
+    # (identical to the per-block defaultdict tally over each head's top-k set).
+    cons_member, _, _ = _topk_membership(step.head_blocks, CONSENSUS_K)
     min_consensus = int(np.ceil(CONSENSUS_FRAC * n_heads))
-    consensus_core = {blk for blk, v in votes_c.items() if v >= min_consensus}
+    consensus_core_size = int((cons_member.sum(axis=0) >= min_consensus).sum())
 
     # vote-vs-max re-aggregation (k-agnostic; B = ceil(middle_budget / block_size)).
     max_set, vote_set = _reaggregate(step, block_size)
@@ -275,20 +326,23 @@ def _step_rows(
     role_only_vote = _role_counts(only_vote, roles)
     role_only_max = _role_counts(only_max, roles)
 
+    kept = step.kept_blocks
+    kept_arr = np.fromiter(kept, dtype=np.int64, count=len(kept))
+
     rows: list[dict] = []
     for k in TOP_K_VALUES:
-        head_sets = [
-            _topk_set(b, s, k) for b, s in zip(step.head_blocks, step.head_scores)
-        ]
-        jac = [
-            _jaccard(head_sets[i], head_sets[j])
-            for i, j in pairs
-            if head_sets[i] or head_sets[j]
-        ]
-        union: set[int] = set()
-        for s in head_sets:
-            union |= s
-        kept = step.kept_blocks
+        membership, sizes, candidates = _topk_membership(step.head_blocks, k)
+        jaccard_mean, jaccard_median = _pairwise_jaccard_stats(membership, sizes)
+        # Union of all heads' top-k = the candidate-block axis of the membership
+        # matrix (each column is a distinct block in >= 1 head's top-k).
+        union_abs = candidates.shape[0]
+        if union_abs and kept_arr.size:
+            union_and_kept = int(np.isin(candidates, kept_arr).sum())
+        else:
+            union_and_kept = 0
+        union_minus_kept = union_abs - union_and_kept
+        kept_minus_union = len(kept) - union_and_kept
+        union_or_kept = union_abs + kept_minus_union
         rows.append(
             {
                 "task": task,
@@ -297,16 +351,16 @@ def _step_rows(
                 "decode_step": step.decode_step,
                 "k": k,
                 "n_heads": n_heads,
-                "jaccard_mean": float(np.mean(jac)) if jac else float("nan"),
-                "jaccard_median": float(np.median(jac)) if jac else float("nan"),
-                "union_abs": len(union),
+                "jaccard_mean": jaccard_mean,
+                "jaccard_median": jaccard_median,
+                "union_abs": union_abs,
                 "kept_abs": len(kept),
-                "union_and_kept": len(union & kept),
-                "union_or_kept": len(union | kept),
-                "union_minus_kept": len(union - kept),
-                "kept_minus_union": len(kept - union),
+                "union_and_kept": union_and_kept,
+                "union_or_kept": union_or_kept,
+                "union_minus_kept": union_minus_kept,
+                "kept_minus_union": kept_minus_union,
                 "n90_mean": n90_mean,
-                "consensus_core_size": len(consensus_core),
+                "consensus_core_size": consensus_core_size,
                 "middle_budget": step.middle_budget,
                 "vote_vs_max_jaccard": vote_max_jac,
                 "vote_only_count": len(only_vote),
@@ -327,15 +381,41 @@ def _role_counts(blocks: set[int], roles: dict[int, str]) -> dict[str, int]:
 
 def analyze(records: list[IterationRecord], block_size: int) -> pd.DataFrame:
     all_rows: list[dict] = []
+    # Records are sorted by (task, call_idx); report ETA per task to stderr so a
+    # long run is no longer flying blind (a full sweep was 55+ min single-thread).
+    n_tasks = len({record.task for record in records})
+    task_idx = 0
+    cur_task: str | None = None
+    task_start = 0.0
+    task_steps = 0
+
+    def _flush(now: float) -> None:
+        if cur_task is not None:
+            print(
+                f"[per_head_topk] [{task_idx}/{n_tasks}] {cur_task} done in "
+                f"{now - task_start:.1f}s, {task_steps} steps",
+                file=sys.stderr,
+                flush=True,
+            )
+
     for record in records:
+        if record.task != cur_task:
+            now = time.perf_counter()
+            _flush(now)
+            cur_task = record.task
+            task_idx += 1
+            task_start = now
+            task_steps = 0
         steps = _iter_steps(record)
         if not steps:
             continue
         roles = _block_roles(record.iter_dir, block_size)
+        task_steps += len(steps)
         for step in steps:
             all_rows.extend(
                 _step_rows(record.task, record.call_idx, step, roles, block_size)
             )
+    _flush(time.perf_counter())
     if not all_rows:
         raise FileNotFoundError(
             "no per_head_topk records found — were the attempts collected with "

@@ -182,3 +182,172 @@ def test_reaggregate_vote_drops_no_consensus_block() -> None:
     assert 99 in max_set  # outlier dominates the max aggregation
     assert 99 not in vote_set  # but gets no consensus votes
     assert vote_set == {1, 2}  # the two consensus blocks
+
+
+def _brute_pairwise_jaccard(head_blocks, k):
+    """Scalar reference: mean/median top-k Jaccard over non-empty-union pairs."""
+    sets = [set(b[:k].tolist()) for b in head_blocks]
+    H = len(sets)
+    jac = []
+    for i in range(H):
+        for j in range(i + 1, H):
+            a, b = sets[i], sets[j]
+            if not (a or b):
+                continue
+            jac.append(len(a & b) / len(a | b))
+    if not jac:
+        return float("nan"), float("nan")
+    return float(np.mean(jac)), float(np.median(jac))
+
+
+def test_membership_jaccard_matches_bruteforce() -> None:
+    """Vectorized membership Jaccard == scalar pairwise reference (random data)."""
+    from scripts.recoding_figures.analyze_per_head_topk import (
+        _pairwise_jaccard_stats,
+        _topk_membership,
+    )
+
+    rng = np.random.default_rng(20260613)
+    for _ in range(50):
+        H = int(rng.integers(2, 33))
+        R = int(rng.integers(1, 65))
+        n_blocks = int(rng.integers(R, 4 * R + 1))
+        head_blocks = []
+        for _h in range(H):
+            r = int(rng.integers(0, R + 1))  # allow empty heads
+            blocks = rng.choice(n_blocks, size=r, replace=False).astype(np.int64)
+            scores = rng.random(r)
+            order = np.argsort(-scores)  # descending-score order, as recorded
+            head_blocks.append(blocks[order])
+        for k in (8, 16, 32, 64):
+            membership, sizes, _ = _topk_membership(head_blocks, k)
+            got = _pairwise_jaccard_stats(membership, sizes)
+            ref = _brute_pairwise_jaccard(head_blocks, k)
+            for g, r in zip(got, ref):
+                assert (np.isnan(g) and np.isnan(r)) or g == r
+
+
+def _old_step_rows(task, call_idx, step, roles, block_size):
+    """Frozen pre-vectorization _step_rows for numerical-equivalence guarding."""
+    import json as _json
+    from collections import defaultdict
+
+    from scripts.recoding_figures.analyze_per_head_topk import (
+        CONSENSUS_FRAC,
+        CONSENSUS_K,
+        TOP_K_VALUES,
+        _jaccard,
+        _n90,
+        _reaggregate,
+        _role_counts,
+        _topk_set,
+    )
+
+    n_heads = len(step.head_blocks)
+    pairs = [(i, j) for i in range(n_heads) for j in range(i + 1, n_heads)]
+    n90_vals = [_n90(sc) for sc in step.head_scores if sc.shape[0] > 0]
+    n90_mean = float(np.mean(n90_vals)) if n90_vals else float("nan")
+    votes_c = defaultdict(int)
+    for blocks, scores in zip(step.head_blocks, step.head_scores):
+        for blk in _topk_set(blocks, scores, CONSENSUS_K):
+            votes_c[blk] += 1
+    min_consensus = int(np.ceil(CONSENSUS_FRAC * n_heads))
+    consensus_core = {blk for blk, v in votes_c.items() if v >= min_consensus}
+    max_set, vote_set = _reaggregate(step, block_size)
+    vote_max_jac = _jaccard(max_set, vote_set)
+    only_vote = vote_set - max_set
+    only_max = max_set - vote_set
+    role_only_vote = _role_counts(only_vote, roles)
+    role_only_max = _role_counts(only_max, roles)
+    rows = []
+    for k in TOP_K_VALUES:
+        head_sets = [
+            _topk_set(b, s, k) for b, s in zip(step.head_blocks, step.head_scores)
+        ]
+        jac = [
+            _jaccard(head_sets[i], head_sets[j])
+            for i, j in pairs
+            if head_sets[i] or head_sets[j]
+        ]
+        union = set()
+        for s in head_sets:
+            union |= s
+        kept = step.kept_blocks
+        rows.append(
+            {
+                "task": task,
+                "call_idx": call_idx,
+                "layer": step.layer,
+                "decode_step": step.decode_step,
+                "k": k,
+                "n_heads": n_heads,
+                "jaccard_mean": float(np.mean(jac)) if jac else float("nan"),
+                "jaccard_median": float(np.median(jac)) if jac else float("nan"),
+                "union_abs": len(union),
+                "kept_abs": len(kept),
+                "union_and_kept": len(union & kept),
+                "union_or_kept": len(union | kept),
+                "union_minus_kept": len(union - kept),
+                "kept_minus_union": len(kept - union),
+                "n90_mean": n90_mean,
+                "consensus_core_size": len(consensus_core),
+                "middle_budget": step.middle_budget,
+                "vote_vs_max_jaccard": vote_max_jac,
+                "vote_only_count": len(only_vote),
+                "max_only_count": len(only_max),
+                "vote_only_roles": _json.dumps(role_only_vote, sort_keys=True),
+                "max_only_roles": _json.dumps(role_only_max, sort_keys=True),
+            }
+        )
+    return rows
+
+
+def test_step_rows_matches_old_reference() -> None:
+    """New vectorized _step_rows == frozen scalar reference on random fixtures."""
+    from scripts.recoding_figures.analyze_per_head_topk import (
+        StepSelections,
+        _step_rows,
+    )
+
+    rng = np.random.default_rng(424242)
+    for _ in range(40):
+        H = int(rng.integers(2, 33))
+        R = int(rng.integers(1, 65))
+        n_blocks = int(rng.integers(R, 5 * R + 1))
+        head_blocks, head_scores = [], []
+        all_blocks: set[int] = set()
+        for _h in range(H):
+            r = int(rng.integers(0, R + 1))
+            blocks = rng.choice(n_blocks, size=r, replace=False).astype(np.int32)
+            scores = rng.random(r).astype(np.float16)
+            order = np.argsort(-scores.astype(np.float32))
+            blocks, scores = blocks[order], scores[order]
+            head_blocks.append(blocks)
+            head_scores.append(scores)
+            all_blocks.update(int(b) for b in blocks)
+        # kept overlaps the candidate union plus some out-of-union ids.
+        kept_pool = list(all_blocks) + [n_blocks + i for i in range(5)]
+        kept_size = int(rng.integers(0, len(kept_pool) + 1))
+        kept = frozenset(
+            int(x) for x in rng.choice(kept_pool, size=kept_size, replace=False)
+        ) if kept_pool else frozenset()
+        step = StepSelections(
+            layer=int(rng.integers(0, 14)),
+            decode_step=int(rng.integers(0, 500)),
+            head_blocks=head_blocks,
+            head_scores=head_scores,
+            kept_blocks=kept,
+            middle_budget=int(rng.integers(0, 4 * R + 1)),
+        )
+        roles = {b: ("tool_result" if b % 2 else "user") for b in range(n_blocks + 5)}
+        new_rows = _step_rows("t", 0, step, roles, block_size=16)
+        old_rows = _old_step_rows("t", 0, step, roles, block_size=16)
+        assert len(new_rows) == len(old_rows)
+        for nr, orow in zip(new_rows, old_rows):
+            assert set(nr) == set(orow)
+            for key in nr:
+                a, b = nr[key], orow[key]
+                if isinstance(a, float) and np.isnan(a):
+                    assert np.isnan(b)
+                else:
+                    assert a == b, f"{key}: {a!r} != {b!r}"
