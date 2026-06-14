@@ -148,7 +148,7 @@ class KVEvictionRecorder:
             value_attr="score_evicted_value",
         )
 
-        np.savez_compressed(
+        np.savez(
             npz_path,
             call_idx=np.asarray(self.call_idx, dtype=np.int32),
             policy_name=np.asarray(self.policy_name, dtype="U16"),

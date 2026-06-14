@@ -233,14 +233,16 @@ def expert_load_per_segment(
 
     segment_ids = token_ids[:n_tokens].to(device=logits.device)
     valid = (segment_ids >= 0) & (segment_ids < n_segments)
-    if bool(valid.any()):
-        valid_segments = segment_ids[valid]
-        for rank in range(k):
-            load.index_put_(
-                (valid_segments, choices[valid, rank]),
-                weights[valid, rank],
-                accumulate=True,
-            )
+    # `index_put_` with empty index tensors is a safe no-op, so we skip the
+    # `valid.any()` host sync; the accumulation result is identical when no
+    # rows are valid (same pattern as the routing-count summary in hooks.py).
+    valid_segments = segment_ids[valid]
+    for rank in range(k):
+        load.index_put_(
+            (valid_segments, choices[valid, rank]),
+            weights[valid, rank],
+            accumulate=True,
+        )
     return choices, weights, load
 
 

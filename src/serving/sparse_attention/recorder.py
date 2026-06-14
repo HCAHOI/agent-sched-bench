@@ -139,7 +139,7 @@ class SparseAttentionRecorder:
                 "width. Either rename the method shorter or widen the U16 dtype "
                 "(both writer here and loader in recording_loader.py)."
             )
-        np.savez_compressed(
+        np.savez(
             npz_path,
             call_idx=np.asarray(self.call_idx, dtype=np.int32),
             method_name=np.asarray(self.method_name, dtype="U16"),

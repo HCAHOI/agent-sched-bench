@@ -269,8 +269,11 @@ def _encode_ragged_csr(
         )
     n_rows = len(index_rows)
     offsets = np.zeros(n_rows + 1, dtype=np.int64)
-    for i, row in enumerate(index_rows):
-        offsets[i + 1] = offsets[i] + int(row.shape[0])
+    if n_rows > 0:
+        lengths = np.fromiter(
+            (row.shape[0] for row in index_rows), dtype=np.int64, count=n_rows
+        )
+        np.cumsum(lengths, out=offsets[1:])
     if int(offsets[-1]) == 0:
         return (
             offsets,
@@ -1999,9 +2002,13 @@ class LayerCapturer:
             layer=layer,
             phase=phase,
             decode_step=decode_step,
-            expert_choice=_as_numpy(choices).astype(np.int32),
-            expert_weight=_as_numpy(weights).astype(np.float32),
-            expert_load=_as_numpy(load).astype(np.float32),
+            # Stage the D2H copies instead of blocking inside the forward hook;
+            # `_synchronize_pending_arrays` materializes them in bulk at routing
+            # flush (mirrors the attention path). The deferred values are
+            # byte-identical: staging applies the same int32/float32 cast.
+            expert_choice=_stage_numpy(choices, np.int32),
+            expert_weight=_stage_numpy(weights, np.float32),
+            expert_load=_stage_numpy(load, np.float32),
             routing_counts=routing_counts,
         )
 
@@ -2451,9 +2458,27 @@ class LayerCapturer:
                         )
                     row_card = max((len(r) for r in ids), default=0)
                     n_candidate_blocks[li, ti] = int(row_card)
+                    # Batch the [H, R] conversion when rows are rectangular (the
+                    # common case: every head exports exactly R = min(rank, nb)
+                    # entries, or all-empty when R == 0). np.asarray over a list
+                    # of equal-length rows yields an [H, R] array whose per-head
+                    # slice arr[h] is byte-identical to np.asarray(ids[h], ...).
+                    # Ragged rows raise ValueError -> fall back to the per-row
+                    # loop so ordering/values can never silently diverge.
+                    try:
+                        id_mat = np.asarray(ids, dtype=np.int32)
+                        sc_mat = np.asarray(scs, dtype=np.float16)
+                        if id_mat.ndim != 2 or sc_mat.ndim != 2:
+                            raise ValueError("non-rectangular per-head rows")
+                    except ValueError:
+                        id_rows_step = [np.asarray(r, dtype=np.int32) for r in ids]
+                        sc_rows_step = [np.asarray(r, dtype=np.float16) for r in scs]
+                    else:
+                        id_rows_step = list(id_mat)
+                        sc_rows_step = list(sc_mat)
                     for h in range(H):
-                        id_row = np.asarray(ids[h], dtype=np.int32)
-                        sc_row = np.asarray(scs[h], dtype=np.float16)
+                        id_row = id_rows_step[h]
+                        sc_row = sc_rows_step[h]
                         if id_row.shape != sc_row.shape:
                             raise RuntimeError(
                                 f"per_head_topk id/score shape mismatch at "
@@ -2550,7 +2575,7 @@ class LayerCapturer:
         head_span_arrays = self._build_head_span_arrays(n_segments)
         block_head_span_arrays = self._build_block_head_span_arrays()
         per_head_topk_arrays = self._build_per_head_topk_arrays()
-        np.savez_compressed(
+        np.savez(
             path,
             call_idx=np.asarray(self._session["call_idx"], dtype=np.int32),
             n_segments=np.asarray(n_segments, dtype=np.int32),
@@ -2604,7 +2629,7 @@ class LayerCapturer:
             token_offsets.append(token_offsets[-1] + int(choices.shape[0]))
             n_experts = int(record["expert_load"].shape[1])
             top_k = int(choices.shape[1])
-        np.savez_compressed(
+        np.savez(
             path,
             call_idx=np.asarray(self._session["call_idx"], dtype=np.int32),
             n_segments=np.asarray(n_segments, dtype=np.int32),
