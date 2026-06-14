@@ -8,11 +8,15 @@ parallel across all cores AFTER a run finishes — when the GPU is idle — so t
 upload/download transfers the small (compressed) form while recording stayed
 fast.
 
-Lossless by construction: ``np.load`` returns byte-identical arrays for the
-compressed and uncompressed npz container. Each rewrite is additionally
-VERIFIED by reloading the temp file and comparing every array (dtype, shape,
-values) against the source before an atomic replace; a mismatch aborts that
-file without touching the original.
+Lossless by construction: an npz is a zip of ``.npy`` members. This operates at
+the ZIP level — it copies each member's raw ``.npy`` bytes verbatim from the
+(stored) source into a new (deflated) archive, WITHOUT deserializing the arrays.
+So ``np.load`` returns byte-identical arrays for every dtype, including object
+arrays (ragged data) and float arrays containing NaN, whose exact bit patterns
+are preserved. Each rewrite is VERIFIED by re-reading the temp archive and
+comparing every member's raw bytes against the source before an atomic replace;
+a mismatch aborts that file without touching the original. Files already fully
+deflated are skipped (idempotent re-runs).
 
 Usage:
     python scripts/campaign/recompress_run.py <trace_dir> [-j N]
@@ -29,36 +33,38 @@ import argparse
 import os
 import sys
 import time
+import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-import numpy as np
-
 
 def recompress_one(path_str: str) -> tuple[str, int, int, str]:
-    """Recompress one npz in place, verifying byte-identity. Returns
-    (path, size_before, size_after, status). status == 'ok' on success."""
+    """Recompress one npz in place at the zip level, verifying byte-identity.
+    Returns (path, size_before, size_after, status); status is 'ok', 'skip'
+    (already fully deflated), or 'FAIL: ...'."""
     path = Path(path_str)
     tmp = path.with_name(path.name + ".recompress.tmp")
     try:
-        with np.load(path, allow_pickle=False) as src:
-            arrays = {k: src[k] for k in src.files}
         before = path.stat().st_size
+        with zipfile.ZipFile(path, "r") as zin:
+            infos = zin.infolist()
+            # Idempotent: skip if every member is already deflated.
+            if infos and all(i.compress_type == zipfile.ZIP_DEFLATED for i in infos):
+                return (path_str, before, before, "skip")
+            members = [(i.filename, zin.read(i.filename)) for i in infos]
 
-        # Write via an explicit file handle so numpy does not append ".npz".
-        with open(tmp, "wb") as fh:
-            np.savez_compressed(fh, **arrays)
+        # Copy each .npy member's raw bytes verbatim into a deflated archive.
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for name, data in members:
+                zout.writestr(name, data)
 
-        # Verify the rewrite is byte-identical before replacing the original.
-        with np.load(tmp, allow_pickle=False) as chk:
-            if set(chk.files) != set(arrays):
-                raise ValueError(
-                    f"key mismatch after recompress: {set(chk.files)} vs {set(arrays)}"
-                )
-            for k, a in arrays.items():
-                b = chk[k]
-                if a.dtype != b.dtype or a.shape != b.shape or not np.array_equal(a, b):
-                    raise ValueError(f"array '{k}' differs after recompress")
+        # Verify member names and raw bytes are unchanged (=> np.load identical).
+        with zipfile.ZipFile(tmp, "r") as zchk:
+            if zchk.namelist() != [n for n, _ in members]:
+                raise ValueError("member list changed after recompress")
+            for name, data in members:
+                if zchk.read(name) != data:
+                    raise ValueError(f"member '{name}' bytes differ after recompress")
 
         after = tmp.stat().st_size
         os.replace(tmp, path)
@@ -93,6 +99,7 @@ def main() -> int:
     print(f"recompressing {len(files)} npz under {root} with {args.jobs} workers ...")
     t0 = time.time()
     tot_before = tot_after = 0
+    skipped = 0
     fails: list[tuple[str, str]] = []
     done = 0
     with ProcessPoolExecutor(max_workers=args.jobs) as ex:
@@ -100,23 +107,25 @@ def main() -> int:
         for fut in as_completed(futs):
             path, before, after, status = fut.result()
             done += 1
-            if status != "ok":
-                fails.append((path, status))
-            else:
+            if status == "ok":
                 tot_before += before
                 tot_after += after
+            elif status == "skip":
+                skipped += 1
+            else:
+                fails.append((path, status))
             if done % 50 == 0 or done == len(files):
                 print(f"  {done}/{len(files)} done", flush=True)
 
     dt = time.time() - t0
     if tot_before:
         print(
-            f"done in {dt:.1f}s: {tot_before / 1e9:.2f} GB -> {tot_after / 1e9:.2f} GB "
-            f"({tot_after / tot_before * 100:.0f}% of original, "
-            f"{tot_before / tot_after:.1f}x shrink)"
+            f"done in {dt:.1f}s: recompressed {tot_before / 1e9:.2f} GB -> "
+            f"{tot_after / 1e9:.2f} GB ({tot_after / tot_before * 100:.0f}% of original, "
+            f"{tot_before / tot_after:.1f}x shrink); {skipped} already-deflated skipped"
         )
     else:
-        print(f"done in {dt:.1f}s")
+        print(f"done in {dt:.1f}s; {skipped} already-deflated skipped")
 
     if fails:
         print(f"\n{len(fails)} FAILURE(S) — originals left untouched:", file=sys.stderr)
