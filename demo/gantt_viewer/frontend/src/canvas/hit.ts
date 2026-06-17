@@ -1,5 +1,5 @@
 import type { Registries, ResourceSample, TracePayload } from "../api/client";
-import { resourceMetricValueAt } from "./resourceMetrics";
+import { cumulativeValueAt, formatMetricValue, resourceMetricValueAt } from "./resourceMetrics";
 import { displayColor } from "../theme/displayColor";
 import { formatAbsTime } from "./time";
 
@@ -32,6 +32,8 @@ export interface ResourceHit {
   traceId: string;
   traceLabel: string;
   timeline: ResourceSample[];
+  /** All spans of this trace, for attributing I/O to the hovered event. */
+  spans?: TracePayload["lanes"][number]["spans"];
   metric: string;
   metricSecondary?: string;
   chartY: number;
@@ -99,6 +101,11 @@ export const RESOURCE_METRIC_COLORS: Record<string, string> = {
   disk_write: "#FF7043",
 };
 
+export const RESOURCE_SLOT_COLORS = {
+  primary: "#00E5FF",
+  secondary: "#FF6D00",
+} as const;
+
 const RESOURCE_METRIC_LABELS: Record<string, string> = {
   cpu: "CPU %",
   memory: "Memory MB",
@@ -115,7 +122,7 @@ export function hitAccent(hit: Hit, registries: Registries | null): string {
     return displayColor("#00E5FF");
   }
   if (hit.kind === "resource") {
-    return displayColor(RESOURCE_METRIC_COLORS[hit.metric] ?? "#94A3B8");
+    return displayColor(RESOURCE_SLOT_COLORS.primary);
   }
   if (hit.kind === "span") {
     return displayColor(registries?.spans[hit.item.type]?.color ?? "#94A3B8");
@@ -154,29 +161,55 @@ export function hitRows(hit: Hit): Array<[string, string]> {
         const memTotal = resourceMetricValueAt(hit.timeline, sampleIndex, "mem_total");
         const memRead = resourceMetricValueAt(hit.timeline, sampleIndex, "mem_read");
         const memWrite = resourceMetricValueAt(hit.timeline, sampleIndex, "mem_write");
-        rows.push(["Mem Total", memTotal == null ? "N/A" : `${memTotal.toFixed(1)} MB/s`]);
-        rows.push(["Mem Read", memRead == null ? "N/A" : `${memRead.toFixed(1)} MB/s`]);
-        rows.push(["Mem Write", memWrite == null ? "N/A" : `${memWrite.toFixed(1)} MB/s`]);
+        rows.push(["Mem Total", memTotal == null ? "N/A" : `${formatMetricValue(memTotal)} MB/s`]);
+        rows.push(["Mem Read", memRead == null ? "N/A" : `${formatMetricValue(memRead)} MB/s`]);
+        rows.push(["Mem Write", memWrite == null ? "N/A" : `${formatMetricValue(memWrite)} MB/s`]);
         const diskTotal = resourceMetricValueAt(hit.timeline, sampleIndex, "disk_total") ?? 0;
         const diskRead = resourceMetricValueAt(hit.timeline, sampleIndex, "disk_read") ?? 0;
         const diskWrite = resourceMetricValueAt(hit.timeline, sampleIndex, "disk_write") ?? 0;
-        rows.push(["Disk Total", `${diskTotal.toFixed(1)} MB/s`]);
-        rows.push(["Disk Read", `${diskRead.toFixed(1)} MB/s`]);
-        rows.push(["Disk Write", `${diskWrite.toFixed(1)} MB/s`]);
+        rows.push(["Disk Total", `${formatMetricValue(diskTotal)} MB/s`]);
+        rows.push(["Disk Read", `${formatMetricValue(diskRead)} MB/s`]);
+        rows.push(["Disk Write", `${formatMetricValue(diskWrite)} MB/s`]);
+        // Cumulative volume since trace start (baseline-subtracted): the
+        // counter is monotonic, so this delta is exact and immune to the
+        // sampling gaps that distort instantaneous throughput.
+        const base = hit.timeline[0];
+        const cumRead = (s.disk_read_mb ?? 0) - (base?.disk_read_mb ?? 0);
+        const cumWrite = (s.disk_write_mb ?? 0) - (base?.disk_write_mb ?? 0);
+        rows.push(["Disk Read Σ", `${formatMetricValue(cumRead)} MB`]);
+        rows.push(["Disk Write Σ", `${formatMetricValue(cumWrite)} MB`]);
       }
       if (s.context_switches != null) {
         rows.push(["Ctx Switches", String(s.context_switches)]);
+      }
+      // If this time point falls inside an event span (tool/LLM/...), attribute
+      // the I/O over that event's window: counter delta between its start and
+      // end. Exact regardless of the 1s sampling interval. Innermost span wins.
+      const enclosing = (hit.spans ?? [])
+        .filter((sp) => sp.start_abs <= s.t_abs && s.t_abs <= sp.end_abs)
+        .sort((a, b) => a.start_abs - b.start_abs)
+        .pop();
+      if (enclosing) {
+        const evRead =
+          cumulativeValueAt(hit.timeline, enclosing.end_abs, "disk_read_mb") -
+          cumulativeValueAt(hit.timeline, enclosing.start_abs, "disk_read_mb");
+        const evWrite =
+          cumulativeValueAt(hit.timeline, enclosing.end_abs, "disk_write_mb") -
+          cumulativeValueAt(hit.timeline, enclosing.start_abs, "disk_write_mb");
+        rows.push(["Event", `${enclosing.type} · iter ${enclosing.iteration}`]);
+        rows.push(["Event Disk Read Δ", `${formatMetricValue(evRead)} MB`]);
+        rows.push(["Event Disk Write Δ", `${formatMetricValue(evWrite)} MB`]);
       }
       return rows;
     }
     // Fallback: no hover sample (e.g. pinned card)
     const rows: Array<[string, string]> = [
       ["trace", hit.traceLabel],
-      [RESOURCE_METRIC_LABELS[hit.metric] ?? hit.metric, `${hit.vMin.toFixed(1)} – ${hit.vMax.toFixed(1)}`],
+      [RESOURCE_METRIC_LABELS[hit.metric] ?? hit.metric, `${formatMetricValue(hit.vMin)} – ${formatMetricValue(hit.vMax)}`],
     ];
     if (hit.metricSecondary && hit.metricSecondary !== hit.metric) {
       rows.push(
-        [RESOURCE_METRIC_LABELS[hit.metricSecondary] ?? hit.metricSecondary, `${(hit.vMinSecondary ?? 0).toFixed(1)} – ${(hit.vMaxSecondary ?? 0).toFixed(1)}`],
+        [RESOURCE_METRIC_LABELS[hit.metricSecondary] ?? hit.metricSecondary, `${formatMetricValue(hit.vMinSecondary ?? 0)} – ${formatMetricValue(hit.vMaxSecondary ?? 0)}`],
       );
     }
     rows.push(["samples", String(hit.timeline.length)]);

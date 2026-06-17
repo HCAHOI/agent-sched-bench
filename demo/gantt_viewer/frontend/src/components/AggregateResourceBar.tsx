@@ -1,8 +1,8 @@
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import type { ResourceSample, TracePayload } from "../api/client";
-import { RESOURCE_METRIC_COLORS, findNearestSample } from "../canvas/hit";
-import { resourceMetricUnit, resourceMetricValues } from "../canvas/resourceMetrics";
+import { RESOURCE_SLOT_COLORS, findNearestSample } from "../canvas/hit";
+import { formatMetricValue, resourceMetricUnit, resourceMetricValues } from "../canvas/resourceMetrics";
 import { displayColor } from "../theme/displayColor";
 import { canvasTimeRange } from "../state/signals";
 import type { ClockMode, ResourceMetric, ThemeMode, TimeMode } from "../state/signals";
@@ -316,7 +316,7 @@ function drawMetricOverlay(
 
   if (points.length === 0) return;
 
-  const color = displayColor(RESOURCE_METRIC_COLORS[metric] ?? "#94A3B8");
+  const color = displayColor(side === "left" ? RESOURCE_SLOT_COLORS.primary : RESOURCE_SLOT_COLORS.secondary);
 
   // Area fill
   ctx.beginPath();
@@ -347,12 +347,12 @@ function drawMetricOverlay(
   const unit = resourceMetricUnit(metric);
   if (side === "left") {
     ctx.textAlign = "left";
-    ctx.fillText(`${vMax.toFixed(1)}${unit}`, 4, y + pad + 8);
-    ctx.fillText(`${vMin.toFixed(1)}${unit}`, 4, y + h - pad - 2);
+    ctx.fillText(`${formatMetricValue(vMax)}${unit}`, 4, y + pad + 8);
+    ctx.fillText(`${formatMetricValue(vMin)}${unit}`, 4, y + h - pad - 2);
   } else {
     ctx.textAlign = "right";
-    ctx.fillText(`${vMax.toFixed(1)}${unit}`, canvasW - 4, y + pad + 8);
-    ctx.fillText(`${vMin.toFixed(1)}${unit}`, canvasW - 4, y + h - pad - 2);
+    ctx.fillText(`${formatMetricValue(vMax)}${unit}`, canvasW - 4, y + pad + 8);
+    ctx.fillText(`${formatMetricValue(vMin)}${unit}`, canvasW - 4, y + h - pad - 2);
   }
 }
 
@@ -487,14 +487,20 @@ export default function AggregateResourceBar(props: AggregateResourceBarProps) {
                 const total = resourceMetricValues(timeline, "disk_total")[index] ?? 0;
                 const read = resourceMetricValues(timeline, "disk_read")[index] ?? 0;
                 const write = resourceMetricValues(timeline, "disk_write")[index] ?? 0;
+                // Cumulative volume since trace start (baseline-subtracted).
+                const base = timeline[0];
+                const cumRead = (info().sample.disk_read_mb ?? 0) - (base?.disk_read_mb ?? 0);
+                const cumWrite = (info().sample.disk_write_mb ?? 0) - (base?.disk_write_mb ?? 0);
                 return (
                   <>
-                    <div>Mem Total: {memTotal == null ? "N/A" : `${memTotal.toFixed(1)} MB/s`}</div>
-                    <div>Mem Read: {memRead == null ? "N/A" : `${memRead.toFixed(1)} MB/s`}</div>
-                    <div>Mem Write: {memWrite == null ? "N/A" : `${memWrite.toFixed(1)} MB/s`}</div>
-                    <div>Disk Total: {total.toFixed(1)} MB/s</div>
-                    <div>Disk Read: {read.toFixed(1)} MB/s</div>
-                    <div>Disk Write: {write.toFixed(1)} MB/s</div>
+                    <div>Mem Total: {memTotal == null ? "N/A" : `${formatMetricValue(memTotal)} MB/s`}</div>
+                    <div>Mem Read: {memRead == null ? "N/A" : `${formatMetricValue(memRead)} MB/s`}</div>
+                    <div>Mem Write: {memWrite == null ? "N/A" : `${formatMetricValue(memWrite)} MB/s`}</div>
+                    <div>Disk Total: {formatMetricValue(total)} MB/s</div>
+                    <div>Disk Read: {formatMetricValue(read)} MB/s</div>
+                    <div>Disk Write: {formatMetricValue(write)} MB/s</div>
+                    <div>Disk Read Σ: {formatMetricValue(cumRead)} MB</div>
+                    <div>Disk Write Σ: {formatMetricValue(cumWrite)} MB</div>
                   </>
                 );
               })()}

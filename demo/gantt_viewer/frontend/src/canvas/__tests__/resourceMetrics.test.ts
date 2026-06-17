@@ -1,7 +1,43 @@
 import { describe, expect, it } from "vitest";
 
 import type { ResourceSample } from "../../api/client";
-import { resourceMetricUnit, resourceMetricValueAt, resourceMetricValues } from "../resourceMetrics";
+import { cumulativeValueAt, formatMetricValue, resourceMetricUnit, resourceMetricValueAt, resourceMetricValues } from "../resourceMetrics";
+
+describe("cumulativeValueAt", () => {
+  // Monotonic write counter: 100 MB at t=10, 160 at t=20, 160 at t=30.
+  const tl = [sample(10, 0, 0, 100), sample(20, 0, 0, 160), sample(30, 0, 0, 160)];
+
+  it("interpolates the counter between samples", () => {
+    expect(cumulativeValueAt(tl, 15, "disk_write_mb")).toBeCloseTo(130, 6);
+  });
+
+  it("yields an exact window delta regardless of sample alignment", () => {
+    // Span [12, 28] straddles sample boundaries: 112 -> 160 = 48 MB.
+    const start = cumulativeValueAt(tl, 12, "disk_write_mb");
+    const end = cumulativeValueAt(tl, 28, "disk_write_mb");
+    expect(end - start).toBeCloseTo(48, 6);
+  });
+
+  it("clamps to endpoints outside the timeline", () => {
+    expect(cumulativeValueAt(tl, 0, "disk_write_mb")).toBe(100);
+    expect(cumulativeValueAt(tl, 99, "disk_write_mb")).toBe(160);
+    expect(cumulativeValueAt([], 5, "disk_write_mb")).toBe(0);
+  });
+});
+
+describe("formatMetricValue", () => {
+  it("uses fixed 3-decimal precision regardless of magnitude", () => {
+    expect(formatMetricValue(0.018)).toBe("0.018");
+    expect(formatMetricValue(0.0078)).toBe("0.008");
+    expect(formatMetricValue(45.2)).toBe("45.200");
+    expect(formatMetricValue(823.5712)).toBe("823.571");
+  });
+
+  it("falls back to 0.000 for non-finite input", () => {
+    expect(formatMetricValue(0)).toBe("0.000");
+    expect(formatMetricValue(Number.NaN)).toBe("0.000");
+  });
+});
 
 function sample(
   tAbs: number,

@@ -1,25 +1,33 @@
 import type { GanttPayload } from "../../api/client";
 import { CanvasRenderer } from "../CanvasRenderer";
+import { RESOURCE_SLOT_COLORS } from "../hit";
 
-function createMockContext(): CanvasRenderingContext2D {
+function createMockContext(styleLog: string[] = []): CanvasRenderingContext2D {
   const noop = () => {};
-  return {
+  const context = {
     arc: noop,
     beginPath: noop,
     closePath: noop,
     clearRect: noop,
-    fill: noop,
-    fillRect: noop,
-    fillText: noop,
+    fill: () => styleLog.push(String(context.fillStyle)),
+    fillRect: () => styleLog.push(String(context.fillStyle)),
+    fillText: () => styleLog.push(String(context.fillStyle)),
+    fillStyle: "",
+    font: "",
+    globalAlpha: 1,
+    lineWidth: 1,
     lineTo: noop,
     moveTo: noop,
     restore: noop,
     rotate: noop,
     save: noop,
     setTransform: noop,
-    stroke: noop,
+    stroke: () => styleLog.push(String(context.strokeStyle)),
+    strokeStyle: "",
+    textAlign: "left",
     translate: noop,
-  } as unknown as CanvasRenderingContext2D;
+  };
+  return context as unknown as CanvasRenderingContext2D;
 }
 
 function setElementBox(element: HTMLElement, width: number, height: number): void {
@@ -369,6 +377,46 @@ describe("CanvasRenderer", () => {
     expect(timeline?.map((sample) => sample.t)).toEqual([0, 0.5, 1]);
     expect(timeline?.[0].cpu_percent).toBeCloseTo(20);
     expect(timeline?.[2].cpu_percent).toBeCloseTo(40);
+    renderer.destroy();
+  });
+
+  it("colors resource overlays by RES slot instead of selected metric", () => {
+    const canvas = document.createElement("canvas");
+    const wrap = document.createElement("div");
+    const styleLog: string[] = [];
+    const context = createMockContext(styleLog);
+    vi.spyOn(canvas, "getContext").mockImplementation(() => context);
+    vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: 360,
+      height: 320,
+      left: 0,
+      right: 640,
+      top: 0,
+      width: 640,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+    setElementBox(canvas, 640, 320);
+    setElementBox(wrap, 640, 320);
+
+    const payload = payloadFixture();
+    payload.traces[0].resource_timeline = [
+      { cpu_percent: 10, disk_read_mb: 0, disk_write_mb: 0, memory_mb: 100, t: 0, t_abs: 1000 },
+      { cpu_percent: 20, disk_read_mb: 2, disk_write_mb: 4, memory_mb: 110, t: 0.5, t_abs: 1000.5 },
+      { cpu_percent: 30, disk_read_mb: 4, disk_write_mb: 8, memory_mb: 120, t: 1, t_abs: 1001 },
+    ];
+
+    const renderer = new CanvasRenderer(canvas, wrap);
+    renderer.setPayload(payload);
+    renderer.setResourceMetric("disk_read");
+    renderer.setResourceMetricSecondary("disk_write");
+    (renderer as unknown as { render: () => void }).render();
+
+    expect(styleLog).toContain(RESOURCE_SLOT_COLORS.primary);
+    expect(styleLog).toContain(RESOURCE_SLOT_COLORS.secondary);
+    expect(styleLog).not.toContain("#FFA726");
+    expect(styleLog).not.toContain("#FF7043");
     renderer.destroy();
   });
 });

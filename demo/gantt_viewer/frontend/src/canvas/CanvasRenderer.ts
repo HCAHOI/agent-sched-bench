@@ -1,7 +1,7 @@
 import type { GanttPayload, ResourceSample } from "../api/client";
 import { displayColor } from "../theme/displayColor";
-import { RESOURCE_METRIC_COLORS, findNearestSample, sameHit, type Hit, type HitCard } from "./hit";
-import { resourceMetricUnit, resourceMetricValues } from "./resourceMetrics";
+import { RESOURCE_SLOT_COLORS, findNearestSample, sameHit, type Hit, type HitCard } from "./hit";
+import { formatMetricValue, resourceMetricUnit, resourceMetricValues } from "./resourceMetrics";
 import {
   CONTROL_FLOW_SPAN_TYPES,
   computeTotalContentHeight,
@@ -681,6 +681,7 @@ export class CanvasRenderer extends EventTarget {
             traceId: trace.id,
             traceLabel: trace.label,
             timeline,
+            spans: trace.lanes.flatMap((l) => l.spans),
             metric: this.resourceMetric,
             metricSecondary: this.resourceMetricSecondary !== this.resourceMetric ? this.resourceMetricSecondary : undefined,
             chartY: laneY,
@@ -950,7 +951,7 @@ export class CanvasRenderer extends EventTarget {
 
     if (points.length > 0) {
       const metricColor = displayColor(
-        RESOURCE_METRIC_COLORS[metric] ?? "#94A3B8",
+        labelSide === "left" ? RESOURCE_SLOT_COLORS.primary : RESOURCE_SLOT_COLORS.secondary,
       );
 
       // Area fill
@@ -981,20 +982,22 @@ export class CanvasRenderer extends EventTarget {
       this.ctx.lineWidth = 1;
     }
 
-    // Y-axis labels colored by metric
+    // Y-axis labels follow the selected resource slot, not the metric type.
     const canvasW = this.canvas.width / (window.devicePixelRatio || 1);
-    const metricLabelColor = displayColor(RESOURCE_METRIC_COLORS[metric] ?? "#94A3B8");
+    const metricLabelColor = displayColor(
+      labelSide === "left" ? RESOURCE_SLOT_COLORS.primary : RESOURCE_SLOT_COLORS.secondary,
+    );
     this.ctx.fillStyle = metricLabelColor;
     this.ctx.font = '9px "JetBrains Mono", monospace';
     const unit = resourceMetricUnit(metric);
     if (labelSide === "left") {
       this.ctx.textAlign = "left";
-      this.ctx.fillText(`${vMax.toFixed(1)}${unit}`, 4, laneY + chartPad + 8);
-      this.ctx.fillText(`${vMin.toFixed(1)}${unit}`, 4, laneY + chartH - chartPad - 2);
+      this.ctx.fillText(`${formatMetricValue(vMax)}${unit}`, 4, laneY + chartPad + 8);
+      this.ctx.fillText(`${formatMetricValue(vMin)}${unit}`, 4, laneY + chartH - chartPad - 2);
     } else {
       this.ctx.textAlign = "right";
-      this.ctx.fillText(`${vMax.toFixed(1)}${unit}`, canvasW - 4, laneY + chartPad + 8);
-      this.ctx.fillText(`${vMin.toFixed(1)}${unit}`, canvasW - 4, laneY + chartH - chartPad - 2);
+      this.ctx.fillText(`${formatMetricValue(vMax)}${unit}`, canvasW - 4, laneY + chartPad + 8);
+      this.ctx.fillText(`${formatMetricValue(vMin)}${unit}`, canvasW - 4, laneY + chartH - chartPad - 2);
     }
 
     return { vMin, vMax };

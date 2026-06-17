@@ -20,6 +20,55 @@ function throughputMbPerS(
   return Math.max(0, delta) / dtSeconds;
 }
 
+/**
+ * Format a resource value (MB or MB/s) at fixed 3-decimal precision. Fixed
+ * precision keeps readings comparable and copyable for quantitative analysis;
+ * we deliberately avoid magnitude-adaptive rounding.
+ */
+export function formatMetricValue(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(3) : "0.000";
+}
+
+/** Cumulative-counter fields that can be interpolated over a time window. */
+type CumulativeField = "disk_read_mb" | "disk_write_mb" | "net_rx_mb" | "net_tx_mb";
+
+/**
+ * Interpolate a cumulative counter value at an absolute epoch time. The
+ * timeline is assumed sorted by t_abs (as served). Querying the counter at a
+ * span's start and end and subtracting gives the exact volume over that
+ * window — immune to sampling-interval gaps, since it reads a monotonic
+ * counter rather than counting samples that fall inside the window.
+ */
+export function cumulativeValueAt(
+  timeline: ResourceSample[],
+  tAbs: number,
+  field: CumulativeField,
+): number {
+  if (timeline.length === 0) {
+    return 0;
+  }
+  const first = timeline[0];
+  const last = timeline[timeline.length - 1];
+  if (tAbs <= first.t_abs) {
+    return first[field] ?? 0;
+  }
+  if (tAbs >= last.t_abs) {
+    return last[field] ?? 0;
+  }
+  for (let i = 1; i < timeline.length; i += 1) {
+    const right = timeline[i];
+    if (right.t_abs >= tAbs) {
+      const left = timeline[i - 1];
+      const range = right.t_abs - left.t_abs;
+      const frac = range === 0 ? 0 : (tAbs - left.t_abs) / range;
+      const lv = left[field] ?? 0;
+      const rv = right[field] ?? 0;
+      return lv + (rv - lv) * frac;
+    }
+  }
+  return last[field] ?? 0;
+}
+
 export function resourceMetricUnit(metric: ResourceMetric): string {
   switch (metric) {
     case "cpu":

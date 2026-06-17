@@ -1,0 +1,10 @@
+groups:
+  - name: "Terminal-Bench 7 — Qwen3.7 Max OpenRouter"
+    paths:
+      - traces/terminal-bench/qwen-qwen3.7-max/openrouter-selected-7tasks-20260608T160935Z-merged-mteb-rerun/query-optimize/attempt_1/trace.jsonl
+      - traces/terminal-bench/qwen-qwen3.7-max/openrouter-selected-7tasks-20260608T160935Z-merged-mteb-rerun/db-wal-recovery/attempt_1/trace.jsonl
+      - traces/terminal-bench/qwen-qwen3.7-max/openrouter-selected-7tasks-20260608T160935Z-merged-mteb-rerun/log-summary-date-ranges/attempt_1/trace.jsonl
+      - traces/terminal-bench/qwen-qwen3.7-max/openrouter-selected-7tasks-20260608T160935Z-merged-mteb-rerun/regex-log/attempt_1/trace.jsonl
+      - traces/terminal-bench/qwen-qwen3.7-max/openrouter-selected-7tasks-20260608T160935Z-merged-mteb-rerun/sparql-university/attempt_1/trace.jsonl
+      - traces/terminal-bench/qwen-qwen3.7-max/openrouter-selected-7tasks-20260608T160935Z-merged-mteb-rerun/multi-source-data-merger/attempt_1/trace.jsonl
+      - traces/terminal-bench/qwen-qwen3.7-max/openrouter-selected-7tasks-20260608T160935Z-merged-mteb-rerun/mteb-retrieve/attempt_1/trace.jsonl

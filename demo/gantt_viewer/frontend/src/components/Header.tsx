@@ -1,6 +1,7 @@
 import { For, type Accessor } from "solid-js";
 
 import { ZOOM_PRESETS } from "../canvas/CanvasRenderer";
+import { RESOURCE_SLOT_COLORS } from "../canvas/hit";
 import type { ClockMode, ResourceMetric, ThemeMode, TimeMode, ViewMode } from "../state/signals";
 
 interface HeaderProps {
@@ -124,7 +125,7 @@ export default function Header(props: HeaderProps) {
         </button>
       </div>
       <label class="zoom-select-wrap" title="Primary resource metric">
-        <span class="zoom-select-label" style={{ color: "#00E5FF" }}>res1</span>
+        <span class="zoom-select-label" style={{ color: RESOURCE_SLOT_COLORS.primary }}>res1</span>
         <select
           class="zoom-select"
           value={props.resourceMetric()}
@@ -146,7 +147,7 @@ export default function Header(props: HeaderProps) {
         </select>
       </label>
       <label class="zoom-select-wrap" title="Secondary resource metric">
-        <span class="zoom-select-label" style={{ color: "#76FF03" }}>res2</span>
+        <span class="zoom-select-label" style={{ color: RESOURCE_SLOT_COLORS.secondary }}>res2</span>
         <select
           class="zoom-select"
           value={props.resourceMetricSecondary()}
