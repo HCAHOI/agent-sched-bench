@@ -1,0 +1,8 @@
+# Non-metadata Delta-pos control. Calibrate matching before campaign use.
+name: position_control
+budget: 1024
+sink_size: 4
+recent_window: 256
+position_control: random
+seed: 0
+record: true

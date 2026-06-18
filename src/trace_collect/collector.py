@@ -542,6 +542,7 @@ async def collect_traces(
     per_head_block_stats: bool = False,
     record_per_head_topk: bool = False,
     per_head_topk_rank: int = 64,
+    generation_seed: int = 0,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     if record_internals and scaffold != "openclaw":
@@ -591,6 +592,7 @@ async def collect_traces(
                         per_head_block_stats=bool(per_head_block_stats),
                         record_per_head_topk=bool(record_per_head_topk),
                         per_head_topk_rank=int(per_head_topk_rank),
+                        generation_seed=int(generation_seed),
                     ),
                     eviction_config=eviction_config,
                     sparse_attention_config=sparse_attention_config,

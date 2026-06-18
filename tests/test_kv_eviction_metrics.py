@@ -320,6 +320,11 @@ def test_load_kv_eviction_decodes_evicted_h2o_scores(tmp_path):
     frame = load_kv_eviction([_make_record(iter_dir)])
 
     assert frame.n_rows == 2
+    assert frame.original_index_valid.tolist() == [False, False]
+    assert frame.original_kept_offsets.tolist() == [0, 0, 0]
+    assert frame.original_kept_indices.shape == (0,)
+    assert frame.original_evicted_offsets.tolist() == [0, 0, 0]
+    assert frame.original_evicted_indices.shape == (0,)
     assert frame.score_evicted_offsets.tolist() == [0, 4, 5]
     assert frame.score_evicted_index.tolist() == [1, 2, 4, 5, 1]
     assert frame.score_evicted_per_row[0].tolist() == [1, 2, 4, 5]
@@ -328,6 +333,108 @@ def test_load_kv_eviction_decodes_evicted_h2o_scores(tmp_path):
         frame.score_evicted_value_per_row[0],
         np.asarray([0.1, 0.2, 0.3, 0.4], dtype=np.float32),
     )
+
+
+def test_load_kv_eviction_preserves_explicit_original_provenance(tmp_path):
+    iter_dir = tmp_path / "attempt_1" / "recordings" / "iter_0000"
+    iter_dir.mkdir(parents=True)
+    np.savez_compressed(
+        iter_dir / "kv_eviction.npz",
+        call_idx=np.asarray(0, dtype=np.int32),
+        policy_name=np.asarray("metadata", dtype="U16"),
+        record_step=np.asarray([0], dtype=np.int32),
+        record_layer=np.asarray([0], dtype=np.int32),
+        record_phase=np.asarray(["decode"], dtype="U7"),
+        pre_len=np.asarray([5], dtype=np.int32),
+        post_len=np.asarray([3], dtype=np.int32),
+        budget=np.asarray([3], dtype=np.int32),
+        kept_offsets=np.asarray([0, 3], dtype=np.int64),
+        kept_indices=np.asarray([0, 2, 4], dtype=np.int32),
+        evicted_offsets=np.asarray([0, 2], dtype=np.int64),
+        evicted_indices=np.asarray([1, 3], dtype=np.int32),
+        original_index_valid=np.asarray([True], dtype=np.bool_),
+        original_kept_offsets=np.asarray([0, 3], dtype=np.int64),
+        original_kept_indices=np.asarray([0, 10, 14], dtype=np.int32),
+        original_evicted_offsets=np.asarray([0, 2], dtype=np.int64),
+        original_evicted_indices=np.asarray([9, 12], dtype=np.int32),
+        evict_reason=np.asarray(["rung4"], dtype="U16"),
+        score_topk_index=np.empty((1, 0), dtype=np.int32),
+        score_topk_value=np.empty((1, 0), dtype=np.float32),
+        score_evicted_offsets=np.asarray([0, 0], dtype=np.int64),
+        score_evicted_index=np.empty(0, dtype=np.int32),
+        score_evicted_value=np.empty(0, dtype=np.float32),
+    )
+
+    frame = load_kv_eviction([_make_record(iter_dir)])
+
+    assert frame.original_index_valid.tolist() == [True]
+    assert frame.original_kept_offsets.tolist() == [0, 3]
+    assert frame.original_kept_indices.tolist() == [0, 10, 14]
+    assert frame.original_evicted_offsets.tolist() == [0, 2]
+    assert frame.original_evicted_indices.tolist() == [9, 12]
+
+
+def test_load_kv_eviction_mixed_legacy_and_original_rows_keep_csr_alignment(tmp_path):
+    legacy_dir = tmp_path / "legacy" / "recordings" / "iter_0000"
+    legacy_dir.mkdir(parents=True)
+    np.savez_compressed(
+        legacy_dir / "kv_eviction.npz",
+        call_idx=np.asarray(0, dtype=np.int32),
+        policy_name=np.asarray("h2o", dtype="U16"),
+        record_step=np.asarray([0, 1], dtype=np.int32),
+        record_layer=np.asarray([0, 0], dtype=np.int32),
+        record_phase=np.asarray(["decode", "decode"], dtype="U7"),
+        pre_len=np.asarray([5, 5], dtype=np.int32),
+        post_len=np.asarray([4, 4], dtype=np.int32),
+        budget=np.asarray([4, 4], dtype=np.int32),
+        kept_offsets=np.asarray([0, 4, 8], dtype=np.int64),
+        kept_indices=np.asarray([0, 1, 3, 4, 0, 2, 3, 4], dtype=np.int32),
+        evicted_offsets=np.asarray([0, 1, 2], dtype=np.int64),
+        evicted_indices=np.asarray([2, 1], dtype=np.int32),
+        evict_reason=np.asarray(["over_budget", "over_budget"], dtype="U16"),
+        score_topk_index=np.empty((2, 0), dtype=np.int32),
+        score_topk_value=np.empty((2, 0), dtype=np.float32),
+        score_evicted_offsets=np.asarray([0, 0, 0], dtype=np.int64),
+        score_evicted_index=np.empty(0, dtype=np.int32),
+        score_evicted_value=np.empty(0, dtype=np.float32),
+    )
+    original_dir = tmp_path / "metadata" / "recordings" / "iter_0000"
+    original_dir.mkdir(parents=True)
+    np.savez_compressed(
+        original_dir / "kv_eviction.npz",
+        call_idx=np.asarray(0, dtype=np.int32),
+        policy_name=np.asarray("metadata", dtype="U16"),
+        record_step=np.asarray([0], dtype=np.int32),
+        record_layer=np.asarray([0], dtype=np.int32),
+        record_phase=np.asarray(["decode"], dtype="U7"),
+        pre_len=np.asarray([5], dtype=np.int32),
+        post_len=np.asarray([3], dtype=np.int32),
+        budget=np.asarray([3], dtype=np.int32),
+        kept_offsets=np.asarray([0, 3], dtype=np.int64),
+        kept_indices=np.asarray([0, 2, 4], dtype=np.int32),
+        evicted_offsets=np.asarray([0, 2], dtype=np.int64),
+        evicted_indices=np.asarray([1, 3], dtype=np.int32),
+        original_index_valid=np.asarray([True], dtype=np.bool_),
+        original_kept_offsets=np.asarray([0, 3], dtype=np.int64),
+        original_kept_indices=np.asarray([0, 10, 14], dtype=np.int32),
+        original_evicted_offsets=np.asarray([0, 2], dtype=np.int64),
+        original_evicted_indices=np.asarray([9, 12], dtype=np.int32),
+        evict_reason=np.asarray(["rung4"], dtype="U16"),
+        score_topk_index=np.empty((1, 0), dtype=np.int32),
+        score_topk_value=np.empty((1, 0), dtype=np.float32),
+        score_evicted_offsets=np.asarray([0, 0], dtype=np.int64),
+        score_evicted_index=np.empty(0, dtype=np.int32),
+        score_evicted_value=np.empty(0, dtype=np.float32),
+    )
+
+    frame = load_kv_eviction([_make_record(legacy_dir), _make_record(original_dir)])
+
+    assert frame.n_rows == 3
+    assert frame.original_index_valid.tolist() == [False, False, True]
+    assert frame.original_kept_offsets.tolist() == [0, 0, 0, 3]
+    assert frame.original_kept_indices.tolist() == [0, 10, 14]
+    assert frame.original_evicted_offsets.tolist() == [0, 0, 0, 2]
+    assert frame.original_evicted_indices.tolist() == [9, 12]
 
 
 def test_aggregate_heavy_hitters_unions_per_layer(tmp_path):

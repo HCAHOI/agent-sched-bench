@@ -87,6 +87,7 @@ def test_recorder_roundtrip(tmp_path) -> None:
             "kept_indices",
             "evicted_offsets",
             "evicted_indices",
+            "original_index_valid",
             "evict_reason",
             "score_topk_index",
             "score_topk_value",
@@ -116,6 +117,7 @@ def test_recorder_roundtrip(tmp_path) -> None:
         assert data["evicted_offsets"].dtype == np.int64
         assert data["kept_indices"].dtype == np.int32
         assert data["evicted_indices"].dtype == np.int32
+        assert data["original_index_valid"].dtype == np.bool_
         assert data["score_topk_index"].dtype == np.int32
         assert data["score_topk_value"].dtype == np.float32
         assert data["score_evicted_offsets"].dtype == np.int64
@@ -160,6 +162,85 @@ def test_recorder_roundtrip(tmp_path) -> None:
         assert int(score_offsets[0]) == 0
         assert int(score_offsets[-1]) == data["score_evicted_index"].shape[0]
         assert data["score_evicted_index"].shape == data["score_evicted_value"].shape
+        assert data["original_index_valid"].shape == (expected_rows,)
+        assert not data["original_index_valid"].any()
+        assert data["original_kept_offsets"].tolist() == [0]
+        assert data["original_kept_indices"].shape == (0,)
+        assert data["original_evicted_offsets"].tolist() == [0]
+        assert data["original_evicted_indices"].shape == (0,)
+
+
+def test_recorder_writes_explicit_original_provenance_only(tmp_path) -> None:
+    recorder = KVEvictionRecorder(call_idx=0, policy_name="metadata")
+    recorder.append(
+        step=0,
+        layer=0,
+        phase="decode",
+        pre_len=5,
+        post_len=3,
+        budget=3,
+        kept_indices=[0, 2, 4],
+        evicted_indices=[1, 3],
+        evict_reason="rung4",
+        original_kept_indices=[0, 10, 14],
+        original_evicted_indices=[9, 12],
+    )
+    npz_path = tmp_path / "kv_eviction.npz"
+    recorder.write(npz_path)
+
+    with np.load(npz_path) as data:
+        assert data["original_index_valid"].tolist() == [True]
+        assert data["original_kept_offsets"].tolist() == [0, 3]
+        assert data["original_kept_indices"].tolist() == [0, 10, 14]
+        assert data["original_evicted_offsets"].tolist() == [0, 2]
+        assert data["original_evicted_indices"].tolist() == [9, 12]
+
+
+def test_recorder_rejects_mixed_original_provenance(tmp_path) -> None:
+    recorder = KVEvictionRecorder(call_idx=0, policy_name="metadata")
+    recorder.append(
+        step=0,
+        layer=0,
+        phase="decode",
+        pre_len=3,
+        post_len=2,
+        budget=2,
+        kept_indices=[0, 2],
+        evicted_indices=[1],
+        evict_reason="rung4",
+        original_kept_indices=[0, 2],
+        original_evicted_indices=[1],
+    )
+    recorder.append(
+        step=1,
+        layer=0,
+        phase="decode",
+        pre_len=3,
+        post_len=2,
+        budget=2,
+        kept_indices=[0, 2],
+        evicted_indices=[1],
+        evict_reason="rung4",
+    )
+    with pytest.raises(ValueError, match="original index provenance"):
+        recorder.write(tmp_path / "kv_eviction.npz")
+
+
+def test_recorder_rejects_partial_original_provenance() -> None:
+    recorder = KVEvictionRecorder(call_idx=0, policy_name="metadata")
+    with pytest.raises(ValueError, match="both original_kept_indices"):
+        recorder.append(
+            step=0,
+            layer=0,
+            phase="decode",
+            pre_len=3,
+            post_len=2,
+            budget=2,
+            kept_indices=[0, 2],
+            evicted_indices=[1],
+            evict_reason="rung4",
+            original_kept_indices=[0, 2],
+        )
 
 
 def test_recorder_empty_write_behavior(tmp_path) -> None:

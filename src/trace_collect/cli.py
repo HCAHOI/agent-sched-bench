@@ -138,7 +138,15 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--kv-policy",
-        choices=["none", "random", "streaming", "h2o"],
+        choices=[
+            "none",
+            "random",
+            "streaming",
+            "h2o",
+            "metadata",
+            "position_control",
+            "null_eviction",
+        ],
         default="none",
         help=(
             "KV cache eviction policy used by the HF recording backend. "
@@ -149,7 +157,10 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(Heavy-Hitter Oracle, arXiv:2306.14048) keeps sink + recent + "
             "top-k positions ranked by accumulated post-softmax attention; "
             "subscribes to the per-provider AttentionBus to share the "
-            "softmax tensor with LayerCapturer (no double-softmax)."
+            "softmax tensor with LayerCapturer (no double-softmax). "
+            "`metadata` applies the pre-registered metadata-residency ladder. "
+            "`position_control` applies non-metadata contiguity controls. "
+            "`null_eviction` is reserve-all identity for probes/tests only."
         ),
     )
     parser.add_argument(
@@ -210,6 +221,52 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--kv-metadata-rung",
+        choices=["rung1", "rung2", "rung3", "rung4"],
+        default="rung4",
+        help=(
+            "Metadata-residency ablation rung. rung1=role/age/offset only; "
+            "rung2 adds sink+recent reservation; rung3 adds recent tool-result "
+            "reservation; rung4 adds tool error/exit-code reservation."
+        ),
+    )
+    parser.add_argument(
+        "--kv-position-control",
+        choices=["random", "middle", "structured"],
+        default="random",
+        help=(
+            "Control mode for --kv-policy position_control. Controls use no "
+            "role or exit-code metadata and are later matched on Delta-pos."
+        ),
+    )
+    parser.add_argument(
+        "--kv-per-layer-table",
+        action="store_true",
+        help=(
+            "Enable the pre-registered per-layer metadata table arm. Requires "
+            "--kv-per-layer-table-path with a frozen P0 score table; global "
+            "remains the default."
+        ),
+    )
+    parser.add_argument(
+        "--kv-per-layer-table-path",
+        type=str,
+        default=None,
+        help=(
+            "Path to the frozen P0 per-layer metadata score table used by "
+            "--kv-per-layer-table. The table is required before any GPU "
+            "campaign arm can be labeled per_layer_table=true."
+        ),
+    )
+    parser.add_argument(
+        "--kv-per-layer-budget",
+        action="store_true",
+        help=(
+            "Enable the stretch per-layer budget arm. This is parsed for "
+            "pre-registration but should not be used without a frozen P0 rule."
+        ),
+    )
+    parser.add_argument(
         "--kv-record",
         choices=["on", "off"],
         default="on",
@@ -223,15 +280,26 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--sparse-attn",
-        choices=["none", "sliding", "streaming", "heavy_hitter", "block_topk", "quest"],
+        choices=[
+            "none",
+            "sliding",
+            "streaming",
+            "heavy_hitter",
+            "block_topk",
+            "quest",
+            "metadata",
+        ],
         default="none",
         help=(
             "Sparse attention method used by the HF recording backend. "
             "`none` (default) leaves attention dense. `sliding`/`streaming` "
             "keep the first `--sparse-attn-sink-size` tokens plus the last "
             "`--sparse-attn-recent-window` tokens. Dynamic methods require "
-            "`--sparse-attn-budget` or YAML `budget:`. "
-            "Mutually exclusive with --kv-policy and requires --record-internals."
+            "`--sparse-attn-budget` or YAML `budget:`. `metadata` records "
+            "metadata-residency would-keep sets and is observe-only. "
+            "Sparse enforce mode is mutually exclusive with --kv-policy; "
+            "observe-only metadata sidecars are allowed. Requires "
+            "--record-internals."
         ),
     )
     parser.add_argument(
@@ -312,6 +380,15 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--sparse-attn-metadata-rung",
+        choices=["rung1", "rung2", "rung3", "rung4"],
+        default="rung4",
+        help=(
+            "Rung for the observe-only metadata sparse sidecar. Meaningful "
+            "only with --sparse-attn metadata."
+        ),
+    )
+    parser.add_argument(
         "--per-head-stats-layers",
         type=str,
         default=None,
@@ -352,6 +429,15 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Per-head rank cap R_ph for --record-per-head-topk. Default 64 "
             "(matches the typical middle-block budget). Lower it to cut storage."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help=(
+            "Generation seed for the HF recording backend. Campaign scripts "
+            "sweep this as the task x policy x beta x seed dimension."
         ),
     )
     parser.add_argument(
@@ -792,6 +878,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             per_head_block_stats=args.per_head_block_stats,
             record_per_head_topk=args.record_per_head_topk,
             per_head_topk_rank=args.per_head_topk_rank,
+            generation_seed=args.seed,
         )
     )
     print(f"Traces written to: {run_dir}/")

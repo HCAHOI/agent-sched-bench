@@ -70,6 +70,23 @@ def test_cli_only_block_topk_requires_budget() -> None:
         load_sparse_attention_config(_ns(sparse_attn="block_topk"))
 
 
+def test_metadata_sidecar_requires_observe_only() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="observe-only"):
+        load_sparse_attention_config(_ns(sparse_attn="metadata", sparse_attn_budget=512))
+    cfg = load_sparse_attention_config(
+        _ns(
+            sparse_attn="metadata",
+            sparse_attn_budget=512,
+            sparse_attn_observe_only=True,
+            sparse_attn_metadata_rung="rung2",
+        )
+    )
+    assert cfg is not None
+    assert cfg.name == "metadata"
+    assert cfg.observe_only is True
+    assert cfg.metadata_rung == "rung2"
+
+
 def test_cli_only_dynamic_method_with_budget() -> None:
     cfg = load_sparse_attention_config(
         _ns(

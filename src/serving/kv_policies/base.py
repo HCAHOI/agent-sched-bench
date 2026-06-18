@@ -27,7 +27,15 @@ class EvictionPolicyConfig:
     (e.g. `seed` is only consulted by random).
     """
 
-    name: Literal["none", "streaming", "h2o", "random"]
+    name: Literal[
+        "none",
+        "streaming",
+        "h2o",
+        "random",
+        "metadata",
+        "position_control",
+        "null_eviction",
+    ]
     budget: int | None  # required when name != "none"
     sink_size: int = 4  # streaming + h2o
     recent_window: int = 256  # streaming + h2o
@@ -37,6 +45,13 @@ class EvictionPolicyConfig:
     seed: int = 0  # random
     record: bool = True  # F15: instrument toggle
     prefill_mode: Literal["sampled", "full"] = "full"  # h2o prefill fidelity
+    metadata_rung: Literal["rung1", "rung2", "rung3", "rung4"] = "rung4"
+    position_control: Literal["random", "middle", "structured"] = "random"
+    position_control_stride: int = 16
+    position_control_cluster_size: int = 8
+    per_layer_table: bool = False
+    per_layer_table_path: str | None = None
+    per_layer_budget: bool = False
 
 
 @dataclass
@@ -89,14 +104,20 @@ class BaseEvictionCache(DynamicCache):
         """True if this policy needs to subscribe to AttentionBus (H2O)."""
         return False
 
-    def notify_new_call(self, call_idx: int) -> None:
+    def notify_new_call(
+        self,
+        call_idx: int,
+        *,
+        segments: list[dict[str, Any]] | None = None,
+        input_token_count: int | None = None,
+    ) -> None:
         """Mark a fresh chat() boundary.
 
         Resets per-call step counters so the next forward maps to `(prefill, -1)`
         and decode counts from 0 again. Physical KV slots, score buffers, and
         bus subscription persist across calls — only the recording labels reset.
         """
-        del call_idx
+        del call_idx, segments, input_token_count
         self._step_counter.clear()
         self._seen_prefill.clear()
 
@@ -182,6 +203,8 @@ class BaseEvictionCache(DynamicCache):
             score_topk_value=policy_state.get("score_topk_value"),
             score_evicted_index=policy_state.get("score_evicted_index"),
             score_evicted_value=policy_state.get("score_evicted_value"),
+            original_kept_indices=policy_state.get("original_kept_indices"),
+            original_evicted_indices=policy_state.get("original_evicted_indices"),
         )
 
     def _post_evict_hook(self, layer_idx: int, decision: EvictionDecision) -> None:

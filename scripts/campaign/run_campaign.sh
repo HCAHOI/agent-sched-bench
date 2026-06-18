@@ -50,6 +50,7 @@ TRACE_CLI_CMD="${TRACE_CLI_CMD:-}"          # if set, used verbatim instead of `
 
 DEFAULT_TIMEOUT="${CAMPAIGN_DEFAULT_TIMEOUT:-21600}"   # 6h per task
 KILL_AFTER="${CAMPAIGN_KILL_AFTER:-60}"                # grace before SIGKILL (data-flush window)
+DEFAULT_SEEDS="${SEEDS:-0}"                            # comma/space-separated generation seeds
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 die() { printf 'run_campaign.sh: %s\n' "$*" >&2; exit 2; }
@@ -276,6 +277,21 @@ json_escape() {
   printf '%s' "$s"
 }
 
+safe_label() {
+  local s="$1"
+  s="${s//[^A-Za-z0-9_.-]/_}"
+  printf '%s' "$s"
+}
+
+emit_seed_list() {
+  local raw="$1" seed
+  raw="${raw//,/ }"
+  for seed in $raw; do
+    [[ "$seed" =~ ^-?[0-9]+$ ]] || die "invalid seed '$seed' in --seeds/SEEDS"
+    printf '%s\n' "$seed"
+  done
+}
+
 # Globals populated by `run` and consumed by write_status.
 STATUS_FILE=""
 ST_CAMPAIGN=""
@@ -366,13 +382,15 @@ resolve_run_dir() {
 # ==========================================================================
 cmd_run() {
   local tasks="" campaign="campaign" run_dir="" timeout="$DEFAULT_TIMEOUT"
-  local sentinel_pidfile="" sentinel_metafile="" print_cmd=0
+  local sentinel_pidfile="" sentinel_metafile="" print_cmd=0 seeds="$DEFAULT_SEEDS"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --tasks) tasks="$2"; shift 2 ;;
       --campaign) campaign="$2"; shift 2 ;;
       --run-dir) run_dir="$2"; shift 2 ;;
       --timeout) timeout="$2"; shift 2 ;;
+      --seed) seeds="$2"; shift 2 ;;
+      --seeds) seeds="$2"; shift 2 ;;
       --sentinel-pidfile) sentinel_pidfile="$2"; shift 2 ;;
       --sentinel-metafile) sentinel_metafile="$2"; shift 2 ;;
       --print-cmd) print_cmd=1; shift ;;
@@ -381,13 +399,22 @@ cmd_run() {
   done
   [[ -n "$tasks" ]] || die "run: --tasks <tsv> required"
   [[ -r "$tasks" ]] || die "run: task list not readable: $tasks"
+  local -a seed_values=()
+  while IFS= read -r seed; do
+    [[ -n "$seed" ]] && seed_values+=("$seed")
+  done < <(emit_seed_list "$seeds")
+  [[ "${#seed_values[@]}" -gt 0 ]] || die "run: at least one seed required"
 
   # --print-cmd: dry-run. Expand each TSV row to the exact command, print, exit.
   if [[ "$print_cmd" -eq 1 ]]; then
     local prefix; prefix="$(emit_cmd_prefix)"
     while IFS=$'\t' read -r task_id benchmark extra || [[ -n "$task_id" ]]; do
       [[ -z "$task_id" || "$task_id" == \#* ]] && continue
-      printf '%s\t%s %s --benchmark %s\n' "$task_id" "$prefix" "$extra" "$benchmark"
+      local seed
+      for seed in "${seed_values[@]}"; do
+        printf '%s__seed_%s\t%s %s --seed %s --benchmark %s\n' \
+          "$task_id" "$seed" "$prefix" "$extra" "$seed" "$benchmark"
+      done
     done < "$tasks"
     return 0
   fi
@@ -477,7 +504,7 @@ cmd_run() {
   ST_TOTAL=0
   while IFS=$'\t' read -r tid _bm _extra || [[ -n "$tid" ]]; do
     [[ -z "$tid" || "$tid" == \#* ]] && continue
-    ST_TOTAL=$((ST_TOTAL + 1))
+    ST_TOTAL=$((ST_TOTAL + ${#seed_values[@]}))
   done < "$tasks"
   write_status
 
@@ -485,6 +512,8 @@ cmd_run() {
   local index=0
   while IFS=$'\t' read -r task_id benchmark extra || [[ -n "$task_id" ]]; do
     [[ -z "$task_id" || "$task_id" == \#* ]] && continue
+    local seed
+    for seed in "${seed_values[@]}"; do
 
     # Graceful stop checked BETWEEN tasks.
     if [[ -e "$stop_flag" ]]; then
@@ -494,10 +523,13 @@ cmd_run() {
     fi
 
     index=$((index + 1))
+    local task_label safe_task_label
+    task_label="${task_id}__seed_${seed}"
+    safe_task_label="$(safe_label "$task_label")"
     ST_CUR_INDEX="$index"
-    ST_CUR_TASK_ID="$task_id"
+    ST_CUR_TASK_ID="$task_label"
     ST_CUR_STARTED_EPOCH="$(date +%s)"
-    local tlog="${run_dir}/logs/${task_id}.log"
+    local tlog="${run_dir}/logs/${safe_task_label}.log"
 
     # Build argv array (no eval). Real path: `python -m trace_collect.cli`;
     # test path: the TRACE_CLI_CMD override (a dummy).
@@ -509,7 +541,12 @@ cmd_run() {
       argv=("$PYTHON_BIN" -m "$TRACE_CLI_MODULE")
     fi
     # shellcheck disable=SC2206
-    argv+=($extra --benchmark "$benchmark")
+    argv+=(
+      $extra
+      --seed "$seed"
+      --run-id "${run_dir}/outputs/${safe_task_label}"
+      --benchmark "$benchmark"
+    )
 
     # cmdline anchor for current_task.pid: a substring GUARANTEED present on the
     # child cmdline and specific enough to reject an unrelated PID. Real path:
@@ -523,7 +560,7 @@ cmd_run() {
       task_anchor="$TRACE_CLI_MODULE"
     fi
 
-    log "[$index/$ST_TOTAL] start task_id=$task_id benchmark=$benchmark" | tee -a "$queue_log"
+    log "[$index/$ST_TOTAL] start task_id=$task_label benchmark=$benchmark seed=$seed" | tee -a "$queue_log"
 
     # Two-phase launch: background the task (log-redirected), write the PID file
     # while it is LIVE, then await it. `child` is the coreutils `timeout` PID
@@ -549,14 +586,16 @@ cmd_run() {
     ST_LAST_EXIT="$rc"
     ST_COMPLETED=$((ST_COMPLETED + 1))
     ST_CUR_TASK_PID=""
-    append_result "$task_id" "$rc" "$timed_out" "$dur"
+    append_result "$task_label" "$rc" "$timed_out" "$dur"
     write_status
 
     if [[ "$rc" -ne 0 ]]; then
-      log "[$index/$ST_TOTAL] task_id=$task_id FAILED exit=$rc timed_out=$timed_out (continuing)" | tee -a "$queue_log"
+      log "[$index/$ST_TOTAL] task_id=$task_label FAILED exit=$rc timed_out=$timed_out (continuing)" | tee -a "$queue_log"
     else
-      log "[$index/$ST_TOTAL] task_id=$task_id ok dur=${dur}s" | tee -a "$queue_log"
+      log "[$index/$ST_TOTAL] task_id=$task_label ok dur=${dur}s" | tee -a "$queue_log"
     fi
+    done
+    [[ "$ST_STATE" == "stopped" ]] && break
   done < "$tasks"
 
   if [[ "$ST_STATE" == "running" ]]; then

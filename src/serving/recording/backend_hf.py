@@ -770,6 +770,7 @@ class HFRecordingProvider(LLMProvider):
             "block_size": int(cfg.block_size),
             "score_reduction": str(cfg.score_reduction),
             "phase_scope": str(cfg.phase_scope),
+            "metadata_rung": str(cfg.metadata_rung),
         }
 
     def _kv_policy_meta_payload(self) -> dict[str, Any] | None:
@@ -799,6 +800,13 @@ class HFRecordingProvider(LLMProvider):
             "record": bool(cfg.record),
             "prefill_mode": str(cfg.prefill_mode),
             "prefill_score_bias": bool(prefill_score_bias),
+            "metadata_rung": str(cfg.metadata_rung),
+            "position_control": str(cfg.position_control),
+            "position_control_stride": int(cfg.position_control_stride),
+            "position_control_cluster_size": int(cfg.position_control_cluster_size),
+            "per_layer_table": bool(cfg.per_layer_table),
+            "per_layer_table_path": cfg.per_layer_table_path,
+            "per_layer_budget": bool(cfg.per_layer_budget),
         }
 
     def get_default_model(self) -> str:
@@ -1331,7 +1339,11 @@ class HFRecordingProvider(LLMProvider):
                     self._session_cache.recorder = kv_recorder
                     # Step counters reset per call; physical KV slots and score
                     # buffers persist.
-                    self._session_cache.notify_new_call(call_idx)
+                    self._session_cache.notify_new_call(
+                        call_idx,
+                        segments=segments,
+                        input_token_count=input_token_count,
+                    )
                 generation_kwargs["past_key_values"] = self._session_cache
                 # phys_kv_len: physical slots after eviction (attention_mask width).
                 # logical_kv_len: absolute conversation position of delta[0] (RoPE).
@@ -1356,9 +1368,8 @@ class HFRecordingProvider(LLMProvider):
                     input_tensor
                 )
             # Per-call sparse-attention recorder swap mirrors the KV recorder
-            # pattern. Both subsystems are mutually exclusive at construction
-            # time, so at most one of (kv_recorder, sparse_recorder) is ever
-            # non-None within a single call.
+            # pattern. Sparse enforce is mutually exclusive with KV eviction,
+            # but observe-only sidecars may coexist and record would-keep sets.
             sparse_recorder: SparseAttentionRecorder | None = None
             if (
                 self._sparse_attention_config is not None
@@ -1373,6 +1384,14 @@ class HFRecordingProvider(LLMProvider):
                 self._sparse_attention, "reset_state"
             ):
                 self._sparse_attention.reset_state()
+            if self._sparse_attention is not None and hasattr(
+                self._sparse_attention, "notify_new_call"
+            ):
+                self._sparse_attention.notify_new_call(
+                    call_idx=call_idx,
+                    segments=segments,
+                    input_token_count=input_token_count,
+                )
             # H2O full-prefill scoring is handled inside LayerCapturer in
             # bounded chunks and delivered only to full-prefill consumers. Do
             # not lift the recording sample cap here; doing so would materialize

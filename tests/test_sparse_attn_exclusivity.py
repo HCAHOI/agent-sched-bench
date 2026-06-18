@@ -33,6 +33,19 @@ def test_validator_allows_either_alone() -> None:
     validate_attention_method_exclusivity(None, None)
 
 
+def test_validator_allows_kv_with_observe_only_metadata_sidecar() -> None:
+    kv = EvictionPolicyConfig(name="metadata", budget=256, sink_size=4, recent_window=64)
+    sparse = SparseAttentionConfig(
+        name="metadata",
+        budget=256,
+        sink_size=4,
+        recent_window=64,
+        record=True,
+        observe_only=True,
+    )
+    validate_attention_method_exclusivity(kv, sparse)
+
+
 def test_provider_init_rejects_both_non_none() -> None:
     """Provider must short-circuit before any model load."""
     kv = EvictionPolicyConfig(name="h2o", budget=256, sink_size=4, recent_window=64)

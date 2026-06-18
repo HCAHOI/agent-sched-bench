@@ -37,6 +37,8 @@ class _Row:
     score_topk_value: list[float] | None = None
     score_evicted_index: list[int] | None = None
     score_evicted_value: list[float] | None = None
+    original_kept_indices: list[int] | None = None
+    original_evicted_indices: list[int] | None = None
 
 
 @dataclass
@@ -63,11 +65,32 @@ class KVEvictionRecorder:
         score_topk_value: list[float] | None = None,
         score_evicted_index: list[int] | None = None,
         score_evicted_value: list[float] | None = None,
+        original_kept_indices: list[int] | None = None,
+        original_evicted_indices: list[int] | None = None,
     ) -> None:
         if pre_len - post_len != len(evicted_indices):
             raise ValueError(
                 f"recorder invariant violated: pre_len={pre_len}, "
                 f"post_len={post_len}, evicted={len(evicted_indices)}"
+            )
+        if (original_kept_indices is None) != (original_evicted_indices is None):
+            raise ValueError(
+                "original index provenance requires both original_kept_indices "
+                "and original_evicted_indices, or neither"
+            )
+        if original_kept_indices is not None and len(original_kept_indices) != len(
+            kept_indices
+        ):
+            raise ValueError(
+                "original_kept_indices length mismatch: "
+                f"{len(original_kept_indices)} vs kept={len(kept_indices)}"
+            )
+        if original_evicted_indices is not None and len(
+            original_evicted_indices
+        ) != len(evicted_indices):
+            raise ValueError(
+                "original_evicted_indices length mismatch: "
+                f"{len(original_evicted_indices)} vs evicted={len(evicted_indices)}"
             )
         if score_evicted_index is not None and score_evicted_value is not None:
             if len(score_evicted_index) != len(score_evicted_value):
@@ -100,6 +123,16 @@ class KVEvictionRecorder:
                 score_evicted_value=(
                     list(score_evicted_value)
                     if score_evicted_value is not None
+                    else None
+                ),
+                original_kept_indices=(
+                    list(original_kept_indices)
+                    if original_kept_indices is not None
+                    else None
+                ),
+                original_evicted_indices=(
+                    list(original_evicted_indices)
+                    if original_evicted_indices is not None
                     else None
                 ),
             )
@@ -136,6 +169,31 @@ class KVEvictionRecorder:
         evicted_offsets, evicted_indices = _build_csr(
             [r.evicted_indices for r in self._rows]
         )
+        has_original_indices = np.asarray(
+            [
+                r.original_kept_indices is not None
+                and r.original_evicted_indices is not None
+                for r in self._rows
+            ],
+            dtype=np.bool_,
+        )
+        if bool(has_original_indices.all()):
+            original_kept_offsets, original_kept_indices = _build_csr(
+                [r.original_kept_indices or [] for r in self._rows]
+            )
+            original_evicted_offsets, original_evicted_indices = _build_csr(
+                [r.original_evicted_indices or [] for r in self._rows]
+            )
+        elif bool(has_original_indices.any()):
+            raise ValueError(
+                "original index provenance must be present for every row or "
+                "absent for every row in one kv_eviction.npz"
+            )
+        else:
+            original_kept_offsets = np.zeros(1, dtype=np.int64)
+            original_kept_indices = np.empty(0, dtype=np.int32)
+            original_evicted_offsets = np.zeros(1, dtype=np.int64)
+            original_evicted_indices = np.empty(0, dtype=np.int32)
 
         score_topk_index, score_topk_value = _build_score_topk(self._rows)
         (
@@ -162,6 +220,11 @@ class KVEvictionRecorder:
             kept_indices=kept_indices,
             evicted_offsets=evicted_offsets,
             evicted_indices=evicted_indices,
+            original_index_valid=has_original_indices,
+            original_kept_offsets=original_kept_offsets,
+            original_kept_indices=original_kept_indices,
+            original_evicted_offsets=original_evicted_offsets,
+            original_evicted_indices=original_evicted_indices,
             evict_reason=evict_reason,
             score_topk_index=score_topk_index,
             score_topk_value=score_topk_value,

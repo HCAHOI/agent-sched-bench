@@ -234,6 +234,31 @@ def test_reconstruct_keep_set_dynamic_prefill_dense_reason() -> None:
     assert set(keep.tolist()) == set(range(8))
 
 
+def test_reconstruct_keep_set_metadata_uses_selected_indices() -> None:
+    params = SparseParams(sink_size=1, recent_window=2)
+    keep = reconstruct_keep_set(
+        method_name="metadata",
+        method_params=params,
+        key_len=8,
+        extras={
+            "selected_indices": [0, 2, 7],
+            "selected_middle_indices": [2],
+        },
+    )
+    assert keep.tolist() == [0, 2, 7]
+
+
+def test_reconstruct_keep_set_metadata_requires_selected_indices() -> None:
+    params = SparseParams(sink_size=1, recent_window=2)
+    with pytest.raises(ValueError, match="selected_indices"):
+        reconstruct_keep_set(
+            method_name="metadata",
+            method_params=params,
+            key_len=8,
+            extras={"selected_middle_indices": [2]},
+        )
+
+
 # ---------------------------------------------------------------------------
 # End-to-end scoring against hand-built npz: perfect / zero / partial
 # ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ _CLI_TO_FIELD = {
     "sparse_attn_block_size": "block_size",
     "sparse_attn_score_reduction": "score_reduction",
     "sparse_attn_phase_scope": "phase_scope",
+    "sparse_attn_metadata_rung": "metadata_rung",
 }
 
 _FIELD_COERCERS = {
@@ -46,10 +47,12 @@ _FIELD_COERCERS = {
     "block_size": int,
     "score_reduction": str,
     "phase_scope": str,
+    "metadata_rung": str,
 }
 
 _DYNAMIC_METHODS = {"heavy_hitter", "block_topk", "quest"}
-_VALID_NAMES = {"none", "sliding", "streaming", *_DYNAMIC_METHODS}
+_VALID_NAMES = {"none", "sliding", "streaming", "metadata", *_DYNAMIC_METHODS}
+_VALID_METADATA_RUNGS = {"rung1", "rung2", "rung3", "rung4"}
 
 
 def _allowed_fields() -> set[str]:
@@ -120,6 +123,7 @@ def load_sparse_attention_config(
         "sparse_attn_block_size": 16,
         "sparse_attn_score_reduction": "max",
         "sparse_attn_phase_scope": "decode_only",
+        "sparse_attn_metadata_rung": "rung4",
     }
 
     merged: dict[str, Any] = dict(base)
@@ -170,7 +174,7 @@ def load_sparse_attention_config(
             raise argparse.ArgumentTypeError(
                 f"sparse attention {name!r} requires sink_size + recent_window > 0"
             )
-    elif name in _DYNAMIC_METHODS:
+    elif name in _DYNAMIC_METHODS or name == "metadata":
         budget = merged.get("budget")
         if budget is None:
             raise argparse.ArgumentTypeError(
@@ -206,14 +210,28 @@ def load_sparse_attention_config(
         # by how many query heads independently top-B them. quest scores pages by
         # a min/max envelope with no per-head block notion, so vote is undefined
         # there — reject rather than silently coerce.
-        allowed_reductions = {"max", "mean"}
-        if name == "block_topk":
-            allowed_reductions = {"max", "mean", "vote"}
-        if score_reduction not in allowed_reductions:
-            raise argparse.ArgumentTypeError(
-                f"sparse attention {name!r} requires score_reduction in "
-                f"{sorted(allowed_reductions)}; got {score_reduction!r}"
-            )
+        if name == "metadata":
+            if not bool(merged.get("observe_only", False)):
+                raise argparse.ArgumentTypeError(
+                    "sparse attention 'metadata' is observe-only; pass "
+                    "--sparse-attn-observe-only or set observe_only: true"
+                )
+            rung = str(merged.get("metadata_rung", "rung4"))
+            if rung not in _VALID_METADATA_RUNGS:
+                raise argparse.ArgumentTypeError(
+                    f"metadata_rung must be one of {sorted(_VALID_METADATA_RUNGS)}; "
+                    f"got {rung!r}"
+                )
+            merged["metadata_rung"] = rung
+        else:
+            allowed_reductions = {"max", "mean"}
+            if name == "block_topk":
+                allowed_reductions = {"max", "mean", "vote"}
+            if score_reduction not in allowed_reductions:
+                raise argparse.ArgumentTypeError(
+                    f"sparse attention {name!r} requires score_reduction in "
+                    f"{sorted(allowed_reductions)}; got {score_reduction!r}"
+                )
         if phase_scope != "decode_only":
             raise argparse.ArgumentTypeError(
                 f"sparse attention {name!r} currently supports only "

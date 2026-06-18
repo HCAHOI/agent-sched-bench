@@ -114,6 +114,21 @@ class KVEvictionFrame:
     kept_indices: np.ndarray  # (sum_kept,) int32
     evicted_offsets: np.ndarray  # (R+1,) int64
     evicted_indices: np.ndarray  # (sum_evicted,) int32
+    original_index_valid: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.bool_)
+    )
+    original_kept_offsets: np.ndarray = field(
+        default_factory=lambda: np.zeros(1, dtype=np.int64)
+    )
+    original_kept_indices: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int32)
+    )
+    original_evicted_offsets: np.ndarray = field(
+        default_factory=lambda: np.zeros(1, dtype=np.int64)
+    )
+    original_evicted_indices: np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.int32)
+    )
     # Per-row decoded form (one np.ndarray per row), convenient for
     # `for kept, evicted in zip(frame.kept_per_row, frame.evicted_per_row)`:
     kept_per_row: list[np.ndarray] = field(default_factory=list)
@@ -769,6 +784,11 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
         "kept_offsets_per_call": [],
         "evicted_indices_per_call": [],
         "evicted_offsets_per_call": [],
+        "original_index_valid_per_call": [],
+        "original_kept_indices_per_call": [],
+        "original_kept_offsets_per_call": [],
+        "original_evicted_indices_per_call": [],
+        "original_evicted_offsets_per_call": [],
         "score_index_per_call": [],
         "score_value_per_call": [],
         "score_evicted_offsets_per_call": [],
@@ -811,6 +831,50 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
             columns["evicted_indices_per_call"].append(
                 data["evicted_indices"].astype(np.int32)
             )
+            has_original_arrays = all(
+                name in data.files
+                for name in (
+                    "original_kept_offsets",
+                    "original_kept_indices",
+                    "original_evicted_offsets",
+                    "original_evicted_indices",
+                )
+            )
+            original_valid = (
+                data["original_index_valid"].astype(np.bool_)
+                if "original_index_valid" in data.files
+                else np.full(n, has_original_arrays, dtype=np.bool_)
+            )
+            if bool(original_valid.any()) and not bool(original_valid.all()):
+                raise ValueError(
+                    f"{npz_path}: mixed original_index_valid rows are unsupported"
+                )
+            if bool(original_valid.all()) and not has_original_arrays:
+                raise ValueError(
+                    f"{npz_path}: original_index_valid is true but original CSR "
+                    "arrays are missing"
+                )
+            columns["original_index_valid_per_call"].append(original_valid)
+            columns["original_kept_offsets_per_call"].append(
+                data["original_kept_offsets"].astype(np.int64)
+                if bool(original_valid.all())
+                else np.zeros(n + 1, dtype=np.int64)
+            )
+            columns["original_kept_indices_per_call"].append(
+                data["original_kept_indices"].astype(np.int32)
+                if bool(original_valid.all())
+                else np.empty(0, dtype=np.int32)
+            )
+            columns["original_evicted_offsets_per_call"].append(
+                data["original_evicted_offsets"].astype(np.int64)
+                if bool(original_valid.all())
+                else np.zeros(n + 1, dtype=np.int64)
+            )
+            columns["original_evicted_indices_per_call"].append(
+                data["original_evicted_indices"].astype(np.int32)
+                if bool(original_valid.all())
+                else np.empty(0, dtype=np.int32)
+            )
             columns["score_index_per_call"].append(
                 data["score_topk_index"].astype(np.int32)
             )
@@ -845,6 +909,11 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
             kept_indices=np.empty(0, dtype=np.int32),
             evicted_offsets=np.zeros(1, dtype=np.int64),
             evicted_indices=np.empty(0, dtype=np.int32),
+            original_index_valid=np.empty(0, dtype=np.bool_),
+            original_kept_offsets=np.zeros(1, dtype=np.int64),
+            original_kept_indices=np.empty(0, dtype=np.int32),
+            original_evicted_offsets=np.zeros(1, dtype=np.int64),
+            original_evicted_indices=np.empty(0, dtype=np.int32),
             kept_per_row=[],
             evicted_per_row=[],
             score_topk_index=np.empty((0, 0), dtype=np.int32),
@@ -866,6 +935,11 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
     kept_flat: list[np.ndarray] = []
     evicted_offsets_global: list[int] = [0]
     evicted_flat: list[np.ndarray] = []
+    original_kept_offsets_global: list[int] = [0]
+    original_kept_flat: list[np.ndarray] = []
+    original_evicted_offsets_global: list[int] = [0]
+    original_evicted_flat: list[np.ndarray] = []
+    original_index_valid_blocks: list[np.ndarray] = []
     score_evicted_per_row: list[np.ndarray] = []
     score_evicted_value_per_row: list[np.ndarray] = []
     score_evicted_offsets_global: list[int] = [0]
@@ -891,6 +965,26 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
         for r in range(n):
             evicted_offsets_global.append(base_e + int(e_off[r + 1]))
         evicted_flat.append(e_idx)
+
+    for ok_off, ok_idx, oe_off, oe_idx in zip(
+        columns["original_kept_offsets_per_call"],
+        columns["original_kept_indices_per_call"],
+        columns["original_evicted_offsets_per_call"],
+        columns["original_evicted_indices_per_call"],
+        strict=True,
+    ):
+        n = int(ok_off.shape[0]) - 1
+        base_ok = original_kept_offsets_global[-1]
+        for r in range(n):
+            original_kept_offsets_global.append(base_ok + int(ok_off[r + 1]))
+        original_kept_flat.append(ok_idx)
+        base_oe = original_evicted_offsets_global[-1]
+        for r in range(n):
+            original_evicted_offsets_global.append(base_oe + int(oe_off[r + 1]))
+        original_evicted_flat.append(oe_idx)
+
+    for valid in columns["original_index_valid_per_call"]:
+        original_index_valid_blocks.append(valid.astype(np.bool_))
 
     for s_off, s_idx, s_val in zip(
         columns["score_evicted_offsets_per_call"],
@@ -949,6 +1043,25 @@ def load_kv_eviction(records: Sequence[IterationRecord]) -> KVEvictionFrame:
         evicted_offsets=np.asarray(evicted_offsets_global, dtype=np.int64),
         evicted_indices=(
             np.concatenate(evicted_flat) if evicted_flat else np.empty(0, dtype=np.int32)
+        ),
+        original_index_valid=(
+            np.concatenate(original_index_valid_blocks)
+            if original_index_valid_blocks
+            else np.empty(0, dtype=np.bool_)
+        ),
+        original_kept_offsets=np.asarray(original_kept_offsets_global, dtype=np.int64),
+        original_kept_indices=(
+            np.concatenate(original_kept_flat)
+            if original_kept_flat
+            else np.empty(0, dtype=np.int32)
+        ),
+        original_evicted_offsets=np.asarray(
+            original_evicted_offsets_global, dtype=np.int64
+        ),
+        original_evicted_indices=(
+            np.concatenate(original_evicted_flat)
+            if original_evicted_flat
+            else np.empty(0, dtype=np.int32)
         ),
         kept_per_row=kept_per_row,
         evicted_per_row=evicted_per_row,
@@ -1167,24 +1280,46 @@ def load_block_head_span_stats(iter_dir: Path) -> dict[str, np.ndarray]:
       block_span_recent_window           scalar                 i32
     """
     with np.load(iter_dir / "attention.npz") as data:
+        mean_decode = data["block_span_mean_decode"].astype(np.float16)
+        selected_block_id = data["block_span_selected_block_id"].astype(np.int32)
+        layer_count, decode_steps, head_count, _ = mean_decode.shape
+        _, _, rank_count = selected_block_id.shape
+        if "block_span_seg_mean_decode" in data.files:
+            seg_mean_decode = data["block_span_seg_mean_decode"].astype(np.float16)
+            seg_var_decode = data["block_span_seg_var_decode"].astype(np.float32)
+            seg_kept_token_count_decode = data[
+                "block_span_seg_kept_token_count_decode"
+            ].astype(np.int32)
+            selected_block_seg_range = data[
+                "block_span_selected_block_seg_range"
+            ].astype(np.int32)
+        else:
+            seg_mean_decode = np.empty(
+                (layer_count, decode_steps, head_count, 0), dtype=np.float16
+            )
+            seg_var_decode = np.empty(
+                (layer_count, decode_steps, head_count, 0), dtype=np.float32
+            )
+            seg_kept_token_count_decode = np.empty(
+                (layer_count, decode_steps, 0), dtype=np.int32
+            )
+            selected_block_seg_range = np.full(
+                (layer_count, decode_steps, rank_count, 2), -1, dtype=np.int32
+            )
         return {
             "block_span_layers": data["block_span_layers"].astype(np.int32),
-            "block_span_mean_decode": data["block_span_mean_decode"].astype(np.float16),
+            "block_span_mean_decode": mean_decode,
             "block_span_var_decode": data["block_span_var_decode"].astype(np.float32),
             "block_span_decode_step": data["block_span_decode_step"].astype(np.int32),
             "block_span_decode_n": data["block_span_decode_n"].astype(np.int32),
-            "block_span_selected_block_id": data["block_span_selected_block_id"].astype(np.int32),
+            "block_span_selected_block_id": selected_block_id,
             "block_span_kept_token_count_decode": data[
                 "block_span_kept_token_count_decode"
             ].astype(np.int32),
-            "block_span_seg_mean_decode": data["block_span_seg_mean_decode"].astype(np.float16),
-            "block_span_seg_var_decode": data["block_span_seg_var_decode"].astype(np.float32),
-            "block_span_seg_kept_token_count_decode": data[
-                "block_span_seg_kept_token_count_decode"
-            ].astype(np.int32),
-            "block_span_selected_block_seg_range": data[
-                "block_span_selected_block_seg_range"
-            ].astype(np.int32),
+            "block_span_seg_mean_decode": seg_mean_decode,
+            "block_span_seg_var_decode": seg_var_decode,
+            "block_span_seg_kept_token_count_decode": seg_kept_token_count_decode,
+            "block_span_selected_block_seg_range": selected_block_seg_range,
             "block_span_block_size": int(data["block_span_block_size"]),
             "block_span_sink_size": int(data["block_span_sink_size"]),
             "block_span_recent_window": int(data["block_span_recent_window"]),

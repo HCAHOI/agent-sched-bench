@@ -27,7 +27,15 @@ class SparseAttentionConfig:
     pass it into the factory.
     """
 
-    name: Literal["none", "sliding", "streaming", "heavy_hitter", "block_topk", "quest"]
+    name: Literal[
+        "none",
+        "sliding",
+        "streaming",
+        "heavy_hitter",
+        "block_topk",
+        "quest",
+        "metadata",
+    ]
     record: bool = False
     # Default sink_size=4 follows StreamingLLM (Xiao et al. 2024,
     # arXiv:2309.17453): the first few tokens carry the "attention sink"
@@ -43,6 +51,7 @@ class SparseAttentionConfig:
     # voting); validated in serving.sparse_attention.config.
     score_reduction: Literal["max", "mean", "vote"] = "max"
     phase_scope: Literal["decode_only"] = "decode_only"
+    metadata_rung: Literal["rung1", "rung2", "rung3", "rung4"] = "rung4"
 
     def __post_init__(self) -> None:
         if self.observe_only and not self.record:

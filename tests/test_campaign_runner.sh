@@ -186,8 +186,8 @@ STATE_B="$(sed -n 's/.*"state": *"\([^"]*\)".*/\1/p' "${RD2}/status.json" | head
 check "$STATE_B" "finished" "run continues past failing task (state=finished)"
 COMP_B="$(sed -n 's/.*"completed": *\([0-9]*\).*/\1/p' "${RD2}/status.json" | head -n1)"
 check "$COMP_B" "3" "run completed=3 despite middle failure"
-# results[] for t_b must carry exit_code 7.
-if grep -q '"task_id":"t_b","exit_code":7' "${RD2}/status.json"; then
+# results[] for t_b seed 0 must carry exit_code 7.
+if grep -q '"task_id":"t_b__seed_0","exit_code":7' "${RD2}/status.json"; then
   pass "results[] records failing task nonzero exit (7)"
 else
   fail "results[] records failing task nonzero exit (7)"
@@ -201,7 +201,7 @@ TSV3="${WORK}/tasks_to.tsv"
 } > "$TSV3"
 RD3="${WORK}/run3"
 TRACE_CLI_CMD="$SLEEPCMD" bash "$RUNNER" run --tasks "$TSV3" --campaign t3 --run-dir "$RD3" --timeout 2 >/dev/null 2>&1
-if grep -q '"task_id":"t_long","exit_code":124,"timed_out":true' "${RD3}/status.json"; then
+if grep -q '"task_id":"t_long__seed_0","exit_code":124,"timed_out":true' "${RD3}/status.json"; then
   pass "timeout yields exit_code 124 timed_out:true"
 else
   fail "timeout yields exit_code 124 timed_out:true"
@@ -209,6 +209,26 @@ else
 fi
 COMP_C="$(sed -n 's/.*"completed": *\([0-9]*\).*/\1/p' "${RD3}/status.json" | head -n1)"
 check "$COMP_C" "2" "queue advances past timed-out task (completed=2)"
+
+# (d) seed axis -> two distinct labeled runs/logs and --seed args.
+TSV_SEED="${WORK}/tasks_seed.tsv"
+printf 'seedtask\tswe-rebench\t1\n' > "$TSV_SEED"
+RD_SEED="${WORK}/run_seed"
+TRACE_CLI_CMD="$SLEEPCMD" bash "$RUNNER" run --tasks "$TSV_SEED" --campaign seed --run-dir "$RD_SEED" --seeds 0,1 --timeout 30 >/dev/null 2>&1
+N_SEED_LOGS=$(find "${RD_SEED}/logs" -name 'seedtask__seed_*.log' 2>/dev/null | wc -l | tr -d ' ')
+check "$N_SEED_LOGS" "2" "seed sweep produces two distinct per-seed logs"
+if grep -q '"task_id":"seedtask__seed_0"' "${RD_SEED}/status.json" && \
+   grep -q '"task_id":"seedtask__seed_1"' "${RD_SEED}/status.json"; then
+  pass "seed sweep records distinct task labels in status.json"
+else
+  fail "seed sweep records distinct task labels in status.json"
+fi
+SEED_PC="$(bash "$RUNNER" run --tasks "$TSV_SEED" --seeds 0,1 --print-cmd 2>&1)"
+if printf '%s' "$SEED_PC" | grep -q -- '--seed 0' && printf '%s' "$SEED_PC" | grep -q -- '--seed 1'; then
+  pass "--print-cmd emits each seed"
+else
+  fail "--print-cmd emits each seed"
+fi
 
 echo "=== Step 3: status and stop ==="
 

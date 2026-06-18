@@ -1,0 +1,7 @@
+# P1 wiring config only. P0 must freeze campaign priors before GPU runs.
+name: metadata
+budget: 1024
+sink_size: 4
+recent_window: 256
+metadata_rung: rung4
+record: true

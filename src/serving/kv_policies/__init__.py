@@ -1,6 +1,7 @@
 """KV cache eviction policies for the HF recording path.
 
-Step 3-6 wire `random` + `streaming` + `h2o`.
+Step 3-6 wire `random` + `streaming` + `h2o`; metadata residency and
+position controls extend the same physical-drop surface.
 """
 
 from __future__ import annotations
@@ -69,6 +70,18 @@ def build_eviction_cache(
             attention_bus=attention_bus,
             max_position_embeddings=int(max_position_embeddings),
         )
+    if name == "metadata":
+        from serving.kv_policies.metadata import MetadataResidencyCache
+
+        return MetadataResidencyCache(config, num_layers, recorder=recorder)
+    if name == "position_control":
+        from serving.kv_policies.metadata import PositionControlCache
+
+        return PositionControlCache(config, num_layers, recorder=recorder)
+    if name == "null_eviction":
+        from serving.kv_policies.metadata import NullEvictionCache
+
+        return NullEvictionCache(config, num_layers, recorder=recorder)
     if name == "none":
         raise ValueError(
             "build_eviction_cache should not be called when policy is disabled "

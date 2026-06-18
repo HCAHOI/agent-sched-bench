@@ -118,6 +118,7 @@ _KV_EVICTION_NPZ_KEYS = {
     "kept_indices",
     "evicted_offsets",
     "evicted_indices",
+    "original_index_valid",
     "evict_reason",
     "score_topk_index",
     "score_topk_value",

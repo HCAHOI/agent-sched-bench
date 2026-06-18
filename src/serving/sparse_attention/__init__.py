@@ -63,6 +63,10 @@ def build_sparse_attention(
             num_layers=num_layers,
             attention_bus=attention_bus,
         )
+    if name == "metadata":
+        from serving.sparse_attention.metadata import MetadataResidencySparseAttention
+
+        return MetadataResidencySparseAttention.from_config(config)
     if name == "none":
         raise ValueError(
             "build_sparse_attention should not be called when method is disabled "

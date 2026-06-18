@@ -26,7 +26,14 @@ def reconstruct_keep_set(
     `extras_json["selected_middle_indices"]` emitted by `sparse_attention.npz`.
     Output dtype is `np.int32`.
     """
-    if method_name not in {"sliding", "streaming", "heavy_hitter", "block_topk", "quest"}:
+    if method_name not in {
+        "sliding",
+        "streaming",
+        "heavy_hitter",
+        "block_topk",
+        "quest",
+        "metadata",
+    }:
         raise NotImplementedError(
             f"keep-set reconstruction for method {method_name!r} is not implemented"
         )
@@ -44,6 +51,17 @@ def reconstruct_keep_set(
         keep[:sink] = True
     if method_params.recent_window > 0:
         keep[recent_start:] = True
+    if method_name == "metadata":
+        extras = extras or {}
+        raw_selected = extras.get("selected_indices")
+        if raw_selected is None:
+            raise ValueError("metadata extras_json missing selected_indices")
+        if not isinstance(raw_selected, list):
+            raise ValueError("metadata selected_indices must be a list")
+        selected = sorted(
+            {int(item) for item in raw_selected if 0 <= int(item) < key_len}
+        )
+        return np.asarray(selected, dtype=np.int32)
     if method_name in {"heavy_hitter", "block_topk", "quest"}:
         if extras is None:
             raise ValueError(

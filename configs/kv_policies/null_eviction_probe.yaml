@@ -1,0 +1,4 @@
+# Identity probe/test config only. null_eviction is not a campaign arm.
+name: null_eviction
+budget: 1000000000
+record: true
