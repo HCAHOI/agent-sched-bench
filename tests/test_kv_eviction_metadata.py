@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import torch
 
+import serving.kv_policies.metadata as metadata_mod
 from serving.kv_policies.analysis import (
     assert_logits_byte_identical,
     assert_teacher_forced_ids_equal,
@@ -189,6 +190,58 @@ def test_recent_tool_reservation_uses_current_physical_recency() -> None:
     assert selection.keep_indices == [0, 1, 7, 8, 9]
     assert 7 in selection.keep_indices
     assert 2 not in selection.keep_indices
+
+
+def test_vectorized_metadata_selector_matches_python_keep_sets() -> None:
+    original_indices = [0, 1, 4, 5, 8, 9, 12, 13, 16, 17]
+    table = {
+        0: TokenMetadata(0, 0, "system", 0, 0, 0, 1),
+        1: TokenMetadata(1, 1, "user", 0, 0, 1, 2),
+        4: TokenMetadata(4, 2, "tool_result", 0, 0, 4, 6),
+        5: TokenMetadata(5, 2, "tool_result", 0, 1, 4, 6),
+        8: TokenMetadata(8, 3, "tool_result", 1, 0, 8, 10, exit_code=1),
+        9: TokenMetadata(9, 3, "tool_result", 1, 1, 8, 10, tool_error=True),
+        12: TokenMetadata(12, 4, "assistant_message", 1, 0, 12, 14),
+        13: TokenMetadata(13, 4, "assistant_message", 1, 1, 12, 14),
+        16: TokenMetadata(16, 5, "generation", 1, 0, 16, 18),
+        17: TokenMetadata(17, 5, "generation", 1, 1, 16, 18),
+    }
+    for rung in ["rung1", "rung2", "rung3", "rung4"]:
+        cfg = EvictionPolicyConfig(
+            name="metadata",
+            budget=5,
+            sink_size=1,
+            recent_window=2,
+            metadata_rung=rung,
+        )
+        selector = MetadataResidencySelector(cfg)
+        expected = selector._select_python(
+            layer_idx=0,
+            key_len=len(original_indices),
+            original_indices=original_indices,
+            metadata_table=table,
+        )
+        arrays = metadata_mod._metadata_arrays_from_table(
+            original_indices=original_indices,
+            metadata_table=table,
+        )
+        actual = selector.select_from_arrays(
+            layer_idx=0,
+            key_len=len(original_indices),
+            original_indices=arrays[0],
+            role_rank=arrays[1],
+            age=arrays[2],
+            offset=arrays[3],
+            segment_id=arrays[4],
+            is_tool_result=arrays[5],
+            is_error=arrays[6],
+        )
+
+        assert actual.keep_indices == expected.keep_indices
+        assert actual.evict_indices == expected.evict_indices
+        assert actual.original_kept_indices == expected.original_kept_indices
+        assert actual.original_evicted_indices == expected.original_evicted_indices
+        assert actual.reason == expected.reason
 
 
 def test_per_layer_table_changes_layer_scores_and_remaps(tmp_path: Path) -> None:
@@ -400,6 +453,98 @@ def test_metadata_cache_update_physically_drops_and_resets_call_labels() -> None
     cache.update(one, one, layer_idx=0)
     phase, step = cache._advance_step(0, query_len=1)
     assert (phase, step) == ("decode", 0)
+
+
+def test_long_context_global_selection_is_cached_across_layers(monkeypatch) -> None:
+    calls = 0
+    original_default = metadata_mod.default_token_metadata
+
+    def counting_default(original_index: int) -> metadata_mod.TokenMetadata:
+        nonlocal calls
+        calls += 1
+        return original_default(original_index)
+
+    monkeypatch.setattr(metadata_mod, "default_token_metadata", counting_default)
+    input_tokens = 1600
+    segments: list[dict] = []
+    pos = 0
+    role_cycle = ["system", "user", "assistant_message", "tool_result"]
+    segment_idx = 0
+    while pos < input_tokens:
+        end = min(input_tokens, pos + 20)
+        role = role_cycle[segment_idx % len(role_cycle)]
+        segment = {
+            "role": role,
+            "token_start": pos,
+            "token_end": end,
+            "first_seen_call": 0,
+        }
+        if role == "tool_result":
+            segment.update({"exit_code": segment_idx % 3, "tool_error": False})
+        segments.append(segment)
+        pos = end
+        segment_idx += 1
+
+    cfg = EvictionPolicyConfig(
+        name="metadata",
+        budget=256,
+        sink_size=4,
+        recent_window=32,
+        metadata_rung="rung4",
+    )
+    n_layers = 6
+    n_decode_steps = 5
+    cache = MetadataResidencyCache(cfg, num_layers=n_layers)
+    cache.notify_new_call(0, segments=segments, input_token_count=input_tokens)
+
+    for layer in range(n_layers):
+        decision = cache._decide_evict(layer_idx=layer, key_len=input_tokens)
+        cache._post_evict_hook(layer, decision)
+    for _step in range(n_decode_steps):
+        expected_keep: list[int] | None = None
+        for layer in range(n_layers):
+            decision = cache._decide_evict(layer_idx=layer, key_len=257)
+            if expected_keep is None:
+                expected_keep = decision.keep_indices
+            else:
+                assert decision.keep_indices == expected_keep
+            cache._post_evict_hook(layer, decision)
+
+    assert cache._selection_compute_count == 1 + n_decode_steps
+    assert cache._selection_cache_hits == (n_layers - 1) * (1 + n_decode_steps)
+    assert calls == 0
+
+
+def test_layer_independent_cache_key_uses_full_original_map() -> None:
+    cfg = EvictionPolicyConfig(
+        name="metadata",
+        budget=2,
+        sink_size=0,
+        recent_window=0,
+        metadata_rung="rung1",
+    )
+    cache = MetadataResidencyCache(cfg, num_layers=1)
+    cache.notify_new_call(
+        0,
+        segments=[
+            {"role": "user", "token_start": 0, "token_end": 6, "first_seen_call": 0}
+        ],
+        input_token_count=6,
+    )
+
+    first = cache._cached_layer_independent_selection(
+        key_len=4,
+        originals=[0, 1, 2, 5],
+    )
+    second = cache._cached_layer_independent_selection(
+        key_len=4,
+        originals=[0, 3, 4, 5],
+    )
+
+    assert first.original_kept_indices == [0, 1]
+    assert second.original_kept_indices == [0, 3]
+    assert cache._selection_compute_count == 2
+    assert cache._selection_cache_hits == 0
 
 
 def test_position_controls_shape_and_structured_order() -> None:

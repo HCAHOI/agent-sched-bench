@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
+import numpy as np
 import yaml
 
 from serving.kv_policies.base import (
@@ -141,6 +142,44 @@ def _none_or_bool(value: Any) -> bool | None:
     return str(value).lower() in {"1", "true", "yes", "on"}
 
 
+def _metadata_arrays_from_table(
+    *,
+    original_indices: list[int],
+    metadata_table: dict[int, TokenMetadata],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    originals = np.asarray(original_indices, dtype=np.int64)
+    n = int(originals.shape[0])
+    role_rank = np.full(n, _ROLE_PRIORITY["generation"], dtype=np.int16)
+    age = np.zeros(n, dtype=np.int32)
+    offset = np.zeros(n, dtype=np.int32)
+    segment_id = np.full(n, -1, dtype=np.int32)
+    is_tool_result = np.zeros(n, dtype=bool)
+    is_error = np.zeros(n, dtype=bool)
+    for physical_idx, original in enumerate(originals.tolist()):
+        meta = metadata_table.get(int(original))
+        if meta is None:
+            continue
+        role = str(meta.role)
+        role_rank[physical_idx] = int(_ROLE_PRIORITY.get(role, 0))
+        age[physical_idx] = int(meta.age)
+        offset[physical_idx] = int(meta.offset)
+        segment_id[physical_idx] = int(meta.segment_id)
+        if role == "tool_result":
+            is_tool_result[physical_idx] = True
+            is_error[physical_idx] = bool(meta.tool_error is True) or (
+                meta.exit_code is not None and int(meta.exit_code) != 0
+            )
+    return (
+        originals,
+        role_rank,
+        age,
+        offset,
+        segment_id,
+        is_tool_result,
+        is_error,
+    )
+
+
 @dataclass(frozen=True)
 class MetadataSelection:
     """Keep/evict result in current physical-index space plus original indices."""
@@ -248,7 +287,43 @@ class MetadataResidencySelector:
             self._per_layer_table = None
         self.config = config
 
+    @property
+    def layer_independent(self) -> bool:
+        """True when a single keep-set can be shared across all layers."""
+        return self._per_layer_table is None
+
     def select(
+        self,
+        *,
+        layer_idx: int,
+        key_len: int,
+        original_indices: list[int],
+        metadata_table: dict[int, TokenMetadata],
+    ) -> MetadataSelection:
+        if self._per_layer_table is None:
+            arrays = _metadata_arrays_from_table(
+                original_indices=original_indices,
+                metadata_table=metadata_table,
+            )
+            return self.select_from_arrays(
+                layer_idx=layer_idx,
+                key_len=key_len,
+                original_indices=arrays[0],
+                role_rank=arrays[1],
+                age=arrays[2],
+                offset=arrays[3],
+                segment_id=arrays[4],
+                is_tool_result=arrays[5],
+                is_error=arrays[6],
+            )
+        return self._select_python(
+            layer_idx=layer_idx,
+            key_len=key_len,
+            original_indices=original_indices,
+            metadata_table=metadata_table,
+        )
+
+    def _select_python(
         self,
         *,
         layer_idx: int,
@@ -316,6 +391,78 @@ class MetadataResidencySelector:
             reason=str(self.config.metadata_rung),
         )
 
+    def select_from_arrays(
+        self,
+        *,
+        layer_idx: int,
+        key_len: int,
+        original_indices: np.ndarray,
+        role_rank: np.ndarray,
+        age: np.ndarray,
+        offset: np.ndarray,
+        segment_id: np.ndarray,
+        is_tool_result: np.ndarray,
+        is_error: np.ndarray,
+    ) -> MetadataSelection:
+        """Vectorized layer-independent selector for the global table path."""
+        del layer_idx
+        if key_len != int(original_indices.shape[0]):
+            raise ValueError(
+                f"key_len {key_len} != original index map length "
+                f"{int(original_indices.shape[0])}"
+            )
+        budget = int(self.config.budget)  # type: ignore[arg-type]
+        if key_len <= budget:
+            keep = np.arange(key_len, dtype=np.int32)
+            return self._selection_from_numpy_keep(
+                key_len=key_len,
+                keep_indices=keep,
+                original_indices=original_indices,
+                reason="none",
+            )
+
+        rung = _RUNG_LEVEL[str(self.config.metadata_rung)]
+        hard_reserved = (
+            self._sink_recent_reserved_mask(key_len=key_len) if rung >= 2 else np.zeros(key_len, dtype=bool)
+        )
+        soft_reserved = np.zeros(key_len, dtype=bool)
+        if rung >= 3:
+            soft_reserved |= self._recent_tool_result_reserved_mask(
+                key_len=key_len,
+                segment_id=segment_id,
+                is_tool_result=is_tool_result,
+            )
+        if rung >= 4:
+            soft_reserved |= is_error
+        hard_count = int(hard_reserved.sum())
+        if hard_count > budget:
+            raise RuntimeError(
+                "hard metadata reservation exceeds budget; constructor validation "
+                "should have rejected this configuration"
+            )
+
+        keep_mask = hard_reserved.copy()
+        remaining_slots = budget - hard_count
+        if remaining_slots > 0:
+            candidates = np.nonzero(~keep_mask)[0].astype(np.int32, copy=False)
+            order = np.lexsort(
+                (
+                    original_indices[candidates],
+                    offset[candidates],
+                    -age[candidates],
+                    -role_rank[candidates],
+                    -soft_reserved[candidates].astype(np.int8),
+                )
+            )
+            keep_mask[candidates[order[:remaining_slots]]] = True
+        keep = np.nonzero(keep_mask)[0].astype(np.int32, copy=False)
+        return self._selection_from_numpy_keep(
+            key_len=key_len,
+            keep_indices=keep,
+            original_indices=original_indices,
+            reason=str(self.config.metadata_rung),
+        )
+
     def _selection_from_keep(
         self,
         *,
@@ -334,11 +481,44 @@ class MetadataResidencySelector:
             reason=reason,
         )
 
+    def _selection_from_numpy_keep(
+        self,
+        *,
+        key_len: int,
+        keep_indices: np.ndarray,
+        original_indices: np.ndarray,
+        reason: str,
+    ) -> MetadataSelection:
+        keep_mask = np.zeros(key_len, dtype=bool)
+        keep_mask[keep_indices] = True
+        evict_indices = np.nonzero(~keep_mask)[0].astype(np.int32, copy=False)
+        return MetadataSelection(
+            keep_indices=[int(idx) for idx in keep_indices.tolist()],
+            evict_indices=[int(idx) for idx in evict_indices.tolist()],
+            original_kept_indices=[
+                int(idx) for idx in original_indices[keep_indices].tolist()
+            ],
+            original_evicted_indices=[
+                int(idx) for idx in original_indices[evict_indices].tolist()
+            ],
+            reason=reason,
+        )
+
     def _sink_recent_reserved(self, key_len: int) -> set[int]:
         sink = min(int(self.config.sink_size), key_len)
         recent = min(int(self.config.recent_window), key_len)
         keep = set(range(sink))
         keep.update(range(max(0, key_len - recent), key_len))
+        return keep
+
+    def _sink_recent_reserved_mask(self, *, key_len: int) -> np.ndarray:
+        sink = min(int(self.config.sink_size), key_len)
+        recent = min(int(self.config.recent_window), key_len)
+        keep = np.zeros(key_len, dtype=bool)
+        if sink > 0:
+            keep[:sink] = True
+        if recent > 0:
+            keep[max(0, key_len - recent) :] = True
         return keep
 
     def _recent_tool_result_reserved(
@@ -370,6 +550,35 @@ class MetadataResidencySelector:
             current_segment_end = max(positions) + 1
             if current_segment_end >= recent_floor:
                 keep.update(positions)
+        return keep
+
+    def _recent_tool_result_reserved_mask(
+        self,
+        *,
+        key_len: int,
+        segment_id: np.ndarray,
+        is_tool_result: np.ndarray,
+    ) -> np.ndarray:
+        recent_window = int(self.config.recent_window)
+        keep = np.zeros(key_len, dtype=bool)
+        if recent_window <= 0:
+            return keep
+        tool_positions = np.nonzero(is_tool_result)[0].astype(np.int32, copy=False)
+        if tool_positions.size == 0:
+            return keep
+        recent_floor = max(0, key_len - recent_window)
+        tool_segments = segment_id[tool_positions]
+        order = np.argsort(tool_segments, kind="stable")
+        sorted_positions = tool_positions[order]
+        sorted_segments = tool_segments[order]
+        group_starts = np.r_[
+            0, np.nonzero(sorted_segments[1:] != sorted_segments[:-1])[0] + 1
+        ]
+        group_ends = np.r_[group_starts[1:], sorted_segments.shape[0]]
+        max_positions = np.maximum.reduceat(sorted_positions, group_starts)
+        group_keep = (max_positions + 1) >= recent_floor
+        repeated = np.repeat(group_keep, group_ends - group_starts)
+        keep[sorted_positions[repeated]] = True
         return keep
 
     def _error_reserved(
@@ -436,6 +645,21 @@ class MetadataResidencyCache(BaseEvictionCache):
         self._original_to_current_by_layer: dict[int, dict[int, int]] = {}
         self._next_original_by_layer: dict[int, int] = {}
         self._last_metadata_reads_by_layer: dict[int, list[int]] = {}
+        self._metadata_version = 0
+        self._original_state_id_by_layer: dict[int, int] = {}
+        self._state_transition_ids: dict[tuple[Any, ...], int] = {}
+        self._next_state_id = 1
+        self._role_rank_by_original = np.empty(0, dtype=np.int16)
+        self._age_by_original = np.empty(0, dtype=np.int32)
+        self._offset_by_original = np.empty(0, dtype=np.int32)
+        self._segment_id_by_original = np.empty(0, dtype=np.int32)
+        self._is_tool_result_by_original = np.empty(0, dtype=bool)
+        self._is_error_by_original = np.empty(0, dtype=bool)
+        self._selection_cache_key: tuple[int, int, int] | None = None
+        self._selection_cache_originals: list[int] | None = None
+        self._selection_cache_value: MetadataSelection | None = None
+        self._selection_compute_count = 0
+        self._selection_cache_hits = 0
 
     def notify_new_call(
         self,
@@ -449,13 +673,17 @@ class MetadataResidencyCache(BaseEvictionCache):
         )
         if segments is None or input_token_count is None:
             return
-        self._metadata_table.update(
-            build_token_metadata_from_segments(
-                segments,
-                input_token_count=int(input_token_count),
-                call_idx=int(call_idx),
-            )
+        new_metadata = build_token_metadata_from_segments(
+            segments,
+            input_token_count=int(input_token_count),
+            call_idx=int(call_idx),
         )
+        self._metadata_table.update(new_metadata)
+        self._update_metadata_arrays(new_metadata)
+        self._metadata_version += 1
+        self._selection_cache_key = None
+        self._selection_cache_originals = None
+        self._selection_cache_value = None
 
     def original_to_current(self, layer_idx: int) -> dict[int, int]:
         """Return the layer-local original->current physical slot map."""
@@ -487,14 +715,23 @@ class MetadataResidencyCache(BaseEvictionCache):
             )
 
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
-        originals = self._ensure_layer_state(int(layer_idx), int(key_len))
-        self._last_metadata_reads_by_layer[int(layer_idx)] = list(originals)
-        selection = self._selector.select(
-            layer_idx=int(layer_idx),
-            key_len=int(key_len),
-            original_indices=originals,
-            metadata_table=self._metadata_table,
-        )
+        layer = int(layer_idx)
+        originals = self._ensure_layer_state(layer, int(key_len), copy=False)
+        self._last_metadata_reads_by_layer[layer] = originals
+        if self._selector.layer_independent:
+            selection = self._cached_layer_independent_selection(
+                key_len=int(key_len),
+                originals=originals,
+                state_id=self._original_state_id_by_layer.get(layer, 0),
+            )
+        else:
+            self._selection_compute_count += 1
+            selection = self._selector.select(
+                layer_idx=layer,
+                key_len=int(key_len),
+                original_indices=originals,
+                metadata_table=self._metadata_table,
+            )
         return EvictionDecision(
             keep_indices=selection.keep_indices,
             evict_indices=selection.evict_indices,
@@ -517,12 +754,22 @@ class MetadataResidencyCache(BaseEvictionCache):
             int(original): current
             for current, original in enumerate(self._original_indices_by_layer[layer])
         }
+        self._original_state_id_by_layer[layer] = self._intern_state_transition(
+            (
+                "keep",
+                self._original_state_id_by_layer.get(layer, 0),
+                tuple(int(idx) for idx in decision.keep_indices),
+            )
+        )
 
-    def _ensure_layer_state(self, layer_idx: int, key_len: int) -> list[int]:
+    def _ensure_layer_state(
+        self, layer_idx: int, key_len: int, *, copy: bool = True
+    ) -> list[int]:
         if key_len < 0:
             raise ValueError(f"key_len must be non-negative, got {key_len}")
         layer = int(layer_idx)
         originals = self._original_indices_by_layer.setdefault(layer, [])
+        self._original_state_id_by_layer.setdefault(layer, 0)
         next_original = self._next_original_by_layer.get(layer, 0)
         if key_len < len(originals):
             raise RuntimeError(
@@ -530,17 +777,142 @@ class MetadataResidencyCache(BaseEvictionCache):
                 f"physical origins {len(originals)}"
             )
         if key_len > len(originals):
+            current_len = len(originals)
             delta = key_len - len(originals)
-            originals.extend(range(next_original, next_original + delta))
+            new_originals = range(next_original, next_original + delta)
+            originals.extend(new_originals)
             self._next_original_by_layer[layer] = next_original + delta
-        self._original_to_current_by_layer[layer] = {
-            int(original): current for current, original in enumerate(originals)
-        }
-        return list(originals)
+            mapping = self._original_to_current_by_layer.get(layer)
+            if mapping is None or len(mapping) != current_len:
+                mapping = {
+                    int(original): current
+                    for current, original in enumerate(originals[:current_len])
+                }
+                self._original_to_current_by_layer[layer] = mapping
+            for current, original in enumerate(new_originals, start=current_len):
+                mapping[int(original)] = current
+            self._original_state_id_by_layer[layer] = self._intern_state_transition(
+                (
+                    "append",
+                    self._original_state_id_by_layer.get(layer, 0),
+                    next_original,
+                    delta,
+                )
+            )
+        elif layer not in self._original_to_current_by_layer:
+            self._original_to_current_by_layer[layer] = {
+                int(original): current for current, original in enumerate(originals)
+            }
+        return list(originals) if copy else originals
 
     def _current_layer_len(self, layer_idx: int) -> int:
         originals = self._original_indices_by_layer.get(int(layer_idx), [])
         return len(originals)
+
+    def _cached_layer_independent_selection(
+        self, *, key_len: int, originals: list[int], state_id: int | None = None
+    ) -> MetadataSelection:
+        cache_state_id = int(state_id) if state_id is not None else -1
+        cache_key = (int(key_len), cache_state_id, int(self._metadata_version))
+        if (
+            self._selection_cache_key == cache_key
+            and self._selection_cache_value is not None
+            and (state_id is not None or self._selection_cache_originals == originals)
+        ):
+            self._selection_cache_hits += 1
+            return self._selection_cache_value
+
+        original_indices = np.asarray(originals, dtype=np.int64)
+        if original_indices.size:
+            self._ensure_metadata_array_capacity(int(original_indices.max()) + 1)
+            role_rank = self._role_rank_by_original[original_indices]
+            age = self._age_by_original[original_indices]
+            offset = self._offset_by_original[original_indices]
+            segment_id = self._segment_id_by_original[original_indices]
+            is_tool_result = self._is_tool_result_by_original[original_indices]
+            is_error = self._is_error_by_original[original_indices]
+        else:
+            role_rank = np.empty(0, dtype=np.int16)
+            age = np.empty(0, dtype=np.int32)
+            offset = np.empty(0, dtype=np.int32)
+            segment_id = np.empty(0, dtype=np.int32)
+            is_tool_result = np.empty(0, dtype=bool)
+            is_error = np.empty(0, dtype=bool)
+        selection = self._selector.select_from_arrays(
+            layer_idx=0,
+            key_len=int(key_len),
+            original_indices=original_indices,
+            role_rank=role_rank,
+            age=age,
+            offset=offset,
+            segment_id=segment_id,
+            is_tool_result=is_tool_result,
+            is_error=is_error,
+        )
+        self._selection_compute_count += 1
+        self._selection_cache_key = cache_key
+        self._selection_cache_originals = None if state_id is not None else list(originals)
+        self._selection_cache_value = selection
+        return selection
+
+    def _intern_state_transition(self, key: tuple[Any, ...]) -> int:
+        state_id = self._state_transition_ids.get(key)
+        if state_id is not None:
+            return state_id
+        state_id = self._next_state_id
+        self._next_state_id += 1
+        self._state_transition_ids[key] = state_id
+        return state_id
+
+    def _ensure_metadata_array_capacity(self, size: int) -> None:
+        current = int(self._role_rank_by_original.shape[0])
+        if size <= current:
+            return
+        next_size = max(int(size), 16 if current == 0 else current * 2)
+        grow = next_size - current
+        self._role_rank_by_original = np.concatenate(
+            [
+                self._role_rank_by_original,
+                np.full(grow, _ROLE_PRIORITY["generation"], dtype=np.int16),
+            ]
+        )
+        self._age_by_original = np.concatenate(
+            [self._age_by_original, np.zeros(grow, dtype=np.int32)]
+        )
+        self._offset_by_original = np.concatenate(
+            [self._offset_by_original, np.zeros(grow, dtype=np.int32)]
+        )
+        self._segment_id_by_original = np.concatenate(
+            [
+                self._segment_id_by_original,
+                np.full(grow, -1, dtype=np.int32),
+            ]
+        )
+        self._is_tool_result_by_original = np.concatenate(
+            [self._is_tool_result_by_original, np.zeros(grow, dtype=bool)]
+        )
+        self._is_error_by_original = np.concatenate(
+            [self._is_error_by_original, np.zeros(grow, dtype=bool)]
+        )
+
+    def _update_metadata_arrays(self, metadata: dict[int, TokenMetadata]) -> None:
+        if not metadata:
+            return
+        max_original = max(int(original) for original in metadata)
+        self._ensure_metadata_array_capacity(max_original + 1)
+        for original, meta in metadata.items():
+            idx = int(original)
+            role = str(meta.role)
+            self._role_rank_by_original[idx] = int(_ROLE_PRIORITY.get(role, 0))
+            self._age_by_original[idx] = int(meta.age)
+            self._offset_by_original[idx] = int(meta.offset)
+            self._segment_id_by_original[idx] = int(meta.segment_id)
+            is_tool = role == "tool_result"
+            self._is_tool_result_by_original[idx] = is_tool
+            self._is_error_by_original[idx] = is_tool and (
+                meta.tool_error is True
+                or (meta.exit_code is not None and int(meta.exit_code) != 0)
+            )
 
 
 class NullEvictionCache(BaseEvictionCache):
