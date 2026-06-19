@@ -20,7 +20,7 @@ from agents.openclaw.runtime_deps import OPENCLAW_MCP_RUNTIME_REQUIREMENTS
 # `serving.recording` (and its KV-eviction transitive deps) pulls in `torch`
 # via `transformers.cache_utils`. Container venvs that only need MCP/scaffold
 # helpers from this module must not pay that import cost — keep this lazy
-# inside the `record_internals` branch in `collect_traces`.
+# inside the HF-backend branch in `collect_traces`.
 from harness.container_image_prep import (
     drop_cached_fixed_image,
     ensure_source_image,
@@ -545,10 +545,22 @@ async def collect_traces(
     generation_seed: int = 0,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
-    if record_internals and scaffold != "openclaw":
+    use_hf_backend = bool(record_internals or eviction_config is not None)
+    if use_hf_backend and scaffold != "openclaw":
         raise ValueError(
-            "--record-internals currently supports scaffold='openclaw' only"
+            "HF-backed recording / KV eviction currently supports "
+            "scaffold='openclaw' only"
         )
+    if sparse_attention_config is not None and not record_internals:
+        raise ValueError("--sparse-attn requires --record-internals")
+    if eviction_config is not None and not record_internals:
+        from serving.kv_policies import eviction_policy_requires_attention
+
+        if eviction_policy_requires_attention(eviction_config):
+            raise ValueError(
+                "The selected KV eviction policy requires attention; pass "
+                "--record-internals so AttentionBus can publish post-softmax scores."
+            )
     benchmark.validate_scaffold_support(scaffold)
     execution_environment = benchmark.execution_environment
     if execution_environment not in {"container", "host"}:
@@ -576,7 +588,7 @@ async def collect_traces(
     with ExitStack() as cleanup_stack:
         recording_provider = None
         recording_server = None
-        if record_internals:
+        if use_hf_backend:
             # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
             from serving.recording import (
                 HFRecordingProvider,
@@ -588,6 +600,7 @@ async def collect_traces(
                 HFRecordingProvider(
                     default_model=model,
                     config=RecordingConfig(
+                        record_artifacts=bool(record_internals),
                         per_head_stats_layers=tuple(per_head_stats_layers),
                         per_head_block_stats=bool(per_head_block_stats),
                         record_per_head_topk=bool(record_per_head_topk),

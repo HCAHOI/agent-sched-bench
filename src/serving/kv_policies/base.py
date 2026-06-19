@@ -100,9 +100,14 @@ class BaseEvictionCache(DynamicCache):
         self._step_counter: dict[int, int] = {}
         self._seen_prefill: set[int] = set()
 
-    def requires_attention(self) -> bool:
-        """True if this policy needs to subscribe to AttentionBus (H2O)."""
+    @classmethod
+    def requires_attention_backend(cls) -> bool:
+        """True if this policy needs post-softmax attention from AttentionBus."""
         return False
+
+    def requires_attention(self) -> bool:
+        """Instance-level mirror used for provider unsubscribe lifecycle."""
+        return self.requires_attention_backend()
 
     def notify_new_call(
         self,

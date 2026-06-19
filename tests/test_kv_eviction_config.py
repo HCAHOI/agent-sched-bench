@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from serving.kv_policies import eviction_policy_requires_attention
+from serving.kv_policies.base import EvictionPolicyConfig
 from serving.kv_policies.config import load_eviction_config
 
 
@@ -201,3 +203,13 @@ def test_kv_record_cli_off_overrides_yaml(tmp_path: Path) -> None:
     )
     assert cfg is not None
     assert cfg.record is False
+
+
+def test_policy_attention_capability_is_declared_by_cache_class() -> None:
+    h2o = EvictionPolicyConfig(name="h2o", budget=512)
+    metadata = EvictionPolicyConfig(name="metadata", budget=512)
+    streaming = EvictionPolicyConfig(name="streaming", budget=512)
+
+    assert eviction_policy_requires_attention(h2o) is True
+    assert eviction_policy_requires_attention(metadata) is False
+    assert eviction_policy_requires_attention(streaming) is False

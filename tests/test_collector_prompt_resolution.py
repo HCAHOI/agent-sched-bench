@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import os
 import sys
 
 import pytest
@@ -185,6 +186,97 @@ def test_run_collect_passes_record_internals(monkeypatch) -> None:
     _run_collect(args)
 
     assert seen["record_internals"] is True
+
+
+def test_run_collect_allows_metadata_kv_without_record_internals(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    async def fake_collect_traces(**kwargs):
+        seen.update(kwargs)
+        return Path("/tmp/fake-run")
+
+    monkeypatch.delenv("NANOBOT_MAX_CONCURRENT_REQUESTS", raising=False)
+    monkeypatch.setattr(
+        "trace_collect.cli.resolve_llm_config",
+        lambda **kwargs: SimpleNamespace(
+            name="openrouter",
+            api_base="https://example.com",
+            api_key="test-key",
+            model="z-ai/glm-5.1",
+            env_key="OPENROUTER_API_KEY",
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.collect_traces",
+        fake_collect_traces,
+    )
+
+    args = parse_collect_args(
+        [
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+            "--mcp-config",
+            "none",
+            "--container",
+            "docker",
+            "--kv-policy",
+            "metadata",
+            "--kv-budget",
+            "4096",
+            "--kv-record",
+            "off",
+        ]
+    )
+
+    _run_collect(args)
+
+    eviction_config = seen["eviction_config"]
+    assert seen["record_internals"] is False
+    assert eviction_config.name == "metadata"
+    assert eviction_config.record is False
+    assert seen["sparse_attention_config"] is None
+    assert os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] == "1"
+
+
+def test_run_collect_rejects_attention_kv_without_record_internals(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        "trace_collect.cli.resolve_llm_config",
+        lambda **kwargs: SimpleNamespace(
+            name="openrouter",
+            api_base="https://example.com",
+            api_key="test-key",
+            model="z-ai/glm-5.1",
+            env_key="OPENROUTER_API_KEY",
+        ),
+    )
+
+    args = parse_collect_args(
+        [
+            "--provider",
+            "openrouter",
+            "--model",
+            "z-ai/glm-5.1",
+            "--mcp-config",
+            "none",
+            "--container",
+            "docker",
+            "--kv-policy",
+            "h2o",
+            "--kv-budget",
+            "4096",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_collect(args)
+
+    assert excinfo.value.code == 2
+    assert "requires attention" in capsys.readouterr().err
 
 
 def test_run_collect_rejects_record_internals_for_tongyi_deepresearch() -> None:

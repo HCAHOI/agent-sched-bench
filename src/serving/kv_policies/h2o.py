@@ -77,8 +77,8 @@ Lifecycle invariants (plan §H4 + Top Risk #4)
   is gating the bus, H2O still observes. A silent skip would corrupt the
   score buffer relative to the cache state and the next eviction would pick
   stale heavy hitters.
-* `requires_attention()` returns True so the provider knows it must wire the
-  bus.
+* `requires_attention_backend()` returns True so the provider knows it must wire
+  the bus.
 * The provider owns subscribe/unsubscribe lifecycle: H2O subscribes itself
   on construction, but the provider must call `attention_bus.unsubscribe(cache)`
   in a `finally` block around `model.generate(...)`. Letting subscriptions
@@ -183,7 +183,8 @@ class H2OCache(BaseEvictionCache):
         self._attention_bus: "AttentionBus" = attention_bus
         attention_bus.subscribe(self)
 
-    def requires_attention(self) -> bool:
+    @classmethod
+    def requires_attention_backend(cls) -> bool:
         return True
 
     # -- AttentionConsumer protocol -----------------------------------------

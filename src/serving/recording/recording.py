@@ -13,6 +13,7 @@ from typing import Any
 class RecordingConfig:
     """Runtime knobs for bounded internal recording."""
 
+    record_artifacts: bool = True
     attention_top_k: int = 32
     decode_window: int = 64
     max_prefill_queries: int = 80

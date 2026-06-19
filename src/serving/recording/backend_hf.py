@@ -30,7 +30,7 @@ from agents.openclaw.providers.base import (
     LLMResponse,
     ToolCallRequest,
 )
-from serving.kv_policies import build_eviction_cache
+from serving.kv_policies import build_eviction_cache, eviction_policy_requires_attention
 from serving.kv_policies.base import BaseEvictionCache, EvictionPolicyConfig
 from serving.kv_policies.recorder import KVEvictionRecorder
 from serving.recording.attention_bus import AttentionBus
@@ -664,6 +664,19 @@ class HFRecordingProvider(LLMProvider):
         super().__init__(api_key=api_key, api_base=api_base)
         self.default_model = default_model
         self.config = config or RecordingConfig()
+        if (
+            eviction_config is not None
+            and eviction_policy_requires_attention(eviction_config)
+            and not self.config.record_artifacts
+        ):
+            raise ValueError(
+                "The selected KV eviction policy requires attention artifacts; "
+                "enable RecordingConfig.record_artifacts."
+            )
+        if sparse_attention_config is not None and not self.config.record_artifacts:
+            raise ValueError(
+                "Sparse attention requires RecordingConfig.record_artifacts."
+            )
         self.generation = GenerationSettings(
             temperature=temperature,
             max_tokens=4096,
@@ -739,10 +752,8 @@ class HFRecordingProvider(LLMProvider):
             sparse_attention=self._sparse_attention,
         )
         # Attempt-level KV policy summary lands in meta.json. The
-        # `prefill_score_bias` flag is the explicit warning that H2O's score
-        # accumulator only saw the LayerCapturer-sampled prefill rows
-        # (recording bias). False for non-h2o policies; analysis code can
-        # branch on it.
+        # `prefill_score_bias` is the explicit warning that an
+        # attention-dependent policy only saw LayerCapturer-sampled prefill rows.
         self.capturer.set_kv_policy_meta(self._kv_policy_meta_payload())
         self.capturer.set_sparse_attention_meta(
             self._sparse_attention_meta_payload()
@@ -778,15 +789,15 @@ class HFRecordingProvider(LLMProvider):
 
         Returns None when no eviction policy is configured. Otherwise mirrors
         the serialisable subset of EvictionPolicyConfig plus the
-        `prefill_score_bias` flag — True when H2O is paired with the sampled
-        prefill mode (the bus only sees the LayerCapturer-sampled query rows
-        during prefill), False otherwise.
+        `prefill_score_bias` flag — True when an attention-dependent policy is
+        paired with sampled prefill mode (the bus only sees the
+        LayerCapturer-sampled query rows during prefill), False otherwise.
         """
         cfg = self._eviction_config
         if cfg is None:
             return None
-        prefill_score_bias = (
-            cfg.name == "h2o" and getattr(cfg, "prefill_mode", "full") == "sampled"
+        prefill_score_bias = eviction_policy_requires_attention(cfg) and (
+            getattr(cfg, "prefill_mode", "full") == "sampled"
         )
         return {
             "name": cfg.name,
@@ -812,6 +823,9 @@ class HFRecordingProvider(LLMProvider):
     def get_default_model(self) -> str:
         return self.default_model
 
+    def _record_artifacts_enabled(self) -> bool:
+        return bool(getattr(self.config, "record_artifacts", True))
+
     def start_attempt(self, recordings_dir: Path) -> None:
         self._drop_session_cache()
         if self._sparse_attention is not None and hasattr(
@@ -821,7 +835,8 @@ class HFRecordingProvider(LLMProvider):
         self._call_idx = 0
         self._session_history = []
         self._message_first_seen = []
-        self.capturer.start_attempt(recordings_dir)
+        if self._record_artifacts_enabled():
+            self.capturer.start_attempt(recordings_dir)
 
     def wait_until_idle(self, timeout_s: float | None = None) -> None:
         """Wait until no chat generation is holding the provider lock."""
@@ -838,6 +853,8 @@ class HFRecordingProvider(LLMProvider):
         self._chat_lock.release()
 
     def finish_attempt(self, trace_path: Path | None = None) -> None:
+        if not self._record_artifacts_enabled():
+            return
         self.capturer.set_attempt_extra_meta(
             {"session_history": [dict(item) for item in self._session_history]}
         )
@@ -1319,8 +1336,13 @@ class HFRecordingProvider(LLMProvider):
             # and bare-baseline runs leave it None. The session cache itself is
             # shared across all branches so consecutive chat() calls can resume
             # past_key_values via LCP-based delta prefill.
+            record_artifacts = self._record_artifacts_enabled()
             kv_recorder: KVEvictionRecorder | None = None
-            if self._eviction_config is not None and self._eviction_config.record:
+            if (
+                record_artifacts
+                and self._eviction_config is not None
+                and self._eviction_config.record
+            ):
                 # `record=False` runs the policy but skips both the
                 # KVEvictionRecorder allocation AND the capturer.flush() npz
                 # write; the cache mechanics still run.
@@ -1372,7 +1394,8 @@ class HFRecordingProvider(LLMProvider):
             # but observe-only sidecars may coexist and record would-keep sets.
             sparse_recorder: SparseAttentionRecorder | None = None
             if (
-                self._sparse_attention_config is not None
+                record_artifacts
+                and self._sparse_attention_config is not None
                 and self._sparse_attention_config.record
             ):
                 sparse_recorder = SparseAttentionRecorder(
@@ -1419,14 +1442,19 @@ class HFRecordingProvider(LLMProvider):
                         start_event.record()
                 _synchronize_cuda_devices(self._torch)
             generate_started = time.perf_counter()
-            with (
-                self._torch.no_grad(),
+            recording_ctx = (
                 self.capturer.recording_session(
                     call_idx=call_idx,
                     segments=segments,
                     input_token_count=input_token_count,
                     generation=generation_meta,
-                ),
+                )
+                if record_artifacts
+                else nullcontext()
+            )
+            with (
+                self._torch.no_grad(),
+                recording_ctx,
                 prefill_ctx,
             ):
                 sequences = self.model.generate(**generation_kwargs)
@@ -1479,7 +1507,8 @@ class HFRecordingProvider(LLMProvider):
                     output_ids = (
                         sequences[0, input_token_count:].detach().cpu().tolist()
                     )
-                self.capturer.flush(output_token_ids=output_ids)
+                if record_artifacts:
+                    self.capturer.flush(output_token_ids=output_ids)
             if isinstance(self._session_cache, BaseEvictionCache):
                 # Detach recorder so the next call's recorder swap is clean.
                 # Only eviction caches carry a `recorder` slot.

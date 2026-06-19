@@ -723,19 +723,10 @@ def _run_collect(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
-    # KV eviction policies live in the HF recording path; they are meaningless
-    # without --record-internals (no HF backend = no Cache subclass injection
-    # site). Either an explicit --kv-policy != none OR a --kv-config yaml that
-    # supplies a non-none `name` activates eviction; both must imply
-    # --record-internals.
-    kv_policy_active = args.kv_policy != "none" or args.kv_config is not None
-    if kv_policy_active and not args.record_internals:
-        print(
-            "ERROR: --kv-policy / --kv-config requires --record-internals "
-            "(KV eviction only applies to the HF recording backend).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+    # KV eviction uses the HF backend because that is where HF Cache subclasses
+    # can be injected. Attention-independent policies may run without recording
+    # internal artifacts; attention-dependent policies are checked after config
+    # resolution via the policy capability registry.
     sparse_attn_active = (
         args.sparse_attn != "none" or args.sparse_attn_config is not None
     )
@@ -826,6 +817,7 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     from agents.benchmarks import get_benchmark_class
     from agents.benchmarks.base import BenchmarkConfig
+    from serving.kv_policies import eviction_policy_requires_attention
     from serving.kv_policies.config import load_eviction_config
     from serving.sparse_attention.config import (
         load_sparse_attention_config,
@@ -834,6 +826,18 @@ def _run_collect(args: argparse.Namespace) -> None:
     from trace_collect.collector import collect_traces
 
     eviction_config = load_eviction_config(args)
+    if eviction_config is not None:
+        os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
+        if (
+            eviction_policy_requires_attention(eviction_config)
+            and not args.record_internals
+        ):
+            print(
+                "ERROR: the selected KV policy requires attention; pass "
+                "--record-internals so AttentionBus can publish post-softmax scores.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
     try:
         sparse_attention_config = load_sparse_attention_config(args)
         validate_attention_method_exclusivity(eviction_config, sparse_attention_config)

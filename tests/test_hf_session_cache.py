@@ -89,9 +89,14 @@ class _StubCapturer:
         self.closed = True
 
 
-def _build_provider(eviction_config: EvictionPolicyConfig | None) -> HFRecordingProvider:
+def _build_provider(
+    eviction_config: EvictionPolicyConfig | None,
+    *,
+    record_artifacts: bool = True,
+) -> HFRecordingProvider:
     """Hand-construct a provider so we don't load HF weights."""
     provider = HFRecordingProvider.__new__(HFRecordingProvider)
+    provider.config = RecordingConfig(record_artifacts=record_artifacts)
     provider._eviction_config = eviction_config
     provider._sparse_attention_config = None
     provider._sparse_attention = None
@@ -382,6 +387,39 @@ def test_start_attempt_resets_session_cache_between_attempts(tmp_path: Path) -> 
             "diverged": False,
         }
     ]
+
+
+def test_record_artifacts_false_suppresses_attempt_recording_tree(
+    tmp_path: Path,
+) -> None:
+    """No-internals KV runs must not leave recordings/meta.json behind."""
+    cfg = EvictionPolicyConfig(name="metadata", budget=8, sink_size=1, recent_window=7)
+    provider = _build_provider(cfg, record_artifacts=False)
+
+    class _ArtifactCapturer(_StubCapturer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.recordings_dir: Path | None = None
+
+        def start_attempt(self, recordings_dir: Path) -> None:
+            super().start_attempt(recordings_dir)
+            self.recordings_dir = recordings_dir
+            recordings_dir.mkdir(parents=True, exist_ok=True)
+
+        def finish_attempt(self, trace_path: Path | None = None) -> None:
+            super().finish_attempt(trace_path)
+            assert self.recordings_dir is not None
+            (self.recordings_dir / "meta.json").write_text("{}", encoding="utf-8")
+
+    provider.capturer = _ArtifactCapturer()
+    recordings_dir = tmp_path / "attempt" / "recordings"
+
+    provider.start_attempt(recordings_dir)
+    provider.finish_attempt()
+
+    assert provider.capturer.started == []
+    assert provider.capturer.finish_calls == []
+    assert not recordings_dir.exists()
 
 
 def test_provider_exit_defensively_finishes_attempt() -> None:
