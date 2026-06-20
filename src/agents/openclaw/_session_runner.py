@@ -339,13 +339,19 @@ class TraceCollectorHook(AgentHook):
                     "finish_reason": finish_reason,
                 }
                 if context.response.extra:
+                    # Preserve existing non-HF error diagnostics, but route HF
+                    # telemetry through the explicit allow-list below so new
+                    # `hf_*` fields cannot leak into traces by naming convention.
                     error_data.update(
                         {
                             key: value
                             for key, value in context.response.extra.items()
-                            if key != "llm_wall_ts_end" and not key.startswith("_")
+                            if key != "llm_wall_ts_end"
+                            and not key.startswith("_")
+                            and not key.startswith("hf_")
                         }
                     )
+                    error_data.update(self._extract_trace_llm_fields(context.response))
                 self.emit_event(
                     LLM,
                     "llm_error",
@@ -540,6 +546,26 @@ class TraceCollectorHook(AgentHook):
             "openrouter_metadata_initial_fetch_status",
             "openrouter_metadata_initial_fetch_ms",
             "openrouter_metadata",
+            "hf_call_idx",
+            "hf_input_token_count",
+            "hf_delta_input_token_count",
+            "hf_used_session_cache",
+            "hf_session_cache_type",
+            "hf_session",
+            "hf_cache_lcp",
+            "hf_cache_cached_len_before",
+            "hf_cache_new_len",
+            "hf_cache_delta_len",
+            "hf_cache_resume_len",
+            "hf_cache_diverged",
+            "hf_cache_replayed_last_token",
+            "hf_generation",
+            "hf_generate_wall_ms",
+            "hf_output_token_count",
+            "hf_hit_max_new_tokens",
+            "hf_tool_call_count",
+            "hf_malformed_tool_output",
+            "hf_finish_reason_inferred",
         ):
             if key in extra:
                 result[key] = extra[key]

@@ -545,6 +545,27 @@ def parse_text_tool_calls(text: str) -> tuple[str | None, list[ToolCallRequest]]
     return _parse_glm_tool_calls(text)
 
 
+def _looks_like_malformed_tool_output(text: str, tool_calls: list[ToolCallRequest]) -> bool:
+    """Return True when text resembles a tool call but no call parsed.
+
+    This is telemetry only: it helps distinguish ordinary final answers from
+    malformed Qwen/OpenClaw tool syntax during long-context degeneration.
+    """
+    if tool_calls:
+        return False
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "<tool_call",
+            "</tool_call",
+            "<function=",
+            "<parameter=",
+            "</parameter>",
+        )
+    )
+
+
 def _positive_int_env(name: str) -> int | None:
     raw = os.environ.get(name)
     if raw is None or raw == "":
@@ -708,6 +729,10 @@ class HFRecordingProvider(LLMProvider):
         # Attempt-level audit log persisted to meta.json. It distinguishes full
         # cold prompts, strict-prefix resume prompts, and divergence rebuilds.
         self._session_history: list[dict[str, Any]] = []
+        # Last per-call session-cache telemetry is copied into LLMResponse.extra
+        # so lean record_artifacts=False runs still expose LCP/crop state in the
+        # live OpenClaw trace.
+        self._last_session_event: dict[str, Any] | None = None
         self._message_first_seen: list[tuple[str, int]] = []
 
         import torch
@@ -848,6 +873,7 @@ class HFRecordingProvider(LLMProvider):
             self._sparse_attention.reset_state()
         self._call_idx = 0
         self._session_history = []
+        self._last_session_event = None
         self._message_first_seen = []
         if self._record_artifacts_enabled():
             if self.capturer is None:
@@ -1022,6 +1048,51 @@ class HFRecordingProvider(LLMProvider):
         else:
             cache.crop(length)
 
+    def _session_cache_snapshot(self) -> dict[str, Any] | None:
+        """Summarise live session-cache state for trace telemetry."""
+        cache = self._session_cache
+        if cache is None:
+            return None
+        snapshot: dict[str, Any] = {
+            "cache_type": type(cache).__name__,
+            "physical_kv_len": int(cache.get_seq_length(0)),
+        }
+        if self._session_token_ids is not None:
+            snapshot["logical_token_ids_len"] = int(
+                self._session_token_ids.shape[-1]
+            )
+        if isinstance(cache, BaseEvictionCache):
+            logical_by_layer = getattr(cache, "_logical_indices_by_layer", {})
+            next_by_layer = getattr(cache, "_next_logical_by_layer", {})
+            physical_lengths: list[int] = []
+            logical_min: int | None = None
+            logical_max: int | None = None
+            next_values: list[int] = []
+            for layer_idx, logical in logical_by_layer.items():
+                values = [int(value) for value in logical]
+                physical_lengths.append(len(values))
+                if values:
+                    layer_min = min(values)
+                    layer_max = max(values)
+                    logical_min = (
+                        layer_min if logical_min is None else min(logical_min, layer_min)
+                    )
+                    logical_max = (
+                        layer_max if logical_max is None else max(logical_max, layer_max)
+                    )
+                next_values.append(int(next_by_layer.get(int(layer_idx), 0)))
+            snapshot["eviction_layer_count"] = len(logical_by_layer)
+            if physical_lengths:
+                snapshot["eviction_physical_len_min"] = min(physical_lengths)
+                snapshot["eviction_physical_len_max"] = max(physical_lengths)
+            if logical_min is not None and logical_max is not None:
+                snapshot["eviction_logical_min"] = logical_min
+                snapshot["eviction_logical_max_exclusive"] = logical_max + 1
+            if next_values:
+                snapshot["eviction_next_logical_min"] = min(next_values)
+                snapshot["eviction_next_logical_max"] = max(next_values)
+        return snapshot
+
     def _record_disabled_session_history(
         self, *, call_idx: int, new_len: int
     ) -> None:
@@ -1031,17 +1102,21 @@ class HFRecordingProvider(LLMProvider):
         (`requires_full_prefill=True`). Records the disabled-cache accounting:
         `used_session_cache=False`, `lcp=0`, `delta_len=new_len`.
         """
-        self._session_history.append(
-            {
-                "call_idx": call_idx,
-                "used_session_cache": False,
-                "lcp": 0,
-                "cached_len_before": 0,
-                "new_len": new_len,
-                "delta_len": new_len,
-                "diverged": False,
-            }
-        )
+        entry = {
+            "call_idx": call_idx,
+            "used_session_cache": False,
+            "lcp": 0,
+            "cached_len_before": 0,
+            "new_len": new_len,
+            "delta_len": new_len,
+            "diverged": False,
+        }
+        self._session_history.append(entry)
+        self._last_session_event = {
+            **entry,
+            "cache_state_before": None,
+            "cache_state_after": None,
+        }
 
     def _prepare_session_cache(
         self, *, prompt_ids: Any, call_idx: int
@@ -1089,17 +1164,22 @@ class HFRecordingProvider(LLMProvider):
                 call_idx,
                 new_len,
             )
-            self._session_history.append(
-                {
-                    "call_idx": call_idx,
-                    "used_session_cache": True,
-                    "lcp": 0,
-                    "cached_len_before": 0,
-                    "new_len": new_len,
-                    "delta_len": new_len,
-                    "diverged": False,
-                }
-            )
+            entry = {
+                "call_idx": call_idx,
+                "used_session_cache": True,
+                "lcp": 0,
+                "cached_len_before": 0,
+                "new_len": new_len,
+                "delta_len": new_len,
+                "diverged": False,
+            }
+            self._session_history.append(entry)
+            snapshot = self._session_cache_snapshot()
+            self._last_session_event = {
+                **entry,
+                "cache_state_before": None,
+                "cache_state_after": snapshot,
+            }
             return prompt_ids, True
         assert self._session_token_ids is not None
         cached_ids = self._session_token_ids[0]
@@ -1119,6 +1199,7 @@ class HFRecordingProvider(LLMProvider):
         new_ids = prompt_ids[0]
         lcp = _longest_common_prefix(cached_ids, new_ids)
         cached_len = int(cached_ids.shape[0])
+        cache_state_before = self._session_cache_snapshot()
         _LOG.debug(
             "session cache lcp check (call_idx=%d, lcp=%d, cached_len=%d, "
             "new_len=%d, is_prefix=%s)",
@@ -1160,19 +1241,24 @@ class HFRecordingProvider(LLMProvider):
             self._crop_session_cache(resume_len)
             self._session_token_ids = prompt_ids[:, :resume_len].clone()
         delta_len = new_len - resume_len
-        self._session_history.append(
-            {
-                "call_idx": call_idx,
-                "used_session_cache": True,
-                "lcp": lcp,
-                "cached_len_before": cached_len,
-                "new_len": new_len,
-                "delta_len": delta_len,
-                "diverged": diverged,
-                "resume_len": resume_len,
-                "replayed_last_token": replayed_last_token,
-            }
-        )
+        cache_state_after = self._session_cache_snapshot()
+        entry = {
+            "call_idx": call_idx,
+            "used_session_cache": True,
+            "lcp": lcp,
+            "cached_len_before": cached_len,
+            "new_len": new_len,
+            "delta_len": delta_len,
+            "diverged": diverged,
+            "resume_len": resume_len,
+            "replayed_last_token": replayed_last_token,
+        }
+        self._session_history.append(entry)
+        self._last_session_event = {
+            **entry,
+            "cache_state_before": cache_state_before,
+            "cache_state_after": cache_state_after,
+        }
         return prompt_ids[:, resume_len:], True
 
     def _extend_session_tokens(self, *, prompt_ids: Any, output_ids: list[int]) -> None:
@@ -1344,8 +1430,27 @@ class HFRecordingProvider(LLMProvider):
         delta_ids, used_session_cache = self._prepare_session_cache(
             prompt_ids=prompt_ids, call_idx=call_idx
         )
+        session_event = dict(self._last_session_event or {})
+        delta_input_token_count = int(delta_ids.shape[-1])
+        hf_trace_extra: dict[str, Any] = {
+            "hf_call_idx": call_idx,
+            "hf_input_token_count": input_token_count,
+            "hf_delta_input_token_count": delta_input_token_count,
+            "hf_used_session_cache": bool(used_session_cache),
+            "hf_session_cache_type": type(self._session_cache).__name__
+            if self._session_cache is not None
+            else None,
+            "hf_session": session_event,
+            "hf_cache_lcp": session_event.get("lcp"),
+            "hf_cache_cached_len_before": session_event.get("cached_len_before"),
+            "hf_cache_new_len": session_event.get("new_len"),
+            "hf_cache_delta_len": session_event.get("delta_len"),
+            "hf_cache_resume_len": session_event.get("resume_len"),
+            "hf_cache_diverged": session_event.get("diverged"),
+            "hf_cache_replayed_last_token": session_event.get("replayed_last_token"),
+        }
 
-        def run_generate() -> tuple[str, list[int]]:
+        def run_generate() -> tuple[str, list[int], dict[str, Any]]:
             input_tensor = delta_ids.to(self._input_device())
             seed = _generation_seed(self.config.generation_seed, call_idx)
             self._torch.manual_seed(seed)
@@ -1358,13 +1463,24 @@ class HFRecordingProvider(LLMProvider):
                 top_k=top_k,
                 repetition_penalty=repetition_penalty,
             )
+            max_new_tokens = max(1, int(max_tokens))
             generation_kwargs: dict[str, Any] = {
                 "input_ids": input_tensor,
-                "max_new_tokens": max(1, int(max_tokens)),
+                "max_new_tokens": max_new_tokens,
                 "do_sample": bool(generation_meta["do_sample"]),
                 "return_dict_in_generate": False,
                 "pad_token_id": self.tokenizer.eos_token_id,
             }
+            generation_meta.update(
+                {
+                    "call_idx": call_idx,
+                    "prompt_tokens": input_token_count,
+                    "input_delta_tokens": int(delta_ids.shape[-1]),
+                    "max_new_tokens": max_new_tokens,
+                    "used_session_cache": bool(used_session_cache),
+                    "session": dict(self._last_session_event or {}),
+                }
+            )
             if temperature > 0:
                 generation_kwargs["temperature"] = float(temperature)
             if top_p is not None:
@@ -1419,6 +1535,16 @@ class HFRecordingProvider(LLMProvider):
                 delta_len = int(delta_ids.shape[-1])
                 logical_kv_len = int(prompt_ids.shape[-1]) - delta_len
                 mask_len = phys_kv_len + delta_len
+                generation_meta.update(
+                    {
+                        "physical_kv_len": int(phys_kv_len),
+                        "logical_kv_len": int(logical_kv_len),
+                        "delta_len": int(delta_len),
+                        "attention_mask_len": int(mask_len),
+                        "cache_position_start": int(logical_kv_len),
+                        "cache_position_end_exclusive": int(logical_kv_len + delta_len),
+                    }
+                )
                 generation_kwargs["attention_mask"] = self._torch.ones(
                     (1, mask_len), dtype=self._torch.long
                 ).to(self._input_device())
@@ -1552,6 +1678,8 @@ class HFRecordingProvider(LLMProvider):
                     output_ids = (
                         sequences[0, input_token_count:].detach().cpu().tolist()
                     )
+                generation_meta["output_tokens"] = len(output_ids)
+                generation_meta["hit_max_new_tokens"] = len(output_ids) >= max_new_tokens
                 if record_artifacts:
                     self.capturer.flush(output_token_ids=output_ids)
             if isinstance(self._session_cache, BaseEvictionCache):
@@ -1564,8 +1692,9 @@ class HFRecordingProvider(LLMProvider):
             if self.capturer is not None:
                 self.capturer.set_sparse_recorder(None)
             text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+            generation_meta["output_text_chars"] = len(text)
             self._extend_session_tokens(prompt_ids=prompt_ids, output_ids=output_ids)
-            return text, output_ids
+            return text, output_ids, generation_meta
 
         # Pre-clear is defensive against fragmentation accumulated by the
         # previous chat; the next chat's pre-clear will sweep what THIS chat
@@ -1574,14 +1703,26 @@ class HFRecordingProvider(LLMProvider):
         # ~50-200ms / call on 30B-A3B FP8).
         self._clear_cuda_cache()
         try:
-            text, output_ids = await asyncio.to_thread(run_generate)
+            text, output_ids, generation_meta = await asyncio.to_thread(run_generate)
         except Exception:
             _LOG.exception("local HF generation failed; dropping session cache")
             self._drop_session_cache()
             self._clear_cuda_cache()
             raise
         content, tool_calls = parse_text_tool_calls(text)
+        malformed_tool_output = _looks_like_malformed_tool_output(text, tool_calls)
         elapsed_ms = (time.time() - started_at) * 1000.0
+        hf_trace_extra.update(
+            {
+                "hf_generation": generation_meta,
+                "hf_generate_wall_ms": generation_meta.get("generate_wall_ms"),
+                "hf_output_token_count": len(output_ids),
+                "hf_hit_max_new_tokens": bool(generation_meta.get("hit_max_new_tokens")),
+                "hf_tool_call_count": len(tool_calls),
+                "hf_malformed_tool_output": bool(malformed_tool_output),
+                "hf_finish_reason_inferred": "tool_calls" if tool_calls else "stop",
+            }
+        )
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
@@ -1595,6 +1736,7 @@ class HFRecordingProvider(LLMProvider):
                 "llm_wall_ts_end": time.time(),
                 "llm_call_time_ms": elapsed_ms,
                 "llm_timing_source": "hf_recording_generate_wall_ms",
+                **hf_trace_extra,
             },
         )
 

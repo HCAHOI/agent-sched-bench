@@ -36,6 +36,7 @@ from serving.recording.backend_hf import (
     _generation_metadata,
     _generation_seed,
     _longest_common_prefix,
+    _looks_like_malformed_tool_output,
     _synchronize_cuda_devices,
 )
 from serving.recording.recording import RecordingConfig
@@ -103,6 +104,7 @@ def _build_provider(
     provider._session_cache = None
     provider._session_token_ids = None
     provider._session_history = []
+    provider._last_session_event = None
     provider._message_first_seen = []
     provider._attention_bus = AttentionBus()
     provider.model = _StubModel()
@@ -144,6 +146,14 @@ def test_synchronize_cuda_devices_targets_each_visible_device() -> None:
     _synchronize_cuda_devices(fake_torch)
 
     assert fake_torch.cuda.synced == [0, 1]
+
+
+def test_malformed_tool_output_detector_is_telemetry_only() -> None:
+    assert _looks_like_malformed_tool_output("<function=read_file>\n<parameter=path>", [])
+    assert not _looks_like_malformed_tool_output("Task complete.", [])
+    assert not _looks_like_malformed_tool_output(
+        "<function=read_file>", [SimpleNamespace(name="read_file")]
+    )
 
 
 def test_generation_metadata_records_resolved_sampling_params() -> None:
@@ -326,6 +336,9 @@ def test_single_chat_equivalent_to_legacy() -> None:
             "diverged": False,
         }
     ]
+    assert provider._last_session_event is not None
+    assert provider._last_session_event["cache_state_after"]["cache_type"] == "RandomEvictCache"
+    assert provider._last_session_event["cache_state_after"]["logical_token_ids_len"] == 5
 
 
 def test_no_eviction_still_builds_session_cache() -> None:
@@ -561,6 +574,7 @@ def test_start_attempt_resets_session_cache_between_attempts(tmp_path: Path) -> 
     assert provider._session_cache is None
     assert provider._session_token_ids is None
     assert provider._session_history == []
+    assert provider._last_session_event is None
     assert provider._message_first_seen == []
 
     prompt_2 = torch.tensor([[1, 2, 3, 10, 11]], dtype=torch.long)
