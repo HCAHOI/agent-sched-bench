@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 import uuid
@@ -25,8 +24,8 @@ from agents.openclaw.bus.queue import MessageBus
 from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 from agents.openclaw.providers.base import LLMProvider
 
-class _SubagentHook(AgentHook):
 
+class _SubagentHook(AgentHook):
     def __init__(self, task_id: str) -> None:
         self._task_id = task_id
 
@@ -40,8 +39,8 @@ class _SubagentHook(AgentHook):
                 args_str,
             )
 
-class SubagentManager:
 
+class SubagentManager:
     def __init__(
         self,
         provider: LLMProvider,
@@ -54,6 +53,7 @@ class SubagentManager:
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
         malformed_retry_budget: int | None = None,
+        skills_dir: Path | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -65,6 +65,7 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self.malformed_retry_budget = malformed_retry_budget
+        self.skills_dir = skills_dir
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
@@ -279,7 +280,9 @@ Tools like 'read_file' and 'web_fetch' can return native image content. Read vis
 {self.workspace}"""
         ]
 
-        skills_summary = SkillsLoader(self.workspace).build_skills_summary()
+        skills_summary = SkillsLoader(
+            self.workspace, skills_dir=self.skills_dir
+        ).build_skills_summary()
         if skills_summary:
             parts.append(
                 f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}"

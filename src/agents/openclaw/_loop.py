@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -50,7 +49,6 @@ except NameError:  # Python 3.10 uses the exceptiongroup backport.
 
 
 class _LoopHook(AgentHook):
-
     def __init__(
         self,
         agent_loop: AgentLoop,
@@ -120,8 +118,8 @@ class _LoopHook(AgentHook):
     ) -> str | None:
         return self._loop._strip_think(content)
 
-class _LoopHookChain(AgentHook):
 
+class _LoopHookChain(AgentHook):
     __slots__ = ("_primary", "_extras")
 
     def __init__(self, primary: AgentHook, extra_hooks: list[AgentHook]) -> None:
@@ -157,6 +155,7 @@ class _LoopHookChain(AgentHook):
         content = self._primary.finalize_content(context, content)
         return self._extras.finalize_content(context, content)
 
+
 class AgentLoop:
     """Coordinate session state, model calls, and tool execution."""
 
@@ -181,6 +180,10 @@ class AgentLoop:
         exec_config: ExecToolConfig | None = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
+        session_dir: Path | None = None,
+        memory_dir: Path | None = None,
+        skills_dir: Path | None = None,
+        tool_results_dir: Path | None = None,
         mcp_servers: dict | None = None,
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
@@ -232,8 +235,14 @@ class AgentLoop:
             workspace,
             timezone=timezone,
             project_workspace=self.project_workspace,
+            memory_dir=memory_dir,
+            skills_dir=skills_dir,
         )
-        self.sessions = session_manager or SessionManager(workspace)
+        self.sessions = session_manager or SessionManager(
+            workspace, storage_dir=session_dir
+        )
+        self.tool_results_dir = tool_results_dir
+        self.skills_dir = skills_dir
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
         self.subagents = SubagentManager(
@@ -247,6 +256,7 @@ class AgentLoop:
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             malformed_retry_budget=self.malformed_retry_budget,
+            skills_dir=skills_dir,
         )
 
         self._running = False
@@ -270,6 +280,7 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
+            memory_dir=memory_dir,
         )
         self._register_default_tools()
 
@@ -410,6 +421,7 @@ class AgentLoop:
                 error_message="Sorry, I encountered an error calling the AI model.",
                 concurrent_tools=True,
                 workspace=self.workspace,
+                tool_results_dir=self.tool_results_dir,
                 session_key=session.key if session else None,
                 context_window_tokens=self.context_window_tokens,
                 context_block_limit=self.context_block_limit,

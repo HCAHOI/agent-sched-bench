@@ -177,9 +177,22 @@ class SWEBenchRunner:
         ws = task.workspace_dir
         ws.mkdir(parents=True, exist_ok=True)
 
-        effective_trace_file = trace_file or (ws / "trace.jsonl")
+        # Trace output must NOT default into the target checkout. When a caller
+        # omits ``trace_file``, derive a path sibling to (not inside) the task
+        # workspace so runtime artifacts never contaminate a git-tracked repo.
+        if trace_file is not None:
+            effective_trace_file = Path(trace_file)
+        else:
+            logger.warning(
+                "SWEBenchRunner.run_task called without trace_file; deriving a "
+                "non-workspace default sibling to the task workspace. Pass an "
+                "explicit attempt trace path outside the checkout for collection."
+            )
+            effective_trace_file = ws.parent / f"{ws.name}-openclaw-trace.jsonl"
         effective_tool_workspace = tool_workspace or ws
         effective_project_workspace = effective_tool_workspace
+        # Runtime dir sits next to the trace file, outside the target checkout.
+        effective_runtime_dir = effective_trace_file.parent / "openclaw-runtime"
 
         prompt_text = self._build_swe_bench_prompt(
             task.problem_statement, prompt_template=prompt_template
@@ -192,6 +205,7 @@ class SWEBenchRunner:
             project_workspace=effective_project_workspace,
             session_key=session_key,
             trace_file=effective_trace_file,
+            runtime_dir=effective_runtime_dir,
             instance_id=task.instance_id,
             channel="cli",
             prepare_ms=None,

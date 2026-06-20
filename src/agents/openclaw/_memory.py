@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import weakref
 from datetime import datetime
 from pathlib import Path
@@ -77,13 +78,31 @@ def _is_tool_choice_unsupported(content: str | None) -> bool:
     return any(m in text for m in _TOOL_CHOICE_ERROR_MARKERS)
 
 
+def _default_memory_dir() -> Path:
+    """Last-resort memory dir for direct MemoryStore construction.
+
+    Returns a non-workspace, user-level path. Eval/CLI paths never hit this —
+    they pass an explicit ``storage_dir`` derived from ``runtime_dir``. The
+    fallback only ensures direct ``MemoryStore(workspace)`` construction does
+    not contaminate the workspace.
+    """
+    explicit = os.environ.get("OPENCLAW_MEMORY_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home).expanduser() / "openclaw" / "memory"
+    return Path.home() / ".local" / "state" / "openclaw" / "memory"
+
+
 class MemoryStore:
     """Two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log)."""
 
     _MAX_FAILURES_BEFORE_RAW_ARCHIVE = 3
 
-    def __init__(self, workspace: Path):
-        self.memory_dir = ensure_dir(workspace / "memory")
+    def __init__(self, workspace: Path, *, storage_dir: Path | None = None):
+        del workspace  # runtime memory must not be stored in the task workspace
+        self.memory_dir = ensure_dir(storage_dir or _default_memory_dir())
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
         self._consecutive_failures = 0
@@ -253,8 +272,9 @@ class MemoryConsolidator:
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
+        memory_dir: Path | None = None,
     ):
-        self.store = MemoryStore(workspace)
+        self.store = MemoryStore(workspace, storage_dir=memory_dir)
         self.provider = provider
         self.model = model
         self.sessions = sessions

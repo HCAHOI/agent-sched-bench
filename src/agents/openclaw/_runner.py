@@ -36,6 +36,7 @@ _DEFAULT_MAX_ITERATIONS_MESSAGE = (
 )
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
 
+
 def _looks_like_malformed_tool_call(content: str | None) -> bool:
     if not content:
         return False
@@ -64,6 +65,8 @@ def _malformed_tool_call_feedback(tools: ToolRegistry) -> str:
         "</tool_call>\n"
         "Do not omit the <tool_call> wrapper."
     )
+
+
 _SNIP_SAFETY_BUFFER = 1024
 _INTERNAL_MESSAGE_ID_KEY = "_openclaw_message_id"
 
@@ -117,6 +120,7 @@ class AgentRunSpec:
     concurrent_tools: bool = False
     fail_on_tool_error: bool = False
     workspace: Path | None = None
+    tool_results_dir: Path | None = None
     session_key: str | None = None
     context_window_tokens: int | None = None
     context_block_limit: int | None = None
@@ -271,9 +275,8 @@ class AgentRunner:
                 await hook.after_iteration(context)
                 continue
 
-            if (
-                response.finish_reason != "error"
-                and _looks_like_malformed_tool_call(response.content)
+            if response.finish_reason != "error" and _looks_like_malformed_tool_call(
+                response.content
             ):
                 input_hash = hash(
                     json.dumps(messages_for_model, sort_keys=True, default=str)
@@ -658,7 +661,9 @@ class AgentRunner:
         context: AgentHookContext,
         messages: list[dict[str, Any]],
     ) -> None:
-        context.messages = AgentRunner._strip_internal_message_ids_from_messages(messages)
+        context.messages = AgentRunner._strip_internal_message_ids_from_messages(
+            messages
+        )
 
     @staticmethod
     def _strip_internal_message_id(message: dict[str, Any]) -> dict[str, Any]:
@@ -693,7 +698,9 @@ class AgentRunner:
                 for item in completed
             ]
         messages = clean.get("messages")
-        if isinstance(messages, list) and all(isinstance(item, dict) for item in messages):
+        if isinstance(messages, list) and all(
+            isinstance(item, dict) for item in messages
+        ):
             clean["messages"] = AgentRunner._strip_internal_message_ids_from_messages(
                 messages
             )
@@ -726,10 +733,10 @@ class AgentRunner:
         result = ensure_nonempty_tool_result(tool_name, result)
         try:
             content = maybe_persist_tool_result(
-                spec.workspace,
-                spec.session_key,
-                tool_call_id,
-                result,
+                tool_results_dir=spec.tool_results_dir,
+                session_key=spec.session_key,
+                tool_call_id=tool_call_id,
+                content=result,
                 max_chars=spec.max_tool_result_chars,
             )
         except Exception as exc:

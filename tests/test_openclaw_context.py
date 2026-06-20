@@ -25,9 +25,25 @@ def test_context_builder_uses_project_workspace_for_prompt_identity(
     ).build_system_prompt()
 
     assert f"Your workspace is at: {project_workspace.resolve()}" in prompt
-    assert f"Agent state directory: {state_workspace.resolve()}" in prompt
-    assert (
-        f"Long-term memory: {state_workspace.resolve()}/memory/MEMORY.md"
-        in prompt
-    )
+    assert f"Agent state workspace: {state_workspace.resolve()}" in prompt
+    # Runtime memory/skills are managed by the agent runtime; the prompt must
+    # not instruct the model to create memory or skill directories in the task
+    # workspace (workspace-local runtime state is deprecated).
+    assert "memory/MEMORY.md" not in prompt
+    assert "memory/HISTORY.md" not in prompt
+    assert "Custom skills:" not in prompt
     assert "project instructions" in prompt
+
+
+def test_context_builder_does_not_instruct_workspace_memory_creation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    prompt = ContextBuilder(workspace).build_system_prompt()
+    # No instructional lines pointing the model at workspace memory/skills paths.
+    assert "memory/MEMORY.md" not in prompt
+    assert "memory/HISTORY.md" not in prompt
+    assert "Custom skills:" not in prompt
+    # The prompt should state memory is runtime-managed, not workspace-written.
+    assert "runtime" in prompt.lower()

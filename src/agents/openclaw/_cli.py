@@ -131,6 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--runtime-dir",
+        default=None,
+        help=(
+            "Canonical OpenClaw runtime directory (sessions, memory, skills, "
+            "tool-results, async prompts/pids/logs). Default: "
+            "<trace-output parent>/runtime. Must be outside evaluated target "
+            "repos; choosing a path inside the workspace is an explicit opt-in."
+        ),
+    )
+    parser.add_argument(
         "--mcp-config",
         default=None,
         help="Optional MCP config YAML passed through to the OpenClaw session runner.",
@@ -273,6 +283,20 @@ def _resolve_trace_output(
     )
 
 
+def _resolve_runtime_dir(args: argparse.Namespace, trace_file: Path) -> Path:
+    """Resolve the canonical runtime dir for CLI invocations.
+
+    Resolution order: ``--runtime-dir`` > ``OPENCLAW_RUNTIME_DIR`` >
+    ``<trace-output parent>/runtime``. The result is outside the task workspace
+    by default, keeping sessions/memory/skills/tool-results/async state from
+    contaminating a git-tracked target repo.
+    """
+    explicit = args.runtime_dir or os.environ.get("OPENCLAW_RUNTIME_DIR")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return (trace_file.parent / "runtime").resolve()
+
+
 def _load_prompt(args: argparse.Namespace) -> str:
     if args.prompt_file:
         prompt_path = Path(args.prompt_file).expanduser()
@@ -293,14 +317,14 @@ def _load_prompt(args: argparse.Namespace) -> str:
 def _materialize_daemon_prompt_file(
     args: argparse.Namespace,
     *,
-    workspace: Path,
+    runtime_dir: Path,
     session_id: str,
 ) -> Path:
     prompt = _load_prompt(args)
     if args.prompt_file:
         return Path(args.prompt_file).expanduser().resolve()
 
-    prompt_dir = workspace / ".openclaw" / "prompts"
+    prompt_dir = runtime_dir / "prompts"
     prompt_dir.mkdir(parents=True, exist_ok=True)
     prompt_file = prompt_dir / f"{session_id}.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
@@ -349,9 +373,11 @@ def _run_sync(args: argparse.Namespace) -> int:
     )
 
     trace_file = _resolve_trace_output(args, session_id, llm_config.model)
+    runtime_dir = _resolve_runtime_dir(args, trace_file)
     # mkdir deferred to SessionRunner — avoids leaving empty dirs on early exit
     if not is_daemon:
         print(f"Trace: {trace_file}", file=sys.stderr)
+        print(f"Runtime: {runtime_dir}", file=sys.stderr)
 
     runner = SessionRunner(
         provider,
@@ -374,6 +400,7 @@ def _run_sync(args: argparse.Namespace) -> int:
                 workspace=workspace,
                 session_key=session_key,
                 trace_file=trace_file,
+                runtime_dir=runtime_dir,
             )
         )
     except KeyboardInterrupt:
@@ -428,22 +455,24 @@ def _run_async(args: argparse.Namespace) -> int:
     session_id = args.session_id or f"oc-{uuid.uuid4().hex[:8]}"
     workspace = Path(args.workspace).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
+
+    trace_file = _resolve_trace_output(args, session_id, llm_config.model)
+    runtime_dir = _resolve_runtime_dir(args, trace_file)
+    # mkdir deferred to daemon's SessionRunner — avoids empty dirs if spawn fails
+
     try:
         prompt_file = _materialize_daemon_prompt_file(
             args,
-            workspace=workspace,
+            runtime_dir=runtime_dir,
             session_id=session_id,
         )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    pid_dir = workspace / ".openclaw" / "pids"
+    pid_dir = runtime_dir / "pids"
     pid_dir.mkdir(parents=True, exist_ok=True)
     pid_file = pid_dir / f"{session_id}.pid"
-
-    trace_file = _resolve_trace_output(args, session_id, llm_config.model)
-    # mkdir deferred to daemon's SessionRunner — avoids empty dirs if spawn fails
 
     cmd = [
         sys.executable,
@@ -474,6 +503,8 @@ def _run_async(args: argparse.Namespace) -> int:
         session_id,
         "--trace-output",
         str(trace_file),
+        "--runtime-dir",
+        str(runtime_dir),
     ]
     if args.top_p is not None:
         cmd.extend(["--top-p", str(args.top_p)])
@@ -490,6 +521,7 @@ def _run_async(args: argparse.Namespace) -> int:
         session_id,
         extra_env={llm_config.env_key: llm_config.api_key},
         trace_file=trace_file,
+        runtime_dir=runtime_dir,
     )
 
     result = {
@@ -497,6 +529,7 @@ def _run_async(args: argparse.Namespace) -> int:
         "pid": pid,
         "pid_file": str(pid_file),
         "workspace": str(workspace),
+        "runtime_dir": str(runtime_dir),
         "trace_file": str(trace_file),
     }
     print(json.dumps(result, indent=2))
@@ -510,8 +543,21 @@ def _run_status(args: argparse.Namespace) -> int:
         print("ERROR: --status requires --session-id.", file=sys.stderr)
         return 1
 
-    workspace = Path(args.workspace).expanduser().resolve()
-    status = get_session_status(args.session_id, workspace)
+    # PID files now live under <runtime_dir>/pids (outside the workspace), so
+    # status resolution needs the same runtime dir used at launch time. Require
+    # an explicit --runtime-dir / OPENCLAW_RUNTIME_DIR rather than guessing a
+    # trace-adjacent default that depends on the launch-time model/timestamp.
+    explicit = args.runtime_dir or os.environ.get("OPENCLAW_RUNTIME_DIR")
+    if not explicit:
+        print(
+            "ERROR: --status requires --runtime-dir (or OPENCLAW_RUNTIME_DIR) "
+            "matching the launch invocation, because PID files no longer live "
+            "under the workspace.",
+            file=sys.stderr,
+        )
+        return 1
+    runtime_dir = Path(explicit).expanduser().resolve()
+    status = get_session_status(args.session_id, runtime_dir)
     print(json.dumps(status, indent=2))
     return 0
 

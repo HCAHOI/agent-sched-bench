@@ -1,4 +1,3 @@
-
 import json
 import os
 import re
@@ -7,16 +6,27 @@ from pathlib import Path
 
 BUILTIN_SKILLS_DIR = Path(__file__).parent / "skills"
 
+
 class SkillsLoader:
-    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
-        self.workspace = workspace
-        self.workspace_skills = workspace / "skills"
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        skills_dir: Path | None = None,
+        builtin_skills_dir: Path | None = None,
+    ):
+        # ``workspace`` is retained for API compatibility but is no longer used
+        # to read or create skills. Runtime/user skills live under ``skills_dir``
+        # (typically <runtime_dir>/skills); workspace-local skills are deprecated
+        # to avoid contaminating target repositories during evaluation.
+        del workspace
+        self.workspace_skills = Path(skills_dir) if skills_dir is not None else None
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self._event_callback = None
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         skills = []
-        if self.workspace_skills.exists():
+        if self.workspace_skills is not None and self.workspace_skills.exists():
             for skill_dir in self.workspace_skills.iterdir():
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
@@ -25,7 +35,7 @@ class SkillsLoader:
                             {
                                 "name": skill_dir.name,
                                 "path": str(skill_file),
-                                "source": "workspace",
+                                "source": "runtime",
                             }
                         )
 
@@ -53,11 +63,12 @@ class SkillsLoader:
         return skills
 
     def load_skill(self, name: str) -> str | None:
-        workspace_skill = self.workspace_skills / name / "SKILL.md"
-        if workspace_skill.exists():
-            content = workspace_skill.read_text(encoding="utf-8")
-            self._emit_skill_loaded(name, source="workspace")
-            return content
+        if self.workspace_skills is not None:
+            runtime_skill = self.workspace_skills / name / "SKILL.md"
+            if runtime_skill.exists():
+                content = runtime_skill.read_text(encoding="utf-8")
+                self._emit_skill_loaded(name, source="runtime")
+                return content
 
         if self.builtin_skills:
             builtin_skill = self.builtin_skills / name / "SKILL.md"

@@ -1,4 +1,3 @@
-
 import base64
 import json
 import re
@@ -12,11 +11,13 @@ from typing import Any
 import tiktoken
 from loguru import logger
 
+
 def strip_think(text: str) -> str:
     """Remove <think>…</think> blocks and any unclosed trailing <think> tag."""
     text = re.sub(r"<think>[\s\S]*?</think>", "", text)
     text = re.sub(r"<think>[\s\S]*$", "", text)
     return text.strip()
+
 
 def detect_image_mime(data: bytes) -> str | None:
     if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -28,6 +29,7 @@ def detect_image_mime(data: bytes) -> str | None:
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return None
+
 
 def build_image_content_blocks(
     raw: bytes, mime: str, path: str, label: str
@@ -42,12 +44,15 @@ def build_image_content_blocks(
         {"type": "text", "text": label},
     ]
 
+
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
+
 def timestamp() -> str:
     return datetime.now().isoformat()
+
 
 def current_time_str(timezone: str | None = None) -> str:
     from zoneinfo import ZoneInfo
@@ -63,22 +68,27 @@ def current_time_str(timezone: str | None = None) -> str:
     tz_name = timezone or (time.strftime("%Z") or "UTC")
     return f"{now.strftime('%Y-%m-%d %H:%M (%A)')} ({tz_name}, UTC{offset_fmt})"
 
+
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
 _TOOL_RESULT_PREVIEW_CHARS = 1200
-_TOOL_RESULTS_DIR = ".nanobot/tool-results"
+_TOOL_RESULTS_SUBDIR = "tool-results"
 _TOOL_RESULT_RETENTION_SECS = 7 * 24 * 60 * 60
 _TOOL_RESULT_MAX_BUCKETS = 32
+
 
 def safe_filename(name: str) -> str:
     return _UNSAFE_CHARS.sub("_", name).strip()
 
+
 def image_placeholder_text(path: str | None, *, empty: str = "[image]") -> str:
     return f"[image: {path}]" if path else empty
+
 
 def truncate_text(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n... (truncated)"
+
 
 def find_legal_message_start(messages: list[dict[str, Any]]) -> int:
     declared: set[str] = set()
@@ -101,6 +111,7 @@ def find_legal_message_start(messages: list[dict[str, Any]]) -> int:
                                 declared.add(str(tc["id"]))
     return start
 
+
 def stringify_text_blocks(content: list[dict[str, Any]]) -> str | None:
     parts: list[str] = []
     for block in content:
@@ -113,6 +124,7 @@ def stringify_text_blocks(content: list[dict[str, Any]]) -> str | None:
             return None
         parts.append(text)
     return "\n".join(parts)
+
 
 def _render_tool_result_reference(
     filepath: Path,
@@ -131,11 +143,13 @@ def _render_tool_result_reference(
         result += "\n...\n(Read the saved file if you need the full output.)"
     return result
 
+
 def _bucket_mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
     except OSError:
         return 0.0
+
 
 def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
     siblings = [
@@ -153,6 +167,7 @@ def _cleanup_tool_result_buckets(root: Path, current_bucket: Path) -> None:
     for path in siblings[keep:]:
         shutil.rmtree(path, ignore_errors=True)
 
+
 def _write_text_atomic(path: Path, content: str) -> None:
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -162,16 +177,23 @@ def _write_text_atomic(path: Path, content: str) -> None:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
 
+
 def maybe_persist_tool_result(
-    workspace: Path | None,
+    *,
+    tool_results_dir: Path | None,
     session_key: str | None,
     tool_call_id: str,
     content: Any,
-    *,
     max_chars: int,
 ) -> Any:
-    """Persist oversized tool output and replace it with a reference string."""
-    if workspace is None or max_chars <= 0:
+    """Persist oversized tool output and replace it with a reference string.
+
+    Spill files are written under ``<tool_results_dir>/tool-results/`` (a
+    runtime dir outside the task workspace) so they never contaminate a
+    git-tracked target repo. When ``tool_results_dir`` is ``None``, the raw
+    content is returned untouched.
+    """
+    if tool_results_dir is None or max_chars <= 0:
         return content
 
     text_payload: str | None = None
@@ -189,7 +211,7 @@ def maybe_persist_tool_result(
     if len(text_payload) <= max_chars:
         return content
 
-    root = ensure_dir(workspace / _TOOL_RESULTS_DIR)
+    root = ensure_dir(tool_results_dir / _TOOL_RESULTS_SUBDIR)
     bucket = ensure_dir(root / safe_filename(session_key or "default"))
     try:
         _cleanup_tool_result_buckets(root, bucket)
@@ -209,6 +231,7 @@ def maybe_persist_tool_result(
         preview=preview,
         truncated_preview=len(text_payload) > _TOOL_RESULT_PREVIEW_CHARS,
     )
+
 
 def split_message(content: str, max_len: int = 2000) -> list[str]:
     """Split content into chunks within ``max_len``, preferring line breaks."""
@@ -231,6 +254,7 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
         content = content[pos:].lstrip()
     return chunks
 
+
 def build_assistant_message(
     content: str | None,
     tool_calls: list[dict[str, Any]] | None = None,
@@ -248,6 +272,7 @@ def build_assistant_message(
     if thinking_blocks:
         msg["thinking_blocks"] = thinking_blocks
     return msg
+
 
 def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
@@ -293,6 +318,7 @@ def estimate_prompt_tokens(
     except Exception:
         return 0
 
+
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
     content = message.get("content")
@@ -330,6 +356,7 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     except Exception:
         return max(4, len(payload) // 4 + 4)
 
+
 def estimate_prompt_tokens_chain(
     provider: Any,
     model: str | None,
@@ -350,6 +377,7 @@ def estimate_prompt_tokens_chain(
     if estimated > 0:
         return int(estimated), "tiktoken"
     return 0, "none"
+
 
 def build_status_content(
     *,
@@ -393,8 +421,23 @@ def build_status_content(
         ]
     )
 
-def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
-    """Sync bundled templates to workspace. Only creates missing files."""
+
+def sync_workspace_templates(
+    workspace: Path,
+    silent: bool = False,
+    *,
+    runtime_dir: Path | None = None,
+    scaffold_runtime: bool = False,
+) -> list[str]:
+    """Sync bundled templates to workspace. Only creates missing files.
+
+    Bootstrap ``.md`` files (AGENTS.md, SOUL.md, TOOLS.md) are written to the
+    task workspace because they are part of the task contract. Runtime-owned
+    state (``memory/`` MEMORY/HISTORY and ``skills/``) is written to
+    ``runtime_dir`` only — never to the task workspace — to avoid contaminating
+    git-tracked target repositories. Pass ``scaffold_runtime=True`` with a
+    ``runtime_dir`` to create those runtime templates.
+    """
     from importlib.resources import files as pkg_files
 
     try:
@@ -418,9 +461,12 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     for item in tpl.iterdir():
         if item.name.endswith(".md") and not item.name.startswith("."):
             _write(item, workspace / item.name)
-    _write(tpl / "memory" / "MEMORY.md", workspace / "memory" / "MEMORY.md")
-    _write(None, workspace / "memory" / "HISTORY.md")
-    (workspace / "skills").mkdir(exist_ok=True)
+
+    if scaffold_runtime and runtime_dir is not None:
+        memory_dir = runtime_dir / "memory"
+        _write_to(tpl / "memory" / "MEMORY.md", memory_dir / "MEMORY.md")
+        _write_to(None, memory_dir / "HISTORY.md")
+        (runtime_dir / "skills").mkdir(exist_ok=True)
 
     if added and not silent:
         from rich.console import Console
@@ -428,3 +474,10 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         for name in added:
             Console().print(f"  [dim]Created {name}[/dim]")
     return added
+
+
+def _write_to(src, dest: Path) -> None:
+    if dest.exists():
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")

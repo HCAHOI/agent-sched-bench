@@ -727,11 +727,25 @@ class SessionRunner:
         project_workspace: Path | None = None,
         session_key: str,
         trace_file: Path,
+        runtime_dir: Path | None = None,
         instance_id: str | None = None,
         channel: str = "cli",
         prepare_ms: float | None = None,
     ) -> SessionRunResult:
         workspace.mkdir(parents=True, exist_ok=True)
+        trace_file = Path(trace_file)
+        # Canonical runtime dir: explicit > trace-adjacent. All runtime state
+        # (sessions, memory, skills, tool-results) lives under it, outside the
+        # task/tool workspace, so it never contaminates a git-tracked target repo.
+        effective_runtime_dir = (
+            Path(runtime_dir)
+            if runtime_dir is not None
+            else trace_file.parent / "runtime"
+        )
+        effective_session_dir = effective_runtime_dir / "sessions"
+        effective_memory_dir = effective_runtime_dir / "memory"
+        effective_skills_dir = effective_runtime_dir / "skills"
+        effective_tool_results_dir = effective_runtime_dir / "tool-results"
         iid = instance_id or session_key
 
         trace_hook = TraceCollectorHook(trace_file, iid, agent_id=iid, task_id=iid)
@@ -744,6 +758,11 @@ class SessionRunner:
             "model": self.model,
             "instance_id": iid,
             "session_key": session_key,
+            "runtime_dir": str(effective_runtime_dir),
+            "session_dir": str(effective_session_dir),
+            "memory_dir": str(effective_memory_dir),
+            "skills_dir": str(effective_skills_dir),
+            "tool_results_dir": str(effective_tool_results_dir),
             "max_iterations": self.max_iterations,
             "scaffold_capabilities": {
                 "tools": self._scaffold_tools(),
@@ -756,7 +775,7 @@ class SessionRunner:
 
         bus = MessageBus()
         collector = ResultCollector(bus)
-        session_manager = SessionManager(workspace)
+        session_manager = SessionManager(workspace, storage_dir=effective_session_dir)
 
         all_hooks: list[AgentHook] = [trace_hook, *self.extra_hooks]
         agent = AgentLoop(
@@ -772,6 +791,10 @@ class SessionRunner:
             exec_config=self.exec_config,
             mcp_servers=self.mcp_servers,
             session_manager=session_manager,
+            session_dir=effective_session_dir,
+            memory_dir=effective_memory_dir,
+            skills_dir=effective_skills_dir,
+            tool_results_dir=effective_tool_results_dir,
             hooks=all_hooks,
             malformed_retry_budget=self.malformed_retry_budget,
         )

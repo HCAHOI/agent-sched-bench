@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+
 def write_pid_file(
     pid_file: Path,
     pid: int,
@@ -31,6 +32,7 @@ def write_pid_file(
         data["trace_file"] = str(trace_file)
     pid_file.write_text(json.dumps(data) + "\n", encoding="utf-8")
 
+
 def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
     if not pid_file.exists():
         return None
@@ -39,14 +41,23 @@ def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError):
         return None
 
+
 def cleanup_pid_file(pid_file: Path) -> None:
     try:
         pid_file.unlink(missing_ok=True)
     except OSError:
         pass
 
-def pid_file_for_session(workspace: Path, session_id: str) -> Path:
-    return workspace / ".openclaw" / "pids" / f"{session_id}.pid"
+
+def pid_file_for_session(runtime_dir: Path, session_id: str) -> Path:
+    """Return the PID file path for a session under ``runtime_dir``.
+
+    ``runtime_dir`` is the canonical OpenClaw runtime directory (outside the
+    task workspace). Historically this was derived from the workspace; it now
+    uses ``<runtime_dir>/pids`` so PID files never contaminate a target repo.
+    """
+    return runtime_dir / "pids" / f"{session_id}.pid"
+
 
 def _is_pid_alive(pid: int) -> bool:
     try:
@@ -55,6 +66,7 @@ def _is_pid_alive(pid: int) -> bool:
     except (OSError, ProcessLookupError):
         return False
 
+
 def spawn_daemon(
     cmd: list[str],
     pid_file: Path,
@@ -62,9 +74,18 @@ def spawn_daemon(
     *,
     extra_env: dict[str, str] | None = None,
     trace_file: Path | None = None,
+    runtime_dir: Path | None = None,
 ) -> int:
-    """Spawn a detached daemon process and write its PID file."""
-    log_dir = pid_file.parent.parent / "logs"
+    """Spawn a detached daemon process and write its PID file.
+
+    Daemon logs are written under ``<runtime_dir>/logs`` when ``runtime_dir`` is
+    supplied; otherwise they fall back to a sibling ``logs`` dir next to the PID
+    file (kept for direct callers that only pass a pid_file).
+    """
+    if runtime_dir is not None:
+        log_dir = runtime_dir / "logs"
+    else:
+        log_dir = pid_file.parent.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{session_id}.log"
 
@@ -85,9 +106,14 @@ def spawn_daemon(
     write_pid_file(pid_file, proc.pid, session_id, trace_file=trace_file)
     return proc.pid
 
-def get_session_status(session_id: str, workspace: Path) -> dict[str, Any]:
-    """Get the current status of a session."""
-    pid_file = pid_file_for_session(workspace, session_id)
+
+def get_session_status(session_id: str, runtime_dir: Path) -> dict[str, Any]:
+    """Get the current status of a session.
+
+    ``runtime_dir`` is the canonical OpenClaw runtime directory (outside the
+    task workspace) where PID files live under ``<runtime_dir>/pids``.
+    """
+    pid_file = pid_file_for_session(runtime_dir, session_id)
     pid_data = read_pid_file(pid_file)
 
     status: str
@@ -138,7 +164,7 @@ def get_session_status(session_id: str, workspace: Path) -> dict[str, Any]:
         "session_id": session_id,
         "status": status,
         "pid": pid,
-        "workspace": str(workspace),
+        "runtime_dir": str(runtime_dir),
         "trace_file": str(trace_file) if trace_file is not None else None,
         "n_actions": n_actions,
         "n_iterations": n_iterations,

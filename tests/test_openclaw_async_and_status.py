@@ -90,13 +90,18 @@ def test_run_async_forwards_explicit_trace_output(tmp_path: Path) -> None:
 
     captured: dict[str, object] = {}
 
-    def _fake_spawn(cmd, pid_file, session_id, *, extra_env=None, trace_file=None):
+    def _fake_spawn(
+        cmd, pid_file, session_id, *, extra_env=None, trace_file=None, runtime_dir=None
+    ):
         captured["cmd"] = list(cmd)
         captured["trace_file"] = trace_file
+        captured["runtime_dir"] = runtime_dir
         return 12345
 
-    with patch("agents.openclaw._daemon.spawn_daemon", side_effect=_fake_spawn), \
-         patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}):
+    with (
+        patch("agents.openclaw._daemon.spawn_daemon", side_effect=_fake_spawn),
+        patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}),
+    ):
         rc = _run_async(args)
 
     assert rc == 0
@@ -104,6 +109,10 @@ def test_run_async_forwards_explicit_trace_output(tmp_path: Path) -> None:
     assert "--trace-output" in cmd, f"--trace-output missing from daemon argv: {cmd}"
     idx = cmd.index("--trace-output")
     assert cmd[idx + 1] == str(explicit.expanduser().resolve())
+    assert "--runtime-dir" in cmd
+    rt_idx = cmd.index("--runtime-dir")
+    # Default runtime dir is <trace-output parent>/runtime
+    assert cmd[rt_idx + 1] == str((explicit.parent / "runtime").resolve())
     assert "--prompt" not in cmd
     assert "--prompt-file" in cmd
     prompt_path = Path(cmd[cmd.index("--prompt-file") + 1])
@@ -112,6 +121,14 @@ def test_run_async_forwards_explicit_trace_output(tmp_path: Path) -> None:
     # spawn_daemon also receives the absolute trace_file so it can persist
     # the path in the PID metadata for --status to recover later.
     assert captured["trace_file"] == explicit.expanduser().resolve()
+    # Prompt and PID files must live under the runtime dir, NOT the workspace.
+    assert prompt_path.parent.name == "prompts"
+    assert prompt_path.parent.parent == Path(captured["runtime_dir"])
+    pid_path = Path(cmd[cmd.index("--_pid-file") + 1])
+    assert pid_path.parent.name == "pids"
+    assert pid_path.parent.parent == Path(captured["runtime_dir"])
+    # Workspace must not contain any .openclaw runtime dir.
+    assert not (workspace / ".openclaw").exists()
 
 
 def test_run_async_default_trace_output_under_repo_root(tmp_path: Path) -> None:
@@ -123,13 +140,17 @@ def test_run_async_default_trace_output_under_repo_root(tmp_path: Path) -> None:
 
     captured: dict[str, object] = {}
 
-    def _fake_spawn(cmd, pid_file, session_id, *, extra_env=None, trace_file=None):
+    def _fake_spawn(
+        cmd, pid_file, session_id, *, extra_env=None, trace_file=None, runtime_dir=None
+    ):
         captured["cmd"] = list(cmd)
         captured["trace_file"] = trace_file
         return 23456
 
-    with patch("agents.openclaw._daemon.spawn_daemon", side_effect=_fake_spawn), \
-         patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}):
+    with (
+        patch("agents.openclaw._daemon.spawn_daemon", side_effect=_fake_spawn),
+        patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}),
+    ):
         _run_async(args)
 
     cmd = captured["cmd"]
@@ -151,12 +172,16 @@ def test_run_async_forwards_mcp_config(tmp_path: Path) -> None:
 
     captured: dict[str, object] = {}
 
-    def _fake_spawn(cmd, pid_file, session_id, *, extra_env=None, trace_file=None):
+    def _fake_spawn(
+        cmd, pid_file, session_id, *, extra_env=None, trace_file=None, runtime_dir=None
+    ):
         captured["cmd"] = list(cmd)
         return 34567
 
-    with patch("agents.openclaw._daemon.spawn_daemon", side_effect=_fake_spawn), \
-         patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}):
+    with (
+        patch("agents.openclaw._daemon.spawn_daemon", side_effect=_fake_spawn),
+        patch.dict("os.environ", {"OPENROUTER_API_KEY": "fake-key"}),
+    ):
         _run_async(args)
 
     cmd = captured["cmd"]
@@ -219,7 +244,9 @@ def test_run_sync_loads_prompt_file(
     assert captured["prompt"] == "do something from file"
 
 
-def test_run_sync_loads_mcp_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_sync_loads_mcp_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
     trace_output = tmp_path / "out.jsonl"
@@ -246,7 +273,16 @@ def test_run_sync_loads_mcp_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     captured: dict[str, object] = {}
 
     class FakeRunner:
-        def __init__(self, provider, *, model, max_iterations, extra_hooks, mcp_servers, malformed_retry_budget=3):
+        def __init__(
+            self,
+            provider,
+            *,
+            model,
+            max_iterations,
+            extra_hooks,
+            mcp_servers,
+            malformed_retry_budget=3,
+        ):
             captured["mcp_servers"] = mcp_servers
 
         async def run(self, **kwargs):
@@ -272,43 +308,55 @@ def _trace(path: Path, *, n_actions: int, n_iterations: int, elapsed_s: float) -
     """Write a minimal canonical trace with the requested action/summary counts."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        json.dumps({
-            "type": "trace_metadata", "scaffold": "openclaw",
-            "trace_format_version": 5, "model": "test",
-        })
+        json.dumps(
+            {
+                "type": "trace_metadata",
+                "scaffold": "openclaw",
+                "trace_format_version": 5,
+                "model": "test",
+            }
+        )
     ]
     for i in range(n_actions):
-        lines.append(json.dumps({
-            "type": "action",
-            "action_type": "llm_call",
-            "action_id": f"llm_{i}",
-            "agent_id": "a1",
-            "iteration": i % n_iterations if n_iterations else i,
-            "ts_start": 1000.0 + i,
-            "ts_end": 1000.5 + i,
-            "data": {},
-        }))
-    lines.append(json.dumps({
-        "type": "summary",
-        "agent_id": "a1",
-        "n_actions": n_actions,
-        "n_iterations": n_iterations,
-        "elapsed_s": elapsed_s,
-    }))
+        lines.append(
+            json.dumps(
+                {
+                    "type": "action",
+                    "action_type": "llm_call",
+                    "action_id": f"llm_{i}",
+                    "agent_id": "a1",
+                    "iteration": i % n_iterations if n_iterations else i,
+                    "ts_start": 1000.0 + i,
+                    "ts_end": 1000.5 + i,
+                    "data": {},
+                }
+            )
+        )
+    lines.append(
+        json.dumps(
+            {
+                "type": "summary",
+                "agent_id": "a1",
+                "n_actions": n_actions,
+                "n_iterations": n_iterations,
+                "elapsed_s": elapsed_s,
+            }
+        )
+    )
     path.write_text("\n".join(lines) + "\n")
 
 
 def test_get_session_status_reads_actions_via_pid_metadata(tmp_path: Path) -> None:
     """The PID file persists the absolute trace path and drives status recovery."""
-    workspace = tmp_path / "ws"
-    pid_file = pid_file_for_session(workspace, "oc-abc")
+    runtime_dir = tmp_path / "rt"
+    pid_file = pid_file_for_session(runtime_dir, "oc-abc")
     trace = tmp_path / "out" / "oc-abc.jsonl"
     _trace(trace, n_actions=12, n_iterations=4, elapsed_s=37.5)
 
     # Pretend the daemon already exited (use a non-existent PID).
     write_pid_file(pid_file, pid=999999, session_id="oc-abc", trace_file=trace)
 
-    status = get_session_status("oc-abc", workspace)
+    status = get_session_status("oc-abc", runtime_dir)
     assert status["session_id"] == "oc-abc"
     assert status["status"] == "completed"
     assert status["trace_file"] == str(trace)
@@ -322,50 +370,86 @@ def test_get_session_status_reads_actions_via_pid_metadata(tmp_path: Path) -> No
 def test_get_session_status_handles_trace_with_no_summary(tmp_path: Path) -> None:
     """Mid-flight trace (no summary record yet) — count actions and
     distinct iterations on the fly."""
-    workspace = tmp_path / "ws"
-    pid_file = pid_file_for_session(workspace, "oc-mid")
+    runtime_dir = tmp_path / "rt"
+    pid_file = pid_file_for_session(runtime_dir, "oc-mid")
     trace = tmp_path / "out" / "oc-mid.jsonl"
     trace.parent.mkdir(parents=True, exist_ok=True)
     trace.write_text(
-        '\n'.join([
-            json.dumps({"type": "trace_metadata", "scaffold": "openclaw",
-                        "trace_format_version": 5}),
-            json.dumps({"type": "action", "action_type": "llm_call",
-                        "action_id": "llm_0", "agent_id": "a", "iteration": 0,
-                        "ts_start": 1.0, "ts_end": 2.0, "data": {}}),
-            json.dumps({"type": "action", "action_type": "tool_exec",
-                        "action_id": "tool_0_bash", "agent_id": "a",
-                        "iteration": 0, "ts_start": 2.0, "ts_end": 2.1,
-                        "data": {"tool_name": "bash"}}),
-            json.dumps({"type": "action", "action_type": "llm_call",
-                        "action_id": "llm_1", "agent_id": "a", "iteration": 1,
-                        "ts_start": 3.0, "ts_end": 4.0, "data": {}}),
-        ]) + "\n"
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "scaffold": "openclaw",
+                        "trace_format_version": 5,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0",
+                        "agent_id": "a",
+                        "iteration": 0,
+                        "ts_start": 1.0,
+                        "ts_end": 2.0,
+                        "data": {},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "tool_exec",
+                        "action_id": "tool_0_bash",
+                        "agent_id": "a",
+                        "iteration": 0,
+                        "ts_start": 2.0,
+                        "ts_end": 2.1,
+                        "data": {"tool_name": "bash"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_1",
+                        "agent_id": "a",
+                        "iteration": 1,
+                        "ts_start": 3.0,
+                        "ts_end": 4.0,
+                        "data": {},
+                    }
+                ),
+            ]
+        )
+        + "\n"
     )
     write_pid_file(pid_file, pid=999998, session_id="oc-mid", trace_file=trace)
 
-    status = get_session_status("oc-mid", workspace)
+    status = get_session_status("oc-mid", runtime_dir)
     assert status["n_actions"] == 3
     assert status["n_iterations"] == 2  # iterations 0 and 1
     assert status["trace_file"] == str(trace)
 
 
-def test_get_session_status_is_idempotent_for_completed_sessions(tmp_path: Path) -> None:
+def test_get_session_status_is_idempotent_for_completed_sessions(
+    tmp_path: Path,
+) -> None:
     """Regression for the codex review finding: a completed async
     session must remain status-queryable across multiple calls. Earlier
     the PID file was deleted on the first ``--status`` call, taking the
     canonical trace path with it and downgrading the second response to
     ``status="unknown"`` / ``trace_file=None``.
     """
-    workspace = tmp_path / "ws"
-    pid_file = pid_file_for_session(workspace, "oc-rerun")
+    runtime_dir = tmp_path / "rt"
+    pid_file = pid_file_for_session(runtime_dir, "oc-rerun")
     trace = tmp_path / "out" / "oc-rerun.jsonl"
     _trace(trace, n_actions=4, n_iterations=2, elapsed_s=12.0)
     write_pid_file(pid_file, pid=999990, session_id="oc-rerun", trace_file=trace)
 
-    first = get_session_status("oc-rerun", workspace)
-    second = get_session_status("oc-rerun", workspace)
-    third = get_session_status("oc-rerun", workspace)
+    first = get_session_status("oc-rerun", runtime_dir)
+    second = get_session_status("oc-rerun", runtime_dir)
+    third = get_session_status("oc-rerun", runtime_dir)
 
     for label, snap in (("first", first), ("second", second), ("third", third)):
         assert snap["status"] == "completed", f"{label}: status drifted"

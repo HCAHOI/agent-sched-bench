@@ -27,21 +27,21 @@ npx --yes clawhub@latest search "web scraping" --limit 5
 ## Install
 
 ```bash
-npx --yes clawhub@latest install <slug> --workdir ~/.nanobot/workspace
+npx --yes clawhub@latest install <slug> --workdir ~/.local/state/openclaw/skills
 ```
 
-Replace `<slug>` with the skill name from search results. This places the skill into `~/.nanobot/workspace/skills/`, where nanobot loads workspace skills from. Always include `--workdir`.
+Replace `<slug>` with the skill name from search results. **Always include `--workdir`** pointing to a directory *outside* the current task workspace (e.g. `~/.local/state/openclaw/skills`). Never omit `--workdir` — without it skills install into the current directory, which contaminates a task repository during evaluation.
 
 ## Update
 
 ```bash
-npx --yes clawhub@latest update --all --workdir ~/.nanobot/workspace
+npx --yes clawhub@latest update --all --workdir ~/.local/state/openclaw/skills
 ```
 
 ## List installed
 
 ```bash
-npx --yes clawhub@latest list --workdir ~/.nanobot/workspace
+npx --yes clawhub@latest list --workdir ~/.local/state/openclaw/skills
 ```
 
 ## Notes
@@ -49,5 +49,8 @@ npx --yes clawhub@latest list --workdir ~/.nanobot/workspace
 - Requires Node.js (`npx` comes with it).
 - No API key needed for search and install.
 - Login (`npx --yes clawhub@latest login`) is only required for publishing.
-- `--workdir ~/.nanobot/workspace` is critical — without it, skills install to the current directory instead of the nanobot workspace.
+- `--workdir` is mandatory and must point outside the task workspace; omitting it
+  installs skills into the current directory and breaks evaluation diffs.
+- Evaluation sessions load only runtime/builtin skills, so ClawHub-installed
+  skills are intended for standalone interactive use, not benchmark runs.
 - After install, remind the user to start a new session to load the skill.

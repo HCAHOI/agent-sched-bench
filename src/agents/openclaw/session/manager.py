@@ -1,5 +1,5 @@
-
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +12,7 @@ from agents.openclaw.utils.helpers import (
     find_legal_message_start,
     safe_filename,
 )
+
 
 @dataclass
 class Session:
@@ -87,12 +88,31 @@ class Session:
         self.last_consolidated = max(0, self.last_consolidated - dropped)
         self.updated_at = datetime.now()
 
+
+def _default_sessions_dir() -> Path:
+    """Last-resort sessions dir for direct SessionManager construction.
+
+    Returns a non-workspace, user-level path (``OPENCLAW_SESSION_DIR`` >
+    ``$XDG_STATE_HOME/openclaw/sessions`` > ``~/.local/state/openclaw/sessions``).
+    Eval/CLI paths never hit this — they pass an explicit per-run ``storage_dir``
+    derived from ``runtime_dir``. This fallback exists only so direct
+    ``SessionManager(workspace)`` construction does not contaminate the workspace.
+    """
+    explicit = os.environ.get("OPENCLAW_SESSION_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home).expanduser() / "openclaw" / "sessions"
+    return Path.home() / ".local" / "state" / "openclaw" / "sessions"
+
+
 class SessionManager:
     """Store conversation sessions as JSONL files."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, storage_dir: Path | None = None):
         self.workspace = workspace
-        self.sessions_dir = ensure_dir(self.workspace / "sessions")
+        self.sessions_dir = ensure_dir(storage_dir or _default_sessions_dir())
         self._cache: dict[str, Session] = {}
         self._event_callback = None
 

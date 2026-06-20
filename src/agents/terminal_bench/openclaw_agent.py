@@ -41,6 +41,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     """Terminal-Bench adapter that installs this repo and runs OpenClaw."""
 
     TRACE_FILENAME = "openclaw-trace.jsonl"
+    RUNTIME_DIRNAME = "openclaw-runtime"
     VENV_PATH = "/installed-agent/venv"
     PROMPT_FILENAME = "openclaw-prompt.txt"
     CONTAINER_PROMPT_PATH = f"/installed-agent/{PROMPT_FILENAME}"
@@ -84,7 +85,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         self._api_base = api_base
         self._env_key = env_key
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key) is None:
-            raise ValueError(f"env_key must be a valid shell environment name: {env_key!r}")
+            raise ValueError(
+                f"env_key must be a valid shell environment name: {env_key!r}"
+            )
         self._api_key = api_key or os.environ.get(env_key, "")
         if not self._api_key:
             raise ValueError(
@@ -327,6 +330,9 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         trace_output = shlex.quote(
             f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.TRACE_FILENAME}"
         )
+        runtime_dir = shlex.quote(
+            f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.RUNTIME_DIRNAME}"
+        )
         prompt_file = shlex.quote(self.CONTAINER_PROMPT_PATH)
         api_base_prefix, api_base_arg = self._api_base_shell_prefix()
         secret_prefix = (
@@ -356,6 +362,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             f"{mcp_flag}"
             f"--workspace {workspace} "
             f"--trace-output {trace_output} "
+            f"--runtime-dir {runtime_dir} "
             f"--max-iterations {self._max_iterations} "
             f"{generation_flags}"
             "--quiet "

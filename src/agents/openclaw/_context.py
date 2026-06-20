@@ -1,4 +1,3 @@
-
 import base64
 import mimetypes
 import platform
@@ -11,8 +10,8 @@ from agents.openclaw._memory import MemoryStore
 from agents.openclaw._skills import SkillsLoader
 from agents.openclaw.utils.helpers import build_assistant_message, detect_image_mime
 
-class ContextBuilder:
 
+class ContextBuilder:
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
@@ -21,12 +20,18 @@ class ContextBuilder:
         workspace: Path,
         timezone: str | None = None,
         project_workspace: Path | None = None,
+        *,
+        memory_dir: Path | None = None,
+        skills_dir: Path | None = None,
     ):
         self.workspace = workspace
         self.project_workspace = project_workspace or workspace
         self.timezone = timezone
-        self.memory = MemoryStore(workspace)
-        self.skills = SkillsLoader(workspace)
+        # Memory and skills must use the same runtime dirs the consolidator and
+        # loop use, so prompt reads match runtime writes. Workspace-local
+        # memory/skills are deprecated to avoid contaminating target repos.
+        self.memory = MemoryStore(workspace, storage_dir=memory_dir)
+        self.skills = SkillsLoader(workspace, skills_dir=skills_dir)
 
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
         parts = [self._get_identity()]
@@ -64,8 +69,8 @@ Skills with available="false" need dependencies installed first - you can try in
         state_workspace_line = ""
         if state_workspace_path != workspace_path:
             state_workspace_line = (
-                f"- Agent state directory: {state_workspace_path} "
-                "(stores sessions, memory, and custom skills)\n"
+                f"- Agent state workspace: {state_workspace_path} "
+                "(may hold task state files; runtime memory/skills live outside it)\n"
             )
 
         platform_policy = ""
@@ -90,9 +95,8 @@ You are OpenClaw Research Agent, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-{state_workspace_line}- Long-term memory: {state_workspace_path}/memory/MEMORY.md (write important facts here)
-- History log: {state_workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Custom skills: {state_workspace_path}/skills/{{skill-name}}/SKILL.md
+{state_workspace_line}
+- Long-term memory and history are managed automatically by the agent runtime; do not create memory or skill directories in the task workspace.
 
 {platform_policy}
 

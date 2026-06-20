@@ -49,8 +49,11 @@ class EvalResult:
     # Exclude runtime-owned files so the extracted patch stays source-only.
     _EXCLUDE_PATTERNS = [
         ".nanobot",
+        ".openclaw",
+        "openclaw-runtime",
         "memory",
         "sessions",
+        "skills",
         "trace.jsonl",
         "MEMORY.md",
         "HISTORY.md",
