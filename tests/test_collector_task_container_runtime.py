@@ -73,8 +73,8 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.write_text("openclaw stdout", encoding="utf-8")
     stderr_path.write_text("", encoding="utf-8")
-    raw_trace_path = runtime_dir / "trace.raw.jsonl"
-    raw_trace_path.write_text(
+    trace_path = ctx.attempt_dir / "trace.jsonl"
+    trace_path.write_text(
         json.dumps(
             {
                 "type": "trace_metadata",
@@ -148,7 +148,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
             seen.update(kwargs["request"]),
             TaskContainerRunResult(
                 success=True,
-                trace_path=raw_trace_path,
+                trace_path=trace_path,
                 model_patch="diff --git a/httpx.py b/httpx.py",
                 exit_status="completed",
                 error=None,
@@ -197,6 +197,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     assert Path(str(seen["raw_stdout_path"])).is_absolute()
     assert Path(str(seen["raw_stderr_path"])).is_absolute()
     assert Path(str(seen["result_path"])) == runtime_dir.resolve() / "run.result.json"
+    assert Path(str(seen["trace_file"])) == (ctx.attempt_dir / "trace.jsonl").resolve()
     assert seen["tool_workspace"] == "/testbed"
     assert seen["exec_working_dir"] == "/testbed"
     assert preflight_seen["runtime"] == "/usr/bin/python3"
@@ -228,8 +229,8 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.write_text("openclaw stdout", encoding="utf-8")
     stderr_path.write_text("", encoding="utf-8")
-    raw_trace_path = runtime_dir / "trace.raw.jsonl"
-    raw_trace_path.write_text(
+    trace_path = ctx.attempt_dir / "trace.jsonl"
+    trace_path.write_text(
         '{"type":"trace_metadata","scaffold":"openclaw","trace_format_version":5}\n',
         encoding="utf-8",
     )
@@ -280,7 +281,7 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
         "trace_collect.collector.run_task_container_agent",
         lambda **kwargs: TaskContainerRunResult(
             success=True,
-            trace_path=raw_trace_path,
+            trace_path=trace_path,
             model_patch="diff --git a/httpx.py b/httpx.py",
             exit_status="completed",
             error=None,

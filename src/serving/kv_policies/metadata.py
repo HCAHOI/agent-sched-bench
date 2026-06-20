@@ -24,8 +24,10 @@ if TYPE_CHECKING:
     from serving.kv_policies.recorder import KVEvictionRecorder
 
 
+_SYSTEM_ROLE = "system"
+
 _ROLE_PRIORITY: dict[str, int] = {
-    "system": 7,
+    _SYSTEM_ROLE: 7,
     "tool_result": 6,
     "user": 5,
     "assistant_call": 4,
@@ -146,7 +148,16 @@ def _metadata_arrays_from_table(
     *,
     original_indices: list[int],
     metadata_table: dict[int, TokenMetadata],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
     originals = np.asarray(original_indices, dtype=np.int64)
     n = int(originals.shape[0])
     role_rank = np.full(n, _ROLE_PRIORITY["generation"], dtype=np.int16)
@@ -155,12 +166,14 @@ def _metadata_arrays_from_table(
     segment_id = np.full(n, -1, dtype=np.int32)
     is_tool_result = np.zeros(n, dtype=bool)
     is_error = np.zeros(n, dtype=bool)
+    is_system = np.zeros(n, dtype=bool)
     for physical_idx, original in enumerate(originals.tolist()):
         meta = metadata_table.get(int(original))
         if meta is None:
             continue
         role = str(meta.role)
         role_rank[physical_idx] = int(_ROLE_PRIORITY.get(role, 0))
+        is_system[physical_idx] = role == _SYSTEM_ROLE
         age[physical_idx] = int(meta.age)
         offset[physical_idx] = int(meta.offset)
         segment_id[physical_idx] = int(meta.segment_id)
@@ -177,6 +190,7 @@ def _metadata_arrays_from_table(
         segment_id,
         is_tool_result,
         is_error,
+        is_system,
     )
 
 
@@ -315,6 +329,7 @@ class MetadataResidencySelector:
                 segment_id=arrays[4],
                 is_tool_result=arrays[5],
                 is_error=arrays[6],
+                is_system=arrays[7],
             )
         return self._select_python(
             layer_idx=layer_idx,
@@ -336,7 +351,11 @@ class MetadataResidencySelector:
                 f"key_len {key_len} != original index map length {len(original_indices)}"
             )
         budget = int(self.config.budget)  # type: ignore[arg-type]
-        if key_len <= budget:
+        system_reserved = self._system_reserved(
+            original_indices=original_indices,
+            metadata_table=metadata_table,
+        )
+        if key_len - len(system_reserved) <= budget:
             return self._selection_from_keep(
                 key_len=key_len,
                 keep_indices=list(range(key_len)),
@@ -362,14 +381,16 @@ class MetadataResidencySelector:
                     metadata_table=metadata_table,
                 )
             )
-        if len(hard_reserved) > budget:
+        hard_budget_count = len(hard_reserved - system_reserved)
+        if hard_budget_count > budget:
             raise RuntimeError(
-                "hard metadata reservation exceeds budget; constructor validation "
-                "should have rejected this configuration"
+                "non-system hard metadata reservation exceeds budget; increase "
+                "budget or reduce sink/recent reservation"
             )
 
-        keep_set: set[int] = set(hard_reserved)
-        remaining_slots = budget - len(keep_set)
+        keep_set: set[int] = set(system_reserved)
+        keep_set.update(hard_reserved)
+        remaining_slots = budget - hard_budget_count
         candidates = [idx for idx in range(key_len) if idx not in keep_set]
         ranked = sorted(
             candidates,
@@ -403,6 +424,7 @@ class MetadataResidencySelector:
         segment_id: np.ndarray,
         is_tool_result: np.ndarray,
         is_error: np.ndarray,
+        is_system: np.ndarray,
     ) -> MetadataSelection:
         """Vectorized layer-independent selector for the global table path."""
         del layer_idx
@@ -412,7 +434,12 @@ class MetadataResidencySelector:
                 f"{int(original_indices.shape[0])}"
             )
         budget = int(self.config.budget)  # type: ignore[arg-type]
-        if key_len <= budget:
+        system_reserved = (
+            is_system.astype(bool, copy=True)
+            if self.config.reserve_system_prompt
+            else np.zeros(key_len, dtype=bool)
+        )
+        if key_len - int(system_reserved.sum()) <= budget:
             keep = np.arange(key_len, dtype=np.int32)
             return self._selection_from_numpy_keep(
                 key_len=key_len,
@@ -434,15 +461,15 @@ class MetadataResidencySelector:
             )
         if rung >= 4:
             soft_reserved |= is_error
-        hard_count = int(hard_reserved.sum())
-        if hard_count > budget:
+        hard_budget_count = int(np.logical_and(hard_reserved, ~system_reserved).sum())
+        if hard_budget_count > budget:
             raise RuntimeError(
-                "hard metadata reservation exceeds budget; constructor validation "
-                "should have rejected this configuration"
+                "non-system hard metadata reservation exceeds budget; increase "
+                "budget or reduce sink/recent reservation"
             )
 
-        keep_mask = hard_reserved.copy()
-        remaining_slots = budget - hard_count
+        keep_mask = np.logical_or(system_reserved, hard_reserved)
+        remaining_slots = budget - hard_budget_count
         if remaining_slots > 0:
             candidates = np.nonzero(~keep_mask)[0].astype(np.int32, copy=False)
             order = np.lexsort(
@@ -503,6 +530,30 @@ class MetadataResidencySelector:
             ],
             reason=reason,
         )
+
+    def _system_reserved(
+        self,
+        *,
+        original_indices: list[int],
+        metadata_table: dict[int, TokenMetadata],
+    ) -> set[int]:
+        """Physical positions for system/tool-schema prompt tokens.
+
+        These tokens are inference-time context, not oracle information. When
+        enabled, they are forced resident and do not consume the policy budget;
+        the budget then measures residency quality over the growing
+        conversation state.
+        """
+        if not self.config.reserve_system_prompt:
+            return set()
+        keep: set[int] = set()
+        for physical_idx, original_idx in enumerate(original_indices):
+            meta = metadata_table.get(
+                int(original_idx), default_token_metadata(int(original_idx))
+            )
+            if meta.role == _SYSTEM_ROLE:
+                keep.add(physical_idx)
+        return keep
 
     def _sink_recent_reserved(self, key_len: int) -> set[int]:
         sink = min(int(self.config.sink_size), key_len)
@@ -655,6 +706,7 @@ class MetadataResidencyCache(BaseEvictionCache):
         self._segment_id_by_original = np.empty(0, dtype=np.int32)
         self._is_tool_result_by_original = np.empty(0, dtype=bool)
         self._is_error_by_original = np.empty(0, dtype=bool)
+        self._is_system_by_original = np.empty(0, dtype=bool)
         self._selection_cache_key: tuple[int, int, int] | None = None
         self._selection_cache_originals: list[int] | None = None
         self._selection_cache_value: MetadataSelection | None = None
@@ -713,6 +765,23 @@ class MetadataResidencyCache(BaseEvictionCache):
                 f"metadata read future original indices {bad[:8]} "
                 f">= limit {original_limit}"
             )
+
+    def crop_to_logical_length(self, logical_length: int) -> None:
+        length = int(logical_length)
+        super().crop_to_logical_length(length)
+        for layer, originals in list(self._original_indices_by_layer.items()):
+            kept = [int(original) for original in originals if int(original) < length]
+            self._original_indices_by_layer[layer] = kept
+            self._original_to_current_by_layer[layer] = {
+                int(original): current for current, original in enumerate(kept)
+            }
+            self._next_original_by_layer[layer] = length
+            self._original_state_id_by_layer[layer] = self._intern_state_transition(
+                ("logical_crop", self._original_state_id_by_layer.get(layer, 0), length)
+            )
+        self._selection_cache_key = None
+        self._selection_cache_originals = None
+        self._selection_cache_value = None
 
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         layer = int(layer_idx)
@@ -831,6 +900,7 @@ class MetadataResidencyCache(BaseEvictionCache):
             segment_id = self._segment_id_by_original[original_indices]
             is_tool_result = self._is_tool_result_by_original[original_indices]
             is_error = self._is_error_by_original[original_indices]
+            is_system = self._is_system_by_original[original_indices]
         else:
             role_rank = np.empty(0, dtype=np.int16)
             age = np.empty(0, dtype=np.int32)
@@ -838,6 +908,7 @@ class MetadataResidencyCache(BaseEvictionCache):
             segment_id = np.empty(0, dtype=np.int32)
             is_tool_result = np.empty(0, dtype=bool)
             is_error = np.empty(0, dtype=bool)
+            is_system = np.empty(0, dtype=bool)
         selection = self._selector.select_from_arrays(
             layer_idx=0,
             key_len=int(key_len),
@@ -848,6 +919,7 @@ class MetadataResidencyCache(BaseEvictionCache):
             segment_id=segment_id,
             is_tool_result=is_tool_result,
             is_error=is_error,
+            is_system=is_system,
         )
         self._selection_compute_count += 1
         self._selection_cache_key = cache_key
@@ -894,6 +966,9 @@ class MetadataResidencyCache(BaseEvictionCache):
         self._is_error_by_original = np.concatenate(
             [self._is_error_by_original, np.zeros(grow, dtype=bool)]
         )
+        self._is_system_by_original = np.concatenate(
+            [self._is_system_by_original, np.zeros(grow, dtype=bool)]
+        )
 
     def _update_metadata_arrays(self, metadata: dict[int, TokenMetadata]) -> None:
         if not metadata:
@@ -909,6 +984,7 @@ class MetadataResidencyCache(BaseEvictionCache):
             self._segment_id_by_original[idx] = int(meta.segment_id)
             is_tool = role == "tool_result"
             self._is_tool_result_by_original[idx] = is_tool
+            self._is_system_by_original[idx] = role == _SYSTEM_ROLE
             self._is_error_by_original[idx] = is_tool and (
                 meta.tool_error is True
                 or (meta.exit_code is not None and int(meta.exit_code) != 0)
@@ -930,6 +1006,14 @@ class NullEvictionCache(BaseEvictionCache):
                 f"NullEvictionCache requires positive config.budget; got {config.budget!r}"
             )
         self._original_indices_by_layer: dict[int, list[int]] = {}
+
+    def crop_to_logical_length(self, logical_length: int) -> None:
+        length = int(logical_length)
+        super().crop_to_logical_length(length)
+        for layer, originals in list(self._original_indices_by_layer.items()):
+            self._original_indices_by_layer[layer] = [
+                int(original) for original in originals if int(original) < length
+            ]
 
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         originals = self._ensure_layer_state(int(layer_idx), int(key_len))
@@ -992,6 +1076,15 @@ class PositionControlCache(BaseEvictionCache):
             self._generator = torch.Generator(device="cpu").manual_seed(int(config.seed))
         else:
             self._generator = None
+
+    def crop_to_logical_length(self, logical_length: int) -> None:
+        length = int(logical_length)
+        super().crop_to_logical_length(length)
+        for layer, originals in list(self._original_indices_by_layer.items()):
+            self._original_indices_by_layer[layer] = [
+                int(original) for original in originals if int(original) < length
+            ]
+            self._next_original_by_layer[layer] = length
 
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         originals = self._ensure_layer_state(int(layer_idx), int(key_len))

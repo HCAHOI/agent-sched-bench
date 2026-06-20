@@ -165,6 +165,102 @@ def test_generation_metadata_records_resolved_sampling_params() -> None:
     }
 
 
+def test_lean_full_kv_provider_skips_layer_capturer_hooks(monkeypatch) -> None:
+    """Plain local-HF full-KV should not install recording hooks."""
+    from transformers import DynamicCache
+
+    class FakeTokenizer:
+        pass
+
+    class FakeModel:
+        config = _StubModelConfig()
+
+        def eval(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "transformers.AutoTokenizer.from_pretrained",
+        lambda *args, **kwargs: FakeTokenizer(),
+    )
+    monkeypatch.setattr(
+        "transformers.AutoModelForCausalLM.from_pretrained",
+        lambda *args, **kwargs: FakeModel(),
+    )
+
+    def fail_layer_capturer(*args, **kwargs):
+        raise AssertionError("LayerCapturer should not be built for lean full-KV")
+
+    monkeypatch.setattr(
+        "serving.recording.backend_hf.LayerCapturer",
+        fail_layer_capturer,
+    )
+
+    provider = HFRecordingProvider(
+        default_model="stub-model",
+        config=RecordingConfig(record_artifacts=False),
+        eviction_config=None,
+        sparse_attention_config=None,
+    )
+
+    assert provider.capturer is None
+    assert provider._attention_bus is None
+    assert isinstance(provider._build_session_cache(), DynamicCache)
+
+
+def test_recording_provider_builds_layer_capturer_when_recording_enabled(
+    monkeypatch,
+) -> None:
+    """Recording-enabled local HF should still install LayerCapturer hooks."""
+    seen: dict[str, object] = {}
+
+    class FakeTokenizer:
+        pass
+
+    class FakeModel:
+        config = _StubModelConfig()
+
+        def eval(self) -> None:
+            pass
+
+    class FakeCapturer:
+        def __init__(self, model, **kwargs) -> None:
+            seen["capturer_model"] = model
+            seen["capturer_kwargs"] = dict(kwargs)
+
+        def set_kv_policy_meta(self, meta) -> None:
+            seen["kv_policy_meta"] = meta
+
+        def set_sparse_attention_meta(self, meta) -> None:
+            seen["sparse_attention_meta"] = meta
+
+    monkeypatch.setattr(
+        "transformers.AutoTokenizer.from_pretrained",
+        lambda *args, **kwargs: FakeTokenizer(),
+    )
+    monkeypatch.setattr(
+        "transformers.AutoModelForCausalLM.from_pretrained",
+        lambda *args, **kwargs: FakeModel(),
+    )
+    monkeypatch.setattr(
+        "serving.recording.backend_hf.LayerCapturer",
+        FakeCapturer,
+    )
+
+    provider = HFRecordingProvider(
+        default_model="stub-model",
+        config=RecordingConfig(record_artifacts=True),
+        eviction_config=None,
+        sparse_attention_config=None,
+    )
+
+    assert isinstance(provider.capturer, FakeCapturer)
+    assert provider._attention_bus is not None
+    assert seen["capturer_kwargs"]["attention_bus"] is provider._attention_bus
+    assert seen["capturer_kwargs"]["sparse_attention"] is None
+    assert seen["kv_policy_meta"] is None
+    assert seen["sparse_attention_meta"] is None
+
+
 def test_model_summary_records_runtime_versions() -> None:
     provider = _build_provider(None)
     provider.default_model = "stub-model"
@@ -319,6 +415,8 @@ def test_consecutive_chats_share_kv_state() -> None:
         "new_len": 8,
         "delta_len": 3,
         "diverged": False,
+        "resume_len": 5,
+        "replayed_last_token": False,
     }
     # Cache instance is the SAME object — not rebuilt.
     assert provider._session_cache is not None
@@ -330,8 +428,8 @@ def test_consecutive_chats_share_kv_state() -> None:
     torch.testing.assert_close(delta_2_again, delta_2)
 
 
-def test_divergent_prompt_triggers_rebuild() -> None:
-    """When LCP < cached_len, drop the cache and rebuild on the new prompt."""
+def test_divergent_prompt_crops_and_prefills_suffix() -> None:
+    """When LCP < cached_len, keep the valid prefix and prefill only suffix."""
     cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
     provider = _build_provider(cfg)
     prompt_1 = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
@@ -342,14 +440,108 @@ def test_divergent_prompt_triggers_rebuild() -> None:
     # Divergence at position 2.
     prompt_2 = torch.tensor([[1, 2, 99, 5]], dtype=torch.long)
     delta, used = provider._prepare_session_cache(prompt_ids=prompt_2, call_idx=1)
+
     assert used is True
-    torch.testing.assert_close(delta, prompt_2)
-    # Fresh cache instance; old one dropped.
+    torch.testing.assert_close(delta, torch.tensor([[99, 5]], dtype=torch.long))
+    assert provider._session_cache is cache_before
+    torch.testing.assert_close(
+        provider._session_token_ids, torch.tensor([[1, 2]], dtype=torch.long)
+    )
+    assert provider._session_history[-1] == {
+        "call_idx": 1,
+        "used_session_cache": True,
+        "lcp": 2,
+        "cached_len_before": 4,
+        "new_len": 4,
+        "delta_len": 2,
+        "diverged": True,
+        "resume_len": 2,
+        "replayed_last_token": False,
+    }
+
+
+def test_exact_match_replays_last_token_without_rebuild() -> None:
+    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+    provider = _build_provider(cfg)
+    prompt = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    provider._prepare_session_cache(prompt_ids=prompt, call_idx=0)
+    cache_before = provider._session_cache
+
+    delta, used = provider._prepare_session_cache(prompt_ids=prompt, call_idx=1)
+
+    assert used is True
+    torch.testing.assert_close(delta, torch.tensor([[4]], dtype=torch.long))
+    assert provider._session_cache is cache_before
+    torch.testing.assert_close(
+        provider._session_token_ids, torch.tensor([[1, 2, 3]], dtype=torch.long)
+    )
+    assert provider._session_history[-1] == {
+        "call_idx": 1,
+        "used_session_cache": True,
+        "lcp": 4,
+        "cached_len_before": 4,
+        "new_len": 4,
+        "delta_len": 1,
+        "diverged": False,
+        "resume_len": 3,
+        "replayed_last_token": True,
+    }
+
+
+def test_exact_match_sparse_eviction_cache_replays_last_logical_token() -> None:
+    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+    provider = _build_provider(cfg)
+    prompt = torch.arange(100, dtype=torch.long).unsqueeze(0)
+    cache = provider._build_session_cache()
+    assert cache is not None
+    keys = torch.arange(4, dtype=torch.float32).reshape(1, 1, 4, 1)
+    values = keys + 100
+    cache.update(keys, values, layer_idx=0)
+    cache._logical_indices_by_layer[0] = [0, 1, 97, 99]
+    cache._next_logical_by_layer[0] = 100
+    provider._session_cache = cache
+    provider._session_token_ids = prompt.clone()
+
+    delta, used = provider._prepare_session_cache(prompt_ids=prompt, call_idx=1)
+
+    assert used is True
+    torch.testing.assert_close(delta, torch.tensor([[99]], dtype=torch.long))
+    assert provider._session_cache is cache
+    assert int(cache.get_seq_length(0)) == 3
+    assert cache._logical_indices_by_layer[0] == [0, 1, 97]
+    torch.testing.assert_close(provider._session_token_ids, prompt[:, :99])
+    assert provider._session_history[-1] == {
+        "call_idx": 1,
+        "used_session_cache": True,
+        "lcp": 100,
+        "cached_len_before": 100,
+        "new_len": 100,
+        "delta_len": 1,
+        "diverged": False,
+        "resume_len": 99,
+        "replayed_last_token": True,
+    }
+
+
+def test_plain_dynamic_cache_partial_divergence_crops_physical_cache() -> None:
+    provider = _build_provider(eviction_config=None)
+    prompt_1 = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    provider._prepare_session_cache(prompt_ids=prompt_1, call_idx=0)
     assert provider._session_cache is not None
-    assert provider._session_cache is not cache_before
-    torch.testing.assert_close(provider._session_token_ids, prompt_2)
-    assert provider._session_history[-1]["diverged"] is True
-    assert provider._session_history[-1]["lcp"] == 2
+    keys = torch.arange(4, dtype=torch.float32).reshape(1, 1, 4, 1)
+    values = keys + 100
+    provider._session_cache.update(keys, values, 0)
+    provider._extend_session_tokens(prompt_ids=prompt_1, output_ids=[])
+
+    prompt_2 = torch.tensor([[1, 2, 99, 5]], dtype=torch.long)
+    delta, used = provider._prepare_session_cache(prompt_ids=prompt_2, call_idx=1)
+
+    assert used is True
+    torch.testing.assert_close(delta, torch.tensor([[99, 5]], dtype=torch.long))
+    assert int(provider._session_cache.get_seq_length(0)) == 2
+    torch.testing.assert_close(
+        provider._session_token_ids, torch.tensor([[1, 2]], dtype=torch.long)
+    )
 
 
 def test_start_attempt_resets_session_cache_between_attempts(tmp_path: Path) -> None:
@@ -646,6 +838,44 @@ def _attn_with_peak(*, key_len: int, peak_pos: int, value: float = 1.0) -> torch
     return attn
 
 
+def test_h2o_crop_to_logical_prefix_compacts_score_buffer() -> None:
+    cfg = EvictionPolicyConfig(
+        name="h2o",
+        budget=8,
+        sink_size=1,
+        recent_window=2,
+        aggregate="sum",
+        prefill_mode="sampled",
+    )
+    bus = AttentionBus()
+    cache = H2OCache(
+        cfg,
+        num_layers=1,
+        attention_bus=bus,
+        max_position_embeddings=16,
+    )
+    keys = torch.arange(4, dtype=torch.float32).reshape(1, 1, 4, 1)
+    values = keys + 100
+    cache.update(keys, values, layer_idx=0)
+    cache._logical_indices_by_layer[0] = [0, 2, 4, 6]
+    cache._next_logical_by_layer[0] = 7
+    score_buffer = torch.zeros(16, dtype=torch.float32)
+    score_buffer[:4] = torch.tensor([10.0, 20.0, 30.0, 40.0])
+    cache._scores[0] = score_buffer
+    cache._score_lengths[0] = 4
+
+    cache.crop_to_logical_length(5)
+
+    assert int(cache.get_seq_length(0)) == 3
+    assert cache._logical_indices_by_layer[0] == [0, 2, 4]
+    assert cache._next_logical_by_layer[0] == 5
+    assert cache._score_lengths[0] == 3
+    torch.testing.assert_close(
+        cache._scores[0][:6],
+        torch.tensor([10.0, 20.0, 30.0, 0.0, 0.0, 0.0]),
+    )
+
+
 def test_h2o_score_buffer_accumulates_across_calls() -> None:
     """Two simulated chat() calls observe attention into the same H2OCache.
 
@@ -757,7 +987,7 @@ def test_close_idempotent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _extend_session_tokens stores raw output_ids (thinking disabled).
+# _extend_session_tokens stores raw output_ids; LCP resume handles re-render drift.
 # ---------------------------------------------------------------------------
 
 
@@ -765,10 +995,9 @@ def test_session_extends_with_raw_output_ids() -> None:
     """_extend_session_tokens stores prompt_ids + raw output_ids.
 
     The raw output_ids are stored directly (no decode→re-encode round-trip).
-    For models with thinking tokens (e.g. Qwen3), the stored state may diverge
-    from the next call's prompt prefix — _prepare_session_cache handles this
-    by rebuilding the cache on divergence. The simpler storage avoids a
-    template-specific re-render whose behavior is model-dependent.
+    For models with thinking tokens or parsed tool calls, the stored state may
+    diverge from the next call's canonical prompt rendering; _prepare_session_cache
+    now crops to the LCP and prefills only the changed suffix.
     """
     cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
     provider = _build_provider(cfg)

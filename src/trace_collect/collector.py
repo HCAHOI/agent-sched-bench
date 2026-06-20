@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -53,6 +54,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _DOCKER_HOST_GATEWAY = "172.17.0.1"
+_INTERNAL_HF_API_KEY = "hf-recording"
+
+
+@dataclass(frozen=True)
+class _CollectModelBackend:
+    """Materialized model client and endpoint exposed to the scaffold."""
+
+    provider: Any
+    provider_name: str | None
+    api_base: str
+    api_key: str
+    recording_provider: Any | None
+    trace_run_config: dict[str, Any]
 
 
 def _recording_server_public_host(
@@ -69,6 +83,119 @@ def _recording_server_public_host(
     ):
         return _DOCKER_HOST_GATEWAY
     return None
+
+
+def _collect_trace_run_config(
+    *,
+    record_internals: bool,
+    local_hf: bool,
+) -> dict[str, Any]:
+    """Return trace run_config fields implied by collect backend knobs."""
+    run_config: dict[str, Any] = {}
+    if record_internals:
+        run_config["record_internals"] = True
+    if local_hf:
+        run_config["local_hf"] = True
+        run_config["hf_backend"] = "local_hf"
+    return run_config
+
+
+def _prepare_collect_model_backend(
+    *,
+    use_hf_backend: bool,
+    record_internals: bool,
+    local_hf: bool,
+    model: str,
+    api_base: str,
+    api_key: str,
+    provider_name: str | None,
+    execution_environment: str,
+    runtime_mode: str,
+    container_executable: str | None,
+    cleanup_stack: ExitStack,
+    eviction_config: "EvictionPolicyConfig | None",
+    sparse_attention_config: "SparseAttentionConfig | None",
+    per_head_stats_layers: tuple[int, ...],
+    per_head_block_stats: bool,
+    record_per_head_topk: bool,
+    per_head_topk_rank: int,
+    generation_seed: int,
+    temperature: float | None,
+    top_p: float | None,
+    top_k: int | None,
+    repetition_penalty: float | None,
+    generation_config: dict[str, Any],
+) -> _CollectModelBackend:
+    """Build the single model-provider path used by host and container agents.
+
+    External OpenAI-compatible endpoints (remote providers and local vLLM) pass
+    through unchanged. Internal HF runs materialize an OpenAI-compatible local
+    recording server and expose only that derived endpoint to the scaffold.
+    """
+    trace_run_config = _collect_trace_run_config(
+        record_internals=record_internals,
+        local_hf=local_hf,
+    )
+    if not use_hf_backend:
+        provider = UnifiedProvider(
+            api_key=api_key,
+            api_base=api_base,
+            default_model=model,
+            **generation_config,
+        )
+        return _CollectModelBackend(
+            provider=provider,
+            provider_name=provider_name,
+            api_base=api_base,
+            api_key=api_key,
+            recording_provider=None,
+            trace_run_config=trace_run_config,
+        )
+
+    # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
+    from serving.recording import (
+        HFRecordingProvider,
+        HFRecordingServer,
+        RecordingConfig,
+    )
+
+    recording_provider = cleanup_stack.enter_context(
+        HFRecordingProvider(
+            default_model=model,
+            config=RecordingConfig(
+                record_artifacts=bool(record_internals),
+                per_head_stats_layers=tuple(per_head_stats_layers),
+                per_head_block_stats=bool(per_head_block_stats),
+                record_per_head_topk=bool(record_per_head_topk),
+                per_head_topk_rank=int(per_head_topk_rank),
+                generation_seed=int(generation_seed),
+            ),
+            eviction_config=eviction_config,
+            sparse_attention_config=sparse_attention_config,
+            temperature=temperature if temperature is not None else 0.1,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
+        )
+    )
+    recording_server = cleanup_stack.enter_context(
+        HFRecordingServer(
+            recording_provider,
+            public_host=_recording_server_public_host(
+                execution_environment=execution_environment,
+                runtime_mode=runtime_mode,
+                container_executable=container_executable,
+            ),
+        )
+    )
+    return _CollectModelBackend(
+        provider=recording_provider,
+        provider_name="openai",
+        api_base=recording_server.api_base,
+        api_key=_INTERNAL_HF_API_KEY,
+        recording_provider=recording_provider,
+        trace_run_config=trace_run_config,
+    )
 
 
 def load_mcp_servers(mcp_config: str | None) -> dict:
@@ -536,6 +663,7 @@ async def collect_traces(
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
     record_internals: bool = False,
+    local_hf: bool = False,
     eviction_config: "EvictionPolicyConfig | None" = None,
     sparse_attention_config: "SparseAttentionConfig | None" = None,
     per_head_stats_layers: tuple[int, ...] = (),
@@ -545,7 +673,7 @@ async def collect_traces(
     generation_seed: int = 0,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
-    use_hf_backend = bool(record_internals or eviction_config is not None)
+    use_hf_backend = bool(local_hf or record_internals or eviction_config is not None)
     if use_hf_backend and scaffold != "openclaw":
         raise ValueError(
             "HF-backed recording / KV eviction currently supports "
@@ -586,67 +714,44 @@ async def collect_traces(
         repetition_penalty=repetition_penalty,
     )
     with ExitStack() as cleanup_stack:
-        recording_provider = None
-        recording_server = None
-        if use_hf_backend:
-            # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
-            from serving.recording import (
-                HFRecordingProvider,
-                HFRecordingServer,
-                RecordingConfig,
-            )
-
-            recording_provider = cleanup_stack.enter_context(
-                HFRecordingProvider(
-                    default_model=model,
-                    config=RecordingConfig(
-                        record_artifacts=bool(record_internals),
-                        per_head_stats_layers=tuple(per_head_stats_layers),
-                        per_head_block_stats=bool(per_head_block_stats),
-                        record_per_head_topk=bool(record_per_head_topk),
-                        per_head_topk_rank=int(per_head_topk_rank),
-                        generation_seed=int(generation_seed),
-                    ),
-                    eviction_config=eviction_config,
-                    sparse_attention_config=sparse_attention_config,
-                    temperature=temperature if temperature is not None else 0.1,
-                    top_p=top_p,
-                    top_k=top_k,
-                    repetition_penalty=repetition_penalty,
-                )
-            )
-            recording_server = cleanup_stack.enter_context(
-                HFRecordingServer(
-                    recording_provider,
-                    public_host=_recording_server_public_host(
-                        execution_environment=execution_environment,
-                        runtime_mode=runtime_mode,
-                        container_executable=container_executable,
-                    ),
-                )
-            )
-        effective_api_base = recording_server.api_base if recording_server else api_base
-        effective_api_key = "hf-recording" if recording_server else api_key
-        effective_provider_name = "openai" if recording_server else provider_name
-        provider = recording_provider or UnifiedProvider(
-            api_key=api_key,
+        model_backend = _prepare_collect_model_backend(
+            use_hf_backend=use_hf_backend,
+            record_internals=record_internals,
+            local_hf=local_hf,
+            model=model,
             api_base=api_base,
-            default_model=model,
-            **generation_config,
+            api_key=api_key,
+            provider_name=provider_name,
+            execution_environment=execution_environment,
+            runtime_mode=runtime_mode,
+            container_executable=container_executable,
+            cleanup_stack=cleanup_stack,
+            eviction_config=eviction_config,
+            sparse_attention_config=sparse_attention_config,
+            per_head_stats_layers=tuple(per_head_stats_layers),
+            per_head_block_stats=per_head_block_stats,
+            record_per_head_topk=record_per_head_topk,
+            per_head_topk_rank=per_head_topk_rank,
+            generation_seed=generation_seed,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=repetition_penalty,
+            generation_config=generation_config,
         )
         runner = None
         if runtime_mode == "host_controller":
             runner = benchmark.build_runner(
                 scaffold=scaffold,
-                provider=provider,
+                provider=model_backend.provider,
                 workspace_base=run_dir / "_workspace_base",
                 max_iterations=max_iterations,
                 context_window_tokens=max_context_tokens,
                 model=model,
-                provider_name=effective_provider_name,
+                provider_name=model_backend.provider_name,
                 env_key=env_key,
-                api_base=effective_api_base,
-                api_key=effective_api_key,
+                api_base=model_backend.api_base,
+                api_key=model_backend.api_key,
                 mcp_config=mcp_config,
                 mcp_servers=load_mcp_servers(mcp_config),
                 generation_config=generation_config,
@@ -674,16 +779,16 @@ async def collect_traces(
                         ctx=ctx,
                         task=task,
                         benchmark=benchmark,
-                        provider_name=effective_provider_name,
-                        api_base=effective_api_base,
-                        api_key=effective_api_key,
+                        provider_name=model_backend.provider_name,
+                        api_base=model_backend.api_base,
+                        api_key=model_backend.api_key,
                         model=model,
                         max_iterations=max_iterations,
                         generation_config=generation_config,
                         max_context_tokens=max_context_tokens,
                         mcp_config=mcp_config,
                         container_executable=container_executable,
-                        record_internals=record_internals,
+                        run_config_overrides=model_backend.trace_run_config,
                     )
 
                 assert runner is not None
@@ -697,10 +802,10 @@ async def collect_traces(
                         "benchmark runner returned "
                         f"{type(result).__name__}, expected AttemptResult"
                     )
-                if record_internals and result.trace_path is not None:
+                if model_backend.trace_run_config and result.trace_path is not None:
                     _stamp_trace_run_config(
                         result.trace_path,
-                        {"record_internals": True},
+                        model_backend.trace_run_config,
                     )
                 return result
 
@@ -716,7 +821,7 @@ async def collect_traces(
             prompt_template=prompt_template,
             min_free_disk_gb=min_free_disk_gb,
             inner_factory=make_inner,
-            recording_provider=recording_provider,
+            recording_provider=model_backend.recording_provider,
         )
 
 
@@ -739,7 +844,7 @@ def _normalize_openclaw_trace(
     prompt_template: str | None = None,
     agent_runtime_mode: str | None = None,
     runtime_proof: dict[str, Any] | None = None,
-    record_internals: bool = False,
+    run_config_overrides: dict[str, Any] | None = None,
     generation_config: dict[str, Any] | None = None,
 ) -> None:
     """Copy an OpenClaw trace into the attempt dir, merging trace metadata."""
@@ -790,24 +895,40 @@ def _normalize_openclaw_trace(
     merged["execution_environment"] = execution_environment
     if mcp_config_label is not None:
         _set_run_config(merged, "mcp_config", mcp_config_label)
-    if record_internals:
-        _set_run_config(merged, "record_internals", True)
+    if run_config_overrides:
+        for key, value in run_config_overrides.items():
+            _set_run_config(merged, key, value)
     if generation_config:
         _set_run_config(merged, "generation", dict(generation_config))
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    with open(dst, "w", encoding="utf-8") as f:
-        f.write(json.dumps(merged, ensure_ascii=False) + "\n")
-        for line in lines[body_start:]:
-            if not line.strip():
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("type") == "trace_metadata":
-                continue
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=dst.parent,
+            prefix=f".{dst.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            f.write(json.dumps(merged, ensure_ascii=False) + "\n")
+            for line in lines[body_start:]:
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("type") == "trace_metadata":
+                    continue
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        os.replace(tmp_path, dst)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def _resolve_prompt_template(
@@ -849,7 +970,7 @@ async def _run_openclaw_in_task_container(
     generation_config: dict[str, Any] | None,
     max_context_tokens: int,
     mcp_config: str | None,
-    record_internals: bool = False,
+    run_config_overrides: dict[str, Any] | None = None,
 ) -> AttemptResult:
     fixed_image = ctx.fixed_image or task.get("image_name") or ""
     if not fixed_image:
@@ -938,7 +1059,7 @@ async def _run_openclaw_in_task_container(
                     ]
                 ),
                 "exec_working_dir": "/testbed",
-                "trace_file": str(runtime_dir / "trace.raw.jsonl"),
+                "trace_file": str((ctx.attempt_dir / "trace.jsonl").resolve()),
                 "raw_stdout_path": str(stdout_path),
                 "raw_stderr_path": str(stderr_path),
                 "container_executable": container_executable,
@@ -961,7 +1082,7 @@ async def _run_openclaw_in_task_container(
             prompt_template=ctx.prompt_template,
             agent_runtime_mode=ctx.agent_runtime_mode,
             runtime_proof=runtime_proof,
-            record_internals=record_internals,
+            run_config_overrides=run_config_overrides,
             generation_config=generation_config,
         )
     finally:

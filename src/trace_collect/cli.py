@@ -137,6 +137,16 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--local-hf",
+        action="store_true",
+        help=(
+            "Run the host-side HuggingFace backend, loading --model locally "
+            "instead of calling the external --provider endpoint. With "
+            "--kv-policy none, this uses plain full-KV DynamicCache plus the "
+            "session prefix cache, avoiding KV-policy proxy overhead."
+        ),
+    )
+    parser.add_argument(
         "--kv-policy",
         choices=[
             "none",
@@ -723,6 +733,12 @@ def _run_collect(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    if args.local_hf and args.scaffold != "openclaw":
+        print(
+            "ERROR: --local-hf currently supports --scaffold openclaw only.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     # KV eviction uses the HF backend because that is where HF Cache subclasses
     # can be injected. Attention-independent policies may run without recording
     # internal artifacts; attention-dependent policies are checked after config
@@ -794,7 +810,7 @@ def _run_collect(args: argparse.Namespace) -> None:
         )
         sys.exit(2)
 
-    if args.record_internals:
+    if args.record_internals or args.local_hf:
         os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
 
     try:
@@ -808,7 +824,7 @@ def _run_collect(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
-    if not provider_config.api_key:
+    if not provider_config.api_key and not args.local_hf:
         print(
             f"ERROR: Set {provider_config.env_key} or pass --api-key.",
             file=sys.stderr,
@@ -876,6 +892,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             prompt_template=args.prompt_template,
             min_free_disk_gb=args.min_free_disk_gb,
             record_internals=args.record_internals,
+            local_hf=args.local_hf,
             eviction_config=eviction_config,
             sparse_attention_config=sparse_attention_config,
             per_head_stats_layers=per_head_stats_layers,

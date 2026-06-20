@@ -115,7 +115,7 @@ def test_normalize_openclaw_trace_preserves_runner_scaffold_capabilities(
     assert metadata["scaffold_capabilities"] == {"tools": ["custom"], "memory": False}
 
 
-def test_normalize_openclaw_trace_stamps_record_internals(tmp_path: Path) -> None:
+def test_normalize_openclaw_trace_stamps_run_config_overrides(tmp_path: Path) -> None:
     from trace_collect.collector import _normalize_openclaw_trace
 
     src = tmp_path / "src.jsonl"
@@ -142,12 +142,70 @@ def test_normalize_openclaw_trace_stamps_record_internals(tmp_path: Path) -> Non
         api_base="https://x.y",
         max_iterations=100,
         instance_id="test-1",
-        record_internals=True,
+        run_config_overrides={
+            "record_internals": True,
+            "local_hf": True,
+            "hf_backend": "local_hf",
+        },
     )
 
     metadata = json.loads(dst.read_text(encoding="utf-8").splitlines()[0])
     assert metadata["run_config"]["mcp_config"] == "none"
     assert metadata["run_config"]["record_internals"] is True
+    assert metadata["run_config"]["local_hf"] is True
+    assert metadata["run_config"]["hf_backend"] == "local_hf"
+
+
+def test_normalize_openclaw_trace_supports_in_place_normalization(
+    tmp_path: Path,
+) -> None:
+    from trace_collect.collector import _normalize_openclaw_trace
+
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text(
+        json.dumps(
+            {
+                "type": "trace_metadata",
+                "scaffold": "openclaw",
+                "trace_format_version": 5,
+                "model": "test/model",
+                "run_config": {"existing": True},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "action",
+                "action_type": "llm_call",
+                "action_id": "llm_0",
+                "agent_id": "test-1",
+                "iteration": 0,
+                "ts_start": 1.0,
+                "ts_end": 2.0,
+                "data": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plugin = get_benchmark_class("swe-bench-verified")(_make_config())
+    _normalize_openclaw_trace(
+        src=trace,
+        dst=trace,
+        benchmark=plugin,
+        model="test/model",
+        api_base="https://x.y",
+        max_iterations=100,
+        instance_id="test-1",
+        run_config_overrides={"record_internals": True},
+    )
+
+    lines = trace.read_text(encoding="utf-8").strip().splitlines()
+    metadata = json.loads(lines[0])
+    assert metadata["benchmark"] == "swe-bench-verified"
+    assert metadata["run_config"] == {"existing": True, "record_internals": True}
+    assert [json.loads(line)["type"] for line in lines] == ["trace_metadata", "action"]
 
 
 def test_normalize_openclaw_trace_marks_unknown_capabilities_without_metadata(

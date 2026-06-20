@@ -59,6 +59,7 @@ _FIELD_COERCERS = {
     "per_layer_table": lambda v: v if isinstance(v, bool) else str(v).lower() in {"on", "true", "1", "yes"},
     "per_layer_table_path": str,
     "per_layer_budget": lambda v: v if isinstance(v, bool) else str(v).lower() in {"on", "true", "1", "yes"},
+    "reserve_system_prompt": lambda v: v if isinstance(v, bool) else str(v).lower() in {"on", "true", "1", "yes"},
 }
 
 _VALID_NAMES = {

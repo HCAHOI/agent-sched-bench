@@ -90,6 +90,7 @@ def _metadata_cache(rung: str, *, budget: int = 6) -> MetadataResidencyCache:
         sink_size=1,
         recent_window=2,
         metadata_rung=rung,  # type: ignore[arg-type]
+        reserve_system_prompt=False,
     )
     cache = MetadataResidencyCache(cfg, num_layers=2)
     cache.notify_new_call(0, segments=_segments(), input_token_count=14)
@@ -127,6 +128,125 @@ def test_metadata_rungs_have_exact_keep_sets() -> None:
         assert decision.policy_state["original_kept_indices"] == keep
 
 
+def test_system_prompt_is_reserved_outside_metadata_budget() -> None:
+    segments = [
+        {"role": "system", "token_start": 0, "token_end": 4, "first_seen_call": 0},
+        {"role": "user", "token_start": 4, "token_end": 10, "first_seen_call": 0},
+        {
+            "role": "assistant_message",
+            "token_start": 10,
+            "token_end": 12,
+            "first_seen_call": 0,
+        },
+    ]
+    cache = MetadataResidencyCache(
+        EvictionPolicyConfig(
+            name="metadata",
+            budget=3,
+            sink_size=0,
+            recent_window=0,
+            metadata_rung="rung1",
+        ),
+        num_layers=1,
+    )
+    cache.notify_new_call(0, segments=segments, input_token_count=12)
+
+    decision = cache._decide_evict(layer_idx=0, key_len=12)
+
+    # Four system/tool-schema tokens are forced resident and do not consume the
+    # three-token conversation budget, so the physical keep set may exceed
+    # config.budget by the system span size.
+    assert decision.keep_indices == [0, 1, 2, 3, 4, 5, 6]
+    assert decision.policy_state is not None
+    assert decision.policy_state["original_kept_indices"] == [0, 1, 2, 3, 4, 5, 6]
+
+    keys = torch.arange(12 * 2, dtype=torch.float32).reshape(1, 1, 12, 2)
+    values = keys + 100
+    out_keys, _out_values = cache.update(keys, values, layer_idx=0)
+    assert int(out_keys.shape[-2]) == 7
+    assert int(cache.get_seq_length(0)) == 7
+
+
+def test_system_prompt_reserve_matches_vectorized_selector() -> None:
+    original_indices = list(range(12))
+    table: dict[int, TokenMetadata] = {}
+    for original in range(4):
+        table[original] = TokenMetadata(original, 0, "system", 0, original, 0, 4)
+    for offset, original in enumerate(range(4, 10)):
+        table[original] = TokenMetadata(original, 1, "user", 0, offset, 4, 10)
+    for offset, original in enumerate(range(10, 12)):
+        table[original] = TokenMetadata(
+            original, 2, "assistant_message", 0, offset, 10, 12
+        )
+    cfg = EvictionPolicyConfig(
+        name="metadata",
+        budget=3,
+        sink_size=0,
+        recent_window=0,
+        metadata_rung="rung1",
+    )
+    selector = MetadataResidencySelector(cfg)
+
+    expected = selector._select_python(
+        layer_idx=0,
+        key_len=len(original_indices),
+        original_indices=original_indices,
+        metadata_table=table,
+    )
+    arrays = metadata_mod._metadata_arrays_from_table(
+        original_indices=original_indices,
+        metadata_table=table,
+    )
+    actual = selector.select_from_arrays(
+        layer_idx=0,
+        key_len=len(original_indices),
+        original_indices=arrays[0],
+        role_rank=arrays[1],
+        age=arrays[2],
+        offset=arrays[3],
+        segment_id=arrays[4],
+        is_tool_result=arrays[5],
+        is_error=arrays[6],
+        is_system=arrays[7],
+    )
+
+    assert actual.keep_indices == expected.keep_indices == [0, 1, 2, 3, 4, 5, 6]
+    assert actual.evict_indices == expected.evict_indices
+    assert actual.original_kept_indices == expected.original_kept_indices
+
+
+def test_metadata_cache_crop_to_logical_prefix_remaps_original_indices() -> None:
+    cfg = EvictionPolicyConfig(
+        name="metadata",
+        budget=16,
+        sink_size=0,
+        recent_window=0,
+        metadata_rung="rung1",
+    )
+    cache = MetadataResidencyCache(cfg, num_layers=1)
+    segments = [
+        {"role": "system", "token_start": 0, "token_end": 1, "first_seen_call": 0},
+        {"role": "user", "token_start": 1, "token_end": 8, "first_seen_call": 0},
+    ]
+    cache.notify_new_call(0, segments=segments, input_token_count=8)
+    keys = torch.arange(8, dtype=torch.float32).reshape(1, 1, 8, 1)
+    values = keys + 100
+    cache.update(keys, values, layer_idx=0)
+
+    cache.crop_to_logical_length(5)
+
+    assert int(cache.get_seq_length(0)) == 5
+    assert cache.original_indices_for_layer(0) == [0, 1, 2, 3, 4]
+    assert cache.original_to_current(0) == {0: 0, 1: 1, 2: 2, 3: 3, 4: 4}
+
+    cache.notify_new_call(1, segments=segments, input_token_count=8)
+    delta_keys = torch.arange(3, dtype=torch.float32).reshape(1, 1, 3, 1)
+    delta_values = delta_keys + 200
+    cache.update(delta_keys, delta_values, layer_idx=0)
+
+    assert cache.original_indices_for_layer(0) == [0, 1, 2, 3, 4, 5, 6, 7]
+
+
 def test_bridge_remap_is_per_layer_and_original_index_pure_after_eviction() -> None:
     cache = _metadata_cache("rung4")
     d0 = cache._decide_evict(layer_idx=0, key_len=14)
@@ -160,6 +280,7 @@ def test_recent_tool_reservation_uses_current_physical_recency() -> None:
         sink_size=1,
         recent_window=2,
         metadata_rung="rung3",
+        reserve_system_prompt=False,
     )
     selector = MetadataResidencySelector(cfg)
     original_indices = [0, 100, 101, 102, 200, 201, 202, 300, 301, 302]
@@ -213,6 +334,7 @@ def test_vectorized_metadata_selector_matches_python_keep_sets() -> None:
             sink_size=1,
             recent_window=2,
             metadata_rung=rung,
+            reserve_system_prompt=False,
         )
         selector = MetadataResidencySelector(cfg)
         expected = selector._select_python(
@@ -235,6 +357,7 @@ def test_vectorized_metadata_selector_matches_python_keep_sets() -> None:
             segment_id=arrays[4],
             is_tool_result=arrays[5],
             is_error=arrays[6],
+            is_system=arrays[7],
         )
 
         assert actual.keep_indices == expected.keep_indices
@@ -253,6 +376,7 @@ def test_per_layer_table_changes_layer_scores_and_remaps(tmp_path: Path) -> None
         sink_size=0,
         recent_window=0,
         metadata_rung="rung1",
+        reserve_system_prompt=False,
         per_layer_table=True,
         per_layer_table_path=str(table_path),
     )
@@ -292,6 +416,7 @@ def test_metadata_sidecar_uses_kv_original_remap_after_compaction() -> None:
         sink_size=1,
         recent_window=2,
         metadata_rung="rung4",
+        reserve_system_prompt=False,
     )
     sidecar.notify_new_call(call_idx=0, segments=_segments(), input_token_count=14)
     context = SparseAttentionContext(
@@ -402,6 +527,7 @@ def test_metadata_and_control_config_parse_and_invalids_raise(tmp_path: Path) ->
     assert cfg is not None
     assert cfg.name == "metadata"
     assert cfg.metadata_rung == "rung3"
+    assert cfg.reserve_system_prompt is True
     assert cfg.per_layer_table is True
     assert cfg.per_layer_table_path == str(table_path)
 
@@ -491,6 +617,7 @@ def test_long_context_global_selection_is_cached_across_layers(monkeypatch) -> N
         sink_size=4,
         recent_window=32,
         metadata_rung="rung4",
+        reserve_system_prompt=False,
     )
     n_layers = 6
     n_decode_steps = 5

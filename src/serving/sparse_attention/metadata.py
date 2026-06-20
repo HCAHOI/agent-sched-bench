@@ -27,6 +27,7 @@ class MetadataResidencySparseAttention:
         sink_size: int,
         recent_window: int,
         metadata_rung: str,
+        reserve_system_prompt: bool = True,
     ) -> None:
         cfg = EvictionPolicyConfig(
             name="metadata",
@@ -34,12 +35,14 @@ class MetadataResidencySparseAttention:
             sink_size=int(sink_size),
             recent_window=int(recent_window),
             metadata_rung=metadata_rung,  # type: ignore[arg-type]
+            reserve_system_prompt=bool(reserve_system_prompt),
         )
         self._selector = MetadataResidencySelector(cfg)
         self.budget = int(budget)
         self.sink_size = int(sink_size)
         self.recent_window = int(recent_window)
         self.metadata_rung = str(metadata_rung)
+        self.reserve_system_prompt = bool(reserve_system_prompt)
         self._metadata_table: dict[int, TokenMetadata] = {}
         self._last_kept_count = 0
         self._last_metadata: dict[str, Any] = {}
@@ -57,6 +60,7 @@ class MetadataResidencySparseAttention:
             sink_size=int(config.sink_size),
             recent_window=int(config.recent_window),
             metadata_rung=str(config.metadata_rung),
+            reserve_system_prompt=True,
         )
 
     def notify_new_call(
@@ -110,6 +114,7 @@ class MetadataResidencySparseAttention:
             "sink_size": self.sink_size,
             "recent_window": self.recent_window,
             "metadata_rung": self.metadata_rung,
+            "reserve_system_prompt": self.reserve_system_prompt,
             "selection_reason": selection.reason,
             "selected_count": len(selection.keep_indices),
             "selected_indices": list(selection.keep_indices),

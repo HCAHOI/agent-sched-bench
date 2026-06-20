@@ -52,6 +52,10 @@ class EvictionPolicyConfig:
     per_layer_table: bool = False
     per_layer_table_path: str | None = None
     per_layer_budget: bool = False
+    # Metadata policy: force system/tool-schema prompt tokens resident outside
+    # the competing token budget. This uses only role metadata available at
+    # inference time; budget then applies to non-system conversation tokens.
+    reserve_system_prompt: bool = True
 
 
 @dataclass
@@ -94,6 +98,8 @@ class BaseEvictionCache(DynamicCache):
         self.config = config
         self.num_layers = int(num_layers)
         self.recorder = recorder
+        self._logical_indices_by_layer: dict[int, list[int]] = {}
+        self._next_logical_by_layer: dict[int, int] = {}
         # Per-layer decode-step counter; prefill calls reset to -1.
         # We use a plain dict because the recording layer needs absolute step
         # ids that match attention.npz's record_decode_step semantics.
@@ -135,6 +141,7 @@ class BaseEvictionCache(DynamicCache):
     ) -> "tuple[torch.Tensor, torch.Tensor]":
         keys, values = super().update(key_states, value_states, layer_idx, cache_kwargs)
         pre_len = int(keys.shape[-2])
+        self._ensure_logical_state(int(layer_idx), pre_len)
         query_len = int(key_states.shape[-2])
         phase, step = self._advance_step(layer_idx, query_len=query_len)
 
@@ -149,6 +156,7 @@ class BaseEvictionCache(DynamicCache):
             return keys, values
         if decision.evict_indices:
             keys, values = self._physically_drop(layer_idx, decision.keep_indices)
+            self._compact_logical_state(int(layer_idx), decision.keep_indices)
             # Subclasses with per-key-position state (H2O score buffer) need to
             # compact that state in lockstep with the K/V drop. Default no-op
             # for stateless policies (streaming, random).
@@ -164,6 +172,36 @@ class BaseEvictionCache(DynamicCache):
             decision=decision,
         )
         return keys, values
+
+    def crop_to_logical_length(self, logical_length: int) -> None:
+        """Retain only cached tokens with logical/original index < length.
+
+        The provider uses this for true LCP resume-prefill: when a newly
+        rendered prompt differs at position ``lcp``, cached K/V before ``lcp``
+        remains valid and only the suffix needs prefill. For plain positional
+        caches physical and logical indices coincide; eviction policies may
+        have physically compacted slots, so the base tracks the logical index
+        carried by each physical slot and drops by that mapping.
+        """
+        length = int(logical_length)
+        if length < 0:
+            raise ValueError(f"logical_length must be non-negative, got {length}")
+        for layer_idx in self._materialized_layer_indices():
+            keys, _values = self._get_layer_kv(layer_idx)
+            key_len = int(keys.shape[-2])
+            logical = self._ensure_logical_state(layer_idx, key_len, copy=False)
+            keep = [idx for idx, original in enumerate(logical) if int(original) < length]
+            if len(keep) < key_len:
+                evict_set = set(keep)
+                decision = EvictionDecision(
+                    keep_indices=keep,
+                    evict_indices=[idx for idx in range(key_len) if idx not in evict_set],
+                    reason="logical_prefix_crop",
+                )
+                self._physically_drop(layer_idx, keep)
+                self._compact_logical_state(layer_idx, keep)
+                self._post_evict_hook(layer_idx, decision)
+            self._next_logical_by_layer[layer_idx] = length
 
     def _defer_decision(
         self,
@@ -221,6 +259,42 @@ class BaseEvictionCache(DynamicCache):
         """
         del layer_idx, decision
         return
+
+    def _materialized_layer_indices(self) -> list[int]:
+        layers = getattr(self, "layers", None)
+        if layers is not None:
+            return [idx for idx, layer in enumerate(layers) if layer is not None]
+        key_cache = getattr(self, "key_cache", None)
+        if key_cache is not None:
+            return list(range(len(key_cache)))
+        return []
+
+    def _ensure_logical_state(
+        self, layer_idx: int, key_len: int, *, copy: bool = True
+    ) -> list[int]:
+        layer = int(layer_idx)
+        length = int(key_len)
+        if length < 0:
+            raise ValueError(f"key_len must be non-negative, got {length}")
+        logical = self._logical_indices_by_layer.setdefault(layer, [])
+        next_logical = self._next_logical_by_layer.get(layer, 0)
+        if length < len(logical):
+            raise RuntimeError(
+                f"layer {layer} key_len {length} is shorter than tracked logical "
+                f"origins {len(logical)}"
+            )
+        if length > len(logical):
+            delta = length - len(logical)
+            logical.extend(range(next_logical, next_logical + delta))
+            self._next_logical_by_layer[layer] = next_logical + delta
+        return list(logical) if copy else logical
+
+    def _compact_logical_state(self, layer_idx: int, keep_indices: list[int]) -> None:
+        layer = int(layer_idx)
+        logical = self._logical_indices_by_layer.get(layer)
+        if logical is None:
+            return
+        self._logical_indices_by_layer[layer] = [int(logical[idx]) for idx in keep_indices]
 
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         """Return keep/evict decision for `layer_idx` given current `key_len`.

@@ -733,31 +733,45 @@ class HFRecordingProvider(LLMProvider):
         self.model.eval()
         self._torch = torch
         self._captures_router_logits = self._model_has_router_logits()
-        # Per-provider AttentionBus: lives across calls so the h2o policy can
-        # subscribe at construction time. With zero subscribers it is a no-op
-        # dispatch and preserves attention.npz byte-equality.
-        self._attention_bus = AttentionBus()
+        needs_capturer = bool(
+            self.config.record_artifacts or self._sparse_attention_config is not None
+        )
+        needs_attention_bus = bool(
+            needs_capturer
+            or (
+                self._eviction_config is not None
+                and eviction_policy_requires_attention(self._eviction_config)
+            )
+        )
+        # Per-provider AttentionBus: only needed when something can publish or
+        # subscribe. Lean local-HF full-KV runs skip it and, more importantly,
+        # skip LayerCapturer hook registration entirely.
+        self._attention_bus = AttentionBus() if needs_attention_bus else None
         if self._sparse_attention_config is not None:
+            if self._attention_bus is None:
+                raise RuntimeError("sparse attention requires an AttentionBus")
             self._sparse_attention = build_sparse_attention(
                 self._sparse_attention_config,
                 num_layers=int(self.model.config.num_hidden_layers),
                 recorder=None,
                 attention_bus=self._attention_bus,
             )
-        self.capturer = LayerCapturer(
-            self.model,
-            config=self.config,
-            model_summary=self._model_summary(),
-            attention_bus=self._attention_bus,
-            sparse_attention=self._sparse_attention,
-        )
-        # Attempt-level KV policy summary lands in meta.json. The
-        # `prefill_score_bias` is the explicit warning that an
-        # attention-dependent policy only saw LayerCapturer-sampled prefill rows.
-        self.capturer.set_kv_policy_meta(self._kv_policy_meta_payload())
-        self.capturer.set_sparse_attention_meta(
-            self._sparse_attention_meta_payload()
-        )
+        self.capturer = None
+        if needs_capturer:
+            self.capturer = LayerCapturer(
+                self.model,
+                config=self.config,
+                model_summary=self._model_summary(),
+                attention_bus=self._attention_bus,
+                sparse_attention=self._sparse_attention,
+            )
+            # Attempt-level KV policy summary lands in meta.json. The
+            # `prefill_score_bias` is the explicit warning that an
+            # attention-dependent policy only saw LayerCapturer-sampled prefill rows.
+            self.capturer.set_kv_policy_meta(self._kv_policy_meta_payload())
+            self.capturer.set_sparse_attention_meta(
+                self._sparse_attention_meta_payload()
+            )
 
     def _sparse_attention_meta_payload(self) -> dict[str, Any] | None:
         """Build the attempt-level sparse_attention block for meta.json.
@@ -836,6 +850,8 @@ class HFRecordingProvider(LLMProvider):
         self._session_history = []
         self._message_first_seen = []
         if self._record_artifacts_enabled():
+            if self.capturer is None:
+                raise RuntimeError("record_artifacts enabled without LayerCapturer")
             self.capturer.start_attempt(recordings_dir)
 
     def wait_until_idle(self, timeout_s: float | None = None) -> None:
@@ -855,6 +871,8 @@ class HFRecordingProvider(LLMProvider):
     def finish_attempt(self, trace_path: Path | None = None) -> None:
         if not self._record_artifacts_enabled():
             return
+        if self.capturer is None:
+            raise RuntimeError("record_artifacts enabled without LayerCapturer")
         self.capturer.set_attempt_extra_meta(
             {"session_history": [dict(item) for item in self._session_history]}
         )
@@ -962,6 +980,11 @@ class HFRecordingProvider(LLMProvider):
             return None
         if self._eviction_config is None:
             return DynamicCache()
+        if (
+            eviction_policy_requires_attention(self._eviction_config)
+            and self._attention_bus is None
+        ):
+            raise RuntimeError("attention-dependent KV policy requires an AttentionBus")
         return build_eviction_cache(
             self._eviction_config,
             num_layers=int(self.model.config.num_hidden_layers),
@@ -977,12 +1000,27 @@ class HFRecordingProvider(LLMProvider):
         # Plain DynamicCache (sparse / baseline runs) has no bus subscription;
         # only BaseEvictionCache subclasses need an unsubscribe attempt.
         if isinstance(cache, BaseEvictionCache) and cache.requires_attention():
+            if self._attention_bus is None:
+                raise RuntimeError("attention-dependent cache has no AttentionBus")
             try:
                 self._attention_bus.unsubscribe(cache)
             except ValueError:
                 pass
         self._session_cache = None
         self._session_token_ids = None
+
+    def _crop_session_cache(self, logical_length: int) -> None:
+        """Crop the live session cache to a logical prompt prefix."""
+        cache = self._session_cache
+        if cache is None:
+            raise RuntimeError("cannot crop missing session cache")
+        length = int(logical_length)
+        if length < 0:
+            raise ValueError(f"logical_length must be non-negative, got {length}")
+        if isinstance(cache, BaseEvictionCache):
+            cache.crop_to_logical_length(length)
+        else:
+            cache.crop(length)
 
     def _record_disabled_session_history(
         self, *, call_idx: int, new_len: int
@@ -1011,9 +1049,10 @@ class HFRecordingProvider(LLMProvider):
         """Resolve the cache state for one chat() call.
 
         Returns `(input_ids, used_session_cache)` — `input_ids` is the tensor
-        to pass to `generate()` (delta when the cache is a strict prefix of
-        the prompt, full prompt otherwise), and `used_session_cache` records
-        whether `past_key_values` will be supplied.
+        to pass to `generate()`. It is the shortest suffix needed after
+        cropping the live cache to the prompt LCP; full-prompt prefill is only
+        the degenerate `lcp == 0` suffix. `used_session_cache` records whether
+        `past_key_values` will be supplied.
 
         Thread-safety: must only be called while `_chat_lock` is held.
         `_session_cache.recorder` and `_session_token_ids` are mutated here and
@@ -1091,31 +1130,36 @@ class HFRecordingProvider(LLMProvider):
         )
         if lcp == cached_len and new_len > cached_len:
             # Strict prefix: pass only the delta.
-            delta_len = new_len - lcp
-            self._session_history.append(
-                {
-                    "call_idx": call_idx,
-                    "used_session_cache": True,
-                    "lcp": lcp,
-                    "cached_len_before": cached_len,
-                    "new_len": new_len,
-                    "delta_len": delta_len,
-                    "diverged": False,
-                }
+            resume_len = lcp
+            diverged = False
+            replayed_last_token = False
+        elif lcp == new_len and new_len > 0:
+            # The rendered prompt is already fully represented in cache (exact
+            # retry or prompt truncation back to a prior prefix). Replaying the
+            # last prompt token is the minimal non-empty generate() input that
+            # recreates logits for continuing from this prompt.
+            resume_len = new_len - 1
+            diverged = lcp < cached_len
+            replayed_last_token = True
+        else:
+            # True LCP resume-prefill: keep the valid prefix and prefill only
+            # the re-rendered suffix. No full-cache rebuild fallback here.
+            resume_len = lcp
+            diverged = lcp < cached_len
+            replayed_last_token = False
+        if resume_len < cached_len:
+            _LOG.info(
+                "session KV cache LCP resume (call_idx=%d, lcp=%d, "
+                "cached_len=%d, new_len=%d, resume_len=%d)",
+                call_idx,
+                lcp,
+                cached_len,
+                new_len,
+                resume_len,
             )
-            return prompt_ids[:, lcp:], True
-        # Divergence: monotonic-reprompt assumption violated. Drop and rebuild.
-        _LOG.warning(
-            "session KV cache diverged from new prompt (lcp=%d, cached_len=%d, "
-            "new_len=%d, call_idx=%d); rebuilding fresh cache",
-            lcp,
-            cached_len,
-            new_len,
-            call_idx,
-        )
-        self._drop_session_cache()
-        self._session_cache = self._build_session_cache()
-        self._session_token_ids = prompt_ids.clone()
+            self._crop_session_cache(resume_len)
+            self._session_token_ids = prompt_ids[:, :resume_len].clone()
+        delta_len = new_len - resume_len
         self._session_history.append(
             {
                 "call_idx": call_idx,
@@ -1123,11 +1167,13 @@ class HFRecordingProvider(LLMProvider):
                 "lcp": lcp,
                 "cached_len_before": cached_len,
                 "new_len": new_len,
-                "delta_len": new_len,
-                "diverged": True,
+                "delta_len": delta_len,
+                "diverged": diverged,
+                "resume_len": resume_len,
+                "replayed_last_token": replayed_last_token,
             }
         )
-        return prompt_ids, True
+        return prompt_ids[:, resume_len:], True
 
     def _extend_session_tokens(self, *, prompt_ids: Any, output_ids: list[int]) -> None:
         # No session cache means nothing to extend (escape hatch or already
@@ -1135,15 +1181,10 @@ class HFRecordingProvider(LLMProvider):
         # bother tracking token state.
         if self._session_cache is None:
             return
-        # Append raw generated token ids to prompt_ids. Note: for models with
-        # chain-of-thought generation (e.g. Qwen3 <think>…</think>), the raw
-        # output_ids include thinking tokens that differ from how the next
-        # call's apply_chat_template re-renders the completed turn. When that
-        # happens, _prepare_session_cache will detect a divergence (LCP <
-        # cached_len) and rebuild the cache from scratch — a correct fallback
-        # at the cost of one extra full-prefill. The divergence path is safe;
-        # this simpler storage avoids a re-render whose template behavior is
-        # model-specific and hard to predict in the general case.
+        # Append raw generated token ids to prompt_ids. A later call may
+        # re-render the same semantic turn differently (tool-call ids, parsed
+        # XML, thinking-token elision). _prepare_session_cache handles that by
+        # cropping the cache to the LCP and prefilling only the changed suffix.
         generated = self._torch.as_tensor(
             output_ids, dtype=prompt_ids.dtype, device=prompt_ids.device
         ).unsqueeze(0)
@@ -1350,7 +1391,8 @@ class HFRecordingProvider(LLMProvider):
                     call_idx=call_idx,
                     policy_name=self._eviction_config.name,
                 )
-            self.capturer.set_kv_recorder(kv_recorder)
+            if self.capturer is not None:
+                self.capturer.set_kv_recorder(kv_recorder)
             if used_session_cache:
                 assert self._session_cache is not None
                 # `recorder` / `notify_new_call` are policy-only hooks; plain
@@ -1402,7 +1444,8 @@ class HFRecordingProvider(LLMProvider):
                     call_idx=call_idx,
                     method_name=self._sparse_attention_config.name,
                 )
-            self.capturer.set_sparse_recorder(sparse_recorder)
+            if self.capturer is not None:
+                self.capturer.set_sparse_recorder(sparse_recorder)
             if self._sparse_attention is not None and hasattr(
                 self._sparse_attention, "reset_state"
             ):
@@ -1442,6 +1485,8 @@ class HFRecordingProvider(LLMProvider):
                         start_event.record()
                 _synchronize_cuda_devices(self._torch)
             generate_started = time.perf_counter()
+            if record_artifacts and self.capturer is None:
+                raise RuntimeError("record_artifacts enabled without LayerCapturer")
             recording_ctx = (
                 self.capturer.recording_session(
                     call_idx=call_idx,
@@ -1516,7 +1561,8 @@ class HFRecordingProvider(LLMProvider):
             # Symmetric detach for sparse recorder; pre-hook reads via
             # capturer attribute, so clearing here keeps a stale recorder
             # from being touched between calls.
-            self.capturer.set_sparse_recorder(None)
+            if self.capturer is not None:
+                self.capturer.set_sparse_recorder(None)
             text = self.tokenizer.decode(output_ids, skip_special_tokens=True)
             self._extend_session_tokens(prompt_ids=prompt_ids, output_ids=output_ids)
             return text, output_ids
@@ -1527,7 +1573,13 @@ class HFRecordingProvider(LLMProvider):
         # forces a `cuda.empty_cache()` + `gc.collect()` + sync, hidden
         # ~50-200ms / call on 30B-A3B FP8).
         self._clear_cuda_cache()
-        text, output_ids = await asyncio.to_thread(run_generate)
+        try:
+            text, output_ids = await asyncio.to_thread(run_generate)
+        except Exception:
+            _LOG.exception("local HF generation failed; dropping session cache")
+            self._drop_session_cache()
+            self._clear_cuda_cache()
+            raise
         content, tool_calls = parse_text_tool_calls(text)
         elapsed_ms = (time.time() - started_at) * 1000.0
         return LLMResponse(
