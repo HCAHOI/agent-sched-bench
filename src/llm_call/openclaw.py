@@ -26,6 +26,7 @@ from agents.openclaw.providers.base import (
     LLMResponse,
     ToolCallRequest,
 )
+from agents.openclaw.trace_fields import filter_hf_trace_extra
 
 _ALLOWED_MSG_KEYS = frozenset(
     {
@@ -605,6 +606,23 @@ class UnifiedProvider(LLMProvider):
         return str(value)
 
     @classmethod
+    def _extract_hf_telemetry(cls, *containers: Any) -> dict[str, Any]:
+        """Extract allow-listed local-HF telemetry from response payloads."""
+        extracted: dict[str, Any] = {}
+        for container in containers:
+            container_map = cls._maybe_mapping(container)
+            if container_map is not None:
+                telemetry_map = cls._maybe_mapping(container_map.get("hf_telemetry"))
+                if telemetry_map is not None:
+                    extracted.update(filter_hf_trace_extra(telemetry_map))
+                extracted.update(filter_hf_trace_extra(container_map))
+                continue
+            telemetry_map = cls._maybe_mapping(_get(container, "hf_telemetry"))
+            if telemetry_map is not None:
+                extracted.update(filter_hf_trace_extra(telemetry_map))
+        return extracted
+
+    @classmethod
     def _extract_usage(cls, response: Any) -> dict[str, int]:
         """Extract token usage from an OpenAI-compatible response."""
         usage_obj = None
@@ -672,6 +690,7 @@ class UnifiedProvider(LLMProvider):
                         content=content,
                         finish_reason=str(response_map.get("finish_reason") or "stop"),
                         usage=self._extract_usage(response_map),
+                        extra=self._extract_hf_telemetry(response_map),
                     )
                 return LLMResponse(
                     content="Error: API returned empty choices.",
@@ -726,6 +745,7 @@ class UnifiedProvider(LLMProvider):
                 reasoning_content=reasoning_content
                 if isinstance(reasoning_content, str)
                 else None,
+                extra=self._extract_hf_telemetry(response_map, msg0),
             )
 
         if not response.choices:
@@ -773,6 +793,7 @@ class UnifiedProvider(LLMProvider):
             finish_reason=finish_reason or "stop",
             usage=self._extract_usage(response),
             reasoning_content=getattr(msg, "reasoning_content", None) or None,
+            extra=self._extract_hf_telemetry(response, msg),
         )
 
     @classmethod

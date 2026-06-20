@@ -20,8 +20,10 @@ the H2OCache's bus observe() path.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +35,7 @@ from serving.kv_policies.h2o import H2OCache
 from serving.recording.attention_bus import AttentionBus
 from serving.recording.backend_hf import (
     HFRecordingProvider,
+    HFRecordingServer,
     _generation_metadata,
     _generation_seed,
     _longest_common_prefix,
@@ -41,6 +44,7 @@ from serving.recording.backend_hf import (
 )
 from serving.recording.recording import RecordingConfig
 from agents.openclaw.providers.base import LLMResponse
+from llm_call.openclaw import UnifiedProvider
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +158,82 @@ def test_malformed_tool_output_detector_is_telemetry_only() -> None:
     assert not _looks_like_malformed_tool_output(
         "<function=read_file>", [SimpleNamespace(name="read_file")]
     )
+
+
+def test_hf_recording_server_serializes_allowlisted_telemetry() -> None:
+    class FakeProvider:
+        default_model = "stub-model"
+
+        async def chat(self, **kwargs) -> LLMResponse:
+            return LLMResponse(
+                content="ok",
+                finish_reason="stop",
+                usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                extra={
+                    "hf_call_idx": 4,
+                    "hf_cache_lcp": 123,
+                    "hf_generation": {"output_tokens": 2},
+                    "hf_unreviewed_future_field": "must-not-leak",
+                    "llm_call_time_ms": 7.0,
+                },
+            )
+
+    with HFRecordingServer(FakeProvider(), bind_host="127.0.0.1") as server:
+        request = urllib.request.Request(
+            f"{server.api_base}/chat/completions",
+            data=json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode(
+                "utf-8"
+            ),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8"))
+
+    assert body["choices"][0]["message"]["content"] == "ok"
+    assert body["hf_telemetry"]["hf_call_idx"] == 4
+    assert body["hf_telemetry"]["hf_cache_lcp"] == 123
+    assert body["hf_telemetry"]["hf_generation"] == {"output_tokens": 2}
+    assert "hf_unreviewed_future_field" not in body["hf_telemetry"]
+    assert "llm_call_time_ms" not in body["hf_telemetry"]
+
+
+def test_local_hf_server_round_trips_telemetry_through_unified_provider() -> None:
+    class FakeProvider:
+        default_model = "stub-model"
+
+        async def chat(self, **kwargs) -> LLMResponse:
+            return LLMResponse(
+                content="ok",
+                finish_reason="stop",
+                usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                extra={
+                    "hf_call_idx": 5,
+                    "hf_cache_lcp": 456,
+                    "hf_generation": {"output_tokens": 2},
+                    "hf_unreviewed_future_field": "must-not-leak",
+                },
+            )
+
+    async def drive() -> None:
+        with HFRecordingServer(FakeProvider(), bind_host="127.0.0.1") as server:
+            provider = UnifiedProvider(
+                api_key="dummy",
+                api_base=server.api_base,
+                default_model="stub-model",
+            )
+            response = await provider.chat(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=8,
+            )
+
+        assert response.content == "ok"
+        assert response.extra["hf_call_idx"] == 5
+        assert response.extra["hf_cache_lcp"] == 456
+        assert response.extra["hf_generation"] == {"output_tokens": 2}
+        assert "hf_unreviewed_future_field" not in response.extra
+
+    asyncio.run(drive())
 
 
 def test_generation_metadata_records_resolved_sampling_params() -> None:

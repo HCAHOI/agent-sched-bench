@@ -30,6 +30,7 @@ from agents.openclaw.providers.base import (
     LLMResponse,
     ToolCallRequest,
 )
+from agents.openclaw.trace_fields import filter_hf_trace_extra
 from serving.kv_policies import build_eviction_cache, eviction_policy_requires_attention
 from serving.kv_policies.base import BaseEvictionCache, EvictionPolicyConfig
 from serving.kv_policies.recorder import KVEvictionRecorder
@@ -1478,7 +1479,6 @@ class HFRecordingProvider(LLMProvider):
                     "input_delta_tokens": int(delta_ids.shape[-1]),
                     "max_new_tokens": max_new_tokens,
                     "used_session_cache": bool(used_session_cache),
-                    "session": dict(self._last_session_event or {}),
                 }
             )
             if temperature > 0:
@@ -1860,7 +1860,7 @@ class HFRecordingServer:
                         tool_call.to_openai_tool_call()
                         for tool_call in response.tool_calls
                     ]
-                return {
+                body = {
                     "id": "hf-recording",
                     "object": "chat.completion",
                     "created": int(time.time()),
@@ -1874,6 +1874,10 @@ class HFRecordingServer:
                     ],
                     "usage": response.usage,
                 }
+                hf_telemetry = filter_hf_trace_extra(response.extra)
+                if hf_telemetry:
+                    body["hf_telemetry"] = hf_telemetry
+                return body
 
         self._server = ThreadingHTTPServer((self._bind_host, 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)

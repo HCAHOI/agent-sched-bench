@@ -131,6 +131,38 @@ def _make_provider(*, completions: _FakeCompletions) -> UnifiedProvider:
     return provider
 
 
+def test_unified_provider_parses_allowlisted_hf_telemetry() -> None:
+    provider = UnifiedProvider(
+        api_key="test-key",
+        api_base="http://localhost:1234/v1",
+        default_model="local-hf",
+    )
+
+    response = provider._parse(
+        {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            "hf_telemetry": {
+                "hf_call_idx": 3,
+                "hf_cache_lcp": 42,
+                "hf_generation": {"output_tokens": 2},
+                "hf_unreviewed_future_field": "must-not-leak",
+            },
+        }
+    )
+
+    assert response.content == "ok"
+    assert response.extra["hf_call_idx"] == 3
+    assert response.extra["hf_cache_lcp"] == 42
+    assert response.extra["hf_generation"] == {"output_tokens": 2}
+    assert "hf_unreviewed_future_field" not in response.extra
+
+
 def test_unified_provider_reads_llm_timeout_env(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
