@@ -19,14 +19,6 @@ def mean_contiguity_displacement(kept_indices: Sequence[int]) -> float:
     )
 
 
-def phase_gap_count(kept_indices: Sequence[int]) -> int:
-    """Count non-adjacent jumps among sorted survivor positions."""
-    kept = sorted(int(idx) for idx in kept_indices)
-    if len(kept) < 2:
-        return 0
-    return sum(1 for left, right in zip(kept, kept[1:], strict=True) if right != left + 1)
-
-
 @dataclass(frozen=True)
 class AffectedPositionResult:
     """Set-A and Set-B affected decode-row masks."""

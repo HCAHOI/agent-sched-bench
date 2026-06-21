@@ -261,13 +261,7 @@ class BaseEvictionCache(DynamicCache):
         return
 
     def _materialized_layer_indices(self) -> list[int]:
-        layers = getattr(self, "layers", None)
-        if layers is not None:
-            return [idx for idx, layer in enumerate(layers) if layer is not None]
-        key_cache = getattr(self, "key_cache", None)
-        if key_cache is not None:
-            return list(range(len(key_cache)))
-        return []
+        return [idx for idx, layer in enumerate(self.layers) if layer is not None]
 
     def _ensure_logical_state(
         self, layer_idx: int, key_len: int, *, copy: bool = True
@@ -311,13 +305,7 @@ class BaseEvictionCache(DynamicCache):
         layer_idx: int,
         keep_indices: list[int],
     ) -> "tuple[torch.Tensor, torch.Tensor]":
-        """Replace this layer's K/V tensors with the subset at `keep_indices`.
-
-        Probes both `layers[idx].keys/values` (4.57+ struct) and the legacy
-        `key_cache/value_cache` attrs since DynamicCache internals shifted
-        between minor versions (see `hooks.py:_cached_key_states` for the
-        same defensive pattern).
-        """
+        """Replace this layer's K/V tensors with the subset at `keep_indices`."""
         import torch
 
         keys, values = self._get_layer_kv(layer_idx)
@@ -330,14 +318,8 @@ class BaseEvictionCache(DynamicCache):
     def _get_layer_kv(
         self, layer_idx: int
     ) -> "tuple[torch.Tensor, torch.Tensor]":
-        layers = getattr(self, "layers", None)
-        if layers is not None:
-            layer = layers[layer_idx]
-            keys = getattr(layer, "keys", None)
-            values = getattr(layer, "values", None)
-            if keys is not None and values is not None:
-                return keys, values
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+        layer = self.layers[layer_idx]
+        return layer.keys, layer.values
 
     def _set_layer_kv(
         self,
@@ -345,15 +327,9 @@ class BaseEvictionCache(DynamicCache):
         keys: "torch.Tensor",
         values: "torch.Tensor",
     ) -> None:
-        layers = getattr(self, "layers", None)
-        if layers is not None:
-            layer = layers[layer_idx]
-            if hasattr(layer, "keys") and hasattr(layer, "values"):
-                layer.keys = keys
-                layer.values = values
-                return
-        self.key_cache[layer_idx] = keys
-        self.value_cache[layer_idx] = values
+        layer = self.layers[layer_idx]
+        layer.keys = keys
+        layer.values = values
 
     def _advance_step(
         self, layer_idx: int, *, query_len: int

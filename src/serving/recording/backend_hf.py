@@ -864,13 +864,11 @@ class HFRecordingProvider(LLMProvider):
         return self.default_model
 
     def _record_artifacts_enabled(self) -> bool:
-        return bool(getattr(self.config, "record_artifacts", True))
+        return bool(self.config.record_artifacts)
 
     def start_attempt(self, recordings_dir: Path) -> None:
         self._drop_session_cache()
-        if self._sparse_attention is not None and hasattr(
-            self._sparse_attention, "reset_state"
-        ):
+        if self._sparse_attention is not None:
             self._sparse_attention.reset_state()
         self._call_idx = 0
         self._session_history = []
@@ -1276,7 +1274,7 @@ class HFRecordingProvider(LLMProvider):
             output_ids, dtype=prompt_ids.dtype, device=prompt_ids.device
         ).unsqueeze(0)
         # O(N²) cat per call; acceptable for agent-loop scales (≤100 turns ×
-        # ≤32K tokens). Future: track only the suffix delta.
+        # ≤32K tokens).
         combined = self._torch.cat([prompt_ids, generated], dim=-1)
         if isinstance(self._session_cache, BaseEvictionCache):
             # Eviction policies intentionally let physical KV length lag
@@ -1307,9 +1305,8 @@ class HFRecordingProvider(LLMProvider):
         del exc_type, exc, tb
         try:
             self.finish_attempt()
-        except Exception:
-            _LOG.exception("defensive finish_attempt() failed during provider exit")
-        self.close()
+        finally:
+            self.close()
         self._session_token_ids = None
         self._session_cache = None
         if hasattr(self, "model"):
@@ -1320,18 +1317,9 @@ class HFRecordingProvider(LLMProvider):
             self.capturer = None
         gc.collect()
         torch = getattr(self, "_torch", None)
-        try:
-            if torch is not None and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                _synchronize_cuda_devices(torch)
-        except Exception:
-            pass
-
-    def __del__(self) -> None:
-        try:
-            self._drop_session_cache()
-        except Exception:
-            pass
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            _synchronize_cuda_devices(torch)
 
     async def chat(
         self,
@@ -1572,9 +1560,7 @@ class HFRecordingProvider(LLMProvider):
                 )
             if self.capturer is not None:
                 self.capturer.set_sparse_recorder(sparse_recorder)
-            if self._sparse_attention is not None and hasattr(
-                self._sparse_attention, "reset_state"
-            ):
+            if self._sparse_attention is not None:
                 self._sparse_attention.reset_state()
             if self._sparse_attention is not None and hasattr(
                 self._sparse_attention, "notify_new_call"
@@ -1696,11 +1682,6 @@ class HFRecordingProvider(LLMProvider):
             self._extend_session_tokens(prompt_ids=prompt_ids, output_ids=output_ids)
             return text, output_ids, generation_meta
 
-        # Pre-clear is defensive against fragmentation accumulated by the
-        # previous chat; the next chat's pre-clear will sweep what THIS chat
-        # leaves behind, so a post-clear here is pure overhead (each call
-        # forces a `cuda.empty_cache()` + `gc.collect()` + sync, hidden
-        # ~50-200ms / call on 30B-A3B FP8).
         self._clear_cuda_cache()
         try:
             text, output_ids, generation_meta = await asyncio.to_thread(run_generate)

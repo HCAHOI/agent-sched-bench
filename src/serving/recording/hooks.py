@@ -64,12 +64,9 @@ def _as_numpy(tensor: Any) -> np.ndarray:
 
 
 def _is_block_topk(method: Any) -> bool:
-    """True iff `method` is the block_topk sparse-attention method.
-
-    Identified by name plus the block-geometry attributes the block-stats
-    accumulator reads (budget / block_size / sink_size / recent_window). The
-    attribute check guards against a future name collision silently feeding a
-    method with no block geometry into the accumulator.
+    """True iff `method` is block_topk. The attribute check guards against a
+    future name collision feeding a non-block-geometry method into the
+    block-stats accumulator.
     """
     return getattr(method, "name", None) == "block_topk" and all(
         hasattr(method, attr)
@@ -385,14 +382,12 @@ def _routing_count_summary(
         segment_ids = token_ids[:n_tokens].to(device=choices.device, dtype=torch.long)
         valid_segments = (segment_ids >= 0) & (segment_ids < n_segments)
         # Hoist scalar-one outside the rank loop; index_put_ broadcasts a 0-d
-        # value across the index set, so we don't need to materialize per-rank
-        # `ones` and can skip the `.any()` / `.sum().item()` GPU->CPU syncs.
+        # value across the (possibly empty) index set, avoiding per-rank `ones`
+        # and the `.any()` / `.sum().item()` GPU->CPU syncs.
         scalar_one = torch.ones((), dtype=torch.int32, device=choices.device)
         for rank in range(top_k):
             experts = choices[:, rank].to(dtype=torch.long)
             valid = valid_segments & (experts >= 0) & (experts < n_experts)
-            # `index_put_` on empty index tensors is a safe no-op; scalar 1
-            # broadcasts across the index set, so the count is unnecessary.
             counts.index_put_(
                 (segment_ids[valid], experts[valid]),
                 scalar_one,
@@ -654,10 +649,6 @@ class LayerCapturer:
             handle.remove()
         self._handles = []
 
-    def kv_recorder(self) -> "KVEvictionRecorder | None":
-        """Currently-attached KV eviction recorder, or None."""
-        return self._kv_recorder
-
     def set_kv_recorder(self, recorder: "KVEvictionRecorder | None") -> None:
         """Swap the KV recorder. Caller (provider) drives the per-call lifecycle.
 
@@ -665,10 +656,6 @@ class LayerCapturer:
         (the project's actual usage).
         """
         self._kv_recorder = recorder
-
-    def sparse_recorder(self) -> "SparseAttentionRecorder | None":
-        """Currently-attached sparse-attention recorder, or None."""
-        return self._sparse_recorder
 
     def set_sparse_recorder(
         self, recorder: "SparseAttentionRecorder | None"
@@ -721,9 +708,9 @@ class LayerCapturer:
             "recording_config": asdict(self.config),
             "iters": [],
         }
-        if getattr(self, "_kv_policy_meta", None) is not None:
+        if self._kv_policy_meta is not None:
             self._meta["kv_policy"] = dict(self._kv_policy_meta)
-        if getattr(self, "_sparse_attention_meta", None) is not None:
+        if self._sparse_attention_meta is not None:
             self._meta["sparse_attention"] = dict(self._sparse_attention_meta)
 
     def finish_attempt(self, trace_path: Path | None = None) -> None:
@@ -970,18 +957,12 @@ class LayerCapturer:
                 dtype=hidden_states.dtype,
                 context=context,
             )
-            # Cache block_topk's kept-block ranking so the attention-capture
-            # hook (same module forward, fires AFTER this pre-hook) can build
-            # per-rank within-block masks that are restricted to actually-kept
-            # positions. We cache (selected_blocks_kept, kept_positions_set):
-            #   - selected_blocks_kept: score-ranked block ids filtered to blocks
-            #     that have ≥1 position in selected_middle (i.e. post-budget-cap).
-            #     This avoids including blocks that were ranked but then dropped
-            #     by cap_middle_selection — using raw selected_blocks would
-            #     pollute rank columns with unretained keys.
-            #   - kept_positions_set: frozenset of selected_middle_indices used
-            #     to intersect each rank bucket mask so partial blocks only count
-            #     their actually-retained positions (not the full block range).
+            # Cache block_topk's kept-block ranking for the post-hook (same
+            # forward) to build per-rank within-block masks restricted to
+            # actually-kept positions. selected_blocks_kept is filtered to
+            # blocks with ≥1 kept position (post-budget-cap); kept_positions_set
+            # intersects each rank bucket so partial blocks count only retained
+            # positions.
             if (
                 self.config.per_head_block_stats
                 and self._session is not None
@@ -1019,11 +1000,6 @@ class LayerCapturer:
                 "the sparse mask tensor."
             )
             if sparse_mask is not None and not observe_only:
-                # Qwen3 decoder layers call self_attn with pure kwargs beyond
-                # `hidden_states`; if a future HF version starts passing
-                # attention_mask positionally, `existing is None` here will let
-                # the materialize-fresh branch fire and overwrite the wrong
-                # arg, surfacing fast in tests rather than silently corrupting.
                 existing = kwargs.get("attention_mask")
                 # Only merge into the upstream mask when it is a 4-D FLOAT
                 # additive mask: finfo() below requires a float dtype and the
@@ -1046,14 +1022,9 @@ class LayerCapturer:
                     # carries the same query-dim as the existing mask (the
                     # downstream LayerCapturer relies on `mask.shape[-2] ==
                     # query_len` to slice sampled rows).
-                    if existing.ndim == 4 and existing.shape[-2] >= 1:
-                        sparse_for_add = sparse_mask.to(
-                            device=existing.device, dtype=existing.dtype
-                        ).expand(-1, -1, existing.shape[-2], -1)
-                    else:
-                        sparse_for_add = sparse_mask.to(
-                            device=existing.device, dtype=existing.dtype
-                        )
+                    sparse_for_add = sparse_mask.to(
+                        device=existing.device, dtype=existing.dtype
+                    ).expand(-1, -1, existing.shape[-2], -1)
                     # Sparse mask is a "force-mask" not a weighted decrement:
                     # positions already masked by the upstream causal mask plus
                     # sparse should stay at finfo.min, not double-saturate to

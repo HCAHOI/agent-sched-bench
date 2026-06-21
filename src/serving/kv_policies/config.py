@@ -109,26 +109,14 @@ def _coerce(field_name: str, value: Any) -> Any:
 def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
     """Build an `EvictionPolicyConfig` from yaml + CLI overlay, or None.
 
-    Resolution order
-    ----------------
-    1. If `--kv-config PATH` is set, load that yaml as the base map (flat
-       keys mirroring `EvictionPolicyConfig`). Empty file or no `--kv-config`
-       starts from an empty base.
-    2. For each CLI flag listed in `_CLI_TO_FIELD`, if the user *explicitly*
-       set it (i.e. the parsed value differs from the argparse default), the
-       CLI value overrides the yaml value. The argparse default for
-       `--kv-policy` is `"none"`; treating that as a real override would
-       silently disable yaml-supplied policies, so we special-case it: a
-       CLI `"none"` only kicks in when there's no yaml file.
-    3. Validate the merged map: `name` must be present and != `"none"`,
-       `budget` must be a positive int. For streaming, an omitted
-       `recent_window` is resolved to `budget - sink_size` so `--kv-budget`
-       alone means "fixed cache capacity"; explicit YAML/CLI windows remain
-       explicit and are validated by the cache subclass.
+    yaml (if any) is the base; explicitly-set CLI flags overlay it. Two
+    non-obvious cases: a CLI `--kv-policy none` only overrides a yaml-supplied
+    name when no `--kv-config` was passed (otherwise the default would silently
+    disable yaml policies); and for streaming an omitted `recent_window` is
+    resolved to `budget - sink_size`.
 
-    Returns None when the resolved policy is `"none"` (or absent and no
-    yaml supplied), so callers can keep the simple `if eviction_config is
-    not None` pattern.
+    Returns None when the resolved policy is `"none"`, so callers can keep the
+    simple `if eviction_config is not None` pattern.
     """
     yaml_path = getattr(args, "kv_config", None)
     base: dict[str, Any] = {}

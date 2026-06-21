@@ -18,73 +18,45 @@ context). From `middle`, keep the top `budget - sink_size - recent_window`
 positions ranked by accumulated attention score; evict the rest. The
 post-eviction layer length is exactly `budget`.
 
-Design choices (locked here so reviewers can audit later H2O variants against
-the same baseline contract).
+Design choices (locked so later H2O variants share one baseline contract).
 
 A. **Score buffer shape — head-mean at `observe()` time, NOT per-head store.**
-   The decision uses head-averaged scores (paper convention; cheap and
-   well-behaved for GQA). We accumulate the head-mean directly in
-   `observe()` instead of storing per-(layer, head, key_pos) and reducing at
-   decision time. Algebraically equivalent because both sum and head-mean are
-   linear; the per-head store would cost `num_kv_heads`x more memory (≈ 8x
-   for Qwen3) for zero behavioural difference. The published `attn` from the
-   bus carries the per-query-head dim already, so we mean over that axis.
+   We accumulate the head-mean directly in `observe()`; equivalent to a
+   per-head store (sum + head-mean are linear) but ≈8x cheaper for Qwen3.
 
 B. **`config.aggregate` — `sum` (default), `mean`, `ema`.**
-   * `sum` — paper default; cumulative score across observed queries, prefill
-     + decode sharing one accumulator.
-   * `mean` — `sum / observation_count` per key position. Maintains a parallel
-     int counter per (layer, key_pos) incremented by `n_query_rows` on every
-     observe(). Decision time divides the live prefix by the counter (clamped
-     to 1 to avoid div-by-zero on never-observed slots; sink+recent are kept
-     unconditionally so an unobserved slot is harmless). Algebraically this
-     re-normalises the score so that older positions don't dominate purely
-     because they have been exposed to more queries.
-   * `ema` — exponential moving average with decay `ema_decay`. observe()
-     applies `buffer = ema_decay * buffer + per_key` on the live prefix only,
-     leaving the unallocated tail untouched. First observe on a layer
-     short-circuits to a plain assignment so the EMA does not start from
-     ambient zero (which would scale the first decision by `1 - ema_decay`).
-     Score buffer compaction (`_post_evict_hook`) gathers the EMA prefix the
-     same way as for sum, so the moving average survives eviction without a
-     phase shift.
+   * `sum` — paper default; cumulative score, prefill + decode share one
+     accumulator.
+   * `mean` — `sum / observation_count` per key position; a parallel int
+     counter (incremented by `n_query_rows`) re-normalises so older positions
+     don't dominate purely from longer exposure.
+   * `ema` — moving average with decay `ema_decay`, touching only the live
+     prefix; first observe assigns directly (else the first decision would be
+     scaled by `1 - ema_decay`).
 
 C. **Score buffer pre-allocation.**
-   We pre-allocate a single `(max_position_embeddings,)` fp32 tensor per
-   layer at first `observe()` (lazy on attn.device). Decode is hot — every
-   step would otherwise grow the buffer; an upfront fp32 vector at 128k pos
-   is ~512 KiB per layer (32 layers ≈ 16 MiB). If a downstream model exceeds
-   `max_position_embeddings`, we raise — silent truncation would corrupt the
-   eviction decisions invisibly.
+   One lazy `(max_position_embeddings,)` fp32 tensor per layer (decode is hot;
+   regrowing every step is wasteful). Exceeding `max_position_embeddings`
+   raises rather than silently truncating the eviction decisions.
 
 D. **Device.**
-   The score buffer lives on the same device as the published `attn` tensor.
-   First `observe()` for a layer pins the device; subsequent calls assume it
-   stays put. This avoids per-call `.to(...)` traffic on the decode path.
+   The buffer pins to the first `observe()`'s `attn` device, avoiding per-call
+   `.to(...)` traffic on the decode path.
 
 E. **Post-eviction score buffer compaction.**
-   `_physically_drop` shrinks the K/V tensors by `keep_indices`; the score
-   buffer must follow the same permutation or the next `observe()` will
-   write into stale slots. We override `_post_evict_hook` (added to
-   `BaseEvictionCache` for this purpose) and rebuild the prefix as
-   `buffer[keep_indices]`. The base class fires the hook *after* the K/V
-   drop succeeds.
+   `_post_evict_hook` rebuilds the prefix as `buffer[keep_indices]` so the
+   buffer follows the K/V drop; otherwise the next `observe()` writes stale
+   slots.
 
 Lifecycle invariants (plan §H4 + Top Risk #4)
 ---------------------------------------------
 
-* `always_active = True` (class-level): even when `LayerCapturer.suspend_attention()`
-  is gating the bus, H2O still observes. A silent skip would corrupt the
-  score buffer relative to the cache state and the next eviction would pick
-  stale heavy hitters.
-* `requires_attention_backend()` returns True so the provider knows it must wire
-  the bus.
-* The provider owns subscribe/unsubscribe lifecycle: H2O subscribes itself
-  on construction, but the provider must call `attention_bus.unsubscribe(cache)`
-  in a `finally` block around `model.generate(...)`. Letting subscriptions
-  accumulate across calls would (a) leak references to dead caches and
-  (b) cause double-observation if a cache from a prior call is still
-  registered.
+* `always_active = True`: H2O observes even while `suspend_attention()` gates
+  the bus — a silent skip would desync the score buffer from the cache.
+* `requires_attention_backend()` returns True so the provider wires the bus.
+* H2O subscribes itself on construction; the provider must
+  `attention_bus.unsubscribe(cache)` in a `finally` around `generate(...)` or
+  subscriptions leak / double-observe across calls.
 """
 
 from __future__ import annotations
@@ -227,12 +199,9 @@ class H2OCache(BaseEvictionCache):
                 "or pick a smaller context"
             )
 
-        # Sum across query-row axis (each query contributes its softmax row)
-        # then sum across batch, then mean across heads. Order of reductions
-        # is irrelevant (linear) but doing query-sum first matches the paper
-        # cumulative-attention definition more naturally.
+        # Sum over query rows + batch, then head-mean (choice A).
         per_head_per_key = attn.sum(dim=2).sum(dim=0)  # (H, K)
-        per_key = per_head_per_key.mean(dim=0)  # (K,) — head-mean (choice A)
+        per_key = per_head_per_key.mean(dim=0)  # (K,)
         # Number of query rows that contributed mass into this observation.
         # Each query row sums to ~1 across keys, so for `mean` we need the
         # divisor to scale with both the query axis and the (already summed)
@@ -363,44 +332,14 @@ class H2OCache(BaseEvictionCache):
             )
         sink = int(self.config.sink_size)
         recent = int(self.config.recent_window)
-        # Defensive: caller-side validation guarantees budget >= sink+recent,
-        # so middle window is always non-empty when budget < key_len. But pin
-        # the invariant explicitly so future config changes can't sneak past.
-        if sink + recent > key_len:
-            raise RuntimeError(
-                f"H2OCache: sink({sink}) + recent({recent}) > key_len({key_len}); "
-                "cannot partition without overlap"
-            )
         n_heavy = budget - sink - recent
         middle_start = sink
         middle_end = key_len - recent
         middle_len = middle_end - middle_start
-        if n_heavy < 0:
-            raise RuntimeError(
-                f"H2OCache: heavy_count budget({budget}) - sink({sink}) - recent({recent}) "
-                f"< 0; constructor invariant breached"
-            )
+        assert n_heavy >= 0 and sink + recent <= key_len
 
         buffer = self._scores[int(layer_idx)]
-        # Order-of-operations note: in HF generate, the layer's
-        # `past_key_values.update(...)` runs BEFORE softmax/capturer hook for
-        # the same forward step. So at decision time the score buffer
-        # reflects scores accumulated through the *previous* forward.
-        #
-        # Prefill case: the *first* forward pass has no "previous" forward;
-        # if prefill_len > budget the very first cache.update triggers an
-        # eviction call here with `buffer is None` (or score_lengths <
-        # middle_end). Fail-fast in that branch is wrong — the H2O paper's
-        # heavy-hitter ranking is undefined without observed attention, and
-        # raising would silently kill the whole recording session via the
-        # `finally unsubscribe` chain in HFRecordingProvider.chat().
-        #
-        # Fallback for direct/stale decision calls: use a streaming-style keep
-        # set when score is missing — sink + recent + uniformly-spaced middle
-        # positions filling the `n_heavy` slots. The normal `update()` path
-        # defers over-budget prefill decisions until `observe()` has populated
-        # scores, so paper-faithful H2O runs should not record this reason for
-        # prefill.
+        # Score-missing fallback: streaming-style keep set when scores aren't populated yet.
         if buffer is None or self._score_lengths[int(layer_idx)] < middle_end:
             if n_heavy <= 0 or middle_len <= 0:
                 keep_middle: list[int] = []
@@ -439,11 +378,8 @@ class H2OCache(BaseEvictionCache):
                     f"{layer_idx}; observe() failed to maintain the parallel "
                     "count tensor."
                 )
-            # Sink + recent are always kept regardless of score; the only
-            # slots whose count actually matters are middle slots that have
-            # been observed. Clamp to 1 so unobserved middle slots (count==0)
-            # produce a finite (zero) mean rather than a NaN that would
-            # propagate through topk.
+            # Clamp count to 1 so unobserved middle slots (count==0) yield a
+            # finite zero mean instead of a NaN that would propagate through topk.
             middle_counts = counts[middle_start:middle_end].to(dtype=middle_scores.dtype)
             middle_scores = middle_scores / middle_counts.clamp(min=1)
         # n_heavy may be 0 (budget == sink + recent); topk(0) is degenerate

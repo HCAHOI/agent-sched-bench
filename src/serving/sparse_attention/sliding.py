@@ -194,11 +194,7 @@ class SlidingWindowSparseAttention:
         decode_step: int,
     ) -> dict[str, Any]:
         del layer_idx, phase, decode_step
-        # sink_size / recent_window already live in attempt-level meta.json
-        # (the `sparse_attention` block); duplicating them per row in
-        # extras_json would be pure bloat. Return an empty dict so the
-        # recorder serialises the literal "{}" string and the column stays
-        # schema-stable.
+        # sink_size / recent_window already live in attempt-level meta.json.
         return {}
 
 

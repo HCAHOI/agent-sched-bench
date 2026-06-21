@@ -11,6 +11,7 @@ from serving.kv_policies.metadata import (
     build_token_metadata_from_segments,
 )
 from serving.sparse_attention.base import SparseAttentionConfig, SparseAttentionContext
+from serving.sparse_attention.patterns import sink_recent_keep_indices
 
 
 class MetadataResidencySparseAttention:
@@ -105,7 +106,11 @@ class MetadataResidencySparseAttention:
             metadata_table=self._metadata_table,
         )
         self._last_kept_count = len(selection.keep_indices)
-        sink_recent = self._sink_recent_set(int(key_len))
+        sink_recent = sink_recent_keep_indices(
+            key_len=int(key_len),
+            sink_size=self.sink_size,
+            recent_window=self.recent_window,
+        )
         selected_middle = [
             idx for idx in selection.keep_indices if int(idx) not in sink_recent
         ]
@@ -158,13 +163,6 @@ class MetadataResidencySparseAttention:
                 f"policy without an original-index map (kv_policy={cache_name!r})"
             )
         return list(range(key_len))
-
-    def _sink_recent_set(self, key_len: int) -> set[int]:
-        sink = min(self.sink_size, key_len)
-        recent = min(self.recent_window, key_len)
-        keep = set(range(sink))
-        keep.update(range(max(0, key_len - recent), key_len))
-        return keep
 
     def kept_count(self, key_len: int) -> int:
         del key_len

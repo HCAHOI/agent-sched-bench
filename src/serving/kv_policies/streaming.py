@@ -6,23 +6,12 @@ otherwise-orphaned attention mass that the model assigns to position 0
 regardless of semantic content (paper §3); the recent window preserves local
 context for next-token prediction.
 
-Why this is the right baseline implementation
----------------------------------------------
-
 This is the **naive** StreamingLLM variant: kept K/V slots retain their
-original RoPE rotation and HF's `cache_position` continues to advance with the
+original RoPE rotation and HF's `cache_position` keeps advancing with the
 absolute generation index. We deliberately do **not** re-rotate cached keys
-to "shift" them as if they were freshly placed at positions
-`[0..sink+recent-1]`. The paper compares both flavours; without re-rotation
-the model still functions because attention sinks dominate the softmax tails
-and recent-window tokens still see the correct relative offsets among
-themselves. Going the full re-rotation route requires either patching every
-attention layer's `position_embeddings` kwarg via a pre-forward hook or
-re-running RoPE on the cached K tensor at every eviction — both are
-non-trivial engineering and orthogonal to the question this policy answers
-(does our `BaseEvictionCache` plumbing carry a non-random policy through HF
-generate cleanly?). A RoPE re-rotation variant via pre-forward hook is a
-possible follow-up if the naive variant produces incoherent text.
+to positions `[0..sink+recent-1]`; without re-rotation the model still
+functions because attention sinks dominate the softmax tails and recent-window
+tokens keep the correct relative offsets among themselves.
 
 Reference: https://arxiv.org/abs/2309.17453, GitHub repo
 mit-han-lab/streaming-llm (see the `enable_streaming_llm` patch for the
@@ -105,9 +94,6 @@ class StreamingLLMCache(BaseEvictionCache):
             )
         sink = int(self.config.sink_size)
         recent = int(self.config.recent_window)
-        # Defensive: if the prompt itself were already shorter than sink+recent
-        # we'd be in the no-evict branch above (budget >= sink+recent). Once
-        # we reach this branch the slicing is well-formed.
         recent_start = key_len - recent
         keep = list(range(0, sink)) + list(range(recent_start, key_len))
         evict = list(range(sink, recent_start))

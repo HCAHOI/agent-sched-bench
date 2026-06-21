@@ -69,14 +69,7 @@ class HeavyHitterSparseAttention:
         attention_bus.subscribe(self)
 
     def reset_state(self) -> None:
-        """Clear historical scores at sparse-call boundaries.
-
-        Heavy-hitter sets `requires_full_prefill = True`, which forces the HF
-        backend to skip session KV cache delta-prefill — every chat() call
-        re-prefills the full prompt and the AttentionBus sees every key
-        position. Carrying scores across calls would therefore double-count
-        replayed context, so we reset at each call boundary.
-        """
+        """Clear historical scores at call boundaries; see requires_full_prefill rationale above."""
         for idx in range(len(self._scores)):
             self._scores[idx] = None
             self._score_lengths[idx] = 0

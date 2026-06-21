@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 
 from serving.sparse_attention.base import SparseAttentionConfig
+from serving.sparse_attention.patterns import validate_sparse_budget
 
 # CLI flag attr -> SparseAttentionConfig field. `sparse_attn` becomes `name`
 # because the CLI uses the `sparse_attn_*` prefix.
@@ -181,35 +182,24 @@ def load_sparse_attention_config(
                 f"sparse attention {name!r} requires `budget` "
                 "(set via --sparse-attn-budget or YAML `budget:`)"
             )
-        budget_int = int(budget)
         sink = int(merged.get("sink_size", 4))
         recent = int(merged.get("recent_window", 256))
         block = int(merged.get("block_size", 16))
         score_reduction = str(merged.get("score_reduction", "max"))
         phase_scope = str(merged.get("phase_scope", "decode_only"))
-        if budget_int <= 0:
-            raise argparse.ArgumentTypeError(
-                f"sparse attention {name!r} requires budget > 0 (got {budget!r})"
+        check_method = "block_topk" if name == "metadata" else name
+        try:
+            budget_int = validate_sparse_budget(
+                method_name=check_method,
+                budget=budget,
+                sink_size=sink,
+                recent_window=recent,
+                block_size=block,
+                score_reduction=score_reduction,
+                phase_scope=phase_scope,
             )
-        if sink < 0 or recent < 0:
-            raise argparse.ArgumentTypeError(
-                f"sparse attention {name!r} requires non-negative "
-                f"sink_size and recent_window; got sink_size={sink!r}, "
-                f"recent_window={recent!r}"
-            )
-        if budget_int < sink + recent:
-            raise argparse.ArgumentTypeError(
-                f"sparse attention {name!r} requires budget >= sink_size + "
-                f"recent_window ({budget_int} < {sink} + {recent})"
-            )
-        if block <= 0:
-            raise argparse.ArgumentTypeError(
-                f"sparse attention {name!r} requires block_size > 0 (got {block!r})"
-            )
-        # "vote" (cross-head block voting) is block_topk-only: it ranks blocks
-        # by how many query heads independently top-B them. quest scores pages by
-        # a min/max envelope with no per-head block notion, so vote is undefined
-        # there — reject rather than silently coerce.
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
         if name == "metadata":
             if not bool(merged.get("observe_only", False)):
                 raise argparse.ArgumentTypeError(
@@ -223,20 +213,6 @@ def load_sparse_attention_config(
                     f"got {rung!r}"
                 )
             merged["metadata_rung"] = rung
-        else:
-            allowed_reductions = {"max", "mean"}
-            if name == "block_topk":
-                allowed_reductions = {"max", "mean", "vote"}
-            if score_reduction not in allowed_reductions:
-                raise argparse.ArgumentTypeError(
-                    f"sparse attention {name!r} requires score_reduction in "
-                    f"{sorted(allowed_reductions)}; got {score_reduction!r}"
-                )
-        if phase_scope != "decode_only":
-            raise argparse.ArgumentTypeError(
-                f"sparse attention {name!r} currently supports only "
-                f"phase_scope='decode_only'; got {phase_scope!r}"
-            )
         merged["budget"] = budget_int
         merged["sink_size"] = sink
         merged["recent_window"] = recent
