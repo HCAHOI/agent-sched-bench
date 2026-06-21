@@ -77,7 +77,7 @@ class GpuResourceSampler:
                 self._task.cancel()
                 try:
                     await self._task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass
         self._flush()
 

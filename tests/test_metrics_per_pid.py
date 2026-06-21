@@ -7,7 +7,6 @@ import pytest
 from harness.metrics import (
     sample_nvidia_smi_compute_apps,
     sample_nvidia_smi_per_pid,
-    parse_nvidia_smi_csv,
 )
 
 # Two-process fake output for reuse across tests
@@ -65,11 +64,3 @@ def test_compute_apps_handles_malformed_rows(monkeypatch: pytest.MonkeyPatch) ->
 def test_compute_apps_returns_empty_when_no_processes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: "")
     assert sample_nvidia_smi_compute_apps() == []
-
-
-def test_existing_sample_nvidia_smi_unchanged() -> None:
-    # Regression: original parse_nvidia_smi_csv still parses device-aggregate format
-    samples = parse_nvidia_smi_csv("10, 2000\n20, 2100\n")
-    assert len(samples) == 2
-    assert samples[0] == {"utilization_gpu": 10.0, "memory_used_mib": 2000.0}
-    assert samples[1] == {"utilization_gpu": 20.0, "memory_used_mib": 2100.0}

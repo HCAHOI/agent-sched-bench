@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import argparse
 import importlib
 import importlib.metadata
-import json
-import re
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -58,24 +54,12 @@ class PreemptionSnapshot:
     gpu_memory_breakdown: GpuMemoryBreakdown | None = None
 
 @dataclass(slots=True)
-class EvictionEvent:
-
-    seq_id: str
-    tokens: int
-    reason: str
-    gpu_usage: float
-
-@dataclass(slots=True)
 class SchedulerHookStatus:
 
     runtime_hook_enabled: bool
     vllm_version: str | None
     target: str
     reason: str | None = None
-
-EVICTION_PATTERN = re.compile(
-    r"EVICT seq_id=(?P<seq_id>\S+) tokens=(?P<tokens>\d+) reason=(?P<reason>\S+) gpu_usage=(?P<gpu_usage>[0-9.]+)"
-)
 
 def parse_prometheus_metrics(metrics_payload: str) -> PreemptionSnapshot:
     # vLLM 0.10+ renamed `gpu_cache_usage_perc` → `kv_cache_usage_perc` and
@@ -142,28 +126,6 @@ def get_snapshot(
     response.raise_for_status()
     return parse_prometheus_metrics(response.text)
 
-def parse_eviction_events(log_text: str) -> list[EvictionEvent]:
-    events: list[EvictionEvent] = []
-    for line in log_text.splitlines():
-        match = EVICTION_PATTERN.search(line)
-        if not match:
-            continue
-        events.append(
-            EvictionEvent(
-                seq_id=match.group("seq_id"),
-                tokens=int(match.group("tokens")),
-                reason=match.group("reason"),
-                gpu_usage=float(match.group("gpu_usage")),
-            )
-        )
-    return events
-
-def scheduler_log_snippet() -> str:
-    return (
-        'logger.info(f"EVICT seq_id={seq.seq_id} tokens={seq.get_len()} '
-        'reason={reason} gpu_usage={self.block_manager.gpu_utilization}")'
-    )
-
 def _safe_vllm_version() -> str | None:
     try:
         return importlib.metadata.version("vllm")
@@ -220,58 +182,3 @@ def apply_scheduler_hook() -> SchedulerHookStatus:
         vllm_version=version,
         target=target,
     )
-
-def build_report(metrics_payload: str, log_text: str) -> dict[str, Any]:
-    snapshot = parse_prometheus_metrics(metrics_payload)
-    events = parse_eviction_events(log_text)
-    return {
-        "metrics_fetch_ok": True,
-        "baseline_provided": False,
-        "preemption_counter_delta": None,
-        "scheduler_log_provided": bool(log_text),
-        "scheduler_hook_runtime_confirmed": bool(events),
-        "evidence_scope": "current_run_log" if log_text else "cumulative_metrics_only",
-        "scheduler_hook_status": None,
-        "preemption_snapshot": asdict(snapshot),
-        "eviction_events": [asdict(event) for event in events],
-        "instrumentation_snippet": scheduler_log_snippet(),
-    }
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Collect and parse vLLM preemption metrics plus scheduler-hook logs."
-    )
-    parser.add_argument("--metrics-url", required=True)
-    parser.add_argument("--log-file")
-    parser.add_argument("--baseline-preemptions-total", type=float)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--write-hook-status")
-    return parser.parse_args()
-
-def main() -> None:
-    args = parse_args()
-    if args.write_hook_status:
-        status = apply_scheduler_hook()
-        Path(args.write_hook_status).write_text(
-            json.dumps(asdict(status), indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return
-    response = httpx.get(args.metrics_url, timeout=10.0)
-    response.raise_for_status()
-    metrics_payload = response.text
-    log_text = Path(args.log_file).read_text(encoding="utf-8") if args.log_file else ""
-    report = build_report(metrics_payload=metrics_payload, log_text=log_text)
-    report["baseline_provided"] = args.baseline_preemptions_total is not None
-    current_total = report["preemption_snapshot"]["num_preemptions_total"]
-    if args.baseline_preemptions_total is not None and current_total is not None:
-        report["preemption_counter_delta"] = (
-            current_total - args.baseline_preemptions_total
-        )
-        report["evidence_scope"] = "baseline_delta"
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-
-if __name__ == "__main__":
-    main()

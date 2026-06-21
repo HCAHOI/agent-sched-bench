@@ -280,8 +280,6 @@ def ensure_fixed_image(
             image_platform,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        # Fall back to the source image rather than leave the caller hanging.
-        _IMAGE_CACHE[source_image] = (source_image, 0.0)
         raise RuntimeError(
             f"Failed to build fixed derivative image for {source_image}: {exc}"
         ) from exc

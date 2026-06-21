@@ -111,7 +111,7 @@ def _cache_process(
         process = psutil_module.Process(pid)
         try:
             process.cpu_percent(interval=None)
-        except Exception:
+        except (psutil_module.NoSuchProcess, psutil_module.AccessDenied):
             pass
         process_cache[pid] = process
     return process
@@ -143,7 +143,7 @@ def _sample_with_psutil(
             if isinstance(child_pid, int) and child_pid not in process_cache:
                 try:
                     child.cpu_percent(interval=None)
-                except Exception:
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
                 process_cache[child_pid] = child
         children = [
