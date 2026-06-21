@@ -81,10 +81,7 @@ class TraceData:
                 line = line.strip()
                 if not line:
                     continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+                record = json.loads(line)
 
                 rec_type = record.get("type", "")
                 agent_id = record.get("agent_id")

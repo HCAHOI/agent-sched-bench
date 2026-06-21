@@ -417,19 +417,19 @@ def _cleanup_task_images(
 
     keep_gb_str = os.environ.get("KEEP_IMAGES_ABOVE_GB", "")
     if keep_gb_str and run_dir is not None:
+        keep_gb = float(keep_gb_str)
         try:
-            keep_gb = float(keep_gb_str)
             free_gb = shutil.disk_usage(run_dir).free / (1024**3)
-            if free_gb > keep_gb:
-                logger.info(
-                    "cleanup %s skipped: %.1f GB free > %.1f GB threshold",
-                    instance_id,
-                    free_gb,
-                    keep_gb,
-                )
-                return
-        except (ValueError, OSError):
-            pass
+        except OSError:
+            free_gb = None
+        if free_gb is not None and free_gb > keep_gb:
+            logger.info(
+                "cleanup %s skipped: %.1f GB free > %.1f GB threshold",
+                instance_id,
+                free_gb,
+                keep_gb,
+            )
+            return
 
     removed_any = False
     try:
@@ -610,7 +610,7 @@ async def _run_scaffold_tasks(
                         instance_id=instance_id,
                         attempt_dir=attempt_ctx.attempt_dir,
                         success=result.success,
-                        model_patch=getattr(result, "model_patch", "") or "",
+                        model_patch=result.model_patch,
                         exit_status=result.exit_status,
                         error=result.error,
                         elapsed_s=time.monotonic() - t0,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import ssl
 import subprocess
 import shutil
 import time
@@ -59,35 +58,15 @@ def _bootstrap_marker_matches(
 ) -> bool:
     if not marker.exists():
         return False
-    try:
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-    except Exception:
-        return False
+    payload = json.loads(marker.read_text(encoding="utf-8"))
     return payload == {"requirements": list(requirements), "python": runtime}
 
 
 def _is_retryable_get_pip_error(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         return False
-    if isinstance(exc, urllib.error.URLError):
-        reason = exc.reason
-        return isinstance(
-            reason,
-            (
-                ssl.SSLError,
-                TimeoutError,
-                ConnectionResetError,
-                OSError,
-            ),
-        )
-    return isinstance(
-        exc,
-        (
-            ssl.SSLError,
-            TimeoutError,
-            ConnectionResetError,
-            OSError,
-        ),
+    return isinstance(exc, OSError) or (
+        isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, OSError)
     )
 
 

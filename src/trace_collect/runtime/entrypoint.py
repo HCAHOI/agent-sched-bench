@@ -62,10 +62,7 @@ def _trace_summary_totals(
     for line in trace_file.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+        record = json.loads(line)
         if record.get("type") != "summary":
             continue
         total_llm_ms = record.get("total_llm_ms")

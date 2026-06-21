@@ -331,22 +331,18 @@ async def run_attempt(
     if ctx.source_image:
         if container_executable is None:
             raise ValueError("container_executable is required for container tasks")
-        try:
-            fixed_name, fix_elapsed = ensure_fixed_image(
-                ctx.source_image,
-                container_executable=container_executable,
-            )
-            ctx.fixed_image = fixed_name
-            ctx.permission_fix_time_s = fix_elapsed
-            logger.info(
-                "image prep: source=%s fixed=%s elapsed=%.2fs",
-                ctx.source_image,
-                fixed_name,
-                fix_elapsed,
-            )
-        except Exception as exc:
-            logger.error("image prep failed: %s", exc)
-            ctx.fixed_image = ctx.source_image
+        fixed_name, fix_elapsed = ensure_fixed_image(
+            ctx.source_image,
+            container_executable=container_executable,
+        )
+        ctx.fixed_image = fixed_name
+        ctx.permission_fix_time_s = fix_elapsed
+        logger.info(
+            "image prep: source=%s fixed=%s elapsed=%.2fs",
+            ctx.source_image,
+            fixed_name,
+            fix_elapsed,
+        )
     else:
         ctx.fixed_image = None
         ctx.permission_fix_time_s = 0.0
@@ -391,8 +387,6 @@ async def run_attempt(
                 sampler = await asyncio.wait_for(watcher_task, timeout=2.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 watcher_task.cancel()
-                sampler = None
-            except Exception:
                 sampler = None
         if sampler is not None:
             samples = sampler.stop()

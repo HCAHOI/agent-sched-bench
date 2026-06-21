@@ -36,25 +36,9 @@ def _write_json(path: Path, payload: Any) -> None:
 # choose dataclass -> dict conversion whichever way suits them.
 
 def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
-    """Write run_manifest.json after stamping schema_version and defaults.
-
-    The *manifest* dict must contain at least:
-      - ``task`` (dict with instance_id, repo, docker_image)
-      - ``attempt`` (e.g. "attempt_1")
-      - ``model`` (dict with at least ``requested``)
-      - ``runtime`` (dict with start_time / end_time ISO strings)
-      - ``result_summary`` (dict with exit_code, total_time, etc.)
-
-    Missing top-level keys are filled with stable defaults so the
-    downstream viewer / analysis layer always sees the same shape.
-    """
+    """Write run_manifest.json, stamping schema_version and the artifacts map."""
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "status": manifest.get("status", "completed"),
-        "task": manifest.get("task", {}),
-        "attempt": manifest.get("attempt", "attempt_1"),
-        "model": manifest.get("model", {}),
-        "runtime": manifest.get("runtime", {}),
         "artifacts": manifest.get(
             "artifacts",
             {
@@ -65,11 +49,9 @@ def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
                 "container_stdout_txt": CONTAINER_STDOUT_FILENAME,
             },
         ),
-        "replay": manifest.get("replay", {"replay_ready": False}),
-        "result_summary": manifest.get("result_summary", {}),
     }
-    # Any extra top-level keys the caller provided (e.g. prompt_template,
-    # host_platform) are preserved verbatim.
+    # Caller-provided top-level keys (status, task, attempt, model, runtime,
+    # replay, result_summary, plus extras) are preserved verbatim.
     for key, value in manifest.items():
         if key not in payload:
             payload[key] = value

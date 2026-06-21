@@ -40,24 +40,19 @@ def validate_gpu_tracking_args(args: Any) -> None:
     Designed to be called from _run_simulate before any work begins,
     so failures are fast and explicit (CLAUDE.md no-silent-fallback rule).
     """
-    gpu_tracking = getattr(args, "gpu_tracking", "off")
-    if gpu_tracking != "on":
+    if args.gpu_tracking != "on":
         return
 
-    mode = getattr(args, "mode", "local_model")
-    if mode == "cloud_model":
+    if args.mode == "cloud_model":
         raise ValueError("--gpu-tracking on is forbidden in cloud_model mode")
 
-    metrics_url = getattr(args, "metrics_url", None)
-    if not metrics_url:
+    if not args.metrics_url:
         raise ValueError("--gpu-tracking on requires --metrics-url")
 
-    vllm_pid = getattr(args, "vllm_pid", None)
-    if vllm_pid is None:
+    if args.vllm_pid is None:
         raise ValueError("--gpu-tracking on requires --vllm-pid")
 
-    vllm_startup_log = getattr(args, "vllm_startup_log", None)
-    if vllm_startup_log is None:
+    if args.vllm_startup_log is None:
         raise ValueError("--gpu-tracking on requires --vllm-startup-log")
 
 
@@ -189,10 +184,7 @@ def _parse_trace_session_file(
             line = line.strip()
             if not line:
                 continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+            record = json.loads(line)
 
             record_type = record.get("type")
             if record_type == "trace_metadata":
@@ -1111,23 +1103,19 @@ def _split_trace_by_agent(
     per_agent: dict[str, list[str]] = {aid: [] for aid in agent_dirs}
     metadata_line: str | None = None
 
-    try:
-        with combined_path.open(encoding="utf-8") as fh:
-            for line in fh:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                record = json.loads(stripped)
-                rtype = record.get("type")
-                if rtype == "trace_metadata":
-                    metadata_line = stripped
-                    continue
-                agent_id = record.get("agent_id")
-                if agent_id in per_agent:
-                    per_agent[agent_id].append(stripped)
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to split trace %s: %s", combined_path, exc)
-        return
+    with combined_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            record = json.loads(stripped)
+            rtype = record.get("type")
+            if rtype == "trace_metadata":
+                metadata_line = stripped
+                continue
+            agent_id = record.get("agent_id")
+            if agent_id in per_agent:
+                per_agent[agent_id].append(stripped)
 
     for agent_id, lines in per_agent.items():
         out_dir = agent_dirs[agent_id]
