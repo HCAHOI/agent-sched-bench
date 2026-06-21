@@ -42,13 +42,6 @@ def read_pid_file(pid_file: Path) -> dict[str, Any] | None:
         return None
 
 
-def cleanup_pid_file(pid_file: Path) -> None:
-    try:
-        pid_file.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
 def pid_file_for_session(runtime_dir: Path, session_id: str) -> Path:
     """Return the PID file path for a session under ``runtime_dir``.
 
@@ -63,7 +56,7 @@ def _is_pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
-    except (OSError, ProcessLookupError):
+    except OSError:
         return False
 
 
@@ -74,18 +67,13 @@ def spawn_daemon(
     *,
     extra_env: dict[str, str] | None = None,
     trace_file: Path | None = None,
-    runtime_dir: Path | None = None,
+    runtime_dir: Path,
 ) -> int:
     """Spawn a detached daemon process and write its PID file.
 
-    Daemon logs are written under ``<runtime_dir>/logs`` when ``runtime_dir`` is
-    supplied; otherwise they fall back to a sibling ``logs`` dir next to the PID
-    file (kept for direct callers that only pass a pid_file).
+    Daemon logs are written under ``<runtime_dir>/logs``.
     """
-    if runtime_dir is not None:
-        log_dir = runtime_dir / "logs"
-    else:
-        log_dir = pid_file.parent.parent / "logs"
+    log_dir = runtime_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{session_id}.log"
 

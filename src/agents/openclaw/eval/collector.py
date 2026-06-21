@@ -1,10 +1,4 @@
-"""Minimal outbound message collector — replaces ChannelManager._dispatch_outbound.
-
-In gateway mode, ChannelManager routes OutboundMessage to chat platforms
-(Telegram, Discord, etc.) with delta coalescing and retry. For SWE-bench
-evaluation there are no chat platforms — we just collect the final response
-per session key.
-"""
+"""Collect the final outbound response per session key for SWE-bench eval."""
 
 from __future__ import annotations
 
@@ -53,11 +47,9 @@ class ResultCollector:
                 continue
 
             session_key = f"{msg.channel}:{msg.chat_id}"
-            # Coalesce: accumulate content for the same session_key
             prev = self._results.get(session_key, "")
             self._results[session_key] = prev + msg.content
 
-            # Signal completion when we see a non-streaming message or _stream_end
             if not msg.metadata.get("_stream_delta"):
                 event = self._done_events.get(session_key)
                 if event:
@@ -74,7 +66,3 @@ class ResultCollector:
 
     def get_result(self, session_key: str) -> str | None:
         return self._results.get(session_key)
-
-    def clear(self) -> None:
-        self._results.clear()
-        self._done_events.clear()

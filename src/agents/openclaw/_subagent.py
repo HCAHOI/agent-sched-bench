@@ -289,18 +289,3 @@ Tools like 'read_file' and 'web_fetch' can return native image content. Read vis
             )
 
         return "\n\n".join(parts)
-
-    async def cancel_by_session(self, session_key: str) -> int:
-        tasks = [
-            self._running_tasks[tid]
-            for tid in self._session_tasks.get(session_key, [])
-            if tid in self._running_tasks and not self._running_tasks[tid].done()
-        ]
-        for t in tasks:
-            t.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        return len(tasks)
-
-    def get_running_count(self) -> int:
-        return len(self._running_tasks)

@@ -74,11 +74,7 @@ _INTERNAL_MESSAGE_ID_KEY = "_openclaw_message_id"
 def _strip_synthetic_malformed_pairs(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Remove (assistant_call, tool_result) pairs synthesised for malformed retries.
-
-    These pairs feed model-feedback only; they should not appear in result
-    persistence, eval tools_used, or downstream analysis.
-    """
+    """Remove (assistant_call, tool_result) pairs synthesised for malformed retries."""
     cleaned: list[dict[str, Any]] = []
     skip_tool_ids: set[str] = set()
     for msg in messages:
@@ -582,15 +578,9 @@ class AgentRunner:
             if spec.fail_on_tool_error:
                 return lookup_error + _HINT, event, RuntimeError(lookup_error)
             return lookup_error + _HINT, event, None
-        prepare_call = getattr(spec.tools, "prepare_call", None)
-        tool, params, prep_error = None, tool_call.arguments, None
-        if callable(prepare_call):
-            try:
-                prepared = prepare_call(tool_call.name, tool_call.arguments)
-                if isinstance(prepared, tuple) and len(prepared) == 3:
-                    tool, params, prep_error = prepared
-            except Exception:
-                pass
+        tool, params, prep_error = spec.tools.prepare_call(
+            tool_call.name, tool_call.arguments
+        )
         if prep_error:
             event = {
                 "name": tool_call.name,
@@ -697,13 +687,6 @@ class AgentRunner:
                 else item
                 for item in completed
             ]
-        messages = clean.get("messages")
-        if isinstance(messages, list) and all(
-            isinstance(item, dict) for item in messages
-        ):
-            clean["messages"] = AgentRunner._strip_internal_message_ids_from_messages(
-                messages
-            )
         return clean
 
     @staticmethod
@@ -780,9 +763,7 @@ class AgentRunner:
         if not messages or not spec.context_window_tokens:
             return messages
 
-        provider_max_tokens = getattr(
-            getattr(self.provider, "generation", None), "max_tokens", 4096
-        )
+        provider_max_tokens = self.provider.generation.max_tokens
         max_output = (
             spec.max_tokens
             if isinstance(spec.max_tokens, int)
@@ -846,8 +827,7 @@ class AgentRunner:
         batches: list[list[ToolCallRequest]] = []
         current: list[ToolCallRequest] = []
         for tool_call in tool_calls:
-            get_tool = getattr(spec.tools, "get", None)
-            tool = get_tool(tool_call.name) if callable(get_tool) else None
+            tool = spec.tools.get(tool_call.name)
             can_batch = bool(tool and tool.concurrency_safe)
             if can_batch:
                 current.append(tool_call)

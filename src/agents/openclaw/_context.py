@@ -33,7 +33,7 @@ class ContextBuilder:
         self.memory = MemoryStore(workspace, storage_dir=memory_dir)
         self.skills = SkillsLoader(workspace, skills_dir=skills_dir)
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
+    def build_system_prompt(self) -> str:
         parts = [self._get_identity()]
 
         bootstrap = self._load_bootstrap_files()
@@ -163,7 +163,6 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         self,
         history: list[dict[str, Any]],
         current_message: str,
-        skill_names: list[str] | None = None,
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
@@ -179,7 +178,7 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt()},
             *history,
         ]
         if messages[-1].get("role") == current_role:
@@ -218,23 +217,6 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         if not images:
             return text
         return images + [{"type": "text", "text": text}]
-
-    def add_tool_result(
-        self,
-        messages: list[dict[str, Any]],
-        tool_call_id: str,
-        tool_name: str,
-        result: Any,
-    ) -> list[dict[str, Any]]:
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "name": tool_name,
-                "content": result,
-            }
-        )
-        return messages
 
     def add_assistant_message(
         self,

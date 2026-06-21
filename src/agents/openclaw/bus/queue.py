@@ -26,11 +26,3 @@ class MessageBus:
 
     async def consume_outbound(self) -> OutboundMessage:
         return await self.outbound.get()
-
-    @property
-    def inbound_size(self) -> int:
-        return self.inbound.qsize()
-
-    @property
-    def outbound_size(self) -> int:
-        return self.outbound.qsize()

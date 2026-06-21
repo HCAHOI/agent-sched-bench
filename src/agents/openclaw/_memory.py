@@ -57,10 +57,6 @@ def _ensure_text(value: Any) -> str:
 
 def _normalize_save_memory_args(args: Any) -> dict[str, Any] | None:
     """Normalize provider tool-call arguments to the expected dict shape."""
-    if isinstance(args, str):
-        args = json.loads(args)
-    if isinstance(args, list):
-        return args[0] if args and isinstance(args[0], dict) else None
     return args if isinstance(args, dict) else None
 
 
@@ -335,15 +331,6 @@ class MemoryConsolidator:
             probe_messages,
             self._get_tool_definitions(),
         )
-
-    async def archive_messages(self, messages: list[dict[str, object]]) -> bool:
-        """Archive messages with guaranteed persistence (retries until raw-dump fallback)."""
-        if not messages:
-            return True
-        for _ in range(self.store._MAX_FAILURES_BEFORE_RAW_ARCHIVE):
-            if await self.consolidate_messages(messages):
-                return True
-        return True
 
     async def maybe_consolidate_by_tokens(self, session: Session) -> None:
         """Loop: archive old messages until prompt fits within safe budget.

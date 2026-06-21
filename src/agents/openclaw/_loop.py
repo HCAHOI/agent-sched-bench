@@ -228,8 +228,6 @@ class AgentLoop:
         self._last_run_outcomes: dict[str, dict[str, str | None]] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
         self._event_callback = None
-        self._mcp_event_callback = None
-        self._dispatch_iteration = 0
 
         self.context = ContextBuilder(
             workspace,
@@ -334,8 +332,8 @@ class AgentLoop:
             if self._mcp_stack:
                 try:
                     await self._mcp_stack.aclose()
-                except Exception:
-                    pass
+                except Exception as aclose_err:
+                    logger.warning("MCP stack aclose failed during degrade: {}", aclose_err)
                 self._mcp_stack = None
         finally:
             self._mcp_connecting = False
@@ -344,12 +342,11 @@ class AgentLoop:
         self, channel: str, chat_id: str, message_id: str | None = None
     ) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron"):
+        for name in ("message", "spawn"):
             if tool := self.tools.get(name):
-                if hasattr(tool, "set_context"):
-                    tool.set_context(
-                        channel, chat_id, *([message_id] if name == "message" else [])
-                    )
+                tool.set_context(
+                    channel, chat_id, *([message_id] if name == "message" else [])
+                )
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -461,9 +458,6 @@ class AgentLoop:
             except asyncio.CancelledError:
                 if not self._running or asyncio.current_task().cancelling():
                     raise
-                continue
-            except Exception as e:
-                logger.warning("Error consuming inbound message: {}, continuing...", e)
                 continue
 
             task = asyncio.create_task(self._dispatch(msg))
@@ -853,7 +847,6 @@ class AgentLoop:
                 if isinstance(content, str) and content.startswith(
                     ContextBuilder._RUNTIME_CONTEXT_TAG
                 ):
-                    # Strip the runtime-context prefix, keep only the user text.
                     parts = content.split("\n\n", 1)
                     if len(parts) > 1 and parts[1].strip():
                         entry["content"] = parts[1]
@@ -946,26 +939,3 @@ class AgentLoop:
 
         self._clear_runtime_checkpoint(session)
         return True
-
-    async def process_direct(
-        self,
-        content: str,
-        session_key: str = "cli:direct",
-        channel: str = "cli",
-        chat_id: str = "direct",
-        on_progress: Callable[[str], Awaitable[None]] | None = None,
-        on_stream: Callable[[str], Awaitable[None]] | None = None,
-        on_stream_end: Callable[..., Awaitable[None]] | None = None,
-    ) -> OutboundMessage | None:
-        """Process a message directly and return the outbound payload."""
-        await self._connect_mcp()
-        msg = InboundMessage(
-            channel=channel, sender_id="user", chat_id=chat_id, content=content
-        )
-        return await self._process_message(
-            msg,
-            session_key=session_key,
-            on_progress=on_progress,
-            on_stream=on_stream,
-            on_stream_end=on_stream_end,
-        )

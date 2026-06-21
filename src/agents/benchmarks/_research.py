@@ -308,7 +308,7 @@ class HostResearchOpenClawRunner:
             "instance_id": instance_id,
             "prompt_template": prompt_template,
         }
-        if getattr(self, "mcp_config", None) is not None:
+        if self.mcp_config is not None:
             metadata["run_config"] = {"mcp_config": self.mcp_config}
         return metadata
 

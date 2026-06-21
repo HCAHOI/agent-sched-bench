@@ -14,25 +14,8 @@ import yaml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar
 
-
-class Runner(Protocol):
-    """Static host-mode runner interface used by collector dispatch.
-
-    Container-mode runners such as SWEBenchRunner have their own in-container
-    adapter path and are not required to satisfy this Protocol directly.
-    """
-
-    async def run_task(
-        self,
-        task: dict[str, Any],
-        *,
-        attempt_ctx: Any,
-        prompt_template: str,
-    ) -> Any:
-        """Run one normalized benchmark task."""
-        ...
 
 @dataclass
 class BenchmarkConfig:
@@ -59,9 +42,7 @@ class BenchmarkConfig:
     def from_yaml(cls, path: Path) -> "BenchmarkConfig":
         """Load a :class:`BenchmarkConfig` from a YAML file.
 
-        Path fields (``data_root``, ``repos_root``, ``trace_root``) are
-        wrapped in :class:`pathlib.Path`.  ``repos_root`` is ``None`` when
-        absent or explicitly set to ``null`` in the YAML.
+        ``data_root``/``repos_root`` are ``None`` when absent or ``null``.
         """
         raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -165,12 +146,7 @@ class Benchmark(ABC):
         n: int | None = None,
         seed: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the first ``n`` tasks, sorted by instance_id for determinism.
-
-        This is the simplest possible benchmark-agnostic default. Subclasses
-        with specific selection needs (repo-stratified like SWE-Bench Verified,
-        lite-filtering like SWE-rebench) MUST override this.
-        """
+        """Return the first ``n`` tasks, sorted by instance_id for determinism."""
         effective_n = n if n is not None else self.config.selection_n
         sorted_tasks = sorted(tasks, key=lambda t: t.get("instance_id", ""))
         return sorted_tasks[:effective_n]

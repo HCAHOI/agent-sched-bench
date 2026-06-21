@@ -15,7 +15,7 @@ from agents.openclaw._session_runner import (
     TraceCollectorHook,
     inject_event_callbacks,
 )
-from agents.openclaw.eval.types import EvalResult, EvalTask
+from agents.openclaw.eval.types import EvalResult, EvalTask, git_diff_excluding
 from agents.openclaw.providers.base import LLMProvider
 
 __all__ = [
@@ -85,10 +85,7 @@ class SWEBenchRunner:
         patch_path = Path(diff_cwd) / "patch.txt"
         if not patch_path.exists():
             return ""
-        try:
-            content = patch_path.read_text(encoding="utf-8")
-        except OSError:
-            return ""
+        content = patch_path.read_text(encoding="utf-8")
         return content.strip() if content.lstrip().startswith("diff --git") else ""
 
     @staticmethod
@@ -101,54 +98,31 @@ class SWEBenchRunner:
         if submitted_patch:
             return submitted_patch
 
-        try:
-            subprocess.run(
-                ["git", "config", "--add", "safe.directory", diff_cwd],
-                cwd=diff_cwd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            add_cmd = ["git", "add", "-A", "--", "."]
-            for pat in EvalResult._EXCLUDE_PATTERNS:
-                add_cmd.append(f":(exclude){pat}")
-            subprocess.run(
-                add_cmd,
-                cwd=diff_cwd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            diff_target = base_commit or "HEAD"
-            diff_cmd = ["git", "diff", diff_target, "--", "."]
-            for pat in EvalResult._EXCLUDE_PATTERNS:
-                diff_cmd.append(f":(exclude){pat}")
-            diff_result = subprocess.run(
-                diff_cmd,
-                cwd=diff_cwd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-            if diff_result.returncode == 0:
-                return diff_result.stdout.strip() or None
-            logger.warning(
-                "Local patch extraction failed for cwd={cwd}: rc={rc} stderr={stderr}",
-                cwd=diff_cwd,
-                rc=diff_result.returncode,
-                stderr=diff_result.stderr[:200],
-            )
-            return None
-        except Exception as exc:
-            logger.warning(
-                "Local patch extraction raised for cwd={cwd}: {exc}",
-                cwd=diff_cwd,
-                exc=exc,
-            )
-            return None
+        subprocess.run(
+            ["git", "config", "--add", "safe.directory", diff_cwd],
+            cwd=diff_cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        diff_result = git_diff_excluding(
+            diff_cwd,
+            base_commit,
+            EvalResult._EXCLUDE_PATTERNS,
+            add_excludes=True,
+            add_timeout=30,
+            diff_timeout=60,
+        )
+        if diff_result.returncode == 0:
+            return diff_result.stdout.strip() or None
+        logger.warning(
+            "Local patch extraction failed for cwd={cwd}: rc={rc} stderr={stderr}",
+            cwd=diff_cwd,
+            rc=diff_result.returncode,
+            stderr=diff_result.stderr[:200],
+        )
+        return None
 
     def _build_swe_bench_prompt(
         self,
@@ -177,17 +151,11 @@ class SWEBenchRunner:
         ws = task.workspace_dir
         ws.mkdir(parents=True, exist_ok=True)
 
-        # Trace output must NOT default into the target checkout. When a caller
-        # omits ``trace_file``, derive a path sibling to (not inside) the task
-        # workspace so runtime artifacts never contaminate a git-tracked repo.
+        # Trace output must land outside the git checkout, not inside it.
         if trace_file is not None:
             effective_trace_file = Path(trace_file)
         else:
-            logger.warning(
-                "SWEBenchRunner.run_task called without trace_file; deriving a "
-                "non-workspace default sibling to the task workspace. Pass an "
-                "explicit attempt trace path outside the checkout for collection."
-            )
+            logger.warning("run_task called without trace_file; using workspace sibling")
             effective_trace_file = ws.parent / f"{ws.name}-openclaw-trace.jsonl"
         effective_tool_workspace = tool_workspace or ws
         effective_project_workspace = effective_tool_workspace
@@ -214,7 +182,6 @@ class SWEBenchRunner:
         content = result.content
         tools_used: list[str] = []
         tool_events: list[dict[str, Any]] = []
-        usage: dict[str, int] = {}
         n_iterations = _count_trace_iterations(effective_trace_file)
 
         if result.session_manager is not None:
@@ -252,7 +219,7 @@ class SWEBenchRunner:
             instance_id=task.instance_id,
             content=content,
             tools_used=tools_used,
-            usage=usage,
+            usage={},
             stop_reason=result.stop_reason,
             error=result.error,
             tool_events=tool_events,

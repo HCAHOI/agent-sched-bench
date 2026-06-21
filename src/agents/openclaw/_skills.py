@@ -82,14 +82,11 @@ class SkillsLoader:
     def _emit_skill_loaded(self, name: str, *, source: str) -> None:
         if self._event_callback is None:
             return
-        try:
-            self._event_callback(
-                "CONTEXT",
-                "skill_loaded",
-                {"skill_name": name, "skill_source": source},
-            )
-        except Exception:
-            pass
+        self._event_callback(
+            "CONTEXT",
+            "skill_loaded",
+            {"skill_name": name, "skill_source": source},
+        )
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:
         parts = []

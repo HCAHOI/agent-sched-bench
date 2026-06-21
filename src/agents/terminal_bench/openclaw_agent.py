@@ -124,11 +124,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     @property
     def _env(self) -> dict[str, str]:
         env = {
-            # Exported here so setup-env.sh can rewrite it (gateway resolution)
-            # before the openclaw command consumes it. Keeping the rewrite in
-            # setup-env.sh — not as a per-command shell prefix — is what keeps
-            # the final openclaw line short enough for tmux send-keys +
-            # asciinema rec --stdin to handle without breaking sync.
+            # gateway resolution lives in setup-env.sh; see _create_env_setup_file
             "OPENCLAW_API_BASE": self._api_base,
         }
         if self._llm_timeout_sec is not None:
@@ -315,11 +311,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _api_base_shell_prefix(self) -> tuple[str, str]:
         """Return a shell prefix and argv expression for the OpenClaw API base.
 
-        Gateway resolution is done in setup-env.sh (see _create_env_setup_file),
-        which is sourced into the container shell long before openclaw runs.
-        That keeps the openclaw command line short — important because the
-        outer asciinema rec --stdin wrapper drops sync when tmux send-keys
-        delivers a very long multi-line command.
+        Gateway resolution lives in setup-env.sh; see _create_env_setup_file.
         """
         if not self._should_resolve_api_base_from_container_gateway(self._api_base):
             return "", shlex.quote(self._api_base)
@@ -448,17 +440,10 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
 
     @staticmethod
     def _container_copy_target(session: TmuxSession) -> str:
-        container = session.container
-        container_id = getattr(container, "id", None) or getattr(
-            container, "name", None
-        )
-        if container_id:
-            return str(container_id)
-        attrs = getattr(container, "attrs", None) or {}
-        container_name = attrs.get("Name")
-        if container_name:
-            return str(container_name).lstrip("/")
-        raise RuntimeError("Unable to determine Docker container id for copy")
+        container_id = session.container.id
+        if not container_id:
+            raise RuntimeError("Unable to determine Docker container id for copy")
+        return str(container_id)
 
     def _copy_to_container_with_deadline(
         self,

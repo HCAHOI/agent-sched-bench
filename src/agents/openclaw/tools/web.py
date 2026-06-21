@@ -44,12 +44,6 @@ def _validate_url(url: str) -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
-def _validate_url_safe(url: str) -> tuple[bool, str]:
-    """Validate URL with SSRF protection: scheme, domain, and resolved IP check."""
-    from agents.openclaw.security.network import validate_url_target
-
-    return validate_url_target(url)
-
 def _format_results(query: str, items: list[dict[str, Any]], n: int) -> str:
     if not items:
         return f"No results for: {query}"
@@ -266,7 +260,9 @@ class WebFetchTool(Tool):
         **kwargs: Any,
     ) -> Any:
         max_chars = maxChars or self.max_chars
-        is_valid, error_msg = _validate_url_safe(url)
+        from agents.openclaw.security.network import validate_url_target
+
+        is_valid, error_msg = validate_url_target(url)
         if not is_valid:
             return json.dumps(
                 {"error": f"URL validation failed: {error_msg}", "url": url},

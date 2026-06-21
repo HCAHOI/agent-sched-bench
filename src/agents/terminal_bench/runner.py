@@ -781,7 +781,7 @@ class TerminalBenchRunner:
         return bool(first.get("is_resolved"))
 
     def _find_trace_path(self, tb_run_path: Path) -> Path:
-        traces = sorted(tb_run_path.glob(f"**/agent-logs/{self._trace_filename()}"))
+        traces = sorted(tb_run_path.glob(f"**/agent-logs/{self.TRACE_FILENAME}"))
         if traces:
             return traces[0]
         return tb_run_path / "missing-trace.jsonl"
@@ -903,9 +903,6 @@ class TerminalBenchRunner:
         if tb_process_logs:
             summary.update(tb_process_logs)
         return summary
-
-    def _trace_filename(self) -> str:
-        return self.TRACE_FILENAME
 
     def _materialize_prompt_template(
         self,

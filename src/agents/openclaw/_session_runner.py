@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from agents.openclaw._hook import AgentHook, AgentHookContext
 from agents.openclaw._loop import AgentLoop
 from agents.openclaw.config.schema import ExecToolConfig
@@ -34,14 +36,11 @@ from trace_collect.latency_metrics import summarize_llm_latencies
 def _trace_has_llm_error(trace_file: Path | None) -> bool:
     if trace_file is None or not trace_file.exists():
         return False
-    try:
-        with trace_file.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                record = json.loads(line)
-                if record.get("type") == "event" and record.get("event") == "llm_error":
-                    return True
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return False
+    with trace_file.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            record = json.loads(line)
+            if record.get("type") == "event" and record.get("event") == "llm_error":
+                return True
     return False
 
 
@@ -399,8 +398,8 @@ class TraceCollectorHook(AgentHook):
             if task is not None:
                 try:
                     await task
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("OpenRouter metadata task failed: {}", exc)
             await self._refresh_unavailable_openrouter_metadata(response)
             response.extra.pop("_openrouter_metadata_task", None)
             response.extra.pop("_openrouter_metadata_refetcher", None)
@@ -643,30 +642,14 @@ def inject_event_callbacks(agent: AgentLoop, hook: TraceCollectorHook) -> None:
     def emit(category: str, event: str, data: dict, iteration: int = 0) -> None:
         hook.emit_event(category, event, data, iteration=iteration)
 
-    if hasattr(agent, "memory_consolidator") and hasattr(
-        agent.memory_consolidator, "_event_callback"
-    ):
-        agent.memory_consolidator._event_callback = lambda cat, evt, d, si=0: emit(
-            cat, evt, d, si
-        )
-
-    if (
-        hasattr(agent, "context")
-        and hasattr(agent.context, "skills")
-        and hasattr(agent.context.skills, "_event_callback")
-    ):
-        agent.context.skills._event_callback = lambda cat, evt, d, si=0: emit(
-            cat, evt, d, si
-        )
-
-    if hasattr(agent, "_mcp_event_callback"):
-        agent._mcp_event_callback = lambda cat, evt, d: emit(cat, evt, d)
-
-    if hasattr(agent, "sessions") and hasattr(agent.sessions, "_event_callback"):
-        agent.sessions._event_callback = lambda cat, evt, d: emit(cat, evt, d)
-
-    if hasattr(agent, "_event_callback"):
-        agent._event_callback = lambda cat, evt, d: emit(cat, evt, d)
+    agent.memory_consolidator._event_callback = lambda cat, evt, d, si=0: emit(
+        cat, evt, d, si
+    )
+    agent.context.skills._event_callback = lambda cat, evt, d, si=0: emit(
+        cat, evt, d, si
+    )
+    agent.sessions._event_callback = lambda cat, evt, d: emit(cat, evt, d)
+    agent._event_callback = lambda cat, evt, d: emit(cat, evt, d)
 
 
 @dataclass

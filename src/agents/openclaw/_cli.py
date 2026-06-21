@@ -576,9 +576,7 @@ def main() -> None:
         build_parser().print_usage(sys.stderr)
         sys.exit(1)
 
-    if args._daemon:
-        sys.exit(_run_sync(args))
-    elif args.run_async:
+    if args.run_async:
         sys.exit(_run_async(args))
     else:
         sys.exit(_run_sync(args))

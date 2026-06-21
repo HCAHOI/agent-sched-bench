@@ -1,8 +1,43 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+def git_diff_excluding(
+    cwd: str | Path,
+    base_commit: str | None,
+    exclude_patterns: list[str],
+    *,
+    add_excludes: bool = False,
+    add_timeout: float = 30.0,
+    diff_timeout: float = 30.0,
+) -> subprocess.CompletedProcess:
+    """Stage all changes and diff against *base_commit*, excluding runtime files.
+
+    Returns the ``git diff`` ``CompletedProcess`` so callers keep their own
+    success/empty handling. ``add_excludes`` mirrors the staging form used by
+    the container runner (``git add -A -- . :(exclude)…``).
+    """
+    add_cmd = ["git", "add", "-A"]
+    if add_excludes:
+        add_cmd.append("--")
+        add_cmd.append(".")
+        for pat in exclude_patterns:
+            add_cmd.append(f":(exclude){pat}")
+    subprocess.run(
+        add_cmd, cwd=cwd, capture_output=True, text=True, timeout=add_timeout,
+        check=False,
+    )
+    diff_cmd = ["git", "diff", base_commit or "HEAD", "--", "."]
+    for pat in exclude_patterns:
+        diff_cmd.append(f":(exclude){pat}")
+    return subprocess.run(
+        diff_cmd, cwd=cwd, capture_output=True, text=True, timeout=diff_timeout,
+        check=False,
+    )
 
 
 @dataclass
@@ -63,31 +98,12 @@ class EvalResult:
     ]
 
     def _extract_patch_from_workspace(self) -> str:
-        import subprocess
-
         if not self.workspace_dir or not (self.workspace_dir / ".git").exists():
             return ""
-        try:
-            subprocess.run(
-                ["git", "add", "-A"],
-                cwd=self.workspace_dir,
-                capture_output=True,
-                timeout=30,
-            )
-            diff_target = self.base_commit or "HEAD"
-            cmd = ["git", "diff", diff_target, "--", "."]
-            for pat in self._EXCLUDE_PATTERNS:
-                cmd.append(f":(exclude){pat}")
-            result = subprocess.run(
-                cmd,
-                cwd=self.workspace_dir,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            return result.stdout.strip() if result.returncode == 0 else ""
-        except Exception:
-            return ""
+        result = git_diff_excluding(
+            self.workspace_dir, self.base_commit, self._EXCLUDE_PATTERNS
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
 
     def _extract_patch_from_content(self) -> str:
         if not self.content:

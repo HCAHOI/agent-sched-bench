@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 import re
 from abc import ABC, abstractmethod
@@ -63,17 +64,6 @@ class GenerationSettings:
     top_p: float | None = None
     top_k: int | None = None
     repetition_penalty: float | None = None
-
-    def sampling_overrides(self) -> dict[str, Any]:
-        """Generation controls that are omitted unless explicitly configured."""
-        values: dict[str, Any] = {}
-        if self.top_p is not None:
-            values["top_p"] = self.top_p
-        if self.top_k is not None:
-            values["top_k"] = self.top_k
-        if self.repetition_penalty is not None:
-            values["repetition_penalty"] = self.repetition_penalty
-        return values
 
 
 class LLMProvider(ABC):
@@ -232,9 +222,15 @@ class LLMProvider(ABC):
                 result.append(msg)
         return result if found else None
 
-    async def _safe_chat(self, **kwargs: Any) -> LLMResponse:
+    async def _safe_call(
+        self,
+        target: Callable[..., Awaitable[LLMResponse]],
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Run *target* (chat/chat_stream), converting failures into an
+        error LLMResponse that the retry loop can inspect (finish_reason=error)."""
         try:
-            return await self.chat(**kwargs)
+            return await target(**kwargs)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -275,17 +271,24 @@ class LLMProvider(ABC):
             await on_content_delta(response.content)
         return response
 
-    async def _safe_chat_stream(self, **kwargs: Any) -> LLMResponse:
-        try:
-            return await self.chat_stream(**kwargs)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return LLMResponse(
-                content=f"Error calling LLM: {exc}",
-                finish_reason="error",
-                extra={"error_type": type(exc).__name__},
-            )
+    def _resolve_generation_kwargs(
+        self,
+        max_tokens: object,
+        temperature: object,
+        reasoning_effort: object,
+    ) -> dict[str, Any]:
+        """Fill generation params from ``self.generation`` when left as _SENTINEL."""
+        return dict(
+            max_tokens=self.generation.max_tokens
+            if max_tokens is self._SENTINEL
+            else max_tokens,
+            temperature=self.generation.temperature
+            if temperature is self._SENTINEL
+            else temperature,
+            reasoning_effort=self.generation.reasoning_effort
+            if reasoning_effort is self._SENTINEL
+            else reasoning_effort,
+        )
 
     async def chat_stream_with_retry(
         self,
@@ -300,25 +303,18 @@ class LLMProvider(ABC):
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
-        if max_tokens is self._SENTINEL:
-            max_tokens = self.generation.max_tokens
-        if temperature is self._SENTINEL:
-            temperature = self.generation.temperature
-        if reasoning_effort is self._SENTINEL:
-            reasoning_effort = self.generation.reasoning_effort
-
         kw: dict[str, Any] = dict(
             messages=messages,
             tools=tools,
             model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
             tool_choice=tool_choice,
             on_content_delta=on_content_delta,
+            **self._resolve_generation_kwargs(
+                max_tokens, temperature, reasoning_effort
+            ),
         )
         return await self._run_with_retry(
-            self._safe_chat_stream,
+            functools.partial(self._safe_call, self.chat_stream),
             kw,
             messages,
             retry_mode=retry_mode,
@@ -343,24 +339,17 @@ class LLMProvider(ABC):
         so callers no longer need to thread temperature / max_tokens /
         reasoning_effort through every layer.
         """
-        if max_tokens is self._SENTINEL:
-            max_tokens = self.generation.max_tokens
-        if temperature is self._SENTINEL:
-            temperature = self.generation.temperature
-        if reasoning_effort is self._SENTINEL:
-            reasoning_effort = self.generation.reasoning_effort
-
         kw: dict[str, Any] = dict(
             messages=messages,
             tools=tools,
             model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
             tool_choice=tool_choice,
+            **self._resolve_generation_kwargs(
+                max_tokens, temperature, reasoning_effort
+            ),
         )
         return await self._run_with_retry(
-            self._safe_chat,
+            functools.partial(self._safe_call, self.chat),
             kw,
             messages,
             retry_mode=retry_mode,

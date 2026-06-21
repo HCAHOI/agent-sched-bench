@@ -50,16 +50,12 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def timestamp() -> str:
-    return datetime.now().isoformat()
-
-
 def current_time_str(timezone: str | None = None) -> str:
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     try:
         tz = ZoneInfo(timezone) if timezone else None
-    except (KeyError, Exception):
+    except ZoneInfoNotFoundError:
         tz = None
 
     now = datetime.now(tz=tz) if tz else datetime.now().astimezone()
@@ -233,28 +229,6 @@ def maybe_persist_tool_result(
     )
 
 
-def split_message(content: str, max_len: int = 2000) -> list[str]:
-    """Split content into chunks within ``max_len``, preferring line breaks."""
-    if not content:
-        return []
-    if len(content) <= max_len:
-        return [content]
-    chunks: list[str] = []
-    while content:
-        if len(content) <= max_len:
-            chunks.append(content)
-            break
-        cut = content[:max_len]
-        pos = cut.rfind("\n")
-        if pos <= 0:
-            pos = cut.rfind(" ")
-        if pos <= 0:
-            pos = max_len
-        chunks.append(content[:pos])
-        content = content[pos:].lstrip()
-    return chunks
-
-
 def build_assistant_message(
     content: str | None,
     tool_calls: list[dict[str, Any]] | None = None,
@@ -283,40 +257,37 @@ def estimate_prompt_tokens(
     Counts all fields that providers send to the LLM: content, tool_calls,
     reasoning_content, tool_call_id, name, plus per-message framing overhead.
     """
-    try:
-        enc = tiktoken.get_encoding("cl100k_base")
-        parts: list[str] = []
-        for msg in messages:
-            content = msg.get("content")
-            if isinstance(content, str):
-                parts.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        txt = part.get("text", "")
-                        if txt:
-                            parts.append(txt)
+    enc = tiktoken.get_encoding("cl100k_base")
+    parts: list[str] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    txt = part.get("text", "")
+                    if txt:
+                        parts.append(txt)
 
-            tc = msg.get("tool_calls")
-            if tc:
-                parts.append(json.dumps(tc, ensure_ascii=False))
+        tc = msg.get("tool_calls")
+        if tc:
+            parts.append(json.dumps(tc, ensure_ascii=False))
 
-            rc = msg.get("reasoning_content")
-            if isinstance(rc, str) and rc:
-                parts.append(rc)
+        rc = msg.get("reasoning_content")
+        if isinstance(rc, str) and rc:
+            parts.append(rc)
 
-            for key in ("name", "tool_call_id"):
-                value = msg.get(key)
-                if isinstance(value, str) and value:
-                    parts.append(value)
+        for key in ("name", "tool_call_id"):
+            value = msg.get(key)
+            if isinstance(value, str) and value:
+                parts.append(value)
 
-        if tools:
-            parts.append(json.dumps(tools, ensure_ascii=False))
+    if tools:
+        parts.append(json.dumps(tools, ensure_ascii=False))
 
-        per_message_overhead = len(messages) * 4
-        return len(enc.encode("\n".join(parts))) + per_message_overhead
-    except Exception:
-        return 0
+    per_message_overhead = len(messages) * 4
+    return len(enc.encode("\n".join(parts))) + per_message_overhead
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
@@ -377,107 +348,3 @@ def estimate_prompt_tokens_chain(
     if estimated > 0:
         return int(estimated), "tiktoken"
     return 0, "none"
-
-
-def build_status_content(
-    *,
-    version: str,
-    model: str,
-    start_time: float,
-    last_usage: dict[str, int],
-    context_window_tokens: int,
-    session_msg_count: int,
-    context_tokens_estimate: int,
-) -> str:
-    """Build a human-readable runtime status snapshot."""
-    uptime_s = int(time.time() - start_time)
-    uptime = (
-        f"{uptime_s // 3600}h {(uptime_s % 3600) // 60}m"
-        if uptime_s >= 3600
-        else f"{uptime_s // 60}m {uptime_s % 60}s"
-    )
-    last_in = last_usage.get("prompt_tokens", 0)
-    last_out = last_usage.get("completion_tokens", 0)
-    cached = last_usage.get("cached_tokens", 0)
-    ctx_total = max(context_window_tokens, 0)
-    ctx_pct = int((context_tokens_estimate / ctx_total) * 100) if ctx_total > 0 else 0
-    ctx_used_str = (
-        f"{context_tokens_estimate // 1000}k"
-        if context_tokens_estimate >= 1000
-        else str(context_tokens_estimate)
-    )
-    ctx_total_str = f"{ctx_total // 1024}k" if ctx_total > 0 else "n/a"
-    token_line = f"\U0001f4ca Tokens: {last_in} in / {last_out} out"
-    if cached and last_in:
-        token_line += f" ({cached * 100 // last_in}% cached)"
-    return "\n".join(
-        [
-            f"\U0001f408 nanobot v{version}",
-            f"\U0001f9e0 Model: {model}",
-            token_line,
-            f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}%)",
-            f"\U0001f4ac Session: {session_msg_count} messages",
-            f"\u23f1 Uptime: {uptime}",
-        ]
-    )
-
-
-def sync_workspace_templates(
-    workspace: Path,
-    silent: bool = False,
-    *,
-    runtime_dir: Path | None = None,
-    scaffold_runtime: bool = False,
-) -> list[str]:
-    """Sync bundled templates to workspace. Only creates missing files.
-
-    Bootstrap ``.md`` files (AGENTS.md, SOUL.md, TOOLS.md) are written to the
-    task workspace because they are part of the task contract. Runtime-owned
-    state (``memory/`` MEMORY/HISTORY and ``skills/``) is written to
-    ``runtime_dir`` only — never to the task workspace — to avoid contaminating
-    git-tracked target repositories. Pass ``scaffold_runtime=True`` with a
-    ``runtime_dir`` to create those runtime templates.
-    """
-    from importlib.resources import files as pkg_files
-
-    try:
-        tpl = pkg_files("nanobot") / "templates"
-    except Exception:
-        return []
-    if not tpl.is_dir():
-        return []
-
-    added: list[str] = []
-
-    def _write(src, dest: Path):
-        if dest.exists():
-            return
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(
-            src.read_text(encoding="utf-8") if src else "", encoding="utf-8"
-        )
-        added.append(str(dest.relative_to(workspace)))
-
-    for item in tpl.iterdir():
-        if item.name.endswith(".md") and not item.name.startswith("."):
-            _write(item, workspace / item.name)
-
-    if scaffold_runtime and runtime_dir is not None:
-        memory_dir = runtime_dir / "memory"
-        _write_to(tpl / "memory" / "MEMORY.md", memory_dir / "MEMORY.md")
-        _write_to(None, memory_dir / "HISTORY.md")
-        (runtime_dir / "skills").mkdir(exist_ok=True)
-
-    if added and not silent:
-        from rich.console import Console
-
-        for name in added:
-            Console().print(f"  [dim]Created {name}[/dim]")
-    return added
-
-
-def _write_to(src, dest: Path) -> None:
-    if dest.exists():
-        return
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")

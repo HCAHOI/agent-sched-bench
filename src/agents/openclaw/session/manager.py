@@ -5,8 +5,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from agents.openclaw.utils.helpers import (
     ensure_dir,
     find_legal_message_start,
@@ -64,30 +62,6 @@ class Session:
         self.last_consolidated = 0
         self.updated_at = datetime.now()
 
-    def retain_recent_legal_suffix(self, max_messages: int) -> None:
-        """Keep a legal recent suffix of the session history."""
-        if max_messages <= 0:
-            self.clear()
-            return
-        if len(self.messages) <= max_messages:
-            return
-
-        start_idx = max(0, len(self.messages) - max_messages)
-
-        while start_idx > 0 and self.messages[start_idx].get("role") != "user":
-            start_idx -= 1
-
-        retained = self.messages[start_idx:]
-
-        start = find_legal_message_start(retained)
-        if start:
-            retained = retained[start:]
-
-        dropped = len(self.messages) - len(retained)
-        self.messages = retained
-        self.last_consolidated = max(0, self.last_consolidated - dropped)
-        self.updated_at = datetime.now()
-
 
 def _default_sessions_dir() -> Path:
     """Last-resort sessions dir for direct SessionManager construction.
@@ -137,41 +111,37 @@ class SessionManager:
         if not path.exists():
             return None
 
-        try:
-            messages = []
-            metadata = {}
-            created_at = None
-            last_consolidated = 0
+        messages = []
+        metadata = {}
+        created_at = None
+        last_consolidated = 0
 
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
 
-                    data = json.loads(line)
+                data = json.loads(line)
 
-                    if data.get("_type") == "metadata":
-                        metadata = data.get("metadata", {})
-                        created_at = (
-                            datetime.fromisoformat(data["created_at"])
-                            if data.get("created_at")
-                            else None
-                        )
-                        last_consolidated = data.get("last_consolidated", 0)
-                    else:
-                        messages.append(data)
+                if data.get("_type") == "metadata":
+                    metadata = data.get("metadata", {})
+                    created_at = (
+                        datetime.fromisoformat(data["created_at"])
+                        if data.get("created_at")
+                        else None
+                    )
+                    last_consolidated = data.get("last_consolidated", 0)
+                else:
+                    messages.append(data)
 
-            return Session(
-                key=key,
-                messages=messages,
-                created_at=created_at or datetime.now(),
-                metadata=metadata,
-                last_consolidated=last_consolidated,
-            )
-        except Exception as e:
-            logger.warning("Failed to load session {}: {}", key, e)
-            return None
+        return Session(
+            key=key,
+            messages=messages,
+            created_at=created_at or datetime.now(),
+            metadata=metadata,
+            last_consolidated=last_consolidated,
+        )
 
     def save(self, session: Session) -> None:
         path = self._get_session_path(session.key)
@@ -190,31 +160,3 @@ class SessionManager:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
         self._cache[session.key] = session
-
-    def invalidate(self, key: str) -> None:
-        self._cache.pop(key, None)
-
-    def list_sessions(self) -> list[dict[str, Any]]:
-        """List saved sessions."""
-        sessions = []
-
-        for path in self.sessions_dir.glob("*.jsonl"):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    first_line = f.readline().strip()
-                    if first_line:
-                        data = json.loads(first_line)
-                        if data.get("_type") == "metadata":
-                            key = data.get("key") or path.stem.replace("_", ":", 1)
-                            sessions.append(
-                                {
-                                    "key": key,
-                                    "created_at": data.get("created_at"),
-                                    "updated_at": data.get("updated_at"),
-                                    "path": str(path),
-                                }
-                            )
-            except Exception:
-                continue
-
-        return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
