@@ -419,11 +419,6 @@ async def _drive_chat_without_openrouter_header_falls_back_to_wall_clock(
     )
     provider = _make_provider(completions=completions)
 
-    async def fail_fetch(_: str) -> dict[str, Any]:
-        raise AssertionError("metadata fetch should not run without generation header")
-
-    monkeypatch.setattr(provider, "_fetch_openrouter_generation_metadata", fail_fetch)
-
     response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
 
     assert response.content == "hello"

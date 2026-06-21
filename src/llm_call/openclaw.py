@@ -362,18 +362,6 @@ class UnifiedProvider(LLMProvider):
         }
         return normalized
 
-    async def _fetch_openrouter_generation_metadata(
-        self,
-        generation_id: str,
-    ) -> dict[str, Any]:
-        (
-            metadata,
-            _diagnostics,
-        ) = await self._fetch_openrouter_generation_metadata_with_diagnostics(
-            generation_id
-        )
-        return metadata
-
     async def _fetch_openrouter_generation_metadata_with_diagnostics(
         self,
         generation_id: str,
@@ -558,7 +546,7 @@ class UnifiedProvider(LLMProvider):
             updated_extra.pop("_openrouter_metadata_task", None)
             try:
                 updated_extra.update(task.result())
-            except Exception as exc:  # pragma: no cover - defensive guard
+            except Exception as exc:
                 updated_extra["openrouter_metadata_fetch_status"] = "task_error"
                 updated_extra["openrouter_metadata_fetch_error"] = str(exc)
             response.extra = updated_extra
@@ -625,28 +613,21 @@ class UnifiedProvider(LLMProvider):
     @classmethod
     def _extract_usage(cls, response: Any) -> dict[str, int]:
         """Extract token usage from an OpenAI-compatible response."""
-        usage_obj = None
         response_map = cls._maybe_mapping(response)
-        if response_map is not None:
-            usage_obj = response_map.get("usage")
-        elif hasattr(response, "usage") and response.usage:
-            usage_obj = response.usage
+        if response_map is None:
+            raise TypeError(
+                f"_extract_usage expected a mapping/model_dump response, got "
+                f"{type(response).__name__}"
+            )
 
-        usage_map = cls._maybe_mapping(usage_obj)
-        if usage_map is not None:
-            result = {
-                "prompt_tokens": int(usage_map.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage_map.get("completion_tokens") or 0),
-                "total_tokens": int(usage_map.get("total_tokens") or 0),
-            }
-        elif usage_obj:
-            result = {
-                "prompt_tokens": getattr(usage_obj, "prompt_tokens", 0) or 0,
-                "completion_tokens": getattr(usage_obj, "completion_tokens", 0) or 0,
-                "total_tokens": getattr(usage_obj, "total_tokens", 0) or 0,
-            }
-        else:
+        usage_map = cls._maybe_mapping(response_map.get("usage"))
+        if usage_map is None:
             return {}
+        result = {
+            "prompt_tokens": int(usage_map.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage_map.get("completion_tokens") or 0),
+            "total_tokens": int(usage_map.get("total_tokens") or 0),
+        }
 
         for path in (
             ("prompt_tokens_details", "cached_tokens"),
@@ -654,8 +635,6 @@ class UnifiedProvider(LLMProvider):
             ("prompt_cache_hit_tokens",),
         ):
             cached = cls._get_nested_int(usage_map, path)
-            if not cached and usage_obj:
-                cached = cls._get_nested_int(usage_obj, path)
             if cached:
                 result["cached_tokens"] = cached
                 break
@@ -679,108 +658,63 @@ class UnifiedProvider(LLMProvider):
             return LLMResponse(content=response, finish_reason="stop")
 
         response_map = self._maybe_mapping(response)
-        if response_map is not None:
-            choices = response_map.get("choices") or []
-            if not choices:
-                content = self._extract_text_content(
-                    response_map.get("content") or response_map.get("output_text")
-                )
-                if content is not None:
-                    return LLMResponse(
-                        content=content,
-                        finish_reason=str(response_map.get("finish_reason") or "stop"),
-                        usage=self._extract_usage(response_map),
-                        extra=self._extract_hf_telemetry(response_map),
-                    )
-                return LLMResponse(
-                    content="Error: API returned empty choices.",
-                    finish_reason="error",
-                    extra={"error_type": "empty_choices"},
-                )
-
-            choice0 = self._maybe_mapping(choices[0]) or {}
-            msg0 = self._maybe_mapping(choice0.get("message")) or {}
-            content = self._extract_text_content(msg0.get("content"))
-            finish_reason = str(choice0.get("finish_reason") or "stop")
-
-            raw_tool_calls: list[Any] = []
-            reasoning_content = msg0.get("reasoning_content")
-            for ch in choices:
-                ch_map = self._maybe_mapping(ch) or {}
-                m = self._maybe_mapping(ch_map.get("message")) or {}
-                tool_calls = m.get("tool_calls")
-                if isinstance(tool_calls, list) and tool_calls:
-                    raw_tool_calls.extend(tool_calls)
-                    if ch_map.get("finish_reason") in ("tool_calls", "stop"):
-                        finish_reason = str(ch_map["finish_reason"])
-                if not content:
-                    content = self._extract_text_content(m.get("content"))
-                if not reasoning_content:
-                    reasoning_content = m.get("reasoning_content")
-
-            parsed_tool_calls = []
-            for tc in raw_tool_calls:
-                tc_map = self._maybe_mapping(tc) or {}
-                fn = self._maybe_mapping(tc_map.get("function")) or {}
-                args = fn.get("arguments", {})
-                if isinstance(args, str):
-                    args = json_repair.loads(args)
-                ec, prov, fn_prov = _extract_tc_extras(tc)
-                parsed_tool_calls.append(
-                    ToolCallRequest(
-                        id=_short_tool_id(),
-                        name=str(fn.get("name") or ""),
-                        arguments=args if isinstance(args, dict) else {},
-                        extra_content=ec,
-                        provider_specific_fields=prov,
-                        function_provider_specific_fields=fn_prov,
-                    )
-                )
-
-            return LLMResponse(
-                content=content,
-                tool_calls=parsed_tool_calls,
-                finish_reason=finish_reason,
-                usage=self._extract_usage(response_map),
-                reasoning_content=reasoning_content
-                if isinstance(reasoning_content, str)
-                else None,
-                extra=self._extract_hf_telemetry(response_map, msg0),
+        if response_map is None:
+            raise TypeError(
+                f"_parse expected a mapping/model_dump response, got "
+                f"{type(response).__name__}"
             )
 
-        if not response.choices:
+        choices = response_map.get("choices") or []
+        if not choices:
+            content = self._extract_text_content(
+                response_map.get("content") or response_map.get("output_text")
+            )
+            if content is not None:
+                return LLMResponse(
+                    content=content,
+                    finish_reason=str(response_map.get("finish_reason") or "stop"),
+                    usage=self._extract_usage(response_map),
+                    extra=self._extract_hf_telemetry(response_map),
+                )
             return LLMResponse(
                 content="Error: API returned empty choices.",
                 finish_reason="error",
                 extra={"error_type": "empty_choices"},
             )
 
-        choice = response.choices[0]
-        msg = choice.message
-        content = msg.content
-        finish_reason = choice.finish_reason
+        choice0 = self._maybe_mapping(choices[0]) or {}
+        msg0 = self._maybe_mapping(choice0.get("message")) or {}
+        content = self._extract_text_content(msg0.get("content"))
+        finish_reason = str(choice0.get("finish_reason") or "stop")
 
-        raw_tool_calls_obj: list[Any] = []
-        for ch in response.choices:
-            m = ch.message
-            if hasattr(m, "tool_calls") and m.tool_calls:
-                raw_tool_calls_obj.extend(m.tool_calls)
-                if ch.finish_reason in ("tool_calls", "stop"):
-                    finish_reason = ch.finish_reason
-            if not content and m.content:
-                content = m.content
+        raw_tool_calls: list[Any] = []
+        reasoning_content = msg0.get("reasoning_content")
+        for ch in choices:
+            ch_map = self._maybe_mapping(ch) or {}
+            m = self._maybe_mapping(ch_map.get("message")) or {}
+            tool_calls = m.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                raw_tool_calls.extend(tool_calls)
+                if ch_map.get("finish_reason") in ("tool_calls", "stop"):
+                    finish_reason = str(ch_map["finish_reason"])
+            if not content:
+                content = self._extract_text_content(m.get("content"))
+            if not reasoning_content:
+                reasoning_content = m.get("reasoning_content")
 
-        tool_calls = []
-        for tc in raw_tool_calls_obj:
-            args = tc.function.arguments
+        parsed_tool_calls = []
+        for tc in raw_tool_calls:
+            tc_map = self._maybe_mapping(tc) or {}
+            fn = self._maybe_mapping(tc_map.get("function")) or {}
+            args = fn.get("arguments", {})
             if isinstance(args, str):
                 args = json_repair.loads(args)
             ec, prov, fn_prov = _extract_tc_extras(tc)
-            tool_calls.append(
+            parsed_tool_calls.append(
                 ToolCallRequest(
                     id=_short_tool_id(),
-                    name=tc.function.name,
-                    arguments=args,
+                    name=str(fn.get("name") or ""),
+                    arguments=args if isinstance(args, dict) else {},
                     extra_content=ec,
                     provider_specific_fields=prov,
                     function_provider_specific_fields=fn_prov,
@@ -789,11 +723,13 @@ class UnifiedProvider(LLMProvider):
 
         return LLMResponse(
             content=content,
-            tool_calls=tool_calls,
-            finish_reason=finish_reason or "stop",
-            usage=self._extract_usage(response),
-            reasoning_content=getattr(msg, "reasoning_content", None) or None,
-            extra=self._extract_hf_telemetry(response, msg),
+            tool_calls=parsed_tool_calls,
+            finish_reason=finish_reason,
+            usage=self._extract_usage(response_map),
+            reasoning_content=reasoning_content
+            if isinstance(reasoning_content, str)
+            else None,
+            extra=self._extract_hf_telemetry(response_map, msg0),
         )
 
     @classmethod
@@ -843,39 +779,30 @@ class UnifiedProvider(LLMProvider):
                 continue
 
             chunk_map = cls._maybe_mapping(chunk)
-            if chunk_map is not None:
-                choices = chunk_map.get("choices") or []
-                if not choices:
-                    usage = cls._extract_usage(chunk_map) or usage
-                    text = cls._extract_text_content(
-                        chunk_map.get("content") or chunk_map.get("output_text")
-                    )
-                    if text:
-                        content_parts.append(text)
-                    continue
-                choice = cls._maybe_mapping(choices[0]) or {}
-                if choice.get("finish_reason"):
-                    finish_reason = str(choice["finish_reason"])
-                delta = cls._maybe_mapping(choice.get("delta")) or {}
-                text = cls._extract_text_content(delta.get("content"))
+            if chunk_map is None:
+                raise TypeError(
+                    f"_parse_chunks expected mapping/model_dump chunks, got "
+                    f"{type(chunk).__name__}"
+                )
+            choices = chunk_map.get("choices") or []
+            if not choices:
+                usage = cls._extract_usage(chunk_map) or usage
+                text = cls._extract_text_content(
+                    chunk_map.get("content") or chunk_map.get("output_text")
+                )
                 if text:
                     content_parts.append(text)
-                for idx, tc in enumerate(delta.get("tool_calls") or []):
-                    _accum_tc(tc, idx)
-                usage = cls._extract_usage(chunk_map) or usage
                 continue
-
-            if not chunk.choices:
-                usage = cls._extract_usage(chunk) or usage
-                continue
-            choice = chunk.choices[0]
-            if choice.finish_reason:
-                finish_reason = choice.finish_reason
-            delta = choice.delta
-            if delta and delta.content:
-                content_parts.append(delta.content)
-            for tc in (delta.tool_calls or []) if delta else []:
-                _accum_tc(tc, getattr(tc, "index", 0))
+            choice = cls._maybe_mapping(choices[0]) or {}
+            if choice.get("finish_reason"):
+                finish_reason = str(choice["finish_reason"])
+            delta = cls._maybe_mapping(choice.get("delta")) or {}
+            text = cls._extract_text_content(delta.get("content"))
+            if text:
+                content_parts.append(text)
+            for idx, tc in enumerate(delta.get("tool_calls") or []):
+                _accum_tc(tc, idx)
+            usage = cls._extract_usage(chunk_map) or usage
 
         return LLMResponse(
             content="".join(content_parts) or None,
