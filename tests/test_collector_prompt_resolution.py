@@ -91,22 +91,6 @@ def test_parse_collect_args_allows_omitted_container_for_host_mode() -> None:
     assert args.container is None
 
 
-def test_parse_collect_args_accepts_tongyi_deepresearch_scaffold() -> None:
-    args = parse_collect_args(
-        [
-            "--provider",
-            "dashscope",
-            "--model",
-            "qwen-plus-latest",
-            "--scaffold",
-            "tongyi-deepresearch",
-        ]
-    )
-
-    assert args.scaffold == "tongyi-deepresearch"
-    assert args.mcp_config is None
-
-
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
 def test_parse_collect_args_accepts_explicit_container(
     container_executable: str,
@@ -347,44 +331,6 @@ def test_run_collect_rejects_attention_kv_without_record_internals(
     assert "requires attention" in capsys.readouterr().err
 
 
-def test_run_collect_rejects_record_internals_for_tongyi_deepresearch() -> None:
-    args = parse_collect_args(
-        [
-            "--provider",
-            "dashscope",
-            "--model",
-            "qwen-plus-latest",
-            "--scaffold",
-            "tongyi-deepresearch",
-            "--record-internals",
-        ]
-    )
-
-    with pytest.raises(SystemExit) as excinfo:
-        _run_collect(args)
-
-    assert excinfo.value.code == 2
-
-
-def test_run_collect_rejects_local_hf_for_tongyi_deepresearch() -> None:
-    args = parse_collect_args(
-        [
-            "--provider",
-            "dashscope",
-            "--model",
-            "qwen-plus-latest",
-            "--scaffold",
-            "tongyi-deepresearch",
-            "--local-hf",
-        ]
-    )
-
-    with pytest.raises(SystemExit) as excinfo:
-        _run_collect(args)
-
-    assert excinfo.value.code == 2
-
-
 def test_prepare_collect_model_backend_preserves_external_endpoint() -> None:
     with ExitStack() as stack:
         backend = _prepare_collect_model_backend(
@@ -516,45 +462,6 @@ def test_recording_server_public_host_prefers_env_override(monkeypatch) -> None:
         )
         == "10.0.0.5"
     )
-
-
-def test_run_collect_does_not_require_mcp_config_for_tongyi_deepresearch(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    async def fake_collect_traces(**kwargs):
-        seen.update(kwargs)
-        return Path("/tmp/fake-run")
-
-    monkeypatch.setattr(
-        "trace_collect.cli.resolve_llm_config",
-        lambda **kwargs: SimpleNamespace(
-            name="dashscope",
-            api_base="https://example.com",
-            api_key="test-key",
-            model="qwen-plus-latest",
-            env_key="DASHSCOPE_API_KEY",
-        ),
-    )
-    monkeypatch.setattr(
-        "trace_collect.collector.collect_traces",
-        fake_collect_traces,
-    )
-
-    args = parse_collect_args(
-        [
-            "--provider",
-            "dashscope",
-            "--model",
-            "qwen-plus-latest",
-            "--scaffold",
-            "tongyi-deepresearch",
-        ]
-    )
-
-    _run_collect(args)
-
-    assert seen["scaffold"] == "tongyi-deepresearch"
-    assert seen["mcp_config"] is None
 
 
 def test_main_dispatches_simulate_without_collect_container_flag(monkeypatch) -> None:

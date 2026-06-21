@@ -78,7 +78,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--scaffold",
-        choices=["openclaw", "tongyi-deepresearch"],
+        choices=["openclaw"],
         default="openclaw",
         help="Agent scaffold to use.",
     )
@@ -719,23 +719,11 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     # --mcp-config is MANDATORY for openclaw runs: a forgotten flag would
     # silently produce an MCP-less trace. Opt-out is the literal "none".
-    if args.scaffold == "openclaw" and args.mcp_config is None:
+    if args.mcp_config is None:
         print(
             "ERROR: MCP config is required for openclaw; pass "
             "--mcp-config configs/mcp/context7.yaml or --mcp-config none "
             "to acknowledge running without MCP",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    if args.record_internals and args.scaffold != "openclaw":
-        print(
-            "ERROR: --record-internals currently supports --scaffold openclaw only.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    if args.local_hf and args.scaffold != "openclaw":
-        print(
-            "ERROR: --local-hf currently supports --scaffold openclaw only.",
             file=sys.stderr,
         )
         sys.exit(2)
