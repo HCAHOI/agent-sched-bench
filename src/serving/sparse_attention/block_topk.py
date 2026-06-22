@@ -58,18 +58,11 @@ class BlockTopKSparseAttention:
         self.observe_only = bool(observe_only)
         self._last_kept_count = 0
         self._last_metadata: dict[str, Any] = {}
-        # Per-head top-R export staged by the last `_rank_middle_positions`;
-        # consumed by the recording hook. None when export is off or no
-        # candidates. Shape: {"block_ids": [[..]*H], "scores": [[..]*H]}.
+        # Staged by _rank_middle_positions; consumed by recording hook.
         self._last_per_head_topk: dict[str, Any] | None = None
-        # Vote-distribution summary from the last vote-reduction ranking; None
-        # for max/mean. Recorded into `_last_metadata` for offline read.
+        # Vote distribution from last vote-reduction ranking; None for max/mean.
         self._last_vote_summary: dict[str, int] | None = None
-        # Set by the recording hook at install time (RecordingConfig
-        # .record_per_head_topk). When > 0, every decode ranking also exports
-        # the per-head top-`export_per_head_topk_rank` (block_id, score) pairs
-        # into `_last_metadata["per_head_topk_*"]` regardless of score_reduction.
-        # Default 0 = no extra per-head [H, Nb] materialization (zero cost).
+        # Set by recording hook; > 0 triggers per-head [H, Nb] export each decode step.
         self.export_per_head_topk_rank: int = 0
 
     @classmethod
@@ -223,8 +216,6 @@ class BlockTopKSparseAttention:
                 block_id_for_position(pos, self.block_size), []
             ).append(pos)
 
-        # Vectorize per-block score: one H2D transfer of candidates, one scatter_reduce
-        # on GPU, one D2H of [num_unique_blocks] scores. No per-block .item() sync.
         candidates_t = torch.as_tensor(
             candidates, dtype=torch.long, device=scores.device
         )
@@ -234,9 +225,6 @@ class BlockTopKSparseAttention:
         )  # [Nb], [Nc]
         nb = int(unique_blocks.shape[0])
 
-        # Per-head block scores [H, Nb] are only materialized when the active
-        # reduction is "vote" OR the recording hook asked for per-head export.
-        # Otherwise we stay on the single-vector head-max path (no [H, Nb] cost).
         need_per_head = self.score_reduction == "vote" or self.export_per_head_topk_rank > 0
         per_head_block_scores: Any = None
         cross_head_max_block_scores: Any = None
@@ -247,8 +235,6 @@ class BlockTopKSparseAttention:
             per_head_block_scores = self._scatter_block_amax(
                 cand_scores_h, inverse, nb
             )  # [H, Nb]
-            # cross-head max block score reused as the vote tie-break and the
-            # max-equivalent ranking (avoids a second scatter for the max arm).
             cross_head_max_block_scores = per_head_block_scores.amax(dim=0)  # [Nb]
 
         if self.export_per_head_topk_rank > 0:

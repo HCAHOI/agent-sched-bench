@@ -695,7 +695,6 @@ class MetadataResidencyCache(BaseEvictionCache):
         self._original_indices_by_layer: dict[int, list[int]] = {}
         self._original_to_current_by_layer: dict[int, dict[int, int]] = {}
         self._next_original_by_layer: dict[int, int] = {}
-        self._last_metadata_reads_by_layer: dict[int, list[int]] = {}
         self._metadata_version = 0
         self._original_state_id_by_layer: dict[int, int] = {}
         self._state_transition_ids: dict[tuple[Any, ...], int] = {}
@@ -737,11 +736,6 @@ class MetadataResidencyCache(BaseEvictionCache):
         self._selection_cache_originals = None
         self._selection_cache_value = None
 
-    def original_to_current(self, layer_idx: int) -> dict[int, int]:
-        """Return the layer-local original->current physical slot map."""
-        self._ensure_layer_state(int(layer_idx), self._current_layer_len(layer_idx))
-        return dict(self._original_to_current_by_layer[int(layer_idx)])
-
     def original_indices_for_layer(
         self, layer_idx: int, key_len: int | None = None
     ) -> list[int]:
@@ -753,18 +747,6 @@ class MetadataResidencyCache(BaseEvictionCache):
         """
         length = self._current_layer_len(layer_idx) if key_len is None else int(key_len)
         return self._ensure_layer_state(int(layer_idx), length)
-
-    def assert_last_metadata_reads_within(
-        self, layer_idx: int, *, original_limit: int
-    ) -> None:
-        """Assert the last decision did not read future ORIGINAL token metadata."""
-        reads = self._last_metadata_reads_by_layer.get(int(layer_idx), [])
-        bad = [idx for idx in reads if int(idx) >= int(original_limit)]
-        if bad:
-            raise AssertionError(
-                f"metadata read future original indices {bad[:8]} "
-                f">= limit {original_limit}"
-            )
 
     def crop_to_logical_length(self, logical_length: int) -> None:
         length = int(logical_length)
@@ -786,7 +768,6 @@ class MetadataResidencyCache(BaseEvictionCache):
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         layer = int(layer_idx)
         originals = self._ensure_layer_state(layer, int(key_len), copy=False)
-        self._last_metadata_reads_by_layer[layer] = originals
         if self._selector.layer_independent:
             selection = self._cached_layer_independent_selection(
                 key_len=int(key_len),

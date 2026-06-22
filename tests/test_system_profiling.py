@@ -51,16 +51,6 @@ def test_parse_pipe_stats_4field() -> None:
     assert result["net_io"] == "1.5kB / 2.3MB"
 
 
-def test_parse_pipe_stats_legacy_3field() -> None:
-    """Legacy 3-field format still works (backward compat)."""
-    raw = "100MB / 1GB|10%|5%"
-    result = _parse_pipe_stats(raw)
-    assert result is not None
-    assert result["mem_usage"] == "100MB / 1GB"
-    assert result["cpu_percent"] == "5%"
-    assert "net_io" not in result
-
-
 def test_parse_pipe_stats_rejects_short_input() -> None:
     assert _parse_pipe_stats("foo|bar") is None
     assert _parse_pipe_stats("") is None

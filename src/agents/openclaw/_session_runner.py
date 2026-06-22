@@ -339,9 +339,6 @@ class TraceCollectorHook(AgentHook):
                     "finish_reason": finish_reason,
                 }
                 if context.response.extra:
-                    # Preserve existing non-HF error diagnostics, but route HF
-                    # telemetry through the explicit allow-list below so new
-                    # `hf_*` fields cannot leak into traces by naming convention.
                     error_data.update(
                         {
                             key: value

@@ -1,27 +1,8 @@
 """Sliding-window sparse attention (sink prefix + recent tail).
 
-Per-row keep set (query row q at absolute position `cached_len + q =
-key_len - query_len + q`):
-  k in [0, sink_size)                       -> 0    (attend)
-  k in [key_len - recent_window, key_len)   -> 0    (attend)
-  otherwise                                  -> -inf (mask)
-  AND additionally: k > (key_len - query_len) + q -> -inf (causal)
-
-At prefill (query_len > 1) the additive mask we return is `[1,1,Q,K]` with
-the upper triangle (k > absolute query position) forced to -inf. This is
-load-bearing: the recording pre-hook sets HF SDPA's `attention_mask`
-kwarg to a non-None tensor, which disables SDPA's implicit `is_causal`
-shortcut. Without the causal upper triangle here, query row 0 would see
-the recent-window tail (future tokens) — a hindsight leak.
-
-At decode (query_len == 1) the single query row sits at position
-`key_len - 1`, which is >= every k in `[0, key_len)`. Causality is
-trivially satisfied, so we keep the cheaper `[1,1,1,K]` key-uniform
-mask shape and let SDPA broadcast.
-
-When `sink_size + recent_window >= key_len`, no sparsity positions are
-masked at decode; causal still applies at prefill via the per-row
-upper-triangular cut.
+Pre-hook sets attention_mask to non-None, disabling HF SDPA's implicit causal.
+Prefill mask ([1,1,Q,K]) carries the per-row upper-triangular -inf cut.
+Decode mask ([1,1,1,K]) omits causal (trivially satisfied at Q==1).
 """
 
 from __future__ import annotations
@@ -106,17 +87,9 @@ class SlidingWindowSparseAttention:
         )
 
         if query_len == 1:
-            # Decode: the single query is at absolute position key_len-1,
-            # which is >= every k in [0, key_len), so causal is trivially
-            # satisfied. Keep the cheaper key-uniform shape and let SDPA
-            # broadcast across the query dimension.
             return key_mask.view(1, 1, 1, key_len)
 
-        # Prefill: per-row causal upper-triangular cut. The q-th query row's
-        # absolute position is `cached_len + q = (key_len - query_len) + q`;
-        # any k strictly greater is a future token and must be -inf,
-        # because setting kwargs["attention_mask"] non-None disables HF
-        # SDPA's implicit causal.
+        # Prefill: per-row causal upper-triangular cut.
         offset = key_len - query_len
         q_idx = torch.arange(query_len, device=device).view(query_len, 1)
         k_idx = torch.arange(key_len, device=device).view(1, key_len)

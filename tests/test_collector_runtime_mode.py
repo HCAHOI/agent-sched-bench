@@ -61,6 +61,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
     )
 
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-rebench",
             harness_split="filtered",
@@ -151,6 +152,7 @@ def test_run_scaffold_tasks_allocates_next_attempt_dir(
     monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
 
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-rebench",
             harness_split="filtered",
@@ -225,6 +227,7 @@ def test_run_scaffold_tasks_uses_max_sparse_attempt_dir(
     monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
 
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-rebench",
             harness_split="filtered",
@@ -278,6 +281,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
     )
 
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-rebench",
             harness_split="filtered",
@@ -348,6 +352,7 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
     )
 
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-bench-verified",
             harness_split="test",
@@ -421,6 +426,7 @@ def test_run_scaffold_tasks_allows_non_image_tasks_and_uses_attempt_success(
     )
 
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="terminal-bench",
             harness_split=None,
@@ -544,6 +550,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
     trace_path = tmp_path / "trace-source" / "trace.jsonl"
     _write_trace(trace_path)
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-rebench",
             harness_split="filtered",
@@ -650,6 +657,7 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
     trace_path = tmp_path / "trace-source" / "trace.jsonl"
     _write_trace(trace_path)
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-rebench",
             harness_split="filtered",
@@ -743,6 +751,7 @@ def test_run_scaffold_tasks_propagates_container_executable(
     seen: list[tuple[str, str]] = []
 
     benchmark = SimpleNamespace(
+        execution_environment="container",
         config=SimpleNamespace(
             slug="swe-rebench",
             harness_split="filtered",

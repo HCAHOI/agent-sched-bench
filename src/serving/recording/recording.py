@@ -21,30 +21,13 @@ class RecordingConfig:
     device_map: str = "auto"
     trust_remote_code: bool = True
     generation_seed: int = 0
-    # Layers for which per-head per-span attention stats are captured.
-    # Empty tuple disables the feature. Must all be < num_hidden_layers.
-    # Recommended for real models: (0, 6, 12, 18, 24, 30, 36, 47)
-    # Layer 47 is the last attention layer in Qwen3-Coder-30B (retrieval/copy heads concentrate there).
+    # Layers for per-head per-span attention stats; empty disables. See recording/CLAUDE.md.
     per_head_stats_layers: tuple[int, ...] = ()
-    # When True, additionally capture per-selected-block within-block attention
-    # mean/std at decode (bucket axis = [sink, rank1..R_max, recent]). Only valid
-    # with an active block_topk sparse method and non-empty per_head_stats_layers;
-    # the CLI gate enforces both. block_size/sink/recent are read at runtime from
-    # the sparse method instance (single source of truth), not duplicated here.
+    # Capture per-selected-block within-block attn mean/std at decode (block_topk only; CLI-gated).
     per_head_block_stats: bool = False
-    # When True, record block_topk's per-head independent top-`per_head_topk_rank`
-    # block selections at each decode step (the counterfactual "what would each
-    # head pick alone" set, uncensored by pooling). Reuses per_head_stats_layers
-    # for the layer set (empty = nothing recorded). Only meaningful with an active
-    # block_topk method; the CLI gate enforces it. The sparse method computes the
-    # per-head block scores regardless of score_reduction when this is on; off =
-    # zero extra compute / GPU memory (no [H, n_blocks] materialization).
+    # Record per-head counterfactual top-R block selections at decode (block_topk only; CLI-gated).
     record_per_head_topk: bool = False
-    # Per-head rank cap R_ph for record_per_head_topk. Default 64 sits ABOVE the
-    # typical middle-block budget (≈48 at budget=1024/block_size=16) so the export
-    # cap is never the binding constraint; per-step rows are capped at the
-    # candidate-block count nb anyway. Lower it in YAML to cut storage
-    # (≈ layers × decode_steps × H × R_ph × 6 bytes per call, see hooks).
+    # Per-head rank cap R_ph for record_per_head_topk; rows also capped at candidate-block count.
     per_head_topk_rank: int = 64
 
 

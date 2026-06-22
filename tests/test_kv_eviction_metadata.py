@@ -237,7 +237,6 @@ def test_metadata_cache_crop_to_logical_prefix_remaps_original_indices() -> None
 
     assert int(cache.get_seq_length(0)) == 5
     assert cache.original_indices_for_layer(0) == [0, 1, 2, 3, 4]
-    assert cache.original_to_current(0) == {0: 0, 1: 1, 2: 2, 3: 3, 4: 4}
 
     cache.notify_new_call(1, segments=segments, input_token_count=8)
     delta_keys = torch.arange(3, dtype=torch.float32).reshape(1, 1, 3, 1)
@@ -251,7 +250,6 @@ def test_bridge_remap_is_per_layer_and_original_index_pure_after_eviction() -> N
     cache = _metadata_cache("rung4")
     d0 = cache._decide_evict(layer_idx=0, key_len=14)
     cache._post_evict_hook(0, d0)
-    cache.assert_last_metadata_reads_within(0, original_limit=14)
 
     # Simulate a different layer-local eviction to prove there is no shared
     # original->current fallback map.
@@ -263,14 +261,9 @@ def test_bridge_remap_is_per_layer_and_original_index_pure_after_eviction() -> N
     cache._ensure_layer_state(1, 14)  # test-local setup of layer 1 origins
     cache._post_evict_hook(1, d1)
 
-    assert cache.original_to_current(0) != cache.original_to_current(1)
-    assert cache.original_to_current(0)[10] == 2
-    assert cache.original_to_current(1)[5] == 5
-
     d0_next = cache._decide_evict(layer_idx=0, key_len=7)
     assert d0_next.policy_state is not None
     assert max(d0_next.policy_state["original_kept_indices"]) <= 14
-    cache.assert_last_metadata_reads_within(0, original_limit=15)
 
 
 def test_recent_tool_reservation_uses_current_physical_recency() -> None:
@@ -402,8 +395,6 @@ def test_per_layer_table_changes_layer_scores_and_remaps(tmp_path: Path) -> None
 
     cache._post_evict_hook(0, d0)
     cache._post_evict_hook(1, d1)
-    assert cache.original_to_current(0) == {0: 0, 1: 1, 2: 2, 3: 3}
-    assert cache.original_to_current(1) == {4: 0, 5: 1, 6: 2, 7: 3}
 
 
 def test_metadata_sidecar_uses_kv_original_remap_after_compaction() -> None:

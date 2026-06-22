@@ -1,62 +1,17 @@
 """H2O (Heavy-Hitter Oracle) KV eviction policy.
 
-Reference: Zhang et al., "H2O: Heavy-Hitter Oracle for Efficient Generative
-Inference of Large Language Models" (NeurIPS 2023, https://arxiv.org/abs/2306.14048).
+Zhang et al., NeurIPS 2023 (https://arxiv.org/abs/2306.14048).
 
-Algorithm sketch (paper §4)
----------------------------
+Keeps sink ∪ recent tokens always; evicts middle tokens by cumulative
+attention score. Score buffer is head-mean (≈8x cheaper than per-head;
+sum+mean are linear so equivalence holds). fp32 accumulation avoids drift
+across bf16/fp16 prefill+decode. EMA first-observe assigns directly to avoid
+the initial (1 - ema_decay) bias.
 
-For each layer, maintain a per-key-position cumulative attention score. When
-`key_len > budget` triggers eviction, partition `[0, key_len)` into
-
-    sink   := [0, sink_size)
-    recent := [key_len - recent_window, key_len)
-    middle := [sink_size, key_len - recent_window)
-
-Always keep `sink ∪ recent` (matches StreamingLLM semantics for sink + local
-context). From `middle`, keep the top `budget - sink_size - recent_window`
-positions ranked by accumulated attention score; evict the rest. The
-post-eviction layer length is exactly `budget`.
-
-Design choices (locked so later H2O variants share one baseline contract).
-
-A. **Score buffer shape — head-mean at `observe()` time, NOT per-head store.**
-   We accumulate the head-mean directly in `observe()`; equivalent to a
-   per-head store (sum + head-mean are linear) but ≈8x cheaper for Qwen3.
-
-B. **`config.aggregate` — `sum` (default), `mean`, `ema`.**
-   * `sum` — paper default; cumulative score, prefill + decode share one
-     accumulator.
-   * `mean` — `sum / observation_count` per key position; a parallel int
-     counter (incremented by `n_query_rows`) re-normalises so older positions
-     don't dominate purely from longer exposure.
-   * `ema` — moving average with decay `ema_decay`, touching only the live
-     prefix; first observe assigns directly (else the first decision would be
-     scaled by `1 - ema_decay`).
-
-C. **Score buffer pre-allocation.**
-   One lazy `(max_position_embeddings,)` fp32 tensor per layer (decode is hot;
-   regrowing every step is wasteful). Exceeding `max_position_embeddings`
-   raises rather than silently truncating the eviction decisions.
-
-D. **Device.**
-   The buffer pins to the first `observe()`'s `attn` device, avoiding per-call
-   `.to(...)` traffic on the decode path.
-
-E. **Post-eviction score buffer compaction.**
-   `_post_evict_hook` rebuilds the prefix as `buffer[keep_indices]` so the
-   buffer follows the K/V drop; otherwise the next `observe()` writes stale
-   slots.
-
-Lifecycle invariants (plan §H4 + Top Risk #4)
----------------------------------------------
-
-* `always_active = True`: H2O observes even while `suspend_attention()` gates
-  the bus — a silent skip would desync the score buffer from the cache.
-* `requires_attention_backend()` returns True so the provider wires the bus.
-* H2O subscribes itself on construction; the provider must
-  `attention_bus.unsubscribe(cache)` in a `finally` around `generate(...)` or
-  subscriptions leak / double-observe across calls.
+`always_active = True`: H2O must observe even while `suspend_attention()`
+gates the bus — a skip would desync the score buffer from the cache.
+Provider must `attention_bus.unsubscribe(cache)` in a `finally` around
+`generate(...)` or subscriptions leak / double-observe across calls.
 """
 
 from __future__ import annotations

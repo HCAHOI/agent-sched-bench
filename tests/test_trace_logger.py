@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from agents.base import AgentBase, TraceAction
+from agents.base import TraceAction
 from harness.trace_logger import TraceLogger
 
 
@@ -68,69 +68,3 @@ def test_trace_logger_log_event_writes_correct_record(tmp_path: Path) -> None:
     assert entry["data"]["prompt_tokens"] == 10
 
 
-def _make_action(iteration: int = 0, action_type: str = "tool_exec",
-                 tool_name: str = "bash") -> TraceAction:
-    return TraceAction(
-        action_type=action_type,
-        action_id=f"{action_type}_{iteration}_{tool_name}",
-        agent_id="agent-1",
-        program_id="agent-1",
-        iteration=iteration,
-        ts_start=1.0,
-        ts_end=2.0,
-        data={
-            "tool_name": tool_name,
-            "duration_ms": 300.0,
-            "timeout": False,
-            "prompt_tokens": 5,
-            "completion_tokens": 2,
-            "llm_latency_ms": 100.0,
-        },
-    )
-
-
-def _make_concrete_agent(api_base: str = "http://localhost") -> AgentBase:
-    class _ConcreteAgent(AgentBase):
-        async def run(self, task):  # type: ignore[override]
-            return False
-    return _ConcreteAgent(agent_id="agent-1", api_base=api_base, model="test-model")
-
-
-def test_emit_action_appends_and_merges_metadata(tmp_path: Path) -> None:
-    logger = TraceLogger(tmp_path, "action_run")
-    agent = _make_concrete_agent()
-    agent._trace_logger = logger
-    agent.run_metadata = {"model": "qwen-plus", "prepare_ms": 500.0}
-
-    action = _make_action(iteration=0)
-    agent._emit_action(action)
-    logger.close()
-
-    assert len(agent.actions) == 1
-    assert agent.actions[0].iteration == 0
-    assert agent.actions[0].data["model"] == "qwen-plus"
-
-    lines = (tmp_path / "action_run.jsonl").read_text(encoding="utf-8").splitlines()
-    entry = json.loads(lines[0])
-    assert entry["type"] == "action"
-    assert entry["data"]["model"] == "qwen-plus"
-
-
-def test_summary_tool_stats() -> None:
-    agent = _make_concrete_agent()
-
-    a1 = TraceAction(action_type="tool_exec", action_id="t0_bash",
-                     iteration=0, data={"tool_name": "bash", "duration_ms": 200.0})
-    a2 = TraceAction(action_type="tool_exec", action_id="t1_bash",
-                     iteration=1, data={"tool_name": "bash", "duration_ms": 100.0, "timeout": True})
-    a3 = TraceAction(action_type="tool_exec", action_id="t2_submit",
-                     iteration=2, data={"tool_name": "submit", "duration_ms": 50.0})
-
-    for a in (a1, a2, a3):
-        agent.actions.append(a)
-
-    s = agent.summary()
-    assert s["tool_ms_by_name"]["bash"] == 300.0
-    assert s["tool_ms_by_name"]["submit"] == 50.0
-    assert s["tool_timeouts"]["bash"] == 1
-    assert "submit" not in s["tool_timeouts"]

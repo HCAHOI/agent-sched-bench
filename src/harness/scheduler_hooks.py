@@ -81,13 +81,7 @@ def parse_prometheus_metrics(metrics_payload: str) -> PreemptionSnapshot:
     return PreemptionSnapshot(**values, gpu_memory_breakdown=None)
 
 def empty_snapshot() -> PreemptionSnapshot:
-    """Return a PreemptionSnapshot with all fields set to None.
-
-    Used by `get_snapshot` and the simulator when no `metrics_url` is
-    provided (explicit opt-out: simulate runs without vLLM metrics
-    integration). Each call returns a fresh instance so callers cannot
-    accidentally share state through a singleton.
-    """
+    """All-None PreemptionSnapshot for callers with no metrics_url."""
     return PreemptionSnapshot(
         num_preemptions_total=None,
         gpu_cache_usage_perc=None,
@@ -102,24 +96,7 @@ def get_snapshot(
     *,
     timeout_s: float = 5.0,
 ) -> PreemptionSnapshot:
-    """Fetch a single PreemptionSnapshot from a vLLM /metrics endpoint.
-
-    Args:
-        metrics_url: Prometheus endpoint URL. If None or empty, returns
-            an `empty_snapshot()` (explicit opt-out — sim runs without
-            metrics integration). This is the only "fallback" path; HTTP
-            failure when a URL IS set raises explicitly per CLAUDE.md
-            "no silent fallbacks for real operations".
-        timeout_s: HTTP timeout in seconds. Defaults to 5s.
-
-    Returns:
-        PreemptionSnapshot with all five fields populated from the
-        Prometheus payload (or all-None if `metrics_url` is unset).
-
-    Raises:
-        httpx.HTTPError: if `metrics_url` is set but the fetch fails.
-        ValueError: if the payload is malformed.
-    """
+    """Fetch a PreemptionSnapshot from a vLLM /metrics endpoint; returns empty_snapshot() if url is unset."""
     if not metrics_url:
         return empty_snapshot()
     response = httpx.get(metrics_url, timeout=timeout_s)

@@ -427,7 +427,6 @@ def test_recording_session_persists_generation_metrics_added_before_flush(tmp_pa
         "prefill_query_seed": None,
         "configured_max_prefill_queries": 80,
         "effective_max_prefill_queries": 80,
-        "unbounded_prefill_queries": False,
         "prefill_query_count": 4,
         "sampled_prefill_queries": 4,
     }
@@ -479,62 +478,8 @@ def test_recording_session_persists_seeded_sampling_metadata(tmp_path) -> None:
         "prefill_query_seed": "0:3",
         "configured_max_prefill_queries": 4,
         "effective_max_prefill_queries": 4,
-        "unbounded_prefill_queries": False,
         "prefill_query_count": 8,
         "sampled_prefill_queries": 4,
-    }
-
-
-def test_recording_session_persists_unbounded_sampling_metadata(tmp_path) -> None:
-    model = _ToyModel()
-    capturer = LayerCapturer(
-        model,
-        config=RecordingConfig(
-            attention_top_k=2,
-            decode_window=2,
-            max_prefill_queries=4,
-        ),
-        model_summary={"name": "toy"},
-    )
-    recordings_dir = tmp_path / "recordings"
-    capturer.start_attempt(recordings_dir)
-    segments = [
-        {
-            "role": "user",
-            "message_index": 0,
-            "token_start": 0,
-            "token_end": 8,
-            "has_content": True,
-            "has_tool_calls": False,
-        }
-    ]
-
-    with capturer.recording_session(
-        call_idx=3,
-        segments=segments,
-        input_token_count=8,
-    ):
-        with capturer.unbounded_prefill_queries():
-            model.model.layers[0].self_attn(
-                torch.zeros(1, 8, 8),
-                position_embeddings=(
-                    torch.ones(1, 8, 4, dtype=torch.float32),
-                    torch.zeros(1, 8, 4, dtype=torch.float32),
-                ),
-                past_key_values=_FakeCache(torch.zeros(1, 1, 8, 4)),
-            )
-        capturer.flush(output_token_ids=[42])
-    capturer.finish_attempt()
-
-    meta = json.loads((recordings_dir / "meta.json").read_text())
-    assert meta["iters"][0]["attention_sampling"] == {
-        "prefill_query_sampler": "all_rows",
-        "prefill_query_seed": None,
-        "configured_max_prefill_queries": 4,
-        "effective_max_prefill_queries": None,
-        "unbounded_prefill_queries": True,
-        "prefill_query_count": 8,
-        "sampled_prefill_queries": 8,
     }
 
 

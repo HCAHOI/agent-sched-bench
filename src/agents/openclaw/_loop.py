@@ -578,18 +578,6 @@ class AgentLoop:
                     )
                 )
 
-    async def close_mcp(self) -> None:
-        """Drain pending background work and close MCP connections."""
-        if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            self._background_tasks.clear()
-        if self._mcp_stack:
-            try:
-                await self._mcp_stack.aclose()
-            except (RuntimeError, _BaseExceptionGroup):
-                pass
-            self._mcp_stack = None
-
     def _schedule_background(self, coro) -> None:
         """Schedule a tracked background task."""
         task = asyncio.create_task(coro)

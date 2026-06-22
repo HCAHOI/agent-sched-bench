@@ -107,9 +107,6 @@ class AgentRunSpec:
     model: str
     max_iterations: int
     max_tool_result_chars: int
-    temperature: float | None = None
-    max_tokens: int | None = None
-    reasoning_effort: str | None = None
     hook: AgentHook | None = None
     error_message: str | None = _DEFAULT_ERROR_MESSAGE
     max_iterations_message: str | None = None
@@ -228,7 +225,6 @@ class AgentRunner:
                     external_lookup_counts,
                 )
                 tool_events.extend(new_events)
-                context.tool_results = list(results)
                 context.tool_events = list(new_events)
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
@@ -458,12 +454,6 @@ class AgentRunner:
             "retry_mode": spec.provider_retry_mode,
             "on_retry_wait": spec.progress_callback,
         }
-        if spec.temperature is not None:
-            kwargs["temperature"] = spec.temperature
-        if spec.max_tokens is not None:
-            kwargs["max_tokens"] = spec.max_tokens
-        if spec.reasoning_effort is not None:
-            kwargs["reasoning_effort"] = spec.reasoning_effort
         return kwargs
 
     async def _request_model(
@@ -764,11 +754,7 @@ class AgentRunner:
             return messages
 
         provider_max_tokens = self.provider.generation.max_tokens
-        max_output = (
-            spec.max_tokens
-            if isinstance(spec.max_tokens, int)
-            else (provider_max_tokens if isinstance(provider_max_tokens, int) else 4096)
-        )
+        max_output = provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
         budget = spec.context_block_limit or (
             spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
         )

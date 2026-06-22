@@ -308,15 +308,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         host = urlparse(api_base).hostname
         return host in cls._CONTAINER_LOCAL_API_HOSTS
 
-    def _api_base_shell_prefix(self) -> tuple[str, str]:
-        """Return a shell prefix and argv expression for the OpenClaw API base.
-
-        Gateway resolution lives in setup-env.sh; see _create_env_setup_file.
-        """
-        if not self._should_resolve_api_base_from_container_gateway(self._api_base):
-            return "", shlex.quote(self._api_base)
-        return "", '"${OPENCLAW_API_BASE}"'
-
     def _run_agent_commands(self) -> list[TerminalCommand]:
         workspace = shlex.quote(".")
         trace_output = shlex.quote(
@@ -326,7 +317,11 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.RUNTIME_DIRNAME}"
         )
         prompt_file = shlex.quote(self.CONTAINER_PROMPT_PATH)
-        api_base_prefix, api_base_arg = self._api_base_shell_prefix()
+        api_base_arg = (
+            shlex.quote(self._api_base)
+            if not self._should_resolve_api_base_from_container_gateway(self._api_base)
+            else '"${OPENCLAW_API_BASE}"'
+        )
         secret_prefix = (
             f'{self._env_key}="$(cat {shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)})" '
         )
@@ -346,7 +341,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             )
         command = (
             f"{secret_prefix}"
-            f"{api_base_prefix}"
             f"{self.VENV_PATH}/bin/openclaw "
             f"--provider {shlex.quote(self._provider_name)} "
             f"--model {shlex.quote(self._model_name)} "

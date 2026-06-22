@@ -55,11 +55,6 @@ def _ensure_text(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
-def _normalize_save_memory_args(args: Any) -> dict[str, Any] | None:
-    """Normalize provider tool-call arguments to the expected dict shape."""
-    return args if isinstance(args, dict) else None
-
-
 _TOOL_CHOICE_ERROR_MARKERS = (
     "tool_choice",
     "toolchoice",
@@ -75,13 +70,7 @@ def _is_tool_choice_unsupported(content: str | None) -> bool:
 
 
 def _default_memory_dir() -> Path:
-    """Last-resort memory dir for direct MemoryStore construction.
-
-    Returns a non-workspace, user-level path. Eval/CLI paths never hit this —
-    they pass an explicit ``storage_dir`` derived from ``runtime_dir``. The
-    fallback only ensures direct ``MemoryStore(workspace)`` construction does
-    not contaminate the workspace.
-    """
+    """Last-resort non-workspace memory dir when no storage_dir is passed."""
     explicit = os.environ.get("OPENCLAW_MEMORY_DIR")
     if explicit:
         return Path(explicit).expanduser()
@@ -192,7 +181,7 @@ class MemoryStore:
                 )
                 return self._fail_or_raw_archive(messages)
 
-            args = _normalize_save_memory_args(response.tool_calls[0].arguments)
+            args = response.tool_calls[0].arguments if isinstance(response.tool_calls[0].arguments, dict) else None
             if args is None:
                 logger.warning("Memory consolidation: unexpected save_memory arguments")
                 return self._fail_or_raw_archive(messages)

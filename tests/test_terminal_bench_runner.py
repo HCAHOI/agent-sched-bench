@@ -214,14 +214,6 @@ def test_extract_success_reads_terminal_bench_results(tmp_path: Path) -> None:
     assert runner._extract_success(run_path) is True
 
 
-def test_find_trace_path_prefers_agent_logs(tmp_path: Path) -> None:
-    runner = _make_runner()
-    trace = tmp_path / "task" / "trial" / "agent-logs" / "openclaw-trace.jsonl"
-    trace.parent.mkdir(parents=True)
-    trace.write_text("{}\n", encoding="utf-8")
-    assert runner._find_trace_path(tmp_path) == trace
-
-
 def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> None:
     runner = _make_runner(
         mcp_config="configs/mcp/context7.yaml",

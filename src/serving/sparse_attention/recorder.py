@@ -1,24 +1,8 @@
 """Per-call audit recorder for sparse attention decisions.
 
-One `SparseAttentionRecorder` per `recording_session()` (per LLM call). Each
-pre-hook invocation appends one row keyed by `(layer, phase, decode_step)`;
-`write(npz_path)` flushes the accumulated rows to a compressed npz next to
-`attention.npz` / `kv_eviction.npz`.
-
-Method-specific extras are serialised to a single `extras_json` U-column
-rather than minted into schema columns; this keeps the writer
-method-agnostic at the cost of a JSON-decode step on the read path. The
-artifact is small (one row per (layer, phase, step)) so CSR /
-pre-allocation is not warranted.
-
-`density` semantics: for key-uniform methods (sliding), density describes
-the sparse key pattern before the causal cut. During prefill, the true
-sparse-and-causal visible-cell fraction is query-row dependent and belongs
-in `extras_json` (for sliding: `effective_kept_count_sum` and
-`effective_density`). For future per-query methods (Quest, MInference, etc.)
-`kept_count` should be the MEAN kept count across query rows, and `density`
-accordingly the mean per-row keep fraction; per-row breakdowns belong in
-`extras_json` so the top-level schema stays method-agnostic.
+One row per (layer, phase, decode_step); method-specific extras go in
+`extras_json` to keep the top-level schema method-agnostic. See
+sparse_attention/CLAUDE.md for the full npz column schema and density semantics.
 """
 
 from __future__ import annotations

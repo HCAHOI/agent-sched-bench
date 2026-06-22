@@ -36,32 +36,12 @@ def _unwrap_tool_args(
 
 
 def _resolve_exec_timeout_s(params: dict[str, Any]) -> float:
-    """Mirror OpenClaw ExecTool timeout semantics during replay.
-
-    Source traces may omit ``timeout`` when the tool relied on its default.
-    To preserve source behavior, replay must use the original tool default
-    instead of the simulator's global fallback. Explicit values are capped to
-    the same 600s ceiling enforced by ``ExecTool``.
-    """
-
-    raw_timeout = params.get("timeout", _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S)
-    try:
-        timeout_s = float(raw_timeout)
-    except (TypeError, ValueError):
-        timeout_s = _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S
-    if timeout_s <= 0:
-        timeout_s = _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S
-    return min(timeout_s, _OPENCLAW_EXEC_MAX_TIMEOUT_S)
+    """Mirror OpenClaw ExecTool timeout semantics; missing → default, explicit → capped at 600s."""
+    return min(float(params.get("timeout", _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S)), _OPENCLAW_EXEC_MAX_TIMEOUT_S)
 
 
-# ---------------------------------------------------------------------------
-# In-container replay agent script.
-#
-# Runs as a single persistent python3 process inside the Docker container.
-# Reads JSON-line requests from stdin, dispatches to tool handlers,
-# writes JSON-line responses to stdout.  All subprocess.run calls use
-# capture_output=True to prevent stdout pollution of the protocol.
-# ---------------------------------------------------------------------------
+# Persistent python3 agent script injected into Docker container; reads JSON-line requests
+# from stdin, writes JSON-line responses to stdout (subprocess.run uses capture_output=True).
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r'''
 import json, os, sys, subprocess, difflib, signal, time
 

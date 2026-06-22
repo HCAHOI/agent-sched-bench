@@ -14,20 +14,6 @@ from agents.benchmarks._swebench_selection import (
 )
 from agents.benchmarks.base import Benchmark
 
-# Repo-level selection constants.
-
-#: Repos known to have heavy test suites (large codebase, slow pytest).
-CLASS_LEVEL_HEAVY_REPOS: frozenset[str] = frozenset(
-    {
-        "django/django",
-        "sympy/sympy",
-        "scikit-learn/scikit-learn",
-        "matplotlib/matplotlib",
-        "sphinx-doc/sphinx",
-        "pytest-dev/pytest",
-    }
-)
-
 #: Target allocation per repo for a 32-task selection.
 CLASS_LEVEL_REPO_QUOTAS: dict[str, int] = {
     "django/django": 10,

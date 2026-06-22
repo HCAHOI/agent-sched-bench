@@ -546,11 +546,7 @@ async def _run_scaffold_tasks(
                 source_image=source_image,
                 prompt_template=resolved_prompt_template,
                 agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
-                execution_environment=getattr(
-                    benchmark,
-                    "execution_environment",
-                    "container",
-                ),
+                execution_environment=benchmark.execution_environment,
             )
 
             _inner = inner_factory(task)
@@ -867,11 +863,9 @@ def _normalize_openclaw_trace(
             body_start = idx
         break
 
-    execution_environment = getattr(benchmark, "execution_environment", "container")
+    execution_environment = benchmark.execution_environment
     merged: dict[str, Any] = {
-        "type": "trace_metadata",
         "scaffold": "openclaw",
-        "trace_format_version": 5,
         "mode": "collect",
         "scaffold_capabilities": {"unknown": True},
     }

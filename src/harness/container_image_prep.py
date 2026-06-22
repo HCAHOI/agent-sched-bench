@@ -243,12 +243,7 @@ def ensure_fixed_image(
 ) -> tuple[str, float]:
     """Return ``(fixed_image_name, elapsed_seconds)``.
 
-    Reuses a cached derivative image for repeat calls within the same process
-    and also skips the build step when the derivative already exists on the
-    host (checked via the runtime-specific image existence probe). The CC
-    reference always
-    builds the fixed image once per source — there is no probe-first path,
-    because the container always needs the ``/testbed`` ownership fix.
+    Caches per process; skips the build if the derivative already exists locally.
     """
     source_image = normalize_image_reference(source_image)
     if source_image in _IMAGE_CACHE:

@@ -151,7 +151,7 @@ class SubagentManager:
                 {"role": "user", "content": task},
             ]
 
-            run_kwargs: dict[str, Any] = dict(
+            result = await self.runner.run(AgentRunSpec(
                 initial_messages=messages,
                 tools=tools,
                 model=self.model,
@@ -161,9 +161,8 @@ class SubagentManager:
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,
                 fail_on_tool_error=True,
-            )
-            run_kwargs["malformed_retry_budget"] = self.malformed_retry_budget
-            result = await self.runner.run(AgentRunSpec(**run_kwargs))
+                malformed_retry_budget=self.malformed_retry_budget,
+            ))
             if result.stop_reason == "tool_error":
                 await self._announce_result(
                     task_id,

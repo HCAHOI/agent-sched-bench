@@ -1,14 +1,7 @@
 """CLI / YAML -> EvictionPolicyConfig adapter.
 
-Step 8 extends the step-3 adapter to accept a YAML file (`--kv-config PATH`)
-in addition to bare CLI flags. Resolution order is documented in the body of
-`load_eviction_config`: yaml provides the base, CLI flags overlay it, and the
-merge result must satisfy the same `EvictionPolicyConfig` invariants the
-caches enforce at construction time.
-
-YAML schema is a flat map mirroring `EvictionPolicyConfig`'s fields one-for-one.
-We deliberately skip Hydra here because the schema is small (~10 keys) and
-keeping a single yaml.safe_load call keeps the loading semantics auditable.
+YAML provides the base; explicit CLI flags overlay it. YAML schema is a flat
+map mirroring EvictionPolicyConfig fields one-for-one.
 """
 
 from __future__ import annotations
@@ -107,26 +100,18 @@ def _coerce(field_name: str, value: Any) -> Any:
 
 
 def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
-    """Build an `EvictionPolicyConfig` from yaml + CLI overlay, or None.
+    """Build an EvictionPolicyConfig from yaml + CLI overlay, or None.
 
-    yaml (if any) is the base; explicitly-set CLI flags overlay it. Two
-    non-obvious cases: a CLI `--kv-policy none` only overrides a yaml-supplied
-    name when no `--kv-config` was passed (otherwise the default would silently
-    disable yaml policies); and for streaming an omitted `recent_window` is
-    resolved to `budget - sink_size`.
-
-    Returns None when the resolved policy is `"none"`, so callers can keep the
-    simple `if eviction_config is not None` pattern.
+    --kv-policy none only overrides a yaml name when --kv-config was not passed.
+    For streaming, omitted recent_window defaults to budget - sink_size.
+    Returns None when resolved policy is "none".
     """
     yaml_path = getattr(args, "kv_config", None)
     base: dict[str, Any] = {}
     if yaml_path is not None:
         base = _load_yaml(Path(yaml_path))
 
-    # Argparse defaults for the kv_* flags. Anything matching the default and
-    # not set in yaml is left to the dataclass default; anything matching the
-    # default but with a yaml value present yields the yaml value. Anything
-    # different from the default overrides yaml.
+    # Explicit CLI values override yaml; defaults fill gaps not covered by yaml.
     cli_defaults = {
         "kv_policy": "none",
         "kv_budget": None,
@@ -160,9 +145,6 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
                 merged[field_name] = cli_value
                 explicit_cli_fields.add(field_name)
             elif field_name not in merged and default_value is not None:
-                # Carry the argparse default into the merged map only when
-                # yaml didn't speak — keeps the dataclass default visible
-                # in CLI-only flows.
                 merged[field_name] = default_value
 
     name = merged.get("name", "none")
@@ -273,9 +255,6 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
                 "position_control_cluster_size must be > 0"
             )
 
-    # Drop unknown keys (already validated by _load_yaml for yaml; CLI keys
-    # are all in _CLI_TO_FIELD which targets known fields). Coerce remaining
-    # values into the dataclass-expected types.
     allowed = _allowed_fields()
     kwargs: dict[str, Any] = {}
     for field_name in allowed:

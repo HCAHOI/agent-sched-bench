@@ -487,13 +487,13 @@ def test_remove_image_keeps_local_fixed_tags_unqualified(
 
 
 def test_parse_pipe_stats_parses_pipe_format() -> None:
-    pipe = _parse_pipe_stats("1MB / 1GB|0.1%|0.5%")
+    pipe = _parse_pipe_stats("1MB / 1GB|0.1%|0.5%|0B / 0B")
     assert pipe is not None and pipe["mem_usage"] == "1MB / 1GB"
 
 
 def test_stats_sampler_collects_samples_and_stops_cleanly() -> None:
     # Emit the new pipe format.
-    pipe_output = "1MB / 1GB|0.1%|0.5%"
+    pipe_output = "1MB / 1GB|0.1%|0.5%|0B / 0B"
 
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 0, stdout=pipe_output, stderr="")

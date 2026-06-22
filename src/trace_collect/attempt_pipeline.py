@@ -48,10 +48,7 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "PIP_INDEX_URL",
     "TASK_CONTAINER_PIP_INDEX_URL",
     "NANOBOT_MAX_CONCURRENT_REQUESTS",
-    # LLM client timeouts: the in-container agent talks to the host recording
-    # server, whose forwards are slow under full attention recording at long
-    # context. Without these the 90s stream-idle / SDK default timeouts trip
-    # and the agent loop ends early on a broken pipe.
+    # LLM client timeouts: slow recording forwards trip the 90s idle/SDK default.
     "NANOBOT_STREAM_IDLE_TIMEOUT_S",
     "OPENCLAW_LLM_TIMEOUT_S",
 )

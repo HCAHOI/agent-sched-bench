@@ -26,12 +26,7 @@ class HeavyHitterSparseAttention:
     name = "heavy_hitter"
     always_active = True
     prefill_observe_mode = "full"
-    # Correctness depends on every prefill token's attention reaching the
-    # AttentionBus so `_scores` accumulates per-key history. With session KV
-    # delta-prefill the cached prefix is skipped → bus never sees those rows →
-    # `_rank_middle_positions` returns [] → decode silently degrades to
-    # streaming-LLM. The HF backend reads this flag and refuses to build a
-    # session cache when it is True (see `_build_session_cache`).
+    # See base.py Protocol docstring for requires_full_prefill semantics.
     requires_full_prefill = True
 
     def __init__(
@@ -69,7 +64,7 @@ class HeavyHitterSparseAttention:
         attention_bus.subscribe(self)
 
     def reset_state(self) -> None:
-        """Clear historical scores at call boundaries; see requires_full_prefill rationale above."""
+        """Clear historical scores at call boundaries."""
         for idx in range(len(self._scores)):
             self._scores[idx] = None
             self._score_lengths[idx] = 0

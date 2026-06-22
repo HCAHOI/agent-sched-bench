@@ -48,10 +48,6 @@ class TerminalBenchBenchmark(Benchmark):
         self.validate_scaffold_support(scaffold)
         return "host_controller"
 
-    @property
-    def execution_environment(self) -> str:
-        return "container"
-
     def load_tasks(self) -> list[dict[str, Any]]:
         dataset_root, task_paths = self._load_dataset_paths()
         return [

@@ -106,10 +106,7 @@ class _PendingNumpyArray:
         return array
 
     def __array__(self, dtype: Any = None) -> np.ndarray:
-        # numpy-coercion protocol. Production consumers materialize() explicitly,
-        # but in-memory paths (np.testing.assert_array_equal on un-flushed reduce
-        # output — see test_layer_capturer_bus reduce-equality tests) rely on
-        # np.asarray() finding this. Load-bearing; do not remove.
+        # numpy-coercion protocol; relied on by np.asarray in reduce-equality tests.
         array = self.materialize()
         if dtype is None:
             return array
@@ -522,60 +519,30 @@ class LayerCapturer:
         self._routing_decode_steps: dict[int, int] = {}
         self._meta: dict[str, Any] = {}
         self._attention_suspended = 0
-        # Per-head span stats accumulators. Keyed by (layer_idx, phase, decode_step).
-        # Values: {"mean_sum": [H, S], "var_sum": [H, S], "n_queries": int}
+        # Per-head span stats; keyed by (layer_idx, phase, decode_step).
         self._head_stats: dict[tuple[int, str, int], dict[str, Any]] = {}
         self._head_stats_n_segments: int = 0
-        # block_topk kept-block info cached per (layer, decode_step) during the
-        # sparse pre-hook so the attention-capture hook (same forward, runs after)
-        # can build per-rank within-block masks restricted to actually-retained
-        # positions. Each value is (selected_blocks_kept, kept_positions_set):
-        #   selected_blocks_kept — score-ranked block ids with ≥1 kept position
-        #   kept_positions_set   — frozenset of selected_middle_indices (the exact
-        #                          positions budget-cap retained)
-        # Cleared each recording_session; bounded by _trim_block_select_cache.
+        # block_topk kept-block info cached per (layer, decode_step) by sparse
+        # pre-hook for the attention-capture hook in the same forward.
         self._block_select_cache: dict[
             tuple[int, int], tuple[list[int], frozenset[int]]
         ] = {}
-        # Per-selected-block within-block decode stats, keyed by
-        # (layer_idx, decode_step). Values mirror _head_stats decode entries but
-        # over the [sink, rank1..R_max, recent] bucket axis (see
-        # _accumulate_block_head_stats). decode-only by design.
+        # Per-selected-block within-block decode stats, keyed by (layer_idx, decode_step).
         self._block_head_stats: dict[tuple[int, int], dict[str, Any]] = {}
-        # Counterfactual per-head top-R block selections from block_topk, staged
-        # by the sparse pre-hook keyed by (layer_idx, decode_step). Each value is
-        # {"block_ids": [[..]*H], "scores": [[..]*H]} (ragged, absolute block ids).
-        # Filled only when record_per_head_topk is on; flushed to attention.npz.
+        # Counterfactual per-head top-R block selections; filled when record_per_head_topk is on.
         self._per_head_topk_cache: dict[tuple[int, int], dict[str, Any]] = {}
-        # KV eviction recorder is per-call; lifecycle is owned by the
-        # HFRecordingProvider, which swaps it before each
-        # `recording_session()`. LayerCapturer only flushes whatever the
-        # current recorder buffered when the session ends.
+        # KV eviction recorder — per-call, swapped by HFRecordingProvider.
         self._kv_recorder: "KVEvictionRecorder | None" = kv_recorder
-        # Bus is per-provider and lives across calls. None means no publish
-        # at all (attention.npz bytes unchanged).
+        # Bus is per-provider and lives across calls.
         self._attention_bus: "AttentionBus | None" = attention_bus
-        # Attempt-level KV policy summary written to meta.json on
-        # `finish_attempt`. Provider sets via `set_kv_policy_meta(...)`
-        # before `start_attempt`. Default None = `--kv-policy none`.
+        # Attempt-level KV/sparse policy summaries written to meta.json.
         self._kv_policy_meta: dict[str, Any] | None = None
-        # Symmetric slot for sparse_attention (see set_sparse_attention_meta).
         self._sparse_attention_meta: dict[str, Any] | None = None
         self._attempt_extra_meta: dict[str, Any] = {}
-        # Optional manual override for `config.max_prefill_queries`. None = use
-        # the frozen RecordingConfig value. H2O full-prefill scoring no longer
-        # uses this path; it streams full rows in bounded chunks below so the
-        # recording sample cap stays intact.
-        self._max_prefill_queries_override: int | None = None
 
-        # Sparse attention method instance (one per provider) + per-call
-        # recorder. Pre-hooks read both via closure-bound getters so the
-        # provider can swap the recorder between calls without re-registering
-        # hooks. When `sparse_attention is None`, no pre-hooks are installed.
+        # Sparse attention method instance (one per provider) + per-call recorder.
         self._sparse_attention: "BaseSparseAttention | None" = sparse_attention
         self._sparse_recorder: "SparseAttentionRecorder | None" = None
-        # Append counter for `record_step`; recorder receives a globally-
-        # monotone step id within the call. Cleared on each recorder swap.
         self._sparse_step_counter: int = 0
         self._sparse_layer_indices: tuple[int, ...] = ()
         self._sparse_hook_counts_by_layer: dict[int, int] = {}
@@ -850,26 +817,6 @@ class LayerCapturer:
         finally:
             self._attention_suspended -= 1
 
-    @contextmanager
-    def unbounded_prefill_queries(self) -> Iterator[None]:
-        """Temporarily disable the prefill query-row sample cap.
-
-        This is retained for debugging and direct recording experiments. The
-        paper-faithful H2O path does not use it because uncapping the recording
-        rows can materialize a full QxK tensor on long prompts. Restores the
-        previous override on exit; nesting is supported by stashing the prior
-        value in a local.
-        """
-        previous = self._max_prefill_queries_override
-        # `2**31 - 1` is what `select_query_positions` treats as "no cap"
-        # since `query_len <= max_queries` short-circuits to the identity
-        # range. Practical sequence lengths sit comfortably below this.
-        self._max_prefill_queries_override = 2_147_483_647
-        try:
-            yield
-        finally:
-            self._max_prefill_queries_override = previous
-
     def _hook(self, layer: int):
         def capture(
             module: Any,
@@ -923,11 +870,7 @@ class LayerCapturer:
             )
             cached_len = 0
             if past_key_values is not None:
-                try:
-                    cached_len = int(past_key_values.get_seq_length(layer))
-                except (AttributeError, TypeError):
-                    cached = _cached_key_states(past_key_values, layer)
-                    cached_len = 0 if cached is None else int(cached.shape[-2])
+                cached_len = int(past_key_values.get_seq_length(layer))
             key_len = cached_len + query_len
             # Phase rule mirrors LayerCapturer's: prefill if multi-token or
             # no session yet; decode if single-token AFTER input was consumed.
@@ -1001,14 +944,8 @@ class LayerCapturer:
             )
             if sparse_mask is not None and not observe_only:
                 existing = kwargs.get("attention_mask")
-                # Only merge into the upstream mask when it is a 4-D FLOAT
-                # additive mask: finfo() below requires a float dtype and the
-                # merge assumes additive (-inf) semantics. HF can instead hand us
-                # a 2-D int/bool padding mask (seen on cached-decode steps of the
-                # FP8 Qwen3-MoE path), where torch.finfo(int dtype) raises. Under
-                # --record-internals (batch=1, no padding) such a mask carries no
-                # information, so fall through to the materialize-fresh sparse
-                # mask below instead of crashing.
+                # Only OR into a 4-D float additive mask; 2-D int/bool padding masks
+                # (seen on FP8 Qwen3-MoE decode) fall through to the fresh-materialize path.
                 if (
                     existing is not None
                     and existing.is_floating_point()
@@ -1016,20 +953,11 @@ class LayerCapturer:
                 ):
                     import torch
 
-                    # Cast/broadcast onto the existing mask's device/dtype so the
-                    # downstream `scores + mask` stays in a single dtype. We
-                    # `expand` rather than `broadcast_to` so the resulting tensor
-                    # carries the same query-dim as the existing mask (the
-                    # downstream LayerCapturer relies on `mask.shape[-2] ==
-                    # query_len` to slice sampled rows).
+                    # expand not broadcast_to: keeps query-dim = existing.shape[-2].
                     sparse_for_add = sparse_mask.to(
                         device=existing.device, dtype=existing.dtype
                     ).expand(-1, -1, existing.shape[-2], -1)
-                    # Sparse mask is a "force-mask" not a weighted decrement:
-                    # positions already masked by the upstream causal mask plus
-                    # sparse should stay at finfo.min, not double-saturate to
-                    # -inf which can overflow fp16 and produce NaN in some SDPA
-                    # backends.
+                    # Use finfo.min not -inf to avoid fp16 NaN in some SDPA backends.
                     neg_inf = torch.finfo(existing.dtype).min
                     sparse_masked = sparse_for_add < 0
                     kwargs["attention_mask"] = torch.where(
@@ -1038,16 +966,10 @@ class LayerCapturer:
                         existing,
                     )
                 else:
-                    # No usable 4-D float additive mask upstream (either none at
-                    # all — SDPA's implicit causal path — or a 2-D int/bool
-                    # padding mask). Materialise a [1,1,Q,K] sparse-only float
-                    # mask so the LayerCapturer's `mask.shape[-2] == query_len`
-                    # contract is satisfied without depending on broadcast.
+                    # Materialise [1,1,Q,K] so mask.shape[-2] == query_len contract holds.
                     kwargs["attention_mask"] = sparse_mask.expand(
                         1, 1, query_len, key_len
                     ).contiguous()
-            # else: observe_only — sparse_mask is None by contract;
-            # kwargs["attention_mask"] left untouched, SDPA uses implicit causal.
             if self._session is not None:
                 self._sparse_hook_counts_by_layer[layer] = (
                     self._sparse_hook_counts_by_layer.get(layer, 0) + 1
@@ -1135,7 +1057,6 @@ class LayerCapturer:
         call_idx: int,
         query_len: int | None = None,
         sampled_query_count: int | None = None,
-        unbounded: bool = False,
     ) -> dict[str, Any]:
         seed = query_sampling_seed(self.config.generation_seed, call_idx)
         configured_max = int(self.config.max_prefill_queries)
@@ -1145,7 +1066,6 @@ class LayerCapturer:
                 "prefill_query_seed": seed,
                 "configured_max_prefill_queries": configured_max,
                 "effective_max_prefill_queries": configured_max,
-                "unbounded_prefill_queries": False,
                 "prefill_query_count": None,
                 "sampled_prefill_queries": None,
             }
@@ -1157,10 +1077,7 @@ class LayerCapturer:
             ),
             "prefill_query_seed": None if all_rows else seed,
             "configured_max_prefill_queries": configured_max,
-            "effective_max_prefill_queries": None
-            if unbounded
-            else configured_max,
-            "unbounded_prefill_queries": bool(unbounded),
+            "effective_max_prefill_queries": configured_max,
             "prefill_query_count": int(query_len),
             "sampled_prefill_queries": int(sampled_query_count),
         }
@@ -1206,20 +1123,12 @@ class LayerCapturer:
 
         assert self._session is not None
         query_len = int(hidden_states.shape[-2])
-        # Manual override path: when `unbounded_prefill_queries()` is active,
-        # treat every query row as sampled. Normal H2O full-prefill scoring
-        # leaves this cap bounded and streams full rows only to H2O consumers.
-        max_queries = (
-            self._max_prefill_queries_override
-            if self._max_prefill_queries_override is not None
-            else self.config.max_prefill_queries
-        )
         row_indices = (
             [0]
             if query_len == 1
             else select_query_positions(
                 query_len,
-                max_queries,
+                self.config.max_prefill_queries,
                 seed=query_sampling_seed(
                     self.config.generation_seed,
                     int(self._session["call_idx"]),
@@ -1244,7 +1153,6 @@ class LayerCapturer:
                 call_idx=int(self._session["call_idx"]),
                 query_len=query_len,
                 sampled_query_count=len(row_indices),
-                unbounded=self._max_prefill_queries_override is not None,
             )
         query_positions = [key_len - query_len + idx for idx in row_indices]
         capture_head_stats = (
@@ -2354,28 +2262,10 @@ class LayerCapturer:
     def _build_per_head_topk_arrays(self) -> dict[str, np.ndarray]:
         """Build CSR arrays for block_topk's counterfactual per-head top-R.
 
-        Decode-only. The CSR row axis is the flattened `(layer_slot, decode_step
-        slot, head)` index — `n_rows = L_s * T_max * H` — so a row's per-head
-        top-R (block_id, score) pairs unpack as
-        ``indices[offsets[row]:offsets[row+1]]``. Rows for unrecorded (step, head)
-        combinations are empty (offset run length 0). block ids are np.int32;
-        scores np.float16 (used only for offline ranking / aggregation, where the
-        fp16 mantissa is ample). When ``record_per_head_topk`` is off every array
-        has a 0-size leading axis (shape-stable, mirroring the head_span empty
-        convention).
-
-        Step coverage: the cache holds EVERY decode step of the call (cleared
-        per call, deliberately NOT trimmed to ``decode_window`` like
-        ``_block_select_cache``) so rows align 1:1 with the full-step
-        ``sparse_attention.npz`` records rather than block_span's decode ring —
-        offline vote-vs-max re-aggregation needs the same step set as the
-        selection log. T_max therefore equals the call's decode step count.
-
-        Storage ≈ L_s × T_max × H × R_ph × 6 bytes (int32 id + fp16 score),
-        upper bound — per-row length is also capped at the candidate-block
-        count nb. Typical agent call (14 layers × ~70 steps × 32 heads × 64
-        rank) ≈ 12 MB; a 500-step generation bounds at ≈ 86 MB. Shrink via
-        ``per_head_topk_rank`` or fewer ``per_head_stats_layers``.
+        Decode-only. CSR row axis = flattened (layer_slot, step_slot, head).
+        T_max = full decode step count (not trimmed to decode_window, so rows
+        align 1:1 with sparse_attention.npz for vote-vs-max re-aggregation).
+        When record_per_head_topk is off every array has a 0-size leading axis.
         """
         disabled = not self.config.record_per_head_topk
         layers = sorted(self.config.per_head_stats_layers)

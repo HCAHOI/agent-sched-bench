@@ -310,16 +310,8 @@ def tokenize_chat_with_segments(
             add_generation_prompt=False,
         )
         if not full_text.startswith(prefix):
-            # Some chat templates (e.g. Qwen3) render assistant turns
-            # differently when add_generation_prompt=False vs. True (adding
-            # <think> markers absent from the full-conversation rendering).
-            # We cannot determine the exact char boundary for this turn, so
-            # emit an "unmatched" sentinel that covers from the last known
-            # boundary to the start of the NEXT turn's prefix (determined on
-            # the following iteration). This preserves full token coverage and
-            # lets downstream consumers filter "unmatched" out of per-role
-            # analyses rather than silently mislabeling those tokens as
-            # belonging to the surrounding turn.
+            # Qwen3 renders assistant turns differently with/without
+            # add_generation_prompt; emit unmatched sentinel, close on next aligned prefix.
             _LOG.warning(
                 "chat template prefix misalignment at message_index=%d role=%s; "
                 "emitting 'unmatched' segment — downstream per-role stats will "
@@ -339,13 +331,8 @@ def tokenize_chat_with_segments(
             )
             continue
         end = len(prefix)
-        # Close any pending "unmatched" segments opened on prior misaligned
-        # turns. Their true end is the start of THIS aligned turn (i.e.
-        # `previous_end`), not `end` — closing at `end` would swallow the
-        # current aligned turn's content and make the aligned segment vanish
-        # (its `previous_end < end` guard would fail after we advance
-        # `previous_end`). Two back-to-back misaligned turns each get their
-        # own sentinel with non-overlapping ranges.
+        # Close pending unmatched sentinels at previous_end (not end), to avoid
+        # swallowing the current aligned turn's content.
         for seg in char_segments:
             if seg.get("_pending"):
                 seg["char_end"] = previous_end
@@ -361,8 +348,7 @@ def tokenize_chat_with_segments(
                 }
             )
         previous_end = end
-    # Close any "unmatched" segment that was still pending at loop end
-    # (last message misaligned, no subsequent aligned prefix to close it).
+    # Close unmatched sentinel if last message was misaligned.
     for seg in char_segments:
         if seg.get("_pending"):
             seg["char_end"] = len(full_text)
@@ -478,72 +464,8 @@ def _parse_qwen_xml_tool_calls(text: str) -> tuple[str | None, list[ToolCallRequ
     return _strip_tool_blocks(text, blocks), calls
 
 
-def _parse_qwen_json_tool_calls(text: str) -> tuple[str | None, list[ToolCallRequest]]:
-    import re
-
-    calls: list[ToolCallRequest] = []
-    blocks: list[tuple[int, int]] = []
-    pattern = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
-    for match in pattern.finditer(text):
-        try:
-            payload = json_repair.loads(match.group(1))
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        calls.append(
-            ToolCallRequest(
-                id=_short_tool_id(),
-                name=_normalize_tool_name(payload.get("name")),
-                arguments=_normalize_tool_arguments(payload.get("arguments", {})),
-            )
-        )
-        blocks.append((match.start(), match.end()))
-    return _strip_tool_blocks(text, blocks), calls
-
-
-def _parse_glm_tool_calls(text: str) -> tuple[str | None, list[ToolCallRequest]]:
-    import re
-
-    calls: list[ToolCallRequest] = []
-    blocks: list[tuple[int, int]] = []
-    pattern = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
-    for match in pattern.finditer(text):
-        body = match.group(1).strip()
-        if not body:
-            continue
-        name, _, rest = body.partition("\n")
-        args: dict[str, Any] = {}
-        for arg_match in re.finditer(
-            r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>",
-            rest,
-            re.DOTALL,
-        ):
-            key = arg_match.group(1).strip()
-            raw_value = arg_match.group(2).strip()
-            try:
-                args[key] = _parse_tool_value(raw_value)
-            except Exception:
-                args[key] = raw_value
-        calls.append(
-            ToolCallRequest(
-                id=_short_tool_id(),
-                name=_normalize_tool_name(name),
-                arguments=args,
-            )
-        )
-        blocks.append((match.start(), match.end()))
-    return _strip_tool_blocks(text, blocks), calls
-
-
 def parse_text_tool_calls(text: str) -> tuple[str | None, list[ToolCallRequest]]:
-    content, calls = _parse_qwen_xml_tool_calls(text)
-    if calls:
-        return content, calls
-    content, calls = _parse_qwen_json_tool_calls(text)
-    if calls:
-        return content, calls
-    return _parse_glm_tool_calls(text)
+    return _parse_qwen_xml_tool_calls(text)
 
 
 def _looks_like_malformed_tool_output(text: str, tool_calls: list[ToolCallRequest]) -> bool:
@@ -1477,10 +1399,6 @@ class HFRecordingProvider(LLMProvider):
                 generation_kwargs["top_k"] = int(top_k)
             if repetition_penalty is not None:
                 generation_kwargs["repetition_penalty"] = float(repetition_penalty)
-            # KV recorder is only built for the eviction-policy branch; sparse
-            # and bare-baseline runs leave it None. The session cache itself is
-            # shared across all branches so consecutive chat() calls can resume
-            # past_key_values via LCP-based delta prefill.
             record_artifacts = self._record_artifacts_enabled()
             kv_recorder: KVEvictionRecorder | None = None
             if (
@@ -1499,10 +1417,6 @@ class HFRecordingProvider(LLMProvider):
                 self.capturer.set_kv_recorder(kv_recorder)
             if used_session_cache:
                 assert self._session_cache is not None
-                # `recorder` / `notify_new_call` are policy-only hooks; plain
-                # DynamicCache (sparse / baseline session cache) doesn't expose
-                # them. Guard via isinstance so we don't AttributeError when
-                # session cache runs without an eviction policy.
                 if isinstance(self._session_cache, BaseEvictionCache):
                     self._session_cache.recorder = kv_recorder
                     # Step counters reset per call; physical KV slots and score
@@ -1513,12 +1427,8 @@ class HFRecordingProvider(LLMProvider):
                         input_token_count=input_token_count,
                     )
                 generation_kwargs["past_key_values"] = self._session_cache
-                # phys_kv_len: physical slots after eviction (attention_mask width).
-                # logical_kv_len: absolute conversation position of delta[0] (RoPE).
-                # These diverge after eviction; using phys for RoPE silently
-                # corrupts embeddings. Explicit cache_position also sidesteps
-                # HF's arange(delta_len)[past_length:] empty-tensor crash. For
-                # plain DynamicCache the two lengths coincide (no eviction).
+                # phys/logical diverge after eviction; use logical for RoPE cache_position
+                # to avoid embedding corruption. Also sidesteps HF empty-tensor crash.
                 phys_kv_len = self._session_cache.get_seq_length(0)
                 delta_len = int(delta_ids.shape[-1])
                 logical_kv_len = int(prompt_ids.shape[-1]) - delta_len
@@ -1540,8 +1450,6 @@ class HFRecordingProvider(LLMProvider):
                     logical_kv_len, logical_kv_len + delta_len, dtype=self._torch.long
                 ).to(self._input_device())
             else:
-                # Escape hatch (OMC_DISABLE_SESSION_CACHE=1): stock DynamicCache,
-                # full prompt each call, no past_key_values.
                 generation_kwargs["attention_mask"] = self._torch.ones_like(
                     input_tensor
                 )
@@ -1570,11 +1478,6 @@ class HFRecordingProvider(LLMProvider):
                     segments=segments,
                     input_token_count=input_token_count,
                 )
-            # H2O full-prefill scoring is handled inside LayerCapturer in
-            # bounded chunks and delivered only to full-prefill consumers. Do
-            # not lift the recording sample cap here; doing so would materialize
-            # a full QxK attention tensor and can OOM on long prompts.
-            prefill_ctx = nullcontext()
             cuda_event_elapsed_ms: float | None = None
             cuda_peak_allocated: dict[str, int] | None = None
             cuda_peak_reserved: dict[str, int] | None = None
@@ -1612,7 +1515,6 @@ class HFRecordingProvider(LLMProvider):
             with (
                 self._torch.no_grad(),
                 recording_ctx,
-                prefill_ctx,
             ):
                 sequences = self.model.generate(**generation_kwargs)
                 if cuda_available:

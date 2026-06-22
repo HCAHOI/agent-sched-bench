@@ -8,7 +8,7 @@ from agents.openclaw.utils.helpers import current_time_str
 
 from agents.openclaw._memory import MemoryStore
 from agents.openclaw._skills import SkillsLoader
-from agents.openclaw.utils.helpers import build_assistant_message, detect_image_mime
+from agents.openclaw.utils.helpers import detect_image_mime
 
 
 class ContextBuilder:
@@ -217,22 +217,3 @@ IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST
         if not images:
             return text
         return images + [{"type": "text", "text": text}]
-
-    def add_assistant_message(
-        self,
-        messages: list[dict[str, Any]],
-        content: str | None,
-        tool_calls: list[dict[str, Any]] | None = None,
-        reasoning_content: str | None = None,
-        thinking_blocks: list[dict] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Add an assistant message to the message list."""
-        messages.append(
-            build_assistant_message(
-                content,
-                tool_calls=tool_calls,
-                reasoning_content=reasoning_content,
-                thinking_blocks=thinking_blocks,
-            )
-        )
-        return messages

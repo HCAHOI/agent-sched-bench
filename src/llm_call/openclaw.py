@@ -59,20 +59,6 @@ def _get(obj: Any, key: str) -> Any:
     return getattr(obj, key, None)
 
 
-def _coerce_dict(value: Any) -> dict[str, Any] | None:
-    """Try to coerce *value* to a dict; return None if not possible or empty."""
-    if value is None:
-        return None
-    if isinstance(value, dict):
-        return value if value else None
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        dumped = model_dump()
-        if isinstance(dumped, dict) and dumped:
-            return dumped
-    return None
-
-
 def _coerce_str(value: Any) -> str | None:
     if value is None:
         return None
@@ -128,6 +114,17 @@ def _get_openrouter_metadata_policy() -> dict[str, Any]:
     }
 
 
+def _maybe_mapping(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, dict):
+            return dumped
+    return None
+
+
 def _extract_tc_extras(
     tc: Any,
 ) -> tuple[
@@ -136,9 +133,9 @@ def _extract_tc_extras(
     dict[str, Any] | None,
 ]:
     """Extract (extra_content, provider_specific_fields, fn_provider_specific_fields)."""
-    extra_content = _coerce_dict(_get(tc, "extra_content"))
+    extra_content = _maybe_mapping(_get(tc, "extra_content")) or None
 
-    tc_dict = _coerce_dict(tc)
+    tc_dict = _maybe_mapping(tc)
     prov = None
     fn_prov = None
     if tc_dict is not None:
@@ -149,7 +146,7 @@ def _extract_tc_extras(
         }
         if leftover:
             prov = leftover
-        fn = _coerce_dict(tc_dict.get("function"))
+        fn = _maybe_mapping(tc_dict.get("function")) or None
         if fn is not None:
             fn_leftover = {
                 k: v
@@ -159,10 +156,10 @@ def _extract_tc_extras(
             if fn_leftover:
                 fn_prov = fn_leftover
     else:
-        prov = _coerce_dict(_get(tc, "provider_specific_fields"))
+        prov = _maybe_mapping(_get(tc, "provider_specific_fields")) or None
         fn_obj = _get(tc, "function")
         if fn_obj is not None:
-            fn_prov = _coerce_dict(_get(fn_obj, "provider_specific_fields"))
+            fn_prov = _maybe_mapping(_get(fn_obj, "provider_specific_fields")) or None
 
     return extra_content, prov, fn_prov
 
@@ -204,10 +201,6 @@ class UnifiedProvider(LLMProvider):
             timeout=timeout if timeout is not None else _get_openclaw_llm_timeout_s(),
             include_session_affinity=True,
         )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _normalize_tool_call_id(tool_call_id: Any) -> Any:
@@ -327,7 +320,7 @@ class UnifiedProvider(LLMProvider):
         provider_responses: list[dict[str, Any]] = []
         if isinstance(provider_responses_raw, list):
             for item in provider_responses_raw:
-                item_map = cls._maybe_mapping(item) or {}
+                item_map = _maybe_mapping(item) or {}
                 provider_responses.append(
                     {
                         "endpoint_id": _coerce_str(item_map.get("endpoint_id")),
@@ -554,21 +547,6 @@ class UnifiedProvider(LLMProvider):
         metadata_task.add_done_callback(_apply_openrouter_metadata)
         return response
 
-    # ------------------------------------------------------------------
-    # Response parsing
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _maybe_mapping(value: Any) -> dict[str, Any] | None:
-        if isinstance(value, dict):
-            return value
-        model_dump = getattr(value, "model_dump", None)
-        if callable(model_dump):
-            dumped = model_dump()
-            if isinstance(dumped, dict):
-                return dumped
-        return None
-
     @classmethod
     def _extract_text_content(cls, value: Any) -> str | None:
         if value is None:
@@ -578,7 +556,7 @@ class UnifiedProvider(LLMProvider):
         if isinstance(value, list):
             parts: list[str] = []
             for item in value:
-                item_map = cls._maybe_mapping(item)
+                item_map = _maybe_mapping(item)
                 if item_map:
                     text = item_map.get("text")
                     if isinstance(text, str):
@@ -598,14 +576,14 @@ class UnifiedProvider(LLMProvider):
         """Extract allow-listed local-HF telemetry from response payloads."""
         extracted: dict[str, Any] = {}
         for container in containers:
-            container_map = cls._maybe_mapping(container)
+            container_map = _maybe_mapping(container)
             if container_map is not None:
-                telemetry_map = cls._maybe_mapping(container_map.get("hf_telemetry"))
+                telemetry_map = _maybe_mapping(container_map.get("hf_telemetry"))
                 if telemetry_map is not None:
                     extracted.update(filter_hf_trace_extra(telemetry_map))
                 extracted.update(filter_hf_trace_extra(container_map))
                 continue
-            telemetry_map = cls._maybe_mapping(_get(container, "hf_telemetry"))
+            telemetry_map = _maybe_mapping(_get(container, "hf_telemetry"))
             if telemetry_map is not None:
                 extracted.update(filter_hf_trace_extra(telemetry_map))
         return extracted
@@ -613,14 +591,14 @@ class UnifiedProvider(LLMProvider):
     @classmethod
     def _extract_usage(cls, response: Any) -> dict[str, int]:
         """Extract token usage from an OpenAI-compatible response."""
-        response_map = cls._maybe_mapping(response)
+        response_map = _maybe_mapping(response)
         if response_map is None:
             raise TypeError(
                 f"_extract_usage expected a mapping/model_dump response, got "
                 f"{type(response).__name__}"
             )
 
-        usage_map = cls._maybe_mapping(response_map.get("usage"))
+        usage_map = _maybe_mapping(response_map.get("usage"))
         if usage_map is None:
             return {}
         result = {
@@ -657,7 +635,7 @@ class UnifiedProvider(LLMProvider):
         if isinstance(response, str):
             return LLMResponse(content=response, finish_reason="stop")
 
-        response_map = self._maybe_mapping(response)
+        response_map = _maybe_mapping(response)
         if response_map is None:
             raise TypeError(
                 f"_parse expected a mapping/model_dump response, got "
@@ -665,47 +643,24 @@ class UnifiedProvider(LLMProvider):
             )
 
         choices = response_map.get("choices") or []
-        if not choices:
-            content = self._extract_text_content(
-                response_map.get("content") or response_map.get("output_text")
-            )
-            if content is not None:
-                return LLMResponse(
-                    content=content,
-                    finish_reason=str(response_map.get("finish_reason") or "stop"),
-                    usage=self._extract_usage(response_map),
-                    extra=self._extract_hf_telemetry(response_map),
-                )
-            return LLMResponse(
-                content="Error: API returned empty choices.",
-                finish_reason="error",
-                extra={"error_type": "empty_choices"},
-            )
-
-        choice0 = self._maybe_mapping(choices[0]) or {}
-        msg0 = self._maybe_mapping(choice0.get("message")) or {}
+        choice0 = _maybe_mapping(choices[0]) or {}
+        msg0 = _maybe_mapping(choice0.get("message")) or {}
         content = self._extract_text_content(msg0.get("content"))
         finish_reason = str(choice0.get("finish_reason") or "stop")
 
-        raw_tool_calls: list[Any] = []
+        # n=1 always; only choice0 is processed
         reasoning_content = msg0.get("reasoning_content")
-        for ch in choices:
-            ch_map = self._maybe_mapping(ch) or {}
-            m = self._maybe_mapping(ch_map.get("message")) or {}
-            tool_calls = m.get("tool_calls")
-            if isinstance(tool_calls, list) and tool_calls:
-                raw_tool_calls.extend(tool_calls)
-                if ch_map.get("finish_reason") in ("tool_calls", "stop"):
-                    finish_reason = str(ch_map["finish_reason"])
-            if not content:
-                content = self._extract_text_content(m.get("content"))
-            if not reasoning_content:
-                reasoning_content = m.get("reasoning_content")
+        raw_tool_calls: list[Any] = []
+        tool_calls = msg0.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            raw_tool_calls.extend(tool_calls)
+            if choice0.get("finish_reason") in ("tool_calls", "stop"):
+                finish_reason = str(choice0["finish_reason"])
 
         parsed_tool_calls = []
         for tc in raw_tool_calls:
-            tc_map = self._maybe_mapping(tc) or {}
-            fn = self._maybe_mapping(tc_map.get("function")) or {}
+            tc_map = _maybe_mapping(tc) or {}
+            fn = _maybe_mapping(tc_map.get("function")) or {}
             args = fn.get("arguments", {})
             if isinstance(args, str):
                 args = json_repair.loads(args)
@@ -778,7 +733,7 @@ class UnifiedProvider(LLMProvider):
                 content_parts.append(chunk)
                 continue
 
-            chunk_map = cls._maybe_mapping(chunk)
+            chunk_map = _maybe_mapping(chunk)
             if chunk_map is None:
                 raise TypeError(
                     f"_parse_chunks expected mapping/model_dump chunks, got "
@@ -787,16 +742,11 @@ class UnifiedProvider(LLMProvider):
             choices = chunk_map.get("choices") or []
             if not choices:
                 usage = cls._extract_usage(chunk_map) or usage
-                text = cls._extract_text_content(
-                    chunk_map.get("content") or chunk_map.get("output_text")
-                )
-                if text:
-                    content_parts.append(text)
                 continue
-            choice = cls._maybe_mapping(choices[0]) or {}
+            choice = _maybe_mapping(choices[0]) or {}
             if choice.get("finish_reason"):
                 finish_reason = str(choice["finish_reason"])
-            delta = cls._maybe_mapping(choice.get("delta")) or {}
+            delta = _maybe_mapping(choice.get("delta")) or {}
             text = cls._extract_text_content(delta.get("content"))
             if text:
                 content_parts.append(text)
@@ -845,10 +795,6 @@ class UnifiedProvider(LLMProvider):
             raw_str = str(raw_body) if not isinstance(raw_body, str) else raw_body
             extra["raw_body"] = raw_str[:1000]
         return LLMResponse(content=msg, finish_reason="error", extra=extra)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     async def chat(
         self,

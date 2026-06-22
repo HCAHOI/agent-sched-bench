@@ -764,14 +764,10 @@ async def _run_local_model_simulation(
 
                 tool_ts_start = time.time()
                 if ctr is None:
-                    # Host-mode tool cannot be re-executed without a container;
-                    # preserve source-trace timing so total_tool_ms and Gantt
-                    # spans remain faithful to the original run.
+                    # Host-mode: replay source-trace timing verbatim.
                     tool_result = td.get("tool_result", td.get("result", ""))
                     tool_duration_ms = float(td.get("duration_ms") or 0.0)
                     tool_success = bool(td.get("success", not td.get("error")))
-                    # Advance wall clock so consecutive replayed spans in the
-                    # output trace don't overlap.
                     await asyncio.sleep(max(0.0, tool_duration_ms / 1000.0 / replay_speed))
                     tool_ts_end = time.time()
                     sim_provenance = "replayed_from_trace"
@@ -1008,8 +1004,7 @@ async def _replay_cloud_model_session(
                 )
                 replay_source = "skipped_host_mode"
                 tool_result = data.get("tool_result", data.get("result", ""))
-                # Research-agent tools don't emit "success"; fall back to
-                # absence-of-error so successful runs aren't mislabeled.
+                # Research-agent tools may omit "success"; infer from absence-of-error.
                 tool_success = bool(data.get("success", not data.get("error")))
                 if source_duration_ms > 0:
                     await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
@@ -1303,9 +1298,7 @@ async def simulate(
                         prepared.task_output_dir / "resources.json",
                     )
             elif prepared.task_output_dir is not None:
-                # Host-mode replay has no container sampler; emit a canonical
-                # empty resources.json so downstream consumers can rely on
-                # the file always existing.
+                # Host-mode: no sampler; emit empty resources.json for schema consistency.
                 attempt_layout.write_resources_json(
                     prepared.task_output_dir,
                     samples=[],

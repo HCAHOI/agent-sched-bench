@@ -182,17 +182,18 @@ class TerminalBenchRunner:
             )
 
         success = self._extract_success(tb_run_path)
-        trace_path = self._find_trace_path(tb_run_path)
+        traces = sorted(tb_run_path.glob(f"**/agent-logs/{self.TRACE_FILENAME}"))
+        if not traces:
+            raise RuntimeError(
+                f"terminal-bench trace file not found under {tb_run_path}"
+            )
+        trace_path = traces[0]
         summary = self._summary(
             tb_version=proof["tb_version"],
             task=task,
             tb_run_path=tb_run_path,
             tb_process_logs=tb_process_logs,
         )
-        if not trace_path.exists():
-            raise RuntimeError(
-                f"terminal-bench trace file not found under {tb_run_path}"
-            )
         normalized_trace = (
             run_root / f"{attempt_ctx.instance_id}-terminal-bench-trace.jsonl"
         )
@@ -779,12 +780,6 @@ class TerminalBenchRunner:
             return False
         first = results[0]
         return bool(first.get("is_resolved"))
-
-    def _find_trace_path(self, tb_run_path: Path) -> Path:
-        traces = sorted(tb_run_path.glob(f"**/agent-logs/{self.TRACE_FILENAME}"))
-        if traces:
-            return traces[0]
-        return tb_run_path / "missing-trace.jsonl"
 
     def _augment_trace_metadata(
         self,

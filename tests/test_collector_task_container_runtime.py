@@ -168,6 +168,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
             ctx=ctx,
             task=dict(ctx.task),
             benchmark=SimpleNamespace(
+                execution_environment="container",
                 config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
             ),
             container_executable="docker",
@@ -300,6 +301,7 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
             ctx=ctx,
             task=dict(ctx.task),
             benchmark=SimpleNamespace(
+                execution_environment="container",
                 config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
             ),
             container_executable="docker",

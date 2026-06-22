@@ -248,21 +248,19 @@ def _read_ctxt_via_exec(
 
 
 def _parse_pipe_stats(raw: str) -> dict[str, Any] | None:
-    """Parse pipe-delimited stats output (3-field legacy or 4-field with NetIO)."""
+    """Parse 4-field pipe-delimited stats output matching _STATS_FORMAT."""
     parts = (raw or "").strip().split("|")
-    if len(parts) < 3:
+    if len(parts) < 4:
         return None
     now = datetime.now(tz=timezone.utc)
-    sample: dict[str, Any] = {
+    return {
         "timestamp": now.isoformat().replace("+00:00", ""),
         "epoch": now.timestamp(),
         "mem_usage": parts[0],
         "mem_percent": parts[1],
         "cpu_percent": parts[2],
+        "net_io": parts[3],
     }
-    if len(parts) >= 4:
-        sample["net_io"] = parts[3]
-    return sample
 
 
 def _parse_memory_mb(mem_usage: str) -> float | None:

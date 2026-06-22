@@ -22,7 +22,6 @@ class ExecTool(Tool):
         timeout: int = _DEFAULT_TIMEOUT,
         working_dir: str | None = None,
         deny_patterns: list[str] | None = None,
-        allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
     ):
@@ -39,7 +38,6 @@ class ExecTool(Tool):
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",  # fork bomb
         ]
-        self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
 
@@ -177,10 +175,6 @@ class ExecTool(Tool):
         for pattern in self.deny_patterns:
             if re.search(pattern, lower):
                 return "Error: Command blocked by safety guard (dangerous pattern detected)"
-
-        if self.allow_patterns:
-            if not any(re.search(p, lower) for p in self.allow_patterns):
-                return "Error: Command blocked by safety guard (not in allowlist)"
 
         from agents.openclaw.security.network import contains_internal_url
 
