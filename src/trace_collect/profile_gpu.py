@@ -8,11 +8,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any
-
 from harness.component_memory_profiler import attach_component_hooks
-# in_process_engine is imported lazily inside main() so importing this
-# module on machines without vllm doesn't crash.
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)

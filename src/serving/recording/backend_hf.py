@@ -284,6 +284,87 @@ def _apply_chat_template(
     return tokenizer.apply_chat_template(messages, **kwargs)
 
 
+def _split_grouped_region(
+    full_text: str,
+    region_start: int,
+    region_end: int,
+    messages: list[dict[str, Any]],
+    group_indices: list[int],
+) -> list[tuple[int, int, int]] | None:
+    """Split a grouped template region into per-message char spans.
+
+    Some chat templates (Qwen3-Coder) collapse a run of consecutive same-block
+    messages — notably parallel ``role:tool`` results — into ONE surrounding
+    block (``<|im_start|>user … <|im_end|>``), each wrapped in its own
+    ``…`` delimiters. The incremental-prefix segmentation strategy in
+    :func:`tokenize_chat_with_segments` then only aligns the LAST member of
+    the run; earlier members fail the prefix check and would be absorbed into
+    the last member's segment, inheriting its ``exit_code``/``tool_error``.
+
+    This function recovers per-message char spans inside the grouped region
+    ``[region_start, region_end]`` by anchoring on each message's own
+    ``content`` string, which the template renders verbatim and in order. The
+    returned spans are exhaustive (they cover the whole region) so wrapper /
+    block-marker tokens are attributed to the adjacent message. Returns None
+    when the content anchors cannot be reconciled within the region, signalling
+    the caller to fall back to a single aligned segment.
+    """
+    if not group_indices:
+        return None
+    content_spans: list[tuple[int, int] | None] = []
+    cursor = region_start
+    for midx in group_indices:
+        content = messages[midx].get("content")
+        if isinstance(content, str) and content:
+            pos = full_text.find(content, cursor)
+            if pos < 0 or pos + len(content) > region_end:
+                return None
+            content_spans.append((pos, pos + len(content)))
+            cursor = pos + len(content)
+        else:
+            content_spans.append(None)
+    last_with_content = max(
+        (i for i, span in enumerate(content_spans) if span is not None),
+        default=None,
+    )
+    spans: list[tuple[int, int, int]] = []
+    cursor = region_start
+    for i, midx in enumerate(group_indices):
+        span = content_spans[i]
+        if span is not None:
+            span_start = cursor
+            span_end = span[1]
+            cursor = span[1]
+        else:
+            span_start = cursor
+            span_end = cursor
+        spans.append((midx, span_start, span_end))
+    if cursor < region_end:
+        anchor = last_with_content if last_with_content is not None else len(spans) - 1
+        midx, span_start, _ = spans[anchor]
+        spans[anchor] = (midx, span_start, region_end)
+    return spans
+
+
+def _append_split_segments(
+    char_segments: list[dict[str, Any]],
+    split: list[tuple[int, int, int]],
+    messages: list[dict[str, Any]],
+) -> None:
+    """Append one char segment per message from a grouped-region split."""
+    for midx, span_start, span_end in split:
+        if span_start < span_end:
+            char_segments.append(
+                {
+                    "role": segment_role(messages[midx]),
+                    "message_index": midx,
+                    "char_start": span_start,
+                    "char_end": span_end,
+                    **_message_segment_metadata(messages[midx]),
+                }
+            )
+
+
 def tokenize_chat_with_segments(
     tokenizer: Any,
     messages: list[dict[str, Any]],
@@ -310,34 +391,65 @@ def tokenize_chat_with_segments(
             add_generation_prompt=False,
         )
         if not full_text.startswith(prefix):
-            # Qwen3 renders assistant turns differently with/without
-            # add_generation_prompt; emit unmatched sentinel, close on next aligned prefix.
-            _LOG.warning(
-                "chat template prefix misalignment at message_index=%d role=%s; "
-                "emitting 'unmatched' segment — downstream per-role stats will "
-                "exclude this region",
-                idx,
-                message.get("role"),
-            )
+            # Some templates group consecutive same-block messages (e.g. Qwen3
+            # wraps a run of parallel tool results in one user block, each in
+            # its own ``…`` wrapper), so an incremental prefix that ends at a
+            # non-last group member closes the block early and is NOT a text
+            # prefix of the full render. Defer this message; the next aligned
+            # prefix closes the whole group and splits the region per message.
             char_segments.append(
                 {
                     "role": "unmatched",
                     "message_index": idx,
                     "char_start": previous_end,
-                    "char_end": previous_end,  # end filled by next aligned prefix
+                    "char_end": previous_end,  # filled by next aligned prefix
                     **_message_segment_metadata(message),
                     "_pending": True,
                 }
             )
             continue
         end = len(prefix)
-        # Close pending unmatched sentinels at previous_end (not end), to avoid
-        # swallowing the current aligned turn's content.
-        for seg in char_segments:
-            if seg.get("_pending"):
-                seg["char_end"] = previous_end
-                del seg["_pending"]
-        if previous_end < end:
+        pending_indices = [
+            int(seg["message_index"])
+            for seg in char_segments
+            if seg.get("_pending")
+        ]
+        if pending_indices:
+            # The aligned message closes a grouped run: messages
+            # [pending_indices[0] .. idx] share the region [previous_end, end].
+            for seg in list(char_segments):
+                if seg.get("_pending"):
+                    char_segments.remove(seg)
+            group_indices = pending_indices + [idx]
+            split = _split_grouped_region(
+                full_text, previous_end, end, messages, group_indices
+            )
+            if split is None:
+                # Genuine misalignment (content not anchored in the region) —
+                # the deferred members cannot be recovered; attribute the whole
+                # region to the aligned message and warn once.
+                _LOG.warning(
+                    "chat template prefix misalignment for messages=%s; "
+                    "attributing region [%d, %d) to message_index=%d role=%s",
+                    group_indices,
+                    previous_end,
+                    end,
+                    idx,
+                    message.get("role"),
+                )
+                if previous_end < end:
+                    char_segments.append(
+                        {
+                            "role": segment_role(message),
+                            "message_index": idx,
+                            "char_start": previous_end,
+                            "char_end": end,
+                            **_message_segment_metadata(message),
+                        }
+                    )
+            else:
+                _append_split_segments(char_segments, split, messages)
+        elif previous_end < end:
             char_segments.append(
                 {
                     "role": segment_role(message),
@@ -348,12 +460,36 @@ def tokenize_chat_with_segments(
                 }
             )
         previous_end = end
-    # Close unmatched sentinel if last message was misaligned.
-    for seg in char_segments:
-        if seg.get("_pending"):
-            seg["char_end"] = len(full_text)
-            del seg["_pending"]
-    if previous_end < len(full_text):
+    # A trailing misaligned run with no aligned closer (e.g. the conversation
+    # ends with an assistant turn the template renders differently under
+    # add_generation_prompt) leaves pending sentinels. Split the tail per
+    # message so those tokens keep their true role instead of a priority-0
+    # 'unmatched' segment; the tail (incl. the gen prompt) is absorbed into the
+    # last member, so no separate gen_prompt segment is emitted in that case.
+    trailing_pending = [
+        int(seg["message_index"]) for seg in char_segments if seg.get("_pending")
+    ]
+    if trailing_pending:
+        for seg in list(char_segments):
+            if seg.get("_pending"):
+                char_segments.remove(seg)
+        split = _split_grouped_region(
+            full_text, previous_end, len(full_text), messages, trailing_pending
+        )
+        if split is None:
+            last = trailing_pending[-1]
+            char_segments.append(
+                {
+                    "role": segment_role(messages[last]),
+                    "message_index": last,
+                    "char_start": previous_end,
+                    "char_end": len(full_text),
+                    **_message_segment_metadata(messages[last]),
+                }
+            )
+        else:
+            _append_split_segments(char_segments, split, messages)
+    elif previous_end < len(full_text):
         char_segments.append(
             {
                 "role": "gen_prompt",
