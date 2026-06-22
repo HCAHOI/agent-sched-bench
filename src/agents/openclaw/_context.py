@@ -40,10 +40,6 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        memory = self.memory.get_memory_context()
-        if memory:
-            parts.append(f"# Memory\n\n{memory}")
-
         always_skills = self.skills.get_always_skills()
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
@@ -63,15 +59,8 @@ Skills with available="false" need dependencies installed first - you can try in
 
     def _get_identity(self) -> str:
         workspace_path = str(self.project_workspace.expanduser().resolve())
-        state_workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-        state_workspace_line = ""
-        if state_workspace_path != workspace_path:
-            state_workspace_line = (
-                f"- Agent state workspace: {state_workspace_path} "
-                "(may hold task state files; runtime memory/skills live outside it)\n"
-            )
 
         platform_policy = ""
         if system == "Windows":
@@ -95,8 +84,6 @@ You are OpenClaw Research Agent, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-{state_workspace_line}
-- Long-term memory and history are managed automatically by the agent runtime; do not create memory or skill directories in the task workspace.
 
 {platform_policy}
 

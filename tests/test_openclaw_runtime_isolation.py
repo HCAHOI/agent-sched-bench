@@ -63,7 +63,9 @@ def test_memory_store_and_context_share_runtime_dir(tmp_path: Path) -> None:
     )
     system_prompt = context.build_system_prompt()
 
-    assert "The answer is 42" in system_prompt
+    # Memory is no longer injected into the prompt (unused per single-task run),
+    # but the store still writes to the runtime memory_dir, never the workspace.
+    assert "The answer is 42" not in system_prompt
     assert (memory_dir / "MEMORY.md").exists()
     assert not (workspace / "memory").exists()
 

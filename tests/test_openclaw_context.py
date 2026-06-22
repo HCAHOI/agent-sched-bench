@@ -25,13 +25,13 @@ def test_context_builder_uses_project_workspace_for_prompt_identity(
     ).build_system_prompt()
 
     assert f"Your workspace is at: {project_workspace.resolve()}" in prompt
-    assert f"Agent state workspace: {state_workspace.resolve()}" in prompt
-    # Runtime memory/skills are managed by the agent runtime; the prompt must
-    # not instruct the model to create memory or skill directories in the task
-    # workspace (workspace-local runtime state is deprecated).
+    # Memory is unused (one fresh run per task): no memory context injection,
+    # no memory/history instruction lines, no agent-state-workspace line.
     assert "memory/MEMORY.md" not in prompt
     assert "memory/HISTORY.md" not in prompt
     assert "Custom skills:" not in prompt
+    assert "managed automatically by the agent runtime" not in prompt
+    assert "Agent state workspace" not in prompt
     assert "project instructions" in prompt
 
 
@@ -45,5 +45,6 @@ def test_context_builder_does_not_instruct_workspace_memory_creation(
     assert "memory/MEMORY.md" not in prompt
     assert "memory/HISTORY.md" not in prompt
     assert "Custom skills:" not in prompt
-    # The prompt should state memory is runtime-managed, not workspace-written.
-    assert "runtime" in prompt.lower()
+    # No memory/history instruction lines remain in the prompt.
+    assert "managed automatically by the agent runtime" not in prompt
+    assert "Agent state workspace" not in prompt
