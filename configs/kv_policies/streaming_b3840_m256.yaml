@@ -1,0 +1,10 @@
+# StreamingLLM baseline (Xiao et al. ICLR 2024), matched to the metadata
+# residency-cap comparison: target budget 3840 + eviction_margin 256 = residency
+# cap 4096, identical to metadata_rung4_b4096.yaml. budget == sink + recent is
+# the StreamingLLM fixed-capacity invariant (3840 = 4 + 3836). record off (perf).
+name: streaming
+budget: 3840
+eviction_margin: 256
+sink_size: 4
+recent_window: 3836
+record: false
