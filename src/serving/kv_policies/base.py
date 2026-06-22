@@ -37,6 +37,14 @@ class EvictionPolicyConfig:
         "null_eviction",
     ]
     budget: int | None  # required when name != "none"
+    # Batch eviction: physically drop only once the cache grows to
+    # `budget + eviction_margin`, then evict back to `budget`. 0 (default)
+    # reproduces drop-every-over-budget-token exactly. A positive margin
+    # amortizes the per-token `index_select` rebuild over `margin` decode
+    # steps — physical KV stays bounded by `budget + margin`. This matters on
+    # FP8/triton backends where the post-eviction K/V reshape makes the MoE
+    # forward CPU-dispatch-bound (kernel re-specialization), starving the GPU.
+    eviction_margin: int = 0
     sink_size: int = 4  # streaming + h2o
     recent_window: int = 256  # streaming + h2o
     heavy_ratio: float = 0.5  # h2o
@@ -154,13 +162,24 @@ class BaseEvictionCache(DynamicCache):
             decision=decision,
         ):
             return keys, values
-        if decision.evict_indices:
+        if decision.evict_indices and self._evict_now(decision):
             keys, values = self._physically_drop(layer_idx, decision.keep_indices)
             self._compact_logical_state(int(layer_idx), decision.keep_indices)
             # Subclasses with per-key-position state (H2O score buffer) need to
             # compact that state in lockstep with the K/V drop. Default no-op
             # for stateless policies (streaming, random).
             self._post_evict_hook(layer_idx, decision)
+        elif decision.evict_indices:
+            # Within the eviction margin: keep the resident set as-is so the
+            # forward stays a cheap append. The recorded decision must reflect
+            # what physically happened, not the deferred plan. Build the no-op
+            # only when a recorder will consume it (per-token cost otherwise).
+            if self.recorder is not None and self.config.record:
+                decision = EvictionDecision(
+                    keep_indices=list(range(pre_len)),
+                    evict_indices=[],
+                    reason="margin_deferred",
+                )
         post_len = int(keys.shape[-2])
 
         self._record_decision(
@@ -215,6 +234,25 @@ class BaseEvictionCache(DynamicCache):
         """Return True when a subclass will finish and record this decision later."""
         del layer_idx, phase, step, pre_len, decision
         return False
+
+    def _evict_now(self, decision: EvictionDecision) -> bool:
+        """Whether to physically drop this step given the eviction margin.
+
+        Gate on the size of the policy's *own* evict set, not on raw cache
+        length: defer until at least `eviction_margin` tokens are pending
+        eviction, then drop them all at once. The rebuild cost is thus paid
+        once per `margin` decode steps (each step adds ~1 over-target token).
+
+        Measuring against the policy target (not `budget`) is what makes this
+        correct under `reserve_system_prompt`: there the post-drop length is
+        `budget + system_count`, so a `pre_len >= budget + margin` threshold
+        would fire every token and defeat the amortization. `len(evict)` is
+        independent of off-budget reserved tokens.
+
+        margin=0 (default): any non-empty evict set fires immediately —
+        bit-identical to evicting on every over-target token.
+        """
+        return len(decision.evict_indices) >= int(self.config.eviction_margin)
 
     def _record_decision(
         self,

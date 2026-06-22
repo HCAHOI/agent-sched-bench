@@ -41,6 +41,7 @@ _CLI_TO_FIELD = {
 # Kept narrow: only the fields users actually set today have entries.
 _FIELD_COERCERS = {
     "budget": int,
+    "eviction_margin": int,
     "sink_size": int,
     "recent_window": int,
     "heavy_ratio": float,
@@ -142,6 +143,12 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
             f"kv policy {name!r} requires budget > 0 (got {budget!r})"
         )
     merged["budget"] = budget_int
+
+    margin = merged.get("eviction_margin", EvictionPolicyConfig.eviction_margin)
+    if int(margin) < 0:
+        raise argparse.ArgumentTypeError(
+            f"kv policy {name!r} requires eviction_margin >= 0 (got {margin!r})"
+        )
 
     if name == "streaming":
         recent_explicit = (
