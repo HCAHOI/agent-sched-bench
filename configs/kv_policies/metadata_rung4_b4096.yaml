@@ -1,0 +1,11 @@
+# Exploratory breadth-probe config (NOT a frozen campaign prior).
+# budget 4096 so the ~2.5k-tok system prompt + tool schema fit; eviction
+# acts on the growing conversation. reserve_system_prompt pins the system
+# span outside the budget (default True, set explicit for reproducibility).
+name: metadata
+budget: 4096
+sink_size: 4
+recent_window: 256
+metadata_rung: rung4
+reserve_system_prompt: true
+record: false
