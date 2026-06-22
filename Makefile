@@ -3,7 +3,7 @@ UV ?= uv
 TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
 GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
-.PHONY: help pull test lint serve-vllm run-smoke run-sweep collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull test lint serve-vllm run-smoke collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
@@ -12,7 +12,6 @@ help:
 	@printf "  lint              Run ruff\n"
 	@printf "  serve-vllm        Run the raw vLLM launcher\n"
 	@printf "  run-smoke         Run the current infrastructure smoke suite\n"
-	@printf "  run-sweep         Run the harness sweep when HARNESS-1 is available\n"
 	@printf "  collect-results   Pull result artifacts back via rsync\n"
 	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
 	@printf "  setup-swebench-repos        Clone repos referenced by selected tasks\n"
@@ -43,9 +42,6 @@ serve-vllm:
 
 run-smoke:
 	./scripts/run_smoke.sh
-
-run-sweep:
-	./scripts/run_sweep.sh
 
 collect-results:
 	./scripts/collect_results.sh

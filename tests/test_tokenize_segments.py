@@ -13,7 +13,7 @@ from typing import Any
 
 import torch
 
-from agents.openclaw.providers.base import LLMResponse
+from llm_call.provider_base import LLMResponse
 from serving.recording.backend_hf import (
     HFRecordingProvider,
     HFRecordingServer,

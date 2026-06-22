@@ -27,7 +27,7 @@ from agents.openclaw.eval.types import (
     EvalTraceEvent,
     EvalTraceSummary,
 )
-from agents.openclaw.providers.base import LLMProvider
+from llm_call.provider_base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
 from agents.openclaw.trace_fields import HF_TRACE_EXTRA_KEYS
 from trace_collect.latency_metrics import summarize_llm_latencies

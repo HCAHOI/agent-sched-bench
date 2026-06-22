@@ -1,7 +1,9 @@
 """CLI / YAML -> EvictionPolicyConfig adapter.
 
 YAML provides the base; explicit CLI flags overlay it. YAML schema is a flat
-map mirroring EvictionPolicyConfig fields one-for-one.
+map mirroring EvictionPolicyConfig fields one-for-one. The shared overlay
+mechanics live in `serving._config_overlay`; this module keeps the
+kv-specific flag maps, coercion table, and validation rules.
 """
 
 from __future__ import annotations
@@ -11,8 +13,11 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from serving._config_overlay import (
+    build_kwargs,
+    load_yaml_config,
+    merge_cli_over_yaml,
+)
 from serving.kv_policies.base import EvictionPolicyConfig
 
 # CLI flag attr name -> EvictionPolicyConfig field name. Only flags that map
@@ -72,33 +77,6 @@ def _allowed_fields() -> set[str]:
     return {f.name for f in fields(EvictionPolicyConfig)}
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise argparse.ArgumentTypeError(f"--kv-config path does not exist: {path}")
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise argparse.ArgumentTypeError(
-            f"--kv-config {path}: expected a YAML mapping, got {type(raw).__name__}"
-        )
-    allowed = _allowed_fields()
-    unknown = set(raw.keys()) - allowed
-    if unknown:
-        raise argparse.ArgumentTypeError(
-            f"--kv-config {path}: unknown keys {sorted(unknown)}; "
-            f"allowed = {sorted(allowed)}"
-        )
-    return dict(raw)
-
-
-def _coerce(field_name: str, value: Any) -> Any:
-    coercer = _FIELD_COERCERS.get(field_name)
-    if coercer is None or value is None:
-        return value
-    return coercer(value)
-
-
 def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
     """Build an EvictionPolicyConfig from yaml + CLI overlay, or None.
 
@@ -109,7 +87,11 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
     yaml_path = getattr(args, "kv_config", None)
     base: dict[str, Any] = {}
     if yaml_path is not None:
-        base = _load_yaml(Path(yaml_path))
+        base = load_yaml_config(
+            Path(yaml_path),
+            flag_label="--kv-config",
+            allowed_fields=_allowed_fields(),
+        )
 
     # Explicit CLI values override yaml; defaults fill gaps not covered by yaml.
     cli_defaults = {
@@ -126,26 +108,14 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
         "kv_per_layer_budget": False,
     }
 
-    merged: dict[str, Any] = dict(base)
-    explicit_cli_fields: set[str] = set()
-    for cli_attr, field_name in _CLI_TO_FIELD.items():
-        cli_value = getattr(args, cli_attr, cli_defaults.get(cli_attr))
-        default_value = cli_defaults.get(cli_attr)
-        cli_explicit = cli_value != default_value
-        if cli_attr == "kv_policy":
-            # `--kv-policy none` is the implicit default. Only let it override
-            # a yaml-supplied name when the user did not pass --kv-config.
-            if cli_explicit:
-                merged[field_name] = cli_value
-                explicit_cli_fields.add(field_name)
-            elif yaml_path is None and field_name not in merged:
-                merged[field_name] = cli_value
-        else:
-            if cli_explicit:
-                merged[field_name] = cli_value
-                explicit_cli_fields.add(field_name)
-            elif field_name not in merged and default_value is not None:
-                merged[field_name] = default_value
+    merged, explicit_cli_fields = merge_cli_over_yaml(
+        base=base,
+        args=args,
+        cli_to_field=_CLI_TO_FIELD,
+        cli_defaults=cli_defaults,
+        yaml_present=yaml_path is not None,
+        name_flag="kv_policy",
+    )
 
     name = merged.get("name", "none")
     if name == "none":
@@ -255,11 +225,10 @@ def load_eviction_config(args: Any) -> EvictionPolicyConfig | None:
                 "position_control_cluster_size must be > 0"
             )
 
-    allowed = _allowed_fields()
-    kwargs: dict[str, Any] = {}
-    for field_name in allowed:
-        if field_name not in merged:
-            continue
-        kwargs[field_name] = _coerce(field_name, merged[field_name])
+    kwargs = build_kwargs(
+        merged,
+        allowed_fields=_allowed_fields(),
+        coercers=_FIELD_COERCERS,
+    )
 
     return EvictionPolicyConfig(**kwargs)

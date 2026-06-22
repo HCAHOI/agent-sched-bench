@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-
-def resolve_python_sibling_executable(name: str) -> str:
-    return str(Path(sys.executable).with_name(name))
 
 def print_or_exec_command(
     *,

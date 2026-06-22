@@ -5,7 +5,7 @@ from typing import Any
 
 from agents.openclaw._hook import AgentHook, AgentHookContext
 from agents.openclaw._runner import AgentRunner, AgentRunSpec
-from agents.openclaw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.registry import ToolRegistry
 

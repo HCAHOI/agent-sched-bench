@@ -7,7 +7,7 @@ from typing import Any
 
 from loguru import logger
 
-from agents.openclaw.providers.base import LLMResponse, ToolCallRequest
+from llm_call.provider_base import LLMResponse, ToolCallRequest
 
 
 @dataclass(slots=True)

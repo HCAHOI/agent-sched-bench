@@ -1,3 +1,17 @@
+"""Provider-agnostic LLM interface: dataclasses + `LLMProvider` ABC.
+
+This is the canonical home for the provider contract used across the
+repository (`UnifiedProvider`, `HFRecordingProvider`, and the OpenClaw agent
+loop all depend on it). It is a leaf module — only stdlib + `loguru` — so
+importing it never pulls in `agents.openclaw` or any provider
+implementation, which keeps `llm_call` importable from any layer.
+
+Historically this ABC lived at `agents.openclaw.providers.base`; it was
+relocated here to fix a layering inversion (``llm_call`` is the documented
+single entrypoint for provider/model resolution). A thin re-export shim
+remains at the old path for existing import sites.
+"""
+
 import asyncio
 import functools
 import json
@@ -9,7 +23,14 @@ from typing import Any
 
 from loguru import logger
 
-from agents.openclaw.utils.helpers import image_placeholder_text
+
+def _image_placeholder_text(path: str | None, *, empty: str = "[image]") -> str:
+    """Render a textual stand-in for an image content block.
+
+    Inlined (rather than imported from `agents.openclaw.utils.helpers`) so
+    this module stays a leaf with no `agents.openclaw` dependency.
+    """
+    return f"[image: {path}]" if path else empty
 
 
 @dataclass
@@ -210,7 +231,7 @@ class LLMProvider(ABC):
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "image_url":
                         path = (b.get("_meta") or {}).get("path", "")
-                        placeholder = image_placeholder_text(
+                        placeholder = _image_placeholder_text(
                             path, empty="[image omitted]"
                         )
                         new_content.append({"type": "text", "text": placeholder})

@@ -13,7 +13,7 @@ from loguru import logger
 
 from agents.openclaw._hook import AgentHook, AgentHookContext
 from agents.openclaw.tools.registry import ToolRegistry
-from agents.openclaw.providers.base import LLMProvider, ToolCallRequest
+from llm_call.provider_base import LLMProvider, ToolCallRequest
 from agents.openclaw.utils.helpers import (
     build_assistant_message,
     estimate_message_tokens,

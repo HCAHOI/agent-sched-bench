@@ -16,7 +16,7 @@ from agents.openclaw._session_runner import (
     inject_event_callbacks,
 )
 from agents.openclaw.eval.types import EvalResult, EvalTask, git_diff_excluding
-from agents.openclaw.providers.base import LLMProvider
+from llm_call.provider_base import LLMProvider
 
 __all__ = [
     "SWEBenchRunner",

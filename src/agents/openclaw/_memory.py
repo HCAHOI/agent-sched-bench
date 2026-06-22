@@ -19,7 +19,7 @@ from agents.openclaw.utils.helpers import (
 )
 
 if TYPE_CHECKING:
-    from agents.openclaw.providers.base import LLMProvider
+    from llm_call.provider_base import LLMProvider
     from agents.openclaw.session.manager import Session, SessionManager
 
 

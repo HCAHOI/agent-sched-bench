@@ -24,7 +24,7 @@ from typing import Any
 import json_repair
 from transformers import DynamicCache
 
-from agents.openclaw.providers.base import (
+from llm_call.provider_base import (
     GenerationSettings,
     LLMProvider,
     LLMResponse,

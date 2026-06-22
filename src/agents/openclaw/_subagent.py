@@ -22,7 +22,7 @@ from agents.openclaw.tools.web import WebFetchTool, WebSearchTool
 from agents.openclaw.bus.events import InboundMessage
 from agents.openclaw.bus.queue import MessageBus
 from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
-from agents.openclaw.providers.base import LLMProvider
+from llm_call.provider_base import LLMProvider
 
 
 class _SubagentHook(AgentHook):

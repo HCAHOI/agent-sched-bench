@@ -43,7 +43,7 @@ from serving.recording.backend_hf import (
     _synchronize_cuda_devices,
 )
 from serving.recording.recording import RecordingConfig
-from agents.openclaw.providers.base import LLMResponse
+from llm_call.provider_base import LLMResponse
 from llm_call.openclaw import UnifiedProvider
 
 

@@ -12,9 +12,19 @@ from llm_call.config import (
 )
 from llm_call.openclaw import UnifiedProvider
 from llm_call.openai_compat import create_async_openai_client, uses_openrouter
+from llm_call.provider_base import (
+    GenerationSettings,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+)
 
 __all__ = [
+    "GenerationSettings",
+    "LLMProvider",
+    "LLMResponse",
     "ResolvedLLMConfig",
+    "ToolCallRequest",
     "UnifiedProvider",
     "add_llm_config_arguments",
     "create_async_openai_client",

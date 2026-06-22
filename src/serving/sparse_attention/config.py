@@ -3,7 +3,9 @@
 Mirrors `serving.kv_policies.config` field-for-field so the two subsystems
 share the same resolution semantics: YAML supplies the base map, explicitly
 passed `--sparse-attn-*` flags overlay, and `--sparse-attn none` (the
-argparse default) does not clobber a yaml-supplied `name`.
+argparse default) does not clobber a yaml-supplied `name`. The shared
+overlay mechanics live in `serving._config_overlay`; this module keeps the
+sparse-specific flag maps, coercion table, and validation rules.
 
 `validate_attention_method_exclusivity(kv_config, sparse_config)` is
 exported from this module rather than the provider so CLI-time errors
@@ -18,8 +20,11 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from serving._config_overlay import (
+    build_kwargs,
+    load_yaml_config,
+    merge_cli_over_yaml,
+)
 from serving.sparse_attention.base import SparseAttentionConfig
 from serving.sparse_attention.patterns import validate_sparse_budget
 
@@ -60,36 +65,6 @@ def _allowed_fields() -> set[str]:
     return {f.name for f in fields(SparseAttentionConfig)}
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise argparse.ArgumentTypeError(
-            f"--sparse-attn-config path does not exist: {path}"
-        )
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise argparse.ArgumentTypeError(
-            f"--sparse-attn-config {path}: expected a YAML mapping, "
-            f"got {type(raw).__name__}"
-        )
-    allowed = _allowed_fields()
-    unknown = set(raw.keys()) - allowed
-    if unknown:
-        raise argparse.ArgumentTypeError(
-            f"--sparse-attn-config {path}: unknown keys {sorted(unknown)}; "
-            f"allowed = {sorted(allowed)}"
-        )
-    return dict(raw)
-
-
-def _coerce(field_name: str, value: Any) -> Any:
-    coercer = _FIELD_COERCERS.get(field_name)
-    if coercer is None or value is None:
-        return value
-    return coercer(value)
-
-
 def load_sparse_attention_config(
     args: Any, *, config_path: str | None = None
 ) -> SparseAttentionConfig | None:
@@ -112,7 +87,11 @@ def load_sparse_attention_config(
     yaml_path = getattr(args, "sparse_attn_config", None) or config_path
     base: dict[str, Any] = {}
     if yaml_path is not None:
-        base = _load_yaml(Path(yaml_path))
+        base = load_yaml_config(
+            Path(yaml_path),
+            flag_label="--sparse-attn-config",
+            allowed_fields=_allowed_fields(),
+        )
 
     cli_defaults = {
         "sparse_attn": "none",
@@ -127,21 +106,14 @@ def load_sparse_attention_config(
         "sparse_attn_metadata_rung": "rung4",
     }
 
-    merged: dict[str, Any] = dict(base)
-    for cli_attr, field_name in _CLI_TO_FIELD.items():
-        cli_value = getattr(args, cli_attr, cli_defaults.get(cli_attr))
-        default_value = cli_defaults.get(cli_attr)
-        cli_explicit = cli_value != default_value
-        if cli_attr == "sparse_attn":
-            if cli_explicit:
-                merged[field_name] = cli_value
-            elif yaml_path is None and field_name not in merged:
-                merged[field_name] = cli_value
-        else:
-            if cli_explicit:
-                merged[field_name] = cli_value
-            elif field_name not in merged and default_value is not None:
-                merged[field_name] = default_value
+    merged, _explicit_cli_fields = merge_cli_over_yaml(
+        base=base,
+        args=args,
+        cli_to_field=_CLI_TO_FIELD,
+        cli_defaults=cli_defaults,
+        yaml_present=yaml_path is not None,
+        name_flag="sparse_attn",
+    )
 
     name = merged.get("name", "none")
     if name == "none":
@@ -220,12 +192,11 @@ def load_sparse_attention_config(
         merged["score_reduction"] = score_reduction
         merged["phase_scope"] = phase_scope
 
-    allowed = _allowed_fields()
-    kwargs: dict[str, Any] = {}
-    for field_name in allowed:
-        if field_name not in merged:
-            continue
-        kwargs[field_name] = _coerce(field_name, merged[field_name])
+    kwargs = build_kwargs(
+        merged,
+        allowed_fields=_allowed_fields(),
+        coercers=_FIELD_COERCERS,
+    )
 
     return SparseAttentionConfig(**kwargs)
 

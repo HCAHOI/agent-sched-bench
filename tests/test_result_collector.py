@@ -8,7 +8,7 @@ from typing import Any
 from agents.openclaw.bus.events import OutboundMessage
 from agents.openclaw.bus.queue import MessageBus
 from agents.openclaw.eval.collector import ResultCollector
-from agents.openclaw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 from agents.openclaw._session_runner import SessionRunner
 from agents.openclaw.tools.message import MessageTool
 from serving.recording.hooks import LayerCapturer

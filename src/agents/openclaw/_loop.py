@@ -30,7 +30,7 @@ from agents.openclaw.tools.web import WebFetchTool, WebSearchTool
 from agents.openclaw.bus.events import InboundMessage, OutboundMessage
 from agents.openclaw.bus.queue import MessageBus
 from agents.openclaw.config.schema import AgentDefaults
-from agents.openclaw.providers.base import LLMProvider
+from llm_call.provider_base import LLMProvider
 from agents.openclaw.session.manager import Session, SessionManager
 from agents.openclaw.utils.helpers import image_placeholder_text, truncate_text
 from agents.openclaw.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE

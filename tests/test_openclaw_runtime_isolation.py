@@ -24,7 +24,7 @@ from agents.openclaw._context import ContextBuilder
 from agents.openclaw._memory import MemoryStore
 from agents.openclaw._skills import SkillsLoader
 from agents.openclaw._session_runner import SessionRunner
-from agents.openclaw.providers.base import LLMProvider, LLMResponse
+from llm_call.provider_base import LLMProvider, LLMResponse
 from agents.openclaw.session.manager import SessionManager
 from agents.openclaw.utils.helpers import maybe_persist_tool_result
 

@@ -20,7 +20,7 @@ import httpx
 import json_repair
 from llm_call.openai_compat import create_async_openai_client, uses_openrouter
 
-from agents.openclaw.providers.base import (
+from llm_call.provider_base import (
     GenerationSettings,
     LLMProvider,
     LLMResponse,
