@@ -418,3 +418,21 @@ async def _run_pair_survives_snip_case() -> None:
         assert tm["tool_call_id"] in declared_ids, (
             f"orphan tool message id={tm['tool_call_id']!r} in snip output"
         )
+
+
+def test_dangling_tool_call_opener_is_not_malformed() -> None:
+    """A finish=stop final answer with only a trailing <tool_call> opener
+    (no <function=...> body) must NOT be treated as a malformed tool call —
+    otherwise it loops on malformed-retry instead of terminating.
+    """
+    from agents.openclaw._runner import _looks_like_malformed_tool_call
+
+    # The exact observed regression: complete answer + dangling opener.
+    assert not _looks_like_malformed_tool_call(
+        "I've completed the task. All tests should pass.\n<tool_call>"
+    )
+    assert not _looks_like_malformed_tool_call("Done.\n</tool_call>")
+    assert not _looks_like_malformed_tool_call("Plain final answer, no tools.")
+    # A real but unparseable attempt (function body present) is still malformed.
+    assert _looks_like_malformed_tool_call("<tool_call>\n<function=list_dir>")
+    assert _looks_like_malformed_tool_call("<function=read_file>")

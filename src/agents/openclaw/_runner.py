@@ -38,12 +38,21 @@ _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
 
 
 def _looks_like_malformed_tool_call(content: str | None) -> bool:
+    """True only when content is a real but unparseable tool-call ATTEMPT.
+
+    A malformed attempt is evidenced by an actual function/parameter line
+    (``<function=...>`` / ``<parameter=...>``). A bare ``<tool_call>`` opener or
+    ``</tool_call>`` closer with no function body is NOT an attempt: Qwen3-Coder
+    sometimes appends a dangling ``<tool_call>`` after a complete
+    finish_reason=stop answer. Flagging that triggers an endless malformed-retry
+    (the retry budget keys on input hash, which changes every turn, so it never
+    exhausts) instead of accepting the final answer — so dangling wrappers must
+    not count.
+    """
     if not content:
         return False
     return bool(
-        re.search(r"(?im)^\s*<tool_call\b", content)
-        or re.search(r"(?im)^\s*</tool_call>", content)
-        or re.search(r"(?im)^\s*<function=[^>\n]+>\s*$", content)
+        re.search(r"(?im)^\s*<function=[^>\n]+>\s*$", content)
         or re.search(r"(?im)^\s*<parameter=[^>\n]+>\s*$", content)
     )
 
