@@ -9,7 +9,7 @@ on SWE-style benchmarks.
 python -m trace_collect.cli <subcommand> [OPTIONS]
 ```
 
-Subcommands: (none) = **collect**, `simulate`, `import-claude-code`, `inspect`, `gantt-serve`, `profile-gpu`.
+Subcommands: (none) = **collect**, `simulate`, `inspect`, `gantt-serve`, `profile-gpu`.
 
 ---
 
@@ -409,23 +409,7 @@ record has:
 
 ---
 
-## Part 3 — import-claude-code
-
-Convert Claude Code session JSONL to canonical trace format.
-
-```bash
-python -m trace_collect.cli import-claude-code \
-  --session ~/.claude/projects/<slug>/<uuid>.jsonl \
-  --output-dir traces
-```
-
-- `--no-sidechains` skips folding `subagents/agent-*.jsonl` into output
-- Output: `<output-dir>/claude-code-import/<uuid>/<uuid>.jsonl`
-- Handles the `toolUseResult` string-vs-dict gotcha in CC JSONL format
-
----
-
-## Part 4 — inspect
+## Part 3 — inspect
 
 Post-hoc CLI for querying traces.
 
@@ -577,7 +561,6 @@ traces/simulate/<benchmark>/<safe-model>/<scaffold>/<arrival_tag>/
 | `simulator.py` | Simulation: cloud/local model replay, container prep, arrival offsets |
 | `attempt_pipeline.py` | Per-attempt lifecycle: container start → agent run → artifact write |
 | `attempt_layout.py` | Canonical artifact filenames and writers |
-| `claude_code_import.py` | CC session → canonical trace converter |
 | `runtime/task_container.py` | In-container entrypoint and runtime bootstrap |
 | `runtime/entrypoint.py` | Container-side JSON stdin/stdout protocol |
 | `src/llm_call/providers.py` | Provider registry |

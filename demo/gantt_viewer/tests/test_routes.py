@@ -18,7 +18,6 @@ from trace_collect.trace_inspector import TraceData
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CC_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "claude_code_minimal.jsonl"
 OPENAPI_SNAPSHOT = (
     REPO_ROOT / "demo" / "gantt_viewer" / "tests" / "fixtures" / "openapi.snapshot.json"
 )
@@ -187,26 +186,6 @@ def test_register_trace_path_adds_descriptor(tmp_path: Path) -> None:
     assert any(trace["path"] == str(extra_path.resolve()) for trace in traces)
 
 
-def test_register_raw_claude_code_trace_auto_imports(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    client, _ = _make_client(tmp_path)
-    response = client.post(
-        "/api/traces/register",
-        json={"paths": [str(CC_FIXTURE)]},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["registered"][0]["source_format"] == "trace"
-    assert "gantt-cc-import" in body["registered"][0]["path"]
-
-    payload_response = client.post("/api/payload", json={"ids": [body["registered"][0]["id"]]})
-    assert payload_response.status_code == 200
-    assert payload_response.json()["traces"][0]["metadata"]["scaffold"] == "claude-code"
-
-
 def test_register_legacy_trace_returns_422(tmp_path: Path) -> None:
     client, _ = _make_client(tmp_path)
     legacy_path = _write_legacy_trace(tmp_path / "legacy" / "trace.jsonl")
@@ -308,24 +287,6 @@ def test_upload_trace_registers_descriptor(tmp_path: Path) -> None:
 
     payload_response = client.post("/api/payload", json={"ids": [body["descriptor"]["id"]]})
     assert payload_response.status_code == 200
-
-
-def test_upload_raw_claude_code_trace_auto_imports(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    client, _ = _make_client(tmp_path)
-    with CC_FIXTURE.open("rb") as handle:
-        response = client.post(
-            "/api/traces/upload",
-            files={"file": ("claude_code_minimal.jsonl", handle, "application/json")},
-        )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["descriptor"]["source_format"] == "trace"
-    assert body["payload_fragment"]["metadata"]["scaffold"] == "claude-code"
 
 
 def test_upload_legacy_trace_returns_422(tmp_path: Path) -> None:

@@ -15,7 +15,6 @@ from demo.gantt_viewer.backend.discovery import (
 from demo.gantt_viewer.tests.helpers import write_config, write_trace
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CC_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "claude_code_minimal.jsonl"
 
 
 def _write_legacy_trace(trace_path: Path) -> Path:
@@ -39,11 +38,6 @@ def _write_legacy_trace(trace_path: Path) -> Path:
 def test_sniff_format_trace(tmp_path: Path) -> None:
     trace_path = write_trace(tmp_path / "runs" / "task-1" / "trace.jsonl", [])
     assert sniff_format(trace_path) == "trace"
-
-
-def test_sniff_format_rejects_raw_claude_code_session() -> None:
-    with pytest.raises(ValueError, match="not a canonical trace JSONL"):
-        sniff_format(CC_FIXTURE)
 
 
 def test_sniff_format_rejects_legacy_trace_version(tmp_path: Path) -> None:

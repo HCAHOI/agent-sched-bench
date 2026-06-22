@@ -100,12 +100,6 @@ agent workflow, see `AGENT_INTERFACE.md` in this directory.
 
 Partial failures on `/api/payload` return mixed `traces` + `errors` arrays.
 
-### Auto-Import
-
-Both `register` and `upload` auto-detect raw Claude Code session JSONL and
-import it to canonical trace format before tracking. For `register`, adjacent
-`subagents/` sidechains are preserved; `upload` (single blob) skips sidechains.
-
 ---
 
 ## Discovery & Registry
@@ -278,7 +272,7 @@ Color/shape registries for spans and markers returned with every payload:
 | `backend/runtime_registry.py` | Registry overlay (config + runtime + uploads) |
 | `backend/payload.py` | Trace → Gantt payload transformation (spans, markers, gaps, resources) |
 | `backend/discovery.py` | YAML config parsing, glob-based trace discovery, format sniffing |
-| `backend/ingest.py` | Format detection + Claude Code auto-import |
+| `backend/ingest.py` | Canonical trace format detection |
 | `backend/uploads.py` | Upload persistence to cache dir |
 | `backend/dev.py` | CLI launcher, Vite subprocess management |
 | `backend/schema.py` | Pydantic models for all API request/response types |

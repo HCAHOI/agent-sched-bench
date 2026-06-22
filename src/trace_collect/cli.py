@@ -158,32 +158,13 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
             "null_eviction",
         ],
         default="none",
-        help=(
-            "KV cache eviction policy used by the HF recording backend. "
-            "`none` (default) keeps stock DynamicCache behaviour. `random` "
-            "evicts uniformly when key_len > budget. `streaming` keeps "
-            "`--kv-sink-size` head + `--kv-recent-window` tail tokens "
-            "(StreamingLLM, naive variant — no RoPE re-rotation). `h2o` "
-            "(Heavy-Hitter Oracle, arXiv:2306.14048) keeps sink + recent + "
-            "top-k positions ranked by accumulated post-softmax attention; "
-            "subscribes to the per-provider AttentionBus to share the "
-            "softmax tensor with LayerCapturer (no double-softmax). "
-            "`metadata` applies the pre-registered metadata-residency ladder. "
-            "`position_control` applies non-metadata contiguity controls. "
-            "`null_eviction` is reserve-all identity for probes/tests only."
-        ),
+        help="KV cache eviction policy for the HF recording backend. See src/trace_collect/CLAUDE.md.",
     )
     parser.add_argument(
         "--kv-budget",
         type=int,
         default=None,
-        help=(
-            "Per-layer KV budget (kept tokens). Required when --kv-policy is "
-            "not `none`. For `streaming` and `h2o`, acts as the trigger "
-            "threshold and must be >= --kv-sink-size + --kv-recent-window. "
-            "For `h2o`, post-eviction layer length is exactly `budget`; the "
-            "middle slot count is `budget - sink_size - recent_window`."
-        ),
+        help="Per-layer KV budget (kept tokens). Required when --kv-policy != none.",
     )
     parser.add_argument(
         "--kv-sink-size",
@@ -208,27 +189,13 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--kv-aggregate",
         choices=["sum", "mean", "ema"],
         default="sum",
-        help=(
-            "H2O score aggregation across queries. `sum` (paper default) "
-            "accumulates raw mass; `mean` divides by the number of observed "
-            "queries per position; `ema` uses an exponential moving average "
-            "with `--kv-ema-decay` (yaml only). Ignored by `random` and "
-            "`streaming`."
-        ),
+        help="H2O score aggregation: sum (default) | mean | ema (yaml-only decay). Ignored by random/streaming.",
     )
     parser.add_argument(
         "--kv-config",
         type=str,
         default=None,
-        help=(
-            "Optional YAML file under e.g. configs/kv_policies/ containing a "
-            "flat map of EvictionPolicyConfig fields (name, budget, sink_size, "
-            "recent_window, heavy_ratio, aggregate, ema_decay, seed, record, "
-            "prefill_mode). When set, the YAML supplies the base config and "
-            "any explicitly-passed --kv-* flag overrides the corresponding "
-            "yaml value. Mutually compatible with --kv-policy: yaml-name and "
-            "an explicit --kv-policy must agree (CLI wins on explicit set)."
-        ),
+        help="YAML under configs/kv_policies/ with EvictionPolicyConfig fields; CLI flags overlay yaml.",
     )
     parser.add_argument(
         "--kv-metadata-rung",
@@ -301,15 +268,9 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         ],
         default="none",
         help=(
-            "Sparse attention method used by the HF recording backend. "
-            "`none` (default) leaves attention dense. `sliding`/`streaming` "
-            "keep the first `--sparse-attn-sink-size` tokens plus the last "
-            "`--sparse-attn-recent-window` tokens. Dynamic methods require "
-            "`--sparse-attn-budget` or YAML `budget:`. `metadata` records "
-            "metadata-residency would-keep sets and is observe-only. "
-            "Sparse enforce mode is mutually exclusive with --kv-policy; "
-            "observe-only metadata sidecars are allowed. Requires "
-            "--record-internals."
+            "Sparse attention method for the HF recording backend. Enforce mode is "
+            "mutually exclusive with --kv-policy. Requires --record-internals. "
+            "See src/trace_collect/CLAUDE.md."
         ),
     )
     parser.add_argument(
@@ -403,33 +364,25 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "Comma-separated layer indices (e.g. 0,6,12,18,24,30,36,47) for "
-            "which to capture per-head within-segment attention mean/variance "
-            "into attention.npz head_span_* arrays. Accepts the preset token "
-            "'qwen3-coder-30b' (= 0,6,12,18,24,30,36,47) or its alias "
-            "'default'. Empty/omitted = disabled. Requires --record-internals."
+            "Comma-separated layer indices or preset 'qwen3-coder-30b'/'default' for "
+            "per-head head_span_* arrays. Requires --record-internals."
         ),
     )
     parser.add_argument(
         "--per-head-block-stats",
         action="store_true",
         help=(
-            "Additionally capture per-selected-block within-block attention "
-            "mean/std at decode into attention.npz block_span_* arrays (bucket "
-            "axis = sink | selection rank 1..R_max | recent). Requires "
-            "--record-internals, --sparse-attn block_topk (resolved), and a "
-            "non-empty --per-head-stats-layers."
+            "Capture per-selected-block attention mean/std into block_span_* arrays "
+            "(bucket axis = sink | selection rank 1..R_max | recent). "
+            "Requires --record-internals, --sparse-attn block_topk, non-empty --per-head-stats-layers."
         ),
     )
     parser.add_argument(
         "--record-per-head-topk",
         action="store_true",
         help=(
-            "Record block_topk's per-head independent top-R block selections at "
-            "decode (the uncensored counterfactual 'what each head would pick "
-            "alone' set) into attention.npz per_head_topk_csr_* arrays. Requires "
-            "--record-internals, --sparse-attn block_topk (resolved), and a "
-            "non-empty --per-head-stats-layers (reused as the recorded layers)."
+            "Record per-head independent top-R block selections into per_head_topk_csr_* arrays. "
+            "Requires --record-internals, --sparse-attn block_topk, non-empty --per-head-stats-layers."
         ),
     )
     parser.add_argument(
@@ -606,56 +559,10 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def parse_import_claude_code_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Convert a Claude Code session JSONL to a canonical trace for the Gantt "
-            "viewer. Post-hoc, read-only — no collection, no simulation. "
-            "Rich Claude Code fields (cache tokens, thinking blocks, "
-            "toolUseResult sidecar) are backfilled into additive data.* and "
-            "metadata.run_config.* slots in the canonical trace schema."
-        ),
-    )
-    parser.add_argument(
-        "--session",
-        required=True,
-        help=(
-            "Path to the Claude Code session JSONL "
-            "(typically ~/.claude/projects/<slug>/<session-uuid>.jsonl)."
-        ),
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="traces",
-        help=(
-            "Root output directory. Final file lands at "
-            "<output-dir>/claude-code-import/<session-uuid>/<session-uuid>.jsonl."
-        ),
-    )
-    parser.add_argument(
-        "--run-id",
-        default=None,
-        help=("Optional explicit run directory suffix (default: session uuid)."),
-    )
-    parser.add_argument(
-        "--no-sidechains",
-        dest="include_sidechains",
-        action="store_false",
-        default=True,
-        help=(
-            "Skip folding <session-dir>/<session-uuid>/subagents/agent-*.jsonl "
-            "into the output. Default: include them as distinct agent_id lanes."
-        ),
-    )
-    return parser.parse_args(argv)
-
-
 def main() -> None:
     sub = sys.argv[1] if len(sys.argv) > 1 else None
     if sub == "simulate":
         _run_simulate(parse_simulate_args(sys.argv[2:]))
-    elif sub == "import-claude-code":
-        _run_import_claude_code(parse_import_claude_code_args(sys.argv[2:]))
     elif sub == "inspect":
         _run_inspect(sys.argv[2:])
     elif sub == "gantt-serve":
@@ -999,23 +906,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
         )
     )
     print(f"Simulate trace written to: {trace_file}")
-
-
-def _run_import_claude_code(args: argparse.Namespace) -> None:
-    """Convert a Claude Code session JSONL into a canonical trace for the Gantt viewer."""
-    from trace_collect.claude_code_import import import_claude_code_session
-
-    trace_file = import_claude_code_session(
-        session_path=Path(args.session),
-        output_dir=Path(args.output_dir),
-        include_sidechains=args.include_sidechains,
-        run_id=args.run_id,
-    )
-    print(f"Claude Code trace written to: {trace_file}")
-    print(
-        "Start the dynamic Gantt viewer with: "
-        "python -m trace_collect.cli gantt-serve --dev"
-    )
 
 
 def _run_inspect(argv: list[str]) -> None:

@@ -189,20 +189,6 @@ For per-component (attn/mlp) deep profiling without a separate server, use the
 See `src/trace_collect/CLAUDE.md` §Simulate for the full flag table, manifest
 format, output directory layout, and simulation-specific fields in `action.data`.
 
-## Importing Claude Code Sessions
-
-Convert a raw Claude Code session JSONL to canonical trace format:
-
-```bash
-PYTHONPATH=src python -m trace_collect.cli import-claude-code \
-    --session ~/.claude/projects/<slug>/<uuid>.jsonl \
-    --output-dir traces
-```
-
-Sidechains under `subagents/` are folded in by default (pass `--no-sidechains`
-to skip). The Gantt viewer's `/api/traces/register` and `/api/traces/upload`
-endpoints auto-invoke this importer when they detect raw CC JSONL.
-
 ## Inspecting Traces
 
 ```bash
@@ -235,9 +221,7 @@ PYTHONPATH=src:. python -m trace_collect.cli gantt-serve \
     --config demo/gantt_viewer/configs/example.yaml
 ```
 
-Discovery config globs accept canonical trace JSONL only. At runtime,
-`POST /api/traces/register` and `POST /api/traces/upload` auto-import raw
-Claude Code sessions through `import-claude-code` before registration.
+Discovery config globs accept canonical trace JSONL only.
 
 Smoke-only subsets belong in dedicated `*_smoke.yaml` workload configs; default
 workload configs should describe the full benchmark dataset path.

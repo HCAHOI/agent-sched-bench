@@ -127,12 +127,7 @@ Current smoke coverage:
 
 For agent-driven workflows, use `demo/gantt_viewer/AGENT_INTERFACE.md`.
 
-Config discovery still requires canonical trace JSONL. At runtime, the REST
-API (`/api/traces/register` and `/api/traces/upload`) can auto-import raw
-Claude Code session JSONL by reusing `python -m trace_collect.cli import-claude-code`
-internally before registering the resulting canonical trace. `register` keeps
-adjacent Claude Code sidechains when they exist next to the session file;
-single-file `upload` imports only the uploaded main session JSONL.
+Config discovery requires canonical trace JSONL.
 
 Frontend bundle check only:
 

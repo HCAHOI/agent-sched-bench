@@ -490,28 +490,6 @@ def test_main_dispatches_simulate_without_collect_container_flag(monkeypatch) ->
     assert seen["source_trace"] == "trace.jsonl"
 
 
-def test_main_dispatches_import_without_collect_container_flag(monkeypatch) -> None:
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(
-        "trace_collect.cli._run_import_claude_code",
-        lambda args: seen.setdefault("session", args.session),
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "trace_collect.cli",
-            "import-claude-code",
-            "--session",
-            "session.jsonl",
-        ],
-    )
-
-    main()
-
-    assert seen["session"] == "session.jsonl"
-
-
 def test_resolve_prompt_template_uses_benchmark_default_when_unset() -> None:
     benchmark = SimpleNamespace(
         config=SimpleNamespace(default_prompt_template="cc_aligned")

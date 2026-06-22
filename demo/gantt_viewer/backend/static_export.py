@@ -379,8 +379,6 @@ def _normalize_source_trace_reference(value: Any) -> str:
     if not isinstance(value, str):
         raise ValueError(f"source trace reference must be a string, got {type(value).__name__}")
     normalized = "/" + value.replace("\\", "/").lstrip("/")
-    if "/claude-code-import/" in normalized:
-        raise ValueError(f"source trace reference points to Claude Code import: {value}")
     if EXPECTED_SOURCE_TRACE_REF_FRAGMENT not in normalized:
         raise ValueError(
             f"source trace reference {value!r} does not contain "
