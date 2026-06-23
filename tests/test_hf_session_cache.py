@@ -522,8 +522,12 @@ def test_consecutive_chats_share_kv_state() -> None:
 
 
 def test_divergent_prompt_crops_and_prefills_suffix() -> None:
-    """When LCP < cached_len, keep the valid prefix and prefill only suffix."""
-    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+    """When LCP < cached_len, keep the valid prefix and prefill only suffix.
+
+    Uses a layer-uniform policy (streaming) — the resume/crop path. Divergent
+    policies (random/h2o) rebuild fresh instead; covered separately.
+    """
+    cfg = EvictionPolicyConfig(name="streaming", budget=8, sink_size=4, recent_window=4)
     provider = _build_provider(cfg)
     prompt_1 = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
     provider._prepare_session_cache(prompt_ids=prompt_1, call_idx=0)
@@ -554,7 +558,7 @@ def test_divergent_prompt_crops_and_prefills_suffix() -> None:
 
 
 def test_exact_match_replays_last_token_without_rebuild() -> None:
-    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+    cfg = EvictionPolicyConfig(name="streaming", budget=8, sink_size=4, recent_window=4)
     provider = _build_provider(cfg)
     prompt = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
     provider._prepare_session_cache(prompt_ids=prompt, call_idx=0)
@@ -582,7 +586,7 @@ def test_exact_match_replays_last_token_without_rebuild() -> None:
 
 
 def test_exact_match_sparse_eviction_cache_replays_last_logical_token() -> None:
-    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+    cfg = EvictionPolicyConfig(name="streaming", budget=8, sink_size=4, recent_window=4)
     provider = _build_provider(cfg)
     prompt = torch.arange(100, dtype=torch.long).unsqueeze(0)
     cache = provider._build_session_cache()

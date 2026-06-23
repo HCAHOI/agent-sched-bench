@@ -1023,6 +1023,9 @@ class NullEvictionCache(BaseEvictionCache):
 class PositionControlCache(BaseEvictionCache):
     """Non-metadata eviction controls for contiguity bracketing."""
 
+    def supports_session_resume(self) -> bool:
+        return self.config.position_control != "random"  # random -> per-layer divergent
+
     def __init__(
         self,
         config: EvictionPolicyConfig,

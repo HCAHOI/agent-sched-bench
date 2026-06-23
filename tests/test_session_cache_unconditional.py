@@ -168,15 +168,30 @@ def test_bare_baseline_reuses_session_cache() -> None:
     _assert_strict_prefix_on_call_2(provider)
 
 
-def test_eviction_path_unchanged() -> None:
-    """Existing eviction-policy path keeps building a BaseEvictionCache."""
-    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+def test_layer_uniform_eviction_resumes() -> None:
+    """A layer-uniform eviction policy (streaming) keeps the cross-call resume
+    path: builds a BaseEvictionCache, strict-prefix reuse on call 2."""
+    cfg = EvictionPolicyConfig(name="streaming", budget=8, sink_size=4, recent_window=4)
     provider = _build_provider(
         eviction_config=cfg, sparse_attention_config=None
     )
     _drive_two_calls(provider)
     assert isinstance(provider._session_cache, BaseEvictionCache)
     _assert_strict_prefix_on_call_2(provider)
+
+
+def test_layer_divergent_eviction_rebuilds_fresh() -> None:
+    """random keeps per-layer-different token sets, so it cannot LCP-resume.
+    Each call rebuilds a fresh cache and full-prefills (lcp=0, used=True)."""
+    cfg = EvictionPolicyConfig(name="random", budget=8, seed=0)
+    provider = _build_provider(
+        eviction_config=cfg, sparse_attention_config=None
+    )
+    _drive_two_calls(provider)
+    assert isinstance(provider._session_cache, BaseEvictionCache)
+    h2 = provider._session_history[-1]
+    assert h2["used_session_cache"] is True
+    assert h2["lcp"] == 0, "divergent policy must full-prefill, not crop-resume"
 
 
 def test_env_var_disables_session_cache_for_all_configs(monkeypatch) -> None:
