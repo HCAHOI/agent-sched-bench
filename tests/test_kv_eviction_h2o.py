@@ -229,6 +229,35 @@ def test_h2o_post_evict_compacts_scores() -> None:
     assert cache._score_lengths[0] == n_keep
 
 
+def test_h2o_deferred_flush_compacts_base_logical_state() -> None:
+    """Deferred prefill eviction must compact the BASE logical-index state in
+    lockstep with the physical drop, not just the score buffer. Otherwise a
+    later update() raises 'key_len ... shorter than tracked logical origins'
+    (the live h2o crash). Drives the real update->defer->observe->flush path.
+    """
+    cache, _bus = _make_cache(
+        budget=4, sink_size=1, recent_window=1, num_layers=1, max_position_embeddings=64
+    )
+    key_len = 10
+    k = torch.randn(1, 1, key_len, 2)
+    v = torch.randn(1, 1, key_len, 2)
+    cache.update(k, v, 0)  # over-budget prefill -> defers (score_missing)
+    cache.observe(
+        layer=0,
+        attn=_attn_with_peaks(key_len=key_len, peak_positions=[3, 7]),
+        query_positions=torch.tensor([key_len - 1], dtype=torch.long),
+        key_len=key_len,
+        phase="prefill",
+    )  # last prefill query -> flushes the deferred eviction
+
+    phys = cache.get_seq_length(0)
+    assert phys == 4, f"post-flush physical length {phys} != budget"
+    logical = cache._ensure_logical_state(0, phys, copy=False)
+    assert len(logical) == phys, f"logical {len(logical)} != physical {phys}"
+    # A subsequent decode update must not raise the logical-origin mismatch.
+    cache.update(torch.randn(1, 1, 1, 2), torch.randn(1, 1, 1, 2), 0)
+
+
 # ---------------------------------------------------------------------------
 # Construction / config validation.
 # ---------------------------------------------------------------------------

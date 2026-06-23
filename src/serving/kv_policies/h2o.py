@@ -267,6 +267,7 @@ class H2OCache(BaseEvictionCache):
             )
         if decision.evict_indices:
             keys, _values = self._physically_drop(int(layer_idx), decision.keep_indices)
+            self._compact_logical_state(int(layer_idx), decision.keep_indices)
             self._post_evict_hook(int(layer_idx), decision)
         post_len = int(keys.shape[-2])
         self._record_decision(
