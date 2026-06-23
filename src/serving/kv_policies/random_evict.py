@@ -61,6 +61,9 @@ class RandomEvictCache(BaseEvictionCache):
         # not perturbed.
         self._generator = torch.Generator(device="cpu").manual_seed(int(config.seed))
 
+    def supports_session_resume(self) -> bool:
+        return False  # per-layer independent sampling -> layer-divergent keep set
+
     def _decide_evict(self, layer_idx: int, key_len: int) -> EvictionDecision:
         budget = int(self.config.budget)  # type: ignore[arg-type]
         if key_len <= budget:

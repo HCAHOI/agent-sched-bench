@@ -683,6 +683,9 @@ class MetadataResidencySelector:
 class MetadataResidencyCache(BaseEvictionCache):
     """Physical KV cache using metadata-derived residency decisions."""
 
+    def supports_session_resume(self) -> bool:
+        return self._selector.layer_independent
+
     def __init__(
         self,
         config: EvictionPolicyConfig,

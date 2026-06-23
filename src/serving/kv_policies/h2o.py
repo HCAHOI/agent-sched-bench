@@ -114,6 +114,9 @@ class H2OCache(BaseEvictionCache):
     def requires_attention_backend(cls) -> bool:
         return True
 
+    def supports_session_resume(self) -> bool:
+        return False  # per-layer heavy-hitter scores -> layer-divergent keep set
+
     # -- AttentionConsumer protocol -----------------------------------------
 
     def observe(

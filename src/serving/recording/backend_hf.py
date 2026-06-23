@@ -1199,6 +1199,14 @@ class HFRecordingProvider(LLMProvider):
                 call_idx=call_idx, new_len=new_len
             )
             return prompt_ids, False
+        # Layer-divergent eviction caches can't be LCP-cropped (per-layer
+        # lengths diverge); drop and rebuild fresh each call so eviction still
+        # applies but the prompt is full-prefilled instead of resumed.
+        if (
+            isinstance(self._session_cache, BaseEvictionCache)
+            and not self._session_cache.supports_session_resume()
+        ):
+            self._drop_session_cache()
         # Session cache benefits any multi-call workflow with shared prefix
         # (sparse_attention runs, bare baseline, eviction policies). Not gated
         # on eviction policy any more — see commit message for the per-turn

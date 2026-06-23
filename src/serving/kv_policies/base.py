@@ -123,6 +123,16 @@ class BaseEvictionCache(DynamicCache):
         """Instance-level mirror used for provider unsubscribe lifecycle."""
         return self.requires_attention_backend()
 
+    def supports_session_resume(self) -> bool:
+        """False when the keep set varies per layer.
+
+        LCP-crop resume only works if every layer keeps the same token set;
+        otherwise per-layer physical lengths diverge and the shared attention
+        mask crashes. Layer-divergent policies (random, h2o) override to False
+        and the provider rebuilds a fresh full-prefill cache each call.
+        """
+        return True
+
     def notify_new_call(
         self,
         call_idx: int,
