@@ -106,13 +106,19 @@ class SWEBenchRunner:
             timeout=30,
             check=False,
         )
+        # git_diff_excluding swallows TimeoutExpired internally (→ rc=124); any
+        # other exception is a real fault and must fail fast, not be masked as
+        # an empty patch (which SWE-bench would score as a spurious unresolved).
         diff_result = git_diff_excluding(
             diff_cwd,
             base_commit,
-            EvalResult._EXCLUDE_PATTERNS,
+            EvalResult.exclude_pathspecs(),
             add_excludes=True,
-            add_timeout=30,
-            diff_timeout=60,
+            # QEMU-emulated x86 on arm64 makes git pathstat ~5-10x slower; the
+            # agent's venv/egg-info can add thousands of files. 180s so a
+            # slow-but-completing diff is not turned into a hard task failure.
+            add_timeout=180,
+            diff_timeout=180,
         )
         if diff_result.returncode == 0:
             return diff_result.stdout.strip() or None
