@@ -10,11 +10,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from agents.base import TraceAction
-from harness.container_image_prep import ensure_fixed_image, normalize_image_reference
+from harness.container_image_prep import (
+    ensure_fixed_image,
+    ensure_source_image,
+    normalize_image_reference,
+)
 from harness.container_stats_sampler import ContainerStatsSampler, summarize_samples
 from harness.gpu_resource_sampler import GpuResourceSampler
-from harness.runner import build_arrival_offsets
 from harness.metrics_client import VLLMMetricsClient
 from harness.scheduler_hooks import GpuBaseline
 from harness.trace_logger import TraceLogger
@@ -28,10 +33,36 @@ from trace_collect.attempt_pipeline import (
 )
 
 logger = logging.getLogger(__name__)
+STARTUP_RESOURCE_SAMPLE_INTERVAL_S = 0.25
 
 
 class SimulateError(Exception):
     """Raised when simulation encounters a fatal issue."""
+
+
+@dataclass(frozen=True, slots=True)
+class TraceManifestEntry:
+    """One resolved trace entry from a simulate manifest."""
+
+    trace: Path
+    task_source: Path
+    docker_image: str | None = None
+    label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayTaskStats:
+    """Per-trace throughput accounting for a simulate run."""
+
+    agent_id: str
+    label: str | None
+    source_trace: str
+    success: bool
+    elapsed_s: float
+    action_count: int
+    llm_call_count: int
+    tool_exec_count: int
+    failed_action_count: int = 0
 
 
 def validate_gpu_tracking_args(args: Any) -> None:
@@ -70,6 +101,7 @@ class LoadedTraceSession:
     actions: list[dict[str, Any]]
     iterations: dict[int, dict[str, Any]]
     docker_image_override: str | None = None
+    label: str | None = None
 
 
 @dataclass(slots=True)
@@ -90,6 +122,110 @@ class PreparedTraceSession:
     container: PreparedContainer | None = None
     sampler: ContainerStatsSampler | None = None
     task_output_dir: Path | None = None
+    resources_written: bool = False
+
+
+class ContainerStartupRecorder:
+    """Collect and persist one task's container startup facts."""
+
+    def __init__(
+        self,
+        *,
+        loaded: LoadedTraceSession,
+        task_output_dir: Path,
+        container_executable: str | None,
+        network_mode: str,
+        source_image: str | None,
+    ) -> None:
+        self.loaded = loaded
+        self.task_output_dir = task_output_dir
+        self.container_executable = container_executable
+        self.network_mode = network_mode
+        self.source_image = source_image
+        self.fixed_image: str | None = None
+        self.container_id: str | None = None
+        self._started_monotonic = time.monotonic()
+        self._started_at = _utc_now_iso()
+        self._phases: list[dict[str, Any]] = []
+        self._resources: dict[str, Any] = {
+            "samples": [],
+            "summary": summarize_samples([]),
+        }
+        self._written = False
+
+    def start_phase(self, name: str) -> dict[str, Any]:
+        phase = {
+            "name": name,
+            "started_at": _utc_now_iso(),
+            "_started_monotonic": time.monotonic(),
+        }
+        return phase
+
+    def finish_phase(
+        self,
+        phase: dict[str, Any],
+        *,
+        status: str = "success",
+        error: BaseException | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        started_monotonic = float(phase.pop("_started_monotonic"))
+        phase["ended_at"] = _utc_now_iso()
+        phase["elapsed_s"] = time.monotonic() - started_monotonic
+        phase["status"] = status
+        if error is not None:
+            phase["error"] = _exception_payload(error)
+        if extra:
+            phase.update(extra)
+        self._phases.append(phase)
+
+    def set_resources(self, samples: list[dict[str, Any]]) -> None:
+        self._resources = {
+            "samples": samples,
+            "summary": summarize_samples(samples),
+        }
+
+    def write(
+        self,
+        *,
+        status: str,
+        reason: str | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        if self._written:
+            return
+        payload: dict[str, Any] = {
+            "status": status,
+            "agent_id": self.loaded.agent_id,
+            "source_trace": str(self.loaded.source_trace),
+            "container_executable": self.container_executable,
+            "network_mode": self.network_mode,
+            "source_image": self.source_image,
+            "fixed_image": self.fixed_image,
+            "container_id": self.container_id,
+            "started_at": self._started_at,
+            "ended_at": _utc_now_iso(),
+            "elapsed_s": time.monotonic() - self._started_monotonic,
+            "phases": self._phases,
+            "resources": self._resources,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        if error is not None:
+            payload["error"] = _exception_payload(error)
+        attempt_layout.write_container_startup_json(self.task_output_dir, payload)
+        self._written = True
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _exception_payload(exc: BaseException) -> dict[str, str]:
+    return {
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
 
 
 async def _call_local_model_streaming(
@@ -232,17 +368,10 @@ def _sanitize_run_label(value: str) -> str:
     return sanitize_path_segment(value).replace(" ", "-")
 
 
-def _arrival_tag(arrival_mode: str, arrival_rate_per_s: float | None) -> str:
-    if arrival_mode == "poisson" and arrival_rate_per_s:
-        return f"poisson_{arrival_rate_per_s:g}_per_s"
-    return arrival_mode or "closed_loop"
-
-
 def _structured_output_subdir(
     sessions: list["LoadedTraceSession"],
     *,
-    arrival_mode: str,
-    arrival_rate_per_s: float | None,
+    concurrency: int,
 ) -> Path:
     primary = sessions[0].metadata or {}
     benchmark = str(primary.get("benchmark") or "unknown")
@@ -267,14 +396,15 @@ def _structured_output_subdir(
         Path(_sanitize_run_label(benchmark))
         / _sanitize_run_label(model)
         / _sanitize_run_label(scaffold)
-        / _arrival_tag(arrival_mode, arrival_rate_per_s)
+        / "bounded_queue"
+        / f"concurrency_{concurrency}"
     )
 
 
-def _build_run_id(*, mode: str, model: str | None) -> str:
+def _build_run_id(*, mode: str, model: str | None, concurrency: int) -> str:
     label = model if model else mode
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
-    return f"simulate_{_sanitize_run_label(label)}_{ts}"
+    return f"simulate_{_sanitize_run_label(label)}_c{concurrency}_{ts}"
 
 
 def _coerce_timestamp(
@@ -317,6 +447,7 @@ def _load_trace_session(
     source_trace: Path,
     task_source: Path,
     docker_image_override: str | None = None,
+    label: str | None = None,
 ) -> LoadedTraceSession:
     agent_id, metadata, actions, summary = _parse_trace_session_file(source_trace)
     scaffold = metadata.get("scaffold", "unknown") if metadata else "unknown"
@@ -332,40 +463,141 @@ def _load_trace_session(
         actions=actions,
         iterations=_group_actions_by_iteration(actions),
         docker_image_override=docker_image_override,
+        label=label,
     )
 
 
-def _load_trace_manifest(
-    trace_manifest: Path,
+def _resolve_manifest_path(
+    value: Any,
+    *,
+    base_dir: Path,
+    field: str,
+    require_absolute: bool = False,
+) -> Path:
+    if not isinstance(value, str) or not value:
+        raise SimulateError(f"manifest {field} must be a non-empty string")
+    path = Path(value)
+    if require_absolute and not path.is_absolute():
+        raise SimulateError(f"manifest {field} must be an absolute path: {value}")
+    if not path.is_absolute():
+        path = (base_dir / path).resolve()
+    return path
+
+
+def _load_simulate_manifest(
+    manifest: Path,
     *,
     default_task_source: Path,
-) -> list[tuple[Path, Path, str | None]]:
+) -> list[TraceManifestEntry]:
     try:
-        raw = json.loads(trace_manifest.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SimulateError(f"Invalid trace manifest JSON: {trace_manifest}") from exc
-    if not isinstance(raw, list) or not raw:
-        raise SimulateError("trace manifest must be a non-empty JSON array")
+        raw = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise SimulateError(f"Invalid simulate manifest YAML: {manifest}") from exc
 
-    base_dir = trace_manifest.parent
-    entries: list[tuple[Path, Path, str | None]] = []
-    for index, entry in enumerate(raw):
-        if not isinstance(entry, dict):
-            raise SimulateError(
-                f"trace manifest entry {index} must be an object with source_trace"
+    base_dir = manifest.parent
+    manifest_default_task_source: Path | None = None
+    raw_traces: Any
+
+    if isinstance(raw, list):
+        raw_traces = raw
+    elif isinstance(raw, dict):
+        allowed_manifest_keys = {"version", "defaults", "traces"}
+        unknown_manifest_keys = set(raw) - allowed_manifest_keys
+        if unknown_manifest_keys:
+            keys = ", ".join(sorted(str(key) for key in unknown_manifest_keys))
+            raise SimulateError(f"simulate manifest has unsupported top-level keys: {keys}")
+        version = raw.get("version", 1)
+        if version != 1:
+            raise SimulateError(f"simulate manifest version must be 1, got {version!r}")
+        defaults = raw.get("defaults") or {}
+        if not isinstance(defaults, dict):
+            raise SimulateError("simulate manifest defaults must be an object")
+        unknown_default_keys = set(defaults) - {"task_source"}
+        if unknown_default_keys:
+            keys = ", ".join(sorted(str(key) for key in unknown_default_keys))
+            raise SimulateError(f"simulate manifest defaults has unsupported keys: {keys}")
+        if "task_source" in defaults:
+            manifest_default_task_source = _resolve_manifest_path(
+                defaults["task_source"],
+                base_dir=base_dir,
+                field="defaults.task_source",
             )
-        source_value = entry.get("source_trace")
-        if not source_value:
-            raise SimulateError(f"trace manifest entry {index} is missing source_trace")
-        task_value = entry.get("task_source")
-        docker_image = entry.get("docker_image")
-        source_path = Path(source_value)
-        task_path = Path(task_value) if task_value else default_task_source
-        if not source_path.is_absolute():
-            source_path = (base_dir / source_path).resolve()
-        if task_value and not task_path.is_absolute():
-            task_path = (base_dir / task_path).resolve()
-        entries.append((source_path, task_path, docker_image))
+        raw_traces = raw.get("traces")
+    else:
+        raise SimulateError("simulate manifest must be a YAML list or object with traces")
+
+    if not isinstance(raw_traces, list) or not raw_traces:
+        raise SimulateError("simulate manifest traces must be a non-empty list")
+
+    entries: list[TraceManifestEntry] = []
+    for index, entry in enumerate(raw_traces):
+        trace_value: Any
+        task_value: Any | None = None
+        docker_image: str | None = None
+        label: str | None = None
+
+        if isinstance(entry, str):
+            trace_value = entry
+        elif isinstance(entry, dict):
+            allowed_entry_keys = {"trace", "task_source", "docker_image", "label"}
+            unknown_entry_keys = set(entry) - allowed_entry_keys
+            if unknown_entry_keys:
+                keys = ", ".join(sorted(str(key) for key in unknown_entry_keys))
+                raise SimulateError(
+                    f"simulate manifest trace entry {index} has unsupported keys: {keys}"
+                )
+            if "trace" not in entry:
+                raise SimulateError(f"simulate manifest trace entry {index} is missing trace")
+            trace_value = entry["trace"]
+            task_value = entry.get("task_source")
+            docker_value = entry.get("docker_image")
+            label_value = entry.get("label")
+            if docker_value is not None:
+                if not isinstance(docker_value, str) or not docker_value:
+                    raise SimulateError(
+                        f"simulate manifest trace entry {index} docker_image must be a non-empty string"
+                    )
+                docker_image = docker_value
+            if label_value is not None:
+                if not isinstance(label_value, str) or not label_value:
+                    raise SimulateError(
+                        f"simulate manifest trace entry {index} label must be a non-empty string"
+                    )
+                label = label_value
+        else:
+            raise SimulateError(
+                f"simulate manifest trace entry {index} must be a string or object"
+            )
+
+        trace_path = _resolve_manifest_path(
+            trace_value,
+            base_dir=base_dir,
+            field=f"traces[{index}].trace",
+            require_absolute=True,
+        )
+        task_path = (
+            _resolve_manifest_path(
+                task_value,
+                base_dir=base_dir,
+                field=f"traces[{index}].task_source",
+            )
+            if task_value is not None
+            else manifest_default_task_source or default_task_source
+        )
+        if not trace_path.exists():
+            raise SimulateError(f"simulate manifest trace entry {index} does not exist: {trace_path}")
+        if not task_path.exists():
+            raise SimulateError(
+                f"simulate manifest trace entry {index} task_source does not exist: {task_path}"
+            )
+        entries.append(
+            TraceManifestEntry(
+                trace=trace_path,
+                task_source=task_path,
+                docker_image=docker_image,
+                label=label,
+            )
+        )
     return entries
 
 
@@ -444,9 +676,57 @@ def _validate_loaded_sessions(
                 )
 
 
+def _validate_container_runtime(
+    sessions: list[LoadedTraceSession],
+    *,
+    container_executable: str | None,
+) -> None:
+    container_sessions = [session.agent_id for session in sessions if not _is_host_mode(session)]
+    if container_sessions and container_executable is None:
+        sample = ", ".join(container_sessions[:3])
+        suffix = "..." if len(container_sessions) > 3 else ""
+        raise ValueError(
+            "container_executable is required for container-mode traces "
+            f"({sample}{suffix})"
+        )
+
+
+def _container_source_images(sessions: list[LoadedTraceSession]) -> list[str]:
+    images: set[str] = set()
+    for session in sessions:
+        if _is_host_mode(session):
+            continue
+        docker_image = _resolve_docker_image(session)
+        if docker_image is None:
+            continue
+        images.add(normalize_image_reference(docker_image))
+    return sorted(images)
+
+
+async def _prefetch_container_images(
+    sessions: list[LoadedTraceSession],
+    *,
+    container_executable: str | None,
+) -> None:
+    if container_executable is None:
+        return
+    images = _container_source_images(sessions)
+    if not images:
+        return
+    logger.info("Prefetching %d container source image(s)", len(images))
+    for image in images:
+        logger.info("Prefetching container source image: %s", image)
+        await asyncio.to_thread(
+            ensure_source_image,
+            image,
+            container_executable=container_executable,
+        )
+
+
 async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
+    task_output_dir: Path,
     container_executable: str,
     network_mode: str = "host",
 ) -> PreparedTraceSession:
@@ -459,26 +739,106 @@ async def _prepare_container_session(
             f"Task {loaded.agent_id!r} has no resolvable docker_image"
         )
     normalized = normalize_image_reference(docker_image)
-    fixed_name, _elapsed = await asyncio.to_thread(
-        ensure_fixed_image,
-        normalized,
+    recorder = ContainerStartupRecorder(
+        loaded=loaded,
+        task_output_dir=task_output_dir,
         container_executable=container_executable,
-    )
-    container_id = await asyncio.to_thread(
-        start_task_container,
-        fixed_name,
-        executable=container_executable,
         network_mode=network_mode,
+        source_image=normalized,
     )
-
-    agent = ContainerAgent(container_id, container_executable)
+    container_id: str | None = None
+    agent: Any | None = None
+    startup_sampler: ContainerStatsSampler | None = None
     try:
-        await agent.start()
-    except Exception:
-        await asyncio.to_thread(
-            stop_task_container, container_id, executable=container_executable,
+        phase = recorder.start_phase("ensure_fixed_image")
+        try:
+            fixed_name, fixed_elapsed_s = await asyncio.to_thread(
+                ensure_fixed_image,
+                normalized,
+                container_executable=container_executable,
+            )
+            recorder.fixed_image = fixed_name
+            recorder.finish_phase(
+                phase,
+                extra={
+                    "fixed_image": fixed_name,
+                    "reported_elapsed_s": fixed_elapsed_s,
+                },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        phase = recorder.start_phase("start_task_container")
+        try:
+            container_id = await asyncio.to_thread(
+                start_task_container,
+                fixed_name,
+                executable=container_executable,
+                network_mode=network_mode,
+            )
+            recorder.container_id = container_id
+            recorder.finish_phase(
+                phase,
+                extra={
+                    "container_id": container_id,
+                },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        startup_sampler = ContainerStatsSampler(
+            container_id=container_id,
+            interval_s=STARTUP_RESOURCE_SAMPLE_INTERVAL_S,
+            executable=container_executable,
         )
+        startup_sampler.start()
+
+        agent = ContainerAgent(container_id, container_executable)
+        phase = recorder.start_phase("container_agent_start")
+        try:
+            await agent.start()
+            recorder.finish_phase(phase)
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        startup_samples = startup_sampler.stop()
+        startup_sampler = None
+        recorder.set_resources(startup_samples)
+        recorder.write(status="success")
+    except (Exception, asyncio.CancelledError) as exc:
+        if startup_sampler is not None:
+            try:
+                recorder.set_resources(startup_sampler.stop())
+            except (Exception, asyncio.CancelledError):
+                logger.exception(
+                    "Failed to stop startup resource sampler for %s",
+                    loaded.agent_id,
+                )
+        try:
+            recorder.write(status="failed", error=exc)
+        except (Exception, asyncio.CancelledError):
+            logger.exception("Failed to write container startup failure artifact for %s", loaded.agent_id)
+        if agent is not None:
+            try:
+                await agent.stop()
+            except (Exception, asyncio.CancelledError):
+                logger.exception("Failed to stop container agent for %s", loaded.agent_id)
+        if container_id is not None:
+            try:
+                await asyncio.to_thread(
+                    stop_task_container,
+                    container_id,
+                    executable=container_executable,
+                )
+            except (Exception, asyncio.CancelledError):
+                logger.exception("Failed to stop startup container for %s", loaded.agent_id)
         raise
+
+    assert container_id is not None
+    assert agent is not None
 
     container = PreparedContainer(
         container_id=container_id,
@@ -489,21 +849,15 @@ async def _prepare_container_session(
     return PreparedTraceSession(loaded=loaded, container=container)
 
 
-async def _prepare_host_session(
-    loaded: LoadedTraceSession,
-) -> PreparedTraceSession:
-    """Prepare a host-mode replay session without Docker/Podman."""
-    return PreparedTraceSession(loaded=loaded, container=None)
-
-
 def _log_trace_metadata(
     *,
     trace_logger: TraceLogger,
     mode: str,
     sessions: list[LoadedTraceSession],
     replay_speed: float,
-    source_trace: Path | None,
-    trace_manifest: Path | None,
+    manifest: Path,
+    concurrency: int,
+    scheduler_mode: str,
     api_base: str | None,
     model: str | None,
     network_mode: str = "host",
@@ -523,15 +877,15 @@ def _log_trace_metadata(
         "simulate_mode": mode,
         "replay_speed": replay_speed,
         "source_trace_count": len(sessions),
+        "source_traces": [str(session.source_trace) for session in sessions],
         "source_models": source_models,
+        "manifest": str(manifest),
+        "concurrency": concurrency,
+        "scheduler_mode": scheduler_mode,
         "network_mode": network_mode,
     }
-    if source_trace is not None:
-        metadata["source_trace"] = str(source_trace)
-    if trace_manifest is not None:
-        metadata["trace_manifest"] = str(trace_manifest)
-        metadata["source_traces"] = [str(session.source_trace) for session in sessions]
     if mode == "local_model":
+        metadata["source_trace"] = str(sessions[0].source_trace)
         metadata["source_model"] = source_models[0]
         metadata["local_model"] = model
         metadata["local_api_base"] = api_base
@@ -588,6 +942,121 @@ def _make_trace_summary(
     return summary
 
 
+def _make_task_stats(
+    *,
+    loaded: LoadedTraceSession,
+    success: bool,
+    elapsed_s: float,
+    failed_action_count: int = 0,
+) -> ReplayTaskStats:
+    llm_call_count = sum(1 for action in loaded.actions if action.get("action_type") == "llm_call")
+    tool_exec_count = sum(1 for action in loaded.actions if action.get("action_type") == "tool_exec")
+    return ReplayTaskStats(
+        agent_id=loaded.agent_id,
+        label=loaded.label,
+        source_trace=str(loaded.source_trace),
+        success=success,
+        elapsed_s=elapsed_s,
+        action_count=len(loaded.actions),
+        llm_call_count=llm_call_count,
+        tool_exec_count=tool_exec_count,
+        failed_action_count=failed_action_count,
+    )
+
+
+def _write_throughput_summary(
+    *,
+    output_path: Path,
+    run_id: str,
+    manifest: Path,
+    mode: str,
+    concurrency: int,
+    scheduler_mode: str,
+    trace_file: Path,
+    wall_time_s: float,
+    task_stats: list[ReplayTaskStats],
+) -> Path:
+    attempted = len(task_stats)
+    completed = sum(1 for stat in task_stats if stat.success)
+    failed = attempted - completed
+    safe_wall_time_s = max(wall_time_s, 1e-9)
+    payload = {
+        "run_id": run_id,
+        "mode": mode,
+        "manifest": str(manifest),
+        "trace_file": str(trace_file),
+        "concurrency": concurrency,
+        "scheduler_mode": scheduler_mode,
+        "wall_time_s": wall_time_s,
+        "attempted_traces": attempted,
+        "completed_traces": completed,
+        "failed_traces": failed,
+        "traces_per_s": attempted / safe_wall_time_s,
+        "successful_traces_per_s": completed / safe_wall_time_s,
+        "action_count": sum(stat.action_count for stat in task_stats),
+        "llm_call_count": sum(stat.llm_call_count for stat in task_stats),
+        "tool_exec_count": sum(stat.tool_exec_count for stat in task_stats),
+        "tasks": [dataclasses.asdict(stat) for stat in task_stats],
+    }
+    summary_path = output_path / "throughput_summary.json"
+    summary_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    run_summary_path = output_path / f"{run_id}.throughput_summary.json"
+    run_summary_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary_path
+
+
+def _assign_task_output_dir(prepared: PreparedTraceSession, output_path: Path) -> None:
+    instance_dir = output_path / prepared.loaded.agent_id
+    attempt_n = next_attempt_number_in(instance_dir)
+    task_dir = instance_dir / f"attempt_{attempt_n}"
+    task_dir.mkdir(parents=True, exist_ok=True)
+    prepared.task_output_dir = task_dir
+
+
+async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
+    if prepared.sampler is not None:
+        samples = prepared.sampler.stop()
+        prepared.sampler = None
+        if prepared.task_output_dir is not None:
+            summary = summarize_samples(samples)
+            attempt_layout.write_resources_json(
+                prepared.task_output_dir,
+                samples,
+                summary,
+            )
+            prepared.resources_written = True
+            logger.info(
+                "Wrote %d resource samples → %s",
+                len(samples),
+                prepared.task_output_dir / "resources.json",
+            )
+    elif prepared.task_output_dir is not None and not prepared.resources_written:
+        attempt_layout.write_resources_json(
+            prepared.task_output_dir,
+            samples=[],
+            summary=summarize_samples([]),
+        )
+        prepared.resources_written = True
+
+    ctr = prepared.container
+    if ctr is None:
+        return
+    prepared.container = None
+    if ctr.agent is not None:
+        await ctr.agent.stop()
+    await asyncio.to_thread(
+        stop_task_container,
+        ctr.container_id,
+        executable=ctr.container_executable,
+    )
+
+
 async def _run_local_model_simulation(
     prepared_session: PreparedTraceSession,
     *,
@@ -603,7 +1072,7 @@ async def _run_local_model_simulation(
     vllm_pid: int | None = None,
     gpu_sample_hz: float = 10.0,
     gpu_output_path: Path | None = None,
-) -> None:
+) -> ReplayTaskStats:
     loaded = prepared_session.loaded
     iterations = loaded.iterations
     source_model = (loaded.summary or {}).get("model", "unknown")
@@ -832,10 +1301,12 @@ async def _run_local_model_simulation(
 
         wall_end = time.time()
 
+        success = failed_iters == 0 and succeeded_iters == total_iters
+        elapsed_s = wall_end - wall_start
         simulate_summary = _make_trace_summary(
             loaded=loaded,
-            success=failed_iters == 0 and succeeded_iters == total_iters,
-            elapsed_s=wall_end - wall_start,
+            success=success,
+            elapsed_s=elapsed_s,
             source_model=source_model,
             extra={
                 "local_model": model,
@@ -845,6 +1316,12 @@ async def _run_local_model_simulation(
             },
         )
         trace_logger.log_summary(loaded.agent_id, simulate_summary)
+    return _make_task_stats(
+        loaded=loaded,
+        success=success,
+        elapsed_s=elapsed_s,
+        failed_action_count=failed_iters,
+    )
 
 
 async def _sleep_until_offset(
@@ -857,46 +1334,139 @@ async def _sleep_until_offset(
         await asyncio.sleep(delay_s)
 
 
-async def _delayed_replay(
-    delay_s: float,
-    prepared_session: PreparedTraceSession,
-    **kwargs: Any,
-) -> None:
-    """Wait *delay_s* then run a single cloud-model session replay."""
-    if delay_s > 0:
-        logger.info(
-            "Poisson delay %.1fs for %s",
-            delay_s, prepared_session.loaded.agent_id,
-        )
-        await asyncio.sleep(delay_s)
-    await _replay_cloud_model_session(prepared_session, **kwargs)
-
-
-async def _run_cloud_model_replay(
-    prepared_sessions: list[PreparedTraceSession],
+async def _prepare_replay_session(
+    loaded: LoadedTraceSession,
     *,
+    output_path: Path,
+    container_executable: str | None,
+    network_mode: str,
+) -> PreparedTraceSession:
+    prepared: PreparedTraceSession | None = None
+    try:
+        prepared = PreparedTraceSession(loaded=loaded)
+        _assign_task_output_dir(prepared, output_path)
+        assert prepared.task_output_dir is not None
+        task_output_dir = prepared.task_output_dir
+        if _is_host_mode(loaded):
+            recorder = ContainerStartupRecorder(
+                loaded=loaded,
+                task_output_dir=task_output_dir,
+                container_executable=container_executable,
+                network_mode=network_mode,
+                source_image=None,
+            )
+            recorder.write(
+                status="skipped",
+                reason="host_execution_environment",
+            )
+        else:
+            if container_executable is None:
+                raise ValueError("container_executable is required for container-mode traces")
+            prepared = await _prepare_container_session(
+                loaded,
+                task_output_dir=task_output_dir,
+                container_executable=container_executable,
+                network_mode=network_mode,
+            )
+            prepared.task_output_dir = task_output_dir
+        if prepared.container is not None:
+            sampler = ContainerStatsSampler(
+                container_id=prepared.container.container_id,
+                interval_s=1.0,
+                executable=prepared.container.container_executable,
+            )
+            sampler.start()
+            prepared.sampler = sampler
+        return prepared
+    except (Exception, asyncio.CancelledError):
+        if prepared is not None:
+            await _finalize_prepared_session(prepared)
+        raise
+
+
+async def _run_cloud_model_queue(
+    loaded_sessions: list[LoadedTraceSession],
+    *,
+    output_path: Path,
     trace_logger: TraceLogger,
+    concurrency: int,
+    container_executable: str | None,
+    network_mode: str,
     replay_speed: float,
     command_timeout_s: float,
     warmup_skip_iterations: int,
-    arrival_offsets: list[float] | None = None,
-) -> None:
-    replay_zero_monotonic = time.monotonic()
-    offsets = arrival_offsets or [0.0] * len(prepared_sessions)
-    await asyncio.gather(
-        *[
-            _delayed_replay(
-                offsets[i],
-                prepared_sessions[i],
-                trace_logger=trace_logger,
-                replay_zero_monotonic=replay_zero_monotonic,
-                replay_speed=replay_speed,
-                command_timeout_s=command_timeout_s,
-                warmup_skip_iterations=warmup_skip_iterations,
-            )
-            for i in range(len(prepared_sessions))
-        ]
+) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+
+    queue: asyncio.Queue[LoadedTraceSession] = asyncio.Queue()
+    for loaded in loaded_sessions:
+        queue.put_nowait(loaded)
+
+    prepared_sessions: list[PreparedTraceSession] = []
+    task_stats: list[ReplayTaskStats] = []
+    result_lock = asyncio.Lock()
+    worker_count = min(concurrency, len(loaded_sessions))
+    first_error: BaseException | None = None
+
+    async def worker(worker_index: int) -> None:
+        nonlocal first_error
+        while True:
+            if first_error is not None:
+                return
+            try:
+                loaded = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+            prepared: PreparedTraceSession | None = None
+            stats: ReplayTaskStats | None = None
+            try:
+                logger.info(
+                    "Worker %d replaying %s (%d queued)",
+                    worker_index,
+                    loaded.agent_id,
+                    queue.qsize(),
+                )
+                prepared = await _prepare_replay_session(
+                    loaded,
+                    output_path=output_path,
+                    container_executable=container_executable,
+                    network_mode=network_mode,
+                )
+                stats = await _replay_cloud_model_session(
+                    prepared,
+                    trace_logger=trace_logger,
+                    replay_zero_monotonic=time.monotonic(),
+                    replay_speed=replay_speed,
+                    command_timeout_s=command_timeout_s,
+                    warmup_skip_iterations=warmup_skip_iterations,
+                )
+            except Exception as exc:
+                async with result_lock:
+                    if first_error is None:
+                        first_error = exc
+            finally:
+                if prepared is not None:
+                    await _finalize_prepared_session(prepared)
+                    async with result_lock:
+                        prepared_sessions.append(prepared)
+                        if stats is not None:
+                            task_stats.append(stats)
+                queue.task_done()
+
+    worker_results = await asyncio.gather(
+        *(worker(index) for index in range(worker_count)),
+        return_exceptions=True,
     )
+    for result in worker_results:
+        if isinstance(result, asyncio.CancelledError):
+            raise result
+        if isinstance(result, Exception) and first_error is None:
+            first_error = result
+    if first_error is not None:
+        raise first_error
+    return prepared_sessions, task_stats
 
 
 async def _replay_cloud_model_session(
@@ -907,7 +1477,7 @@ async def _replay_cloud_model_session(
     replay_speed: float,
     command_timeout_s: float,
     warmup_skip_iterations: int,
-) -> None:
+) -> ReplayTaskStats:
     loaded = prepared_session.loaded
     ctr = prepared_session.container
     source_model = (loaded.summary or {}).get("model", "unknown")
@@ -1064,11 +1634,12 @@ async def _replay_cloud_model_session(
             failed_actions += 1
 
     wall_end = time.time()
+    success = failed_actions == 0
     trace_logger.log_summary(
         loaded.agent_id,
         _make_trace_summary(
             loaded=loaded,
-            success=failed_actions == 0,
+            success=success,
             elapsed_s=wall_end - wall_start,
             source_model=source_model,
             extra={
@@ -1078,6 +1649,12 @@ async def _replay_cloud_model_session(
                 "failed_actions": failed_actions,
             },
         ),
+    )
+    return _make_task_stats(
+        loaded=loaded,
+        success=success,
+        elapsed_s=wall_end - wall_start,
+        failed_action_count=failed_actions,
     )
 
 
@@ -1131,11 +1708,11 @@ def _split_trace_by_agent(
 
 async def simulate(
     *,
-    source_trace: Path | None = None,
-    trace_manifest: Path | None = None,
+    manifest: Path,
     task_source: Path,
     output_dir: Path,
     mode: str = "local_model",
+    concurrency: int = 1,
     container_executable: str | None = None,
     network_mode: str = "host",
     api_base: str | None = None,
@@ -1145,100 +1722,84 @@ async def simulate(
     metrics_url: str | None = None,
     warmup_skip_iterations: int = 0,
     replay_speed: float = 1.0,
-    arrival_mode: str = "closed_loop",
-    arrival_rate_per_s: float | None = None,
-    arrival_seed: int | None = None,
     structured_output: bool = False,
     gpu_baseline: GpuBaseline | None = None,
     vllm_pid: int | None = None,
     gpu_sample_hz: float = 10.0,
 ) -> Path:
-    if source_trace is not None and trace_manifest is not None:
-        raise ValueError("source_trace and trace_manifest are mutually exclusive")
-    if source_trace is None and trace_manifest is None:
-        raise ValueError("simulate requires source_trace or trace_manifest")
     if mode not in {"local_model", "cloud_model"}:
         raise ValueError(f"Unsupported simulate mode: {mode}")
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+    if mode == "local_model" and concurrency != 1:
+        raise ValueError("local_model simulate requires concurrency=1")
 
-    if trace_manifest is not None:
-        trace_inputs = _load_trace_manifest(
-            trace_manifest,
-            default_task_source=task_source.resolve(),
-        )
-    else:
-        assert source_trace is not None
-        trace_inputs = [(source_trace, task_source, None)]
+    manifest_entries = _load_simulate_manifest(
+        manifest,
+        default_task_source=task_source.resolve(),
+    )
 
     loaded_sessions = [
-        _load_trace_session(source_path, task_path, docker_image_override=img)
-        for source_path, task_path, img in trace_inputs
+        _load_trace_session(
+            entry.trace,
+            entry.task_source,
+            docker_image_override=entry.docker_image,
+            label=entry.label,
+        )
+        for entry in manifest_entries
     ]
     _validate_loaded_sessions(
         loaded_sessions,
         mode=mode,
         replay_speed=replay_speed,
     )
+    _validate_container_runtime(
+        loaded_sessions,
+        container_executable=container_executable,
+    )
+    await _prefetch_container_images(
+        loaded_sessions,
+        container_executable=container_executable,
+    )
 
     output_path = Path(output_dir)
     if structured_output:
         output_path = output_path / _structured_output_subdir(
             loaded_sessions,
-            arrival_mode=arrival_mode,
-            arrival_rate_per_s=arrival_rate_per_s,
+            concurrency=concurrency,
         )
 
     prepared_sessions: list[PreparedTraceSession] = []
+    task_stats: list[ReplayTaskStats] = []
     trace_logger: TraceLogger | None = None
     output_path.mkdir(parents=True, exist_ok=True)
+    run_wall_start = time.monotonic()
+    scheduler_mode = "bounded_queue"
 
     try:
-        for loaded in loaded_sessions:
-            if _is_host_mode(loaded):
-                prepared_sessions.append(await _prepare_host_session(loaded))
-                continue
-            if container_executable is None:
-                raise ValueError(
-                    "container_executable is required for container-mode traces"
-                )
-            prepared_sessions.append(
-                await _prepare_container_session(
-                    loaded,
-                    container_executable=container_executable,
-                    network_mode=network_mode,
-                )
-            )
-
-        for prepared in prepared_sessions:
-            instance_dir = output_path / prepared.loaded.agent_id
-            attempt_n = next_attempt_number_in(instance_dir)
-            task_dir = instance_dir / f"attempt_{attempt_n}"
-            task_dir.mkdir(parents=True, exist_ok=True)
-            prepared.task_output_dir = task_dir
-            if prepared.container is None:
-                continue
-            sampler = ContainerStatsSampler(
-                container_id=prepared.container.container_id,
-                interval_s=1.0,
-                executable=prepared.container.container_executable,
-            )
-            sampler.start()
-            prepared.sampler = sampler
-
-        run_id = _build_run_id(mode=mode, model=model)
+        run_id = _build_run_id(mode=mode, model=model, concurrency=concurrency)
         trace_logger = TraceLogger(output_path, run_id)
         _log_trace_metadata(
             trace_logger=trace_logger,
             mode=mode,
             sessions=loaded_sessions,
             replay_speed=replay_speed,
-            source_trace=source_trace,
-            trace_manifest=trace_manifest,
+            manifest=manifest,
+            concurrency=concurrency,
+            scheduler_mode=scheduler_mode,
             api_base=api_base,
             model=model,
             network_mode=network_mode,
         )
 
         if mode == "local_model":
+            prepared = await _prepare_replay_session(
+                loaded_sessions[0],
+                output_path=output_path,
+                container_executable=container_executable,
+                network_mode=network_mode,
+            )
+            prepared_sessions.append(prepared)
             assert trace_logger is not None
             assert api_base is not None
             assert api_key is not None
@@ -1249,7 +1810,7 @@ async def simulate(
                 task_dir = prepared_sessions[0].task_output_dir
                 if task_dir is not None:
                     gpu_output_path = task_dir / "gpu_resources.json"
-            await _run_local_model_simulation(
+            local_stats = await _run_local_model_simulation(
                 prepared_sessions[0],
                 trace_logger=trace_logger,
                 replay_speed=replay_speed,
@@ -1264,57 +1825,38 @@ async def simulate(
                 gpu_sample_hz=gpu_sample_hz,
                 gpu_output_path=gpu_output_path,
             )
+            task_stats = [local_stats]
         else:
             assert trace_logger is not None
-            offsets = build_arrival_offsets(
-                len(prepared_sessions),
-                arrival_mode=arrival_mode,
-                arrival_rate_per_s=arrival_rate_per_s,
-                arrival_seed=arrival_seed,
-            )
-            await _run_cloud_model_replay(
-                prepared_sessions,
+            prepared_sessions, task_stats = await _run_cloud_model_queue(
+                loaded_sessions,
+                output_path=output_path,
                 trace_logger=trace_logger,
+                concurrency=concurrency,
+                container_executable=container_executable,
+                network_mode=network_mode,
                 replay_speed=replay_speed,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
-                arrival_offsets=offsets,
             )
     finally:
         if trace_logger is not None:
             trace_logger.close()
             _split_trace_by_agent(trace_logger.path, prepared_sessions)
         for prepared in prepared_sessions:
-            if prepared.sampler is not None:
-                samples = prepared.sampler.stop()
-                if prepared.task_output_dir is not None:
-                    summary = summarize_samples(samples)
-                    attempt_layout.write_resources_json(
-                        prepared.task_output_dir, samples, summary,
-                    )
-                    logger.info(
-                        "Wrote %d resource samples → %s",
-                        len(samples),
-                        prepared.task_output_dir / "resources.json",
-                    )
-            elif prepared.task_output_dir is not None:
-                # Host-mode: no sampler; emit empty resources.json for schema consistency.
-                attempt_layout.write_resources_json(
-                    prepared.task_output_dir,
-                    samples=[],
-                    summary=summarize_samples([]),
-                )
-            ctr = prepared.container
-            if ctr is None:
-                continue
-            if ctr.agent is not None:
-                await ctr.agent.stop()
-            await asyncio.to_thread(
-                stop_task_container,
-                ctr.container_id,
-                executable=ctr.container_executable,
-            )
+            await _finalize_prepared_session(prepared)
 
     trace_file = output_path / f"{run_id}.jsonl"
+    _write_throughput_summary(
+        output_path=output_path,
+        run_id=run_id,
+        manifest=manifest,
+        mode=mode,
+        concurrency=concurrency,
+        scheduler_mode=scheduler_mode,
+        trace_file=trace_file,
+        wall_time_s=time.monotonic() - run_wall_start,
+        task_stats=task_stats,
+    )
     logger.info("Simulate complete [%s] -> %s", mode, trace_file)
     return trace_file

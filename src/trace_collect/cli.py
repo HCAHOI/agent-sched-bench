@@ -416,17 +416,12 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Simulate a trace with local model timing (TTFT/TPOT).",
     )
-    source_group = parser.add_mutually_exclusive_group(required=True)
-    source_group.add_argument(
-        "--source-trace",
-        help="Path to the source API trace JSONL file.",
-    )
-    source_group.add_argument(
-        "--trace-manifest",
-        default=None,
+    parser.add_argument(
+        "--manifest",
+        required=True,
         help=(
-            "JSON manifest describing one or more replay traces. "
-            "Each entry must contain source_trace and may override task_source."
+            "YAML simulate manifest. It may be a list of absolute trace paths "
+            "or an object with defaults.task_source and traces entries."
         ),
     )
     add_llm_config_arguments(parser)
@@ -438,6 +433,14 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "Simulation mode. local_model replays one trace through a local "
             "OpenAI-compatible model; cloud_model replays one or more traces "
             "using source-trace timing without issuing any LLM requests."
+        ),
+    )
+    parser.add_argument(
+        "--concurrency",
+        default="1",
+        help=(
+            "Maximum active traces for cloud_model. Use a comma-separated list "
+            "such as 1,2,4,8 to run a throughput sweep."
         ),
     )
     parser.add_argument(
@@ -501,24 +504,6 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "Wall-clock acceleration factor for cloud_model replay. "
             "Example: --replay-speed 50 replays source timing at 50x."
         ),
-    )
-    parser.add_argument(
-        "--arrival-mode",
-        default="closed_loop",
-        choices=["closed_loop", "poisson"],
-        help="Task arrival pattern for cloud_model replay (default: closed_loop).",
-    )
-    parser.add_argument(
-        "--arrival-rate-per-s",
-        type=float,
-        default=None,
-        help="Poisson arrival rate (tasks/sec). Required when --arrival-mode=poisson.",
-    )
-    parser.add_argument(
-        "--arrival-seed",
-        type=int,
-        default=None,
-        help="RNG seed for Poisson arrival offsets (for reproducibility).",
     )
     parser.add_argument(
         "--gpu-tracking",
@@ -804,6 +789,30 @@ def _run_collect(args: argparse.Namespace) -> None:
 
 
 
+def _parse_concurrency_values(value: str) -> list[int]:
+    parts = [part.strip() for part in value.split(",")]
+    if not parts or any(not part for part in parts):
+        raise ValueError("--concurrency must be a positive integer or comma-separated list")
+    values: list[int] = []
+    for part in parts:
+        try:
+            concurrency = int(part)
+        except ValueError as exc:
+            raise ValueError(f"invalid --concurrency value: {part!r}") from exc
+        if concurrency < 1:
+            raise ValueError("--concurrency values must be >= 1")
+        values.append(concurrency)
+    return values
+
+
+def _append_throughput_sweep_record(sweep_path: Path, trace_file: Path) -> None:
+    summary_path = trace_file.with_name(f"{trace_file.stem}.throughput_summary.json")
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    sweep_path.parent.mkdir(parents=True, exist_ok=True)
+    with sweep_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def _run_simulate(args: argparse.Namespace) -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -818,9 +827,14 @@ def _run_simulate(args: argparse.Namespace) -> None:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
 
+    try:
+        concurrency_values = _parse_concurrency_values(args.concurrency)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+
     simulate_kwargs = {
-        "source_trace": Path(args.source_trace) if args.source_trace else None,
-        "trace_manifest": Path(args.trace_manifest) if args.trace_manifest else None,
+        "manifest": Path(args.manifest),
         "task_source": Path(args.task_source),
         "output_dir": Path(args.output_dir),
         "mode": args.mode,
@@ -829,9 +843,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "command_timeout_s": args.command_timeout,
         "warmup_skip_iterations": args.warmup_skip_iterations,
         "replay_speed": args.replay_speed,
-        "arrival_mode": args.arrival_mode,
-        "arrival_rate_per_s": args.arrival_rate_per_s,
-        "arrival_seed": args.arrival_seed,
         "structured_output": args.output_dir == "traces/simulate",
     }
 
@@ -842,13 +853,23 @@ def _run_simulate(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
             sys.exit(2)
-        trace_file = asyncio.run(simulate(**simulate_kwargs))
-        print(f"Simulate trace written to: {trace_file}")
+        sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"
+        if len(concurrency_values) > 1 and sweep_path.exists():
+            sweep_path.unlink()
+        for concurrency in concurrency_values:
+            trace_file = asyncio.run(
+                simulate(**simulate_kwargs, concurrency=concurrency)
+            )
+            print(f"Simulate trace written to: {trace_file}")
+            if len(concurrency_values) > 1:
+                _append_throughput_sweep_record(sweep_path, trace_file)
+        if len(concurrency_values) > 1:
+            print(f"Throughput sweep written to: {sweep_path}")
         return
 
-    if args.trace_manifest:
+    if concurrency_values != [1]:
         print(
-            "ERROR: local_model mode accepts only --source-trace, not --trace-manifest.",
+            "ERROR: local_model mode requires --concurrency 1.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -898,6 +919,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
     trace_file = asyncio.run(
         simulate(
             **simulate_kwargs,
+            concurrency=1,
             api_base=llm_config.api_base,
             api_key=llm_config.api_key,
             model=llm_config.model,

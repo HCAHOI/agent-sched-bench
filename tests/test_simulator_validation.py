@@ -9,6 +9,23 @@ import pytest
 from trace_collect.simulator import simulate, SimulateError
 
 
+def _write_manifest(path: Path, entries: list[str | dict[str, object]]) -> Path:
+    lines: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            lines.append(f"- {json.dumps(entry)}")
+            continue
+        lines.append("-")
+        for key, value in entry.items():
+            lines.append(f"  {key}: {json.dumps(str(value))}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _single_trace_manifest(tmp_path: Path, trace_path: Path) -> Path:
+    return _write_manifest(tmp_path / "manifest.yaml", [str(trace_path)])
+
+
 def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
     trace_path.write_text(
@@ -50,7 +67,7 @@ def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
     with pytest.raises(SimulateError, match="no resolvable docker_image"):
         asyncio.run(
             simulate(
-                source_trace=trace_path,
+                manifest=_single_trace_manifest(tmp_path, trace_path),
                 task_source=task_source,
                 output_dir=tmp_path / "out",
                 api_base="http://localhost:8000/v1",
@@ -116,7 +133,13 @@ def test_simulator_accepts_task_with_image_name(
     class _FakeAgent:
         async def stop(self): pass
 
-    async def fake_prepare(loaded, *, container_executable, network_mode="host"):
+    async def fake_prepare(
+        loaded,
+        *,
+        task_output_dir=None,
+        container_executable,
+        network_mode="host",
+    ):
         return PreparedTraceSession(
             loaded=loaded,
             container=PreparedContainer(
@@ -127,7 +150,11 @@ def test_simulator_accepts_task_with_image_name(
             ),
         )
 
+    async def fake_prefetch(*_args, **_kwargs) -> None:
+        pass
+
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare)
+    monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
     async def _fake_exec(*a, **kw):
         return ("ok", 1.0, True)
 
@@ -139,7 +166,7 @@ def test_simulator_accepts_task_with_image_name(
 
     trace_file = asyncio.run(
         simulate(
-            source_trace=trace_path,
+            manifest=_single_trace_manifest(tmp_path, trace_path),
             task_source=task_source,
             output_dir=tmp_path / "out",
             mode="cloud_model",
@@ -199,7 +226,7 @@ def test_container_mode_trace_requires_container_executable(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="container_executable is required"):
         asyncio.run(
             simulate(
-                source_trace=trace_path,
+                manifest=_single_trace_manifest(tmp_path, trace_path),
                 task_source=task_source,
                 output_dir=tmp_path / "out",
                 mode="cloud_model",
@@ -211,7 +238,7 @@ def test_simulator_rejects_duplicate_agent_ids(tmp_path: Path) -> None:
     trace_a = tmp_path / "trace-a.jsonl"
     trace_b = tmp_path / "trace-b.jsonl"
     task_source = tmp_path / "tasks.json"
-    manifest = tmp_path / "manifest.json"
+    manifest = tmp_path / "manifest.yaml"
 
     for trace_path in (trace_a, trace_b):
         trace_path.write_text(
@@ -247,20 +274,94 @@ def test_simulator_rejects_duplicate_agent_ids(tmp_path: Path) -> None:
         json.dumps([{"instance_id": "same-id", "image_name": "img"}]) + "\n",
         encoding="utf-8",
     )
-    manifest.write_text(
-        json.dumps([
-            {"source_trace": trace_a.name},
-            {"source_trace": trace_b.name},
-        ]) + "\n",
-        encoding="utf-8",
-    )
+    _write_manifest(manifest, [str(trace_a), str(trace_b)])
 
     with pytest.raises(SimulateError, match="Duplicate agent_id"):
         asyncio.run(
             simulate(
-                trace_manifest=manifest,
+                manifest=manifest,
                 task_source=task_source,
                 output_dir=tmp_path / "out",
                 mode="cloud_model",
+            )
+        )
+
+
+def test_simulator_rejects_relative_trace_paths_in_manifest(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    trace_path.write_text("", encoding="utf-8")
+    task_source.write_text("[]\n", encoding="utf-8")
+    _write_manifest(manifest, ["trace.jsonl"])
+
+    with pytest.raises(SimulateError, match="absolute path"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+            )
+        )
+
+
+def test_local_model_rejects_multi_trace_manifest(tmp_path: Path) -> None:
+    trace_a = tmp_path / "trace-a.jsonl"
+    trace_b = tmp_path / "trace-b.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    for trace_path, agent_id in ((trace_a, "task-a"), (trace_b, "task-b")):
+        trace_path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "trace_metadata",
+                            "scaffold": "openclaw",
+                            "instance_id": agent_id,
+                            "model": "dummy",
+                            "execution_environment": "host",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "action",
+                            "action_type": "llm_call",
+                            "action_id": "llm_0",
+                            "agent_id": agent_id,
+                            "iteration": 0,
+                            "ts_start": 1.0,
+                            "ts_end": 2.0,
+                            "data": {"messages_in": [], "completion_tokens": 1},
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    task_source.write_text(
+        json.dumps(
+            [
+                {"instance_id": "task-a", "image_name": None},
+                {"instance_id": "task-b", "image_name": None},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_manifest(manifest, [str(trace_a), str(trace_b)])
+
+    with pytest.raises(SimulateError, match="exactly one"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="local_model",
+                api_base="http://localhost:8000/v1",
+                api_key="EMPTY",
+                model="dummy",
             )
         )

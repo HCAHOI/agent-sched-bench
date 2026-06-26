@@ -5,7 +5,6 @@ no real vLLM, no real nvidia-smi, no real containers.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,7 +124,7 @@ def test_startup_log_parse_failure_raises(
     args = parse_simulate_args(
         [
             "--mode", "local_model",
-            "--source-trace", "trace.jsonl",
+            "--manifest", "manifest.yaml",
             "--provider", "openai",
             "--api-base", "http://localhost:8000/v1",
             "--api-key", "dummy",
@@ -176,7 +175,7 @@ def test_gpu_tracking_off_does_not_alter_behavior(
     args = parse_simulate_args(
         [
             "--mode", "local_model",
-            "--source-trace", "trace.jsonl",
+            "--manifest", "manifest.yaml",
             "--provider", "openai",
             "--api-base", "http://localhost:8000/v1",
             "--api-key", "dummy",
@@ -206,7 +205,7 @@ def test_gpu_tracking_on_cloud_model_exits_via_cli(
     args = parse_simulate_args(
         [
             "--mode", "cloud_model",
-            "--source-trace", "trace.jsonl",
+            "--manifest", "manifest.yaml",
             "--gpu-tracking", "on",
             "--vllm-pid", "9999",
             "--vllm-startup-log", "/tmp/startup.log",
@@ -271,7 +270,7 @@ def test_gpu_tracking_on_valid_args_passes_baseline_to_simulate(
     args = parse_simulate_args(
         [
             "--mode", "local_model",
-            "--source-trace", "trace.jsonl",
+            "--manifest", "manifest.yaml",
             "--provider", "openai",
             "--api-base", "http://localhost:8000/v1",
             "--api-key", "dummy",

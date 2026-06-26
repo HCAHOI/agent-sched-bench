@@ -468,7 +468,7 @@ def test_main_dispatches_simulate_without_collect_container_flag(monkeypatch) ->
     seen: dict[str, object] = {}
     monkeypatch.setattr(
         "trace_collect.cli._run_simulate",
-        lambda args: seen.setdefault("source_trace", args.source_trace),
+        lambda args: seen.setdefault("manifest", args.manifest),
     )
     monkeypatch.setattr(
         sys,
@@ -476,8 +476,8 @@ def test_main_dispatches_simulate_without_collect_container_flag(monkeypatch) ->
         [
             "trace_collect.cli",
             "simulate",
-            "--source-trace",
-            "trace.jsonl",
+            "--manifest",
+            "manifest.yaml",
             "--provider",
             "openrouter",
             "--model",
@@ -487,7 +487,7 @@ def test_main_dispatches_simulate_without_collect_container_flag(monkeypatch) ->
 
     main()
 
-    assert seen["source_trace"] == "trace.jsonl"
+    assert seen["manifest"] == "manifest.yaml"
 
 
 def test_resolve_prompt_template_uses_benchmark_default_when_unset() -> None:

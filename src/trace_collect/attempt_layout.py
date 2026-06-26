@@ -16,6 +16,7 @@ from typing import Any
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 RESULTS_FILENAME = "results.json"
 RESOURCES_FILENAME = "resources.json"
+CONTAINER_STARTUP_FILENAME = "container_startup.json"
 TOOL_CALLS_FILENAME = "tool_calls.json"
 CONTAINER_STDOUT_FILENAME = "container_stdout.txt"
 TRACE_FILENAME = "trace.jsonl"
@@ -44,6 +45,7 @@ def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
             {
                 "results_json": RESULTS_FILENAME,
                 "resources_json": RESOURCES_FILENAME,
+                "container_startup_json": CONTAINER_STARTUP_FILENAME,
                 "trace_jsonl": TRACE_FILENAME,
                 "tool_calls_json": TOOL_CALLS_FILENAME,
                 "container_stdout_txt": CONTAINER_STDOUT_FILENAME,
@@ -79,6 +81,14 @@ def write_resources_json(
         "summary": summary if summary is not None else {},
     }
     path = attempt_dir / RESOURCES_FILENAME
+    _write_json(path, payload)
+    return path
+
+def write_container_startup_json(
+    attempt_dir: Path,
+    payload: dict[str, Any],
+) -> Path:
+    path = attempt_dir / CONTAINER_STARTUP_FILENAME
     _write_json(path, payload)
     return path
 

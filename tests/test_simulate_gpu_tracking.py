@@ -212,6 +212,12 @@ def _read_jsonl(path: Path) -> list[dict]:
     ]
 
 
+def _single_trace_manifest(tmp_path: Path, trace_path: Path) -> Path:
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(f"- {json.dumps(str(trace_path))}\n", encoding="utf-8")
+    return manifest
+
+
 def _patch_gpu_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mock nvidia-smi to return a fixed PID/memory reading."""
     monkeypatch.setattr(
@@ -266,7 +272,7 @@ def test_simulate_local_model_with_gpu_tracking_on_writes_breakdown_to_trace(
     try:
         trace_file = asyncio.run(
             simulate(
-                source_trace=trace_path,
+                manifest=_single_trace_manifest(tmp_path, trace_path),
                 task_source=task_source,
                 output_dir=tmp_path / "out",
                 mode="local_model",
@@ -342,7 +348,7 @@ def test_simulate_local_model_with_gpu_tracking_off_skips_breakdown(
     try:
         trace_file = asyncio.run(
             simulate(
-                source_trace=trace_path,
+                manifest=_single_trace_manifest(tmp_path, trace_path),
                 task_source=task_source,
                 output_dir=tmp_path / "out",
                 mode="local_model",
@@ -406,7 +412,7 @@ def test_baseline_consistency_per_call_vs_resources_json(
     try:
         trace_file = asyncio.run(
             simulate(
-                source_trace=trace_path,
+                manifest=_single_trace_manifest(tmp_path, trace_path),
                 task_source=task_source,
                 output_dir=tmp_path / "out",
                 mode="local_model",

@@ -5,7 +5,7 @@ multi-step LLM workloads. The repo ships three top-level capabilities:
 
 1. **Trace collect** — run agent scaffolds on benchmark tasks inside containers
    and record canonical JSONL traces (`python -m trace_collect.cli`).
-2. **Trace simulate** — replay collected traces under new arrival patterns or
+2. **Trace simulate** — replay collected traces under bounded concurrency or
    against a local serving stack to measure scheduling-sensitive timing
    (`python -m trace_collect.cli simulate`).
 3. **Gantt viewer demo** — an interactive FastAPI + Solid.js viewer under
@@ -147,27 +147,59 @@ Replay a collected trace under new infrastructure assumptions. Two modes:
 
 | Mode | LLM calls | Timing source | Multi-trace | Use case |
 |---|---|---|---|---|
-| `cloud_model` | replayed from source trace (no API call) | `ts_start`/`ts_end` × `--replay-speed` | yes (`--trace-manifest`) | "what if N agents arrive concurrently?" |
-| `local_model` | sent to a real OpenAI-compatible endpoint | live TTFT + TPOT | single (`--source-trace`) | "what if we self-host on local vLLM?" |
+| `cloud_model` | replayed from source trace (no API call) | `ts_start`/`ts_end` × `--replay-speed` | yes (`--manifest`) | "what throughput do we get at concurrency N?" |
+| `local_model` | sent to a real OpenAI-compatible endpoint | live TTFT + TPOT | manifest with exactly one trace | "what if we self-host on local vLLM?" |
 
-### cloud_model — arrival-pattern sweep
+### cloud_model — bounded-concurrency sweep
 
 ```bash
 PYTHONPATH=src python -m trace_collect.cli simulate \
-    --trace-manifest configs/trace_collect/simulate.yaml \
+    --manifest /abs/path/to/simulate-manifest.yaml \
     --mode cloud_model \
+    --concurrency 1,2,4,8 \
     --container docker \
-    --replay-speed 50 \
-    --arrival-mode poisson \
-    --arrival-rate-per-s 0.5 \
-    --arrival-seed 42
+    --replay-speed 50
+```
+
+`--concurrency 8` runs a single bounded-queue simulation with at most 8 active
+traces. `--concurrency 1,2,4,8` runs the same manifest sequentially at each
+concurrency and writes `throughput_sweep.jsonl`.
+
+For container-mode traces, simulate prefetches the unique source Docker images
+before the bounded queue starts. Task containers are still created only when a
+worker admits that trace.
+
+Each attempt writes `container_startup.json` with fixed-image timing, container
+creation timing, agent bootstrap timing, and startup-only resource samples.
+Runtime resource sampling remains separate in `resources.json`.
+
+Manifest input is YAML. The simplest form is a list of absolute trace paths:
+
+```yaml
+- /abs/path/task-a/attempt_1/trace.jsonl
+- /abs/path/task-b/attempt_1/trace.jsonl
+```
+
+Use the structured form when traces need per-entry metadata:
+
+```yaml
+version: 1
+defaults:
+  task_source: /abs/path/data/swe-rebench/tasks.json
+traces:
+  - trace: /abs/path/task-a/attempt_1/trace.jsonl
+    label: task-a
+  - trace: /abs/path/task-b/attempt_1/trace.jsonl
+    task_source: /abs/path/other-tasks.json
+  - trace: /abs/path/task-c/attempt_1/trace.jsonl
+    docker_image: custom/image:tag
 ```
 
 ### local_model — self-hosted serving
 
 ```bash
 PYTHONPATH=src python -m trace_collect.cli simulate \
-    --source-trace traces/.../trace.jsonl \
+    --manifest /abs/path/to/single-trace-manifest.yaml \
     --mode local_model \
     --provider openai --api-base http://localhost:8000/v1 \
     --api-key dummy --model Qwen/Qwen3-32B \
@@ -178,7 +210,7 @@ PYTHONPATH=src python -m trace_collect.cli simulate \
 `--metrics-url` snapshots vLLM Prometheus counters per iteration
 (`num_preemptions_total`, `gpu_cache_usage_perc`, `*_prefix_cache_hit_rate`) into
 `TraceAction.data.sim_metrics`. Container resource usage is sampled at 1 Hz by
-`ContainerStatsSampler` and written to `resources.json`.
+`ContainerStatsSampler` after startup finishes and written to `resources.json`.
 
 **GPU memory tracking** (`--gpu-tracking on`): add `--vllm-pid`, `--vllm-startup-log`,
 and `--gpu-sample-hz` to capture a full GPU memory breakdown time-series (weights,

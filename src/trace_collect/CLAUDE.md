@@ -205,24 +205,24 @@ Replay collected traces to measure timing under different infrastructure.
 | **LLM calls** | Replayed from source timing (no API calls) | Sent to real local OpenAI-compatible endpoint |
 | **Timing source** | Source trace `ts_start`/`ts_end` × `replay_speed` | Actual TTFT + TPOT from live model |
 | **Tool execution** | MCP tools (`mcp_*`) replayed from trace; others re-executed in container | All tools re-executed in container |
-| **Multi-trace** | Yes (via `--trace-manifest`) | Single trace only (`--source-trace`) |
+| **Multi-trace** | Yes (via `--manifest`) | Manifest must contain exactly one trace |
 | **LLM client** | None created (forbidden) | Requires `--api-base`, `--model`, `--api-key` |
-| **Use case** | "What if N agents run concurrently?" | "What if we self-host on local vLLM?" |
+| **Use case** | "What throughput do we get at concurrency N?" | "What if we self-host on local vLLM?" |
 
 ### Minimal Examples
 
 ```bash
-# Cloud model: replay 3 traces at 50x speed, Poisson arrival
+# Cloud model: replay traces at 50x speed with a bounded concurrency sweep
 python -m trace_collect.cli simulate \
-  --trace-manifest manifest.json \
+  --manifest manifest.yaml \
   --mode cloud_model \
+  --concurrency 1,2,4,8 \
   --container docker \
-  --replay-speed 50 \
-  --arrival-mode poisson --arrival-rate-per-s 0.5 --arrival-seed 42
+  --replay-speed 50
 
 # Local model: measure real TTFT/TPOT against local vLLM
 python -m trace_collect.cli simulate \
-  --source-trace traces/.../trace.jsonl \
+  --manifest single-trace.yaml \
   --mode local_model \
   --provider openai --api-base http://localhost:8000/v1 \
   --api-key dummy --model Qwen/Qwen3-32B \
@@ -234,44 +234,65 @@ python -m trace_collect.cli simulate \
 
 | Flag | Required | Default | Notes |
 |------|----------|---------|-------|
-| `--source-trace` | one of | — | Mutually exclusive with `--trace-manifest` |
-| `--trace-manifest` | one of | — | JSON array of `{source_trace, task_source?, docker_image?}` |
+| `--manifest` | yes | — | YAML list/object describing source traces |
 | `--mode` | no | `local_model` | `local_model` or `cloud_model` |
+| `--concurrency` | no | `1` | Positive integer or comma list for cloud_model sweep |
 | `--task-source` | no | `data/swe-rebench/tasks.json` | Path to tasks JSON |
 | `--output-dir` | no | `traces/simulate` | Output directory |
-| `--container` | no | `docker` | `docker` or `podman` |
+| `--container` | no | — | `docker` or `podman`; required for container-mode traces |
 | `--network-mode` | no | `host` | Container network mode |
 | `--command-timeout` | no | `600.0` | Seconds per command |
 | `--replay-speed` | no | `1.0` | Wall-clock acceleration (cloud_model only) |
 | `--warmup-skip-iterations` | no | `0` | Tag first N iterations as warmup |
-| `--arrival-mode` | no | `closed_loop` | `closed_loop` or `poisson` |
-| `--arrival-rate-per-s` | no | — | Required for poisson mode |
-| `--arrival-seed` | no | — | RNG seed for reproducibility |
 | `--metrics-url` | no | — | vLLM Prometheus endpoint (local_model only; forbidden for cloud_model) |
 
 LLM flags (`--provider`, `--api-base`, `--api-key`, `--model`) required for `local_model` only.
 
-### Arrival Modes
+### Bounded Queue Scheduler
 
-| Mode | Behavior |
-|------|----------|
-| `closed_loop` | All tasks arrive at t=0, compete for resources |
-| `poisson` | Inter-arrival times ~ Exp(rate). Seeded RNG for reproducibility |
+`cloud_model` uses a bounded worker queue. `--concurrency 8` means at most eight
+trace replays are active at once; when one completes, the next manifest entry is
+prepared and admitted. Container preparation, replay, resource sampling, and
+cleanup are worker-local, so a 50-trace manifest with concurrency 8 does not
+start 50 containers up front.
 
-Implementation: `harness.runner.build_arrival_offsets()` generates offsets;
-cloud_model sessions `asyncio.gather` with per-session delay.
+Before the queue starts, simulate prefetches the unique source Docker images for
+container-mode traces. Task containers are still created only when a worker
+admits that trace.
+
+Each admitted attempt writes `container_startup.json`. It records
+`ensure_fixed_image`, `start_task_container`, and `container_agent_start` phase
+timing plus startup-only container resource samples. Host-mode traces write the
+same file with `status="skipped"`. Runtime resource sampling starts after
+startup finishes and remains separate in `resources.json`.
+
+Each run writes `throughput_summary.json`. A comma-separated concurrency sweep
+writes one JSON object per run to `throughput_sweep.jsonl`.
 
 ### Trace Manifest Format
 
-```json
-[
-  {"source_trace": "path/to/trace-a.jsonl"},
-  {"source_trace": "path/to/trace-b.jsonl", "docker_image": "custom:latest"},
-  {"source_trace": "path/to/trace-c.jsonl", "task_source": "other-tasks.json"}
-]
+```yaml
+- /abs/path/to/trace-a.jsonl
+- /abs/path/to/trace-b.jsonl
 ```
 
-Paths resolved relative to manifest directory.
+Structured form:
+
+```yaml
+version: 1
+defaults:
+  task_source: /abs/path/data/swe-rebench/tasks.json
+traces:
+  - trace: /abs/path/to/trace-a.jsonl
+    label: trace-a
+  - trace: /abs/path/to/trace-b.jsonl
+    task_source: /abs/path/other-tasks.json
+  - trace: /abs/path/to/trace-c.jsonl
+    docker_image: custom:latest
+```
+
+Trace paths must be absolute. Per-entry `task_source` overrides
+`defaults.task_source`, which overrides CLI `--task-source`.
 
 ### vLLM Metrics Integration
 
@@ -309,7 +330,7 @@ gain a `gpu_memory_breakdown` field when GPU tracking is enabled.
 
 ```bash
 python -m trace_collect.cli simulate \
-  --source-trace traces/.../trace.jsonl \
+  --manifest single-trace.yaml \
   --mode local_model \
   --provider openai --api-base http://localhost:8000/v1 \
   --api-key dummy --model Qwen/Qwen3-32B \
@@ -400,6 +421,9 @@ record has:
 - Metrics: CPU %, memory MB, disk I/O MB, network I/O MB, context switches
 - Prefers cgroup v2 host-side reads; falls back to `docker exec`-based aggregation
 - Output: `resources.json` with `{samples: [...], summary: {...}}`
+
+`simulate` uses a separate short-lived startup sampler while bootstrapping the
+task container. Those samples are written only to `container_startup.json`.
 
 ### Key Dataclasses (simulator.py)
 
@@ -528,10 +552,11 @@ traces/<benchmark>/<safe-model>/<timestamp>/        # run_dir
 ### simulate
 
 ```
-traces/simulate/<benchmark>/<safe-model>/<scaffold>/<arrival_tag>/
+traces/simulate/<benchmark>/<safe-model>/<scaffold>/bounded_queue/concurrency_<N>/
   <instance_id>/
     attempt_<N>/                    # increments per rerun
       trace.jsonl
+      container_startup.json
       resources.json
   simulate_<model-or-mode>_<timestamp>.jsonl   # combined
 ```
@@ -545,6 +570,7 @@ traces/simulate/<benchmark>/<safe-model>/<scaffold>/<arrival_tag>/
 | `run_manifest.json` | Status + metadata + artifact pointers (schema v1) |
 | `trace.jsonl` | Canonical trace (v5 JSONL) |
 | `results.json` | Task result summary |
+| `container_startup.json` | Simulate container startup phases + startup-only resources |
 | `resources.json` | `{samples: [...], summary: {...}}` |
 | `tool_calls.json` | Flattened `{timestamp, tool, id, input, duration_ms, result_preview}` |
 | `container_stdout.txt` | Raw container logs |
@@ -558,7 +584,7 @@ traces/simulate/<benchmark>/<safe-model>/<scaffold>/<arrival_tag>/
 |------|---------|
 | `cli.py` | CLI entry point (argparse, subcommand dispatch) |
 | `collector.py` | Collection orchestration, image prefetch, sequential dispatch |
-| `simulator.py` | Simulation: cloud/local model replay, container prep, arrival offsets |
+| `simulator.py` | Simulation: cloud/local model replay, container prep, bounded queue replay |
 | `attempt_pipeline.py` | Per-attempt lifecycle: container start → agent run → artifact write |
 | `attempt_layout.py` | Canonical artifact filenames and writers |
 | `runtime/task_container.py` | In-container entrypoint and runtime bootstrap |
@@ -567,7 +593,6 @@ traces/simulate/<benchmark>/<safe-model>/<scaffold>/<arrival_tag>/
 | `src/llm_call/config.py` | `resolve_llm_config()` |
 | `src/agents/benchmarks/base.py` | `Benchmark` ABC + `BenchmarkConfig` |
 | `src/agents/base.py` | `TraceAction`, `LLMCallResult`, retry logic |
-| `src/harness/runner.py` | `build_arrival_offsets()` |
 | `src/harness/container_stats_sampler.py` | `ContainerStatsSampler` |
 | `src/harness/metrics_client.py` | `VLLMMetricsClient` |
 | `src/harness/trace_logger.py` | `TraceLogger` (JSONL writer) |
