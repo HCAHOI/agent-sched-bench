@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
@@ -22,6 +23,7 @@ from harness.container_image_prep import (  # noqa: E402
     remove_image,
 )
 from harness.container_stats_sampler import (  # noqa: E402
+    ContainerResourceRecorder,
     ContainerStatsSampler,
     _parse_pipe_stats,
     summarize_samples,
@@ -511,6 +513,181 @@ def test_stats_sampler_collects_samples_and_stops_cleanly() -> None:
         samples = sampler.stop()
     assert len(samples) >= 2
     assert samples[0]["mem_usage"] == "1MB / 1GB"
+
+
+@pytest.mark.parametrize(
+    ("container_executable", "expected_stats_id_field"),
+    [
+        ("docker", "{{.Container}}"),
+        ("podman", "{{.ID}}"),
+    ],
+)
+def test_container_resource_recorder_appends_global_container_samples(
+    tmp_path: Path,
+    container_executable: str,
+    expected_stats_id_field: str,
+) -> None:
+    container_id = "abcdef1234567890"
+    other_container_id = "1111111111112222"
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == [container_executable, "ps"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=(
+                    f"{container_id}|swerebench/task-a|task-a\n"
+                    f"{other_container_id}|swerebench/task-b|task-b\n"
+                ),
+                stderr="",
+            )
+        if cmd[:2] == [container_executable, "stats"]:
+            stats_format = cmd[cmd.index("--format") + 1]
+            assert expected_stats_id_field in stats_format
+            assert container_id in cmd
+            assert other_container_id not in cmd
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=(
+                    "abcdef123456|task-a|10MiB / 1GiB|1.0%|12.5%|"
+                    "1kB / 2kB\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id=f"simulate-test-{container_executable}",
+        interval_s=0.01,
+        executable=container_executable,
+        subprocess_timeout_s=0.1,
+        sample_all_containers=False,
+    )
+    recorder.register_container(container_id)
+    with patch(
+        "harness.container_stats_sampler.subprocess.run",
+        side_effect=fake_run,
+    ):
+        recorder.start()
+        time.sleep(0.04)
+        summary = recorder.stop()
+
+    records = [
+        json.loads(line)
+        for line in recorder.jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    persisted_summary = json.loads(recorder.summary_path.read_text(encoding="utf-8"))
+    assert records
+    assert records[0]["resource_scope"] == "global_container"
+    assert records[0]["container_id"] == container_id
+    assert records[0]["container_short_id"] == container_id[:12]
+    assert records[0]["container_image"] == "swerebench/task-a"
+    assert records[0]["container_name"] == "task-a"
+    assert records[0]["net_rx_bytes"] == 1000
+    assert records[0]["net_tx_bytes"] == 2000
+    assert summary["sample_count"] == len(records)
+    assert persisted_summary["sampling"]["stop_complete"] is True
+    assert persisted_summary["sampling"]["sample_all_containers"] is False
+    assert len(persisted_summary["containers"]) == 1
+    assert persisted_summary["containers"][0]["summary"]["sample_count"] == len(records)
+
+
+def test_container_resource_recorder_writes_empty_summary_without_containers(
+    tmp_path: Path,
+) -> None:
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-empty",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+    )
+    with patch(
+        "harness.container_stats_sampler.subprocess.run",
+        side_effect=fake_run,
+    ):
+        recorder.start()
+        time.sleep(0.02)
+        summary = recorder.stop()
+
+    assert recorder.jsonl_path.read_text(encoding="utf-8") == ""
+    assert summary["sample_count"] == 0
+    assert summary["containers"] == []
+    assert summary["sampling"]["empty_tick_count"] >= 1
+    assert summary["sampling"]["stop_complete"] is True
+
+
+def test_container_resource_recorder_treats_stats_eof_as_transient(
+    tmp_path: Path,
+) -> None:
+    container_id = "abcdef1234567890"
+    stats_calls = 0
+
+    def fake_run(cmd, **kwargs):
+        nonlocal stats_calls
+        if cmd[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=f"{container_id}|swerebench/task-a|task-a\n",
+                stderr="",
+            )
+        if cmd[:2] == ["docker", "stats"]:
+            stats_calls += 1
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="EOF\n")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-eof",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+        sample_all_containers=False,
+    )
+    recorder.register_container(container_id)
+    with patch(
+        "harness.container_stats_sampler.subprocess.run",
+        side_effect=fake_run,
+    ):
+        recorder.start()
+        time.sleep(0.02)
+        summary = recorder.stop()
+
+    assert stats_calls >= 1
+    assert summary["sample_count"] == 0
+    assert summary["errors"] == []
+    assert summary["sampling"]["empty_tick_count"] >= 1
+
+
+def test_container_resource_recorder_marks_stop_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-timeout",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+    )
+    joins: list[float | None] = []
+    monkeypatch.setattr(recorder, "is_alive", lambda: True)
+    monkeypatch.setattr(recorder, "join", lambda timeout=None: joins.append(timeout))
+
+    summary = recorder.stop()
+
+    assert joins
+    assert summary["sampling"]["stop_complete"] is False
+    assert summary["errors"][-1]["type"] == "RuntimeError"
+    assert "did not stop before summary" in summary["errors"][-1]["message"]
 
 
 def test_summarize_samples_computes_min_max_avg() -> None:

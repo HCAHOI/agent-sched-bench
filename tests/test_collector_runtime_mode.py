@@ -489,11 +489,44 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
     ]
 
 
+def test_cleanup_task_images_disabled_by_default(monkeypatch) -> None:
+    removed: list[str] = []
+    cached: list[str] = []
+    pruned: list[str] = []
+
+    monkeypatch.delenv("TASK_CONTAINER_CLEANUP_IMAGES", raising=False)
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: removed.append(image) or True,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: cached.append(source_image),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: pruned.append("pruned"),
+    )
+
+    _cleanup_task_images(
+        instance_id="encode__httpx-2701",
+        source_image="source-image",
+        fixed_image="fixed-source-image",
+        keep_source_image=None,
+        container_executable=None,
+    )
+
+    assert removed == []
+    assert cached == []
+    assert pruned == []
+
+
 def test_cleanup_task_images_keeps_next_source_image(monkeypatch) -> None:
     removed: list[str] = []
     cached: list[str] = []
     pruned: list[str] = []
 
+    monkeypatch.setenv("TASK_CONTAINER_CLEANUP_IMAGES", "1")
     monkeypatch.setattr(
         "trace_collect.collector.remove_image",
         lambda image, *, container_executable: removed.append(image) or True,
@@ -563,6 +596,8 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
     events: list[tuple[str, str]] = []
     prefetch_started = threading.Event()
     allow_prefetch_finish = threading.Event()
+
+    monkeypatch.setenv("TASK_CONTAINER_CLEANUP_IMAGES", "1")
 
     def fake_ensure_source_image(image: str, *, container_executable: str) -> None:
         events.append(("ensure_source", image))
@@ -650,6 +685,86 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
     )
 
 
+def test_run_scaffold_tasks_does_not_clean_images_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    benchmark = SimpleNamespace(
+        execution_environment="container",
+        config=SimpleNamespace(
+            slug="swe-rebench",
+            harness_split="filtered",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="cc_aligned",
+        ),
+        runtime_mode_for=lambda scaffold: "task_container_agent",
+        image_name_for=lambda task: task.get("image_name"),
+    )
+    events: list[tuple[str, str]] = []
+
+    monkeypatch.delenv("TASK_CONTAINER_CLEANUP_IMAGES", raising=False)
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: events.append(
+            ("ensure_source", source_image)
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: (
+            events.append(("remove_image", image)) or True
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: events.append(("drop_cache", source_image)),
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: events.append(("prune", "done")),
+    )
+
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ):
+        ctx.fixed_image = f"fixed-{ctx.source_image}"
+        events.append(("run_end", ctx.instance_id))
+        return AttemptResult(
+            success=True,
+            exit_status="ok",
+            trace_path=trace_path,
+            model_patch=f"diff --git a/{ctx.instance_id} b/{ctx.instance_id}",
+        )
+
+    monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
+
+    asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "task-a", "image_name": "img-a"}],
+            run_dir=tmp_path / "run",
+            model="qwen-plus-latest",
+            scaffold="openclaw",
+            container_executable="docker",
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=lambda task: lambda ctx: None,
+        )
+    )
+
+    assert ("ensure_source", "docker.io/library/img-a") in events
+    assert ("run_end", "task-a") in events
+    assert [event for event in events if event[0] == "remove_image"] == []
+    assert [event for event in events if event[0] == "drop_cache"] == []
+    assert [event for event in events if event[0] == "prune"] == []
+
+
 def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
     tmp_path: Path,
     monkeypatch,
@@ -668,6 +783,8 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
         image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
+
+    monkeypatch.setenv("TASK_CONTAINER_CLEANUP_IMAGES", "1")
 
     async def fake_run_attempt(
         ctx,
@@ -749,6 +866,8 @@ def test_run_scaffold_tasks_propagates_container_executable(
     trace_path = tmp_path / "trace-source" / "trace.jsonl"
     _write_trace(trace_path)
     seen: list[tuple[str, str]] = []
+
+    monkeypatch.setenv("TASK_CONTAINER_CLEANUP_IMAGES", "1")
 
     benchmark = SimpleNamespace(
         execution_environment="container",

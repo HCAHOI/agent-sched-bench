@@ -18,7 +18,11 @@ from harness.container_image_prep import (
     ensure_source_image,
     normalize_image_reference,
 )
-from harness.container_stats_sampler import ContainerStatsSampler, summarize_samples
+from harness.container_stats_sampler import (
+    ContainerResourceRecorder,
+    ContainerStatsSampler,
+    summarize_samples,
+)
 from harness.gpu_resource_sampler import GpuResourceSampler
 from harness.metrics_client import VLLMMetricsClient
 from harness.scheduler_hooks import GpuBaseline
@@ -33,7 +37,7 @@ from trace_collect.attempt_pipeline import (
 )
 
 logger = logging.getLogger(__name__)
-STARTUP_RESOURCE_SAMPLE_INTERVAL_S = 0.25
+GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 
 
 class SimulateError(Exception):
@@ -120,6 +124,7 @@ class PreparedTraceSession:
 
     loaded: LoadedTraceSession
     container: PreparedContainer | None = None
+    container_resource_recorder: ContainerResourceRecorder | None = None
     sampler: ContainerStatsSampler | None = None
     task_output_dir: Path | None = None
     resources_written: bool = False
@@ -703,6 +708,10 @@ def _container_source_images(sessions: list[LoadedTraceSession]) -> list[str]:
     return sorted(images)
 
 
+def _has_container_mode_sessions(sessions: list[LoadedTraceSession]) -> bool:
+    return any(not _is_host_mode(session) for session in sessions)
+
+
 async def _prefetch_container_images(
     sessions: list[LoadedTraceSession],
     *,
@@ -748,7 +757,6 @@ async def _prepare_container_session(
     )
     container_id: str | None = None
     agent: Any | None = None
-    startup_sampler: ContainerStatsSampler | None = None
     try:
         phase = recorder.start_phase("ensure_fixed_image")
         try:
@@ -788,13 +796,6 @@ async def _prepare_container_session(
             recorder.finish_phase(phase, status="failed", error=exc)
             raise
 
-        startup_sampler = ContainerStatsSampler(
-            container_id=container_id,
-            interval_s=STARTUP_RESOURCE_SAMPLE_INTERVAL_S,
-            executable=container_executable,
-        )
-        startup_sampler.start()
-
         agent = ContainerAgent(container_id, container_executable)
         phase = recorder.start_phase("container_agent_start")
         try:
@@ -804,19 +805,8 @@ async def _prepare_container_session(
             recorder.finish_phase(phase, status="failed", error=exc)
             raise
 
-        startup_samples = startup_sampler.stop()
-        startup_sampler = None
-        recorder.set_resources(startup_samples)
         recorder.write(status="success")
     except (Exception, asyncio.CancelledError) as exc:
-        if startup_sampler is not None:
-            try:
-                recorder.set_resources(startup_sampler.stop())
-            except (Exception, asyncio.CancelledError):
-                logger.exception(
-                    "Failed to stop startup resource sampler for %s",
-                    loaded.agent_id,
-                )
         try:
             recorder.write(status="failed", error=exc)
         except (Exception, asyncio.CancelledError):
@@ -975,6 +965,7 @@ def _write_throughput_summary(
     trace_file: Path,
     wall_time_s: float,
     task_stats: list[ReplayTaskStats],
+    container_resources: dict[str, Any] | None = None,
 ) -> Path:
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
@@ -998,6 +989,14 @@ def _write_throughput_summary(
         "tool_exec_count": sum(stat.tool_exec_count for stat in task_stats),
         "tasks": [dataclasses.asdict(stat) for stat in task_stats],
     }
+    if container_resources is not None:
+        payload["container_resources"] = {
+            "jsonl_path": container_resources.get("jsonl_path"),
+            "summary_path": container_resources.get("summary_path"),
+            "sample_count": container_resources.get("sample_count", 0),
+            "sampling": container_resources.get("sampling", {}),
+            "errors": container_resources.get("errors", []),
+        }
     summary_path = output_path / "throughput_summary.json"
     summary_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -1048,13 +1047,44 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
     if ctr is None:
         return
     prepared.container = None
-    if ctr.agent is not None:
-        await ctr.agent.stop()
-    await asyncio.to_thread(
-        stop_task_container,
-        ctr.container_id,
-        executable=ctr.container_executable,
-    )
+    agent_stop_error: BaseException | None = None
+    container_stop_error: BaseException | None = None
+    container_stopped = False
+    try:
+        if ctr.agent is not None:
+            await ctr.agent.stop()
+    except (Exception, asyncio.CancelledError) as exc:
+        agent_stop_error = exc
+
+    try:
+        await asyncio.to_thread(
+            stop_task_container,
+            ctr.container_id,
+            executable=ctr.container_executable,
+        )
+        container_stopped = True
+    except (Exception, asyncio.CancelledError) as exc:
+        container_stop_error = exc
+
+    if container_stopped:
+        if prepared.container_resource_recorder is not None:
+            prepared.container_resource_recorder.unregister_container(ctr.container_id)
+            prepared.container_resource_recorder = None
+
+    if container_stop_error is not None and agent_stop_error is not None:
+        logger.exception(
+            "Failed to stop task container after agent stop failure for %s",
+            prepared.loaded.agent_id,
+            exc_info=(
+                type(container_stop_error),
+                container_stop_error,
+                container_stop_error.__traceback__,
+            ),
+        )
+    if agent_stop_error is not None:
+        raise agent_stop_error
+    if container_stop_error is not None:
+        raise container_stop_error
 
 
 async def _run_local_model_simulation(
@@ -1340,6 +1370,7 @@ async def _prepare_replay_session(
     output_path: Path,
     container_executable: str | None,
     network_mode: str,
+    container_resource_recorder: ContainerResourceRecorder | None = None,
 ) -> PreparedTraceSession:
     prepared: PreparedTraceSession | None = None
     try:
@@ -1370,6 +1401,11 @@ async def _prepare_replay_session(
             )
             prepared.task_output_dir = task_output_dir
         if prepared.container is not None:
+            prepared.container_resource_recorder = container_resource_recorder
+            if container_resource_recorder is not None:
+                container_resource_recorder.register_container(
+                    prepared.container.container_id
+                )
             sampler = ContainerStatsSampler(
                 container_id=prepared.container.container_id,
                 interval_s=1.0,
@@ -1392,6 +1428,7 @@ async def _run_cloud_model_queue(
     concurrency: int,
     container_executable: str | None,
     network_mode: str,
+    container_resource_recorder: ContainerResourceRecorder | None,
     replay_speed: float,
     command_timeout_s: float,
     warmup_skip_iterations: int,
@@ -1433,6 +1470,7 @@ async def _run_cloud_model_queue(
                     output_path=output_path,
                     container_executable=container_executable,
                     network_mode=network_mode,
+                    container_resource_recorder=container_resource_recorder,
                 )
                 stats = await _replay_cloud_model_session(
                     prepared,
@@ -1772,6 +1810,8 @@ async def simulate(
     prepared_sessions: list[PreparedTraceSession] = []
     task_stats: list[ReplayTaskStats] = []
     trace_logger: TraceLogger | None = None
+    container_resource_recorder: ContainerResourceRecorder | None = None
+    container_resource_summary: dict[str, Any] | None = None
     output_path.mkdir(parents=True, exist_ok=True)
     run_wall_start = time.monotonic()
     scheduler_mode = "bounded_queue"
@@ -1791,6 +1831,17 @@ async def simulate(
             model=model,
             network_mode=network_mode,
         )
+        if container_executable is not None and _has_container_mode_sessions(
+            loaded_sessions
+        ):
+            container_resource_recorder = ContainerResourceRecorder(
+                output_dir=output_path,
+                run_id=run_id,
+                interval_s=GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S,
+                executable=container_executable,
+                sample_all_containers=False,
+            )
+            container_resource_recorder.start()
 
         if mode == "local_model":
             prepared = await _prepare_replay_session(
@@ -1798,6 +1849,7 @@ async def simulate(
                 output_path=output_path,
                 container_executable=container_executable,
                 network_mode=network_mode,
+                container_resource_recorder=container_resource_recorder,
             )
             prepared_sessions.append(prepared)
             assert trace_logger is not None
@@ -1835,16 +1887,21 @@ async def simulate(
                 concurrency=concurrency,
                 container_executable=container_executable,
                 network_mode=network_mode,
+                container_resource_recorder=container_resource_recorder,
                 replay_speed=replay_speed,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
             )
     finally:
-        if trace_logger is not None:
-            trace_logger.close()
-            _split_trace_by_agent(trace_logger.path, prepared_sessions)
-        for prepared in prepared_sessions:
-            await _finalize_prepared_session(prepared)
+        try:
+            if trace_logger is not None:
+                trace_logger.close()
+                _split_trace_by_agent(trace_logger.path, prepared_sessions)
+            for prepared in prepared_sessions:
+                await _finalize_prepared_session(prepared)
+        finally:
+            if container_resource_recorder is not None:
+                container_resource_summary = container_resource_recorder.stop()
 
     trace_file = output_path / f"{run_id}.jsonl"
     _write_throughput_summary(
@@ -1857,6 +1914,7 @@ async def simulate(
         trace_file=trace_file,
         wall_time_s=time.monotonic() - run_wall_start,
         task_stats=task_stats,
+        container_resources=container_resource_summary,
     )
     logger.info("Simulate complete [%s] -> %s", mode, trace_file)
     return trace_file

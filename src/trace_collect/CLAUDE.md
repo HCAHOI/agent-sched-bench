@@ -161,6 +161,10 @@ the benchmark plugin's `image_name_for(task)`.
 - Architecture normalization: `amd64`/`x86_64` → `amd64`, `arm64`/`aarch64` → `arm64`
 - SWE-rebench ships fully-qualified x86_64 image URIs; ARM Macs use QEMU emulation
 - Image prep: source image → fixed image (permission corrections, cached)
+- Image cleanup is opt-in: set `TASK_CONTAINER_CLEANUP_IMAGES=1` to remove
+  source/fixed images after tasks. By default, pre-pulled images are retained
+  for smoke tests, resumes, and concurrency sweeps. When cleanup is enabled,
+  `KEEP_IMAGES_ABOVE_GB=<gb>` skips removal if free disk exceeds the threshold.
 - Environment passthrough: `HTTP_PROXY`, `HTTPS_PROXY`, `PIP_INDEX_URL`, etc.
 - Network mode: defaults to host; override via `--network-mode`
 - **task_container_agent runtime (swe-rebench / swe-bench): no conda, no host
@@ -262,9 +266,19 @@ admits that trace.
 
 Each admitted attempt writes `container_startup.json`. It records
 `ensure_fixed_image`, `start_task_container`, and `container_agent_start` phase
-timing plus startup-only container resource samples. Host-mode traces write the
-same file with `status="skipped"`. Runtime resource sampling starts after
-startup finishes and remains separate in `resources.json`.
+timing. Startup resource points are not required; container-level resource data
+is captured best-effort by the run-level global sampler and by each task's
+runtime sampler. Host-mode traces write the same file with `status="skipped"`.
+
+Container-mode simulate runs start a run-level `ContainerResourceRecorder`
+before replay work begins and stop it after all prepared sessions are
+finalized. Simulate uses registered-container mode: each task container is
+registered after preparation and unregistered only after the container stop
+succeeds. The recorder appends those task-container samples to
+`<run_id>.container_resources.jsonl`, writes
+`<run_id>.container_resources_summary.json`, and references those files from
+`throughput_summary.json`. Per-task runtime resource sampling remains separate
+in `resources.json`.
 
 Each run writes `throughput_summary.json`. A comma-separated concurrency sweep
 writes one JSON object per run to `throughput_sweep.jsonl`.
@@ -417,13 +431,15 @@ record has:
 
 ### Container Resource Sampling
 
-`ContainerStatsSampler` runs a background thread at 1s intervals:
+`ContainerStatsSampler` runs a per-task background thread at 1s intervals:
 - Metrics: CPU %, memory MB, disk I/O MB, network I/O MB, context switches
 - Prefers cgroup v2 host-side reads; falls back to `docker exec`-based aggregation
 - Output: `resources.json` with `{samples: [...], summary: {...}}`
 
-`simulate` uses a separate short-lived startup sampler while bootstrapping the
-task container. Those samples are written only to `container_startup.json`.
+`ContainerResourceRecorder` is the run-level sampler used by `simulate`.
+Simulate uses `sample_all_containers=False` and registers only its task
+containers. The recorder can also run in `sample_all_containers=True` mode for
+standalone diagnostics.
 
 ### Key Dataclasses (simulator.py)
 
@@ -570,7 +586,7 @@ traces/simulate/<benchmark>/<safe-model>/<scaffold>/bounded_queue/concurrency_<N
 | `run_manifest.json` | Status + metadata + artifact pointers (schema v1) |
 | `trace.jsonl` | Canonical trace (v5 JSONL) |
 | `results.json` | Task result summary |
-| `container_startup.json` | Simulate container startup phases + startup-only resources |
+| `container_startup.json` | Simulate container startup phases and timing |
 | `resources.json` | `{samples: [...], summary: {...}}` |
 | `tool_calls.json` | Flattened `{timestamp, tool, id, input, duration_ms, result_preview}` |
 | `container_stdout.txt` | Raw container logs |

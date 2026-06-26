@@ -183,6 +183,96 @@ def _single_trace_manifest(tmp_path: Path, trace_path: Path) -> Path:
     return _write_manifest(tmp_path / "manifest.yaml", [str(trace_path)])
 
 
+@pytest.fixture(autouse=True)
+def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    recorders: list[object] = []
+
+    class _FakeContainerResourceRecorder:
+        def __init__(
+            self,
+            *,
+            output_dir: Path,
+            run_id: str,
+            interval_s: float,
+            executable: str,
+            sample_all_containers: bool,
+        ) -> None:
+            self.output_dir = Path(output_dir)
+            self.run_id = run_id
+            self.interval_s = interval_s
+            self.executable = executable
+            self.sample_all_containers = sample_all_containers
+            self.started = False
+            self.stopped = False
+            self.registered: list[str] = []
+            self.unregistered: list[str] = []
+            self.jsonl_path = self.output_dir / f"{run_id}.container_resources.jsonl"
+            self.summary_path = (
+                self.output_dir / f"{run_id}.container_resources_summary.json"
+            )
+            recorders.append(self)
+
+        def start(self) -> None:
+            self.started = True
+
+        def register_container(self, container_id: str) -> None:
+            self.registered.append(container_id)
+
+        def unregister_container(self, container_id: str) -> None:
+            self.unregistered.append(container_id)
+
+        def stop(self) -> dict:
+            self.stopped = True
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            sample = {
+                "timestamp": "2026-06-26T00:00:00Z",
+                "epoch": 1782470400.0,
+                "resource_scope": "global_container",
+                "sampler_run_id": self.run_id,
+                "container_id": "fake-cid",
+                "container_short_id": "fake-cid",
+                "container_name": "fake-task",
+                "container_image": "fake-image",
+                "mem_usage": "1MiB / 1GiB",
+                "mem_percent": "0.1%",
+                "cpu_percent": "0.5%",
+                "net_io": "0B / 0B",
+                "net_rx_bytes": 0,
+                "net_tx_bytes": 0,
+            }
+            self.jsonl_path.write_text(
+                json.dumps(sample, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            summary = {
+                "run_id": self.run_id,
+                "jsonl_path": str(self.jsonl_path),
+                "summary_path": str(self.summary_path),
+                "sample_count": 1,
+                "sampling": {
+                    "interval_s": self.interval_s,
+                    "scope": "registered_containers",
+                    "sample_all_containers": self.sample_all_containers,
+                    "tick_count": 1,
+                    "empty_tick_count": 0,
+                    "stop_complete": True,
+                },
+                "containers": [],
+                "errors": [],
+            }
+            self.summary_path.write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return summary
+
+    monkeypatch.setattr(
+        "trace_collect.simulator.ContainerResourceRecorder",
+        _FakeContainerResourceRecorder,
+    )
+    return recorders
+
+
 def _patch_simulator_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -850,21 +940,31 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
             assert container_id == "fake-cid"
             assert executable == "docker"
             self.interval_s = interval_s
+            kind = "startup" if self.interval_s == 0.25 else "runtime"
+            self._samples = [
+                {
+                    "timestamp": "2026-06-26T00:00:00Z",
+                    "epoch": 1782470400.0,
+                    "container_id": "fake-cid",
+                    "phase": kind,
+                    "cpu_percent": "1.00%",
+                    "mem_usage": "2MiB / 1GiB",
+                },
+                {
+                    "timestamp": "2026-06-26T00:00:01Z",
+                    "epoch": 1782470401.0,
+                    "container_id": "fake-cid",
+                    "phase": kind,
+                    "cpu_percent": "2.00%",
+                    "mem_usage": "3MiB / 1GiB",
+                },
+            ]
 
         def start(self) -> None:
             pass
 
         def stop(self) -> list[dict]:
-            kind = "startup" if self.interval_s == 0.25 else "runtime"
-            return [
-                {
-                    "timestamp": "2026-06-26T00:00:00Z",
-                    "container_id": "fake-cid",
-                    "phase": kind,
-                    "cpu_percent": 1.0,
-                    "memory_mib": 2.0,
-                }
-            ]
+            return self._samples[:1]
 
     async def fake_exec_tool(*_args, **_kwargs):
         return ("ok", 1.0, True)
@@ -913,8 +1013,8 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         "container_agent_start",
     ]
     assert startup["phases"][0]["reported_elapsed_s"] == pytest.approx(0.125)
-    assert startup["resources"]["samples"][0]["phase"] == "startup"
-    assert startup["resources"]["summary"]["sample_count"] == 1
+    assert startup["resources"]["samples"] == []
+    assert startup["resources"]["summary"]["sample_count"] == 0
     assert resources["samples"][0]["phase"] == "runtime"
     assert resources["summary"]["sample_count"] == 1
 
@@ -941,26 +1041,6 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
         async def stop(self) -> None:
             raise AssertionError("failed startup agent must not be finalized later")
 
-    class _FakeSampler:
-        def __init__(self, *, container_id: str, interval_s: float, executable: str) -> None:
-            assert container_id == "fake-cid"
-            assert interval_s == 0.25
-            assert executable == "docker"
-
-        def start(self) -> None:
-            pass
-
-        def stop(self) -> list[dict]:
-            return [
-                {
-                    "timestamp": "2026-06-26T00:00:00Z",
-                    "container_id": "fake-cid",
-                    "phase": "startup",
-                    "cpu_percent": 1.0,
-                    "memory_mib": 2.0,
-                }
-            ]
-
     def fake_stop_task_container(container_id: str, *, executable: str) -> str:
         assert executable == "docker"
         stopped_containers.append(container_id)
@@ -976,7 +1056,6 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
-    monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FailingContainerAgent)
 
     with pytest.raises(RuntimeError, match="agent failed"):
@@ -1000,79 +1079,8 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
     assert startup["phases"][-1]["name"] == "container_agent_start"
     assert startup["phases"][-1]["status"] == "failed"
     assert startup["phases"][-1]["error"]["message"] == "agent failed"
-    assert startup["resources"]["samples"][0]["phase"] == "startup"
-    assert stopped_containers == ["fake-cid"]
-
-
-def test_prepare_container_session_stops_started_agent_when_startup_sampler_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from trace_collect.simulator import _load_trace_session, _prepare_container_session
-
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    attempt_dir = tmp_path / "attempt_1"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    loaded = _load_trace_session(trace_path, task_source)
-    agent_stops = 0
-    stopped_containers: list[str] = []
-
-    class _FakeContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
-            assert container_id == "fake-cid"
-            assert container_executable == "docker"
-
-        async def start(self) -> None:
-            pass
-
-        async def stop(self) -> None:
-            nonlocal agent_stops
-            agent_stops += 1
-
-    class _FailingStartupSampler:
-        def __init__(self, *, container_id: str, interval_s: float, executable: str) -> None:
-            assert container_id == "fake-cid"
-            assert interval_s == 0.25
-            assert executable == "docker"
-
-        def start(self) -> None:
-            pass
-
-        def stop(self) -> list[dict]:
-            raise RuntimeError("startup sampler failed")
-
-    def fake_stop_task_container(container_id: str, *, executable: str) -> str:
-        assert executable == "docker"
-        stopped_containers.append(container_id)
-        return ""
-
-    monkeypatch.setattr(
-        "trace_collect.simulator.ensure_fixed_image",
-        lambda *args, **kwargs: ("fixed-image", 0.125),
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.start_task_container",
-        lambda *args, **kwargs: "fake-cid",
-    )
-    monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
-    monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FailingStartupSampler)
-    monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeContainerAgent)
-
-    with pytest.raises(RuntimeError, match="startup sampler failed"):
-        asyncio.run(
-            _prepare_container_session(
-                loaded,
-                task_output_dir=attempt_dir,
-                container_executable="docker",
-            )
-        )
-
-    startup = json.loads((attempt_dir / "container_startup.json").read_text())
-    assert startup["status"] == "failed"
-    assert startup["error"]["message"] == "startup sampler failed"
-    assert agent_stops == 1
+    assert startup["resources"]["samples"] == []
+    assert startup["resources"]["summary"]["sample_count"] == 0
     assert stopped_containers == ["fake-cid"]
 
 
@@ -1236,6 +1244,115 @@ def test_cloud_model_prepare_failure_cleans_returned_container(
 
     assert agent_stops == 1
     assert container_stops == 1
+
+
+def _loaded_for_finalize(tmp_path: Path) -> object:
+    from trace_collect.simulator import LoadedTraceSession
+
+    return LoadedTraceSession(
+        source_trace=tmp_path / "trace.jsonl",
+        task_source=tmp_path / "tasks.json",
+        agent_id="task-a",
+        scaffold="openclaw",
+        metadata=None,
+        summary=None,
+        task={},
+        actions=[],
+        iterations={},
+    )
+
+
+def test_finalize_prepared_session_stops_container_when_agent_stop_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.simulator import (
+        PreparedContainer,
+        PreparedTraceSession,
+        _finalize_prepared_session,
+    )
+
+    class _FailingAgent:
+        async def stop(self) -> None:
+            raise RuntimeError("agent stop failed")
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.unregistered: list[str] = []
+
+        def unregister_container(self, container_id: str) -> None:
+            self.unregistered.append(container_id)
+
+    container_stops: list[str] = []
+
+    def fake_stop_task_container(container_id: str, *, executable: str) -> str:
+        assert executable == "docker"
+        container_stops.append(container_id)
+        return ""
+
+    recorder = _Recorder()
+    prepared = PreparedTraceSession(
+        loaded=_loaded_for_finalize(tmp_path),
+        container=PreparedContainer(
+            container_id="fake-cid",
+            container_executable="docker",
+            docker_image="fake-image",
+            agent=_FailingAgent(),
+        ),
+        container_resource_recorder=recorder,
+    )
+    monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+
+    with pytest.raises(RuntimeError, match="agent stop failed"):
+        asyncio.run(_finalize_prepared_session(prepared))
+
+    assert container_stops == ["fake-cid"]
+    assert recorder.unregistered == ["fake-cid"]
+
+
+def test_finalize_prepared_session_keeps_target_when_container_stop_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.simulator import (
+        PreparedContainer,
+        PreparedTraceSession,
+        _finalize_prepared_session,
+    )
+
+    class _Agent:
+        async def stop(self) -> None:
+            pass
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.unregistered: list[str] = []
+
+        def unregister_container(self, container_id: str) -> None:
+            self.unregistered.append(container_id)
+
+    def fake_stop_task_container(container_id: str, *, executable: str) -> str:
+        assert container_id == "fake-cid"
+        assert executable == "docker"
+        raise RuntimeError("container stop failed")
+
+    recorder = _Recorder()
+    prepared = PreparedTraceSession(
+        loaded=_loaded_for_finalize(tmp_path),
+        container=PreparedContainer(
+            container_id="fake-cid",
+            container_executable="docker",
+            docker_image="fake-image",
+            agent=_Agent(),
+        ),
+        container_resource_recorder=recorder,
+    )
+    monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+
+    with pytest.raises(RuntimeError, match="container stop failed"):
+        asyncio.run(_finalize_prepared_session(prepared))
+
+    assert recorder.unregistered == []
 
 
 def test_cloud_model_host_trace_skips_mcp_tools(
@@ -1754,6 +1871,7 @@ def test_cloud_model_manifest_replays_multiple_sessions(
 def test_cloud_model_concurrency_limits_active_traces(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    _fake_container_resource_recorders: list[object],
 ) -> None:
     traces = [tmp_path / f"trace-{idx}.jsonl" for idx in range(3)]
     task_source = tmp_path / "tasks.json"
@@ -1838,6 +1956,24 @@ def test_cloud_model_concurrency_limits_active_traces(
     assert summary["scheduler_mode"] == "bounded_queue"
     assert summary["attempted_traces"] == 3
     assert summary["completed_traces"] == 3
+    assert len(_fake_container_resource_recorders) == 1
+    recorder = _fake_container_resource_recorders[0]
+    assert getattr(recorder, "started") is True
+    assert getattr(recorder, "stopped") is True
+    assert getattr(recorder, "sample_all_containers") is False
+    assert sorted(getattr(recorder, "registered")) == [
+        "fake-task-0",
+        "fake-task-1",
+        "fake-task-2",
+    ]
+    assert sorted(getattr(recorder, "unregistered")) == [
+        "fake-task-0",
+        "fake-task-1",
+        "fake-task-2",
+    ]
+    assert summary["container_resources"]["sample_count"] == 1
+    assert Path(summary["container_resources"]["jsonl_path"]).exists()
+    assert Path(summary["container_resources"]["summary_path"]).exists()
 
 
 def test_cloud_model_structured_manifest_defaults_and_overrides(

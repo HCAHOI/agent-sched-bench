@@ -10,6 +10,7 @@ those spawned via ``docker exec``.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import threading
@@ -24,6 +25,14 @@ logger = logging.getLogger(__name__)
 
 # 4-field pipe-delimited format: mem_usage | mem% | cpu% | net_io
 _STATS_FORMAT = "{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}|{{.NetIO}}"
+_CONTAINER_PS_FORMAT = "{{.ID}}|{{.Image}}|{{.Names}}"
+_GLOBAL_STATS_FORMAT_DOCKER = (
+    "{{.Container}}|{{.Name}}|{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}|{{.NetIO}}"
+)
+_GLOBAL_STATS_FORMAT_PODMAN = (
+    "{{.ID}}|{{.Name}}|{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}|{{.NetIO}}"
+)
+_MAX_CONTAINER_RECORDER_ERRORS = 100
 
 
 def _resolve_container_pid(
@@ -441,6 +450,358 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "net_tx_mb": {**_minmaxavg(net_tx_values), "delta": _delta(net_tx_values)},
         "context_switches": {**_minmaxavg(ctxt_values), "delta": _delta(ctxt_values)},
     }
+
+
+def _list_running_containers(
+    *,
+    executable: str,
+    timeout_s: float,
+) -> dict[str, dict[str, str]]:
+    result = subprocess.run(
+        [
+            executable,
+            "ps",
+            "--no-trunc",
+            "--format",
+            _CONTAINER_PS_FORMAT,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"{executable} ps failed")
+
+    containers: dict[str, dict[str, str]] = {}
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        container_id, image, name = (part.strip() for part in parts)
+        if not container_id:
+            continue
+        containers[container_id] = {
+            "container_id": container_id,
+            "container_short_id": container_id[:12],
+            "container_image": image,
+            "container_name": name,
+        }
+    return containers
+
+
+def _container_metadata_for_stats_id(
+    stats_id: str,
+    stats_name: str,
+    containers: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    if stats_id in containers:
+        return containers[stats_id]
+    matches = [metadata for cid, metadata in containers.items() if cid.startswith(stats_id)]
+    if len(matches) == 1:
+        metadata = dict(matches[0])
+        if stats_name:
+            metadata["container_name"] = stats_name
+        return metadata
+    return {
+        "container_id": stats_id,
+        "container_short_id": stats_id[:12],
+        "container_image": "",
+        "container_name": stats_name,
+    }
+
+
+def _parse_global_stats_line(
+    raw: str,
+    *,
+    containers: dict[str, dict[str, str]],
+) -> dict[str, Any] | None:
+    parts = (raw or "").strip().split("|", 5)
+    if len(parts) != 6:
+        return None
+    stats_id, stats_name, mem_usage, mem_percent, cpu_percent, net_io = (
+        part.strip() for part in parts
+    )
+    if not stats_id:
+        return None
+    now = datetime.now(tz=timezone.utc)
+    metadata = _container_metadata_for_stats_id(stats_id, stats_name, containers)
+    sample: dict[str, Any] = {
+        "timestamp": now.isoformat().replace("+00:00", "Z"),
+        "epoch": now.timestamp(),
+        "resource_scope": "global_container",
+        "container_id": metadata["container_id"],
+        "container_short_id": metadata["container_short_id"],
+        "container_name": metadata["container_name"],
+        "container_image": metadata["container_image"],
+        "mem_usage": mem_usage,
+        "mem_percent": mem_percent,
+        "cpu_percent": cpu_percent,
+        "net_io": net_io,
+    }
+    rx, tx = _parse_net_io_bytes(net_io)
+    if rx is not None:
+        sample["net_rx_bytes"] = rx
+    if tx is not None:
+        sample["net_tx_bytes"] = tx
+    return sample
+
+
+def _sample_running_container_stats(
+    *,
+    containers: dict[str, dict[str, str]],
+    executable: str,
+    timeout_s: float,
+) -> list[dict[str, Any]]:
+    if not containers:
+        return []
+    stats_format = _global_stats_format(executable)
+    result = subprocess.run(
+        [
+            executable,
+            "stats",
+            "--no-stream",
+            "--format",
+            stats_format,
+            *containers.keys(),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip()
+        if message == "EOF":
+            return []
+        raise RuntimeError(message or f"{executable} stats failed")
+    samples: list[dict[str, Any]] = []
+    for raw_line in result.stdout.splitlines():
+        sample = _parse_global_stats_line(raw_line, containers=containers)
+        if sample is not None:
+            samples.append(sample)
+    return samples
+
+
+def _global_stats_format(executable: str) -> str:
+    executable_name = Path(executable).name.lower()
+    if "podman" in executable_name:
+        return _GLOBAL_STATS_FORMAT_PODMAN
+    return _GLOBAL_STATS_FORMAT_DOCKER
+
+
+class ContainerResourceRecorder(threading.Thread):
+    """Continuously append resource samples for all running containers."""
+
+    def __init__(
+        self,
+        *,
+        output_dir: Path,
+        run_id: str,
+        interval_s: float = 1.0,
+        executable: str = "podman",
+        subprocess_timeout_s: float = 5.0,
+        sample_all_containers: bool = True,
+    ) -> None:
+        super().__init__(daemon=True, name=f"container-resources-{run_id}")
+        self.output_dir = Path(output_dir)
+        self.run_id = run_id
+        self.interval_s = interval_s
+        self.executable = executable
+        self.subprocess_timeout_s = subprocess_timeout_s
+        self.sample_all_containers = sample_all_containers
+        self.jsonl_path = self.output_dir / f"{run_id}.container_resources.jsonl"
+        self.summary_path = (
+            self.output_dir / f"{run_id}.container_resources_summary.json"
+        )
+        self._stop_event = threading.Event()
+        self._target_container_ids: set[str] = set()
+        self._errors: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
+        self._started_at: str | None = None
+        self._ended_at: str | None = None
+        self._started_monotonic: float | None = None
+        self._tick_count = 0
+        self._empty_tick_count = 0
+        self._dropped_error_count = 0
+        self._stop_complete = False
+
+    def register_container(self, container_id: str) -> None:
+        if not container_id:
+            raise ValueError("container_id is required")
+        with self._lock:
+            self._target_container_ids.add(container_id)
+
+    def unregister_container(self, container_id: str) -> None:
+        if not container_id:
+            return
+        with self._lock:
+            self._target_container_ids.discard(container_id)
+
+    def _select_target_containers(
+        self,
+        containers: dict[str, dict[str, str]],
+    ) -> dict[str, dict[str, str]]:
+        if self.sample_all_containers:
+            return containers
+        with self._lock:
+            target_ids = set(self._target_container_ids)
+        if not target_ids:
+            return {}
+        selected: dict[str, dict[str, str]] = {}
+        for container_id, metadata in containers.items():
+            if any(
+                container_id.startswith(target_id) or target_id.startswith(container_id)
+                for target_id in target_ids
+            ):
+                selected[container_id] = metadata
+        return selected
+
+    def run(self) -> None:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._started_at = datetime.now(tz=timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        )
+        self._started_monotonic = time.monotonic()
+        with self.jsonl_path.open("w", encoding="utf-8") as fh:
+            while not self._stop_event.is_set():
+                tick_start = time.monotonic()
+                with self._lock:
+                    self._tick_count += 1
+                try:
+                    containers = _list_running_containers(
+                        executable=self.executable,
+                        timeout_s=self.subprocess_timeout_s,
+                    )
+                    containers = self._select_target_containers(containers)
+                    samples = _sample_running_container_stats(
+                        containers=containers,
+                        executable=self.executable,
+                        timeout_s=self.subprocess_timeout_s,
+                    )
+                    if not samples:
+                        with self._lock:
+                            self._empty_tick_count += 1
+                    for sample in samples:
+                        sample["sampler_run_id"] = self.run_id
+                        fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                    fh.flush()
+                except (
+                    RuntimeError,
+                    subprocess.TimeoutExpired,
+                    FileNotFoundError,
+                    OSError,
+                ) as exc:
+                    self._record_error(exc)
+
+                elapsed = time.monotonic() - tick_start
+                remainder = max(0.0, self.interval_s - elapsed)
+                if self._stop_event.wait(remainder):
+                    break
+        self._ended_at = datetime.now(tz=timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        )
+
+    def _record_error(self, exc: BaseException) -> None:
+        payload = {
+            "timestamp": datetime.now(tz=timezone.utc).isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        with self._lock:
+            if len(self._errors) < _MAX_CONTAINER_RECORDER_ERRORS:
+                self._errors.append(payload)
+            else:
+                self._dropped_error_count += 1
+
+    def stop(self) -> dict[str, Any]:
+        self._stop_event.set()
+        if self.is_alive():
+            self.join(timeout=self.subprocess_timeout_s + self.interval_s + 1.0)
+        self._stop_complete = not self.is_alive()
+        if not self._stop_complete:
+            self._record_error(
+                RuntimeError("container resource recorder did not stop before summary")
+            )
+        summary = self.get_summary()
+        self.summary_path.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return summary
+
+    def _read_samples_from_jsonl(self) -> list[dict[str, Any]]:
+        if not self.jsonl_path.exists():
+            return []
+        samples: list[dict[str, Any]] = []
+        with self.jsonl_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    sample = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    self._record_error(exc)
+                    continue
+                if isinstance(sample, dict):
+                    samples.append(sample)
+        return samples
+
+    def get_summary(self) -> dict[str, Any]:
+        samples = self._read_samples_from_jsonl()
+        with self._lock:
+            errors = list(self._errors)
+            dropped_error_count = self._dropped_error_count
+            tick_count = self._tick_count
+            empty_tick_count = self._empty_tick_count
+            stop_complete = self._stop_complete
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for sample in samples:
+            grouped.setdefault(str(sample["container_id"]), []).append(sample)
+        containers = [
+            {
+                "container_id": container_id,
+                "container_short_id": container_samples[-1].get(
+                    "container_short_id", container_id[:12]
+                ),
+                "container_name": container_samples[-1].get("container_name", ""),
+                "container_image": container_samples[-1].get("container_image", ""),
+                "summary": summarize_samples(container_samples),
+            }
+            for container_id, container_samples in sorted(grouped.items())
+        ]
+        elapsed_s = 0.0
+        if self._started_monotonic is not None:
+            elapsed_s = time.monotonic() - self._started_monotonic
+        return {
+            "run_id": self.run_id,
+            "started_at": self._started_at,
+            "ended_at": self._ended_at,
+            "elapsed_s": elapsed_s,
+            "sample_count": len(samples),
+            "jsonl_path": str(self.jsonl_path),
+            "summary_path": str(self.summary_path),
+            "sampling": {
+                "interval_s": self.interval_s,
+                "scope": (
+                    "all_running_containers"
+                    if self.sample_all_containers
+                    else "registered_containers"
+                ),
+                "sample_all_containers": self.sample_all_containers,
+                "tick_count": tick_count,
+                "empty_tick_count": empty_tick_count,
+                "stop_complete": stop_complete,
+            },
+            "containers": containers,
+            "errors": errors,
+            "dropped_error_count": dropped_error_count,
+        }
 
 
 class ContainerStatsSampler(threading.Thread):

@@ -55,6 +55,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _DOCKER_HOST_GATEWAY = "172.17.0.1"
 _INTERNAL_HF_API_KEY = "hf-recording"
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+_FALSY_ENV_VALUES = {"0", "false", "no", "off"}
 
 
 @dataclass(frozen=True)
@@ -396,6 +398,20 @@ def _ensure_task_source_ready(
     )
 
 
+def _task_image_cleanup_enabled() -> bool:
+    value = os.environ.get("TASK_CONTAINER_CLEANUP_IMAGES", "").strip().lower()
+    if not value:
+        return False
+    if value in _TRUTHY_ENV_VALUES:
+        return True
+    if value in _FALSY_ENV_VALUES:
+        return False
+    raise ValueError(
+        "TASK_CONTAINER_CLEANUP_IMAGES must be one of "
+        "1/true/yes/on or 0/false/no/off"
+    )
+
+
 def _cleanup_task_images(
     *,
     instance_id: str,
@@ -407,10 +423,19 @@ def _cleanup_task_images(
 ) -> None:
     """Best-effort cleanup that keeps only the current/next-image budget.
 
-    Set env ``KEEP_IMAGES_ABOVE_GB`` (e.g. ``30``) to skip image removal
-    when free disk exceeds the threshold.  Default: always clean up.
+    Image removal is disabled by default so benchmark runs can reuse pre-pulled
+    task images across smoke tests and sweeps. Set
+    ``TASK_CONTAINER_CLEANUP_IMAGES=1`` to enable removal. When enabled, set env
+    ``KEEP_IMAGES_ABOVE_GB`` (e.g. ``30``) to skip image removal when free disk
+    exceeds the threshold.
     """
     if not source_image and not fixed_image:
+        return
+    if not _task_image_cleanup_enabled():
+        logger.info(
+            "cleanup %s skipped: TASK_CONTAINER_CLEANUP_IMAGES is not enabled",
+            instance_id,
+        )
         return
     if container_executable is None:
         raise ValueError("container_executable is required for image cleanup")
