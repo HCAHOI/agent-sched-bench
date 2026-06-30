@@ -336,6 +336,30 @@ def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> 
     assert args.manifest == "manifest.yaml"
     assert args.concurrency == "8"
     assert args.replay_speed == 1.0
+    assert args.llm_timing == "source-scaled"
+    assert args.llm_ttft_ms is None
+    assert args.llm_tpot_ms is None
+
+
+def test_parse_simulate_args_accepts_ttft_tpot_llm_timing() -> None:
+    args = parse_simulate_args(
+        [
+            "--mode",
+            "cloud_model",
+            "--manifest",
+            "manifest.yaml",
+            "--llm-timing",
+            "ttft-tpot",
+            "--llm-ttft-ms",
+            "800",
+            "--llm-tpot-ms",
+            "20",
+        ]
+    )
+
+    assert args.llm_timing == "ttft-tpot"
+    assert args.llm_ttft_ms == 800.0
+    assert args.llm_tpot_ms == 20.0
 
 
 def test_parse_simulate_args_accepts_container_flag() -> None:
@@ -387,6 +411,9 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
     assert seen["manifest"] == Path("manifest.yaml")
     assert seen["concurrency"] == 1
     assert seen["container_executable"] is None
+    assert seen["llm_timing_mode"] == "source_scaled"
+    assert seen["llm_ttft_ms"] is None
+    assert seen["llm_tpot_ms"] is None
 
 
 def test_run_simulate_cloud_model_concurrency_sweep(
@@ -432,12 +459,78 @@ def test_run_simulate_cloud_model_concurrency_sweep(
     assert [record["concurrency"] for record in sweep_records] == [2, 4]
 
 
+def test_cloud_model_ttft_tpot_llm_timing_records_simulated_latency(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        llm_start=100.0,
+        llm_end=100.2,
+        tool_start=100.4,
+        tool_end=100.45,
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            replay_speed=100.0,
+            llm_timing_mode="ttft_tpot",
+            llm_ttft_ms=10.0,
+            llm_tpot_ms=2.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    metadata = records[0]
+    llm_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert metadata["llm_timing_mode"] == "ttft_tpot"
+    assert metadata["llm_ttft_ms"] == 10.0
+    assert metadata["llm_tpot_ms"] == 2.0
+    assert llm_record["data"]["llm_timing_mode"] == "ttft_tpot"
+    assert llm_record["data"]["simulated_ttft_ms"] == 10.0
+    assert llm_record["data"]["simulated_tpot_ms"] == 2.0
+    assert llm_record["data"]["simulated_llm_latency_ms"] == 18.0
+    assert llm_record["data"]["source_llm_latency_ms"] == pytest.approx(200.0)
+    assert llm_record["data"]["llm_latency_ms"] == pytest.approx(18.0, abs=25.0)
+    assert summary["llm_timing_mode"] == "ttft_tpot"
 
 
+def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
 
-
-
-
+    with pytest.raises(ValueError, match="llm_ttft_ms is required"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+                llm_timing_mode="ttft_tpot",
+                llm_tpot_ms=2.0,
+            )
+        )
 
 
 def test_cloud_model_tool_success_false_marks_trace_failed(

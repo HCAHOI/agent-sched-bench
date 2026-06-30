@@ -202,12 +202,35 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--replay-speed",
-        type=float,
+        type=positive_float_arg,
         default=1.0,
         help=(
-            "Wall-clock acceleration factor. Example: --replay-speed 50 "
+            "Wall-clock acceleration factor for source inter-action gaps and "
+            "source-scaled action durations. Example: --replay-speed 50 "
             "replays source timing at 50x."
         ),
+    )
+    parser.add_argument(
+        "--llm-timing",
+        choices=["source-scaled", "ttft-tpot"],
+        default="source-scaled",
+        help=(
+            "LLM replay duration model. source-scaled sleeps for source LLM "
+            "duration divided by --replay-speed. ttft-tpot sleeps for "
+            "--llm-ttft-ms + (completion_tokens - 1) * --llm-tpot-ms."
+        ),
+    )
+    parser.add_argument(
+        "--llm-ttft-ms",
+        type=nonnegative_float_arg,
+        default=None,
+        help="Simulated TTFT in milliseconds when --llm-timing ttft-tpot.",
+    )
+    parser.add_argument(
+        "--llm-tpot-ms",
+        type=nonnegative_float_arg,
+        default=None,
+        help="Simulated TPOT in milliseconds when --llm-timing ttft-tpot.",
     )
     parser.add_argument(
         "--verbose",
@@ -365,6 +388,9 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "command_timeout_s": args.command_timeout,
         "warmup_skip_iterations": args.warmup_skip_iterations,
         "replay_speed": args.replay_speed,
+        "llm_timing_mode": args.llm_timing.replace("-", "_"),
+        "llm_ttft_ms": args.llm_ttft_ms,
+        "llm_tpot_ms": args.llm_tpot_ms,
         "structured_output": args.output_dir == "traces/simulate",
     }
 

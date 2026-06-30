@@ -76,6 +76,14 @@ class ReplayTaskStats:
     failed_action_count: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class LLMTimingConfig:
+    """LLM duration model for cloud replay."""
+
+    mode: str = "source_scaled"
+    ttft_ms: float | None = None
+    tpot_ms: float | None = None
+
 
 @dataclass(slots=True)
 class LoadedTraceSession:
@@ -924,11 +932,13 @@ def _validate_loaded_sessions(
     *,
     mode: str,
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
 ) -> None:
     if replay_speed <= 0:
         raise ValueError("replay_speed must be > 0")
     if not sessions:
         raise SimulateError("No trace sessions were loaded")
+    _validate_llm_timing_config(llm_timing)
     for session in sessions:
         if _is_host_mode(session):
             continue
@@ -1281,6 +1291,7 @@ def _log_trace_metadata(
     mode: str,
     sessions: list[LoadedTraceSession],
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
     manifest: Path,
     concurrency: int,
     scheduler_mode: str,
@@ -1302,6 +1313,7 @@ def _log_trace_metadata(
         "mode": "simulate",
         "simulate_mode": mode,
         "replay_speed": replay_speed,
+        "llm_timing_mode": llm_timing.mode,
         "source_trace_count": len(sessions),
         "source_traces": [str(session.source_trace) for session in sessions],
         "source_trace_entries": [
@@ -1323,6 +1335,9 @@ def _log_trace_metadata(
         "scheduler_mode": scheduler_mode,
         "network_mode": network_mode,
     }
+    if llm_timing.mode == "ttft_tpot":
+        metadata["llm_ttft_ms"] = llm_timing.ttft_ms
+        metadata["llm_tpot_ms"] = llm_timing.tpot_ms
     metadata["source_model"] = (
         source_models[0] if len(set(source_models)) == 1 else "multiple"
     )
@@ -1420,6 +1435,7 @@ def _write_throughput_summary(
     mode: str,
     concurrency: int,
     scheduler_mode: str,
+    llm_timing: LLMTimingConfig,
     trace_file: Path,
     wall_time_s: float,
     task_stats: list[ReplayTaskStats],
@@ -1438,6 +1454,7 @@ def _write_throughput_summary(
         "concurrency": concurrency,
         "effective_concurrency": effective_concurrency,
         "scheduler_mode": scheduler_mode,
+        "llm_timing_mode": llm_timing.mode,
         "wall_time_s": wall_time_s,
         "attempted_traces": attempted,
         "completed_traces": completed,
@@ -1449,6 +1466,9 @@ def _write_throughput_summary(
         "tool_exec_count": sum(stat.tool_exec_count for stat in task_stats),
         "tasks": [dataclasses.asdict(stat) for stat in task_stats],
     }
+    if llm_timing.mode == "ttft_tpot":
+        payload["llm_ttft_ms"] = llm_timing.ttft_ms
+        payload["llm_tpot_ms"] = llm_timing.tpot_ms
     if container_resources is not None:
         payload["container_resources"] = {
             "jsonl_path": container_resources.get("jsonl_path"),
@@ -1627,14 +1647,67 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
 
 
 
-async def _sleep_until_offset(
+async def _sleep_source_gap(
     *,
-    replay_zero_monotonic: float,
-    target_offset_s: float,
+    previous_source_end: float | None,
+    action_source_start: float,
+    replay_speed: float,
 ) -> None:
-    delay_s = target_offset_s - (time.monotonic() - replay_zero_monotonic)
-    if delay_s > 0:
-        await asyncio.sleep(delay_s)
+    if previous_source_end is None:
+        return
+    gap_s = max(0.0, action_source_start - previous_source_end)
+    if gap_s > 0:
+        await asyncio.sleep(gap_s / replay_speed)
+
+
+def _coerce_completion_tokens(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    tokens = int(value)
+    if tokens < 0:
+        raise ValueError(f"completion_tokens must be non-negative, got {value!r}")
+    return tokens
+
+
+def _validate_llm_timing_config(config: LLMTimingConfig) -> None:
+    if config.mode not in {"source_scaled", "ttft_tpot"}:
+        raise ValueError(f"Unsupported llm_timing_mode: {config.mode}")
+    if config.mode == "source_scaled":
+        return
+    if config.ttft_ms is None:
+        raise ValueError("llm_ttft_ms is required when llm_timing_mode='ttft_tpot'")
+    if config.tpot_ms is None:
+        raise ValueError("llm_tpot_ms is required when llm_timing_mode='ttft_tpot'")
+    if config.ttft_ms < 0:
+        raise ValueError("llm_ttft_ms must be non-negative")
+    if config.tpot_ms < 0:
+        raise ValueError("llm_tpot_ms must be non-negative")
+
+
+def _llm_replay_duration_s(
+    *,
+    data: dict[str, Any],
+    source_duration_s: float,
+    replay_speed: float,
+    timing: LLMTimingConfig,
+) -> tuple[float, dict[str, Any]]:
+    if timing.mode == "source_scaled":
+        return source_duration_s / replay_speed, {
+            "llm_timing_mode": "source_scaled",
+        }
+
+    completion_tokens = _coerce_completion_tokens(data.get("completion_tokens", 0))
+    assert timing.ttft_ms is not None
+    assert timing.tpot_ms is not None
+    simulated_ms = timing.ttft_ms + max(0, completion_tokens - 1) * timing.tpot_ms
+    return simulated_ms / 1000.0, {
+        "llm_timing_mode": "ttft_tpot",
+        "simulated_ttft_ms": timing.ttft_ms,
+        "simulated_tpot_ms": timing.tpot_ms,
+        "simulated_llm_latency_ms": simulated_ms,
+        "source_ttft_ms": data.get("ttft_ms"),
+        "source_tpot_ms": data.get("tpot_ms"),
+    }
 
 
 async def _prepare_replay_session(
@@ -1709,6 +1782,7 @@ async def _run_cloud_model_queue(
     network_mode: str,
     container_resource_recorder: ContainerResourceRecorder | None,
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
     fixed_images_by_source: dict[str, str] | None = None,
@@ -1756,8 +1830,8 @@ async def _run_cloud_model_queue(
                 stats = await _replay_cloud_model_session(
                     prepared,
                     trace_logger=trace_logger,
-                    replay_zero_monotonic=time.monotonic(),
                     replay_speed=replay_speed,
+                    llm_timing=llm_timing,
                     command_timeout_s=command_timeout_s,
                     warmup_skip_iterations=warmup_skip_iterations,
                 )
@@ -1792,28 +1866,22 @@ async def _replay_cloud_model_session(
     prepared_session: PreparedTraceSession,
     *,
     trace_logger: TraceLogger,
-    replay_zero_monotonic: float,
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
 ) -> ReplayTaskStats:
     loaded = prepared_session.loaded
     ctr = prepared_session.container
     source_model = (loaded.summary or {}).get("model", "unknown")
-    source_zero = _coerce_timestamp(
-        loaded.actions[0].get("ts_start"),
-        field="ts_start",
-        source_trace=loaded.source_trace,
-        action_id=str(loaded.actions[0].get("action_id", "")),
-    )
-
     logger.info(
-        "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx",
+        "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx (llm_timing=%s)",
         loaded.agent_id,
         loaded.scaffold,
         len(loaded.actions),
         source_model,
         replay_speed,
+        llm_timing.mode,
     )
 
     wall_start = time.time()
@@ -1823,6 +1891,7 @@ async def _replay_cloud_model_session(
     source_failed_actions = 0
     replay_failed_actions = 0
     matched_failed_actions = 0
+    previous_source_end: float | None = None
 
     for action in loaded.actions:
         action_id = str(action.get("action_id", ""))
@@ -1832,16 +1901,27 @@ async def _replay_cloud_model_session(
         action_ts_start, action_ts_end = _coerce_action_bounds(action, source_trace=loaded.source_trace)
         source_duration_s = max(0.0, action_ts_end - action_ts_start)
 
-        await _sleep_until_offset(
-            replay_zero_monotonic=replay_zero_monotonic,
-            target_offset_s=(action_ts_start - source_zero) / replay_speed,
+        await _sleep_source_gap(
+            previous_source_end=previous_source_end,
+            action_source_start=action_ts_start,
+            replay_speed=replay_speed,
+        )
+        previous_source_end = max(
+            action_ts_end,
+            previous_source_end if previous_source_end is not None else action_ts_end,
         )
 
         try:
             if action_type == "llm_call":
                 record_ts_start = time.time()
-                if source_duration_s > 0:
-                    await asyncio.sleep(source_duration_s / replay_speed)
+                sleep_s, llm_timing_fields = _llm_replay_duration_s(
+                    data=data,
+                    source_duration_s=source_duration_s,
+                    replay_speed=replay_speed,
+                    timing=llm_timing,
+                )
+                if sleep_s > 0:
+                    await asyncio.sleep(sleep_s)
                 record_ts_end = time.time()
                 record = _make_trace_action(
                     loaded=loaded,
@@ -1860,6 +1940,7 @@ async def _replay_cloud_model_session(
                         "source_llm_latency_ms": data.get("llm_latency_ms"),
                         "replay_mode": "cloud_model",
                         "replay_speed": replay_speed,
+                        **llm_timing_fields,
                         "sim_metrics": {
                             "warmup": iteration < warmup_skip_iterations,
                         },
@@ -2079,6 +2160,7 @@ async def _replay_cloud_model_session(
             extra={
                 "replay_mode": "cloud_model",
                 "replay_speed": replay_speed,
+                "llm_timing_mode": llm_timing.mode,
                 "succeeded_actions": succeeded_actions,
                 "failed_actions": failed_actions,
                 "source_failed_actions": source_failed_actions,
@@ -2181,12 +2263,21 @@ async def simulate(
     command_timeout_s: float = 120.0,
     warmup_skip_iterations: int = 0,
     replay_speed: float = 1.0,
+    llm_timing_mode: str = "source_scaled",
+    llm_ttft_ms: float | None = None,
+    llm_tpot_ms: float | None = None,
     structured_output: bool = False,
 ) -> Path:
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
+    llm_timing = LLMTimingConfig(
+        mode=llm_timing_mode,
+        ttft_ms=llm_ttft_ms,
+        tpot_ms=llm_tpot_ms,
+    )
+    _validate_llm_timing_config(llm_timing)
 
     manifest_entries = _load_simulate_manifest(
         manifest,
@@ -2208,6 +2299,7 @@ async def simulate(
         loaded_sessions,
         mode=mode,
         replay_speed=replay_speed,
+        llm_timing=llm_timing,
     )
     _validate_container_runtime(
         loaded_sessions,
@@ -2251,6 +2343,7 @@ async def simulate(
             mode=mode,
             sessions=loaded_sessions,
             replay_speed=replay_speed,
+            llm_timing=llm_timing,
             manifest=manifest,
             concurrency=concurrency,
             scheduler_mode=scheduler_mode,
@@ -2280,6 +2373,7 @@ async def simulate(
             network_mode=network_mode,
             container_resource_recorder=container_resource_recorder,
             replay_speed=replay_speed,
+            llm_timing=llm_timing,
             command_timeout_s=command_timeout_s,
             warmup_skip_iterations=warmup_skip_iterations,
             fixed_images_by_source=sweep_fixed_images,
@@ -2325,6 +2419,7 @@ async def simulate(
         mode=mode,
         concurrency=concurrency,
         scheduler_mode=scheduler_mode,
+        llm_timing=llm_timing,
         trace_file=trace_file,
         wall_time_s=run_wall_end - run_wall_start,
         task_stats=task_stats,

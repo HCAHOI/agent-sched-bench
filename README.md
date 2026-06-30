@@ -81,6 +81,10 @@ PYTHONPATH=src python -m trace_collect.cli simulate \
 
 `--concurrency 8` runs one bounded-queue replay with at most 8 active traces.
 `--concurrency 1,2,4,8` runs a sweep and writes `throughput_sweep.jsonl`.
+By default, replay sleeps source inter-action gaps and action durations scaled by
+`--replay-speed`. To replace source LLM durations with a fixed model, pass
+`--llm-timing ttft-tpot --llm-ttft-ms <ms> --llm-tpot-ms <ms>`; tool timing and
+inter-action gaps still use source timing scaled by `--replay-speed`.
 
 Manifest input is YAML. The simplest form is a list of absolute trace paths:
 
