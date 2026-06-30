@@ -29,11 +29,7 @@ from harness.container_stats_sampler import (
     ContainerStatsSampler,
     summarize_samples,
 )
-from harness.gpu_resource_sampler import GpuResourceSampler
-from harness.metrics_client import VLLMMetricsClient
-from harness.scheduler_hooks import GpuBaseline
 from harness.trace_logger import TraceLogger
-from llm_call import create_async_openai_client
 from trace_collect import attempt_layout
 from trace_collect.attempt_pipeline import (
     configure_task_container_apt_mirror,
@@ -79,27 +75,6 @@ class ReplayTaskStats:
     tool_exec_count: int
     failed_action_count: int = 0
 
-
-def validate_gpu_tracking_args(args: Any) -> None:
-    """Validate GPU tracking CLI args. Raises ValueError with a clear message on failure.
-
-    Designed to be called from _run_simulate before any work begins,
-    so failures are fast and explicit (CLAUDE.md no-silent-fallback rule).
-    """
-    if args.gpu_tracking != "on":
-        return
-
-    if args.mode == "cloud_model":
-        raise ValueError("--gpu-tracking on is forbidden in cloud_model mode")
-
-    if not args.metrics_url:
-        raise ValueError("--gpu-tracking on requires --metrics-url")
-
-    if args.vllm_pid is None:
-        raise ValueError("--gpu-tracking on requires --vllm-pid")
-
-    if args.vllm_startup_log is None:
-        raise ValueError("--gpu-tracking on requires --vllm-startup-log")
 
 
 @dataclass(slots=True)
@@ -258,39 +233,6 @@ def _exception_payload(exc: BaseException) -> dict[str, str]:
     }
 
 
-async def _call_local_model_streaming(
-    client: Any,
-    model: str,
-    messages: list[dict[str, Any]],
-    n_tokens: int,
-) -> tuple[float, float, float]:
-    """Send *messages* to the local model and force exactly *n_tokens* of output.
-
-    Returns:
-        (ttft_ms, tpot_ms, total_latency_ms)
-    """
-    t0 = time.monotonic()
-    first_token_ts: float | None = None
-
-    stream = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=n_tokens,
-        stream=True,
-        temperature=0.0,
-        extra_body={"min_tokens": n_tokens},
-    )
-    async for chunk in stream:
-        if first_token_ts is None and chunk.choices and chunk.choices[0].delta.content:
-            first_token_ts = time.monotonic()
-
-    t_end = time.monotonic()
-    total_ms = (t_end - t0) * 1000
-    ttft_ms = (first_token_ts - t0) * 1000 if first_token_ts else total_ms
-    gen_ms = total_ms - ttft_ms
-    tpot_ms = gen_ms / max(1, n_tokens - 1) if n_tokens > 1 else 0.0
-    return ttft_ms, tpot_ms, total_ms
-
 
 async def _exec_tool(
     agent: Any,
@@ -325,7 +267,7 @@ async def _exec_tool(
 def _group_actions_by_iteration(
     actions: list[dict[str, Any]],
 ) -> dict[int, dict[str, Any]]:
-    """Group loaded trace actions into the local-model iteration shape."""
+    """Group loaded trace actions into per-iteration replay buckets."""
 
     iterations: dict[int, dict[str, Any]] = {}
     for action in actions:
@@ -987,8 +929,6 @@ def _validate_loaded_sessions(
         raise ValueError("replay_speed must be > 0")
     if not sessions:
         raise SimulateError("No trace sessions were loaded")
-    if mode == "local_model" and len(sessions) != 1:
-        raise SimulateError("local_model mode supports exactly one source trace")
     for session in sessions:
         if _is_host_mode(session):
             continue
@@ -1383,17 +1323,10 @@ def _log_trace_metadata(
         "scheduler_mode": scheduler_mode,
         "network_mode": network_mode,
     }
-    if mode == "local_model":
-        metadata["source_trace"] = str(sessions[0].source_trace)
-        metadata["source_model"] = source_models[0]
-        metadata["local_model"] = model
-        metadata["local_api_base"] = api_base
-        metadata["n_source_iterations"] = _iteration_count(sessions[0].actions)
-    else:
-        metadata["source_model"] = (
-            source_models[0] if len(set(source_models)) == 1 else "multiple"
-        )
-        metadata["replay_target"] = "cloud_replay"
+    metadata["source_model"] = (
+        source_models[0] if len(set(source_models)) == 1 else "multiple"
+    )
+    metadata["replay_target"] = "cloud_replay"
     trace_logger.log_metadata(**metadata)
 
 
@@ -1692,370 +1625,6 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
     if fixed_image_cleanup_error is not None:
         raise fixed_image_cleanup_error
 
-
-async def _run_local_model_simulation(
-    prepared_session: PreparedTraceSession,
-    *,
-    trace_logger: TraceLogger,
-    replay_speed: float,
-    api_base: str,
-    api_key: str,
-    model: str,
-    command_timeout_s: float,
-    metrics_url: str | None,
-    warmup_skip_iterations: int,
-    gpu_baseline: GpuBaseline | None = None,
-    vllm_pid: int | None = None,
-    gpu_sample_hz: float = 10.0,
-    gpu_output_path: Path | None = None,
-) -> ReplayTaskStats:
-    loaded = prepared_session.loaded
-    iterations = loaded.iterations
-    source_model = (loaded.summary or {}).get("model", "unknown")
-    logger.info(
-        "Simulating %s [scaffold=%s]: %d iterations from %s, local model=%s",
-        loaded.agent_id,
-        loaded.scaffold,
-        len(iterations),
-        source_model,
-        model,
-    )
-
-    metrics_client = VLLMMetricsClient(
-        metrics_url=metrics_url,
-        gpu_baseline=gpu_baseline,
-        vllm_pid=vllm_pid,
-    )
-    logger.info(
-        "vLLM metrics client: %s",
-        f"enabled (url={metrics_url})" if metrics_client.is_enabled else "disabled",
-    )
-
-    gpu_sampler: GpuResourceSampler | None = None
-    if gpu_baseline is not None and vllm_pid is not None and metrics_url and gpu_output_path:
-        gpu_sampler = GpuResourceSampler(
-            metrics_url=metrics_url,
-            gpu_baseline=gpu_baseline,
-            vllm_pid=vllm_pid,
-            output_path=gpu_output_path,
-            sample_hz=gpu_sample_hz,
-        )
-        await gpu_sampler.start()
-        logger.info("GPU resource sampler started (%.1f Hz) → %s", gpu_sample_hz, gpu_output_path)
-
-    client = None
-
-    wall_start = time.time()
-    total_iters = len(iterations)
-    succeeded_iters = 0
-    failed_iters = 0
-    fatal_replay_errors = 0
-    sorted_iters = sorted(iterations.keys())
-
-    try:
-        for i, it_num in enumerate(sorted_iters):
-            it_group = iterations[it_num]
-            llm_actions = it_group.get("llms", [])
-            tool_actions = it_group.get("tools", [])
-
-            if not llm_actions:
-                logger.warning("Iteration %d: no LLM actions, skipping", it_num)
-                continue
-
-            iter_failed = False
-            for llm_idx, llm_action in enumerate(llm_actions):
-                llm_data = llm_action.get("data", {})
-                messages_in = llm_data.get("messages_in")
-                n_tokens = llm_data.get("completion_tokens", 1) or 1
-
-                if llm_data.get("transport_retry_terminal"):
-                    ts_now = time.time()
-                    llm_record = _make_trace_action(
-                        loaded=loaded,
-                        action_type="llm_call",
-                        action_id=f"llm_{it_num}_{llm_idx}",
-                        iteration=it_num,
-                        ts_start=ts_now,
-                        ts_end=ts_now,
-                        data={
-                            "messages_in": messages_in,
-                            "raw_response": llm_data.get("raw_response", {}),
-                            "prompt_tokens": llm_data.get("prompt_tokens", 0),
-                            "completion_tokens": 0,
-                            "llm_latency_ms": 0.0,
-                            "simulate_source": str(loaded.source_trace),
-                            "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
-                            "transport_retry": True,
-                            "transport_retry_terminal": True,
-                            "error": llm_data.get("error"),
-                            "sim_metrics": {
-                                "warmup": i < warmup_skip_iterations,
-                                "failed": True,
-                            },
-                        },
-                    )
-                    trace_logger.log_trace_action(loaded.agent_id, llm_record)
-                    iter_failed = True
-                    break
-
-                if not messages_in:
-                    logger.warning("Iteration %d llm %d: no messages_in, skipping", it_num, llm_idx)
-                    continue
-
-                ts_start = time.time()
-
-                try:
-                    if client is None:
-                        client = create_async_openai_client(
-                            api_base=api_base,
-                            api_key=api_key,
-                            timeout=180.0,
-                        )
-                    ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
-                        client, model, messages_in, n_tokens
-                    )
-                except Exception as exc:
-                    logger.error("Iteration %d llm %d: LLM call failed: %s", it_num, llm_idx, exc)
-                    iter_failed = True
-                    break
-
-                ts_after_llm = time.time()
-
-                scheduler_snapshot = metrics_client.get_snapshot()
-
-                llm_record = _make_trace_action(
-                    loaded=loaded,
-                    action_type="llm_call",
-                    action_id=f"llm_{it_num}_{llm_idx}",
-                    iteration=it_num,
-                    ts_start=ts_start,
-                    ts_end=ts_after_llm,
-                    data={
-                        "messages_in": messages_in,
-                        "raw_response": llm_data.get("raw_response", {}),
-                        "prompt_tokens": llm_data.get("prompt_tokens", 0),
-                        "completion_tokens": llm_data.get("completion_tokens", 0),
-                        "llm_latency_ms": llm_latency_ms,
-                        "ttft_ms": ttft_ms,
-                        "tpot_ms": tpot_ms,
-                        "simulate_source": str(loaded.source_trace),
-                        "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
-                        "sim_metrics": {
-                            "timing": {
-                                "ttft_ms": ttft_ms,
-                                "tpot_ms": tpot_ms,
-                                "total_ms": llm_latency_ms,
-                            },
-                            "vllm_scheduler_snapshot": dataclasses.asdict(
-                                scheduler_snapshot
-                            ),
-                            "warmup": i < warmup_skip_iterations,
-                        },
-                    },
-                )
-                trace_logger.log_trace_action(loaded.agent_id, llm_record)
-
-            if iter_failed:
-                failed_iters += 1
-                continue
-
-            ctr = prepared_session.container
-            total_tool_ms = 0.0
-            failed_tool_actions = 0
-            for tool_act in tool_actions:
-                td = tool_act.get("data", {})
-                tool_name = td.get("tool_name")
-                tool_args = td.get("tool_args", "{}")
-                if not tool_name:
-                    continue
-
-                tool_ts_start = time.time()
-                source_duration_ms = float(td.get("duration_ms") or 0.0)
-                source_success = _source_tool_success(td)
-                source_tool_result = td.get("tool_result", td.get("result", ""))
-                source_exec_timeout = _source_exec_timeout_s(
-                    tool_name=tool_name,
-                    tool_args_json=tool_args,
-                    source_duration_ms=source_duration_ms,
-                    source_success=source_success,
-                    source_tool_result=source_tool_result,
-                )
-                original_artifact_path: str | None = None
-                mapped_artifact_path: str | None = None
-                if ctr is None:
-                    tool_result = td.get("tool_result", td.get("result", ""))
-                    tool_success = source_success
-                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                    tool_ts_end = time.time()
-                    tool_duration_ms = source_duration_ms
-                    sim_provenance = "replayed_from_trace"
-                elif tool_name == "message":
-                    tool_result = td.get("tool_result", td.get("result", ""))
-                    if not tool_result:
-                        tool_result = "Message replayed as no-op"
-                    tool_success = source_success
-                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                    tool_ts_end = time.time()
-                    tool_duration_ms = source_duration_ms
-                    sim_provenance = "message_noop"
-                elif tool_name.startswith("mcp_"):
-                    tool_result = td.get("tool_result", "")
-                    tool_success = source_success
-                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                    tool_ts_end = time.time()
-                    tool_duration_ms = source_duration_ms
-                    sim_provenance = "replayed_from_trace"
-                else:
-                    mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
-                        _remap_runtime_artifact_tool_args(
-                            tool_name=tool_name,
-                            tool_args_json=tool_args,
-                            runtime_root_map=prepared_session.runtime_artifact_root_map,
-                        )
-                    )
-                    if original_artifact_path is None and isinstance(tool_args, str):
-                        from trace_collect.openclaw_tools import (
-                            source_runtime_artifact_path_from_tool_call,
-                        )
-
-                        original_artifact_path = source_runtime_artifact_path_from_tool_call(
-                            tool_name=tool_name,
-                            tool_args_json=tool_args,
-                        )
-                    if original_artifact_path is not None and not mapped_exists:
-                        await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                        tool_result = _artifact_unavailable_result(original_artifact_path)
-                        tool_success = False
-                        tool_ts_end = time.time()
-                        tool_duration_ms = (tool_ts_end - tool_ts_start) * 1000
-                        sim_provenance = "source_artifact_unavailable"
-                        fatal_replay_errors += 1
-                    elif mapped_artifact_path is not None:
-                        tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
-                            tool_name,
-                            mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
-                            True,
-                        )
-                        tool_ts_end = time.time()
-                        sim_provenance = "restored_runtime_artifact"
-                    else:
-                        tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
-                            tool_name,
-                            mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
-                        )
-                        tool_ts_end = time.time()
-                        sim_provenance = "executed_in_container"
-                total_tool_ms += tool_duration_ms
-                replay_outcome_match = (
-                    tool_success == source_success
-                    and sim_provenance != "source_artifact_unavailable"
-                )
-                extra_tool_fields = _command_metadata(
-                    tool_name=tool_name,
-                    tool_args_json=tool_args,
-                    tool_result=str(tool_result),
-                    tool_success=tool_success,
-                )
-                if original_artifact_path is not None:
-                    extra_tool_fields["source_artifact_path"] = original_artifact_path
-                if mapped_artifact_path is not None:
-                    extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
-                if source_exec_timeout is not None:
-                    extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
-
-                tool_record = _make_trace_action(
-                    loaded=loaded,
-                    action_type="tool_exec",
-                    action_id=f"tool_{it_num}_{tool_name}",
-                    iteration=it_num,
-                    ts_start=tool_ts_start,
-                    ts_end=tool_ts_end,
-                    data={
-                        "tool_name": tool_name,
-                        "tool_args": tool_args,
-                        "tool_result": tool_result,
-                        "duration_ms": tool_duration_ms,
-                        "success": tool_success,
-                        "source_success": source_success,
-                        "replay_outcome_match": replay_outcome_match,
-                        **extra_tool_fields,
-                        "replay_source": sim_provenance,
-                        "sim_metrics": {
-                            "source": sim_provenance,
-                            "sim_tool_format": (
-                                sim_provenance
-                                if sim_provenance
-                                in {
-                                    "replayed_from_trace",
-                                    "message_noop",
-                                    "source_artifact_unavailable",
-                                    "restored_runtime_artifact",
-                                }
-                                else "container_exec"
-                            ),
-                            "warmup": i < warmup_skip_iterations,
-                        },
-                    },
-                )
-                trace_logger.log_trace_action(loaded.agent_id, tool_record)
-                if not replay_outcome_match:
-                    failed_tool_actions += 1
-
-            if failed_tool_actions:
-                logger.error(
-                    "Local-model replay failed %d tool action(s) for %s iteration=%s",
-                    failed_tool_actions,
-                    loaded.agent_id,
-                    it_num,
-                )
-                failed_iters += 1
-                continue
-
-            succeeded_iters += 1
-
-            logger.info(
-                "[%d/%d] iter %d: %d llm calls, tool=%.0fms",
-                i + 1,
-                total_iters,
-                it_num,
-                len(llm_actions),
-                total_tool_ms,
-            )
-    finally:
-        if gpu_sampler is not None:
-            await gpu_sampler.stop()
-            logger.info("GPU resource sampler stopped → %s", gpu_output_path)
-
-        wall_end = time.time()
-
-        success = failed_iters == 0 and succeeded_iters == total_iters
-        elapsed_s = wall_end - wall_start
-        simulate_summary = _make_trace_summary(
-            loaded=loaded,
-            success=success,
-            elapsed_s=elapsed_s,
-            source_model=source_model,
-            extra={
-                "local_model": model,
-                "local_api_base": api_base,
-                "succeeded_iterations": succeeded_iters,
-                "failed_iterations": failed_iters,
-                "fatal_replay_errors": fatal_replay_errors,
-            },
-        )
-        trace_logger.log_summary(loaded.agent_id, simulate_summary)
-    return _make_task_stats(
-        loaded=loaded,
-        success=success,
-        elapsed_s=elapsed_s,
-        failed_action_count=failed_iters,
-    )
 
 
 async def _sleep_until_offset(
@@ -2602,7 +2171,7 @@ async def simulate(
     manifest: Path,
     task_source: Path,
     output_dir: Path,
-    mode: str = "local_model",
+    mode: str = "cloud_model",
     concurrency: int = 1,
     container_executable: str | None = None,
     network_mode: str = "host",
@@ -2610,20 +2179,14 @@ async def simulate(
     api_key: str | None = None,
     model: str | None = None,
     command_timeout_s: float = 120.0,
-    metrics_url: str | None = None,
     warmup_skip_iterations: int = 0,
     replay_speed: float = 1.0,
     structured_output: bool = False,
-    gpu_baseline: GpuBaseline | None = None,
-    vllm_pid: int | None = None,
-    gpu_sample_hz: float = 10.0,
 ) -> Path:
-    if mode not in {"local_model", "cloud_model"}:
+    if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
-    if mode == "local_model" and concurrency != 1:
-        raise ValueError("local_model simulate requires concurrency=1")
 
     manifest_entries = _load_simulate_manifest(
         manifest,
@@ -2691,7 +2254,7 @@ async def simulate(
             manifest=manifest,
             concurrency=concurrency,
             scheduler_mode=scheduler_mode,
-            api_base=api_base,
+            api_base=None,
             model=model,
             network_mode=network_mode,
         )
@@ -2707,57 +2270,20 @@ async def simulate(
             )
             container_resource_recorder.start()
 
-        if mode == "local_model":
-            prepared = await _prepare_replay_session(
-                loaded_sessions[0],
-                output_path=output_path,
-                container_executable=container_executable,
-                network_mode=network_mode,
-                container_resource_recorder=container_resource_recorder,
-                fixed_images_by_source=sweep_fixed_images,
-            )
-            prepared_sessions.append(prepared)
-            assert trace_logger is not None
-            assert api_base is not None
-            assert api_key is not None
-            assert model is not None
-            # Compute gpu_output_path from the single session's attempt dir
-            gpu_output_path: Path | None = None
-            if gpu_baseline is not None and vllm_pid is not None and metrics_url:
-                task_dir = prepared_sessions[0].task_output_dir
-                if task_dir is not None:
-                    gpu_output_path = task_dir / "gpu_resources.json"
-            local_stats = await _run_local_model_simulation(
-                prepared_sessions[0],
-                trace_logger=trace_logger,
-                replay_speed=replay_speed,
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
-                command_timeout_s=command_timeout_s,
-                metrics_url=metrics_url,
-                warmup_skip_iterations=warmup_skip_iterations,
-                gpu_baseline=gpu_baseline,
-                vllm_pid=vllm_pid,
-                gpu_sample_hz=gpu_sample_hz,
-                gpu_output_path=gpu_output_path,
-            )
-            task_stats = [local_stats]
-        else:
-            assert trace_logger is not None
-            prepared_sessions, task_stats = await _run_cloud_model_queue(
-                loaded_sessions,
-                output_path=output_path,
-                trace_logger=trace_logger,
-                concurrency=concurrency,
-                container_executable=container_executable,
-                network_mode=network_mode,
-                container_resource_recorder=container_resource_recorder,
-                replay_speed=replay_speed,
-                command_timeout_s=command_timeout_s,
-                warmup_skip_iterations=warmup_skip_iterations,
-                fixed_images_by_source=sweep_fixed_images,
-            )
+        assert trace_logger is not None
+        prepared_sessions, task_stats = await _run_cloud_model_queue(
+            loaded_sessions,
+            output_path=output_path,
+            trace_logger=trace_logger,
+            concurrency=concurrency,
+            container_executable=container_executable,
+            network_mode=network_mode,
+            container_resource_recorder=container_resource_recorder,
+            replay_speed=replay_speed,
+            command_timeout_s=command_timeout_s,
+            warmup_skip_iterations=warmup_skip_iterations,
+            fixed_images_by_source=sweep_fixed_images,
+        )
         run_completed_for_fixed_cleanup = True
     finally:
         finalization_error: BaseException | None = None

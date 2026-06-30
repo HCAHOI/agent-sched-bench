@@ -276,7 +276,7 @@ def test_terminal_bench_command_includes_runtime_dir() -> None:
             return Path("/tmp/agent_sched_bench-0.1.0-py3-none-any.whl")
 
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",

@@ -232,7 +232,7 @@ def test_export_rejects_mismatched_sim_metadata(
             "instance_id": "task-a",
             "mode": "simulate",
             "replay_target": "cloud_replay",
-            "simulate_mode": "local_model",
+            "simulate_mode": "unsupported_mode",
             "source_trace": (
                 "/root/agent-sched-bench/traces/swe-rebench/z-ai-glm-5.1/"
                 "run/task-a/attempt_1/trace.jsonl"
@@ -248,7 +248,7 @@ def test_export_rejects_mismatched_sim_metadata(
         },
     )
 
-    with pytest.raises(ValueError, match="simulate_mode='local_model' expected 'cloud_model'"):
+    with pytest.raises(ValueError, match="simulate_mode='unsupported_mode' expected 'cloud_model'"):
         static_export.export_swe_rebench_glm_openclaw_100(
             output_dir=tmp_path / "out",
             group="closed_loop",

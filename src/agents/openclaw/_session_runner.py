@@ -29,7 +29,6 @@ from agents.openclaw.eval.types import (
 )
 from llm_call.provider_base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
-from agents.openclaw.trace_fields import HF_TRACE_EXTRA_KEYS
 from trace_collect.latency_metrics import summarize_llm_latencies
 
 
@@ -345,7 +344,6 @@ class TraceCollectorHook(AgentHook):
                             for key, value in context.response.extra.items()
                             if key != "llm_wall_ts_end"
                             and not key.startswith("_")
-                            and not key.startswith("hf_")
                         }
                     )
                     error_data.update(self._extract_trace_llm_fields(context.response))
@@ -543,7 +541,6 @@ class TraceCollectorHook(AgentHook):
             "openrouter_metadata_initial_fetch_status",
             "openrouter_metadata_initial_fetch_ms",
             "openrouter_metadata",
-            *HF_TRACE_EXTRA_KEYS,
         ):
             if key in extra:
                 result[key] = extra[key]

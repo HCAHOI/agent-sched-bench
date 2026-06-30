@@ -3,14 +3,13 @@ UV ?= uv
 TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
 GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
-.PHONY: help pull test lint serve-vllm run-smoke collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull test lint run-smoke collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
 	@printf "  pull              Fast-forward pull the current branch\n"
 	@printf "  test              Run the full test suite\n"
 	@printf "  lint              Run ruff\n"
-	@printf "  serve-vllm        Run the raw vLLM launcher\n"
 	@printf "  run-smoke         Run the current infrastructure smoke suite\n"
 	@printf "  collect-results   Pull result artifacts back via rsync\n"
 	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
@@ -36,9 +35,6 @@ test:
 
 lint:
 	$(PYTHON) -m ruff check .
-
-serve-vllm:
-	./scripts/serve_vllm.sh
 
 run-smoke:
 	./scripts/run_smoke.sh
@@ -80,6 +76,7 @@ smoke-swe-rebench-openclaw:
 	    --benchmark swe-rebench \
 	    --scaffold openclaw \
 	    --sample $(SMOKE_N) \
+	    --mcp-config none \
 	    --verbose
 
 gantt-viewer-install:

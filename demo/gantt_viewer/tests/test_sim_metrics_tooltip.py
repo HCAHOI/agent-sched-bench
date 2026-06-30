@@ -64,12 +64,10 @@ def test_sim_metrics_flows_through_action_detail_extraction() -> None:
                     "tpot_ms": 5.6,
                     "total_ms": 200.0,
                 },
-                "vllm_scheduler_snapshot": {
-                    "num_preemptions_total": 42.0,
-                    "gpu_cache_usage_perc": 0.85,
-                    "cpu_cache_usage_perc": 0.10,
-                    "gpu_prefix_cache_hit_rate": 0.72,
-                    "cpu_prefix_cache_hit_rate": 0.05,
+                "replay_scheduler_snapshot": {
+                    "queued_traces": 2,
+                    "active_traces": 1,
+                    "completed_traces": 3,
                 },
                 "warmup": False,
             },
@@ -89,10 +87,10 @@ def test_sim_metrics_flows_through_action_detail_extraction() -> None:
     assert sm["timing"]["tpot_ms"] == 5.6
     assert sm["timing"]["total_ms"] == 200.0
 
-    snap = sm["vllm_scheduler_snapshot"]
-    assert snap["num_preemptions_total"] == 42.0
-    assert snap["gpu_cache_usage_perc"] == 0.85
-    assert snap["gpu_prefix_cache_hit_rate"] == 0.72
+    snap = sm["replay_scheduler_snapshot"]
+    assert snap["queued_traces"] == 2
+    assert snap["active_traces"] == 1
+    assert snap["completed_traces"] == 3
 
 def test_sim_metrics_extraction_does_not_drop_other_fields() -> None:
     fake_action = {

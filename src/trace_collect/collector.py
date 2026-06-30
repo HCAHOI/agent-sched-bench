@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
 import logging
@@ -18,10 +17,6 @@ from typing import TYPE_CHECKING, Any
 from llm_call import UnifiedProvider
 from agents.openclaw.runtime_deps import OPENCLAW_MCP_RUNTIME_REQUIREMENTS
 
-# `serving.recording` (and its KV-eviction transitive deps) pulls in `torch`
-# via `transformers.cache_utils`. Container venvs that only need MCP/scaffold
-# helpers from this module must not pay that import cost — keep this lazy
-# inside the HF-backend branch in `collect_traces`.
 from harness.container_image_prep import (
     drop_cached_fixed_image,
     ensure_source_image,
@@ -49,156 +44,46 @@ from trace_collect.runtime.task_container import (
 
 if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
-    from serving.kv_policies.base import EvictionPolicyConfig
-    from serving.sparse_attention.base import SparseAttentionConfig
 
 logger = logging.getLogger(__name__)
 _DOCKER_HOST_GATEWAY = "172.17.0.1"
-_INTERNAL_HF_API_KEY = "hf-recording"
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 _FALSY_ENV_VALUES = {"0", "false", "no", "off"}
 
 
 @dataclass(frozen=True)
 class _CollectModelBackend:
-    """Materialized model client and endpoint exposed to the scaffold."""
+    """Materialized cloud model client and endpoint exposed to the scaffold."""
 
     provider: Any
     provider_name: str | None
     api_base: str
     api_key: str
-    recording_provider: Any | None
     trace_run_config: dict[str, Any]
-
-
-def _recording_server_public_host(
-    *,
-    execution_environment: str,
-    runtime_mode: str,
-    container_executable: str | None,
-) -> str | None:
-    explicit = os.environ.get("HF_RECORDING_PUBLIC_HOST")
-    if explicit:
-        return explicit
-    if container_executable == "docker" and (
-        execution_environment == "container" or runtime_mode == "task_container_agent"
-    ):
-        return _DOCKER_HOST_GATEWAY
-    return None
-
-
-def _collect_trace_run_config(
-    *,
-    record_internals: bool,
-    local_hf: bool,
-) -> dict[str, Any]:
-    """Return trace run_config fields implied by collect backend knobs."""
-    run_config: dict[str, Any] = {}
-    if record_internals:
-        run_config["record_internals"] = True
-    if local_hf:
-        run_config["local_hf"] = True
-        run_config["hf_backend"] = "local_hf"
-    return run_config
 
 
 def _prepare_collect_model_backend(
     *,
-    use_hf_backend: bool,
-    record_internals: bool,
-    local_hf: bool,
     model: str,
     api_base: str,
     api_key: str,
     provider_name: str | None,
-    execution_environment: str,
-    runtime_mode: str,
-    container_executable: str | None,
-    cleanup_stack: ExitStack,
-    eviction_config: "EvictionPolicyConfig | None",
-    sparse_attention_config: "SparseAttentionConfig | None",
-    per_head_stats_layers: tuple[int, ...],
-    per_head_block_stats: bool,
-    record_per_head_topk: bool,
-    per_head_topk_rank: int,
-    generation_seed: int,
-    temperature: float | None,
-    top_p: float | None,
-    top_k: int | None,
-    repetition_penalty: float | None,
     generation_config: dict[str, Any],
 ) -> _CollectModelBackend:
-    """Build the single model-provider path used by host and container agents.
-
-    External OpenAI-compatible endpoints (remote providers and local vLLM) pass
-    through unchanged. Internal HF runs materialize an OpenAI-compatible local
-    recording server and expose only that derived endpoint to the scaffold.
-    """
-    trace_run_config = _collect_trace_run_config(
-        record_internals=record_internals,
-        local_hf=local_hf,
-    )
-    if not use_hf_backend:
-        provider = UnifiedProvider(
-            api_key=api_key,
-            api_base=api_base,
-            default_model=model,
-            **generation_config,
-        )
-        return _CollectModelBackend(
-            provider=provider,
-            provider_name=provider_name,
-            api_base=api_base,
-            api_key=api_key,
-            recording_provider=None,
-            trace_run_config=trace_run_config,
-        )
-
-    # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
-    from serving.recording import (
-        HFRecordingProvider,
-        HFRecordingServer,
-        RecordingConfig,
-    )
-
-    recording_provider = cleanup_stack.enter_context(
-        HFRecordingProvider(
-            default_model=model,
-            config=RecordingConfig(
-                record_artifacts=bool(record_internals),
-                per_head_stats_layers=tuple(per_head_stats_layers),
-                per_head_block_stats=bool(per_head_block_stats),
-                record_per_head_topk=bool(record_per_head_topk),
-                per_head_topk_rank=int(per_head_topk_rank),
-                generation_seed=int(generation_seed),
-            ),
-            eviction_config=eviction_config,
-            sparse_attention_config=sparse_attention_config,
-            temperature=temperature if temperature is not None else 0.1,
-            top_p=top_p,
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
-        )
-    )
-    recording_server = cleanup_stack.enter_context(
-        HFRecordingServer(
-            recording_provider,
-            public_host=_recording_server_public_host(
-                execution_environment=execution_environment,
-                runtime_mode=runtime_mode,
-                container_executable=container_executable,
-            ),
-        )
+    """Build the cloud/OpenAI-compatible model-provider path."""
+    provider = UnifiedProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+        **generation_config,
     )
     return _CollectModelBackend(
-        provider=recording_provider,
-        provider_name="openai",
-        api_base=recording_server.api_base,
-        api_key=_INTERNAL_HF_API_KEY,
-        recording_provider=recording_provider,
-        trace_run_config=trace_run_config,
+        provider=provider,
+        provider_name=provider_name,
+        api_base=api_base,
+        api_key=api_key,
+        trace_run_config={},
     )
-
 
 def load_mcp_servers(mcp_config: str | None) -> dict:
     """Parse a ``--mcp-config`` argument into ``dict[str, MCPServerConfig]``."""
@@ -683,33 +568,8 @@ async def collect_traces(
     mcp_config: str | None = None,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
-    record_internals: bool = False,
-    local_hf: bool = False,
-    eviction_config: "EvictionPolicyConfig | None" = None,
-    sparse_attention_config: "SparseAttentionConfig | None" = None,
-    per_head_stats_layers: tuple[int, ...] = (),
-    per_head_block_stats: bool = False,
-    record_per_head_topk: bool = False,
-    per_head_topk_rank: int = 64,
-    generation_seed: int = 0,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
-    use_hf_backend = bool(local_hf or record_internals or eviction_config is not None)
-    if use_hf_backend and scaffold != "openclaw":
-        raise ValueError(
-            "HF-backed recording / KV eviction currently supports "
-            "scaffold='openclaw' only"
-        )
-    if sparse_attention_config is not None and not record_internals:
-        raise ValueError("--sparse-attn requires --record-internals")
-    if eviction_config is not None and not record_internals:
-        from serving.kv_policies import eviction_policy_requires_attention
-
-        if eviction_policy_requires_attention(eviction_config):
-            raise ValueError(
-                "The selected KV eviction policy requires attention; pass "
-                "--record-internals so AttentionBus can publish post-softmax scores."
-            )
     benchmark.validate_scaffold_support(scaffold)
     execution_environment = benchmark.execution_environment
     if execution_environment not in {"container", "host"}:
@@ -734,117 +594,96 @@ async def collect_traces(
         top_k=top_k,
         repetition_penalty=repetition_penalty,
     )
-    with ExitStack() as cleanup_stack:
-        model_backend = _prepare_collect_model_backend(
-            use_hf_backend=use_hf_backend,
-            record_internals=record_internals,
-            local_hf=local_hf,
+    model_backend = _prepare_collect_model_backend(
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
+        provider_name=provider_name,
+        generation_config=generation_config,
+    )
+    runner = None
+    if runtime_mode == "host_controller":
+        runner = benchmark.build_runner(
+            scaffold=scaffold,
+            provider=model_backend.provider,
+            workspace_base=run_dir / "_workspace_base",
+            max_iterations=max_iterations,
+            context_window_tokens=max_context_tokens,
             model=model,
-            api_base=api_base,
-            api_key=api_key,
-            provider_name=provider_name,
-            execution_environment=execution_environment,
-            runtime_mode=runtime_mode,
-            container_executable=container_executable,
-            cleanup_stack=cleanup_stack,
-            eviction_config=eviction_config,
-            sparse_attention_config=sparse_attention_config,
-            per_head_stats_layers=tuple(per_head_stats_layers),
-            per_head_block_stats=per_head_block_stats,
-            record_per_head_topk=record_per_head_topk,
-            per_head_topk_rank=per_head_topk_rank,
-            generation_seed=generation_seed,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
+            provider_name=model_backend.provider_name,
+            env_key=env_key,
+            api_base=model_backend.api_base,
+            api_key=model_backend.api_key,
+            mcp_config=mcp_config,
+            mcp_servers=load_mcp_servers(mcp_config),
             generation_config=generation_config,
         )
-        runner = None
-        if runtime_mode == "host_controller":
-            runner = benchmark.build_runner(
-                scaffold=scaffold,
-                provider=model_backend.provider,
-                workspace_base=run_dir / "_workspace_base",
-                max_iterations=max_iterations,
-                context_window_tokens=max_context_tokens,
-                model=model,
-                provider_name=model_backend.provider_name,
-                env_key=env_key,
-                api_base=model_backend.api_base,
-                api_key=model_backend.api_key,
-                mcp_config=mcp_config,
-                mcp_servers=load_mcp_servers(mcp_config),
-                generation_config=generation_config,
-            )
 
-        tasks = _select_tasks(
-            benchmark.load_tasks(),
-            instance_ids=instance_ids,
-            sample=sample,
-        )
+    tasks = _select_tasks(
+        benchmark.load_tasks(),
+        instance_ids=instance_ids,
+        sample=sample,
+    )
 
-        def make_inner(task: dict[str, Any]):
-            async def inner(ctx: AttemptContext) -> AttemptResult:
-                if ctx.agent_runtime_mode == "task_container_agent":
-                    if scaffold != "openclaw":
-                        raise NotImplementedError(
-                            "task-container collection currently supports "
-                            f"scaffold='openclaw', got {scaffold!r}"
-                        )
-                    if container_executable is None:
-                        raise ValueError(
-                            "container_executable is required for task-container runs"
-                        )
-                    return await _run_openclaw_in_task_container(
-                        ctx=ctx,
-                        task=task,
-                        benchmark=benchmark,
-                        provider_name=model_backend.provider_name,
-                        api_base=model_backend.api_base,
-                        api_key=model_backend.api_key,
-                        model=model,
-                        max_iterations=max_iterations,
-                        generation_config=generation_config,
-                        max_context_tokens=max_context_tokens,
-                        mcp_config=mcp_config,
-                        container_executable=container_executable,
-                        run_config_overrides=model_backend.trace_run_config,
+    def make_inner(task: dict[str, Any]):
+        async def inner(ctx: AttemptContext) -> AttemptResult:
+            if ctx.agent_runtime_mode == "task_container_agent":
+                if scaffold != "openclaw":
+                    raise NotImplementedError(
+                        "task-container collection currently supports "
+                        f"scaffold='openclaw', got {scaffold!r}"
                     )
-
-                assert runner is not None
-                result = await runner.run_task(
-                    task,
-                    attempt_ctx=ctx,
-                    prompt_template=ctx.prompt_template,
+                if container_executable is None:
+                    raise ValueError(
+                        "container_executable is required for task-container runs"
+                    )
+                return await _run_openclaw_in_task_container(
+                    ctx=ctx,
+                    task=task,
+                    benchmark=benchmark,
+                    provider_name=model_backend.provider_name,
+                    api_base=model_backend.api_base,
+                    api_key=model_backend.api_key,
+                    model=model,
+                    max_iterations=max_iterations,
+                    generation_config=generation_config,
+                    max_context_tokens=max_context_tokens,
+                    mcp_config=mcp_config,
+                    container_executable=container_executable,
+                    run_config_overrides=model_backend.trace_run_config,
                 )
-                if not isinstance(result, AttemptResult):
-                    raise TypeError(
-                        "benchmark runner returned "
-                        f"{type(result).__name__}, expected AttemptResult"
-                    )
-                if model_backend.trace_run_config and result.trace_path is not None:
-                    _stamp_trace_run_config(
-                        result.trace_path,
-                        model_backend.trace_run_config,
-                    )
-                return result
 
-            return inner
+            assert runner is not None
+            result = await runner.run_task(
+                task,
+                attempt_ctx=ctx,
+                prompt_template=ctx.prompt_template,
+            )
+            if not isinstance(result, AttemptResult):
+                raise TypeError(
+                    "benchmark runner returned "
+                    f"{type(result).__name__}, expected AttemptResult"
+                )
+            if model_backend.trace_run_config and result.trace_path is not None:
+                _stamp_trace_run_config(
+                    result.trace_path,
+                    model_backend.trace_run_config,
+                )
+            return result
 
-        return await _run_scaffold_tasks(
-            benchmark=benchmark,
-            tasks=tasks,
-            run_dir=run_dir,
-            model=model,
-            scaffold=scaffold,
-            container_executable=container_executable,
-            prompt_template=prompt_template,
-            min_free_disk_gb=min_free_disk_gb,
-            inner_factory=make_inner,
-            recording_provider=model_backend.recording_provider,
-        )
+        return inner
 
+    return await _run_scaffold_tasks(
+        benchmark=benchmark,
+        tasks=tasks,
+        run_dir=run_dir,
+        model=model,
+        scaffold=scaffold,
+        container_executable=container_executable,
+        prompt_template=prompt_template,
+        min_free_disk_gb=min_free_disk_gb,
+        inner_factory=make_inner,
+    )
 
 def _set_run_config(merged: dict[str, Any], key: str, value: Any) -> None:
     run_config = merged.get("run_config") or {}

@@ -185,8 +185,6 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
     for heavy_dep in (
         "datasets",
         "terminal-bench",
-        "transformers",
-        "accelerate",
         "trafilatura",
     ):
         assert heavy_dep not in input_script

@@ -1,195 +1,95 @@
-# agent-sched-bench
+# agent-sched-bench (`dev/cpu-only`)
 
-Benchmark environment for studying agent scheduling and KV-cache management on
-multi-step LLM workloads. The repo ships three top-level capabilities:
+CPU/cloud-provider-only branch for collecting and replaying multi-step agent
+traces. This branch intentionally removes local model backends, vLLM,
+HuggingFace model execution, KV/sparse-attention experiments, and GPU profiling.
 
-1. **Trace collect** — run agent scaffolds on benchmark tasks inside containers
-   and record canonical JSONL traces (`python -m trace_collect.cli`).
-2. **Trace simulate** — replay collected traces under bounded concurrency or
-   against a local serving stack to measure scheduling-sensitive timing
-   (`python -m trace_collect.cli simulate`).
-3. **Gantt viewer demo** — an interactive FastAPI + Solid.js viewer under
-   `demo/gantt_viewer/` for inspecting traces as multi-lane Gantt charts with
-   resource overlays.
+Top-level capabilities:
 
-`AGENTS.md` and `CLAUDE.md` define research-integrity and process rules.
+1. **Trace collect** — run agent scaffolds on benchmark tasks and record canonical
+   JSONL traces with cloud/OpenAI-compatible model providers.
+2. **Trace simulate** — replay collected traces under bounded concurrency using
+   source-trace timing; no LLM requests are issued during replay.
+3. **Gantt viewer demo** — inspect traces as multi-lane Gantt charts under
+   `demo/gantt_viewer/`.
 
 ## Repository Layout
 
 ```text
 agent-sched-bench/
-├── configs/            # benchmark / system / trace_collect / sweep YAMLs
+├── configs/            # benchmark, prompt, MCP, and replay YAMLs
 ├── demo/gantt_viewer/  # FastAPI backend + Solid.js frontend
-├── docs/               # specs and plans
-├── scripts/            # setup, download, smoke, and runner shells
+├── scripts/            # setup, download, smoke, and utility shells
 ├── src/
 │   ├── agents/         # scaffolds + benchmark plugins
-│   ├── harness/        # runner, samplers, metrics, trace logger
+│   ├── harness/        # container/runtime samplers and trace logger
 │   ├── llm_call/       # provider registry + OpenAI-compatible client
-│   └── trace_collect/  # CLI: collect / simulate / import / inspect / gantt-serve
+│   └── trace_collect/  # CLI: collect / simulate / inspect / gantt-serve
 └── tests/
 ```
 
 ## Development Workflow
 
-All Python runs inside the project `.venv` (Python 3.12, managed by `uv`). On a
-fresh server, run `bash scripts/setup/benchmark_server.sh` once — it
-installs `uv`, creates `.venv` at the repo root, installs deps, prewarms the
-model, validates the terminal-bench benchmark loads, and prints a ready-to-run
-smoke command. Then activate the venv:
+Use `uv` and the project `.venv` at the repo root:
 
 ```bash
+uv sync --extra dev
 source .venv/bin/activate
-make help    # list all targets
-make test    # run pytest
-make lint    # ruff
+make help
+make test
+make lint
 ```
 
 ## Trace Collect
 
 Run an agent scaffold on a benchmark and record a canonical v5 JSONL trace per
-task. The CLI requires an explicit `--provider` and `--model` and loads
-benchmark specifics from `configs/benchmarks/<slug>.yaml`.
+task. The CLI requires explicit `--provider` and `--model`; benchmark specifics
+come from `configs/benchmarks/<slug>.yaml`.
 
 ```bash
-source .venv/bin/activate
-make download-swe-rebench         # or download-swebench-verified
-make setup-swe-rebench-repos      # or setup-swebench-repos
 PYTHONPATH=src python -m trace_collect.cli \
     --provider dashscope \
     --model qwen-plus-latest \
     --benchmark swe-rebench \
     --scaffold openclaw \
+    --container docker \
     --mcp-config none \
     --sample 2
 ```
 
-Key flags: `--benchmark <slug>` (default `swe-bench-verified`),
-`--scaffold openclaw|tongyi-deepresearch`, `--mcp-config` (required for
-`openclaw`; YAML path or the literal `none`), `--sample N`,
-`--instance-ids a,b,c`, `--run-id <path>` (resume an interrupted run),
-`--prompt-template <name>` (override the benchmark default).
+Key flags: `--benchmark <slug>`, `--scaffold openclaw`, `--mcp-config` (required
+for OpenClaw; YAML path or literal `none`), `--sample N`, `--instance-ids a,b,c`,
+`--run-id <path>`, `--prompt-template <name>`, and provider sampling flags
+`--temperature`, `--top-p`, `--top-k`, `--repetition-penalty`.
 
-See `src/trace_collect/CLAUDE.md` for the complete flag reference, provider
-registry, checkpointing behaviour, and trace schema v5 layout.
-
-### Recording Internals
-
-`--record-internals` switches OpenClaw model calls to a host-side HuggingFace
-backend and records reduced attention/MoE artifacts beside each attempt.
-It currently supports `--scaffold openclaw` only.
-For task-container benchmarks, the container talks to a temporary local
-OpenAI-compatible proxy backed by that host model, so benchmark tools still run
-inside the task container. Docker task containers use `172.17.0.1` as the
-default host gateway for that proxy; set `HF_RECORDING_PUBLIC_HOST` if the
-server uses a different bridge address.
-
-```bash
-PYTHONPATH=src python -m trace_collect.cli \
-    --provider openai --api-key hf-recording \
-    --model Qwen/Qwen3-Coder-30B-A3B-Instruct \
-    --benchmark swe-rebench \
-    --scaffold openclaw \
-    --container docker \
-    --mcp-config none \
-    --sample 1 \
-    --record-internals
-```
-
-Artifacts are written under
-`<attempt_dir>/recordings/iter_0000/{attention.npz,routing.npz,segments.json}`
-plus `<attempt_dir>/recordings/meta.json`. `call_idx` is 0-based and aligns to
-the nth `action_type="llm_call"` record in `trace.jsonl`.
-
-Sanity-check one call:
-
-```bash
-python scripts/load_recording.py --attempt-dir <attempt_dir> --call-idx 0
-```
-
-Recording uses `attn_implementation="sdpa"` for the model path and computes
-only sampled attention rows inside hooks. It forces
-`NANOBOT_MAX_CONCURRENT_REQUESTS=1` and is intended for data collection, not
-production throughput.
-
-### Registered Benchmarks
-
-| Slug | `task_shape` | Dataset | Split | Docker | Scaffolds | Scoring |
-|---|---|---|---|---|---|---|
-| `swe-bench-verified` | `swe_patch` | `princeton-nlp/SWE-bench_Verified` | `test` | `swebench/sweb.eval.x86.*` (namespace-prefixed) | openclaw | harness (pytest in container) |
-| `swe-rebench` | `swe_patch` | `nebius/SWE-rebench` | `filtered` | `swerebench/sweb.eval.x86_64.*` (fully qualified) | openclaw | harness (pytest in container) |
-| `terminal-bench` | `terminal_task` | `terminal-bench-core` (or local task dir) | n/a | Terminal-Bench-managed | openclaw (phase 1) | Terminal-Bench harness + imported OpenClaw trace |
-| `deep-research-bench` | `research_qa` | configured in YAML | `test` | host | openclaw, tongyi-deepresearch | reference-answer comparison |
-| `browsecomp` | `browse_qa` | configured in YAML | `test` | host | openclaw, tongyi-deepresearch | reference-answer comparison |
-
-Terminal-Bench requires Python 3.12+ (upstream `tb` CLI dependency) and only
-supports `--scaffold openclaw` with the Docker runtime in phase 1.
-
-### Adding a New Benchmark
-
-Benchmarks live in `src/agents/benchmarks/<slug>.py` with a matching
-`configs/benchmarks/<slug>.yaml`. See `src/agents/benchmarks/base.py` for the
-`Benchmark` ABC and `BenchmarkConfig` fields, plus `CLAUDE.md §Benchmark Plugin
-Architecture` for the enforcement rules. Short version:
-
-1. Implement a `Benchmark` subclass in `src/agents/benchmarks/<slug>.py`.
-2. Author `configs/benchmarks/<slug>.yaml` with the `BenchmarkConfig` fields.
-3. Register the class in `src/agents/benchmarks/__init__.py::REGISTRY`.
-4. Add `tests/test_<slug>_plugin.py` covering `normalize_task`.
-5. Add `make download-<slug>` / `make setup-<slug>-repos` Makefile targets.
-
-Dataset names, image namespaces, and CLI-visible defaults must live in YAML —
-never hardcode them in `collector.py`, `cli.py`, or scaffold code.
+Supported providers live in `src/llm_call/providers.py`. Use `--api-base` and
+`--api-key` for OpenAI-compatible gateways when the built-in provider URL or env
+var is not enough.
 
 ## Trace Simulate
 
-Replay a collected trace under new infrastructure assumptions. Two modes:
-
-| Mode | LLM calls | Timing source | Multi-trace | Use case |
-|---|---|---|---|---|
-| `cloud_model` | replayed from source trace (no API call) | `ts_start`/`ts_end` × `--replay-speed` | yes (`--manifest`) | "what throughput do we get at concurrency N?" |
-| `local_model` | sent to a real OpenAI-compatible endpoint | live TTFT + TPOT | manifest with exactly one trace | "what if we self-host on local vLLM?" |
-
-### cloud_model — bounded-concurrency sweep
+Replay collected traces with bounded concurrency using source action timing. This
+branch supports cloud replay only; there is no local model/vLLM mode.
 
 ```bash
 PYTHONPATH=src python -m trace_collect.cli simulate \
     --manifest /abs/path/to/simulate-manifest.yaml \
-    --mode cloud_model \
     --concurrency 1,2,4,8 \
     --container docker \
     --replay-speed 50
 ```
 
-`--concurrency 8` runs a single bounded-queue simulation with at most 8 active
-traces. `--concurrency 1,2,4,8` runs the same manifest sequentially at each
-concurrency and writes `throughput_sweep.jsonl`.
-Throughput is reported in manifest entries per second. If the same trace path is
-listed more than once, each listing is replayed as a separate entry.
-
-For container-mode traces, simulate prefetches the unique source Docker images
-before the bounded queue starts. Task containers are still created only when a
-worker admits that trace.
-
-Each attempt writes `container_startup.json` with fixed-image timing, container
-creation timing, and agent bootstrap timing. Startup resource samples are
-best-effort and may be empty; runtime resource sampling remains separate in
-`resources.json`.
+`--concurrency 8` runs one bounded-queue replay with at most 8 active traces.
+`--concurrency 1,2,4,8` runs a sweep and writes `throughput_sweep.jsonl`.
 
 Manifest input is YAML. The simplest form is a list of absolute trace paths:
 
 ```yaml
 - /abs/path/task-a/attempt_1/trace.jsonl
 - /abs/path/task-b/attempt_1/trace.jsonl
-- /abs/path/task-a/attempt_1/trace.jsonl  # replay task-a a second time
 ```
 
-Duplicate source traces get separate replay instance IDs such as
-`task-a__replica-001` and `task-a__replica-002`. Output actions use that replay
-ID as `agent_id`; the original task ID is preserved as `source_agent_id` and
-`task_id`.
-
-Use the structured form when traces need per-entry metadata:
+Structured entries can override task source or image:
 
 ```yaml
 version: 1
@@ -199,73 +99,32 @@ traces:
   - trace: /abs/path/task-a/attempt_1/trace.jsonl
     label: task-a
   - trace: /abs/path/task-b/attempt_1/trace.jsonl
-    task_source: /abs/path/other-tasks.json
-  - trace: /abs/path/task-c/attempt_1/trace.jsonl
     docker_image: custom/image:tag
 ```
 
-### local_model — self-hosted serving
+## Registered Benchmarks
 
-```bash
-PYTHONPATH=src python -m trace_collect.cli simulate \
-    --manifest /abs/path/to/single-trace-manifest.yaml \
-    --mode local_model \
-    --provider openai --api-base http://localhost:8000/v1 \
-    --api-key dummy --model Qwen/Qwen3-32B \
-    --container docker \
-    --metrics-url http://localhost:8000/metrics
-```
+| Slug | Task shape | Dataset | Scaffolds |
+|---|---|---|---|
+| `swe-bench-verified` | `swe_patch` | `princeton-nlp/SWE-bench_Verified` | openclaw |
+| `swe-rebench` | `swe_patch` | `nebius/SWE-rebench` | openclaw |
+| `terminal-bench` | `terminal_task` | Terminal-Bench tasks | openclaw |
 
-`--metrics-url` snapshots vLLM Prometheus counters per iteration
-(`num_preemptions_total`, `gpu_cache_usage_perc`, `*_prefix_cache_hit_rate`) into
-`TraceAction.data.sim_metrics`. Container resource usage is sampled at 1 Hz by
-`ContainerStatsSampler` after startup finishes and written to `resources.json`.
-
-**GPU memory tracking** (`--gpu-tracking on`): add `--vllm-pid`, `--vllm-startup-log`,
-and `--gpu-sample-hz` to capture a full GPU memory breakdown time-series (weights,
-KV cache, activations) sampled in the background and written to `gpu_resources.json`.
-For per-component (attn/mlp) deep profiling without a separate server, use the
-`profile-gpu` subcommand (requires `pip install -e .[profile]`; GPU + vLLM only).
-
-See `src/trace_collect/CLAUDE.md` §Simulate for the full flag table, manifest
-format, output directory layout, and simulation-specific fields in `action.data`.
+Dataset names, image namespaces, and CLI-visible defaults must live in YAML —
+not in `collector.py`, `cli.py`, or scaffold code.
 
 ## Inspecting Traces
 
 ```bash
 PYTHONPATH=src python -m trace_collect.cli inspect traces/.../trace.jsonl overview
-PYTHONPATH=src python -m trace_collect.cli inspect traces/.../trace.jsonl timeline --json
+PYTHONPATH=src python -m trace_collect.cli inspect traces/.../trace.jsonl timeline
 PYTHONPATH=src python -m trace_collect.cli inspect traces/.../trace.jsonl tools --agent <instance-id>
 ```
 
-Subcommands: `overview`, `step`, `messages`, `response`, `events`, `tools`,
-`search`, `timeline`. Filters: `--agent`, `--role`, `--category`, `--iteration`.
+## Explicitly removed from this branch
 
-## Demo: Gantt Viewer
-
-Interactive multi-lane Gantt visualisation for collected and simulated traces.
-FastAPI backend (`:8765`) + Solid.js / Vite frontend rendered on Canvas 2D.
-
-```bash
-make gantt-viewer-install   # one-time: npm install
-make gantt-viewer-dev       # dev mode (Vite HMR on :5173)
-make gantt-viewer-build     # production bundle into frontend/dist
-make gantt-viewer-test      # backend pytest + frontend vitest
-make gantt-viewer-smoke     # headless browser smoke check
-```
-
-Equivalent CLI:
-
-```bash
-PYTHONPATH=src:. python -m trace_collect.cli gantt-serve --dev
-PYTHONPATH=src:. python -m trace_collect.cli gantt-serve \
-    --config demo/gantt_viewer/configs/example.yaml
-```
-
-Discovery config globs accept canonical trace JSONL only.
-
-Smoke-only subsets belong in dedicated `*_smoke.yaml` workload configs; default
-workload configs should describe the full benchmark dataset path.
-
-See `demo/gantt_viewer/README.md` for the full acceptance workflow and
-`demo/gantt_viewer/AGENT_INTERFACE.md` for the REST-driven agent interface.
+- `vllm`, `torch`, `transformers`, `accelerate` dependencies
+- `src/serving/` local backend code
+- local-HF recording, KV eviction, sparse attention, and per-head artifacts
+- vLLM serving, metrics, startup parsing, and scheduler hooks
+- GPU / `nvidia-smi` profiling and `profile-gpu`

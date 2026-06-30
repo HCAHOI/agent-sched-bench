@@ -21,7 +21,7 @@ from llm_call.config import (
 
 def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Collect SWE-Bench agent traces using an external LLM API.",
+        description="Collect benchmark agent traces using a cloud LLM API.",
     )
     add_llm_config_arguments(parser)
     parser.add_argument(
@@ -128,282 +128,6 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Resume an interrupted run by passing its existing run directory path.",
     )
     parser.add_argument(
-        "--record-internals",
-        action="store_true",
-        help=(
-            "Record per-call attention aggregates and MoE routing with a "
-            "host-side HuggingFace SDPA backend. Forces OpenClaw model request "
-            "concurrency to 1 for the run."
-        ),
-    )
-    parser.add_argument(
-        "--local-hf",
-        action="store_true",
-        help=(
-            "Run the host-side HuggingFace backend, loading --model locally "
-            "instead of calling the external --provider endpoint. With "
-            "--kv-policy none, this uses plain full-KV DynamicCache plus the "
-            "session prefix cache, avoiding KV-policy proxy overhead."
-        ),
-    )
-    parser.add_argument(
-        "--kv-policy",
-        choices=[
-            "none",
-            "random",
-            "streaming",
-            "h2o",
-            "metadata",
-            "position_control",
-            "null_eviction",
-        ],
-        default="none",
-        help="KV cache eviction policy for the HF recording backend. See src/trace_collect/CLAUDE.md.",
-    )
-    parser.add_argument(
-        "--kv-budget",
-        type=int,
-        default=None,
-        help="Per-layer KV budget (kept tokens). Required when --kv-policy != none.",
-    )
-    parser.add_argument(
-        "--kv-sink-size",
-        type=int,
-        default=4,
-        help=(
-            "Sink-prefix length (head tokens kept) for `streaming` and `h2o`. "
-            "Default 4 matches StreamingLLM's §3 ablation. Ignored by "
-            "`random`."
-        ),
-    )
-    parser.add_argument(
-        "--kv-recent-window",
-        type=int,
-        default=256,
-        help=(
-            "Recent-window length (tail tokens kept) for `streaming` and "
-            "`h2o`. Default 256. Ignored by `random`."
-        ),
-    )
-    parser.add_argument(
-        "--kv-aggregate",
-        choices=["sum", "mean", "ema"],
-        default="sum",
-        help="H2O score aggregation: sum (default) | mean | ema (yaml-only decay). Ignored by random/streaming.",
-    )
-    parser.add_argument(
-        "--kv-config",
-        type=str,
-        default=None,
-        help="YAML under configs/kv_policies/ with EvictionPolicyConfig fields; CLI flags overlay yaml.",
-    )
-    parser.add_argument(
-        "--kv-metadata-rung",
-        choices=["rung1", "rung2", "rung3", "rung4"],
-        default="rung4",
-        help=(
-            "Metadata-residency ablation rung. rung1=role/age/offset only; "
-            "rung2 adds sink+recent reservation; rung3 adds recent tool-result "
-            "reservation; rung4 adds tool error/exit-code reservation."
-        ),
-    )
-    parser.add_argument(
-        "--kv-position-control",
-        choices=["random", "middle", "structured"],
-        default="random",
-        help=(
-            "Control mode for --kv-policy position_control. Controls use no "
-            "role or exit-code metadata and are later matched on Delta-pos."
-        ),
-    )
-    parser.add_argument(
-        "--kv-per-layer-table",
-        action="store_true",
-        help=(
-            "Enable the pre-registered per-layer metadata table arm. Requires "
-            "--kv-per-layer-table-path with a frozen P0 score table; global "
-            "remains the default."
-        ),
-    )
-    parser.add_argument(
-        "--kv-per-layer-table-path",
-        type=str,
-        default=None,
-        help=(
-            "Path to the frozen P0 per-layer metadata score table used by "
-            "--kv-per-layer-table. The table is required before any GPU "
-            "campaign arm can be labeled per_layer_table=true."
-        ),
-    )
-    parser.add_argument(
-        "--kv-per-layer-budget",
-        action="store_true",
-        help=(
-            "Enable the stretch per-layer budget arm. This is parsed for "
-            "pre-registration but should not be used without a frozen P0 rule."
-        ),
-    )
-    parser.add_argument(
-        "--kv-record",
-        choices=["on", "off"],
-        default="on",
-        help=(
-            "Whether to write `kv_eviction.npz` recordings. Default `on` "
-            "preserves the audit trail. `off` runs the policy but skips the "
-            "per-call recorder allocation and npz write — used by the perf "
-            "microbench to isolate eviction overhead from recording "
-            "overhead. Meaningful only when --kv-policy != none."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn",
-        choices=[
-            "none",
-            "sliding",
-            "streaming",
-            "heavy_hitter",
-            "block_topk",
-            "quest",
-            "metadata",
-        ],
-        default="none",
-        help=(
-            "Sparse attention method for the HF recording backend. Enforce mode is "
-            "mutually exclusive with --kv-policy. Requires --record-internals. "
-            "See src/trace_collect/CLAUDE.md."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-sink-size",
-        type=int,
-        default=4,
-        help=(
-            "Sink-prefix length kept attended for `sliding`. Default 4. "
-            "Ignored when --sparse-attn != sliding."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-recent-window",
-        type=int,
-        default=256,
-        help=(
-            "Recent-window length kept attended for `sliding`. Default 256. "
-            "Ignored when --sparse-attn != sliding."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-config",
-        type=str,
-        default=None,
-        help=(
-            "Optional YAML file (e.g. configs/sparse_attention/sliding.yaml) "
-            "carrying a flat map of SparseAttentionConfig fields. CLI flags "
-            "overlay yaml using the same rules as --kv-config."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-record",
-        choices=["on", "off"],
-        default="on",
-        help=(
-            "Whether to write `sparse_attention.npz` recordings. Default "
-            "`on`. `off` runs the method but skips the per-call recorder "
-            "allocation and npz write. Meaningful only when --sparse-attn "
-            "!= none."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-observe-only",
-        action="store_true",
-        help="Record sparse selection without enforcing it (compatible with --kv-policy).",
-    )
-    parser.add_argument(
-        "--sparse-attn-budget",
-        type=int,
-        default=None,
-        help=(
-            "Token budget for dynamic sparse attention methods "
-            "(`heavy_hitter`, `block_topk`, `quest`)."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-block-size",
-        type=int,
-        default=16,
-        help="Block/page size for `block_topk` and `quest`. Default 16.",
-    )
-    parser.add_argument(
-        "--sparse-attn-score-reduction",
-        choices=["max", "mean", "vote"],
-        default="max",
-        help=(
-            "How to reduce token scores into block/page scores. Default max. "
-            "'vote' (block_topk only) ranks blocks by cross-head top-B votes."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-phase-scope",
-        choices=["decode_only"],
-        default="decode_only",
-        help=(
-            "Where dynamic methods enforce sparse masks. Only decode_only is "
-            "currently supported; prefill remains dense causal."
-        ),
-    )
-    parser.add_argument(
-        "--sparse-attn-metadata-rung",
-        choices=["rung1", "rung2", "rung3", "rung4"],
-        default="rung4",
-        help=(
-            "Rung for the observe-only metadata sparse sidecar. Meaningful "
-            "only with --sparse-attn metadata."
-        ),
-    )
-    parser.add_argument(
-        "--per-head-stats-layers",
-        type=str,
-        default=None,
-        help=(
-            "Comma-separated layer indices or preset 'qwen3-coder-30b'/'default' for "
-            "per-head head_span_* arrays. Requires --record-internals."
-        ),
-    )
-    parser.add_argument(
-        "--per-head-block-stats",
-        action="store_true",
-        help=(
-            "Capture per-selected-block attention mean/std into block_span_* arrays "
-            "(bucket axis = sink | selection rank 1..R_max | recent). "
-            "Requires --record-internals, --sparse-attn block_topk, non-empty --per-head-stats-layers."
-        ),
-    )
-    parser.add_argument(
-        "--record-per-head-topk",
-        action="store_true",
-        help=(
-            "Record per-head independent top-R block selections into per_head_topk_csr_* arrays. "
-            "Requires --record-internals, --sparse-attn block_topk, non-empty --per-head-stats-layers."
-        ),
-    )
-    parser.add_argument(
-        "--per-head-topk-rank",
-        type=int,
-        default=64,
-        help=(
-            "Per-head rank cap R_ph for --record-per-head-topk. Default 64 "
-            "(matches the typical middle-block budget). Lower it to cut storage."
-        ),
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help=(
-            "Generation seed for the HF recording backend. Campaign scripts "
-            "sweep this as the task x policy x beta x seed dimension."
-        ),
-    )
-    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -411,10 +135,9 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
-
 def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Simulate a trace with local model timing (TTFT/TPOT).",
+        description="Replay cloud-model traces using source-trace timing.",
     )
     parser.add_argument(
         "--manifest",
@@ -424,23 +147,18 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
             "or an object with defaults.task_source and traces entries."
         ),
     )
-    add_llm_config_arguments(parser)
     parser.add_argument(
         "--mode",
-        choices=["local_model", "cloud_model"],
-        default="local_model",
-        help=(
-            "Simulation mode. local_model replays one trace through a local "
-            "OpenAI-compatible model; cloud_model replays one or more traces "
-            "using source-trace timing without issuing any LLM requests."
-        ),
+        choices=["cloud_model"],
+        default="cloud_model",
+        help="Replay mode. Only cloud_model is supported on this branch.",
     )
     parser.add_argument(
         "--concurrency",
         default="1",
         help=(
-            "Maximum active traces for cloud_model. Use a comma-separated list "
-            "such as 1,2,4,8 to run a throughput sweep."
+            "Maximum active traces. Use a comma-separated list such as 1,2,4,8 "
+            "to run a throughput sweep."
         ),
     )
     parser.add_argument(
@@ -474,26 +192,12 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--metrics-url",
-        default=None,
-        help=(
-            "vLLM Prometheus /metrics endpoint URL. When set, the simulator "
-            "snapshots scheduler metrics (PreemptionSnapshot) per iteration "
-            "and stores them under TraceAction.data.sim_metrics. When unset, "
-            "the simulator records empty (all-None) snapshots — the explicit "
-            "opt-out path used for local runs without a vLLM server."
-        ),
-    )
-    parser.add_argument(
         "--warmup-skip-iterations",
         type=int,
         default=0,
         help=(
             "Tag the first N replay iterations with sim_metrics.warmup=true "
-            "for analysis-time exclusion. Iterations are still measured at "
-            "collection time; the flag controls analysis treatment only. "
-            "Default 0 (no warmup tagging). Opt in only when first-iteration "
-            "latency variance is empirically >20%% vs steady-state."
+            "for analysis-time exclusion. Iterations are still replayed."
         ),
     )
     parser.add_argument(
@@ -501,38 +205,8 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         type=float,
         default=1.0,
         help=(
-            "Wall-clock acceleration factor for cloud_model replay. "
-            "Example: --replay-speed 50 replays source timing at 50x."
-        ),
-    )
-    parser.add_argument(
-        "--gpu-tracking",
-        choices=["on", "off"],
-        default="off",
-        help=(
-            "Enable GPU memory tracking. When 'on', requires --metrics-url, "
-            "--vllm-pid, and --vllm-startup-log. Forbidden in cloud_model mode."
-        ),
-    )
-    parser.add_argument(
-        "--gpu-sample-hz",
-        type=float,
-        default=10.0,
-        help="GPU memory sampling rate in Hz (default: 10.0). Used only when --gpu-tracking on.",
-    )
-    parser.add_argument(
-        "--vllm-pid",
-        type=int,
-        default=None,
-        help="PID of the vLLM server process. Required when --gpu-tracking on.",
-    )
-    parser.add_argument(
-        "--vllm-startup-log",
-        type=Path,
-        default=None,
-        help=(
-            "Path to vLLM startup stderr log. Required when --gpu-tracking on. "
-            "Used to extract GPU baseline (weights MiB, KV cache MiB)."
+            "Wall-clock acceleration factor. Example: --replay-speed 50 "
+            "replays source timing at 50x."
         ),
     )
     parser.add_argument(
@@ -542,7 +216,6 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Enable verbose logging.",
     )
     return parser.parse_args(argv)
-
 
 def main() -> None:
     sub = sys.argv[1] if len(sys.argv) > 1 else None
@@ -562,46 +235,11 @@ def main() -> None:
 
         result = export_from_args(build_gantt_export_parser().parse_args(sys.argv[2:]))
         print(json.dumps(result, indent=2, sort_keys=True))
-    elif sub == "profile-gpu":
-        from trace_collect.profile_gpu import main as run_profile_gpu
-
-        sys.exit(run_profile_gpu(sys.argv[2:]))
     else:
         _run_collect(parse_collect_args())
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-_QWEN3_CODER_30B_LAYERS: tuple[int, ...] = (0, 6, 12, 18, 24, 30, 36, 47)
-_PER_HEAD_STATS_PRESETS: dict[str, tuple[int, ...]] = {
-    "qwen3-coder-30b": _QWEN3_CODER_30B_LAYERS,
-    "default": _QWEN3_CODER_30B_LAYERS,
-}
-
-
-def _parse_per_head_stats_layers(value: str | None) -> tuple[int, ...]:
-    """Resolve --per-head-stats-layers into a sorted tuple of layer indices.
-
-    Accepts a preset token (case-insensitive) or a comma-separated integer
-    list. Empty/None disables the feature (empty tuple). Out-of-range checks
-    against the model's layer count happen later in the recording stack.
-    """
-    if value is None:
-        return ()
-    token = value.strip()
-    if token == "":
-        return ()
-    preset = _PER_HEAD_STATS_PRESETS.get(token.lower())
-    if preset is not None:
-        return preset
-    layers = tuple(int(part) for part in token.split(",") if part.strip() != "")
-    if not layers:
-        raise ValueError(f"--per-head-stats-layers parsed to no layers: {value!r}")
-    if any(layer < 0 for layer in layers):
-        raise ValueError("--per-head-stats-layers indices must be non-negative")
-    return tuple(sorted(set(layers)))
-
 
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
@@ -619,79 +257,6 @@ def _run_collect(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
-    # KV eviction uses the HF backend because that is where HF Cache subclasses
-    # can be injected. Attention-independent policies may run without recording
-    # internal artifacts; attention-dependent policies are checked after config
-    # resolution via the policy capability registry.
-    sparse_attn_active = (
-        args.sparse_attn != "none" or args.sparse_attn_config is not None
-    )
-    if sparse_attn_active and not args.record_internals:
-        print(
-            "ERROR: --sparse-attn / --sparse-attn-config requires "
-            "--record-internals (sparse attention only applies to the HF "
-            "recording backend).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    if args.per_head_stats_layers and not args.record_internals:
-        print(
-            "ERROR: --per-head-stats-layers requires --record-internals "
-            "(per-head span stats only apply to the HF recording backend).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    try:
-        per_head_stats_layers = _parse_per_head_stats_layers(
-            args.per_head_stats_layers
-        )
-    except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(2)
-
-    # Per-selected-block within-block stats require the block_topk method (its
-    # selection ranking IS the bucket axis) AND recorded layers to aggregate
-    # over. Validate eagerly (no silent fallback) using a torch-free sparse
-    # config resolution so the misconfig surfaces before model load. The main
-    # resolution + exclusivity check below re-derives the config for collection.
-    if args.per_head_block_stats or args.record_per_head_topk:
-        from serving.sparse_attention.config import load_sparse_attention_config
-
-        block_sparse_config = load_sparse_attention_config(args)
-        method_name = (
-            block_sparse_config.name if block_sparse_config is not None else "none"
-        )
-        # Name the offending flag in the message so a user enabling either knob
-        # without block_topk gets a specific, no-silent-fallback error.
-        offending = (
-            "--per-head-block-stats"
-            if args.per_head_block_stats
-            else "--record-per-head-topk"
-        )
-        if method_name != "block_topk":
-            print(
-                f"ERROR: {offending} requires --sparse-attn block_topk "
-                f"(resolved method: {method_name!r}).",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        if not per_head_stats_layers:
-            print(
-                f"ERROR: {offending} requires a non-empty --per-head-stats-layers "
-                "(which layers to record for).",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-    if args.record_per_head_topk and args.per_head_topk_rank <= 0:
-        print(
-            "ERROR: --per-head-topk-rank must be > 0 "
-            f"(got {args.per_head_topk_rank!r}).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    if args.record_internals or args.local_hf:
-        os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
 
     try:
         provider_config = resolve_llm_config(
@@ -704,7 +269,7 @@ def _run_collect(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
-    if not provider_config.api_key and not args.local_hf:
+    if not provider_config.api_key:
         print(
             f"ERROR: Set {provider_config.env_key} or pass --api-key.",
             file=sys.stderr,
@@ -713,33 +278,7 @@ def _run_collect(args: argparse.Namespace) -> None:
 
     from agents.benchmarks import get_benchmark_class
     from agents.benchmarks.base import BenchmarkConfig
-    from serving.kv_policies import eviction_policy_requires_attention
-    from serving.kv_policies.config import load_eviction_config
-    from serving.sparse_attention.config import (
-        load_sparse_attention_config,
-        validate_attention_method_exclusivity,
-    )
     from trace_collect.collector import collect_traces
-
-    eviction_config = load_eviction_config(args)
-    if eviction_config is not None:
-        os.environ["NANOBOT_MAX_CONCURRENT_REQUESTS"] = "1"
-        if (
-            eviction_policy_requires_attention(eviction_config)
-            and not args.record_internals
-        ):
-            print(
-                "ERROR: the selected KV policy requires attention; pass "
-                "--record-internals so AttentionBus can publish post-softmax scores.",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-    try:
-        sparse_attention_config = load_sparse_attention_config(args)
-        validate_attention_method_exclusivity(eviction_config, sparse_attention_config)
-    except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(2)
 
     benchmark_yaml = REPO_ROOT / "configs" / "benchmarks" / f"{args.benchmark}.yaml"
     if not benchmark_yaml.exists():
@@ -771,23 +310,12 @@ def _run_collect(args: argparse.Namespace) -> None:
             mcp_config=args.mcp_config,
             prompt_template=args.prompt_template,
             min_free_disk_gb=args.min_free_disk_gb,
-            record_internals=args.record_internals,
-            local_hf=args.local_hf,
-            eviction_config=eviction_config,
-            sparse_attention_config=sparse_attention_config,
-            per_head_stats_layers=per_head_stats_layers,
-            per_head_block_stats=args.per_head_block_stats,
-            record_per_head_topk=args.record_per_head_topk,
-            per_head_topk_rank=args.per_head_topk_rank,
-            generation_seed=args.seed,
         )
     )
     print(f"Traces written to: {run_dir}/")
     results_path = run_dir / "results.jsonl"
     if results_path.exists():
         print(f"Results written to: {results_path}")
-
-
 
 def _parse_concurrency_values(value: str) -> list[int]:
     parts = [part.strip() for part in value.split(",")]
@@ -819,13 +347,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    from trace_collect.simulator import simulate, validate_gpu_tracking_args
-
-    try:
-        validate_gpu_tracking_args(args)
-    except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(2)
+    from trace_collect.simulator import simulate
 
     try:
         concurrency_values = _parse_concurrency_values(args.concurrency)
@@ -846,89 +368,16 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "structured_output": args.output_dir == "traces/simulate",
     }
 
-    if args.mode == "cloud_model":
-        if args.metrics_url:
-            print(
-                "ERROR: cloud_model replay does not support --metrics-url.",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"
-        if len(concurrency_values) > 1 and sweep_path.exists():
-            sweep_path.unlink()
-        for concurrency in concurrency_values:
-            trace_file = asyncio.run(
-                simulate(**simulate_kwargs, concurrency=concurrency)
-            )
-            print(f"Simulate trace written to: {trace_file}")
-            if len(concurrency_values) > 1:
-                _append_throughput_sweep_record(sweep_path, trace_file)
+    sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"
+    if len(concurrency_values) > 1 and sweep_path.exists():
+        sweep_path.unlink()
+    for concurrency in concurrency_values:
+        trace_file = asyncio.run(simulate(**simulate_kwargs, concurrency=concurrency))
+        print(f"Simulate trace written to: {trace_file}")
         if len(concurrency_values) > 1:
-            print(f"Throughput sweep written to: {sweep_path}")
-        return
-
-    if concurrency_values != [1]:
-        print(
-            "ERROR: local_model mode requires --concurrency 1.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    if not args.api_base:
-        print(
-            "ERROR: local_model simulate requires --api-base for the target "
-            "OpenAI-compatible endpoint.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    try:
-        llm_config = resolve_llm_config(
-            provider=args.provider,
-            api_base=args.api_base,
-            api_key=args.api_key,
-            model=args.model,
-            environ=os.environ,
-        )
-    except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(2)
-    if not llm_config.api_key:
-        print(
-            f"ERROR: Set {llm_config.env_key} or pass --api-key.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    gpu_tracking_kwargs: dict = {}
-    if args.gpu_tracking == "on":
-        from harness.vllm_startup_parser import parse_startup_log_file
-
-        gpu_baseline = parse_startup_log_file(args.vllm_startup_log)
-        if gpu_baseline is None:
-            print(
-                f"ERROR: Failed to parse vLLM startup log at {args.vllm_startup_log}; "
-                "check log file content and vLLM version (supported 0.5–0.7)",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        gpu_tracking_kwargs = {
-            "gpu_baseline": gpu_baseline,
-            "vllm_pid": args.vllm_pid,
-            "gpu_sample_hz": args.gpu_sample_hz,
-        }
-
-    trace_file = asyncio.run(
-        simulate(
-            **simulate_kwargs,
-            concurrency=1,
-            api_base=llm_config.api_base,
-            api_key=llm_config.api_key,
-            model=llm_config.model,
-            metrics_url=args.metrics_url,
-            **gpu_tracking_kwargs,
-        )
-    )
-    print(f"Simulate trace written to: {trace_file}")
-
+            _append_throughput_sweep_record(sweep_path, trace_file)
+    if len(concurrency_values) > 1:
+        print(f"Throughput sweep written to: {sweep_path}")
 
 def _run_inspect(argv: list[str]) -> None:
     import argparse as _argparse

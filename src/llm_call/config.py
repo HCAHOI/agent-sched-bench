@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import math
+import ipaddress
 import os
 from dataclasses import dataclass
 from typing import Mapping
+from urllib.parse import urlparse
 
 from llm_call.providers import PROVIDERS, provider_choices
 
@@ -96,6 +98,34 @@ def _float_arg(value: str, *, name: str) -> float:
     return parsed
 
 
+_LOCAL_API_HOSTS = {
+    "localhost",
+    "host.docker.internal",
+}
+
+
+def validate_cloud_api_base(api_base: str) -> None:
+    """Reject local/private OpenAI-compatible endpoints on this branch."""
+    parsed = urlparse(api_base)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"api_base must be an http(s) URL, got {api_base!r}.")
+    host = parsed.hostname.strip().lower().rstrip(".")
+    if host in _LOCAL_API_HOSTS:
+        raise ValueError(
+            "local/private OpenAI-compatible endpoints are not supported on this "
+            "branch; use a cloud provider API base."
+        )
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified:
+        raise ValueError(
+            "local/private OpenAI-compatible endpoints are not supported on this "
+            "branch; use a cloud provider API base."
+        )
+
+
 def resolve_llm_config(
     *,
     provider: str | None,
@@ -119,10 +149,12 @@ def resolve_llm_config(
 
     env = os.environ if environ is None else environ
     definition = PROVIDERS[provider]
+    resolved_api_base = api_base or definition.api_base
+    validate_cloud_api_base(resolved_api_base)
     resolved_api_key = api_key or env.get(definition.env_key, "")
     return ResolvedLLMConfig(
         name=provider,
-        api_base=api_base or definition.api_base,
+        api_base=resolved_api_base,
         api_key=resolved_api_key,
         model=model,
         env_key=definition.env_key,

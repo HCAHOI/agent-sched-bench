@@ -9,7 +9,6 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from terminal_bench.agents.base_agent import AgentResult
 from terminal_bench.agents.failure_mode import FailureMode
@@ -23,6 +22,7 @@ from agents.openclaw.runtime_deps import (
     OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS,
     OPENCLAW_MCP_RUNTIME_REQUIREMENTS,
 )
+from llm_call.config import validate_cloud_api_base
 
 
 def _optional_float(value: object) -> float | None:
@@ -49,13 +49,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     _SECRET_EXEC_ENV_KEY = "OPENCLAW_SECRET_VALUE"
     _SECRET_FIFO_WRITER_TIMEOUT_SEC = 86400.0
     _WHEEL_CACHE: Path | None = None
-    _CONTAINER_LOCAL_API_HOSTS = {
-        "127.0.0.1",
-        "localhost",
-        "0.0.0.0",
-        "172.17.0.1",
-        "host.docker.internal",
-    }
 
     @staticmethod
     def name() -> str:
@@ -80,6 +73,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        validate_cloud_api_base(api_base)
         self._model_name = model_name
         self._provider_name = provider_name
         self._api_base = api_base
@@ -137,47 +131,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
 
     def _secret_exec_environment(self) -> dict[str, str]:
         return {self._SECRET_EXEC_ENV_KEY: self._api_key}
-
-    def _create_env_setup_file(self) -> str:
-        """Extend the parent's export lines with gateway-resolution logic.
-
-        Why this lives here and not as a shell prefix on the openclaw command:
-        terminal-bench wraps the agent shell in `asciinema rec --stdin`, and
-        sending a long multi-line command (prefix + openclaw + multi-line
-        prompt) through `tmux send-keys` breaks asciinema's stdin sync —
-        asciinema exits early and the openclaw subprocess never runs. Putting
-        the resolution in setup-env.sh keeps the openclaw command itself a
-        single short line that tmux/asciinema can handle.
-        """
-        base = super()._create_env_setup_file()
-        if not self._should_resolve_api_base_from_container_gateway(self._api_base):
-            return base
-        # Use /proc/net/route (always present on Linux) instead of `ip route`
-        # (iproute2 is missing in many minimal container images, including
-        # terminal-bench-core's). Gateway is a little-endian hex IP.
-        resolution = (
-            "\n"
-            "# Resolve OPENCLAW_API_BASE to the container's actual default gateway\n"
-            "# when the original points at a host-local placeholder (172.17.0.1\n"
-            "# etc.). Terminal-Bench user-defined networks can give the task\n"
-            "# container a non-default-bridge gateway.\n"
-            "_oc_gw_hex=$(awk '$2==\"00000000\"{print $3; exit}' "
-            "/proc/net/route 2>/dev/null)\n"
-            'if [ -n "$_oc_gw_hex" ] && [ "$_oc_gw_hex" != 00000000 ]; then\n'
-            "  _oc_gw=$(printf '%d.%d.%d.%d' "
-            '"$((0x${_oc_gw_hex:6:2}))" "$((0x${_oc_gw_hex:4:2}))" '
-            '"$((0x${_oc_gw_hex:2:2}))" "$((0x${_oc_gw_hex:0:2}))" 2>/dev/null)\n'
-            '  case "$_oc_gw" in *.*.*.*)\n'
-            "    OPENCLAW_API_BASE=$(printf '%s' \"$OPENCLAW_API_BASE\" | "
-            'sed -E "s#^(https?://)'
-            r"(127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|172\\.17\\.0\\.1|host\\.docker\\.internal)"
-            '(:|/)#\\\\1${_oc_gw}\\\\3#")\n'
-            "    export OPENCLAW_API_BASE\n"
-            "  ;; esac\n"
-            "fi\n"
-            "unset _oc_gw_hex _oc_gw\n"
-        )
-        return base + resolution
 
     @property
     def _install_agent_script_path(self) -> Path:
@@ -303,11 +256,6 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             "fi\n"
         )
 
-    @classmethod
-    def _should_resolve_api_base_from_container_gateway(cls, api_base: str) -> bool:
-        host = urlparse(api_base).hostname
-        return host in cls._CONTAINER_LOCAL_API_HOSTS
-
     def _run_agent_commands(self) -> list[TerminalCommand]:
         workspace = shlex.quote(".")
         trace_output = shlex.quote(
@@ -317,11 +265,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             f"{self.CONTAINER_AGENT_LOGS_PATH}/{self.RUNTIME_DIRNAME}"
         )
         prompt_file = shlex.quote(self.CONTAINER_PROMPT_PATH)
-        api_base_arg = (
-            shlex.quote(self._api_base)
-            if not self._should_resolve_api_base_from_container_gateway(self._api_base)
-            else '"${OPENCLAW_API_BASE}"'
-        )
+        api_base_arg = shlex.quote(self._api_base)
         secret_prefix = (
             f'{self._env_key}="$(cat {shlex.quote(self.CONTAINER_SECRET_FIFO_PATH)})" '
         )

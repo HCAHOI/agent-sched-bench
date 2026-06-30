@@ -1,6 +1,6 @@
 """OpenClaw provider adapter built on the shared llm_call client layer.
 
-Supports any OpenAI-compatible endpoint (OpenRouter, local servers, etc.).
+Supports cloud OpenAI-compatible endpoints such as OpenRouter and provider gateways.
 No ProviderSpec dependency — configuration is passed directly to the constructor.
 """
 
@@ -26,7 +26,6 @@ from llm_call.provider_base import (
     LLMResponse,
     ToolCallRequest,
 )
-from agents.openclaw.trace_fields import filter_hf_trace_extra
 
 _ALLOWED_MSG_KEYS = frozenset(
     {
@@ -571,22 +570,7 @@ class UnifiedProvider(LLMProvider):
             return "".join(parts) or None
         return str(value)
 
-    @classmethod
-    def _extract_hf_telemetry(cls, *containers: Any) -> dict[str, Any]:
-        """Extract allow-listed local-HF telemetry from response payloads."""
-        extracted: dict[str, Any] = {}
-        for container in containers:
-            container_map = _maybe_mapping(container)
-            if container_map is not None:
-                telemetry_map = _maybe_mapping(container_map.get("hf_telemetry"))
-                if telemetry_map is not None:
-                    extracted.update(filter_hf_trace_extra(telemetry_map))
-                extracted.update(filter_hf_trace_extra(container_map))
-                continue
-            telemetry_map = _maybe_mapping(_get(container, "hf_telemetry"))
-            if telemetry_map is not None:
-                extracted.update(filter_hf_trace_extra(telemetry_map))
-        return extracted
+
 
     @classmethod
     def _extract_usage(cls, response: Any) -> dict[str, int]:
@@ -684,7 +668,7 @@ class UnifiedProvider(LLMProvider):
             reasoning_content=reasoning_content
             if isinstance(reasoning_content, str)
             else None,
-            extra=self._extract_hf_telemetry(response_map, msg0),
+            extra={},
         )
 
     @classmethod

@@ -11,35 +11,6 @@ from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.simulator import _source_exec_timeout_s, simulate
 
 
-class _FakeStream:
-    def __init__(self) -> None:
-        self._emitted = False
-
-    def __aiter__(self) -> "_FakeStream":
-        return self
-
-    async def __anext__(self):
-        if self._emitted:
-            raise StopAsyncIteration
-        self._emitted = True
-        await asyncio.sleep(0.01)
-        delta = type("Delta", (), {"content": "x"})()
-        choice = type("Choice", (), {"delta": delta})()
-        return type("Chunk", (), {"choices": [choice]})()
-
-
-class _FakeClient:
-    class _Completions:
-        async def create(self, **kwargs):
-            return _FakeStream()
-
-    class _Chat:
-        def __init__(self) -> None:
-            self.completions = _FakeClient._Completions()
-
-    def __init__(self) -> None:
-        self.chat = self._Chat()
-
 
 def _write_trace(
     path: Path,
@@ -284,7 +255,6 @@ def _patch_simulator_runtime(
     tool_delay_s: float = 0.0,
     tool_duration_ms: float = 8.0,
     tool_result_prefix: str = "executed",
-    llm_client_mode: str = "forbid",
 ) -> None:
     class _FakeAgent:
         async def stop(self): pass
@@ -338,20 +308,6 @@ def _patch_simulator_runtime(
     monkeypatch.setattr("trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    if llm_client_mode == "forbid":
-        monkeypatch.setattr(
-            "trace_collect.simulator.create_async_openai_client",
-            lambda **_kwargs: (_ for _ in ()).throw(
-                AssertionError("cloud_model must not create llm client")
-            ),
-        )
-    elif llm_client_mode == "fake":
-        monkeypatch.setattr(
-            "trace_collect.simulator.create_async_openai_client",
-            lambda **_kwargs: _FakeClient(),
-        )
-    else:
-        raise AssertionError(f"unknown llm_client_mode: {llm_client_mode}")
 
 
 def _patch_noop_sweep_fixed_prebuild(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -476,153 +432,12 @@ def test_run_simulate_cloud_model_concurrency_sweep(
     assert [record["concurrency"] for record in sweep_records] == [2, 4]
 
 
-def test_run_simulate_rejects_metrics_url_in_cloud_model(capsys: pytest.CaptureFixture[str]) -> None:
-    args = parse_simulate_args(
-        [
-            "--mode",
-            "cloud_model",
-            "--manifest",
-            "manifest.yaml",
-            "--metrics-url",
-            "http://localhost:8000/metrics",
-        ]
-    )
-
-    with pytest.raises(SystemExit, match="2"):
-        _run_simulate(args)
-
-    assert "cloud_model replay does not support --metrics-url" in capsys.readouterr().err
 
 
-def test_run_simulate_local_model_resolves_llm_config(monkeypatch, tmp_path: Path) -> None:
-    seen: dict[str, object] = {}
-
-    async def fake_simulate(**kwargs):
-        seen.update(kwargs)
-        return tmp_path / "out.jsonl"
-
-    monkeypatch.setattr(
-        "trace_collect.cli.resolve_llm_config",
-        lambda **_kwargs: type(
-            "Cfg",
-            (),
-            {
-                "api_base": "https://example.com/v1",
-                "api_key": "secret",
-                "model": "z-ai/glm-5.1",
-                "env_key": "OPENROUTER_API_KEY",
-            },
-        )(),
-    )
-    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
-
-    args = parse_simulate_args(
-        [
-            "--mode",
-            "local_model",
-            "--manifest",
-            "manifest.yaml",
-            "--provider",
-            "openrouter",
-            "--model",
-            "z-ai/glm-5.1",
-            "--api-base",
-            "https://ignored.example/v1",
-        ]
-    )
-
-    _run_simulate(args)
-
-    assert seen["mode"] == "local_model"
-    assert seen["manifest"] == Path("manifest.yaml")
-    assert seen["api_base"] == "https://example.com/v1"
-    assert seen["api_key"] == "secret"
-    assert seen["model"] == "z-ai/glm-5.1"
 
 
-def test_run_simulate_local_model_rejects_concurrency_sweep(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    args = parse_simulate_args(
-        [
-            "--mode",
-            "local_model",
-            "--manifest",
-            "manifest.yaml",
-            "--concurrency",
-            "1,2",
-        ]
-    )
-
-    with pytest.raises(SystemExit, match="2"):
-        _run_simulate(args)
-
-    assert "local_model mode requires --concurrency 1" in capsys.readouterr().err
 
 
-def test_cloud_model_single_trace_replays_without_llm_client(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(
-        monkeypatch,
-        tmp_path,
-        tool_delay_s=0.01,
-        tool_duration_ms=10.0,
-        llm_client_mode="forbid",
-    )
-
-    started = time.monotonic()
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="cloud_model",
-            container_executable="docker",
-            replay_speed=10.0,
-        )
-    )
-    elapsed = time.monotonic() - started
-
-    records = _read_jsonl(trace_file)
-    assert elapsed >= 0.03
-    assert records[0]["simulate_mode"] == "cloud_model"
-    assert records[0]["source_model"] == "claude-haiku"
-    assert "local_model" not in records[0]
-    llm_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
-    )
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert llm_record["data"]["replay_mode"] == "cloud_model"
-    assert llm_record["data"]["source_llm_latency_ms"] == pytest.approx(200.0)
-    assert llm_record["data"]["sim_metrics"]["warmup"] is False
-    assert tool_record["data"]["replay_source"] == "executed_in_container"
-    assert tool_record["data"]["source_duration_ms"] == pytest.approx(50.0)
-    assert tool_record["data"]["tool_result"] == "executed-write_file"
-    assert tool_record["data"]["sim_metrics"]["warmup"] is False
-    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "container_exec"
-    assert summary["success"] is True
-    assert summary["source_success"] is True
-    assert summary["replay_mode"] == "cloud_model"
-    assert summary["replay_speed"] == pytest.approx(10.0)
-    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
-    assert throughput["completed_traces"] == 1
-    assert throughput["failed_traces"] == 0
-    assert throughput["effective_concurrency"] == 1
-    assert records[0]["effective_concurrency"] == 1
 
 
 def test_cloud_model_tool_success_false_marks_trace_failed(
@@ -905,76 +720,6 @@ def test_cloud_model_preserves_source_exec_timeout_for_replay(
     assert summary["matched_failed_actions"] == 1
 
 
-def test_local_model_preserves_source_exec_timeout_for_replay(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    output_dir = tmp_path / "out"
-    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
-    records = _read_jsonl(trace_path)
-    for record in records:
-        if record.get("action_type") == "tool_exec":
-            record["data"]["tool_args"] = json.dumps(
-                {"exec": {"command": "cd /testbed && slow command"}}
-            )
-            record["data"]["duration_ms"] = 300056.8
-            record["data"]["success"] = False
-            record["data"]["tool_result"] = "Error: Command timed out after 300 seconds"
-    trace_path.write_text(
-        "\n".join(json.dumps(record) for record in records) + "\n",
-        encoding="utf-8",
-    )
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    captured_source_timeouts: list[float | None] = []
-
-    async def fake_exec_tool(
-        _agent,
-        _tool_name,
-        _tool_args_json,
-        _command_timeout_s,
-        source_exec_timeout_s=None,
-        allow_source_runtime_artifacts=False,
-    ):
-        assert allow_source_runtime_artifacts is False
-        captured_source_timeouts.append(source_exec_timeout_s)
-        return "[timeout]\n\nExit code: 124", 300056.8, False
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=output_dir,
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-            replay_speed=100.0,
-            command_timeout_s=600.0,
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert captured_source_timeouts == [pytest.approx(300.0568)]
-    assert tool_record["data"]["source_exec_timeout_s"] == pytest.approx(300.0568)
-    assert tool_record["data"]["source_success"] is False
-    assert tool_record["data"]["success"] is False
-    assert tool_record["data"]["replay_outcome_match"] is True
-    assert summary["success"] is True
-    assert summary["failed_iterations"] == 0
 
 
 def test_cloud_model_source_runtime_artifact_path_fails_trace(
@@ -1367,12 +1112,6 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
         "trace_collect.simulator._prepare_container_session",
         fail_prepare,
     )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -1565,10 +1304,6 @@ def test_cloud_model_prefetches_images_before_container_prepare(
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeAgent)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -1814,10 +1549,6 @@ def test_cloud_model_prefetch_uses_manifest_docker_image_override(
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -1925,10 +1656,6 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeContainerAgent)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -2236,10 +1963,6 @@ def test_cloud_model_worker_failure_waits_for_inflight_cleanup(
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     started = time.monotonic()
     with pytest.raises(RuntimeError, match="prepare failed"):
@@ -2617,12 +2340,6 @@ def test_cloud_model_host_trace_skips_mcp_tools(
         "trace_collect.simulator._prepare_container_session",
         fail_prepare,
     )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -2653,7 +2370,7 @@ def test_cloud_model_replay_marks_warmup_iterations(
     task_source = tmp_path / "tasks.json"
     _write_trace(trace_path, agent_id="task-a")
     _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="forbid")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
 
     trace_file = asyncio.run(
         simulate(
@@ -2683,566 +2400,22 @@ def test_cloud_model_replay_marks_warmup_iterations(
     assert tool_record["data"]["sim_metrics"]["warmup"] is True
 
 
-def test_local_model_single_trace_still_emits_sim_metrics(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    metadata = records[0]
-    llm_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
-    )
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-
-    assert metadata["simulate_mode"] == "local_model"
-    assert metadata["local_model"] == "local-qwen"
-    assert llm_record["data"]["sim_metrics"]["timing"]["total_ms"] >= 0.0
-    assert llm_record["data"]["source_llm_latency_ms"] == pytest.approx(200.0)
-    assert tool_record["data"]["sim_metrics"]["source"] == "executed_in_container"
-    assert tool_record["data"]["tool_result"] == "executed-write_file"
-    summary = next(record for record in records if record.get("type") == "summary")
-    assert summary["success"] is True
-    assert summary["source_success"] is True
 
 
-def test_local_model_failed_iteration_marks_throughput_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    class _FailingClient:
-        class _Completions:
-            async def create(self, **_kwargs):
-                raise RuntimeError("local llm failed")
-
-        class _Chat:
-            def __init__(self) -> None:
-                self.completions = _FailingClient._Completions()
-
-        def __init__(self) -> None:
-            self.chat = self._Chat()
-
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FailingClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    summary = next(record for record in _read_jsonl(trace_file) if record.get("type") == "summary")
-    assert summary["success"] is False
-    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
-    assert throughput["completed_traces"] == 0
-    assert throughput["failed_traces"] == 1
-    assert throughput["tasks"][0]["success"] is False
 
 
-def test_local_model_tool_success_false_marks_throughput_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    async def fake_exec_tool(*_args, **_kwargs):
-        return "tool failed", 1.0, False
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    summary = next(record for record in _read_jsonl(trace_file) if record.get("type") == "summary")
-    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
-    assert summary["success"] is False
-    assert summary["failed_iterations"] == 1
-    assert throughput["completed_traces"] == 0
-    assert throughput["failed_traces"] == 1
-    assert throughput["tasks"][0]["success"] is False
-    assert throughput["tasks"][0]["failed_action_count"] == 1
 
 
-def test_local_model_records_command_exit_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
-    records = _read_jsonl(trace_path)
-    for record in records:
-        if record.get("action_type") == "tool_exec":
-            record["data"]["tool_args"] = json.dumps({"command": "false"})
-            record["data"]["success"] = True
-    trace_path.write_text(
-        "\n".join(json.dumps(record) for record in records) + "\n",
-        encoding="utf-8",
-    )
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    async def fake_exec_tool(*_args, **_kwargs):
-        return "boom\n\nExit code: 1", 1.0, True
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert tool_record["data"]["success"] is True
-    assert tool_record["data"]["source_success"] is True
-    assert tool_record["data"]["replay_outcome_match"] is True
-    assert tool_record["data"]["command_exit_code"] == 1
-    assert tool_record["data"]["command_success"] is False
-    assert tool_record["data"]["replay_transport_success"] is True
-    assert summary["success"] is True
 
 
-def test_local_model_restores_source_runtime_artifact(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    source_attempt = tmp_path / "source" / "task-a" / "attempt_1"
-    source_attempt.mkdir(parents=True)
-    trace_path = source_attempt / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    output_dir = tmp_path / "out"
-    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
-    artifact_dir = source_attempt / "openclaw-runtime" / "tool-results"
-    artifact_file = artifact_dir / "tool-results" / "cli_task" / "out.txt"
-    artifact_file.parent.mkdir(parents=True)
-    artifact_file.write_text("full saved output", encoding="utf-8")
-    (source_attempt / "run_manifest.json").write_text(
-        json.dumps(
-            {
-                "artifacts": {
-                    "openclaw_tool_results_dir": "openclaw-runtime/tool-results",
-                }
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    source_artifact_path = (
-        "/root/agent-sched-bench/traces/source/task-a/attempt_1/"
-        "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
-    )
-    records = _read_jsonl(trace_path)
-    for record in records:
-        if record.get("action_type") == "tool_exec":
-            record["data"]["tool_args"] = json.dumps({"path": source_artifact_path})
-            record["data"]["success"] = True
-    trace_path.write_text(
-        "\n".join(json.dumps(record) for record in records) + "\n",
-        encoding="utf-8",
-    )
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._copy_source_runtime_artifacts_to_container",
-        lambda **_kwargs: None,
-    )
-
-    async def fake_exec_tool(
-        _agent,
-        tool_name,
-        tool_args_json,
-        _command_timeout_s,
-        _source_exec_timeout_s=None,
-        allow_source_runtime_artifacts=False,
-    ):
-        args = json.loads(tool_args_json)
-        assert tool_name == "read_file"
-        assert allow_source_runtime_artifacts is True
-        assert str(output_dir.resolve()) in args["path"]
-        return "full saved output", 1.0, True
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=output_dir,
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-            replay_speed=100.0,
-        )
-    )
-
-    simulator_artifact = (
-        output_dir
-        / "task-a"
-        / "attempt_1"
-        / "openclaw-runtime"
-        / "tool-results"
-        / "tool-results"
-        / "cli_task"
-        / "out.txt"
-    )
-    assert simulator_artifact.read_text(encoding="utf-8") == "full saved output"
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert tool_record["data"]["replay_source"] == "restored_runtime_artifact"
-    assert tool_record["data"]["source_artifact_path"] == source_artifact_path
-    assert tool_record["data"]["simulator_artifact_path"] == str(simulator_artifact.resolve())
-    assert tool_record["data"]["replay_outcome_match"] is True
-    assert summary["success"] is True
-    assert summary["fatal_replay_errors"] == 0
 
 
-def test_local_model_host_trace_completes_without_container(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(
-        trace_path,
-        agent_id="host-task",
-        scaffold="tongyi-deepresearch",
-        execution_environment="host",
-    )
-    _write_host_tasks(task_source, "host-task")
-
-    async def fail_prepare(*args, **kwargs):
-        raise AssertionError("host-mode local simulation must not prepare a container")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        fail_prepare,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FakeClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    metadata = records[0]
-    llm_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
-    )
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert metadata["execution_environment"] == "host"
-    assert llm_record["data"]["sim_metrics"]["timing"]["total_ms"] >= 0.0
-    # Host-mode tools cannot be re-executed in local_model (no container);
-    # preserve source-trace timing so total_tool_ms stays faithful.
-    assert tool_record["data"]["sim_metrics"]["source"] == "replayed_from_trace"
-    assert (
-        tool_record["data"]["sim_metrics"]["sim_tool_format"]
-        == "replayed_from_trace"
-    )
-    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
-    # ts_end - ts_start should match the replayed duration (0.05s)
-    assert tool_record["ts_end"] - tool_record["ts_start"] == pytest.approx(
-        0.05, abs=0.01
-    )
-    assert tool_record["data"]["success"] is True
-    assert summary["success"] is True
 
 
-def test_local_model_host_trace_replays_mcp_tool_timing(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(
-        trace_path,
-        agent_id="host-task",
-        scaffold="tongyi-deepresearch",
-        tool_name="mcp_search",
-        execution_environment="host",
-    )
-    _write_host_tasks(task_source, "host-task")
-
-    async def fail_prepare(*args, **kwargs):
-        raise AssertionError("host-mode local simulation must not prepare a container")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        fail_prepare,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FakeClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-
-    # Both MCP and non-MCP host-mode tools go through the same replay path
-    # in local_model — they cannot be re-executed without a container.
-    assert tool_record["data"]["sim_metrics"]["source"] == "replayed_from_trace"
-    assert (
-        tool_record["data"]["sim_metrics"]["sim_tool_format"]
-        == "replayed_from_trace"
-    )
-    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
-    assert tool_record["data"]["success"] is True
 
 
-def test_local_model_host_trace_replay_speed_scales_replayed_tool_timing(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(
-        trace_path,
-        agent_id="host-task",
-        scaffold="tongyi-deepresearch",
-        execution_environment="host",
-    )
-    _write_host_tasks(task_source, "host-task")
-
-    async def fail_prepare(*args, **kwargs):
-        raise AssertionError("host-mode local simulation must not prepare a container")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        fail_prepare,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FakeClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-            replay_speed=10.0,
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-
-    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
-    assert tool_record["ts_end"] - tool_record["ts_start"] == pytest.approx(
-        0.005, abs=0.01
-    )
 
 
-def test_local_model_terminal_transport_retry_marks_failed_iteration(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    trace_path.write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "type": "trace_metadata",
-                        "trace_format_version": 5,
-                        "scaffold": "tongyi-deepresearch",
-                        "instance_id": "task-a",
-                        "model": "source-model",
-                        "execution_environment": "host",
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "action",
-                        "action_type": "llm_call",
-                        "action_id": "llm_0_transport_exhausted",
-                        "agent_id": "task-a",
-                        "iteration": 0,
-                        "ts_start": 100.0,
-                        "ts_end": 100.0,
-                        "data": {
-                            "transport_retry": True,
-                            "transport_retry_terminal": True,
-                            "messages_in": [{"role": "user", "content": "fail please"}],
-                            "error": "APIConnectionError: boom",
-                        },
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "summary",
-                        "agent_id": "task-a",
-                        "model": "source-model",
-                        "success": False,
-                        "n_iterations": 1,
-                        "elapsed_s": 0.0,
-                    }
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    _write_host_tasks(task_source, "task-a")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("terminal transport retry should not invoke local model")
-        ),
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("host-mode local simulation must not prepare a container")
-        ),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    llm_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert llm_record["data"]["transport_retry_terminal"] is True
-    assert llm_record["data"]["sim_metrics"]["failed"] is True
-    assert llm_record["data"]["messages_in"] == [{"role": "user", "content": "fail please"}]
-    assert summary["success"] is False
-    assert summary["failed_iterations"] == 1
 
 
 def test_cloud_model_manifest_replays_multiple_sessions(
@@ -3268,8 +2441,7 @@ def test_cloud_model_manifest_replays_multiple_sessions(
         tmp_path,
         tool_delay_s=0.02,
         tool_duration_ms=20.0,
-        tool_result_prefix="ok",
-        llm_client_mode="forbid",
+        tool_result_prefix="ok"
     )
 
     trace_file = asyncio.run(
@@ -3313,7 +2485,7 @@ def test_cloud_model_manifest_allows_duplicate_trace_entries(
     _write_trace(trace_path, agent_id="task-a")
     _write_tasks(task_source, "task-a")
     _write_manifest(manifest, [str(trace_path), str(trace_path)])
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="forbid")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
 
     trace_file = asyncio.run(
         simulate(
@@ -3528,10 +2700,6 @@ def test_cloud_model_concurrency_limits_active_traces(
     _patch_noop_sweep_fixed_prebuild(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -3604,7 +2772,7 @@ def test_cloud_model_structured_manifest_defaults_and_overrides(
         + "\n",
         encoding="utf-8",
     )
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="forbid")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
 
     trace_file = asyncio.run(
         simulate(
@@ -3652,8 +2820,7 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
     _patch_simulator_runtime(
         monkeypatch,
         tmp_path,
-        tool_result_prefix="ok",
-        llm_client_mode="forbid",
+        tool_result_prefix="ok"
     )
 
     trace_file = asyncio.run(
@@ -3726,10 +2893,6 @@ def test_cloud_model_manifest_with_docker_image_override(
         return ("ok", 1.0, True)
 
     monkeypatch.setattr("trace_collect.simulator._exec_tool", _fake_exec)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -3782,8 +2945,7 @@ def test_cloud_model_manifest_keeps_cli_task_source_cwd_semantics(
         monkeypatch,
         tmp_path,
         tool_duration_ms=5.0,
-        tool_result_prefix="ok",
-        llm_client_mode="forbid",
+        tool_result_prefix="ok"
     )
 
     trace_file = asyncio.run(
@@ -3881,12 +3043,6 @@ def test_cloud_model_host_tool_without_success_field_is_not_mislabeled_as_failur
         "trace_collect.simulator._prepare_container_session",
         fail_prepare,
     )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -3935,12 +3091,6 @@ def test_simulator_replays_tongyi_deepresearch_trace(
 
     monkeypatch.setattr(
         "trace_collect.simulator._prepare_container_session", _fail_prepare,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
     )
 
     trace_file = asyncio.run(

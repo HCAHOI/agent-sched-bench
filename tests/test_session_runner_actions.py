@@ -251,10 +251,6 @@ async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
             "openrouter_provider_name": "Z.AI",
             "openrouter_upstream_id": "up-123",
             "openrouter_metadata": openrouter_metadata,
-            "hf_call_idx": 7,
-            "hf_cache_lcp": 123,
-            "hf_generation": {"hit_max_new_tokens": True, "output_tokens": 4096},
-            "hf_malformed_tool_output": True,
         },
     )
     await hook.after_iteration(
@@ -294,14 +290,8 @@ async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
     assert (
         llm_call["data"]["raw_response"]["openrouter_metadata"] == openrouter_metadata
     )
-    assert llm_call["data"]["hf_call_idx"] == 7
-    assert llm_call["data"]["hf_cache_lcp"] == 123
-    assert llm_call["data"]["hf_generation"]["output_tokens"] == 4096
-    assert llm_call["data"]["hf_malformed_tool_output"] is True
     assert llm_event["data"]["llm_latency_ms"] == 6500.0
     assert llm_event["data"]["openrouter_request_id"] == "req-123"
-    assert llm_event["data"]["hf_call_idx"] == 7
-    assert llm_event["data"]["hf_malformed_tool_output"] is True
     assert "openrouter_metadata" not in llm_event["data"]
     assert summary["total_llm_ms"] == 6500.0
     assert summary["total_llm_call_time_ms"] == 6500.0

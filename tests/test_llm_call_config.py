@@ -61,6 +61,27 @@ def test_resolve_llm_config_honors_explicit_overrides() -> None:
     assert resolved.model == "override-model"
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://localhost:8000/v1",
+        "http://127.0.0.1:8000/v1",
+        "http://172.17.0.1:8000/v1",
+        "http://0.0.0.0:8000/v1",
+        "http://host.docker.internal:8000/v1",
+    ],
+)
+def test_resolve_llm_config_rejects_local_api_base(api_base: str) -> None:
+    with pytest.raises(ValueError, match="local/private OpenAI-compatible"):
+        resolve_llm_config(
+            provider="openai",
+            api_base=api_base,
+            api_key="test-key",
+            model="test-model",
+            environ={},
+        )
+
+
 def test_resolve_llm_config_supports_siliconflow() -> None:
     resolved = resolve_llm_config(
         provider="siliconflow",
