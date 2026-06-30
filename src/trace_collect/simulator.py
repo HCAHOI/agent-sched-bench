@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
+import subprocess
+import shutil
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +20,9 @@ from agents.base import TraceAction
 from harness.container_image_prep import (
     ensure_fixed_image,
     ensure_source_image,
+    fixed_image_name_for,
     normalize_image_reference,
+    remove_image,
 )
 from harness.container_stats_sampler import (
     ContainerResourceRecorder,
@@ -30,6 +36,7 @@ from harness.trace_logger import TraceLogger
 from llm_call import create_async_openai_client
 from trace_collect import attempt_layout
 from trace_collect.attempt_pipeline import (
+    configure_task_container_apt_mirror,
     next_attempt_number_in,
     sanitize_path_segment,
     start_task_container,
@@ -48,6 +55,7 @@ class SimulateError(Exception):
 class TraceManifestEntry:
     """One resolved trace entry from a simulate manifest."""
 
+    index: int
     trace: Path
     task_source: Path
     docker_image: str | None = None
@@ -59,6 +67,9 @@ class ReplayTaskStats:
     """Per-trace throughput accounting for a simulate run."""
 
     agent_id: str
+    run_instance_id: str
+    source_agent_id: str
+    manifest_index: int
     label: str | None
     source_trace: str
     success: bool
@@ -97,7 +108,9 @@ class LoadedTraceSession:
 
     source_trace: Path
     task_source: Path
-    agent_id: str
+    source_agent_id: str
+    run_instance_id: str
+    manifest_index: int
     scaffold: str
     metadata: dict[str, Any] | None
     summary: dict[str, Any] | None
@@ -106,6 +119,10 @@ class LoadedTraceSession:
     iterations: dict[int, dict[str, Any]]
     docker_image_override: str | None = None
     label: str | None = None
+
+    @property
+    def agent_id(self) -> str:
+        return self.run_instance_id
 
 
 @dataclass(slots=True)
@@ -116,6 +133,8 @@ class PreparedContainer:
     container_executable: str
     docker_image: str
     agent: Any  # ContainerAgent
+    fixed_image: str | None = None
+    cleanup_fixed_image: bool = True
 
 
 @dataclass(slots=True)
@@ -128,6 +147,7 @@ class PreparedTraceSession:
     sampler: ContainerStatsSampler | None = None
     task_output_dir: Path | None = None
     resources_written: bool = False
+    runtime_artifact_root_map: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 class ContainerStartupRecorder:
@@ -202,6 +222,11 @@ class ContainerStartupRecorder:
         payload: dict[str, Any] = {
             "status": status,
             "agent_id": self.loaded.agent_id,
+            "run_instance_id": self.loaded.run_instance_id,
+            "source_agent_id": self.loaded.source_agent_id,
+            "task_id": self.loaded.source_agent_id,
+            "manifest_index": self.loaded.manifest_index,
+            "label": self.loaded.label,
             "source_trace": str(self.loaded.source_trace),
             "container_executable": self.container_executable,
             "network_mode": self.network_mode,
@@ -272,6 +297,8 @@ async def _exec_tool(
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
+    source_exec_timeout_s: float | None = None,
+    allow_source_runtime_artifacts: bool = False,
 ) -> tuple[str, float, bool]:
     """Execute one source-trace tool call via the persistent container agent.
 
@@ -286,6 +313,8 @@ async def _exec_tool(
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         command_timeout_s=command_timeout_s,
+        source_exec_timeout_s=source_exec_timeout_s,
+        allow_source_runtime_artifacts=allow_source_runtime_artifacts,
     )
     wall_duration_ms = (time.monotonic() - t0) * 1000
     # Prefer agent-side timing to exclude pipe transfer overhead
@@ -308,6 +337,253 @@ def _group_actions_by_iteration(
         elif action.get("action_type") == "tool_exec":
             iterations[it]["tools"].append(action)
     return iterations
+
+
+def _source_tool_success(data: dict[str, Any]) -> bool:
+    raw_success = data.get("success")
+    if isinstance(raw_success, bool):
+        return raw_success
+    if raw_success is None:
+        return not bool(data.get("error"))
+    raise ValueError(f"tool success must be boolean when present, got {raw_success!r}")
+
+
+def _command_exit_code(tool_result: str) -> int | None:
+    marker = "Exit code:"
+    if marker not in tool_result:
+        return None
+    suffix = tool_result.rsplit(marker, 1)[1].strip().splitlines()[0].strip()
+    if suffix == "<missing>":
+        return None
+    try:
+        return int(suffix)
+    except ValueError:
+        return None
+
+
+def _tool_uses_exec_semantics(tool_name: str | None, tool_args_json: Any) -> bool:
+    if tool_name == "exec":
+        return True
+    if isinstance(tool_args_json, str):
+        try:
+            parsed = json.loads(tool_args_json or "{}")
+        except json.JSONDecodeError:
+            return False
+    elif isinstance(tool_args_json, dict):
+        parsed = tool_args_json
+    else:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    payload = parsed.get("exec") if isinstance(parsed.get("exec"), dict) else parsed
+    return isinstance(payload, dict) and (
+        "command" in payload or "commands" in payload
+    )
+
+
+def _command_metadata(
+    *,
+    tool_name: str | None,
+    tool_args_json: Any,
+    tool_result: str,
+    tool_success: bool,
+) -> dict[str, Any]:
+    if not _tool_uses_exec_semantics(tool_name, tool_args_json):
+        return {}
+    exit_code = _command_exit_code(tool_result)
+    if exit_code is None:
+        return {}
+    return {
+        "command_exit_code": exit_code,
+        "command_success": exit_code == 0,
+        "replay_transport_success": tool_success,
+    }
+
+
+def _is_replay_wrapper_timeout_result(tool_result: str) -> bool:
+    for line in tool_result.splitlines():
+        if not line.strip():
+            continue
+        return line.strip() == "[timeout]"
+    return False
+
+
+def _source_exec_timeout_s(
+    *,
+    tool_name: str | None,
+    tool_args_json: Any,
+    source_duration_ms: float,
+    source_success: bool,
+    source_tool_result: Any,
+) -> float | None:
+    if source_success or source_duration_ms <= 0:
+        return None
+    if not _tool_uses_exec_semantics(tool_name, tool_args_json):
+        return None
+
+    source_tool_result_text = str(source_tool_result or "")
+    if (
+        "Error: Command timed out after " not in source_tool_result_text
+        and not _is_replay_wrapper_timeout_result(source_tool_result_text)
+    ):
+        return None
+    return max(0.001, source_duration_ms / 1000.0)
+
+
+def _remap_runtime_artifact_tool_args(
+    *,
+    tool_name: str | None,
+    tool_args_json: Any,
+    runtime_root_map: dict[str, str],
+) -> tuple[Any, str | None, str | None, bool]:
+    from trace_collect.openclaw_tools import remap_source_runtime_artifact_tool_args
+
+    if not isinstance(tool_args_json, str):
+        return tool_args_json, None, None, False
+    mapped_args, source_path, mapped_path = remap_source_runtime_artifact_tool_args(
+        tool_name=tool_name,
+        tool_args_json=tool_args_json,
+        runtime_root_map=runtime_root_map,
+    )
+    mapped_exists = mapped_path is not None and Path(mapped_path).is_file()
+    return mapped_args, source_path, mapped_path, mapped_exists
+
+
+def _artifact_unavailable_result(source_path: str) -> str:
+    return (
+        "Error: source trace references an OpenClaw runtime artifact "
+        "that is unavailable in the simulator runtime: "
+        f"{source_path}"
+    )
+
+
+def _source_openclaw_tool_results_dir(source_trace: Path) -> Path | None:
+    attempt_dir = source_trace.parent
+    candidates: list[Path] = []
+    manifest_path = attempt_dir / attempt_layout.RUN_MANIFEST_FILENAME
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact_value = (manifest.get("artifacts") or {}).get(
+            "openclaw_tool_results_dir"
+        )
+        if artifact_value:
+            artifact_path = Path(str(artifact_value))
+            if not artifact_path.is_absolute():
+                artifact_path = attempt_dir / artifact_path
+            candidates.append(artifact_path)
+    candidates.append(attempt_dir / "openclaw-runtime" / "tool-results")
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _source_runtime_artifact_roots(actions: list[dict[str, Any]]) -> set[str]:
+    from trace_collect.openclaw_tools import (
+        source_runtime_artifact_path_from_tool_call,
+        source_runtime_artifact_root_from_path,
+    )
+
+    roots: set[str] = set()
+    for action in actions:
+        if action.get("action_type") != "tool_exec":
+            continue
+        data = action.get("data") or {}
+        tool_name = data.get("tool_name")
+        tool_args = data.get("tool_args", "{}")
+        if not tool_name:
+            continue
+        try:
+            artifact_path = source_runtime_artifact_path_from_tool_call(
+                tool_name=tool_name,
+                tool_args_json=tool_args,
+            )
+        except (TypeError, ValueError):
+            continue
+        if artifact_path is None:
+            continue
+        artifact_root = source_runtime_artifact_root_from_path(artifact_path)
+        if artifact_root is not None:
+            roots.add(artifact_root)
+    return roots
+
+
+def _run_checked_container_command(cmd: list[str], *, timeout: float) -> None:
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+    if result.returncode == 0:
+        return
+    message = result.stderr.strip() or result.stdout.strip()
+    raise RuntimeError(
+        f"container command failed ({result.returncode}): {' '.join(cmd)}"
+        + (f": {message}" if message else "")
+    )
+
+
+def _copy_source_runtime_artifacts_to_container(
+    *,
+    source_dir: Path,
+    container_id: str,
+    container_executable: str,
+    destination_dir: str,
+) -> None:
+    _run_checked_container_command(
+        [container_executable, "exec", container_id, "mkdir", "-p", destination_dir],
+        timeout=120,
+    )
+    _run_checked_container_command(
+        [
+            container_executable,
+            "cp",
+            f"{source_dir.resolve()}/.",
+            f"{container_id}:{destination_dir}",
+        ],
+        timeout=600,
+    )
+
+
+async def _restore_source_runtime_artifacts(
+    prepared: PreparedTraceSession,
+) -> None:
+    container = prepared.container
+    if container is None or prepared.task_output_dir is None:
+        return
+    artifact_roots = _source_runtime_artifact_roots(prepared.loaded.actions)
+    if not artifact_roots:
+        return
+    source_dir = _source_openclaw_tool_results_dir(prepared.loaded.source_trace)
+    if source_dir is None:
+        logger.warning(
+            "Source trace references OpenClaw runtime artifacts but no "
+            "tool-results directory is available: %s",
+            prepared.loaded.source_trace,
+        )
+        return
+    simulator_dir = prepared.task_output_dir / "openclaw-runtime" / "tool-results"
+    if source_dir.resolve() != simulator_dir.resolve():
+        if simulator_dir.exists():
+            shutil.rmtree(simulator_dir)
+        shutil.copytree(source_dir, simulator_dir)
+    simulator_root = str(simulator_dir.resolve())
+    for destination_dir in sorted(artifact_roots):
+        await asyncio.to_thread(
+            _copy_source_runtime_artifacts_to_container,
+            source_dir=simulator_dir,
+            container_id=container.container_id,
+            container_executable=container.container_executable,
+            destination_dir=simulator_root,
+        )
+        prepared.runtime_artifact_root_map[destination_dir] = simulator_root
+    logger.info(
+        "Restored OpenClaw runtime artifacts for %s into simulator runtime %s",
+        prepared.loaded.agent_id,
+        simulator_root,
+    )
 
 
 def _parse_trace_session_file(
@@ -371,6 +647,28 @@ def _iteration_count(actions: list[dict[str, Any]]) -> int:
 
 def _sanitize_run_label(value: str) -> str:
     return sanitize_path_segment(value).replace(" ", "-")
+
+
+def _replay_fixed_image_name(
+    *,
+    source_image: str,
+    agent_id: str,
+    task_output_dir: Path,
+) -> str:
+    label = _sanitize_run_label(agent_id).lower()[:64]
+    digest = hashlib.sha1(str(task_output_dir.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"{fixed_image_name_for(source_image)}:simulate-{label}-{digest}"
+
+
+def _sweep_fixed_image_name(
+    *,
+    source_image: str,
+    output_path: Path,
+    sweep_id: str,
+) -> str:
+    digest_source = f"{source_image}\0{output_path.resolve()}\0{sweep_id}"
+    digest = hashlib.sha1(digest_source.encode("utf-8")).hexdigest()[:12]
+    return f"{fixed_image_name_for(source_image)}:simulate-sweep-{digest}"
 
 
 def _structured_output_subdir(
@@ -451,16 +749,19 @@ def _coerce_action_bounds(
 def _load_trace_session(
     source_trace: Path,
     task_source: Path,
+    manifest_index: int,
     docker_image_override: str | None = None,
     label: str | None = None,
 ) -> LoadedTraceSession:
-    agent_id, metadata, actions, summary = _parse_trace_session_file(source_trace)
+    source_agent_id, metadata, actions, summary = _parse_trace_session_file(source_trace)
     scaffold = metadata.get("scaffold", "unknown") if metadata else "unknown"
-    task = _find_task(task_source, agent_id)
+    task = _find_task(task_source, source_agent_id)
     return LoadedTraceSession(
         source_trace=source_trace,
         task_source=task_source,
-        agent_id=agent_id,
+        source_agent_id=source_agent_id,
+        run_instance_id=source_agent_id,
+        manifest_index=manifest_index,
         scaffold=scaffold,
         metadata=metadata,
         summary=summary,
@@ -470,6 +771,39 @@ def _load_trace_session(
         docker_image_override=docker_image_override,
         label=label,
     )
+
+
+def _assign_replay_instance_ids(sessions: list[LoadedTraceSession]) -> None:
+    source_counts: dict[str, int] = {}
+    for session in sessions:
+        source_counts[session.source_agent_id] = (
+            source_counts.get(session.source_agent_id, 0) + 1
+        )
+
+    reserved_source_ids = set(source_counts)
+    used_ids: set[str] = set()
+    source_occurrences: dict[str, int] = {}
+
+    for session in sessions:
+        source_agent_id = session.source_agent_id
+        if source_counts[source_agent_id] == 1:
+            candidate = source_agent_id
+        else:
+            occurrence = source_occurrences.get(source_agent_id, 0) + 1
+            source_occurrences[source_agent_id] = occurrence
+            base = f"{source_agent_id}__replica-{occurrence:03d}"
+            candidate = base
+            if candidate in reserved_source_ids or candidate in used_ids:
+                candidate = f"{base}__entry-{session.manifest_index:04d}"
+                suffix = 2
+                while candidate in reserved_source_ids or candidate in used_ids:
+                    candidate = (
+                        f"{base}__entry-{session.manifest_index:04d}-{suffix}"
+                    )
+                    suffix += 1
+
+        session.run_instance_id = candidate
+        used_ids.add(candidate)
 
 
 def _resolve_manifest_path(
@@ -597,6 +931,7 @@ def _load_simulate_manifest(
             )
         entries.append(
             TraceManifestEntry(
+                index=index,
                 trace=trace_path,
                 task_source=task_path,
                 docker_image=docker_image,
@@ -660,17 +995,18 @@ def _validate_loaded_sessions(
         docker_image = _resolve_docker_image(session)
         if not docker_image:
             raise SimulateError(
-                f"Task {session.agent_id!r} has no resolvable docker_image "
+                f"Task {session.source_agent_id!r} has no resolvable docker_image "
                 "(set docker_image in manifest or ensure task has image_name)"
             )
 
-    seen_agent_ids: set[str] = set()
+    seen_run_instance_ids: set[str] = set()
     for session in sessions:
-        if session.agent_id in seen_agent_ids:
+        if session.run_instance_id in seen_run_instance_ids:
             raise SimulateError(
-                f"Duplicate agent_id across replay sessions: {session.agent_id!r}"
+                "Duplicate run_instance_id across replay sessions: "
+                f"{session.run_instance_id!r}"
             )
-        seen_agent_ids.add(session.agent_id)
+        seen_run_instance_ids.add(session.run_instance_id)
 
         for action in session.actions:
             action_id = str(action.get("action_id", ""))
@@ -732,12 +1068,88 @@ async def _prefetch_container_images(
         )
 
 
+async def _prebuild_sweep_fixed_images(
+    sessions: list[LoadedTraceSession],
+    *,
+    output_path: Path,
+    container_executable: str | None,
+) -> dict[str, str]:
+    if container_executable is None:
+        return {}
+    images = _container_source_images(sessions)
+    if not images:
+        return {}
+    logger.info("Prebuilding %d sweep fixed image(s)", len(images))
+    fixed_images: dict[str, str] = {}
+    sweep_id = uuid.uuid4().hex
+    for source_image in images:
+        fixed_image_name = _sweep_fixed_image_name(
+            source_image=source_image,
+            output_path=output_path,
+            sweep_id=sweep_id,
+        )
+        logger.info(
+            "Prebuilding sweep fixed image: source=%s fixed=%s",
+            source_image,
+            fixed_image_name,
+        )
+        fixed_name, elapsed_s = await asyncio.to_thread(
+            ensure_fixed_image,
+            source_image,
+            container_executable=container_executable,
+            fixed_image_name=fixed_image_name,
+            rebuild=True,
+        )
+        fixed_images[source_image] = fixed_name
+        logger.info(
+            "Prebuilt sweep fixed image: source=%s fixed=%s elapsed=%.3fs",
+            source_image,
+            fixed_name,
+            elapsed_s,
+        )
+    return fixed_images
+
+
+async def _cleanup_sweep_fixed_images(
+    fixed_images: dict[str, str],
+    *,
+    container_executable: str | None,
+) -> None:
+    if container_executable is None:
+        return
+    cleanup_error: BaseException | None = None
+    for source_image, fixed_image in fixed_images.items():
+        try:
+            removed = await asyncio.to_thread(
+                remove_image,
+                fixed_image,
+                container_executable=container_executable,
+            )
+            if removed:
+                logger.info(
+                    "Removed sweep fixed image: source=%s fixed=%s",
+                    source_image,
+                    fixed_image,
+                )
+        except (Exception, asyncio.CancelledError) as exc:
+            logger.exception(
+                "Failed to remove sweep fixed image: source=%s fixed=%s",
+                source_image,
+                fixed_image,
+            )
+            if cleanup_error is None:
+                cleanup_error = exc
+    if cleanup_error is not None:
+        raise cleanup_error
+
+
 async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
     task_output_dir: Path,
     container_executable: str,
     network_mode: str = "host",
+    fixed_images_by_source: dict[str, str] | None = None,
 ) -> PreparedTraceSession:
     """Prepare a Docker/Podman container and start a persistent replay agent."""
     from trace_collect.openclaw_tools import ContainerAgent
@@ -745,7 +1157,7 @@ async def _prepare_container_session(
     docker_image = _resolve_docker_image(loaded)
     if not docker_image:
         raise SimulateError(
-            f"Task {loaded.agent_id!r} has no resolvable docker_image"
+            f"Task {loaded.source_agent_id!r} has no resolvable docker_image"
         )
     normalized = normalize_image_reference(docker_image)
     recorder = ContainerStartupRecorder(
@@ -757,21 +1169,43 @@ async def _prepare_container_session(
     )
     container_id: str | None = None
     agent: Any | None = None
+    cleanup_fixed_image = True
     try:
         phase = recorder.start_phase("ensure_fixed_image")
         try:
-            fixed_name, fixed_elapsed_s = await asyncio.to_thread(
-                ensure_fixed_image,
-                normalized,
-                container_executable=container_executable,
-            )
+            fixed_name = (
+                fixed_images_by_source or {}
+            ).get(normalized)
+            if fixed_name is not None:
+                cleanup_fixed_image = False
+                fixed_elapsed_s = 0.0
+                extra = {
+                    "fixed_image": fixed_name,
+                    "reported_elapsed_s": fixed_elapsed_s,
+                    "prebuilt": True,
+                }
+            else:
+                fixed_image_name = _replay_fixed_image_name(
+                    source_image=normalized,
+                    agent_id=loaded.agent_id,
+                    task_output_dir=task_output_dir,
+                )
+                fixed_name, fixed_elapsed_s = await asyncio.to_thread(
+                    ensure_fixed_image,
+                    normalized,
+                    container_executable=container_executable,
+                    fixed_image_name=fixed_image_name,
+                    rebuild=True,
+                )
+                extra = {
+                    "fixed_image": fixed_name,
+                    "reported_elapsed_s": fixed_elapsed_s,
+                    "prebuilt": False,
+                }
             recorder.fixed_image = fixed_name
             recorder.finish_phase(
                 phase,
-                extra={
-                    "fixed_image": fixed_name,
-                    "reported_elapsed_s": fixed_elapsed_s,
-                },
+                extra=extra,
             )
         except (Exception, asyncio.CancelledError) as exc:
             recorder.finish_phase(phase, status="failed", error=exc)
@@ -783,6 +1217,21 @@ async def _prepare_container_session(
                 start_task_container,
                 fixed_name,
                 executable=container_executable,
+                run_as_host_user=False,
+                mount_host_home=False,
+                container_home="/root",
+                extra_args=[
+                    "--label",
+                    "agent-sched-bench.component=simulate-replay",
+                    "--label",
+                    f"agent-sched-bench.run_instance_id={loaded.agent_id}",
+                    "--label",
+                    f"agent-sched-bench.source_agent_id={loaded.source_agent_id}",
+                    "--label",
+                    f"agent-sched-bench.manifest_index={loaded.manifest_index}",
+                    "--label",
+                    f"agent-sched-bench.output_dir={task_output_dir}",
+                ],
                 network_mode=network_mode,
             )
             recorder.container_id = container_id
@@ -791,6 +1240,27 @@ async def _prepare_container_session(
                 extra={
                     "container_id": container_id,
                 },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        phase = recorder.start_phase("configure_apt_mirror")
+        try:
+            mirror_info = await asyncio.to_thread(
+                configure_task_container_apt_mirror,
+                container_id,
+                executable=container_executable,
+            )
+            mirror_status = (
+                "skipped"
+                if mirror_info is None or mirror_info.get("configured") == "false"
+                else "success"
+            )
+            recorder.finish_phase(
+                phase,
+                status=mirror_status,
+                extra=mirror_info or {"reason": "TASK_CONTAINER_APT_MIRROR unset"},
             )
         except (Exception, asyncio.CancelledError) as exc:
             recorder.finish_phase(phase, status="failed", error=exc)
@@ -807,6 +1277,7 @@ async def _prepare_container_session(
 
         recorder.write(status="success")
     except (Exception, asyncio.CancelledError) as exc:
+        cleanup_errors: list[BaseException] = []
         try:
             recorder.write(status="failed", error=exc)
         except (Exception, asyncio.CancelledError):
@@ -816,6 +1287,7 @@ async def _prepare_container_session(
                 await agent.stop()
             except (Exception, asyncio.CancelledError):
                 logger.exception("Failed to stop container agent for %s", loaded.agent_id)
+        container_stopped = False
         if container_id is not None:
             try:
                 await asyncio.to_thread(
@@ -823,8 +1295,30 @@ async def _prepare_container_session(
                     container_id,
                     executable=container_executable,
                 )
-            except (Exception, asyncio.CancelledError):
+                container_stopped = True
+            except (Exception, asyncio.CancelledError) as cleanup_exc:
+                cleanup_errors.append(cleanup_exc)
                 logger.exception("Failed to stop startup container for %s", loaded.agent_id)
+        if cleanup_fixed_image and recorder.fixed_image is not None and (
+            container_id is None or container_stopped
+        ):
+            try:
+                await asyncio.to_thread(
+                    remove_image,
+                    recorder.fixed_image,
+                    container_executable=container_executable,
+                )
+            except (Exception, asyncio.CancelledError) as cleanup_exc:
+                cleanup_errors.append(cleanup_exc)
+                logger.exception(
+                    "Failed to remove startup fixed image for %s",
+                    loaded.agent_id,
+                )
+        if cleanup_errors:
+            cleanup_error = cleanup_errors[0]
+            if cleanup_error is not exc:
+                cleanup_error.__context__ = exc
+            raise cleanup_error
         raise
 
     assert container_id is not None
@@ -835,6 +1329,8 @@ async def _prepare_container_session(
         container_executable=container_executable,
         docker_image=normalized,
         agent=agent,
+        fixed_image=recorder.fixed_image,
+        cleanup_fixed_image=cleanup_fixed_image,
     )
     return PreparedTraceSession(loaded=loaded, container=container)
 
@@ -868,9 +1364,22 @@ def _log_trace_metadata(
         "replay_speed": replay_speed,
         "source_trace_count": len(sessions),
         "source_traces": [str(session.source_trace) for session in sessions],
+        "source_trace_entries": [
+            {
+                "manifest_index": session.manifest_index,
+                "source_trace": str(session.source_trace),
+                "source_agent_id": session.source_agent_id,
+                "run_instance_id": session.run_instance_id,
+                "label": session.label,
+            }
+            for session in sessions
+        ],
+        "source_agent_ids": [session.source_agent_id for session in sessions],
+        "run_instance_ids": [session.run_instance_id for session in sessions],
         "source_models": source_models,
         "manifest": str(manifest),
         "concurrency": concurrency,
+        "effective_concurrency": min(concurrency, len(sessions)),
         "scheduler_mode": scheduler_mode,
         "network_mode": network_mode,
     }
@@ -898,15 +1407,24 @@ def _make_trace_action(
     ts_end: float,
     data: dict[str, Any],
 ) -> TraceAction:
+    action_data = {
+        **data,
+        "run_instance_id": loaded.run_instance_id,
+        "source_agent_id": loaded.source_agent_id,
+        "manifest_index": loaded.manifest_index,
+    }
+    if loaded.label is not None:
+        action_data["label"] = loaded.label
     return TraceAction(
         action_type=action_type,
         action_id=action_id,
-        agent_id=loaded.agent_id,
-        program_id=loaded.agent_id,
+        agent_id=loaded.run_instance_id,
+        program_id=loaded.run_instance_id,
+        instance_id=loaded.run_instance_id,
         iteration=iteration,
         ts_start=ts_start,
         ts_end=ts_end,
-        data=data,
+        data=action_data,
     )
 
 
@@ -919,8 +1437,12 @@ def _make_trace_summary(
     extra: dict[str, Any],
 ) -> dict[str, Any]:
     summary = {
-        "agent_id": loaded.agent_id,
-        "task_id": loaded.agent_id,
+        "agent_id": loaded.run_instance_id,
+        "run_instance_id": loaded.run_instance_id,
+        "source_agent_id": loaded.source_agent_id,
+        "task_id": loaded.source_agent_id,
+        "manifest_index": loaded.manifest_index,
+        "label": loaded.label,
         "success": success,
         "source_success": (loaded.summary or {}).get("success"),
         "n_iterations": _iteration_count(loaded.actions),
@@ -942,7 +1464,10 @@ def _make_task_stats(
     llm_call_count = sum(1 for action in loaded.actions if action.get("action_type") == "llm_call")
     tool_exec_count = sum(1 for action in loaded.actions if action.get("action_type") == "tool_exec")
     return ReplayTaskStats(
-        agent_id=loaded.agent_id,
+        agent_id=loaded.run_instance_id,
+        run_instance_id=loaded.run_instance_id,
+        source_agent_id=loaded.source_agent_id,
+        manifest_index=loaded.manifest_index,
         label=loaded.label,
         source_trace=str(loaded.source_trace),
         success=success,
@@ -970,6 +1495,7 @@ def _write_throughput_summary(
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
     failed = attempted - completed
+    effective_concurrency = min(concurrency, attempted)
     safe_wall_time_s = max(wall_time_s, 1e-9)
     payload = {
         "run_id": run_id,
@@ -977,6 +1503,7 @@ def _write_throughput_summary(
         "manifest": str(manifest),
         "trace_file": str(trace_file),
         "concurrency": concurrency,
+        "effective_concurrency": effective_concurrency,
         "scheduler_mode": scheduler_mode,
         "wall_time_s": wall_time_s,
         "attempted_traces": attempted,
@@ -1018,37 +1545,66 @@ def _assign_task_output_dir(prepared: PreparedTraceSession, output_path: Path) -
     prepared.task_output_dir = task_dir
 
 
+def _write_prepared_resources(
+    prepared: PreparedTraceSession,
+    samples: list[dict[str, Any]],
+) -> None:
+    if prepared.task_output_dir is None:
+        return
+    summary = summarize_samples(samples)
+    attempt_layout.write_resources_json(
+        prepared.task_output_dir,
+        samples,
+        summary,
+    )
+    prepared.resources_written = True
+    logger.info(
+        "Wrote %d resource samples → %s",
+        len(samples),
+        prepared.task_output_dir / "resources.json",
+    )
+
+
 async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
-    if prepared.sampler is not None:
-        samples = prepared.sampler.stop()
-        prepared.sampler = None
-        if prepared.task_output_dir is not None:
-            summary = summarize_samples(samples)
-            attempt_layout.write_resources_json(
-                prepared.task_output_dir,
-                samples,
-                summary,
-            )
-            prepared.resources_written = True
-            logger.info(
-                "Wrote %d resource samples → %s",
-                len(samples),
-                prepared.task_output_dir / "resources.json",
-            )
-    elif prepared.task_output_dir is not None and not prepared.resources_written:
-        attempt_layout.write_resources_json(
-            prepared.task_output_dir,
-            samples=[],
-            summary=summarize_samples([]),
-        )
-        prepared.resources_written = True
+    resource_write_error: BaseException | None = None
+    resource_samples: list[dict[str, Any]] | None = None
+    try:
+        if prepared.sampler is not None:
+            resource_samples = prepared.sampler.stop()
+            prepared.sampler = None
+        elif prepared.task_output_dir is not None and not prepared.resources_written:
+            resource_samples = []
+    except (Exception, asyncio.CancelledError) as exc:
+        resource_write_error = exc
 
     ctr = prepared.container
     if ctr is None:
+        if (
+            resource_write_error is None
+            and resource_samples is not None
+            and prepared.task_output_dir is not None
+            and not prepared.resources_written
+        ):
+            try:
+                _write_prepared_resources(prepared, resource_samples)
+            except (Exception, asyncio.CancelledError) as exc:
+                resource_write_error = exc
+        if resource_write_error is not None:
+            logger.exception(
+                "Failed to write resource artifact for %s",
+                prepared.loaded.agent_id,
+                exc_info=(
+                    type(resource_write_error),
+                    resource_write_error,
+                    resource_write_error.__traceback__,
+                ),
+            )
+            raise resource_write_error
         return
     prepared.container = None
     agent_stop_error: BaseException | None = None
     container_stop_error: BaseException | None = None
+    fixed_image_cleanup_error: BaseException | None = None
     container_stopped = False
     try:
         if ctr.agent is not None:
@@ -1066,10 +1622,36 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
     except (Exception, asyncio.CancelledError) as exc:
         container_stop_error = exc
 
-    if container_stopped:
-        if prepared.container_resource_recorder is not None:
-            prepared.container_resource_recorder.unregister_container(ctr.container_id)
-            prepared.container_resource_recorder = None
+    if container_stopped and prepared.container_resource_recorder is not None:
+        prepared.container_resource_recorder.unregister_container(ctr.container_id)
+        prepared.container_resource_recorder = None
+
+    if container_stopped and ctr.fixed_image and ctr.cleanup_fixed_image:
+        try:
+            removed_fixed = await asyncio.to_thread(
+                remove_image,
+                ctr.fixed_image,
+                container_executable=ctr.container_executable,
+            )
+            if removed_fixed:
+                logger.info(
+                    "Removed fixed replay image for %s: %s",
+                    prepared.loaded.agent_id,
+                    ctr.fixed_image,
+                )
+        except (Exception, asyncio.CancelledError) as exc:
+            fixed_image_cleanup_error = exc
+
+    if (
+        resource_write_error is None
+        and resource_samples is not None
+        and prepared.task_output_dir is not None
+        and not prepared.resources_written
+    ):
+        try:
+            _write_prepared_resources(prepared, resource_samples)
+        except (Exception, asyncio.CancelledError) as exc:
+            resource_write_error = exc
 
     if container_stop_error is not None and agent_stop_error is not None:
         logger.exception(
@@ -1081,10 +1663,34 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
                 container_stop_error.__traceback__,
             ),
         )
+    if fixed_image_cleanup_error is not None:
+        logger.exception(
+            "Failed to remove fixed replay image for %s",
+            prepared.loaded.agent_id,
+            exc_info=(
+                type(fixed_image_cleanup_error),
+                fixed_image_cleanup_error,
+                fixed_image_cleanup_error.__traceback__,
+            ),
+        )
+    if resource_write_error is not None:
+        logger.exception(
+            "Failed to write resource artifact for %s",
+            prepared.loaded.agent_id,
+            exc_info=(
+                type(resource_write_error),
+                resource_write_error,
+                resource_write_error.__traceback__,
+            ),
+        )
+    if resource_write_error is not None:
+        raise resource_write_error
     if agent_stop_error is not None:
         raise agent_stop_error
     if container_stop_error is not None:
         raise container_stop_error
+    if fixed_image_cleanup_error is not None:
+        raise fixed_image_cleanup_error
 
 
 async def _run_local_model_simulation(
@@ -1143,6 +1749,7 @@ async def _run_local_model_simulation(
     total_iters = len(iterations)
     succeeded_iters = 0
     failed_iters = 0
+    fatal_replay_errors = 0
     sorted_iters = sorted(iterations.keys())
 
     try:
@@ -1254,6 +1861,7 @@ async def _run_local_model_simulation(
 
             ctr = prepared_session.container
             total_tool_ms = 0.0
+            failed_tool_actions = 0
             for tool_act in tool_actions:
                 td = tool_act.get("data", {})
                 tool_name = td.get("tool_name")
@@ -1262,31 +1870,104 @@ async def _run_local_model_simulation(
                     continue
 
                 tool_ts_start = time.time()
+                source_duration_ms = float(td.get("duration_ms") or 0.0)
+                source_success = _source_tool_success(td)
+                source_tool_result = td.get("tool_result", td.get("result", ""))
+                source_exec_timeout = _source_exec_timeout_s(
+                    tool_name=tool_name,
+                    tool_args_json=tool_args,
+                    source_duration_ms=source_duration_ms,
+                    source_success=source_success,
+                    source_tool_result=source_tool_result,
+                )
+                original_artifact_path: str | None = None
+                mapped_artifact_path: str | None = None
                 if ctr is None:
-                    # Host-mode: replay source-trace timing verbatim.
                     tool_result = td.get("tool_result", td.get("result", ""))
-                    tool_duration_ms = float(td.get("duration_ms") or 0.0)
-                    tool_success = bool(td.get("success", not td.get("error")))
-                    await asyncio.sleep(max(0.0, tool_duration_ms / 1000.0 / replay_speed))
+                    tool_success = source_success
+                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
                     tool_ts_end = time.time()
+                    tool_duration_ms = source_duration_ms
                     sim_provenance = "replayed_from_trace"
+                elif tool_name == "message":
+                    tool_result = td.get("tool_result", td.get("result", ""))
+                    if not tool_result:
+                        tool_result = "Message replayed as no-op"
+                    tool_success = source_success
+                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
+                    tool_ts_end = time.time()
+                    tool_duration_ms = source_duration_ms
+                    sim_provenance = "message_noop"
                 elif tool_name.startswith("mcp_"):
                     tool_result = td.get("tool_result", "")
-                    tool_duration_ms = float(td.get("duration_ms") or 0.0)
-                    tool_success = bool(td.get("success", True))
-                    await asyncio.sleep(max(0.0, tool_duration_ms / 1000.0 / replay_speed))
+                    tool_success = source_success
+                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
                     tool_ts_end = time.time()
+                    tool_duration_ms = source_duration_ms
                     sim_provenance = "replayed_from_trace"
                 else:
-                    tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                        ctr.agent,
-                        tool_name,
-                        tool_args,
-                        command_timeout_s,
+                    mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
+                        _remap_runtime_artifact_tool_args(
+                            tool_name=tool_name,
+                            tool_args_json=tool_args,
+                            runtime_root_map=prepared_session.runtime_artifact_root_map,
+                        )
                     )
-                    tool_ts_end = time.time()
-                    sim_provenance = "executed_in_container"
+                    if original_artifact_path is None and isinstance(tool_args, str):
+                        from trace_collect.openclaw_tools import (
+                            source_runtime_artifact_path_from_tool_call,
+                        )
+
+                        original_artifact_path = source_runtime_artifact_path_from_tool_call(
+                            tool_name=tool_name,
+                            tool_args_json=tool_args,
+                        )
+                    if original_artifact_path is not None and not mapped_exists:
+                        await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
+                        tool_result = _artifact_unavailable_result(original_artifact_path)
+                        tool_success = False
+                        tool_ts_end = time.time()
+                        tool_duration_ms = (tool_ts_end - tool_ts_start) * 1000
+                        sim_provenance = "source_artifact_unavailable"
+                        fatal_replay_errors += 1
+                    elif mapped_artifact_path is not None:
+                        tool_result, tool_duration_ms, tool_success = await _exec_tool(
+                            ctr.agent,
+                            tool_name,
+                            mapped_tool_args,
+                            command_timeout_s,
+                            source_exec_timeout,
+                            True,
+                        )
+                        tool_ts_end = time.time()
+                        sim_provenance = "restored_runtime_artifact"
+                    else:
+                        tool_result, tool_duration_ms, tool_success = await _exec_tool(
+                            ctr.agent,
+                            tool_name,
+                            mapped_tool_args,
+                            command_timeout_s,
+                            source_exec_timeout,
+                        )
+                        tool_ts_end = time.time()
+                        sim_provenance = "executed_in_container"
                 total_tool_ms += tool_duration_ms
+                replay_outcome_match = (
+                    tool_success == source_success
+                    and sim_provenance != "source_artifact_unavailable"
+                )
+                extra_tool_fields = _command_metadata(
+                    tool_name=tool_name,
+                    tool_args_json=tool_args,
+                    tool_result=str(tool_result),
+                    tool_success=tool_success,
+                )
+                if original_artifact_path is not None:
+                    extra_tool_fields["source_artifact_path"] = original_artifact_path
+                if mapped_artifact_path is not None:
+                    extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
+                if source_exec_timeout is not None:
+                    extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
 
                 tool_record = _make_trace_action(
                     loaded=loaded,
@@ -1301,11 +1982,21 @@ async def _run_local_model_simulation(
                         "tool_result": tool_result,
                         "duration_ms": tool_duration_ms,
                         "success": tool_success,
+                        "source_success": source_success,
+                        "replay_outcome_match": replay_outcome_match,
+                        **extra_tool_fields,
+                        "replay_source": sim_provenance,
                         "sim_metrics": {
                             "source": sim_provenance,
                             "sim_tool_format": (
-                                "replayed_from_trace"
-                                if sim_provenance == "replayed_from_trace"
+                                sim_provenance
+                                if sim_provenance
+                                in {
+                                    "replayed_from_trace",
+                                    "message_noop",
+                                    "source_artifact_unavailable",
+                                    "restored_runtime_artifact",
+                                }
                                 else "container_exec"
                             ),
                             "warmup": i < warmup_skip_iterations,
@@ -1313,6 +2004,18 @@ async def _run_local_model_simulation(
                     },
                 )
                 trace_logger.log_trace_action(loaded.agent_id, tool_record)
+                if not replay_outcome_match:
+                    failed_tool_actions += 1
+
+            if failed_tool_actions:
+                logger.error(
+                    "Local-model replay failed %d tool action(s) for %s iteration=%s",
+                    failed_tool_actions,
+                    loaded.agent_id,
+                    it_num,
+                )
+                failed_iters += 1
+                continue
 
             succeeded_iters += 1
 
@@ -1343,6 +2046,7 @@ async def _run_local_model_simulation(
                 "local_api_base": api_base,
                 "succeeded_iterations": succeeded_iters,
                 "failed_iterations": failed_iters,
+                "fatal_replay_errors": fatal_replay_errors,
             },
         )
         trace_logger.log_summary(loaded.agent_id, simulate_summary)
@@ -1371,6 +2075,7 @@ async def _prepare_replay_session(
     container_executable: str | None,
     network_mode: str,
     container_resource_recorder: ContainerResourceRecorder | None = None,
+    fixed_images_by_source: dict[str, str] | None = None,
 ) -> PreparedTraceSession:
     prepared: PreparedTraceSession | None = None
     try:
@@ -1393,13 +2098,18 @@ async def _prepare_replay_session(
         else:
             if container_executable is None:
                 raise ValueError("container_executable is required for container-mode traces")
+            prepare_kwargs: dict[str, Any] = {}
+            if fixed_images_by_source:
+                prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
             prepared = await _prepare_container_session(
                 loaded,
                 task_output_dir=task_output_dir,
                 container_executable=container_executable,
                 network_mode=network_mode,
+                **prepare_kwargs,
             )
             prepared.task_output_dir = task_output_dir
+            await _restore_source_runtime_artifacts(prepared)
         if prepared.container is not None:
             prepared.container_resource_recorder = container_resource_recorder
             if container_resource_recorder is not None:
@@ -1432,6 +2142,7 @@ async def _run_cloud_model_queue(
     replay_speed: float,
     command_timeout_s: float,
     warmup_skip_iterations: int,
+    fixed_images_by_source: dict[str, str] | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -1471,6 +2182,7 @@ async def _run_cloud_model_queue(
                     container_executable=container_executable,
                     network_mode=network_mode,
                     container_resource_recorder=container_resource_recorder,
+                    fixed_images_by_source=fixed_images_by_source,
                 )
                 stats = await _replay_cloud_model_session(
                     prepared,
@@ -1538,6 +2250,10 @@ async def _replay_cloud_model_session(
     wall_start = time.time()
     succeeded_actions = 0
     failed_actions = 0
+    fatal_replay_errors = 0
+    source_failed_actions = 0
+    replay_failed_actions = 0
+    matched_failed_actions = 0
 
     for action in loaded.actions:
         action_id = str(action.get("action_id", ""))
@@ -1603,6 +2319,19 @@ async def _replay_cloud_model_session(
 
             record_ts_start = time.time()
             source_duration_ms = float(data.get("duration_ms") or 0.0)
+            source_success = _source_tool_success(data)
+            source_tool_result = data.get("tool_result", data.get("result", ""))
+            source_exec_timeout = _source_exec_timeout_s(
+                tool_name=tool_name,
+                tool_args_json=tool_args,
+                source_duration_ms=source_duration_ms,
+                source_success=source_success,
+                source_tool_result=source_tool_result,
+            )
+            original_artifact_path: str | None = None
+            mapped_artifact_path: str | None = None
+            if not source_success:
+                source_failed_actions += 1
             if ctr is None:
                 logger.info(
                     "Skipping host-mode tool action for %s action=%s tool=%s",
@@ -1612,27 +2341,95 @@ async def _replay_cloud_model_session(
                 )
                 replay_source = "skipped_host_mode"
                 tool_result = data.get("tool_result", data.get("result", ""))
-                # Research-agent tools may omit "success"; infer from absence-of-error.
-                tool_success = bool(data.get("success", not data.get("error")))
+                tool_success = source_success
                 if source_duration_ms > 0:
                     await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
                 duration_ms = (time.time() - record_ts_start) * 1000
+            elif tool_name == "message":
+                if source_duration_ms > 0:
+                    await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
+                tool_result = data.get("tool_result", data.get("result", ""))
+                if not tool_result:
+                    tool_result = "Message replayed as no-op"
+                tool_success = source_success
+                duration_ms = (time.time() - record_ts_start) * 1000
+                replay_source = "message_noop"
             elif tool_name.startswith("mcp_"):
                 if source_duration_ms > 0:
                     await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
                 tool_result = data.get("tool_result", "")
-                tool_success = bool(data.get("success", True))
+                tool_success = source_success
                 duration_ms = (time.time() - record_ts_start) * 1000
                 replay_source = "replayed_from_trace"
             else:
-                tool_result, duration_ms, tool_success = await _exec_tool(
-                    ctr.agent,
-                    tool_name,
-                    tool_args,
-                    command_timeout_s,
+                mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
+                    _remap_runtime_artifact_tool_args(
+                        tool_name=tool_name,
+                        tool_args_json=tool_args,
+                        runtime_root_map=prepared_session.runtime_artifact_root_map,
+                    )
                 )
-                replay_source = "executed_in_container"
+                if original_artifact_path is None and isinstance(tool_args, str):
+                    from trace_collect.openclaw_tools import (
+                        source_runtime_artifact_path_from_tool_call,
+                    )
+
+                    original_artifact_path = source_runtime_artifact_path_from_tool_call(
+                        tool_name=tool_name,
+                        tool_args_json=tool_args,
+                    )
+                if original_artifact_path is not None and not mapped_exists:
+                    if source_duration_ms > 0:
+                        await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
+                    tool_result = _artifact_unavailable_result(original_artifact_path)
+                    tool_success = False
+                    duration_ms = (time.time() - record_ts_start) * 1000
+                    replay_source = "source_artifact_unavailable"
+                    fatal_replay_errors += 1
+                else:
+                    if mapped_artifact_path is not None:
+                        tool_result, duration_ms, tool_success = await _exec_tool(
+                            ctr.agent,
+                            tool_name,
+                            mapped_tool_args,
+                            command_timeout_s,
+                            source_exec_timeout,
+                            True,
+                        )
+                    else:
+                        tool_result, duration_ms, tool_success = await _exec_tool(
+                            ctr.agent,
+                            tool_name,
+                            mapped_tool_args,
+                            command_timeout_s,
+                            source_exec_timeout,
+                        )
+                    replay_source = (
+                        "restored_runtime_artifact"
+                        if mapped_artifact_path is not None
+                        else "executed_in_container"
+                    )
+            if not tool_success:
+                replay_failed_actions += 1
+            replay_outcome_match = (
+                tool_success == source_success
+                and replay_source != "source_artifact_unavailable"
+            )
+            if (not tool_success) and replay_outcome_match:
+                matched_failed_actions += 1
             record_ts_end = time.time()
+            extra_tool_fields = _command_metadata(
+                tool_name=tool_name,
+                tool_args_json=tool_args,
+                tool_result=str(tool_result),
+                tool_success=tool_success,
+            )
+            if original_artifact_path is not None:
+                extra_tool_fields["source_artifact_path"] = original_artifact_path
+            if mapped_artifact_path is not None:
+                extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
+            if source_exec_timeout is not None:
+                extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
             tool_record = _make_trace_action(
                 loaded=loaded,
                 action_type="tool_exec",
@@ -1646,6 +2443,9 @@ async def _replay_cloud_model_session(
                     "tool_result": tool_result,
                     "duration_ms": duration_ms,
                     "success": tool_success,
+                    "source_success": source_success,
+                    "replay_outcome_match": replay_outcome_match,
+                    **extra_tool_fields,
                     "simulate_source": str(loaded.source_trace),
                     "source_duration_ms": source_duration_ms,
                     "replay_mode": "cloud_model",
@@ -1655,13 +2455,40 @@ async def _replay_cloud_model_session(
                         "warmup": iteration < warmup_skip_iterations,
                         "source": replay_source,
                         "sim_tool_format": replay_source
-                        if replay_source == "skipped_host_mode"
+                        if replay_source
+                        in {
+                            "skipped_host_mode",
+                            "message_noop",
+                            "replayed_from_trace",
+                            "source_artifact_unavailable",
+                            "restored_runtime_artifact",
+                        }
                         else "container_exec",
                     },
                 },
             )
             trace_logger.log_trace_action(loaded.agent_id, tool_record)
-            succeeded_actions += 1
+            if replay_outcome_match:
+                if tool_success:
+                    succeeded_actions += 1
+                else:
+                    logger.info(
+                        "Replay tool action matched source failure for %s action=%s tool=%s",
+                        loaded.agent_id,
+                        action_id,
+                        tool_name,
+                    )
+            else:
+                logger.error(
+                    "Replay tool outcome mismatch for %s action=%s tool=%s "
+                    "source_success=%s replay_success=%s",
+                    loaded.agent_id,
+                    action_id,
+                    tool_name,
+                    source_success,
+                    tool_success,
+                )
+                failed_actions += 1
         except Exception as exc:
             logger.error(
                 "Replay action failed for %s action=%s: %s",
@@ -1672,7 +2499,7 @@ async def _replay_cloud_model_session(
             failed_actions += 1
 
     wall_end = time.time()
-    success = failed_actions == 0
+    success = failed_actions == 0 and fatal_replay_errors == 0
     trace_logger.log_summary(
         loaded.agent_id,
         _make_trace_summary(
@@ -1685,6 +2512,11 @@ async def _replay_cloud_model_session(
                 "replay_speed": replay_speed,
                 "succeeded_actions": succeeded_actions,
                 "failed_actions": failed_actions,
+                "source_failed_actions": source_failed_actions,
+                "replay_failed_actions": replay_failed_actions,
+                "matched_failed_actions": matched_failed_actions,
+                "fatal_replay_errors": fatal_replay_errors,
+                "outcome_mismatches": failed_actions,
             },
         ),
     )
@@ -1700,13 +2532,13 @@ def _split_trace_by_agent(
     combined_path: Path,
     sessions: list[PreparedTraceSession],
 ) -> None:
-    """Write per-task trace.jsonl from the combined JSONL, filtered by agent_id."""
+    """Write per-task trace.jsonl from the combined JSONL, filtered by replay id."""
     agent_dirs = {
-        s.loaded.agent_id: s.task_output_dir
+        s.loaded.run_instance_id: s.task_output_dir
         for s in sessions
         if s.task_output_dir is not None
     }
-    sessions_by_agent = {s.loaded.agent_id: s for s in sessions}
+    sessions_by_agent = {s.loaded.run_instance_id: s for s in sessions}
     if not agent_dirs:
         return
 
@@ -1736,8 +2568,29 @@ def _split_trace_by_agent(
                 session = sessions_by_agent[agent_id].loaded
                 metadata["scaffold"] = session.scaffold
                 metadata["execution_environment"] = _execution_environment(session)
-                metadata["instance_id"] = session.agent_id
+                metadata["instance_id"] = session.run_instance_id
+                metadata["run_instance_id"] = session.run_instance_id
+                metadata["source_agent_id"] = session.source_agent_id
+                metadata["task_id"] = session.source_agent_id
+                metadata["manifest_index"] = session.manifest_index
+                metadata["label"] = session.label
                 metadata["source_trace"] = str(session.source_trace)
+                metadata["source_trace_count"] = 1
+                metadata["source_traces"] = [str(session.source_trace)]
+                metadata["source_trace_entries"] = [
+                    {
+                        "manifest_index": session.manifest_index,
+                        "source_trace": str(session.source_trace),
+                        "source_agent_id": session.source_agent_id,
+                        "run_instance_id": session.run_instance_id,
+                        "label": session.label,
+                    }
+                ]
+                metadata["source_agent_ids"] = [session.source_agent_id]
+                metadata["run_instance_ids"] = [session.run_instance_id]
+                source_model = (session.summary or {}).get("model", "unknown")
+                metadata["source_models"] = [source_model]
+                metadata["source_model"] = source_model
                 fh.write(json.dumps(metadata, ensure_ascii=False) + "\n")
             for ln in lines:
                 fh.write(ln + "\n")
@@ -1781,11 +2634,13 @@ async def simulate(
         _load_trace_session(
             entry.trace,
             entry.task_source,
+            manifest_index=entry.index,
             docker_image_override=entry.docker_image,
             label=entry.label,
         )
         for entry in manifest_entries
     ]
+    _assign_replay_instance_ids(loaded_sessions)
     _validate_loaded_sessions(
         loaded_sessions,
         mode=mode,
@@ -1812,11 +2667,20 @@ async def simulate(
     trace_logger: TraceLogger | None = None
     container_resource_recorder: ContainerResourceRecorder | None = None
     container_resource_summary: dict[str, Any] | None = None
+    sweep_fixed_images: dict[str, str] = {}
+    run_completed_for_fixed_cleanup = False
+    run_wall_start: float | None = None
+    run_wall_end: float | None = None
     output_path.mkdir(parents=True, exist_ok=True)
-    run_wall_start = time.monotonic()
     scheduler_mode = "bounded_queue"
 
     try:
+        sweep_fixed_images = await _prebuild_sweep_fixed_images(
+            loaded_sessions,
+            output_path=output_path,
+            container_executable=container_executable,
+        )
+        run_wall_start = time.monotonic()
         run_id = _build_run_id(mode=mode, model=model, concurrency=concurrency)
         trace_logger = TraceLogger(output_path, run_id)
         _log_trace_metadata(
@@ -1850,6 +2714,7 @@ async def simulate(
                 container_executable=container_executable,
                 network_mode=network_mode,
                 container_resource_recorder=container_resource_recorder,
+                fixed_images_by_source=sweep_fixed_images,
             )
             prepared_sessions.append(prepared)
             assert trace_logger is not None
@@ -1891,18 +2756,41 @@ async def simulate(
                 replay_speed=replay_speed,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
+                fixed_images_by_source=sweep_fixed_images,
             )
+        run_completed_for_fixed_cleanup = True
     finally:
+        finalization_error: BaseException | None = None
         try:
-            if trace_logger is not None:
-                trace_logger.close()
-                _split_trace_by_agent(trace_logger.path, prepared_sessions)
-            for prepared in prepared_sessions:
-                await _finalize_prepared_session(prepared)
-        finally:
+            try:
+                if trace_logger is not None:
+                    trace_logger.close()
+                    _split_trace_by_agent(trace_logger.path, prepared_sessions)
+                for prepared in prepared_sessions:
+                    await _finalize_prepared_session(prepared)
+            except (Exception, asyncio.CancelledError) as exc:
+                finalization_error = exc
+            if finalization_error is None:
+                run_wall_end = time.monotonic()
             if container_resource_recorder is not None:
                 container_resource_summary = container_resource_recorder.stop()
+            if run_completed_for_fixed_cleanup and finalization_error is None:
+                await _cleanup_sweep_fixed_images(
+                    sweep_fixed_images,
+                    container_executable=container_executable,
+                )
+            elif sweep_fixed_images:
+                logger.warning(
+                    "Skipping sweep fixed image cleanup because simulate did not "
+                    "complete cleanly; images=%s",
+                    sorted(sweep_fixed_images.values()),
+                )
+        finally:
+            if finalization_error is not None:
+                raise finalization_error
 
+    if run_wall_start is None or run_wall_end is None:
+        raise AssertionError("simulate wall-clock measurement was not recorded")
     trace_file = output_path / f"{run_id}.jsonl"
     _write_throughput_summary(
         output_path=output_path,
@@ -1912,7 +2800,7 @@ async def simulate(
         concurrency=concurrency,
         scheduler_mode=scheduler_mode,
         trace_file=trace_file,
-        wall_time_s=time.monotonic() - run_wall_start,
+        wall_time_s=run_wall_end - run_wall_start,
         task_stats=task_stats,
         container_resources=container_resource_summary,
     )

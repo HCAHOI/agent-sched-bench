@@ -334,6 +334,10 @@ def test_summarize_samples_with_io() -> None:
             "memory_write_mb_s": 40.0,
             "memory_bandwidth_available": True,
             "memory_bandwidth_source": "perf:intel-imc-cas",
+            "memory_access_available": True,
+            "memory_access_source": "perf:armv8_pmuv3_0:mem_access:cgroup",
+            "memory_access_events": 1000.0,
+            "memory_access_events_per_s": 500.0,
             "disk_read_bytes": 1024 * 1024,       # 1 MB
             "disk_write_bytes": 512 * 1024,        # 0.5 MB
             "net_rx_bytes": 1000.0,                # ~0.001 MB
@@ -350,6 +354,10 @@ def test_summarize_samples_with_io() -> None:
             "memory_write_mb_s": 60.0,
             "memory_bandwidth_available": True,
             "memory_bandwidth_source": "perf:intel-imc-cas",
+            "memory_access_available": True,
+            "memory_access_source": "perf:armv8_pmuv3_0:mem_access:cgroup",
+            "memory_access_events": 2400.0,
+            "memory_access_events_per_s": 1200.0,
             "disk_read_bytes": 2 * 1024 * 1024,   # 2 MB
             "disk_write_bytes": 1024 * 1024,       # 1 MB
             "net_rx_bytes": 5000.0,
@@ -366,6 +374,10 @@ def test_summarize_samples_with_io() -> None:
             "memory_write_mb_s": 75.0,
             "memory_bandwidth_available": True,
             "memory_bandwidth_source": "perf:intel-imc-cas",
+            "memory_access_available": True,
+            "memory_access_source": "perf:armv8_pmuv3_0:mem_access:cgroup",
+            "memory_access_events": 3600.0,
+            "memory_access_events_per_s": 1800.0,
             "disk_read_bytes": 4 * 1024 * 1024,   # 4 MB
             "disk_write_bytes": 2 * 1024 * 1024,   # 2 MB
             "net_rx_bytes": 20000.0,
@@ -389,6 +401,14 @@ def test_summarize_samples_with_io() -> None:
     assert summary["memory_total_mb_s"]["avg"] == pytest.approx((100.0 + 150.0 + 175.0) / 3)
     assert summary["memory_bandwidth_available"] is True
     assert summary["memory_bandwidth_source"] == "perf:intel-imc-cas"
+    assert summary["memory_access_available"] is True
+    assert summary["memory_access_source"] == (
+        "perf:armv8_pmuv3_0:mem_access:cgroup"
+    )
+    assert summary["memory_access_events"]["max"] == pytest.approx(3600.0)
+    assert summary["memory_access_events_per_s"]["avg"] == pytest.approx(
+        (500.0 + 1200.0 + 1800.0) / 3
+    )
 
     # Disk I/O
     assert summary["disk_read_mb"]["min"] == pytest.approx(1.0)
@@ -420,6 +440,8 @@ def test_summarize_samples_empty() -> None:
     assert summary["sample_count"] == 0
     assert summary["memory_total_mb_s"]["avg"] == 0
     assert summary["memory_bandwidth_available"] is False
+    assert summary["memory_access_available"] is False
+    assert summary["memory_access_events_per_s"]["avg"] == 0
     assert summary["disk_read_mb"]["min"] == 0
     assert summary["net_rx_mb"]["delta"] == 0
     assert summary["context_switches"]["avg"] == 0
@@ -446,6 +468,8 @@ def test_summarize_samples_legacy_no_io() -> None:
     assert summary["cpu_percent"]["avg"] == 10.0
     assert summary["memory_total_mb_s"]["avg"] == 0
     assert summary["memory_bandwidth_available"] is False
+    assert summary["memory_access_available"] is False
+    assert summary["memory_access_events_per_s"]["avg"] == 0
     assert summary["disk_read_mb"]["avg"] == 0
     assert summary["net_rx_mb"]["avg"] == 0
     assert summary["context_switches"]["avg"] == 0

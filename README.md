@@ -164,21 +164,30 @@ PYTHONPATH=src python -m trace_collect.cli simulate \
 `--concurrency 8` runs a single bounded-queue simulation with at most 8 active
 traces. `--concurrency 1,2,4,8` runs the same manifest sequentially at each
 concurrency and writes `throughput_sweep.jsonl`.
+Throughput is reported in manifest entries per second. If the same trace path is
+listed more than once, each listing is replayed as a separate entry.
 
 For container-mode traces, simulate prefetches the unique source Docker images
 before the bounded queue starts. Task containers are still created only when a
 worker admits that trace.
 
 Each attempt writes `container_startup.json` with fixed-image timing, container
-creation timing, agent bootstrap timing, and startup-only resource samples.
-Runtime resource sampling remains separate in `resources.json`.
+creation timing, and agent bootstrap timing. Startup resource samples are
+best-effort and may be empty; runtime resource sampling remains separate in
+`resources.json`.
 
 Manifest input is YAML. The simplest form is a list of absolute trace paths:
 
 ```yaml
 - /abs/path/task-a/attempt_1/trace.jsonl
 - /abs/path/task-b/attempt_1/trace.jsonl
+- /abs/path/task-a/attempt_1/trace.jsonl  # replay task-a a second time
 ```
+
+Duplicate source traces get separate replay instance IDs such as
+`task-a__replica-001` and `task-a__replica-002`. Output actions use that replay
+ID as `agent_id`; the original task ID is preserved as `source_agent_id` and
+`task_id`.
 
 Use the structured form when traces need per-entry metadata:
 

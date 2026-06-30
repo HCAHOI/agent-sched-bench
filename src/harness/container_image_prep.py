@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 
 from harness.container_runtime import image_exists_command
 
-_IMAGE_CACHE: dict[str, tuple[str, float]] = {}
+_IMAGE_CACHE: dict[tuple[str, str, str], tuple[str, float]] = {}
+_BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_BUILD_LOCKS_GUARD = threading.Lock()
 _PULL_ATTEMPTS = 3
 _PULL_BACKOFF_SECONDS = 1.0
 _ARCH_ALIASES = {
@@ -234,59 +237,86 @@ def _build_fixed_image(
         _run([executable, "rm", "-f", container_id], check=False, timeout=30)
 
 
+def _build_lock_for(source_image: str, executable: str) -> threading.Lock:
+    key = (executable, source_image)
+    with _BUILD_LOCKS_GUARD:
+        lock = _BUILD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _BUILD_LOCKS[key] = lock
+        return lock
+
+
 def ensure_fixed_image(
     source_image: str,
     *,
     container_executable: str,
     host_uid: int | None = None,
     host_gid: int | None = None,
+    fixed_image_name: str | None = None,
+    rebuild: bool = False,
 ) -> tuple[str, float]:
     """Return ``(fixed_image_name, elapsed_seconds)``.
 
-    Caches per process; skips the build if the derivative already exists locally.
+    Caches per process unless ``rebuild`` is set. ``rebuild`` removes any
+    existing derivative tag before building from the already-local source image.
     """
     source_image = normalize_image_reference(source_image)
-    if source_image in _IMAGE_CACHE:
-        return _IMAGE_CACHE[source_image]
+    fixed_name = fixed_image_name or fixed_image_name_for(source_image)
+    cache_key = (container_executable, source_image, fixed_name)
 
-    fixed_name = fixed_image_name_for(source_image)
+    if not rebuild and cache_key in _IMAGE_CACHE:
+        return _IMAGE_CACHE[cache_key]
 
-    if _image_exists(fixed_name, container_executable):
-        _IMAGE_CACHE[source_image] = (fixed_name, 0.0)
-        return _IMAGE_CACHE[source_image]
+    build_lock = _build_lock_for(source_image, container_executable)
+    with build_lock:
+        if not rebuild and cache_key in _IMAGE_CACHE:
+            return _IMAGE_CACHE[cache_key]
 
-    ensure_source_image(
-        source_image,
-        container_executable=container_executable,
-    )
-    image_platform = _inspect_image_platform(source_image, container_executable)
+        if rebuild:
+            _IMAGE_CACHE.pop(cache_key, None)
+            remove_image(fixed_name, container_executable=container_executable)
+        elif _image_exists(fixed_name, container_executable):
+            _IMAGE_CACHE[cache_key] = (fixed_name, 0.0)
+            return _IMAGE_CACHE[cache_key]
 
-    uid = host_uid if host_uid is not None else os.getuid()
-    gid = host_gid if host_gid is not None else os.getgid()
-
-    t0 = time.time()
-    try:
-        _build_fixed_image(
+        ensure_source_image(
             source_image,
-            fixed_name,
-            container_executable,
-            uid,
-            gid,
-            image_platform,
+            container_executable=container_executable,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(
-            f"Failed to build fixed derivative image for {source_image}: {exc}"
-        ) from exc
-    elapsed = time.time() - t0
-    _IMAGE_CACHE[source_image] = (fixed_name, elapsed)
-    return _IMAGE_CACHE[source_image]
+        image_platform = _inspect_image_platform(source_image, container_executable)
+
+        uid = host_uid if host_uid is not None else os.getuid()
+        gid = host_gid if host_gid is not None else os.getgid()
+
+        t0 = time.time()
+        try:
+            _build_fixed_image(
+                source_image,
+                fixed_name,
+                container_executable,
+                uid,
+                gid,
+                image_platform,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(
+                f"Failed to build fixed derivative image for {source_image}: {exc}"
+            ) from exc
+        elapsed = time.time() - t0
+        _IMAGE_CACHE[cache_key] = (fixed_name, elapsed)
+        return _IMAGE_CACHE[cache_key]
 
 
 def clear_image_cache() -> None:
     _IMAGE_CACHE.clear()
+    with _BUILD_LOCKS_GUARD:
+        _BUILD_LOCKS.clear()
 
 
 def drop_cached_fixed_image(source_image: str) -> None:
     """Forget any cached fixed-image lookup for ``source_image``."""
-    _IMAGE_CACHE.pop(normalize_image_reference(source_image), None)
+    normalized = normalize_image_reference(source_image)
+    for cache_key in list(_IMAGE_CACHE):
+        if cache_key[1] == normalized:
+            _IMAGE_CACHE.pop(cache_key, None)

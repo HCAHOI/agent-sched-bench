@@ -22,6 +22,14 @@ CONTAINER_STDOUT_FILENAME = "container_stdout.txt"
 TRACE_FILENAME = "trace.jsonl"
 
 SCHEMA_VERSION = 1
+_DEFAULT_ARTIFACTS = {
+    "results_json": RESULTS_FILENAME,
+    "resources_json": RESOURCES_FILENAME,
+    "container_startup_json": CONTAINER_STARTUP_FILENAME,
+    "trace_jsonl": TRACE_FILENAME,
+    "tool_calls_json": TOOL_CALLS_FILENAME,
+    "container_stdout_txt": CONTAINER_STDOUT_FILENAME,
+}
 
 def ensure_attempt_dir(attempt_dir: Path) -> Path:
     attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -38,19 +46,10 @@ def _write_json(path: Path, payload: Any) -> None:
 
 def write_run_manifest(attempt_dir: Path, manifest: dict[str, Any]) -> Path:
     """Write run_manifest.json, stamping schema_version and the artifacts map."""
+    artifacts = {**_DEFAULT_ARTIFACTS, **(manifest.get("artifacts") or {})}
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "artifacts": manifest.get(
-            "artifacts",
-            {
-                "results_json": RESULTS_FILENAME,
-                "resources_json": RESOURCES_FILENAME,
-                "container_startup_json": CONTAINER_STARTUP_FILENAME,
-                "trace_jsonl": TRACE_FILENAME,
-                "tool_calls_json": TOOL_CALLS_FILENAME,
-                "container_stdout_txt": CONTAINER_STDOUT_FILENAME,
-            },
-        ),
+        "artifacts": artifacts,
     }
     # Caller-provided top-level keys (status, task, attempt, model, runtime,
     # replay, result_summary, plus extras) are preserved verbatim.

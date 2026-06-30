@@ -6,8 +6,11 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 import subprocess
 import threading
+import time
+import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,11 +50,56 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "no_proxy",
     "PIP_INDEX_URL",
     "TASK_CONTAINER_PIP_INDEX_URL",
+    "TASK_CONTAINER_APT_MIRROR",
+    "TASK_CONTAINER_APT_SECURITY_MIRROR",
     "NANOBOT_MAX_CONCURRENT_REQUESTS",
     # LLM client timeouts: slow recording forwards trip the 90s idle/SDK default.
     "NANOBOT_STREAM_IDLE_TIMEOUT_S",
     "OPENCLAW_LLM_TIMEOUT_S",
 )
+
+
+def _is_missing_container_inspect_error(
+    result: subprocess.CompletedProcess[str],
+) -> bool:
+    if result.returncode == 0:
+        return False
+    message = ((result.stderr or "") + "\n" + (result.stdout or "")).lower()
+    return (
+        "no such object" in message
+        or "no such container" in message
+        or "does not exist" in message
+    )
+
+
+def _is_container_removal_in_progress(message: str) -> bool:
+    normalized = message.lower()
+    return "removal of container" in normalized and "is already in progress" in normalized
+
+
+def _inspect_container_exists(container_id: str, *, executable: str) -> tuple[bool, str | None]:
+    try:
+        inspect = subprocess.run(
+            [executable, "inspect", container_id],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return True, f"{executable} inspect {container_id} timed out after 30s"
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"container executable not found: {executable}") from exc
+    if inspect.returncode == 0:
+        return True, None
+    if _is_missing_container_inspect_error(inspect):
+        return False, None
+    message = (inspect.stderr or inspect.stdout or "").strip()
+    detail = (
+        f"{executable} inspect {container_id} failed with exit {inspect.returncode}"
+        + (f": {message}" if message else "")
+    )
+    return True, detail
 
 
 _ATTEMPT_DIR_RE = re.compile(r"^attempt_(\d+)$")
@@ -139,29 +187,42 @@ def start_task_container(
     executable: str,
     extra_args: list[str] | None = None,
     network_mode: str = "host",
+    run_as_host_user: bool = True,
+    mount_host_home: bool = True,
+    container_home: str | None = None,
 ) -> str:
     """Launch the task container and return its id."""
-    home_dir = os.environ.get("HOME", "/root")
+    home_dir = container_home or os.environ.get("HOME", "/root")
     cmd = [
         executable,
         "run",
         "-d",
         "--rm",
         f"--network={network_mode}",
-        "-v",
-        f"{home_dir}:{home_dir}",
         "-w",
         "/testbed",
-        "-e",
-        f"HOME={home_dir}",
-        "-e",
-        f"PATH={home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
     ]
+    if mount_host_home:
+        cmd.extend(
+            [
+                "-v",
+                f"{home_dir}:{home_dir}",
+            ]
+        )
+    cmd.extend(
+        [
+            "-e",
+            f"HOME={home_dir}",
+            "-e",
+            f"PATH={home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+        ]
+    )
     for env_name in _TASK_CONTAINER_ENV_PASSTHROUGH:
         value = os.environ.get(env_name)
         if value:
             cmd.extend(["-e", f"{env_name}={value}"])
-    cmd.extend(container_run_user_args(executable))
+    if run_as_host_user:
+        cmd.extend(container_run_user_args(executable))
     if extra_args:
         cmd.extend(extra_args)
     cmd.extend([fixed_image, "sleep", "infinity"])
@@ -172,6 +233,105 @@ def start_task_container(
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
     return result.stdout.strip()
+
+
+def _derive_debian_security_mirror(main_mirror: str) -> str:
+    normalized = main_mirror.rstrip("/")
+    if normalized.endswith("/debian"):
+        return f"{normalized[:-len('/debian')]}/debian-security"
+    return normalized
+
+
+def _validate_apt_mirror_url(value: str, *, env_name: str) -> str:
+    normalized = value.rstrip("/")
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{env_name} must be an absolute http(s) URL")
+    if any(ch.isspace() for ch in normalized):
+        raise ValueError(f"{env_name} must not contain whitespace")
+    return normalized
+
+
+def configure_task_container_apt_mirror(
+    container_id: str,
+    *,
+    executable: str,
+) -> dict[str, str] | None:
+    """Configure Debian apt mirrors inside a running task container.
+
+    This is opt-in via TASK_CONTAINER_APT_MIRROR. It is an infrastructure
+    mirror, not benchmark-specific behavior; trace commands still execute as
+    recorded, but apt resolves packages from the configured mirror.
+    """
+    main_mirror = os.environ.get("TASK_CONTAINER_APT_MIRROR")
+    if not main_mirror:
+        return None
+    main_mirror = _validate_apt_mirror_url(
+        main_mirror,
+        env_name="TASK_CONTAINER_APT_MIRROR",
+    )
+    security_mirror = _validate_apt_mirror_url(
+        os.environ.get("TASK_CONTAINER_APT_SECURITY_MIRROR")
+        or _derive_debian_security_mirror(main_mirror),
+        env_name="TASK_CONTAINER_APT_SECURITY_MIRROR",
+    )
+    script = f"""
+set -eu
+main_mirror={shlex.quote(main_mirror)}
+security_mirror={shlex.quote(security_mirror)}
+. /etc/os-release
+if [ "${{ID:-}}" != "debian" ]; then
+  echo "apt mirror skipped: unsupported distro: ${{ID:-unknown}}"
+  exit 0
+fi
+codename="${{VERSION_CODENAME:-}}"
+if [ -z "$codename" ]; then
+  echo "apt mirror unsupported Debian image without VERSION_CODENAME" >&2
+  exit 1
+fi
+mkdir -p /etc/apt/sources.list.d
+for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+  [ -e "$source_file" ] || continue
+  case "$source_file" in
+    */agent-sched-bench-mirror.*|*.agent-sched-bench-disabled) continue ;;
+  esac
+  mv "$source_file" "$source_file.agent-sched-bench-disabled"
+done
+cat > /etc/apt/sources.list.d/agent-sched-bench-mirror.sources <<EOF
+Types: deb
+URIs: $main_mirror
+Suites: $codename $codename-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: $security_mirror
+Suites: $codename-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+echo "apt mirror configured: main=$main_mirror security=$security_mirror"
+"""
+    result = subprocess.run(
+        [executable, "exec", "-i", container_id, "/bin/sh", "-s"],
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "failed to configure task-container apt mirror: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    stdout = result.stdout.strip()
+    return {
+        "configured": "false" if stdout.startswith("apt mirror skipped:") else "true",
+        "main_mirror": main_mirror,
+        "security_mirror": security_mirror,
+        "stdout": stdout,
+    }
 
 
 def stop_task_container(container_id: str, *, executable: str) -> str:
@@ -188,26 +348,67 @@ def stop_task_container(container_id: str, *, executable: str) -> str:
         logs_text = (logs.stdout or "") + (logs.stderr or "")
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
-    try:
-        subprocess.run(
-            [executable, "stop", container_id],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    try:
-        subprocess.run(
-            [executable, "rm", "-f", container_id],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+
+    errors: list[str] = []
+    removal_in_progress = False
+    for cmd, timeout in (
+        ([executable, "stop", container_id], 30),
+        ([executable, "rm", "-f", container_id], 60),
+    ):
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            errors.append(f"{' '.join(cmd)} timed out after {timeout}s")
+            continue
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"container executable not found: {executable}") from exc
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "").strip()
+            if cmd[:3] == [executable, "rm", "-f"] and _is_container_removal_in_progress(
+                message
+            ):
+                removal_in_progress = True
+                continue
+            errors.append(
+                f"{' '.join(cmd)} failed with exit {result.returncode}"
+                + (f": {message}" if message else "")
+            )
+
+    inspect_exists, inspect_error = _inspect_container_exists(
+        container_id,
+        executable=executable,
+    )
+    if inspect_error:
+        errors.append(inspect_error)
+
+    if inspect_exists and removal_in_progress:
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            inspect_exists, inspect_error = _inspect_container_exists(
+                container_id,
+                executable=executable,
+            )
+            if inspect_error:
+                errors.append(inspect_error)
+                break
+            if not inspect_exists:
+                break
+        if inspect_exists:
+            errors.append(
+                f"{executable} rm -f {container_id} reported removal in progress, "
+                "but the container still exists after 60s"
+            )
+
+    if inspect_exists:
+        detail = "; ".join(errors) if errors else "container still exists after cleanup"
+        raise RuntimeError(f"Failed to remove task container {container_id}: {detail}")
     return logs_text
 
 
@@ -518,6 +719,14 @@ async def run_attempt(
         tool_calls = attempt_layout.build_tool_calls_from_trace(trace_file)
     else:
         tool_calls = []
+
+    openclaw_tool_results_dir = (
+        ctx.attempt_dir / "openclaw-runtime" / "tool-results"
+    )
+    if openclaw_tool_results_dir.exists():
+        manifest.setdefault("artifacts", {})["openclaw_tool_results_dir"] = str(
+            openclaw_tool_results_dir.relative_to(ctx.attempt_dir)
+        )
 
     attempt_layout.write_run_manifest(ctx.attempt_dir, manifest)
     attempt_layout.write_results_json(ctx.attempt_dir, results_payload)

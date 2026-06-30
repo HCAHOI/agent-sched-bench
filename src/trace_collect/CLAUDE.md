@@ -160,11 +160,14 @@ the benchmark plugin's `image_name_for(task)`.
 
 - Architecture normalization: `amd64`/`x86_64` → `amd64`, `arm64`/`aarch64` → `arm64`
 - SWE-rebench ships fully-qualified x86_64 image URIs; ARM Macs use QEMU emulation
-- Image prep: source image → fixed image (permission corrections, cached)
+- Image prep (collect): source image → fixed image (permission corrections, cached)
 - Image cleanup is opt-in: set `TASK_CONTAINER_CLEANUP_IMAGES=1` to remove
   source/fixed images after tasks. By default, pre-pulled images are retained
   for smoke tests, resumes, and concurrency sweeps. When cleanup is enabled,
   `KEEP_IMAGES_ABOVE_GB=<gb>` skips removal if free disk exceeds the threshold.
+- Image prep (simulate): source images are pre-pulled and retained, while each
+  replay builds an attempt-scoped fixed image and removes that fixed image
+  during cleanup.
 - Environment passthrough: `HTTP_PROXY`, `HTTPS_PROXY`, `PIP_INDEX_URL`, etc.
 - Network mode: defaults to host; override via `--network-mode`
 - **task_container_agent runtime (swe-rebench / swe-bench): no conda, no host
@@ -260,6 +263,12 @@ prepared and admitted. Container preparation, replay, resource sampling, and
 cleanup are worker-local, so a 50-trace manifest with concurrency 8 does not
 start 50 containers up front.
 
+Throughput is measured over manifest entries, not unique task IDs. Listing the
+same trace path multiple times intentionally replays it multiple times. Repeated
+source tasks receive unique replay instance IDs such as
+`task-a__replica-001`; generated actions use that value as `agent_id` while
+preserving the original task in `source_agent_id` and `task_id`.
+
 Before the queue starts, simulate prefetches the unique source Docker images for
 container-mode traces. Task containers are still created only when a worker
 admits that trace.
@@ -288,6 +297,7 @@ writes one JSON object per run to `throughput_sweep.jsonl`.
 ```yaml
 - /abs/path/to/trace-a.jsonl
 - /abs/path/to/trace-b.jsonl
+- /abs/path/to/trace-a.jsonl  # replay trace-a again
 ```
 
 Structured form:
@@ -443,7 +453,7 @@ standalone diagnostics.
 
 ### Key Dataclasses (simulator.py)
 
-- `LoadedTraceSession` — parsed source trace: actions, iterations, metadata, task
+- `LoadedTraceSession` — parsed source trace plus source/replay identities
 - `PreparedContainer` — container_id + ContainerAgent handle
 - `PreparedTraceSession` — loaded session + container + sampler
 

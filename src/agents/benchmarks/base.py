@@ -10,6 +10,7 @@ New code should instantiate benchmarks via::
 from __future__ import annotations
 
 import json
+import random
 import yaml
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -146,10 +147,20 @@ class Benchmark(ABC):
         n: int | None = None,
         seed: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the first ``n`` tasks, sorted by instance_id for determinism."""
+        """Return a random sample of ``n`` tasks, reproducible via ``seed``.
+
+        Uses ``random.Random(seed)`` to shuffle a copy of *tasks* and takes the
+        first ``n``. This is a true random sample (not a dictionary-order
+        prefix) while remaining deterministic for a fixed seed — the same
+        seed always yields the same selection, which keeps runs reproducible.
+        When ``seed`` is None it falls back to ``config.selection_seed``.
+        """
         effective_n = n if n is not None else self.config.selection_n
-        sorted_tasks = sorted(tasks, key=lambda t: t.get("instance_id", ""))
-        return sorted_tasks[:effective_n]
+        effective_seed = seed if seed is not None else self.config.selection_seed
+        # Shuffle a copy (never mutate the caller's list) and take the prefix.
+        shuffled = list(tasks)
+        random.Random(effective_seed).shuffle(shuffled)
+        return shuffled[:effective_n]
 
     def image_name_for(self, task: dict[str, Any]) -> str | None:
         return task.get("image_name")

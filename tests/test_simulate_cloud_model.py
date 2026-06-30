@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from trace_collect.cli import _run_simulate, parse_simulate_args
-from trace_collect.simulator import simulate
+from trace_collect.simulator import _source_exec_timeout_s, simulate
 
 
 class _FakeStream:
@@ -270,6 +270,10 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
         "trace_collect.simulator.ContainerResourceRecorder",
         _FakeContainerResourceRecorder,
     )
+    monkeypatch.setattr(
+        "trace_collect.simulator.stop_task_container",
+        lambda *args, **kwargs: "",
+    )
     return recorders
 
 
@@ -301,13 +305,23 @@ def _patch_simulator_runtime(
         )
         return PreparedTraceSession(loaded=loaded, container=container)
 
-    async def fake_exec_tool(agent, tool_name, tool_args_json, command_timeout_s):
+    async def fake_exec_tool(
+        agent,
+        tool_name,
+        tool_args_json,
+        command_timeout_s,
+        source_exec_timeout_s=None,
+        allow_source_runtime_artifacts=False,
+    ):
         if tool_delay_s > 0:
             await asyncio.sleep(tool_delay_s)
         return f"{tool_result_prefix}-{tool_name}", tool_duration_ms, True
 
     async def fake_prefetch(*_args, **_kwargs) -> None:
         pass
+
+    async def fake_prebuild(*_args, **_kwargs) -> dict[str, str]:
+        return {}
 
     class _FakeSampler:
         def __init__(self, **_kwargs) -> None:
@@ -321,6 +335,7 @@ def _patch_simulator_runtime(
 
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
     monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
+    monkeypatch.setattr("trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
     if llm_client_mode == "forbid":
@@ -337,6 +352,16 @@ def _patch_simulator_runtime(
         )
     else:
         raise AssertionError(f"unknown llm_client_mode: {llm_client_mode}")
+
+
+def _patch_noop_sweep_fixed_prebuild(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_prebuild(*_args, **_kwargs) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prebuild_sweep_fixed_images",
+        fake_prebuild,
+    )
 
 
 def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> None:
@@ -593,6 +618,732 @@ def test_cloud_model_single_trace_replays_without_llm_client(
     assert summary["source_success"] is True
     assert summary["replay_mode"] == "cloud_model"
     assert summary["replay_speed"] == pytest.approx(10.0)
+    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
+    assert throughput["completed_traces"] == 1
+    assert throughput["failed_traces"] == 0
+    assert throughput["effective_concurrency"] == 1
+    assert records[0]["effective_concurrency"] == 1
+
+
+def test_cloud_model_tool_success_false_marks_trace_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "Error: Unsupported replay tool 'bad_tool'", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+    throughput = json.loads((output_dir / "throughput_summary.json").read_text())
+
+    assert tool_record["data"]["success"] is False
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
+    assert throughput["completed_traces"] == 0
+    assert throughput["failed_traces"] == 1
+    assert throughput["tasks"][0]["success"] is False
+    assert throughput["tasks"][0]["failed_action_count"] == 1
+
+
+def test_cloud_model_source_failed_tool_match_does_not_fail_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["success"] = False
+            record["data"]["tool_result"] = "Error: Not a file: /testbed/pkg"
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "Error: [Errno 21] Is a directory: '/testbed/pkg'", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+    throughput = json.loads((output_dir / "throughput_summary.json").read_text())
+
+    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["source_success"] is False
+    assert tool_record["data"]["replay_outcome_match"] is True
+    assert summary["success"] is True
+    assert summary["failed_actions"] == 0
+    assert summary["source_failed_actions"] == 1
+    assert summary["replay_failed_actions"] == 1
+    assert summary["matched_failed_actions"] == 1
+    assert throughput["completed_traces"] == 1
+    assert throughput["failed_traces"] == 0
+
+
+def test_cloud_model_source_failed_replay_success_marks_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"exec": {"command": "slow"}})
+            record["data"]["success"] = False
+            record["data"]["tool_result"] = "Error: Command timed out after 300 seconds"
+            record["data"]["duration_ms"] = 300000.0
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "finished\n\nExit code: 0", 1.0, True
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+            command_timeout_s=600.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+    throughput = json.loads((output_dir / "throughput_summary.json").read_text())
+
+    assert tool_record["data"]["success"] is True
+    assert tool_record["data"]["source_success"] is False
+    assert tool_record["data"]["replay_outcome_match"] is False
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
+    assert summary["source_failed_actions"] == 1
+    assert summary["replay_failed_actions"] == 0
+    assert summary["matched_failed_actions"] == 0
+    assert summary["outcome_mismatches"] == 1
+    assert throughput["completed_traces"] == 0
+    assert throughput["failed_traces"] == 1
+
+
+def test_source_exec_timeout_detects_source_timeout_failure() -> None:
+    timeout_s = _source_exec_timeout_s(
+        tool_name="exec",
+        tool_args_json=json.dumps({"exec": {"command": "slow command"}}),
+        source_duration_ms=300056.8,
+        source_success=False,
+        source_tool_result="Error: Command timed out after 300 seconds",
+    )
+
+    assert timeout_s == pytest.approx(300.0568)
+    assert _source_exec_timeout_s(
+        tool_name="exec",
+        tool_args_json=json.dumps({"exec": {"command": "timeout 1 sleep 2"}}),
+        source_duration_ms=1000.0,
+        source_success=False,
+        source_tool_result="shell returned timeout status\n\nExit code: 124",
+    ) is None
+    assert _source_exec_timeout_s(
+        tool_name="exec",
+        tool_args_json=json.dumps({"exec": {"command": "printf '[timeout]' && false"}}),
+        source_duration_ms=50.0,
+        source_success=False,
+        source_tool_result="app printed [timeout]\n\nExit code: 1",
+    ) is None
+    assert _source_exec_timeout_s(
+        tool_name="exec",
+        tool_args_json=json.dumps({"exec": {"command": "slow command"}}),
+        source_duration_ms=300056.8,
+        source_success=False,
+        source_tool_result="[timeout]\n\nExit code: 124",
+    ) == pytest.approx(300.0568)
+    assert _source_exec_timeout_s(
+        tool_name="exec",
+        tool_args_json=json.dumps({"exec": {"command": "false"}}),
+        source_duration_ms=50.0,
+        source_success=False,
+        source_tool_result="failed\n\nExit code: 1",
+    ) is None
+    assert _source_exec_timeout_s(
+        tool_name="read_file",
+        tool_args_json=json.dumps({"path": "/testbed/file.txt"}),
+        source_duration_ms=300056.8,
+        source_success=False,
+        source_tool_result="[timeout]\n\nExit code: 124",
+    ) is None
+
+
+def test_cloud_model_preserves_source_exec_timeout_for_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps(
+                {"exec": {"command": "cd /testbed && slow command"}}
+            )
+            record["data"]["duration_ms"] = 300056.8
+            record["data"]["success"] = False
+            record["data"]["tool_result"] = "Error: Command timed out after 300 seconds"
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    captured_source_timeouts: list[float | None] = []
+
+    async def fake_exec_tool(
+        _agent,
+        _tool_name,
+        _tool_args_json,
+        _command_timeout_s,
+        source_exec_timeout_s=None,
+        allow_source_runtime_artifacts=False,
+    ):
+        assert allow_source_runtime_artifacts is False
+        captured_source_timeouts.append(source_exec_timeout_s)
+        return "[timeout]\n\nExit code: 124", 300056.8, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+            command_timeout_s=600.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert captured_source_timeouts == [pytest.approx(300.0568)]
+    assert tool_record["data"]["source_exec_timeout_s"] == pytest.approx(300.0568)
+    assert tool_record["data"]["source_success"] is False
+    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["replay_outcome_match"] is True
+    assert summary["success"] is True
+    assert summary["failed_actions"] == 0
+    assert summary["matched_failed_actions"] == 1
+
+
+def test_local_model_preserves_source_exec_timeout_for_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps(
+                {"exec": {"command": "cd /testbed && slow command"}}
+            )
+            record["data"]["duration_ms"] = 300056.8
+            record["data"]["success"] = False
+            record["data"]["tool_result"] = "Error: Command timed out after 300 seconds"
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
+
+    captured_source_timeouts: list[float | None] = []
+
+    async def fake_exec_tool(
+        _agent,
+        _tool_name,
+        _tool_args_json,
+        _command_timeout_s,
+        source_exec_timeout_s=None,
+        allow_source_runtime_artifacts=False,
+    ):
+        assert allow_source_runtime_artifacts is False
+        captured_source_timeouts.append(source_exec_timeout_s)
+        return "[timeout]\n\nExit code: 124", 300056.8, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="local_model",
+            container_executable="docker",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+            replay_speed=100.0,
+            command_timeout_s=600.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert captured_source_timeouts == [pytest.approx(300.0568)]
+    assert tool_record["data"]["source_exec_timeout_s"] == pytest.approx(300.0568)
+    assert tool_record["data"]["source_success"] is False
+    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["replay_outcome_match"] is True
+    assert summary["success"] is True
+    assert summary["failed_iterations"] == 0
+
+
+def test_cloud_model_source_runtime_artifact_path_fails_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
+    records = _read_jsonl(trace_path)
+    artifact_path = (
+        "/root/agent-sched-bench/traces/x/attempt_1/"
+        "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
+    )
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"path": artifact_path})
+            record["data"]["success"] = True
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fail_exec_tool(*_args, **_kwargs):
+        raise AssertionError("runtime artifact path must not execute in container")
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fail_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+    throughput = json.loads((output_dir / "throughput_summary.json").read_text())
+
+    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["source_success"] is True
+    assert tool_record["data"]["replay_outcome_match"] is False
+    assert tool_record["data"]["replay_source"] == "source_artifact_unavailable"
+    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "source_artifact_unavailable"
+    assert artifact_path in tool_record["data"]["tool_result"]
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
+    assert summary["source_failed_actions"] == 0
+    assert summary["replay_failed_actions"] == 1
+    assert summary["fatal_replay_errors"] == 1
+    assert throughput["completed_traces"] == 0
+    assert throughput["failed_traces"] == 1
+
+
+def test_cloud_model_missing_source_runtime_artifact_is_fatal_for_source_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
+    records = _read_jsonl(trace_path)
+    artifact_path = (
+        "/root/agent-sched-bench/traces/x/attempt_1/"
+        "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
+    )
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"path": artifact_path})
+            record["data"]["success"] = False
+            record["data"]["tool_result"] = "Error: missing artifact"
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["source_success"] is False
+    assert tool_record["data"]["replay_outcome_match"] is False
+    assert tool_record["data"]["replay_source"] == "source_artifact_unavailable"
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
+    assert summary["fatal_replay_errors"] == 1
+
+
+def test_cloud_model_missing_specific_runtime_artifact_file_is_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_attempt = tmp_path / "source" / "task-a" / "attempt_1"
+    source_attempt.mkdir(parents=True)
+    trace_path = source_attempt / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
+    artifact_dir = source_attempt / "openclaw-runtime" / "tool-results"
+    artifact_dir.mkdir(parents=True)
+    (source_attempt / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "openclaw_tool_results_dir": "openclaw-runtime/tool-results",
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source_artifact_path = (
+        "/root/agent-sched-bench/traces/source/task-a/attempt_1/"
+        "openclaw-runtime/tool-results/tool-results/cli_task/missing.txt"
+    )
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"path": source_artifact_path})
+            record["data"]["success"] = False
+            record["data"]["tool_result"] = "Error: missing source spill file"
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._copy_source_runtime_artifacts_to_container",
+        lambda **_kwargs: None,
+    )
+
+    async def fail_exec_tool(*_args, **_kwargs):
+        raise AssertionError("missing specific artifact file must not execute")
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fail_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["success"] is False
+    assert tool_record["data"]["source_success"] is False
+    assert tool_record["data"]["replay_outcome_match"] is False
+    assert tool_record["data"]["replay_source"] == "source_artifact_unavailable"
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
+    assert summary["fatal_replay_errors"] == 1
+
+
+def test_cloud_model_restores_source_runtime_artifact_into_simulator_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_attempt = tmp_path / "source" / "task-a" / "attempt_1"
+    source_attempt.mkdir(parents=True)
+    trace_path = source_attempt / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
+    artifact_dir = source_attempt / "openclaw-runtime" / "tool-results"
+    artifact_file = artifact_dir / "tool-results" / "cli_task" / "out.txt"
+    artifact_file.parent.mkdir(parents=True)
+    artifact_file.write_text("full saved output", encoding="utf-8")
+    (source_attempt / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "openclaw_tool_results_dir": "openclaw-runtime/tool-results",
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source_artifact_path = (
+        "/root/agent-sched-bench/traces/source/task-a/attempt_1/"
+        "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
+    )
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"path": source_artifact_path})
+            record["data"]["success"] = True
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    copied: list[tuple[Path, str]] = []
+
+    def fake_copy_source_runtime_artifacts_to_container(
+        *,
+        source_dir: Path,
+        container_id: str,
+        container_executable: str,
+        destination_dir: str,
+    ) -> None:
+        assert container_id == "fake-cid"
+        assert container_executable == "docker"
+        copied.append((source_dir, destination_dir))
+
+    async def fake_exec_tool(
+        _agent,
+        tool_name,
+        tool_args_json,
+        _command_timeout_s,
+        _source_exec_timeout_s=None,
+        allow_source_runtime_artifacts=False,
+    ):
+        args = json.loads(tool_args_json)
+        assert tool_name == "read_file"
+        assert allow_source_runtime_artifacts is True
+        assert args["path"].endswith(
+            "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
+        )
+        assert str(output_dir.resolve()) in args["path"]
+        return "full saved output", 1.0, True
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._copy_source_runtime_artifacts_to_container",
+        fake_copy_source_runtime_artifacts_to_container,
+    )
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    simulator_artifact = (
+        output_dir
+        / "task-a"
+        / "attempt_1"
+        / "openclaw-runtime"
+        / "tool-results"
+        / "tool-results"
+        / "cli_task"
+        / "out.txt"
+    )
+    assert simulator_artifact.read_text(encoding="utf-8") == "full saved output"
+    assert copied == [
+        (
+            output_dir / "task-a" / "attempt_1" / "openclaw-runtime" / "tool-results",
+            str((output_dir / "task-a" / "attempt_1" / "openclaw-runtime" / "tool-results").resolve()),
+        )
+    ]
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["replay_source"] == "restored_runtime_artifact"
+    assert tool_record["data"]["source_artifact_path"] == source_artifact_path
+    assert tool_record["data"]["simulator_artifact_path"] == str(simulator_artifact.resolve())
+    assert tool_record["data"]["replay_outcome_match"] is True
+    assert summary["success"] is True
+    assert summary["fatal_replay_errors"] == 0
+
+
+def test_cloud_model_message_tool_replays_as_noop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="message")
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"content": "finished"})
+            record["data"]["tool_result"] = "Message sent to cli:task-a"
+            record["data"]["success"] = True
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fail_exec_tool(*_args, **_kwargs):
+        raise AssertionError("message replay must not execute in container")
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fail_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["success"] is True
+    assert tool_record["data"]["source_success"] is True
+    assert tool_record["data"]["replay_outcome_match"] is True
+    assert tool_record["data"]["replay_source"] == "message_noop"
+    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "message_noop"
+    assert summary["success"] is True
 
 
 def test_cloud_model_host_trace_replays_without_container_or_llm_client(
@@ -737,34 +1488,61 @@ def test_cloud_model_prefetches_images_before_container_prepare(
     _write_manifest(manifest, [str(trace_a), str(trace_b)])
 
     events: list[tuple[str, str]] = []
+    fixed_images: list[str] = []
+    removed_images: list[str] = []
 
     def fake_ensure_source_image(image, *, container_executable):
         events.append(("prefetch", image))
 
-    async def fake_prepare_container(
-        loaded,
+    def fake_ensure_fixed_image(
+        source_image: str,
         *,
-        task_output_dir=None,
-        container_executable,
-        network_mode="host",
-    ):
-        from trace_collect.simulator import PreparedContainer, PreparedTraceSession
+        container_executable: str,
+        fixed_image_name: str,
+        rebuild: bool,
+        **_kwargs,
+    ) -> tuple[str, float]:
+        assert source_image == "docker.io/shared/image:latest"
+        assert container_executable == "docker"
+        assert rebuild is True
+        fixed_images.append(fixed_image_name)
+        return (fixed_image_name, 0.1)
 
-        events.append(("prepare", loaded.agent_id))
+    def fake_start_task_container(
+        image: str,
+        *,
+        executable: str,
+        network_mode: str,
+        run_as_host_user: bool,
+        mount_host_home: bool,
+        container_home: str,
+        extra_args: list[str] | None = None,
+    ) -> str:
+        assert executable == "docker"
+        assert network_mode == "host"
+        assert run_as_host_user is False
+        assert mount_host_home is False
+        assert container_home == "/root"
+        assert extra_args is not None
+        assert "agent-sched-bench.component=simulate-replay" in extra_args
+        events.append(("prepare", image))
+        return f"fake-{len(fixed_images)}"
 
-        class _FakeAgent:
-            async def stop(self) -> None:
-                pass
+    def fake_remove_image(image: str, *, container_executable: str) -> bool:
+        assert container_executable == "docker"
+        removed_images.append(image)
+        return True
 
-        return PreparedTraceSession(
-            loaded=loaded,
-            container=PreparedContainer(
-                container_id=f"fake-{loaded.agent_id}",
-                container_executable=container_executable,
-                docker_image="fake-image",
-                agent=_FakeAgent(),
-            ),
-        )
+    class _FakeAgent:
+        def __init__(self, container_id: str, container_executable: str) -> None:
+            self.container_id = container_id
+            self.container_executable = container_executable
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
 
     class _FakeSampler:
         def __init__(self, **_kwargs) -> None:
@@ -780,7 +1558,11 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         return ("ok", 1.0, True)
 
     monkeypatch.setattr("trace_collect.simulator.ensure_source_image", fake_ensure_source_image)
-    monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
+    monkeypatch.setattr("trace_collect.simulator.ensure_fixed_image", fake_ensure_fixed_image)
+    monkeypatch.setattr("trace_collect.simulator.start_task_container", fake_start_task_container)
+    monkeypatch.setattr("trace_collect.simulator.stop_task_container", lambda *args, **kwargs: "")
+    monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
+    monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeAgent)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
     monkeypatch.setattr(
@@ -805,6 +1587,142 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         ("prefetch", "docker.io/shared/image:latest")
     ]
     assert all(event[0] == "prepare" for event in events[1:])
+    assert len(fixed_images) == 1
+    assert fixed_images[0].startswith(
+        "swebench-fixed-docker.io_shared_image_latest:simulate-sweep-"
+    )
+    assert [event for event in events if event[0] == "prepare"] == [
+        ("prepare", fixed_images[0]),
+        ("prepare", fixed_images[0]),
+    ]
+    assert removed_images == fixed_images
+
+
+def test_throughput_wall_time_excludes_sweep_fixed_image_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+
+    clock = {"value": 0.0}
+
+    def fake_monotonic() -> float:
+        return clock["value"]
+
+    async def fake_prebuild(*_args, **_kwargs) -> dict[str, str]:
+        clock["value"] += 100.0
+        return {"docker.io/swebench-test/task-a": "fixed-image"}
+
+    async def fake_queue(*_args, **_kwargs):
+        from trace_collect.simulator import ReplayTaskStats
+
+        clock["value"] += 10.0
+        return [], [
+            ReplayTaskStats(
+                agent_id="task-a",
+                run_instance_id="task-a",
+                source_agent_id="task-a",
+                manifest_index=0,
+                label=None,
+                source_trace=str(trace_path),
+                success=True,
+                elapsed_s=10.0,
+                action_count=2,
+                llm_call_count=1,
+                tool_exec_count=1,
+            )
+        ]
+
+    async def fake_cleanup(*_args, **_kwargs) -> None:
+        clock["value"] += 100.0
+
+    async def fake_prefetch(*_args, **_kwargs) -> None:
+        pass
+
+    monkeypatch.setattr("trace_collect.simulator.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
+    monkeypatch.setattr("trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild)
+    monkeypatch.setattr("trace_collect.simulator._run_cloud_model_queue", fake_queue)
+    monkeypatch.setattr("trace_collect.simulator._cleanup_sweep_fixed_images", fake_cleanup)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    assert trace_file.exists()
+    summary = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
+    assert summary["wall_time_s"] == pytest.approx(10.0)
+    assert summary["traces_per_s"] == pytest.approx(0.1)
+    assert clock["value"] == pytest.approx(210.0)
+
+
+def test_cloud_model_prebuild_failure_keeps_prebuilt_sweep_fixed_images(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_a = tmp_path / "trace-a.jsonl"
+    trace_b = tmp_path / "trace-b.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    _write_trace(trace_a, agent_id="task-a")
+    _write_trace(trace_b, agent_id="task-b")
+    _write_tasks(task_source, "task-a", "task-b")
+    _write_manifest(manifest, [str(trace_a), str(trace_b)])
+
+    fixed_images: list[str] = []
+    removed_images: list[str] = []
+
+    async def fake_prefetch(*_args, **_kwargs) -> None:
+        pass
+
+    def fake_ensure_fixed_image(
+        source_image: str,
+        *,
+        container_executable: str,
+        fixed_image_name: str,
+        rebuild: bool,
+        **_kwargs,
+    ) -> tuple[str, float]:
+        assert container_executable == "docker"
+        assert rebuild is True
+        fixed_images.append(fixed_image_name)
+        if source_image == "docker.io/swebench-test/task-b":
+            raise RuntimeError("prebuild failed")
+        return (fixed_image_name, 0.1)
+
+    monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
+    monkeypatch.setattr("trace_collect.simulator.ensure_fixed_image", fake_ensure_fixed_image)
+    monkeypatch.setattr(
+        "trace_collect.simulator.remove_image",
+        lambda image, *, container_executable: removed_images.append(image) or True,
+    )
+
+    with pytest.raises(RuntimeError, match="prebuild failed"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+                concurrency=2,
+                container_executable="docker",
+                replay_speed=100.0,
+            )
+        )
+
+    assert len(fixed_images) == 2
+    assert all(":simulate-sweep-" in image for image in fixed_images)
+    assert removed_images == []
 
 
 def test_cloud_model_prefetch_failure_happens_before_output_creation(
@@ -892,6 +1810,7 @@ def test_cloud_model_prefetch_uses_manifest_docker_image_override(
         return ("ok", 1.0, True)
 
     monkeypatch.setattr("trace_collect.simulator.ensure_source_image", fake_ensure_source_image)
+    _patch_noop_sweep_fixed_prebuild(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
@@ -969,11 +1888,35 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     async def fake_exec_tool(*_args, **_kwargs):
         return ("ok", 1.0, True)
 
+    ensure_calls: list[dict[str, object]] = []
+    removed_images: list[str] = []
+
+    def fake_ensure_fixed_image(
+        source_image: str,
+        *,
+        container_executable: str,
+        fixed_image_name: str,
+        rebuild: bool,
+        **_kwargs,
+    ) -> tuple[str, float]:
+        ensure_calls.append(
+            {
+                "source_image": source_image,
+                "container_executable": container_executable,
+                "fixed_image_name": fixed_image_name,
+                "rebuild": rebuild,
+            }
+        )
+        return (fixed_image_name, 0.125)
+
+    def fake_remove_image(image: str, *, container_executable: str) -> bool:
+        assert container_executable == "docker"
+        removed_images.append(image)
+        return True
+
     monkeypatch.setattr("trace_collect.simulator.ensure_source_image", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "trace_collect.simulator.ensure_fixed_image",
-        lambda *args, **kwargs: ("fixed-image", 0.125),
-    )
+    monkeypatch.setattr("trace_collect.simulator.ensure_fixed_image", fake_ensure_fixed_image)
+    monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
     monkeypatch.setattr(
         "trace_collect.simulator.start_task_container",
         lambda *args, **kwargs: "fake-cid",
@@ -1005,18 +1948,33 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert startup["status"] == "success"
     assert startup["agent_id"] == "task-a"
     assert startup["source_image"] == "docker.io/swebench-test/task-a"
-    assert startup["fixed_image"] == "fixed-image"
+    assert startup["fixed_image"].startswith(
+        "swebench-fixed-docker.io_swebench-test_task-a:simulate-sweep-"
+    )
     assert startup["container_id"] == "fake-cid"
     assert [phase["name"] for phase in startup["phases"]] == [
         "ensure_fixed_image",
         "start_task_container",
+        "configure_apt_mirror",
         "container_agent_start",
     ]
-    assert startup["phases"][0]["reported_elapsed_s"] == pytest.approx(0.125)
+    assert startup["phases"][0]["prebuilt"] is True
+    assert startup["phases"][0]["reported_elapsed_s"] == pytest.approx(0.0)
+    assert startup["phases"][2]["status"] == "skipped"
+    assert startup["phases"][2]["reason"] == "TASK_CONTAINER_APT_MIRROR unset"
     assert startup["resources"]["samples"] == []
     assert startup["resources"]["summary"]["sample_count"] == 0
     assert resources["samples"][0]["phase"] == "runtime"
     assert resources["summary"]["sample_count"] == 1
+    assert ensure_calls == [
+        {
+            "source_image": "docker.io/swebench-test/task-a",
+            "container_executable": "docker",
+            "fixed_image_name": startup["fixed_image"],
+            "rebuild": True,
+        }
+    ]
+    assert removed_images == [startup["fixed_image"]]
 
 
 def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
@@ -1046,6 +2004,8 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
         stopped_containers.append(container_id)
         return ""
 
+    removed_images: list[str] = []
+
     monkeypatch.setattr("trace_collect.simulator.ensure_source_image", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "trace_collect.simulator.ensure_fixed_image",
@@ -1056,6 +2016,10 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    monkeypatch.setattr(
+        "trace_collect.simulator.remove_image",
+        lambda image, *, container_executable: removed_images.append(image) or True,
+    )
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FailingContainerAgent)
 
     with pytest.raises(RuntimeError, match="agent failed"):
@@ -1082,6 +2046,123 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
     assert startup["resources"]["samples"] == []
     assert startup["resources"]["summary"]["sample_count"] == 0
     assert stopped_containers == ["fake-cid"]
+    assert removed_images == []
+
+
+def test_cloud_model_start_container_failure_keeps_sweep_fixed_image(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+    removed_images: list[str] = []
+
+    def fail_start_task_container(*_args, **_kwargs) -> str:
+        raise RuntimeError("container start failed")
+
+    monkeypatch.setattr("trace_collect.simulator.ensure_source_image", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "trace_collect.simulator.ensure_fixed_image",
+        lambda *args, **kwargs: ("fixed-image", 0.125),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.start_task_container",
+        fail_start_task_container,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.stop_task_container",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("container was never started")
+        ),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.remove_image",
+        lambda image, *, container_executable: removed_images.append(image) or True,
+    )
+
+    with pytest.raises(RuntimeError, match="container start failed"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=output_dir,
+                mode="cloud_model",
+                container_executable="docker",
+                replay_speed=100.0,
+            )
+        )
+
+    startup = json.loads(
+        (output_dir / "task-a" / "attempt_1" / "container_startup.json").read_text()
+    )
+    assert startup["status"] == "failed"
+    assert startup["phases"][-1]["name"] == "start_task_container"
+    assert startup["phases"][-1]["status"] == "failed"
+    assert removed_images == []
+
+
+def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+
+    class _FailingContainerAgent:
+        def __init__(self, container_id: str, container_executable: str) -> None:
+            assert container_id == "fake-cid"
+            assert container_executable == "docker"
+
+        async def start(self) -> None:
+            raise RuntimeError("agent failed")
+
+        async def stop(self) -> None:
+            raise AssertionError("failed startup agent must not be finalized later")
+
+    def fake_stop_task_container(container_id: str, *, executable: str) -> str:
+        assert container_id == "fake-cid"
+        assert executable == "docker"
+        raise RuntimeError("container cleanup failed")
+
+    removed_images: list[str] = []
+
+    monkeypatch.setattr("trace_collect.simulator.ensure_source_image", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "trace_collect.simulator.ensure_fixed_image",
+        lambda *args, **kwargs: ("fixed-image", 0.125),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.start_task_container",
+        lambda *args, **kwargs: "fake-cid",
+    )
+    monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    monkeypatch.setattr(
+        "trace_collect.simulator.remove_image",
+        lambda image, *, container_executable: removed_images.append(image) or True,
+    )
+    monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FailingContainerAgent)
+
+    with pytest.raises(RuntimeError, match="container cleanup failed") as exc_info:
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=output_dir,
+                mode="cloud_model",
+                container_executable="docker",
+                replay_speed=100.0,
+            )
+        )
+
+    assert isinstance(exc_info.value.__context__, RuntimeError)
+    assert str(exc_info.value.__context__) == "agent failed"
+    assert removed_images == []
 
 
 def test_cloud_model_worker_failure_waits_for_inflight_cleanup(
@@ -1151,6 +2232,7 @@ def test_cloud_model_worker_failure_waits_for_inflight_cleanup(
 
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
     monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
+    _patch_noop_sweep_fixed_prebuild(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
@@ -1228,6 +2310,7 @@ def test_cloud_model_prepare_failure_cleans_returned_container(
 
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
     monkeypatch.setattr("trace_collect.simulator.ensure_source_image", lambda *args, **kwargs: None)
+    _patch_noop_sweep_fixed_prebuild(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _RaisingSampler)
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
 
@@ -1252,7 +2335,9 @@ def _loaded_for_finalize(tmp_path: Path) -> object:
     return LoadedTraceSession(
         source_trace=tmp_path / "trace.jsonl",
         task_source=tmp_path / "tasks.json",
-        agent_id="task-a",
+        source_agent_id="task-a",
+        run_instance_id="task-a",
+        manifest_index=0,
         scaffold="openclaw",
         metadata=None,
         summary=None,
@@ -1298,16 +2383,23 @@ def test_finalize_prepared_session_stops_container_when_agent_stop_fails(
             container_executable="docker",
             docker_image="fake-image",
             agent=_FailingAgent(),
+            fixed_image="fixed-image",
         ),
         container_resource_recorder=recorder,
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    removed_images: list[str] = []
+    monkeypatch.setattr(
+        "trace_collect.simulator.remove_image",
+        lambda image, *, container_executable: removed_images.append(image) or True,
+    )
 
     with pytest.raises(RuntimeError, match="agent stop failed"):
         asyncio.run(_finalize_prepared_session(prepared))
 
     assert container_stops == ["fake-cid"]
     assert recorder.unregistered == ["fake-cid"]
+    assert removed_images == ["fixed-image"]
 
 
 def test_finalize_prepared_session_keeps_target_when_container_stop_fails(
@@ -1344,15 +2436,163 @@ def test_finalize_prepared_session_keeps_target_when_container_stop_fails(
             container_executable="docker",
             docker_image="fake-image",
             agent=_Agent(),
+            fixed_image="fixed-image",
         ),
         container_resource_recorder=recorder,
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    removed_images: list[str] = []
+    monkeypatch.setattr(
+        "trace_collect.simulator.remove_image",
+        lambda image, *, container_executable: removed_images.append(image) or True,
+    )
 
     with pytest.raises(RuntimeError, match="container stop failed"):
         asyncio.run(_finalize_prepared_session(prepared))
 
     assert recorder.unregistered == []
+    assert removed_images == []
+
+
+def test_finalize_prepared_session_cleans_fixed_image_after_resource_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.simulator import (
+        PreparedContainer,
+        PreparedTraceSession,
+        _finalize_prepared_session,
+    )
+
+    class _Agent:
+        async def stop(self) -> None:
+            pass
+
+    class _Sampler:
+        def stop(self) -> list[dict]:
+            raise RuntimeError("resource failed")
+
+    container_stops: list[str] = []
+    removed_images: list[str] = []
+
+    monkeypatch.setattr(
+        "trace_collect.simulator.stop_task_container",
+        lambda container_id, *, executable: container_stops.append(container_id) or "",
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.remove_image",
+        lambda image, *, container_executable: removed_images.append(image) or True,
+    )
+
+    prepared = PreparedTraceSession(
+        loaded=_loaded_for_finalize(tmp_path),
+        container=PreparedContainer(
+            container_id="fake-cid",
+            container_executable="docker",
+            docker_image="fake-image",
+            agent=_Agent(),
+            fixed_image="fixed-image",
+        ),
+        sampler=_Sampler(),
+        task_output_dir=tmp_path / "task-a" / "attempt_1",
+    )
+
+    with pytest.raises(RuntimeError, match="resource failed"):
+        asyncio.run(_finalize_prepared_session(prepared))
+
+    assert container_stops == ["fake-cid"]
+    assert removed_images == ["fixed-image"]
+
+
+def test_finalize_prepared_session_unregisters_before_resource_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.simulator import (
+        PreparedContainer,
+        PreparedTraceSession,
+        _finalize_prepared_session,
+    )
+
+    events: list[str] = []
+
+    class _Agent:
+        async def stop(self) -> None:
+            events.append("agent_stop")
+
+    class _Sampler:
+        def stop(self) -> list[dict]:
+            events.append("sampler_stop")
+            return [{"container_id": "fake-cid"}]
+
+    class _Recorder:
+        def unregister_container(self, container_id: str) -> None:
+            assert container_id == "fake-cid"
+            events.append("unregister")
+
+    def fake_stop_task_container(container_id: str, *, executable: str) -> str:
+        assert container_id == "fake-cid"
+        assert executable == "docker"
+        events.append("container_stop")
+        return ""
+
+    def fake_write_resources(*_args, **_kwargs) -> None:
+        events.append("resource_write")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator.stop_task_container",
+        fake_stop_task_container,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.attempt_layout.write_resources_json",
+        fake_write_resources,
+    )
+
+    prepared = PreparedTraceSession(
+        loaded=_loaded_for_finalize(tmp_path),
+        container=PreparedContainer(
+            container_id="fake-cid",
+            container_executable="docker",
+            docker_image="fake-image",
+            agent=_Agent(),
+        ),
+        sampler=_Sampler(),
+        task_output_dir=tmp_path / "task-a" / "attempt_1",
+        container_resource_recorder=_Recorder(),
+    )
+
+    asyncio.run(_finalize_prepared_session(prepared))
+
+    assert events == [
+        "sampler_stop",
+        "agent_stop",
+        "container_stop",
+        "unregister",
+        "resource_write",
+    ]
+
+
+def test_finalize_prepared_session_raises_host_resource_write_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from trace_collect.simulator import PreparedTraceSession, _finalize_prepared_session
+
+    def fail_write_resources(*_args, **_kwargs) -> None:
+        raise RuntimeError("resource write failed")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator.attempt_layout.write_resources_json",
+        fail_write_resources,
+    )
+    prepared = PreparedTraceSession(
+        loaded=_loaded_for_finalize(tmp_path),
+        container=None,
+        task_output_dir=tmp_path / "task-a" / "attempt_1",
+    )
+
+    with pytest.raises(RuntimeError, match="resource write failed"):
+        asyncio.run(_finalize_prepared_session(prepared))
 
 
 def test_cloud_model_host_trace_skips_mcp_tools(
@@ -1536,6 +2776,201 @@ def test_local_model_failed_iteration_marks_throughput_failure(
     assert throughput["completed_traces"] == 0
     assert throughput["failed_traces"] == 1
     assert throughput["tasks"][0]["success"] is False
+
+
+def test_local_model_tool_success_false_marks_throughput_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "tool failed", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="local_model",
+            container_executable="docker",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+        )
+    )
+
+    summary = next(record for record in _read_jsonl(trace_file) if record.get("type") == "summary")
+    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
+    assert summary["success"] is False
+    assert summary["failed_iterations"] == 1
+    assert throughput["completed_traces"] == 0
+    assert throughput["failed_traces"] == 1
+    assert throughput["tasks"][0]["success"] is False
+    assert throughput["tasks"][0]["failed_action_count"] == 1
+
+
+def test_local_model_records_command_exit_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"command": "false"})
+            record["data"]["success"] = True
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "boom\n\nExit code: 1", 1.0, True
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="local_model",
+            container_executable="docker",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["success"] is True
+    assert tool_record["data"]["source_success"] is True
+    assert tool_record["data"]["replay_outcome_match"] is True
+    assert tool_record["data"]["command_exit_code"] == 1
+    assert tool_record["data"]["command_success"] is False
+    assert tool_record["data"]["replay_transport_success"] is True
+    assert summary["success"] is True
+
+
+def test_local_model_restores_source_runtime_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_attempt = tmp_path / "source" / "task-a" / "attempt_1"
+    source_attempt.mkdir(parents=True)
+    trace_path = source_attempt / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
+    artifact_dir = source_attempt / "openclaw-runtime" / "tool-results"
+    artifact_file = artifact_dir / "tool-results" / "cli_task" / "out.txt"
+    artifact_file.parent.mkdir(parents=True)
+    artifact_file.write_text("full saved output", encoding="utf-8")
+    (source_attempt / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "openclaw_tool_results_dir": "openclaw-runtime/tool-results",
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source_artifact_path = (
+        "/root/agent-sched-bench/traces/source/task-a/attempt_1/"
+        "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
+    )
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            record["data"]["tool_args"] = json.dumps({"path": source_artifact_path})
+            record["data"]["success"] = True
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._copy_source_runtime_artifacts_to_container",
+        lambda **_kwargs: None,
+    )
+
+    async def fake_exec_tool(
+        _agent,
+        tool_name,
+        tool_args_json,
+        _command_timeout_s,
+        _source_exec_timeout_s=None,
+        allow_source_runtime_artifacts=False,
+    ):
+        args = json.loads(tool_args_json)
+        assert tool_name == "read_file"
+        assert allow_source_runtime_artifacts is True
+        assert str(output_dir.resolve()) in args["path"]
+        return "full saved output", 1.0, True
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="local_model",
+            container_executable="docker",
+            api_base="https://example.com/v1",
+            api_key="secret",
+            model="local-qwen",
+            replay_speed=100.0,
+        )
+    )
+
+    simulator_artifact = (
+        output_dir
+        / "task-a"
+        / "attempt_1"
+        / "openclaw-runtime"
+        / "tool-results"
+        / "tool-results"
+        / "cli_task"
+        / "out.txt"
+    )
+    assert simulator_artifact.read_text(encoding="utf-8") == "full saved output"
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["replay_source"] == "restored_runtime_artifact"
+    assert tool_record["data"]["source_artifact_path"] == source_artifact_path
+    assert tool_record["data"]["simulator_artifact_path"] == str(simulator_artifact.resolve())
+    assert tool_record["data"]["replay_outcome_match"] is True
+    assert summary["success"] is True
+    assert summary["fatal_replay_errors"] == 0
 
 
 def test_local_model_host_trace_completes_without_container(
@@ -1868,6 +3303,167 @@ def test_cloud_model_manifest_replays_multiple_sessions(
     assert abs(llm_records[0]["ts_start"] - llm_records[1]["ts_start"]) < 0.05
 
 
+def test_cloud_model_manifest_allows_duplicate_trace_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace-a.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    _write_trace(trace_path, agent_id="task-a")
+    _write_tasks(task_source, "task-a")
+    _write_manifest(manifest, [str(trace_path), str(trace_path)])
+    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="forbid")
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            concurrency=2,
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    metadata = records[0]
+    summaries = [record for record in records if record.get("type") == "summary"]
+    llm_records = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    ]
+    expected_ids = {"task-a__replica-001", "task-a__replica-002"}
+
+    assert metadata["source_traces"] == [str(trace_path), str(trace_path)]
+    assert metadata["source_agent_ids"] == ["task-a", "task-a"]
+    assert set(metadata["run_instance_ids"]) == expected_ids
+    assert {record["agent_id"] for record in summaries} == expected_ids
+    assert {record["source_agent_id"] for record in summaries} == {"task-a"}
+    assert {record["task_id"] for record in summaries} == {"task-a"}
+    assert {record["agent_id"] for record in llm_records} == expected_ids
+    assert {record["data"]["source_agent_id"] for record in llm_records} == {"task-a"}
+    assert {record["data"]["run_instance_id"] for record in llm_records} == expected_ids
+
+    summary = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
+    assert summary["attempted_traces"] == 2
+    assert {task["source_agent_id"] for task in summary["tasks"]} == {"task-a"}
+    assert {task["run_instance_id"] for task in summary["tasks"]} == expected_ids
+    for run_instance_id in expected_ids:
+        per_task_trace = tmp_path / "out" / run_instance_id / "attempt_1" / "trace.jsonl"
+        per_task_records = _read_jsonl(per_task_trace)
+        assert per_task_records[0]["instance_id"] == run_instance_id
+        assert per_task_records[0]["source_trace_count"] == 1
+        assert per_task_records[0]["source_traces"] == [str(trace_path)]
+        assert per_task_records[0]["source_agent_ids"] == ["task-a"]
+        assert per_task_records[0]["run_instance_ids"] == [run_instance_id]
+        assert per_task_records[0]["source_models"] == ["claude-haiku"]
+        assert per_task_records[0]["source_model"] == "claude-haiku"
+        assert per_task_records[0]["source_trace_entries"] == [
+            {
+                "manifest_index": per_task_records[0]["manifest_index"],
+                "source_trace": str(trace_path),
+                "source_agent_id": "task-a",
+                "run_instance_id": run_instance_id,
+                "label": None,
+            }
+        ]
+        assert per_task_records[0]["source_agent_id"] == "task-a"
+
+
+def test_cloud_model_duplicate_trace_run_ids_avoid_real_task_id_collision(
+    tmp_path: Path,
+) -> None:
+    trace_a = tmp_path / "trace-a.jsonl"
+    trace_replica = tmp_path / "trace-replica.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    _write_trace(trace_a, agent_id="task-a", execution_environment="host")
+    _write_trace(
+        trace_replica,
+        agent_id="task-a__replica-001",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "task-a", "task-a__replica-001")
+    _write_manifest(manifest, [str(trace_a), str(trace_a), str(trace_replica)])
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            concurrency=3,
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    summaries = [record for record in records if record.get("type") == "summary"]
+    expected_ids = {
+        "task-a__replica-001__entry-0000",
+        "task-a__replica-002",
+        "task-a__replica-001",
+    }
+
+    assert {record["agent_id"] for record in summaries} == expected_ids
+    by_manifest_index = {record["manifest_index"]: record for record in summaries}
+    assert by_manifest_index[0]["agent_id"] == "task-a__replica-001__entry-0000"
+    assert by_manifest_index[0]["source_agent_id"] == "task-a"
+    assert by_manifest_index[1]["agent_id"] == "task-a__replica-002"
+    assert by_manifest_index[1]["source_agent_id"] == "task-a"
+    assert by_manifest_index[2]["agent_id"] == "task-a__replica-001"
+    assert by_manifest_index[2]["source_agent_id"] == "task-a__replica-001"
+
+
+def test_cloud_model_duplicate_trace_run_ids_avoid_repeated_real_replica_id_collision(
+    tmp_path: Path,
+) -> None:
+    trace_a = tmp_path / "trace-a.jsonl"
+    trace_replica = tmp_path / "trace-replica.jsonl"
+    task_source = tmp_path / "tasks.json"
+    manifest = tmp_path / "manifest.yaml"
+    _write_trace(trace_a, agent_id="task-a", execution_environment="host")
+    _write_trace(
+        trace_replica,
+        agent_id="task-a__replica-001",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "task-a", "task-a__replica-001")
+    _write_manifest(
+        manifest,
+        [str(trace_a), str(trace_a), str(trace_replica), str(trace_replica)],
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            concurrency=4,
+            replay_speed=100.0,
+        )
+    )
+
+    summaries = [
+        record for record in _read_jsonl(trace_file) if record.get("type") == "summary"
+    ]
+    agent_ids = {record["agent_id"] for record in summaries}
+
+    assert len(agent_ids) == 4
+    assert "task-a__replica-001" not in agent_ids
+    assert "task-a__replica-001__entry-0000" in agent_ids
+    assert "task-a__replica-001__replica-001" in agent_ids
+    assert "task-a__replica-001__replica-002" in agent_ids
+    assert {record["source_agent_id"] for record in summaries} == {
+        "task-a",
+        "task-a__replica-001",
+    }
+
+
 def test_cloud_model_concurrency_limits_active_traces(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1929,6 +3525,7 @@ def test_cloud_model_concurrency_limits_active_traces(
 
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
     monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
+    _patch_noop_sweep_fixed_prebuild(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
     monkeypatch.setattr(
@@ -1953,6 +3550,7 @@ def test_cloud_model_concurrency_limits_active_traces(
     assert active == 0
     summary = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
     assert summary["concurrency"] == 2
+    assert summary["effective_concurrency"] == 2
     assert summary["scheduler_mode"] == "bounded_queue"
     assert summary["attempted_traces"] == 3
     assert summary["completed_traces"] == 3
@@ -2123,6 +3721,7 @@ def test_cloud_model_manifest_with_docker_image_override(
         pass
 
     monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", _fake_prefetch)
+    _patch_noop_sweep_fixed_prebuild(monkeypatch)
     async def _fake_exec(*a, **kw):
         return ("ok", 1.0, True)
 

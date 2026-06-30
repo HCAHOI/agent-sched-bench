@@ -34,3 +34,7 @@ models/
 .kilo/
 .sisyphus/data/swe-rebench/tasks.json
 docs/
+.index_tag
+.pi/
+.rpiv/
+figures/

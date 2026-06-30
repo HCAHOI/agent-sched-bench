@@ -17,6 +17,21 @@ The goal is to produce **publishable, reproducible, and scientifically rigorous*
 
 ---
 
+## Environment
+
+**Single entry point** — `uv` with a `.venv` at the repo root, via
+`bash scripts/setup/benchmark_server.sh`. Produces a Python 3.12 env with
+the project deps (pyproject is the spec). Verified ~2 min on a fresh
+Ubuntu 22.04 + GPU instance. No conda. After setup, activate with
+`source .venv/bin/activate`.
+
+There is no conda flow. Task-container agent runs (swe-rebench / swe-bench)
+do not need the host interpreter mounted: each task container bootstraps its
+own Python (≥3.11) in-container — see
+`src/trace_collect/runtime/task_container.py`.
+
+---
+
 ## Research Integrity & Taste (CRITICAL)
 
 > These principles are NON-NEGOTIABLE. Violating them compromises the scientific validity of our work.
@@ -365,8 +380,7 @@ Types: feat, fix, refactor, docs, test, config
 - Run the minimal test covering your changes
 - Ask for clarification when requirements are ambiguous
 - Preserve existing functionality unless explicitly told otherwise
-- Persist multi-step plans to a file (e.g., docs/CURRENT_PLAN.md). Complex tasks with checkpoints, TODOs, or dependencies must be written to disk — not held in conversation context. After any context compaction or session resume, re-read the plan file immediately before continuing. The plan file is the source of truth.
-- MUST pause at checkpoints for human review — this is the default mode. Before advancing to the next implementing phase, modifying new files, or running significant operations, stop and wait for explicit approval. Autonomous "keep going" behavior is only permitted when the human explicitly requests autopilot mode (e.g., "run to completion", "autopilot", "全自动", "持续推进"). Even then, pause on errors, ambiguity, or judgment calls. Default behavior: stop and check. Not: charge ahead and hope.
+- Make code fail fast
 
 ### DO NOT
 - Guess or hallucinate about project internals
@@ -374,6 +388,7 @@ Types: feat, fix, refactor, docs, test, config
 - Modify files outside the scope of current task
 - Make "improvements" that weren't requested
 - Simplify by removing functionality (simplify implementation, not behavior)
+- Add unnecessary exception handling - this is a research project, not a production system, we should let the code fail fast so that we can quickly find unaligned behavior
 
 ### When Uncertain
 1. First: Check existing code for precedent

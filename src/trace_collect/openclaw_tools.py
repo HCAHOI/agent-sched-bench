@@ -12,6 +12,18 @@ logger = logging.getLogger(__name__)
 
 _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S = 300.0
 _OPENCLAW_EXEC_MAX_TIMEOUT_S = 600.0
+_AGENT_STOP_GRACE_S = 5.0
+_AGENT_KILL_WAIT_S = 5.0
+_SOURCE_RUNTIME_ARTIFACT_MARKERS = (
+    (
+        "/openclaw-runtime/tool-results/tool-results/",
+        "/openclaw-runtime/tool-results",
+    ),
+    (
+        "/runtime/tool-results/tool-results/",
+        "/runtime/tool-results",
+    ),
+)
 
 
 def _unwrap_tool_args(
@@ -35,9 +47,79 @@ def _unwrap_tool_args(
     return tool_name, parsed
 
 
-def _resolve_exec_timeout_s(params: dict[str, Any]) -> float:
-    """Mirror OpenClaw ExecTool timeout semantics; missing → default, explicit → capped at 600s."""
-    return min(float(params.get("timeout", _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S)), _OPENCLAW_EXEC_MAX_TIMEOUT_S)
+def _resolve_exec_timeout_s(
+    params: dict[str, Any],
+    *,
+    default_timeout_s: float = _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S,
+) -> float:
+    """Resolve replay exec timeout; source value wins, otherwise use simulate fallback."""
+    return min(
+        float(params.get("timeout", default_timeout_s)),
+        _OPENCLAW_EXEC_MAX_TIMEOUT_S,
+    )
+
+
+def _is_source_runtime_artifact_path(path: str) -> bool:
+    return any(marker in path for marker, _root_suffix in _SOURCE_RUNTIME_ARTIFACT_MARKERS)
+
+
+def source_runtime_artifact_root_from_path(path: str) -> str | None:
+    for marker, root_suffix in _SOURCE_RUNTIME_ARTIFACT_MARKERS:
+        marker_index = path.find(marker)
+        if marker_index >= 0:
+            return path[:marker_index] + root_suffix
+    return None
+
+
+def source_runtime_artifact_path_from_tool_call(
+    *,
+    tool_name: str | None,
+    tool_args_json: str,
+) -> str | None:
+    """Return an OpenClaw source-runtime artifact path referenced by a tool call.
+
+    These paths point to files produced by the original collection run, not to
+    files in the task repository image. A fresh replay container cannot execute
+    them faithfully unless the source artifact tree is explicitly restored.
+    """
+    resolved_name, params = _unwrap_tool_args(
+        tool_name=tool_name,
+        tool_args_json=tool_args_json,
+    )
+    if resolved_name != "read_file":
+        return None
+    path = params.get("path")
+    if isinstance(path, str) and _is_source_runtime_artifact_path(path):
+        return path
+    return None
+
+
+def remap_source_runtime_artifact_tool_args(
+    *,
+    tool_name: str | None,
+    tool_args_json: str,
+    runtime_root_map: dict[str, str],
+) -> tuple[str, str | None, str | None]:
+    """Map a source OpenClaw artifact path into the simulator runtime tree."""
+    resolved_name, params = _unwrap_tool_args(
+        tool_name=tool_name,
+        tool_args_json=tool_args_json,
+    )
+    if resolved_name != "read_file":
+        return tool_args_json, None, None
+    path = params.get("path")
+    if not isinstance(path, str):
+        return tool_args_json, None, None
+    source_root = source_runtime_artifact_root_from_path(path)
+    if source_root is None:
+        return tool_args_json, None, None
+    mapped_root = runtime_root_map.get(source_root)
+    if mapped_root is None:
+        return tool_args_json, path, None
+    mapped_path = mapped_root + path[len(source_root):]
+    remapped = dict(params)
+    remapped["path"] = mapped_path
+    return json.dumps(remapped, ensure_ascii=False), path, mapped_path
 
 
 # Persistent python3 agent script injected into Docker container; reads JSON-line requests
@@ -95,7 +177,7 @@ def handle_exec(args):
         r = subprocess.run(cmd, shell=True, cwd="/testbed",
                            capture_output=True, text=True, timeout=timeout, env=env)
         output = (r.stdout or "") + (r.stderr or "")
-        return {"ok": r.returncode == 0, "result": _truncate_output(output), "returncode": r.returncode}
+        return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
     except subprocess.TimeoutExpired:
         return {"ok": False, "result": "[timeout]", "returncode": 124}
 
@@ -105,20 +187,26 @@ def handle_commands(args):
     env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
     all_output = []
     last_rc = 0
+    first_failed_rc = 0
+    any_timeout = False
     for i, cmd in enumerate(cmds):
         try:
             r = subprocess.run(cmd, shell=True, cwd="/testbed",
                                capture_output=True, text=True, timeout=timeout, env=env)
             all_output.append((r.stdout or "") + (r.stderr or ""))
             last_rc = r.returncode
+            if r.returncode != 0 and first_failed_rc == 0:
+                first_failed_rc = r.returncode
         except subprocess.TimeoutExpired:
             all_output.append("[timeout]")
             last_rc = 124
+            any_timeout = True
     if len(cmds) > 1:
         combined = "\n".join(f"[call {k}]\n{out}" for k, out in enumerate(all_output))
     else:
         combined = all_output[0] if all_output else ""
-    return {"ok": last_rc == 0, "result": combined, "returncode": last_rc}
+    returncode = 124 if any_timeout else (first_failed_rc or last_rc)
+    return {"ok": not any_timeout, "result": combined, "returncode": returncode}
 
 _READ_MAX_CHARS = 128_000
 _READ_DEFAULT_LIMIT = 2000
@@ -247,16 +335,41 @@ class ContainerAgent:
         )
 
     async def stop(self) -> None:
-        if self._process is None:
+        process = self._process
+        if process is None:
             return
-        try:
-            if self._process.stdin and not self._process.stdin.is_closing():
-                self._process.stdin.close()
-            await asyncio.wait_for(self._process.wait(), timeout=5)
-        except (asyncio.TimeoutError, ProcessLookupError):
-            self._process.kill()
-            await self._process.wait()
         self._process = None
+
+        if process.stdin and not process.stdin.is_closing():
+            try:
+                process.stdin.close()
+            except (BrokenPipeError, ConnectionResetError, ProcessLookupError):
+                pass
+
+        wait_task = asyncio.create_task(process.wait())
+        try:
+            await asyncio.wait_for(asyncio.shield(wait_task), timeout=_AGENT_STOP_GRACE_S)
+            return
+        except ProcessLookupError:
+            return
+        except asyncio.TimeoutError:
+            pass
+
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+
+        try:
+            await asyncio.wait_for(asyncio.shield(wait_task), timeout=_AGENT_KILL_WAIT_S)
+        except ProcessLookupError:
+            return
+        except asyncio.TimeoutError as exc:
+            wait_task.cancel()
+            raise RuntimeError(
+                f"ContainerAgent process did not exit after kill: pid={process.pid}"
+            ) from exc
 
     @property
     def alive(self) -> bool:
@@ -334,18 +447,31 @@ def _resolve_tool_request(
     tool_name: str | None,
     params: dict[str, Any],
     command_timeout_s: float,
+    source_exec_timeout_s: float | None = None,
 ) -> tuple[dict[str, Any] | None, float]:
     """Build a JSON-line request plus the outer response timeout."""
 
+    exec_fallback_timeout_s = (
+        source_exec_timeout_s
+        if source_exec_timeout_s is not None
+        else command_timeout_s
+    )
+
     # Shell commands
     if "command" in params:
-        timeout_s = _resolve_exec_timeout_s(params)
+        timeout_s = _resolve_exec_timeout_s(
+            params,
+            default_timeout_s=exec_fallback_timeout_s,
+        )
         return (
             {"tool": "exec", "args": {"command": params["command"], "timeout": timeout_s}},
             timeout_s,
         )
     if "commands" in params:
-        timeout_s = _resolve_exec_timeout_s(params)
+        timeout_s = _resolve_exec_timeout_s(
+            params,
+            default_timeout_s=exec_fallback_timeout_s,
+        )
         return (
             {
                 "tool": "commands",
@@ -358,13 +484,19 @@ def _resolve_tool_request(
         command = params.get("command")
         commands = params.get("commands")
         if command:
-            timeout_s = _resolve_exec_timeout_s(params)
+            timeout_s = _resolve_exec_timeout_s(
+                params,
+                default_timeout_s=exec_fallback_timeout_s,
+            )
             return (
                 {"tool": "exec", "args": {"command": command, "timeout": timeout_s}},
                 timeout_s,
             )
         if commands:
-            timeout_s = _resolve_exec_timeout_s(params)
+            timeout_s = _resolve_exec_timeout_s(
+                params,
+                default_timeout_s=exec_fallback_timeout_s,
+            )
             return (
                 {
                     "tool": "commands",
@@ -409,6 +541,8 @@ async def execute_trace_tool(
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
+    source_exec_timeout_s: float | None = None,
+    allow_source_runtime_artifacts: bool = False,
 ) -> tuple[str, bool, float | None]:
     """Execute one trace tool call via the persistent in-container agent."""
 
@@ -421,7 +555,23 @@ async def execute_trace_tool(
         resolved_name,
         params,
         command_timeout_s,
+        source_exec_timeout_s,
     )
+
+    if resolved_name == "message":
+        return "Message replayed as no-op", True, 0.0
+
+    artifact_path = source_runtime_artifact_path_from_tool_call(
+        tool_name=resolved_name,
+        tool_args_json=json.dumps(params, ensure_ascii=False),
+    )
+    if artifact_path is not None and not allow_source_runtime_artifacts:
+        return (
+            "Error: source trace references an OpenClaw runtime artifact "
+            f"that is unavailable in a fresh replay container: {artifact_path}",
+            False,
+            0.0,
+        )
 
     if request is None:
         return f"Error: Unsupported replay tool {resolved_name!r}", False, None
@@ -433,7 +583,11 @@ async def execute_trace_tool(
 
     # Append exit code for exec-style commands
     if request["tool"] in ("exec", "commands"):
-        rc = resp.get("returncode", -1)
+        rc = resp.get("returncode")
+        if not isinstance(rc, int) or isinstance(rc, bool):
+            result = f"{result}\n\nExit code: <missing>".strip()
+            return result, False, inner_duration_ms
         result = f"{result}\n\nExit code: {rc}".strip()
+        ok = bool(ok)
 
     return result, ok, inner_duration_ms

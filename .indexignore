@@ -1,0 +1,42 @@
+# pi-code-index ignore — keep the semantic code index on actual source, not
+# agent scratch state or data/result artifacts. Same gitignore syntax.
+#
+# Why this file exists: the indexer only reads the repo-root .gitignore. Dirs
+# ignored via a GLOBAL gitignore or .git/info/exclude (e.g. .sisyphus/) are
+# invisible to it, so they leak into semantic search results. Listing them
+# here closes that gap. Re-run the index after editing.
+
+# ── Agent scratch / metadata dirs (notepads, evidence, decisions — not code) ──
+.sisyphus/
+.rpiv/
+.omc/
+.omo/
+.omx/
+.kilo/
+.codegraph/
+.claude/
+.playwright-mcp/
+
+# ── Data, traces, and experiment/result dumps (bulk artifacts, no code value) ──
+data/
+traces/
+results/
+output/
+experiments/
+log/
+tmp/
+
+# ── Caches ──
+.uv-cache/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Belt-and-suspenders: never embed bulk data files even if a dir rule misses.
+#    Kept narrow so source-tree config (pyproject.toml, *.yaml) stays indexed. ──
+*.jsonl
+*.npz
+.pi/
+.rpiv/
+

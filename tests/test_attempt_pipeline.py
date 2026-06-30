@@ -22,7 +22,9 @@ from harness.disk_preflight import DiskSpaceError  # noqa: E402
 from trace_collect.attempt_pipeline import (  # noqa: E402
     AttemptContext,
     AttemptResult,
+    configure_task_container_apt_mirror,
     start_task_container,
+    stop_task_container,
     run_attempt,
 )
 
@@ -116,6 +118,16 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     async def inner(ctx: AttemptContext) -> AttemptResult:
         ctx.mark_container_ready("fake_container_id_xyz")
         ctx.container_stdout = "hello from container stdout"
+        tool_result_artifact = (
+            ctx.attempt_dir
+            / "openclaw-runtime"
+            / "tool-results"
+            / "tool-results"
+            / "cli_mozilla__bleach-259"
+            / "large-output.txt"
+        )
+        tool_result_artifact.parent.mkdir(parents=True, exist_ok=True)
+        tool_result_artifact.write_text("large output", encoding="utf-8")
         return AttemptResult(
             success=True,
             exit_status="Submitted",
@@ -170,6 +182,12 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
         manifest["runtime"]["runtime_proof"]["container_id"] == "fake_container_id_xyz"
     )
     assert "tool_call_count" not in manifest["replay"]
+    assert manifest["artifacts"]["trace_jsonl"] == "trace.jsonl"
+    assert manifest["artifacts"]["results_json"] == "results.json"
+    assert (
+        manifest["artifacts"]["openclaw_tool_results_dir"]
+        == "openclaw-runtime/tool-results"
+    )
 
     results = json.loads((ctx.attempt_dir / "results.json").read_text())
     assert results["instance_id"] == "mozilla__bleach-259"
@@ -657,6 +675,34 @@ def test_start_task_container_uses_runtime_specific_user_args(
         assert "--userns=keep-id" not in seen["cmd"]
 
 
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_start_task_container_can_use_image_default_user_without_host_home_mount(
+    container_executable: str,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        container_id = start_task_container(
+            "docker.io/swerebench/example:latest",
+            executable=container_executable,
+            run_as_host_user=False,
+            mount_host_home=False,
+            container_home="/root",
+        )
+
+    cmd = seen["cmd"]
+    assert container_id == "cid-1"
+    assert "--user" not in cmd
+    assert "--userns=keep-id" not in cmd
+    assert "-v" not in cmd
+    assert "HOME=/root" in cmd
+    assert "PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin" in cmd
+
+
 def test_start_task_container_passes_through_network_env_when_present() -> None:
     seen: dict[str, object] = {}
 
@@ -671,6 +717,8 @@ def test_start_task_container_passes_through_network_env_when_present() -> None:
         "NO_PROXY": "localhost,127.0.0.1",
         "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
         "TASK_CONTAINER_PIP_INDEX_URL": "https://mirror.example/simple",
+        "TASK_CONTAINER_APT_MIRROR": "https://mirror.example/debian",
+        "TASK_CONTAINER_APT_SECURITY_MIRROR": "https://mirror.example/debian-security",
     }
     with (
         patch("subprocess.run", side_effect=fake_run),
@@ -698,6 +746,8 @@ def test_start_task_container_skips_empty_network_env() -> None:
         "NO_PROXY": "",
         "PIP_INDEX_URL": "",
         "TASK_CONTAINER_PIP_INDEX_URL": "",
+        "TASK_CONTAINER_APT_MIRROR": "",
+        "TASK_CONTAINER_APT_SECURITY_MIRROR": "",
     }
     with (
         patch("subprocess.run", side_effect=fake_run),
@@ -710,3 +760,210 @@ def test_start_task_container_skips_empty_network_env() -> None:
         assert not any(
             isinstance(part, str) and part.startswith(f"{name}=") for part in cmd
         )
+
+
+def test_configure_task_container_apt_mirror_noops_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TASK_CONTAINER_APT_MIRROR", raising=False)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        result = configure_task_container_apt_mirror("cid-1", executable="docker")
+
+    assert result is None
+    assert calls == []
+
+
+def test_configure_task_container_apt_mirror_writes_debian_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+    monkeypatch.setenv("TASK_CONTAINER_APT_MIRROR", "https://mirror.example/debian/")
+    monkeypatch.delenv("TASK_CONTAINER_APT_SECURITY_MIRROR", raising=False)
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["input"] = kwargs["input"]
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=(
+                "apt mirror configured: main=https://mirror.example/debian "
+                "security=https://mirror.example/debian-security\n"
+            ),
+            stderr="",
+        )
+
+    with patch("subprocess.run", side_effect=fake_run):
+        result = configure_task_container_apt_mirror("cid-1", executable="docker")
+
+    assert seen["cmd"] == ["docker", "exec", "-i", "cid-1", "/bin/sh", "-s"]
+    script = str(seen["input"])
+    assert "TASK_CONTAINER_APT_MIRROR" not in script
+    assert "main_mirror=https://mirror.example/debian" in script
+    assert "security_mirror=https://mirror.example/debian-security" in script
+    assert "URIs: $main_mirror" in script
+    assert "URIs: $security_mirror" in script
+    assert "Suites: $codename $codename-updates" in script
+    assert "Suites: $codename-security" in script
+    assert "*.agent-sched-bench-disabled" in script
+    assert result == {
+        "configured": "true",
+        "main_mirror": "https://mirror.example/debian",
+        "security_mirror": "https://mirror.example/debian-security",
+        "stdout": (
+            "apt mirror configured: main=https://mirror.example/debian "
+            "security=https://mirror.example/debian-security"
+        ),
+    }
+
+
+def test_configure_task_container_apt_mirror_rejects_unsafe_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TASK_CONTAINER_APT_MIRROR",
+        "https://mirror.example/debian $(touch /tmp/nope)",
+    )
+
+    with (
+        patch("subprocess.run") as run,
+        pytest.raises(ValueError, match="TASK_CONTAINER_APT_MIRROR"),
+    ):
+        configure_task_container_apt_mirror("cid-1", executable="docker")
+
+    run.assert_not_called()
+
+
+def test_configure_task_container_apt_mirror_reports_unsupported_distro_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TASK_CONTAINER_APT_MIRROR", "https://mirror.example/debian")
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout="apt mirror skipped: unsupported distro: ubuntu\n",
+            stderr="",
+        )
+
+    with patch("subprocess.run", side_effect=fake_run):
+        result = configure_task_container_apt_mirror("cid-1", executable="docker")
+
+    assert result is not None
+    assert result["configured"] == "false"
+    assert result["stdout"] == "apt mirror skipped: unsupported distro: ubuntu"
+
+
+def test_stop_task_container_raises_when_container_still_exists() -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["docker", "logs"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="logs\n", stderr="")
+        if cmd[:2] == ["docker", "stop"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="stop failed")
+        if cmd[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="rm failed")
+        if cmd[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="Failed to remove task container cid-1"):
+            stop_task_container("cid-1", executable="docker")
+
+    assert calls == [
+        ["docker", "logs", "cid-1"],
+        ["docker", "stop", "cid-1"],
+        ["docker", "rm", "-f", "cid-1"],
+        ["docker", "inspect", "cid-1"],
+    ]
+
+
+def test_stop_task_container_tolerates_stop_error_when_rm_removes_container() -> None:
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["docker", "logs"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="logs\n", stderr="")
+        if cmd[:2] == ["docker", "stop"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="already stopped")
+        if cmd[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+        if cmd[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="No such object")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        logs = stop_task_container("cid-1", executable="docker")
+
+    assert logs == "logs\n"
+
+
+def test_stop_task_container_waits_for_removal_already_in_progress() -> None:
+    inspect_calls = 0
+
+    def fake_run(cmd, **kwargs):
+        nonlocal inspect_calls
+        if cmd[:2] == ["docker", "logs"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="logs\n", stderr="")
+        if cmd[:2] == ["docker", "stop"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+        if cmd[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout="",
+                stderr=(
+                    "Error response from daemon: removal of container cid-1 "
+                    "is already in progress"
+                ),
+            )
+        if cmd[:2] == ["docker", "inspect"]:
+            inspect_calls += 1
+            if inspect_calls == 1:
+                return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout="",
+                stderr="Error: No such object: cid-1",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        patch("trace_collect.attempt_pipeline.time.sleep"),
+    ):
+        logs = stop_task_container("cid-1", executable="docker")
+
+    assert logs == "logs\n"
+    assert inspect_calls == 2
+
+
+def test_stop_task_container_raises_on_unclassified_inspect_failure() -> None:
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["docker", "logs"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[:2] == ["docker", "stop"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="stop failed")
+        if cmd[:3] == ["docker", "rm", "-f"]:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="rm failed")
+        if cmd[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout="",
+                stderr="Cannot connect to the Docker daemon",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="Cannot connect to the Docker daemon"):
+            stop_task_container("cid-1", executable="docker")

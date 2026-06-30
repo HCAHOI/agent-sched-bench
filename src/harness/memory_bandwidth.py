@@ -5,9 +5,10 @@ import shutil
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,35 @@ class PerfEventBackend:
     read_specs: tuple[str, ...]
     write_specs: tuple[str, ...]
     bytes_per_count: float
+
+
+@dataclass(frozen=True, slots=True)
+class CgroupMemoryAccessBackend:
+    source: str
+    event_specs: tuple[str, ...]
+
+    @property
+    def event_spec(self) -> str:
+        return ",".join(self.event_specs)
+
+
+@dataclass(frozen=True, slots=True)
+class CgroupMemoryAccessMeasurement:
+    cgroup: str
+    events: float
+    events_per_s: float
+
+
+@dataclass(frozen=True, slots=True)
+class CgroupMemoryAccessReading:
+    available: bool
+    source: str | None = None
+    measurements: Mapping[str, CgroupMemoryAccessMeasurement] = field(
+        default_factory=dict
+    )
+    reason: str | None = None
+    started_epoch: float | None = None
+    ended_epoch: float | None = None
 
 
 def _event_aliases(device_path: Path) -> set[str]:
@@ -115,6 +145,31 @@ def detect_perf_backend(root: Path = EVENT_SOURCE_ROOT) -> PerfEventBackend | No
     return _detect_intel_imc_backend(root) or _detect_explicit_byte_backend(root)
 
 
+def detect_cgroup_memory_access_backend(
+    root: Path = EVENT_SOURCE_ROOT,
+) -> CgroupMemoryAccessBackend | None:
+    """Find a PMU event usable for per-cgroup memory-access counting.
+
+    This deliberately reports access events, not memory bandwidth bytes. On ARM
+    hosts the common architectural PMU exposes ``mem_access`` but not a portable
+    read/write byte counter.
+    """
+    specs: list[str] = []
+    devices: list[str] = []
+    for device in sorted(root.iterdir()) if root.exists() else []:
+        aliases = _event_aliases(device)
+        if "mem_access" not in aliases:
+            continue
+        devices.append(device.name)
+        specs.append(f"{device.name}/mem_access/")
+    if not specs:
+        return None
+    return CgroupMemoryAccessBackend(
+        source=f"perf:{'+'.join(devices)}:mem_access:cgroup",
+        event_specs=tuple(specs),
+    )
+
+
 def _parse_perf_count(raw: str) -> float | None:
     value = raw.strip()
     if not value or value in {"<not counted>", "<not supported>"}:
@@ -155,6 +210,124 @@ def _classify_perf_failure(stderr: str) -> str:
     if "not found" in message:
         return "perf_missing"
     return "perf_error"
+
+
+def _parse_perf_cgroup_count_output(
+    text: str,
+    *,
+    event_specs: tuple[str, ...],
+    cgroups: Mapping[str, str],
+) -> tuple[dict[str, float], bool]:
+    counts: dict[str, float] = {}
+    saw_matching_cgroup = False
+    for line in text.splitlines():
+        if not any(spec in line for spec in event_specs):
+            continue
+        fields = [field.strip() for field in line.split(",") if field.strip()]
+        for key, cgroup in cgroups.items():
+            normalized = cgroup.lstrip("/")
+            if not any(field.lstrip("/") == normalized for field in fields):
+                continue
+            saw_matching_cgroup = True
+            value = _parse_perf_count(line.split(",", 1)[0])
+            if value is not None:
+                counts[key] = counts.get(key, 0.0) + value
+                break
+    return counts, saw_matching_cgroup
+
+
+def sample_cgroup_memory_access_once(
+    backend: CgroupMemoryAccessBackend,
+    *,
+    cgroups: Mapping[str, str],
+    interval_s: float,
+    perf_executable: str = DEFAULT_PERF_EXECUTABLE,
+) -> CgroupMemoryAccessReading:
+    if not cgroups:
+        return CgroupMemoryAccessReading(
+            available=False,
+            source=backend.source,
+            reason="no_cgroups",
+        )
+    started_epoch = time.time()
+    try:
+        result = subprocess.run(
+            [
+                perf_executable,
+                "stat",
+                "-x,",
+                "--no-big-num",
+                "-a",
+                "-e",
+                backend.event_spec,
+                "--for-each-cgroup",
+                ",".join(dict.fromkeys(cgroups.values())),
+                "--",
+                "sleep",
+                f"{interval_s:.6f}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=max(5.0, interval_s + 5.0),
+            check=False,
+            env={"LC_ALL": "C"},
+        )
+    except FileNotFoundError:
+        return CgroupMemoryAccessReading(
+            available=False,
+            source=backend.source,
+            reason="perf_missing",
+            started_epoch=started_epoch,
+            ended_epoch=time.time(),
+        )
+    except subprocess.TimeoutExpired:
+        return CgroupMemoryAccessReading(
+            available=False,
+            source=backend.source,
+            reason="perf_timeout",
+            started_epoch=started_epoch,
+            ended_epoch=time.time(),
+        )
+    ended_epoch = time.time()
+
+    perf_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    if result.returncode != 0:
+        return CgroupMemoryAccessReading(
+            available=False,
+            source=backend.source,
+            reason=_classify_perf_failure(perf_output),
+            started_epoch=started_epoch,
+            ended_epoch=ended_epoch,
+        )
+    counts, saw_matching_cgroup = _parse_perf_cgroup_count_output(
+        perf_output,
+        event_specs=backend.event_specs,
+        cgroups=cgroups,
+    )
+    if not counts:
+        return CgroupMemoryAccessReading(
+            available=False,
+            source=backend.source,
+            reason="not_counted" if saw_matching_cgroup else "parse_error",
+            started_epoch=started_epoch,
+            ended_epoch=ended_epoch,
+        )
+    divisor = max(interval_s, 1e-9)
+    measurements = {
+        key: CgroupMemoryAccessMeasurement(
+            cgroup=cgroups[key],
+            events=value,
+            events_per_s=value / divisor,
+        )
+        for key, value in counts.items()
+    }
+    return CgroupMemoryAccessReading(
+        available=True,
+        source=backend.source,
+        measurements=measurements,
+        started_epoch=started_epoch,
+        ended_epoch=ended_epoch,
+    )
 
 
 def sample_memory_bandwidth_once(

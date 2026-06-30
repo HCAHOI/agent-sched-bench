@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 import json
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -32,6 +35,32 @@ from harness.disk_preflight import (  # noqa: E402
     DiskSpaceError,
     preflight_disk,
 )
+from harness.memory_bandwidth import (  # noqa: E402
+    CgroupMemoryAccessBackend,
+    CgroupMemoryAccessMeasurement,
+    CgroupMemoryAccessReading,
+)
+
+
+def _wait_until(predicate: Callable[[], bool], *, timeout_s: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.005)
+    if predicate():
+        return
+    raise AssertionError("condition did not become true before timeout")
+
+
+def _recorder_empty_tick_count(recorder: ContainerResourceRecorder) -> int:
+    with recorder._lock:
+        return recorder._empty_tick_count
+
+
+def _recorder_error_count(recorder: ContainerResourceRecorder) -> int:
+    with recorder._lock:
+        return len(recorder._errors)
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +150,146 @@ def test_ensure_fixed_image_builds_when_derivative_missing(
     ]
     assert any("exec cid_xyz" == " ".join(c[1:3]) for c in calls)
     assert any("commit cid_xyz" == " ".join(c[1:3]) for c in calls)
+
+
+def test_ensure_fixed_image_rebuild_removes_existing_derivative() -> None:
+    calls = []
+    fixed_name = "swebench-fixed-custom:attempt"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["docker", "image", "inspect"] and "--format" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="amd64 linux\n", stderr="")
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[:3] == ["docker", "image", "rm"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[1:3] == ["run", "-d"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="cid_xyz\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with patch(
+        "harness.container_image_prep.subprocess.run",
+        side_effect=fake_run,
+    ):
+        fixed, elapsed = ensure_fixed_image(
+            "swerebench/foo:latest",
+            container_executable="docker",
+            fixed_image_name=fixed_name,
+            rebuild=True,
+            host_uid=1000,
+            host_gid=1000,
+        )
+
+    assert fixed == fixed_name
+    assert elapsed >= 0.0
+    assert ["docker", "image", "rm", "-f", fixed_name] in calls
+    assert ["docker", "commit", "cid_xyz", fixed_name] in calls
+
+
+def test_ensure_fixed_image_serializes_builds_per_source_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = 0
+    max_active = 0
+    active_lock = threading.Lock()
+    built: list[str] = []
+
+    def fake_build_fixed_image(
+        source_image: str,
+        fixed_name: str,
+        executable: str,
+        uid: int,
+        gid: int,
+        image_platform: str | None,
+    ) -> None:
+        nonlocal active, max_active
+        assert source_image == "docker.io/swerebench/shared:latest"
+        assert executable == "docker"
+        assert image_platform is None
+        with active_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)
+        with active_lock:
+            active -= 1
+            built.append(fixed_name)
+
+    monkeypatch.setattr("harness.container_image_prep._image_exists", lambda *_: False)
+    monkeypatch.setattr("harness.container_image_prep.ensure_source_image", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("harness.container_image_prep._inspect_image_platform", lambda *_: None)
+    monkeypatch.setattr("harness.container_image_prep._build_fixed_image", fake_build_fixed_image)
+
+    def build(index: int) -> tuple[str, float]:
+        return ensure_fixed_image(
+            "swerebench/shared:latest",
+            container_executable="docker",
+            fixed_image_name=f"fixed-shared:{index}",
+            rebuild=True,
+            host_uid=1000,
+            host_gid=1000,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(build, range(4)))
+
+    assert max_active == 1
+    assert sorted(fixed for fixed, _elapsed in results) == [
+        "fixed-shared:0",
+        "fixed-shared:1",
+        "fixed-shared:2",
+        "fixed-shared:3",
+    ]
+    assert sorted(built) == [
+        "fixed-shared:0",
+        "fixed-shared:1",
+        "fixed-shared:2",
+        "fixed-shared:3",
+    ]
+
+
+def test_ensure_fixed_image_cache_is_scoped_by_container_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr("harness.container_image_prep._image_exists", lambda *_: False)
+    monkeypatch.setattr("harness.container_image_prep.ensure_source_image", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("harness.container_image_prep._inspect_image_platform", lambda *_: None)
+
+    def fake_build_fixed_image(
+        source_image: str,
+        fixed_name: str,
+        executable: str,
+        uid: int,
+        gid: int,
+        image_platform: str | None,
+    ) -> None:
+        build_calls.append((executable, fixed_name))
+
+    monkeypatch.setattr("harness.container_image_prep._build_fixed_image", fake_build_fixed_image)
+
+    docker_result = ensure_fixed_image(
+        "swerebench/shared:latest",
+        container_executable="docker",
+        fixed_image_name="fixed-shared:latest",
+        host_uid=1000,
+        host_gid=1000,
+    )
+    podman_result = ensure_fixed_image(
+        "swerebench/shared:latest",
+        container_executable="podman",
+        fixed_image_name="fixed-shared:latest",
+        host_uid=1000,
+        host_gid=1000,
+    )
+
+    assert docker_result[0] == "fixed-shared:latest"
+    assert podman_result[0] == "fixed-shared:latest"
+    assert build_calls == [
+        ("docker", "fixed-shared:latest"),
+        ("podman", "fixed-shared:latest"),
+    ]
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
@@ -564,6 +733,7 @@ def test_container_resource_recorder_appends_global_container_samples(
         executable=container_executable,
         subprocess_timeout_s=0.1,
         sample_all_containers=False,
+        collect_cgroup_memory_access=False,
     )
     recorder.register_container(container_id)
     with patch(
@@ -571,7 +741,10 @@ def test_container_resource_recorder_appends_global_container_samples(
         side_effect=fake_run,
     ):
         recorder.start()
-        time.sleep(0.04)
+        _wait_until(
+            lambda: recorder.jsonl_path.exists()
+            and bool(recorder.jsonl_path.read_text(encoding="utf-8").strip())
+        )
         summary = recorder.stop()
 
     records = [
@@ -594,6 +767,251 @@ def test_container_resource_recorder_appends_global_container_samples(
     assert persisted_summary["containers"][0]["summary"]["sample_count"] == len(records)
 
 
+def test_container_resource_recorder_attaches_cgroup_memory_access(
+    tmp_path: Path,
+) -> None:
+    container_id = "abcdef1234567890"
+    cgroup_path = Path("/sys/fs/cgroup/system.slice/docker-test.scope")
+    backend = CgroupMemoryAccessBackend(
+        source="perf:armv8_pmuv3_0:mem_access:cgroup",
+        event_specs=("armv8_pmuv3_0/mem_access/",),
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=f"{container_id}|swerebench/task-a|task-a\n",
+                stderr="",
+            )
+        if cmd[:2] == ["docker", "stats"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=(
+                    f"{container_id}|task-a|10MiB / 1GiB|1.0%|12.5%|"
+                    "1kB / 2kB\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    def fake_sample_memory_access(
+        sample_backend,
+        *,
+        cgroups,
+        interval_s,
+    ):
+        assert sample_backend is backend
+        assert cgroups == {container_id: "/system.slice/docker-test.scope"}
+        assert interval_s == pytest.approx(0.01)
+        return CgroupMemoryAccessReading(
+            available=True,
+            source=backend.source,
+            measurements={
+                container_id: CgroupMemoryAccessMeasurement(
+                    cgroup="/system.slice/docker-test.scope",
+                    events=1200.0,
+                    events_per_s=120000.0,
+                )
+            },
+            started_epoch=1000.0,
+            ended_epoch=1000.01,
+        )
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-memory-access",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+        sample_all_containers=False,
+    )
+    recorder.register_container(container_id)
+    with (
+        patch(
+            "harness.container_stats_sampler.subprocess.run",
+            side_effect=fake_run,
+        ),
+        patch(
+            "harness.container_stats_sampler.detect_cgroup_memory_access_backend",
+            return_value=backend,
+        ),
+        patch("harness.container_stats_sampler.sys.platform", "linux"),
+        patch(
+            "harness.container_stats_sampler._resolve_container_pid",
+            return_value=42,
+        ),
+        patch(
+            "harness.container_stats_sampler._resolve_cgroup_path",
+            return_value=cgroup_path,
+        ),
+        patch(
+            "harness.container_stats_sampler.sample_cgroup_memory_access_once",
+            side_effect=fake_sample_memory_access,
+        ),
+    ):
+        recorder.start()
+        _wait_until(
+            lambda: recorder.jsonl_path.exists()
+            and bool(recorder.jsonl_path.read_text(encoding="utf-8").strip())
+        )
+        summary = recorder.stop()
+
+    records = [
+        json.loads(line)
+        for line in recorder.jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records
+    assert records[0]["memory_access_available"] is True
+    assert records[0]["memory_access_source"] == backend.source
+    assert records[0]["memory_access_cgroup"] == "/system.slice/docker-test.scope"
+    assert records[0]["memory_access_events"] == pytest.approx(1200.0)
+    assert records[0]["memory_access_events_per_s"] == pytest.approx(120000.0)
+    assert records[0]["memory_access_window_start_epoch"] == pytest.approx(1000.0)
+    assert records[0]["memory_access_window_end_epoch"] == pytest.approx(1000.01)
+    container_summary = summary["containers"][0]["summary"]
+    assert container_summary["memory_access_available"] is True
+    assert container_summary["memory_access_source"] == backend.source
+    assert container_summary["memory_access_events_per_s"]["avg"] == pytest.approx(
+        120000.0
+    )
+    assert summary["sampling"]["memory_access"]["source"] == backend.source
+
+
+def test_container_resource_recorder_disables_terminal_memory_access_failures(
+    tmp_path: Path,
+) -> None:
+    container_id = "abcdef1234567890"
+    backend = CgroupMemoryAccessBackend(
+        source="perf:armv8_pmuv3_0:mem_access:cgroup",
+        event_specs=("armv8_pmuv3_0/mem_access/",),
+    )
+    calls = 0
+
+    def fake_sample_memory_access(
+        sample_backend,
+        *,
+        cgroups,
+        interval_s,
+    ):
+        nonlocal calls
+        calls += 1
+        return CgroupMemoryAccessReading(
+            available=False,
+            source=sample_backend.source,
+            reason="permission_denied",
+            started_epoch=1000.0,
+            ended_epoch=1001.0,
+        )
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-memory-access-terminal",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+        sample_all_containers=False,
+    )
+    recorder.register_container(container_id)
+    containers = {container_id: {"container_id": container_id}}
+    with (
+        patch(
+            "harness.container_stats_sampler.detect_cgroup_memory_access_backend",
+            return_value=backend,
+        ),
+        patch(
+            "harness.container_stats_sampler._resolve_container_pid",
+            return_value=42,
+        ),
+        patch(
+            "harness.container_stats_sampler._resolve_cgroup_path",
+            return_value=Path("/sys/fs/cgroup/system.slice/docker-test.scope"),
+        ),
+        patch(
+            "harness.container_stats_sampler.sample_cgroup_memory_access_once",
+            side_effect=fake_sample_memory_access,
+        ),
+        patch("harness.container_stats_sampler.sys.platform", "linux"),
+    ):
+        first = recorder._sample_memory_access(containers)
+        second = recorder._sample_memory_access(containers)
+
+    assert calls == 1
+    assert first.reason == "permission_denied"
+    assert second.reason == "permission_denied"
+    assert second.source == backend.source
+
+
+def test_container_resource_recorder_keeps_retrying_not_counted(
+    tmp_path: Path,
+) -> None:
+    container_id = "abcdef1234567890"
+    backend = CgroupMemoryAccessBackend(
+        source="perf:armv8_pmuv3_0:mem_access:cgroup",
+        event_specs=("armv8_pmuv3_0/mem_access/",),
+    )
+    calls = 0
+
+    def fake_sample_memory_access(
+        sample_backend,
+        *,
+        cgroups,
+        interval_s,
+    ):
+        nonlocal calls
+        calls += 1
+        return CgroupMemoryAccessReading(
+            available=False,
+            source=sample_backend.source,
+            reason="not_counted",
+            started_epoch=1000.0 + calls,
+            ended_epoch=1001.0 + calls,
+        )
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-memory-access-not-counted",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+        sample_all_containers=False,
+    )
+    recorder.register_container(container_id)
+    containers = {container_id: {"container_id": container_id}}
+    with (
+        patch(
+            "harness.container_stats_sampler.detect_cgroup_memory_access_backend",
+            return_value=backend,
+        ),
+        patch(
+            "harness.container_stats_sampler._resolve_container_pid",
+            return_value=42,
+        ),
+        patch(
+            "harness.container_stats_sampler._resolve_cgroup_path",
+            return_value=Path("/sys/fs/cgroup/system.slice/docker-test.scope"),
+        ),
+        patch(
+            "harness.container_stats_sampler.sample_cgroup_memory_access_once",
+            side_effect=fake_sample_memory_access,
+        ),
+        patch("harness.container_stats_sampler.sys.platform", "linux"),
+    ):
+        first = recorder._sample_memory_access(containers)
+        second = recorder._sample_memory_access(containers)
+        third = recorder._sample_memory_access(containers)
+
+    assert calls == 3
+    assert first.reason == "not_counted"
+    assert second.reason == "not_counted"
+    assert third.reason == "not_counted"
+    assert third.source == backend.source
+    assert recorder._memory_access_backend_reason is None
+    assert recorder._memory_access_consecutive_not_counted == 3
+
+
 def test_container_resource_recorder_writes_empty_summary_without_containers(
     tmp_path: Path,
 ) -> None:
@@ -614,7 +1032,7 @@ def test_container_resource_recorder_writes_empty_summary_without_containers(
         side_effect=fake_run,
     ):
         recorder.start()
-        time.sleep(0.02)
+        _wait_until(lambda: _recorder_empty_tick_count(recorder) >= 1)
         summary = recorder.stop()
 
     assert recorder.jsonl_path.read_text(encoding="utf-8") == ""
@@ -641,7 +1059,7 @@ def test_container_resource_recorder_treats_stats_eof_as_transient(
             )
         if cmd[:2] == ["docker", "stats"]:
             stats_calls += 1
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="EOF\n")
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="EOF\nEOF\n")
         raise AssertionError(f"unexpected command: {cmd}")
 
     recorder = ContainerResourceRecorder(
@@ -658,13 +1076,104 @@ def test_container_resource_recorder_treats_stats_eof_as_transient(
         side_effect=fake_run,
     ):
         recorder.start()
-        time.sleep(0.02)
+        _wait_until(lambda: stats_calls >= 1)
         summary = recorder.stop()
 
     assert stats_calls >= 1
     assert summary["sample_count"] == 0
     assert summary["errors"] == []
     assert summary["sampling"]["empty_tick_count"] >= 1
+
+
+def test_container_resource_recorder_treats_missing_container_stats_as_transient(
+    tmp_path: Path,
+) -> None:
+    container_id = "abcdef1234567890"
+    stats_calls = 0
+
+    def fake_run(cmd, **kwargs):
+        nonlocal stats_calls
+        if cmd[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=f"{container_id}|swerebench/task-a|task-a\n",
+                stderr="",
+            )
+        if cmd[:2] == ["docker", "stats"]:
+            stats_calls += 1
+            message = (
+                "Error response from daemon: No such container: "
+                f"{container_id}\nEOF\n"
+            )
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=message)
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-missing-container",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+        sample_all_containers=False,
+    )
+    recorder.register_container(container_id)
+    with patch(
+        "harness.container_stats_sampler.subprocess.run",
+        side_effect=fake_run,
+    ):
+        recorder.start()
+        _wait_until(lambda: stats_calls >= 1)
+        summary = recorder.stop()
+
+    assert summary["sample_count"] == 0
+    assert summary["errors"] == []
+    assert summary["sampling"]["empty_tick_count"] >= 1
+
+
+def test_container_resource_recorder_records_non_transient_stats_errors(
+    tmp_path: Path,
+) -> None:
+    container_id = "abcdef1234567890"
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=f"{container_id}|swerebench/task-a|task-a\n",
+                stderr="",
+            )
+        if cmd[:2] == ["docker", "stats"]:
+            message = (
+                "Error response from daemon: No such container: "
+                f"{container_id}\npermission denied\n"
+            )
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=message)
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    recorder = ContainerResourceRecorder(
+        output_dir=tmp_path,
+        run_id="simulate-stats-error",
+        interval_s=0.01,
+        executable="docker",
+        subprocess_timeout_s=0.1,
+        sample_all_containers=False,
+    )
+    recorder.register_container(container_id)
+    with patch(
+        "harness.container_stats_sampler.subprocess.run",
+        side_effect=fake_run,
+    ):
+        recorder.start()
+        _wait_until(lambda: _recorder_error_count(recorder) >= 1)
+        summary = recorder.stop()
+
+    assert summary["sample_count"] == 0
+    assert summary["errors"]
+    assert summary["errors"][0]["type"] == "RuntimeError"
+    assert "No such container" in summary["errors"][0]["message"]
+    assert "permission denied" in summary["errors"][0]["message"]
 
 
 def test_container_resource_recorder_marks_stop_timeout(

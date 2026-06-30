@@ -153,8 +153,16 @@ def test_simulator_accepts_task_with_image_name(
     async def fake_prefetch(*_args, **_kwargs) -> None:
         pass
 
+    async def fake_prebuild(*_args, **_kwargs) -> dict[str, str]:
+        return {}
+
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare)
     monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
+    monkeypatch.setattr("trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild)
+    monkeypatch.setattr(
+        "trace_collect.simulator.stop_task_container",
+        lambda *args, **kwargs: "",
+    )
     async def _fake_exec(*a, **kw):
         return ("ok", 1.0, True)
 
@@ -234,7 +242,9 @@ def test_container_mode_trace_requires_container_executable(tmp_path: Path) -> N
         )
 
 
-def test_simulator_rejects_duplicate_agent_ids(tmp_path: Path) -> None:
+def test_simulator_allows_duplicate_source_agent_ids_as_replay_replicas(
+    tmp_path: Path,
+) -> None:
     trace_a = tmp_path / "trace-a.jsonl"
     trace_b = tmp_path / "trace-b.jsonl"
     task_source = tmp_path / "tasks.json"
@@ -276,7 +286,7 @@ def test_simulator_rejects_duplicate_agent_ids(tmp_path: Path) -> None:
     )
     _write_manifest(manifest, [str(trace_a), str(trace_b)])
 
-    with pytest.raises(SimulateError, match="Duplicate agent_id"):
+    with pytest.raises(ValueError, match="same-id__replica-001"):
         asyncio.run(
             simulate(
                 manifest=manifest,

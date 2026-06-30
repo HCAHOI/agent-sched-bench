@@ -131,7 +131,7 @@ class EvalResult:
     # patch and bloated `git add -A` pathstat under QEMU. `**/x/**` drops the
     # subtree contents (the real work); `**/x` additionally catches a tracked
     # file or gitlink literally named x.
-    _ANY_DEPTH = ("venv", ".venv", "*.egg-info", "__pycache__")
+    _ANY_DEPTH = ("venv", ".venv", "*.egg-info", "__pycache__", "*.core")
 
     @classmethod
     def exclude_pathspecs(cls) -> list[str]:

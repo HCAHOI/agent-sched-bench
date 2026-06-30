@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 
-from trace_collect.openclaw_tools import execute_trace_tool
+from trace_collect.openclaw_tools import (
+    _REPLAY_AGENT_SCRIPT,
+    ContainerAgent,
+    execute_trace_tool,
+)
 
 
 def _nested(tool_name: str, payload: dict) -> str:
@@ -26,7 +31,87 @@ class FakeAgent:
         return self._responses.get(tool, self._default)
 
 
-def test_exec_command_sends_correct_request() -> None:
+class _FakeStdin:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def is_closing(self) -> bool:
+        return self.closed
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeProcess:
+    def __init__(self, *, kill_error: BaseException | None = None) -> None:
+        self.pid = 12345
+        self.stdin = _FakeStdin()
+        self.returncode: int | None = None
+        self.kill_calls = 0
+        self.wait_calls = 0
+        self._kill_error = kill_error
+        self._released = asyncio.Event()
+
+    async def wait(self) -> int:
+        self.wait_calls += 1
+        await self._released.wait()
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        if self._kill_error is not None:
+            self.returncode = 0
+            self._released.set()
+            raise self._kill_error
+        self.returncode = -9
+        self._released.set()
+
+    def release(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+        self._released.set()
+
+
+def test_container_agent_stop_ignores_kill_race(monkeypatch) -> None:
+    async def run_stop() -> tuple[_FakeProcess, ContainerAgent]:
+        agent = ContainerAgent("cid", "docker")
+        process = _FakeProcess(kill_error=ProcessLookupError())
+        agent._process = process
+        await agent.stop()
+        return process, agent
+
+    monkeypatch.setattr("trace_collect.openclaw_tools._AGENT_STOP_GRACE_S", 0.001)
+    monkeypatch.setattr("trace_collect.openclaw_tools._AGENT_KILL_WAIT_S", 0.1)
+
+    process, agent = asyncio.run(run_stop())
+
+    assert agent._process is None
+    assert process.stdin.closed is True
+    assert process.kill_calls == 1
+    assert process.returncode == 0
+
+
+def test_container_agent_stop_kills_timed_out_process(monkeypatch) -> None:
+    async def run_stop() -> tuple[_FakeProcess, ContainerAgent]:
+        agent = ContainerAgent("cid", "docker")
+        process = _FakeProcess()
+        agent._process = process
+        await agent.stop()
+        return process, agent
+
+    monkeypatch.setattr("trace_collect.openclaw_tools._AGENT_STOP_GRACE_S", 0.001)
+    monkeypatch.setattr("trace_collect.openclaw_tools._AGENT_KILL_WAIT_S", 0.1)
+
+    process, agent = asyncio.run(run_stop())
+
+    assert agent._process is None
+    assert process.stdin.closed is True
+    assert process.kill_calls == 1
+    assert process.returncode == -9
+
+
+def test_exec_command_uses_simulate_timeout_fallback() -> None:
     agent = FakeAgent({"exec": {"ok": True, "result": "hello\n", "returncode": 0}})
     result, success, _ = asyncio.run(
         execute_trace_tool(
@@ -40,8 +125,58 @@ def test_exec_command_sends_correct_request() -> None:
     assert "hello" in result
     assert agent.requests[0]["tool"] == "exec"
     assert agent.requests[0]["args"]["command"] == "echo hello"
-    assert agent.requests[0]["args"]["timeout"] == 300.0
-    assert agent.timeouts == [300.0]
+    assert agent.requests[0]["args"]["timeout"] == 10.0
+    assert agent.timeouts == [10.0]
+
+
+def test_exec_command_simulate_timeout_fallback_is_capped() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "hello\n", "returncode": 0}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "echo hello"}),
+            command_timeout_s=999.0,
+        )
+    )
+    assert success is True
+    assert "hello" in result
+    assert agent.requests[0]["args"]["timeout"] == 600.0
+    assert agent.timeouts == [600.0]
+
+
+def test_exec_command_source_timeout_fallback_preserves_source_timeout() -> None:
+    agent = FakeAgent({"exec": {"ok": False, "result": "[timeout]", "returncode": 124}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "slow command"}),
+            command_timeout_s=600.0,
+            source_exec_timeout_s=300.0568,
+        )
+    )
+    assert success is False
+    assert "Exit code: 124" in result
+    assert agent.requests[0]["args"]["timeout"] == 300.0568
+    assert agent.timeouts == [300.0568]
+
+
+def test_exec_command_source_timeout_does_not_override_trace_timeout() -> None:
+    agent = FakeAgent({"exec": {"ok": False, "result": "[timeout]", "returncode": 124}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "slow command", "timeout": 123}),
+            command_timeout_s=600.0,
+            source_exec_timeout_s=300.0568,
+        )
+    )
+    assert success is False
+    assert "Exit code: 124" in result
+    assert agent.requests[0]["args"]["timeout"] == 123.0
+    assert agent.timeouts == [123.0]
 
 
 def test_exec_timeout_from_trace_overrides_simulate_default() -> None:
@@ -144,8 +279,80 @@ def test_list_dir_sends_correct_request() -> None:
     assert "foo.py" in result
 
 
-def test_exec_appends_exit_code() -> None:
-    agent = FakeAgent({"exec": {"ok": False, "result": "error msg", "returncode": 1}})
+def test_message_tool_replays_as_noop_without_container_request() -> None:
+    agent = FakeAgent()
+    result, success, duration_ms = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="message",
+            tool_args_json=_nested("message", {"content": "done"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert result == "Message replayed as no-op"
+    assert duration_ms == 0.0
+    assert agent.requests == []
+
+
+def test_source_runtime_artifact_read_file_fails_without_container_request() -> None:
+    agent = FakeAgent()
+    result, success, duration_ms = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="read_file",
+            tool_args_json=_nested(
+                "read_file",
+                {
+                    "path": (
+                        "/root/agent-sched-bench/traces/x/attempt_1/"
+                        "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
+                    )
+                },
+            ),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is False
+    assert duration_ms == 0.0
+    assert "OpenClaw runtime artifact" in result
+    assert agent.requests == []
+
+
+def test_regular_runtime_tool_results_path_is_not_treated_as_source_artifact() -> None:
+    agent = FakeAgent({"read_file": {"ok": True, "result": "normal file"}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="read_file",
+            tool_args_json=_nested(
+                "read_file",
+                {"path": "/testbed/pkg/runtime/tool-results/output.txt"},
+            ),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert result == "normal file"
+    assert agent.requests[0]["args"]["path"] == "/testbed/pkg/runtime/tool-results/output.txt"
+
+
+def test_exec_nonzero_returncode_is_transport_success() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "error msg", "returncode": 1}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "false"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert "Exit code: 1" in result
+
+
+def test_exec_agent_failure_with_non_timeout_returncode_remains_failed() -> None:
+    agent = FakeAgent({"exec": {"ok": False, "result": "transport failed", "returncode": 1}})
     result, success, _ = asyncio.run(
         execute_trace_tool(
             agent=agent,
@@ -156,6 +363,114 @@ def test_exec_appends_exit_code() -> None:
     )
     assert success is False
     assert "Exit code: 1" in result
+
+
+def test_exec_zero_returncode_requires_agent_transport_ok() -> None:
+    agent = FakeAgent({"exec": {"ok": False, "result": "tool failed", "returncode": 0}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "true"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is False
+    assert "Exit code: 0" in result
+
+
+def test_exec_timeout_remains_failed() -> None:
+    agent = FakeAgent({"exec": {"ok": False, "result": "[timeout]", "returncode": 124}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "sleep 999"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is False
+    assert "Exit code: 124" in result
+
+
+def test_exec_shell_timeout_exit_code_is_success_when_agent_completed() -> None:
+    agent = FakeAgent(
+        {"exec": {"ok": True, "result": "command timed out", "returncode": 124}}
+    )
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "timeout 5 pytest"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is True
+    assert "Exit code: 124" in result
+
+
+def test_exec_missing_returncode_fails_closed() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "missing rc"}})
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "echo ok"}),
+            command_timeout_s=10.0,
+        )
+    )
+    assert success is False
+    assert "Exit code: <missing>" in result
+
+
+def test_commands_timeout_is_preserved_across_later_success(monkeypatch) -> None:
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+    calls = 0
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.TimeoutExpired(cmd="slow", timeout=1)
+        return subprocess.CompletedProcess("fast", 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
+
+    response = namespace["handle_commands"](
+        {"commands": ["slow", "fast"], "timeout": 1}
+    )
+
+    assert calls == 2
+    assert response["ok"] is False
+    assert response["returncode"] == 124
+    assert "[timeout]" in response["result"]
+    assert "ok" in response["result"]
+
+
+def test_commands_nonzero_returncode_is_preserved_across_later_success(monkeypatch) -> None:
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+    calls = 0
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return subprocess.CompletedProcess("fail", 100, stdout="", stderr="apt failed\n")
+        return subprocess.CompletedProcess("fast", 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
+
+    response = namespace["handle_commands"](
+        {"commands": ["apt-get update", "echo ok"], "timeout": 1}
+    )
+
+    assert calls == 2
+    assert response["ok"] is True
+    assert response["returncode"] == 100
+    assert "apt failed" in response["result"]
+    assert "ok" in response["result"]
 
 
 def test_unsupported_tool_returns_error() -> None:
@@ -185,5 +500,5 @@ def test_commands_sends_list() -> None:
     assert success is True
     assert agent.requests[0]["tool"] == "commands"
     assert agent.requests[0]["args"]["commands"] == ["echo a", "echo b"]
-    assert agent.requests[0]["args"]["timeout"] == 300.0
-    assert agent.timeouts == [300.0]
+    assert agent.requests[0]["args"]["timeout"] == 10.0
+    assert agent.timeouts == [10.0]

@@ -13,13 +13,20 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from harness.memory_bandwidth import attach_host_memory_bandwidth
+from harness.memory_bandwidth import (
+    CgroupMemoryAccessBackend,
+    CgroupMemoryAccessReading,
+    attach_host_memory_bandwidth,
+    detect_cgroup_memory_access_backend,
+    sample_cgroup_memory_access_once,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +40,36 @@ _GLOBAL_STATS_FORMAT_PODMAN = (
     "{{.ID}}|{{.Name}}|{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}|{{.NetIO}}"
 )
 _MAX_CONTAINER_RECORDER_ERRORS = 100
+_CGROUP_ROOT = Path("/sys/fs/cgroup")
+_TERMINAL_CGROUP_MEMORY_ACCESS_REASONS = {
+    "parse_error",
+    "perf_error",
+    "perf_missing",
+    "perf_timeout",
+    "permission_denied",
+    "pmu_unsupported",
+    "unsupported_platform",
+}
 
+
+def _is_transient_stats_failure(message: str) -> bool:
+    normalized = (message or "").strip()
+    if not normalized:
+        return False
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    return bool(lines) and all(
+        line == "EOF" or _is_missing_container_stats_line(line)
+        for line in lines
+    )
+
+
+def _is_missing_container_stats_line(line: str) -> bool:
+    lower = line.lower()
+    return (
+        "no such container" in lower
+        or "no container with id or name" in lower
+        or "no container with name or id" in lower
+    )
 
 def _resolve_container_pid(
     container_id: str, *, executable: str,
@@ -74,6 +110,14 @@ def _resolve_cgroup_path(pid: int) -> Path | None:
                 if cgroup_path.exists():
                     return cgroup_path
     return None
+
+
+def _cgroup_path_to_perf_arg(cgroup_path: Path) -> str:
+    try:
+        relative = cgroup_path.relative_to(_CGROUP_ROOT)
+    except ValueError:
+        return str(cgroup_path)
+    return f"/{relative.as_posix()}"
 
 
 def _read_cgroup_io_stat(cgroup_path: Path) -> dict[str, int] | None:
@@ -359,6 +403,11 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "memory_bandwidth_available": False,
             "memory_bandwidth_source": None,
             "memory_bandwidth_reason": None,
+            "memory_access_events": {"min": 0, "max": 0, "avg": 0},
+            "memory_access_events_per_s": {"min": 0, "max": 0, "avg": 0},
+            "memory_access_available": False,
+            "memory_access_source": None,
+            "memory_access_reason": None,
             "disk_read_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
             "disk_write_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
             "net_rx_mb": {"min": 0, "max": 0, "avg": 0, "delta": 0},
@@ -371,6 +420,8 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
     mem_total_values: list[float] = []
     mem_read_values: list[float] = []
     mem_write_values: list[float] = []
+    mem_access_event_values: list[float] = []
+    mem_access_rate_values: list[float] = []
     disk_read_values: list[float] = []
     disk_write_values: list[float] = []
     net_rx_values: list[float] = []
@@ -379,6 +430,9 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
     mem_bw_available = False
     mem_bw_source: str | None = None
     mem_bw_reason: str | None = None
+    mem_access_available = False
+    mem_access_source: str | None = None
+    mem_access_reason: str | None = None
 
     for sample in samples:
         mem_mb = _parse_memory_mb(sample.get("mem_usage", ""))
@@ -402,6 +456,20 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
             mem_bw_source = str(sample.get("memory_bandwidth_source"))
         if sample.get("memory_bandwidth_reason") is not None:
             mem_bw_reason = str(sample.get("memory_bandwidth_reason"))
+        mem_access_events = sample.get("memory_access_events")
+        if mem_access_events is not None:
+            mem_access_event_values.append(float(mem_access_events))
+        mem_access_rate = sample.get("memory_access_events_per_s")
+        if mem_access_rate is not None:
+            mem_access_rate_values.append(float(mem_access_rate))
+        if "memory_access_available" in sample:
+            mem_access_available = mem_access_available or bool(
+                sample.get("memory_access_available")
+            )
+        if sample.get("memory_access_source") is not None:
+            mem_access_source = str(sample.get("memory_access_source"))
+        if sample.get("memory_access_reason") is not None:
+            mem_access_reason = str(sample.get("memory_access_reason"))
 
         # Disk I/O (from cgroup io.stat, stored as bytes in sample)
         rb = sample.get("disk_read_bytes")
@@ -444,6 +512,11 @@ def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "memory_bandwidth_available": mem_bw_available,
         "memory_bandwidth_source": mem_bw_source,
         "memory_bandwidth_reason": mem_bw_reason,
+        "memory_access_events": _minmaxavg(mem_access_event_values),
+        "memory_access_events_per_s": _minmaxavg(mem_access_rate_values),
+        "memory_access_available": mem_access_available,
+        "memory_access_source": mem_access_source,
+        "memory_access_reason": mem_access_reason,
         "disk_read_mb": {**_minmaxavg(disk_read_values), "delta": _delta(disk_read_values)},
         "disk_write_mb": {**_minmaxavg(disk_write_values), "delta": _delta(disk_write_values)},
         "net_rx_mb": {**_minmaxavg(net_rx_values), "delta": _delta(net_rx_values)},
@@ -575,7 +648,7 @@ def _sample_running_container_stats(
     )
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip()
-        if message == "EOF":
+        if _is_transient_stats_failure(message):
             return []
         raise RuntimeError(message or f"{executable} stats failed")
     samples: list[dict[str, Any]] = []
@@ -605,6 +678,7 @@ class ContainerResourceRecorder(threading.Thread):
         executable: str = "podman",
         subprocess_timeout_s: float = 5.0,
         sample_all_containers: bool = True,
+        collect_cgroup_memory_access: bool = True,
     ) -> None:
         super().__init__(daemon=True, name=f"container-resources-{run_id}")
         self.output_dir = Path(output_dir)
@@ -613,6 +687,7 @@ class ContainerResourceRecorder(threading.Thread):
         self.executable = executable
         self.subprocess_timeout_s = subprocess_timeout_s
         self.sample_all_containers = sample_all_containers
+        self.collect_cgroup_memory_access = collect_cgroup_memory_access
         self.jsonl_path = self.output_dir / f"{run_id}.container_resources.jsonl"
         self.summary_path = (
             self.output_dir / f"{run_id}.container_resources_summary.json"
@@ -628,6 +703,10 @@ class ContainerResourceRecorder(threading.Thread):
         self._empty_tick_count = 0
         self._dropped_error_count = 0
         self._stop_complete = False
+        self._memory_access_backend: CgroupMemoryAccessBackend | None = None
+        self._memory_access_backend_reason: str | None = None
+        self._memory_access_cgroups: dict[str, str] = {}
+        self._memory_access_consecutive_not_counted = 0
 
     def register_container(self, container_id: str) -> None:
         if not container_id:
@@ -660,6 +739,136 @@ class ContainerResourceRecorder(threading.Thread):
                 selected[container_id] = metadata
         return selected
 
+    def _ensure_memory_access_backend(self) -> CgroupMemoryAccessBackend | None:
+        if not self.collect_cgroup_memory_access:
+            self._memory_access_backend_reason = "disabled"
+            return None
+        if self._memory_access_backend_reason in _TERMINAL_CGROUP_MEMORY_ACCESS_REASONS:
+            return None
+        if self._memory_access_backend is not None:
+            return self._memory_access_backend
+        if self._memory_access_backend_reason is not None:
+            return None
+        if sys.platform != "linux":
+            self._memory_access_backend_reason = "unsupported_platform"
+            return None
+        self._memory_access_backend = detect_cgroup_memory_access_backend()
+        if self._memory_access_backend is None:
+            self._memory_access_backend_reason = "pmu_unsupported"
+        return self._memory_access_backend
+
+    def _resolve_memory_access_cgroups(
+        self,
+        containers: dict[str, dict[str, str]],
+    ) -> dict[str, str]:
+        active_container_ids = set(containers)
+        stale_ids = set(self._memory_access_cgroups) - active_container_ids
+        for container_id in stale_ids:
+            self._memory_access_cgroups.pop(container_id, None)
+        for container_id in active_container_ids:
+            if container_id in self._memory_access_cgroups:
+                continue
+            pid = _resolve_container_pid(container_id, executable=self.executable)
+            if pid is None:
+                continue
+            cgroup_path = _resolve_cgroup_path(pid)
+            if cgroup_path is None:
+                continue
+            self._memory_access_cgroups[container_id] = _cgroup_path_to_perf_arg(
+                cgroup_path
+            )
+        return {
+            container_id: self._memory_access_cgroups[container_id]
+            for container_id in active_container_ids
+            if container_id in self._memory_access_cgroups
+        }
+
+    def _sample_memory_access(
+        self,
+        containers: dict[str, dict[str, str]],
+    ) -> CgroupMemoryAccessReading:
+        backend = self._ensure_memory_access_backend()
+        if backend is None:
+            source = (
+                self._memory_access_backend.source
+                if self._memory_access_backend is not None
+                else None
+            )
+            return CgroupMemoryAccessReading(
+                available=False,
+                source=source,
+                reason=self._memory_access_backend_reason,
+            )
+        cgroups = self._resolve_memory_access_cgroups(containers)
+        if not cgroups:
+            return CgroupMemoryAccessReading(
+                available=False,
+                source=backend.source,
+                reason="cgroup_unavailable",
+            )
+        reading = sample_cgroup_memory_access_once(
+            backend,
+            cgroups=cgroups,
+            interval_s=self.interval_s,
+        )
+        if reading.available:
+            self._memory_access_consecutive_not_counted = 0
+        elif reading.reason == "not_counted":
+            self._memory_access_consecutive_not_counted += 1
+        else:
+            self._memory_access_consecutive_not_counted = 0
+            if reading.reason in _TERMINAL_CGROUP_MEMORY_ACCESS_REASONS:
+                self._memory_access_backend_reason = reading.reason
+        return reading
+
+    def _attach_memory_access(
+        self,
+        samples: list[dict[str, Any]],
+        reading: CgroupMemoryAccessReading,
+    ) -> None:
+        if not samples:
+            return
+        for sample in samples:
+            if reading.started_epoch is not None:
+                sample["memory_access_window_start_epoch"] = reading.started_epoch
+                sample["memory_access_window_start"] = (
+                    datetime.fromtimestamp(
+                        reading.started_epoch, tz=timezone.utc
+                    )
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+            if reading.ended_epoch is not None:
+                sample["memory_access_window_end_epoch"] = reading.ended_epoch
+                sample["memory_access_window_end"] = (
+                    datetime.fromtimestamp(reading.ended_epoch, tz=timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+        if not reading.available:
+            for sample in samples:
+                sample["memory_access_available"] = False
+                if reading.source is not None:
+                    sample["memory_access_source"] = reading.source
+                if reading.reason is not None:
+                    sample["memory_access_reason"] = reading.reason
+            return
+        for sample in samples:
+            container_id = str(sample.get("container_id", ""))
+            measurement = reading.measurements.get(container_id)
+            if measurement is None:
+                sample["memory_access_available"] = False
+                if reading.source is not None:
+                    sample["memory_access_source"] = reading.source
+                sample["memory_access_reason"] = "measurement_unavailable"
+                continue
+            sample["memory_access_available"] = True
+            sample["memory_access_source"] = reading.source
+            sample["memory_access_cgroup"] = measurement.cgroup
+            sample["memory_access_events"] = measurement.events
+            sample["memory_access_events_per_s"] = measurement.events_per_s
+            sample["memory_access_interval_s"] = self.interval_s
+
     def run(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._started_at = datetime.now(tz=timezone.utc).isoformat().replace(
@@ -682,6 +891,9 @@ class ContainerResourceRecorder(threading.Thread):
                         executable=self.executable,
                         timeout_s=self.subprocess_timeout_s,
                     )
+                    if samples:
+                        memory_access = self._sample_memory_access(containers)
+                        self._attach_memory_access(samples, memory_access)
                     if not samples:
                         with self._lock:
                             self._empty_tick_count += 1
@@ -760,6 +972,11 @@ class ContainerResourceRecorder(threading.Thread):
             tick_count = self._tick_count
             empty_tick_count = self._empty_tick_count
             stop_complete = self._stop_complete
+        memory_access_source = (
+            self._memory_access_backend.source
+            if self._memory_access_backend is not None
+            else None
+        )
         grouped: dict[str, list[dict[str, Any]]] = {}
         for sample in samples:
             grouped.setdefault(str(sample["container_id"]), []).append(sample)
@@ -797,6 +1014,14 @@ class ContainerResourceRecorder(threading.Thread):
                 "tick_count": tick_count,
                 "empty_tick_count": empty_tick_count,
                 "stop_complete": stop_complete,
+                "memory_access": {
+                    "enabled": self.collect_cgroup_memory_access,
+                    "source": memory_access_source,
+                    "reason": self._memory_access_backend_reason,
+                    "consecutive_not_counted": (
+                        self._memory_access_consecutive_not_counted
+                    ),
+                },
             },
             "containers": containers,
             "errors": errors,
