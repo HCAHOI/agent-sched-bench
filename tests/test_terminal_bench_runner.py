@@ -140,7 +140,7 @@ def test_terminal_bench_agent_exports_llm_timeout_env() -> None:
     agent = TerminalBenchOpenClawAgent(
         model_name="gpt-4o-mini",
         provider_name="openai",
-        api_base="https://api.openai.com/v1",
+        api_base="https://api.openai.invalid/v1",
         env_key="OPENAI_API_KEY",
         api_key="dummy",
         llm_timeout_sec=1800.0,
