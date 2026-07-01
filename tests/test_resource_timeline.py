@@ -8,6 +8,7 @@ from trace_collect.resource_timeline import (
     read_cgroup_cpu_usage_s,
     read_proc_net_bytes,
     resource_delta,
+    valid_resource_timeline,
 )
 
 
@@ -71,3 +72,14 @@ def test_resource_delta_serializes_cpu_and_network() -> None:
         "cpu_quota_cores": 4.0,
         "cpu_opportunity_core_s": 2.0,
     }
+
+
+def test_valid_resource_timeline_requires_positive_dt_and_signal() -> None:
+    valid = {
+        "version": 1,
+        "samples": [{"dt_s": 0.5, "cpu_core_s": 0.0, "net_rx_bytes": 10}],
+    }
+    invalid = {"version": 1, "samples": [{"dt_s": 0.0, "cpu_core_s": 1.0}]}
+
+    assert valid_resource_timeline(valid) == valid
+    assert valid_resource_timeline(invalid) is None

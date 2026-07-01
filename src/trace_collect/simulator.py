@@ -31,6 +31,7 @@ from harness.container_stats_sampler import (
 )
 from harness.trace_logger import TraceLogger
 from trace_collect import attempt_layout
+from trace_collect.resource_timeline import valid_resource_timeline
 from trace_collect.attempt_pipeline import (
     configure_task_container_apt_mirror,
     next_attempt_number_in,
@@ -249,27 +250,51 @@ async def _exec_tool(
     command_timeout_s: float,
     source_exec_timeout_s: float | None = None,
     allow_source_runtime_artifacts: bool = False,
-) -> tuple[str, float, bool]:
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[str, float, bool, dict[str, Any]]:
     """Execute one source-trace tool call via the persistent container agent.
 
     Returns:
-        (tool_result, tool_duration_ms, tool_success)
+        (tool_result, tool_duration_ms, tool_success, replay_metadata)
     """
-    from trace_collect.openclaw_tools import execute_trace_tool
+    from trace_collect.openclaw_tools import execute_trace_tool_detailed
 
     t0 = time.monotonic()
-    tool_result, tool_success, inner_duration_ms = await execute_trace_tool(
+    (
+        tool_result,
+        tool_success,
+        inner_duration_ms,
+        tool_metadata,
+    ) = await execute_trace_tool_detailed(
         agent=agent,
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         command_timeout_s=command_timeout_s,
         source_exec_timeout_s=source_exec_timeout_s,
         allow_source_runtime_artifacts=allow_source_runtime_artifacts,
+        source_resource_timeline=source_resource_timeline,
     )
     wall_duration_ms = (time.monotonic() - t0) * 1000
     # Prefer agent-side timing to exclude pipe transfer overhead
     duration_ms = inner_duration_ms if inner_duration_ms is not None else wall_duration_ms
-    return tool_result, duration_ms, tool_success
+    return tool_result, duration_ms, tool_success, tool_metadata
+
+
+def _unpack_exec_tool_result(
+    result: tuple[Any, ...],
+) -> tuple[str, float, bool, dict[str, Any]]:
+    if len(result) == 3:
+        tool_result, duration_ms, tool_success = result
+        return str(tool_result), float(duration_ms), bool(tool_success), {}
+    if len(result) == 4:
+        tool_result, duration_ms, tool_success, metadata = result
+        return (
+            str(tool_result),
+            float(duration_ms),
+            bool(tool_success),
+            metadata if isinstance(metadata, dict) else {},
+        )
+    raise ValueError(f"unexpected _exec_tool result shape: {len(result)}")
 
 
 def _group_actions_by_iteration(
@@ -311,24 +336,45 @@ def _command_exit_code(tool_result: str) -> int | None:
         return None
 
 
-def _tool_uses_exec_semantics(tool_name: str | None, tool_args_json: Any) -> bool:
-    if tool_name == "exec":
-        return True
+def _exec_semantics_payload(
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> dict[str, Any] | None:
     if isinstance(tool_args_json, str):
         try:
             parsed = json.loads(tool_args_json or "{}")
         except json.JSONDecodeError:
-            return False
+            return None
     elif isinstance(tool_args_json, dict):
         parsed = tool_args_json
     else:
-        return False
+        return None
     if not isinstance(parsed, dict):
-        return False
+        return None
+    if tool_name == "exec" and isinstance(parsed, dict):
+        return parsed.get("exec") if isinstance(parsed.get("exec"), dict) else parsed
     payload = parsed.get("exec") if isinstance(parsed.get("exec"), dict) else parsed
+    return payload if isinstance(payload, dict) else None
+
+
+def _tool_uses_exec_semantics(tool_name: str | None, tool_args_json: Any) -> bool:
+    if tool_name == "exec":
+        payload = _exec_semantics_payload(tool_name, tool_args_json)
+        return payload is None or "command" in payload or "commands" in payload
+    payload = _exec_semantics_payload(tool_name, tool_args_json)
     return isinstance(payload, dict) and (
         "command" in payload or "commands" in payload
     )
+
+
+def _tool_uses_single_exec_command_semantics(
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> bool:
+    payload = _exec_semantics_payload(tool_name, tool_args_json)
+    if payload is None:
+        return False
+    return "command" in payload and "commands" not in payload
 
 
 def _command_metadata(
@@ -351,11 +397,12 @@ def _command_metadata(
 
 
 def _is_replay_wrapper_timeout_result(tool_result: str) -> bool:
-    for line in tool_result.splitlines():
-        if not line.strip():
-            continue
-        return line.strip() == "[timeout]"
-    return False
+    timeout_markers = {
+        "[timeout]",
+        "[resource_timeout]",
+        "[resource_stall_timeout]",
+    }
+    return any(line.strip() in timeout_markers for line in tool_result.splitlines())
 
 
 def _source_exec_timeout_s(
@@ -1978,11 +2025,13 @@ async def _replay_cloud_model_session(
                 source_success=source_success,
                 source_tool_result=source_tool_result,
             )
-            source_resource_timeline = data.get("resource_timeline")
-            if not isinstance(source_resource_timeline, dict):
-                source_resource_timeline = None
+            source_resource_timeline = valid_resource_timeline(
+                data.get("resource_timeline")
+            )
             original_artifact_path: str | None = None
             mapped_artifact_path: str | None = None
+            exec_resource_timeline: dict[str, Any] | None = None
+            tool_exec_metadata: dict[str, Any] = {}
             if not source_success:
                 source_failed_actions += 1
             if ctr is None:
@@ -2040,22 +2089,79 @@ async def _replay_cloud_model_session(
                     replay_source = "source_artifact_unavailable"
                     fatal_replay_errors += 1
                 else:
-                    if mapped_artifact_path is not None:
-                        tool_result, duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
+                    exec_resource_timeline = (
+                        source_resource_timeline
+                        if _tool_uses_single_exec_command_semantics(
                             tool_name,
                             mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
-                            True,
+                        )
+                        else None
+                    )
+                    if exec_resource_timeline is None:
+                        if mapped_artifact_path is not None:
+                            (
+                                tool_result,
+                                duration_ms,
+                                tool_success,
+                                tool_exec_metadata,
+                            ) = _unpack_exec_tool_result(
+                                await _exec_tool(
+                                    ctr.agent,
+                                    tool_name,
+                                    mapped_tool_args,
+                                    command_timeout_s,
+                                    source_exec_timeout,
+                                    True,
+                                )
+                            )
+                        else:
+                            (
+                                tool_result,
+                                duration_ms,
+                                tool_success,
+                                tool_exec_metadata,
+                            ) = _unpack_exec_tool_result(
+                                await _exec_tool(
+                                    ctr.agent,
+                                    tool_name,
+                                    mapped_tool_args,
+                                    command_timeout_s,
+                                    source_exec_timeout,
+                                )
+                            )
+                    elif mapped_artifact_path is not None:
+                        (
+                            tool_result,
+                            duration_ms,
+                            tool_success,
+                            tool_exec_metadata,
+                        ) = _unpack_exec_tool_result(
+                            await _exec_tool(
+                                ctr.agent,
+                                tool_name,
+                                mapped_tool_args,
+                                command_timeout_s,
+                                source_exec_timeout,
+                                True,
+                                exec_resource_timeline,
+                            )
                         )
                     else:
-                        tool_result, duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
-                            tool_name,
-                            mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
+                        (
+                            tool_result,
+                            duration_ms,
+                            tool_success,
+                            tool_exec_metadata,
+                        ) = _unpack_exec_tool_result(
+                            await _exec_tool(
+                                ctr.agent,
+                                tool_name,
+                                mapped_tool_args,
+                                command_timeout_s,
+                                source_exec_timeout,
+                                False,
+                                exec_resource_timeline,
+                            )
                         )
                     replay_source = (
                         "restored_runtime_artifact"
@@ -2081,11 +2187,16 @@ async def _replay_cloud_model_session(
                 extra_tool_fields["source_artifact_path"] = original_artifact_path
             if mapped_artifact_path is not None:
                 extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
+            extra_tool_fields.update(tool_exec_metadata)
             if source_exec_timeout is not None:
                 extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
             if source_resource_timeline is not None:
                 extra_tool_fields["source_resource_timeline"] = source_resource_timeline
-                extra_tool_fields["resource_timeout_policy"] = "wall_clock"
+                extra_tool_fields["resource_timeout_policy"] = (
+                    "resource_integrated"
+                    if exec_resource_timeline is not None
+                    else "wall_clock"
+                )
             tool_record = _make_trace_action(
                 loaded=loaded,
                 action_type="tool_exec",

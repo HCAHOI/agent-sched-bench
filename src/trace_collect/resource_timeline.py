@@ -1,7 +1,7 @@
 """Action-level resource timeline collection for trace replay.
 
 The collector stores per-tool deltas instead of only aggregate container stats so
-simulate can later reason about source-equivalent progress under different CPU
+container replay can reason about source-equivalent progress under different CPU
 and network conditions.
 """
 
@@ -329,7 +329,7 @@ class ResourceTimelineRecorder:
 
 
 def valid_resource_timeline(value: Any) -> dict[str, Any] | None:
-    """Return value when it looks like a v1 resource timeline."""
+    """Return value when it is a usable v1 resource timeline."""
 
     if not isinstance(value, dict):
         return None
@@ -338,7 +338,26 @@ def valid_resource_timeline(value: Any) -> dict[str, Any] | None:
     samples = value.get("samples")
     if not isinstance(samples, list) or not samples:
         return None
-    valid_samples = [sample for sample in samples if isinstance(sample, dict)]
-    if not valid_samples:
+    has_valid_sample = False
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        dt_s = _nonnegative_number(sample.get("dt_s"))
+        if dt_s is None or dt_s <= 0:
+            continue
+        has_signal = any(
+            _nonnegative_number(sample.get(field)) is not None
+            for field in ("cpu_core_s", "net_rx_bytes", "net_tx_bytes")
+        )
+        if has_signal:
+            has_valid_sample = True
+            break
+    return value if has_valid_sample else None
+
+
+def _nonnegative_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
         return None
-    return value
+    return number if number >= 0 else None

@@ -35,5 +35,9 @@ Keep canonical JSONL trace fields stable: full model responses, timing, tool
 outputs, run config, benchmark metadata, and task/container runtime proofs.
 `tool_exec.data.resource_timeline` is optional v1 telemetry currently emitted
 for OpenClaw `exec` tool intervals. It records cgroup CPU core-seconds plus
-network RX/TX byte deltas. Simulate preserves it as source metadata; integrated
-resource-normalized replay deadlines are not enabled yet.
+network RX/TX byte deltas. Container replay uses it, when present for a single
+`exec.command`, for an online source-equivalent resource-integrated timeout;
+host/no-op replay and multi-command exec preserve it as source metadata only.
+The fixed v1 timeout model treats source intervals as CPU-active at >=0.05 core
+and network-active at >=1024 B/s, samples replay every 0.5s, and uses a 5-60s
+stall detector plus a 24h outer protocol guard.

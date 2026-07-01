@@ -24,6 +24,7 @@ def _write_trace(
     tool_name: str = "write_file",
     execution_environment: str = "container",
     resource_timeline: dict | None = None,
+    tool_args: dict | None = None,
 ) -> None:
     path.write_text(
         "\n".join(
@@ -68,7 +69,7 @@ def _write_trace(
                         "ts_end": tool_end,
                         "data": {
                             "tool_name": tool_name,
-                            "tool_args": json.dumps({"path": "/testbed/x.txt"}),
+                            "tool_args": json.dumps(tool_args or {"path": "/testbed/x.txt"}),
                             "tool_result": "source-result",
                             "duration_ms": (tool_end - tool_start) * 1000,
                             "success": True,
@@ -546,6 +547,7 @@ def test_simulate_preserves_source_resource_timeline_as_metadata(tmp_path: Path)
         tool_name="exec",
         execution_environment="host",
         resource_timeline=resource_timeline,
+        tool_args={"command": "pytest"},
     )
     _write_host_tasks(task_source, "host-task")
 
@@ -567,6 +569,167 @@ def test_simulate_preserves_source_resource_timeline_as_metadata(tmp_path: Path)
     )
     assert tool_record["data"]["source_resource_timeline"] == resource_timeline
     assert tool_record["data"]["resource_timeout_policy"] == "wall_clock"
+
+
+def test_simulate_uses_resource_integrated_policy_for_container_exec(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    resource_timeline = {
+        "version": 1,
+        "source": "cgroup_cpu_proc_net",
+        "scope": "openclaw_exec_tool_interval",
+        "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
+    }
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        resource_timeline=resource_timeline,
+        tool_args={"command": "pytest"},
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+    captured_timelines: list[dict | None] = []
+
+    async def fake_exec_tool(
+        _agent,
+        _tool_name,
+        _tool_args_json,
+        _command_timeout_s,
+        _source_exec_timeout_s=None,
+        _allow_source_runtime_artifacts=False,
+        source_resource_timeline=None,
+    ):
+        captured_timelines.append(source_resource_timeline)
+        return (
+            "ok\n\nExit code: 0",
+            1.0,
+            True,
+            {"resource_virtual_time_s": 0.5},
+        )
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert captured_timelines == [resource_timeline]
+    assert tool_record["data"]["resource_timeout_policy"] == "resource_integrated"
+    assert tool_record["data"]["resource_virtual_time_s"] == 0.5
+
+
+def test_simulate_keeps_wall_policy_for_commands_resource_timeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    resource_timeline = {
+        "version": 1,
+        "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
+    }
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        resource_timeline=resource_timeline,
+        tool_args={"commands": ["pytest"]},
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+    captured_timelines: list[dict | None] = []
+
+    async def fake_exec_tool(
+        _agent,
+        _tool_name,
+        _tool_args_json,
+        _command_timeout_s,
+        _source_exec_timeout_s=None,
+        _allow_source_runtime_artifacts=False,
+        source_resource_timeline=None,
+    ):
+        captured_timelines.append(source_resource_timeline)
+        return "ok\n\nExit code: 0", 1.0, True
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    tool_record = next(
+        record
+        for record in _read_jsonl(trace_file)
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert captured_timelines == [None]
+    assert tool_record["data"]["resource_timeout_policy"] == "wall_clock"
+
+
+def test_simulate_ignores_invalid_resource_timeline_for_timeout_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    invalid_timeline = {"version": 1, "samples": [{"dt_s": 0.0, "cpu_core_s": 1.0}]}
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        resource_timeline=invalid_timeline,
+        tool_args={"command": "pytest"},
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "ok\n\nExit code: 0", 1.0, True
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    tool_record = next(
+        record
+        for record in _read_jsonl(trace_file)
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert "source_resource_timeline" not in tool_record["data"]
+    assert "resource_timeout_policy" not in tool_record["data"]
 
 
 def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:

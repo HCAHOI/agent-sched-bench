@@ -8,10 +8,16 @@ import logging
 import textwrap
 from typing import Any
 
+from trace_collect.resource_timeline import valid_resource_timeline
+
 logger = logging.getLogger(__name__)
 
 _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S = 300.0
 _OPENCLAW_EXEC_MAX_TIMEOUT_S = 600.0
+# Outer guard for resource-aware exec requests. The in-container watchdog owns
+# the modeled deadline; this only prevents an agent protocol deadlock from
+# blocking simulate forever.
+_RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S = 24 * 60 * 60.0
 _AGENT_STOP_GRACE_S = 5.0
 _AGENT_KILL_WAIT_S = 5.0
 _SOURCE_RUNTIME_ARTIFACT_MARKERS = (
@@ -169,10 +175,275 @@ def _truncate_output(text, limit=_MAX_OUTPUT):
     half = limit // 2
     return text[:half] + f"\n\n... ({len(text) - limit} chars truncated) ...\n\n" + text[-half:]
 
+_RESOURCE_CPU_RATE_EPS_CORE = 0.05
+_RESOURCE_NET_RATE_EPS_BPS = 1024.0
+_RESOURCE_PROGRESS_EPS_S = 1e-6
+_RESOURCE_SAMPLE_INTERVAL_S = 0.5
+_RESOURCE_STALL_MIN_S = 5.0
+_RESOURCE_STALL_MAX_S = 60.0
+
+
+def _nonnegative_float(value, default=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number < 0:
+        return default
+    return number
+
+
+def _resource_source_samples(timeline):
+    if not isinstance(timeline, dict) or timeline.get("version") != 1:
+        return []
+    raw_samples = timeline.get("samples")
+    if not isinstance(raw_samples, list):
+        return []
+    samples = []
+    offset_s = 0.0
+    for raw in raw_samples:
+        if not isinstance(raw, dict):
+            continue
+        dt_s = _nonnegative_float(raw.get("dt_s"))
+        if dt_s <= 0:
+            continue
+        cpu_core_s = _nonnegative_float(raw.get("cpu_core_s"))
+        rx_bytes = _nonnegative_float(raw.get("net_rx_bytes"))
+        tx_bytes = _nonnegative_float(raw.get("net_tx_bytes"))
+        sample = {
+            "start_s": offset_s,
+            "end_s": offset_s + dt_s,
+            "cpu_rate_core": cpu_core_s / dt_s,
+            "rx_rate_bps": rx_bytes / dt_s,
+            "tx_rate_bps": tx_bytes / dt_s,
+        }
+        samples.append(sample)
+        offset_s += dt_s
+    return samples
+
+
+def _resource_sample_at(samples, virtual_time_s):
+    if not samples:
+        return None
+    for sample in samples:
+        if sample["start_s"] <= virtual_time_s < sample["end_s"]:
+            return sample
+    return samples[-1]
+
+
+def _read_cgroup_cpu_usage_s():
+    try:
+        with open("/sys/fs/cgroup/cpu.stat", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == "usage_usec":
+                    return int(parts[1]) / 1_000_000.0
+    except Exception:
+        return None
+    return None
+
+
+def _read_proc_net_bytes():
+    rx_total = 0
+    tx_total = 0
+    found = False
+    try:
+        with open("/proc/net/dev", encoding="utf-8") as fh:
+            lines = fh.readlines()[2:]
+    except Exception:
+        return None, None
+    for line in lines:
+        if ":" not in line:
+            continue
+        iface, rest = line.split(":", 1)
+        if iface.strip() == "lo":
+            continue
+        fields = rest.split()
+        if len(fields) < 16:
+            continue
+        try:
+            rx_total += int(fields[0])
+            tx_total += int(fields[8])
+        except ValueError:
+            continue
+        found = True
+    if not found:
+        return None, None
+    return rx_total, tx_total
+
+
+def _read_resource_counters():
+    rx_bytes, tx_bytes = _read_proc_net_bytes()
+    return {
+        "time_s": time.monotonic(),
+        "cpu_usage_s": _read_cgroup_cpu_usage_s(),
+        "rx_bytes": rx_bytes,
+        "tx_bytes": tx_bytes,
+    }
+
+
+def _counter_delta(previous, current, key):
+    left = previous.get(key)
+    right = current.get(key)
+    if left is None or right is None:
+        return None
+    return max(0.0, float(right) - float(left))
+
+
+def _resource_progress_increment(samples, virtual_time_s, wall_dt_s, deltas):
+    if wall_dt_s <= 0:
+        return 0.0
+    if not samples:
+        return wall_dt_s
+    source_end_s = samples[-1]["end_s"]
+    if virtual_time_s >= source_end_s:
+        return wall_dt_s
+    sample = _resource_sample_at(samples, virtual_time_s)
+    if sample is None:
+        return wall_dt_s
+    candidates = []
+    cpu_rate = sample["cpu_rate_core"]
+    if cpu_rate >= _RESOURCE_CPU_RATE_EPS_CORE and deltas.get("cpu_core_s") is not None:
+        candidates.append(float(deltas["cpu_core_s"]) / cpu_rate)
+    rx_rate = sample["rx_rate_bps"]
+    if rx_rate >= _RESOURCE_NET_RATE_EPS_BPS and deltas.get("rx_bytes") is not None:
+        candidates.append(float(deltas["rx_bytes"]) / rx_rate)
+    tx_rate = sample["tx_rate_bps"]
+    if tx_rate >= _RESOURCE_NET_RATE_EPS_BPS and deltas.get("tx_bytes") is not None:
+        candidates.append(float(deltas["tx_bytes"]) / tx_rate)
+    if not candidates:
+        progress_s = wall_dt_s
+    else:
+        progress_s = max(0.0, min(candidates))
+    return min(progress_s, max(0.0, sample["end_s"] - virtual_time_s))
+
+
+def _resource_has_active_demand(samples, virtual_time_s):
+    sample = _resource_sample_at(samples, virtual_time_s)
+    if sample is None:
+        return False
+    return (
+        sample["cpu_rate_core"] >= _RESOURCE_CPU_RATE_EPS_CORE
+        or sample["rx_rate_bps"] >= _RESOURCE_NET_RATE_EPS_BPS
+        or sample["tx_rate_bps"] >= _RESOURCE_NET_RATE_EPS_BPS
+    )
+
+
+def _kill_process_group(process):
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        else:
+            process.kill()
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_timeline):
+    samples = _resource_source_samples(source_resource_timeline)
+    if not samples:
+        return None
+    timeout_s = float(timeout)
+    stall_timeout_s = max(
+        _RESOURCE_STALL_MIN_S,
+        min(_RESOURCE_STALL_MAX_S, timeout_s),
+    )
+    start_new_session = hasattr(os, "setsid")
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        cwd="/testbed",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=start_new_session,
+    )
+    virtual_time_s = 0.0
+    last_counters = _read_resource_counters()
+    last_progress_wall_s = last_counters["time_s"]
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=_RESOURCE_SAMPLE_INTERVAL_S)
+            output = (stdout or "") + (stderr or "")
+            return {
+                "ok": True,
+                "result": _truncate_output(output),
+                "returncode": process.returncode,
+                "resource_timeout_policy": "resource_integrated",
+                "resource_virtual_time_s": round(virtual_time_s, 6),
+            }
+        except subprocess.TimeoutExpired:
+            current_counters = _read_resource_counters()
+            wall_dt_s = max(0.0, current_counters["time_s"] - last_counters["time_s"])
+            deltas = {
+                "cpu_core_s": _counter_delta(last_counters, current_counters, "cpu_usage_s"),
+                "rx_bytes": _counter_delta(last_counters, current_counters, "rx_bytes"),
+                "tx_bytes": _counter_delta(last_counters, current_counters, "tx_bytes"),
+            }
+            progress_s = _resource_progress_increment(
+                samples,
+                virtual_time_s,
+                wall_dt_s,
+                deltas,
+            )
+            virtual_time_s += progress_s
+            if progress_s > _RESOURCE_PROGRESS_EPS_S:
+                last_progress_wall_s = current_counters["time_s"]
+            if virtual_time_s >= timeout_s:
+                _kill_process_group(process)
+                stdout, stderr = process.communicate()
+                output = (stdout or "") + (stderr or "")
+                if output:
+                    output = _truncate_output(output) + "\n[resource_timeout]"
+                else:
+                    output = "[resource_timeout]"
+                return {
+                    "ok": False,
+                    "result": output,
+                    "returncode": 124,
+                    "resource_timeout_policy": "resource_integrated",
+                    "resource_virtual_time_s": round(virtual_time_s, 6),
+                }
+            stalled_s = current_counters["time_s"] - last_progress_wall_s
+            if stalled_s >= stall_timeout_s and _resource_has_active_demand(
+                samples,
+                virtual_time_s,
+            ):
+                _kill_process_group(process)
+                stdout, stderr = process.communicate()
+                output = (stdout or "") + (stderr or "")
+                marker = "[resource_stall_timeout]"
+                if output:
+                    output = _truncate_output(output) + "\n" + marker
+                else:
+                    output = marker
+                return {
+                    "ok": False,
+                    "result": output,
+                    "returncode": 124,
+                    "resource_timeout_policy": "resource_integrated",
+                    "resource_virtual_time_s": round(virtual_time_s, 6),
+                    "resource_stall_s": round(stalled_s, 6),
+                }
+            last_counters = current_counters
+
+
 def handle_exec(args):
     cmd = args.get("command", "")
     timeout = args.get("timeout", 600)
     env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
+    resource_response = _run_shell_command_with_resource_timeout(
+        cmd,
+        timeout,
+        env,
+        args.get("source_resource_timeline"),
+    )
+    if resource_response is not None:
+        return resource_response
     try:
         r = subprocess.run(cmd, shell=True, cwd="/testbed",
                            capture_output=True, text=True, timeout=timeout, env=env)
@@ -313,6 +584,15 @@ for line in sys.stdin:
 _IDEMPOTENT_TOOLS = frozenset({"read_file", "list_dir"})
 
 
+async def _readline_with_timeout(
+    stream: asyncio.StreamReader,
+    timeout_s: float | None,
+) -> bytes:
+    if timeout_s is None:
+        return await stream.readline()
+    return await asyncio.wait_for(stream.readline(), timeout=timeout_s + 5.0)
+
+
 class ContainerAgent:
 
     def __init__(self, container_id: str, container_executable: str) -> None:
@@ -384,7 +664,7 @@ class ContainerAgent:
         self,
         request: dict[str, Any],
         *,
-        timeout_s: float = 600.0,
+        timeout_s: float | None = 600.0,
     ) -> dict[str, Any]:
         """Send a request and return the response. Restarts on crash."""
         tool_name = request.get("tool", "")
@@ -402,9 +682,9 @@ class ContainerAgent:
             try:
                 proc.stdin.write(line.encode())
                 await proc.stdin.drain()
-                raw = await asyncio.wait_for(
-                    proc.stdout.readline(),
-                    timeout=timeout_s + 5.0,
+                raw = await _readline_with_timeout(
+                    proc.stdout,
+                    timeout_s,
                 )
             except (asyncio.TimeoutError, BrokenPipeError, ConnectionResetError):
                 await self._restart()
@@ -426,9 +706,7 @@ class ContainerAgent:
                     break
                 logger.debug("Skipping non-JSON agent output: %s", decoded[:120])
                 try:
-                    raw = await asyncio.wait_for(
-                        proc.stdout.readline(), timeout=timeout_s + 5.0,
-                    )
+                    raw = await _readline_with_timeout(proc.stdout, timeout_s)
                     decoded = raw.decode(errors="replace").strip()
                 except (asyncio.TimeoutError, BrokenPipeError):
                     return {"ok": False, "result": "[timeout]", "returncode": 124}
@@ -443,12 +721,27 @@ class ContainerAgent:
         return {"ok": False, "result": "Error: agent restart failed"}
 
 
+def _resource_timed_exec_request(
+    *,
+    command: str,
+    timeout_s: float,
+    source_resource_timeline: dict[str, Any] | None,
+) -> tuple[dict[str, Any], float | None]:
+    request = {"tool": "exec", "args": {"command": command, "timeout": timeout_s}}
+    resource_timeline = valid_resource_timeline(source_resource_timeline)
+    if resource_timeline is None:
+        return request, timeout_s
+    request["args"]["source_resource_timeline"] = resource_timeline
+    return request, _RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S
+
+
 def _resolve_tool_request(
     tool_name: str | None,
     params: dict[str, Any],
     command_timeout_s: float,
     source_exec_timeout_s: float | None = None,
-) -> tuple[dict[str, Any] | None, float]:
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, float | None]:
     """Build a JSON-line request plus the outer response timeout."""
 
     exec_fallback_timeout_s = (
@@ -463,9 +756,10 @@ def _resolve_tool_request(
             params,
             default_timeout_s=exec_fallback_timeout_s,
         )
-        return (
-            {"tool": "exec", "args": {"command": params["command"], "timeout": timeout_s}},
-            timeout_s,
+        return _resource_timed_exec_request(
+            command=params["command"],
+            timeout_s=timeout_s,
+            source_resource_timeline=source_resource_timeline,
         )
     if "commands" in params:
         timeout_s = _resolve_exec_timeout_s(
@@ -488,9 +782,10 @@ def _resolve_tool_request(
                 params,
                 default_timeout_s=exec_fallback_timeout_s,
             )
-            return (
-                {"tool": "exec", "args": {"command": command, "timeout": timeout_s}},
-                timeout_s,
+            return _resource_timed_exec_request(
+                command=command,
+                timeout_s=timeout_s,
+                source_resource_timeline=source_resource_timeline,
             )
         if commands:
             timeout_s = _resolve_exec_timeout_s(
@@ -535,7 +830,19 @@ def _resolve_tool_request(
     return None, command_timeout_s  # unsupported tool
 
 
-async def execute_trace_tool(
+def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key in (
+        "resource_timeout_policy",
+        "resource_virtual_time_s",
+        "resource_stall_s",
+    ):
+        if key in resp:
+            metadata[key] = resp[key]
+    return metadata
+
+
+async def execute_trace_tool_detailed(
     *,
     agent: ContainerAgent,
     tool_name: str | None,
@@ -543,8 +850,9 @@ async def execute_trace_tool(
     command_timeout_s: float,
     source_exec_timeout_s: float | None = None,
     allow_source_runtime_artifacts: bool = False,
-) -> tuple[str, bool, float | None]:
-    """Execute one trace tool call via the persistent in-container agent."""
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[str, bool, float | None, dict[str, Any]]:
+    """Execute one trace tool call and return replay metadata."""
 
     resolved_name, params = _unwrap_tool_args(
         tool_name=tool_name,
@@ -556,10 +864,11 @@ async def execute_trace_tool(
         params,
         command_timeout_s,
         source_exec_timeout_s,
+        source_resource_timeline,
     )
 
     if resolved_name == "message":
-        return "Message replayed as no-op", True, 0.0
+        return "Message replayed as no-op", True, 0.0, {}
 
     artifact_path = source_runtime_artifact_path_from_tool_call(
         tool_name=resolved_name,
@@ -571,23 +880,49 @@ async def execute_trace_tool(
             f"that is unavailable in a fresh replay container: {artifact_path}",
             False,
             0.0,
+            {},
         )
 
     if request is None:
-        return f"Error: Unsupported replay tool {resolved_name!r}", False, None
+        return f"Error: Unsupported replay tool {resolved_name!r}", False, None, {}
 
     resp = await agent.execute(request, timeout_s=request_timeout_s)
     result = resp.get("result", "")
     ok = resp.get("ok", False)
     inner_duration_ms = resp.get("inner_duration_ms")
+    metadata = _trace_tool_response_metadata(resp)
 
     # Append exit code for exec-style commands
     if request["tool"] in ("exec", "commands"):
         rc = resp.get("returncode")
         if not isinstance(rc, int) or isinstance(rc, bool):
             result = f"{result}\n\nExit code: <missing>".strip()
-            return result, False, inner_duration_ms
+            return result, False, inner_duration_ms, metadata
         result = f"{result}\n\nExit code: {rc}".strip()
         ok = bool(ok)
 
+    return result, ok, inner_duration_ms, metadata
+
+
+async def execute_trace_tool(
+    *,
+    agent: ContainerAgent,
+    tool_name: str | None,
+    tool_args_json: str,
+    command_timeout_s: float,
+    source_exec_timeout_s: float | None = None,
+    allow_source_runtime_artifacts: bool = False,
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[str, bool, float | None]:
+    """Execute one trace tool call via the persistent in-container agent."""
+
+    result, ok, inner_duration_ms, _metadata = await execute_trace_tool_detailed(
+        agent=agent,
+        tool_name=tool_name,
+        tool_args_json=tool_args_json,
+        command_timeout_s=command_timeout_s,
+        source_exec_timeout_s=source_exec_timeout_s,
+        allow_source_runtime_artifacts=allow_source_runtime_artifacts,
+        source_resource_timeline=source_resource_timeline,
+    )
     return result, ok, inner_duration_ms

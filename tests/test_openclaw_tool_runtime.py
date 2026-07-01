@@ -6,8 +6,10 @@ import subprocess
 
 from trace_collect.openclaw_tools import (
     _REPLAY_AGENT_SCRIPT,
+    _RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S,
     ContainerAgent,
     execute_trace_tool,
+    execute_trace_tool_detailed,
 )
 
 
@@ -160,6 +162,117 @@ def test_exec_command_source_timeout_fallback_preserves_source_timeout() -> None
     assert "Exit code: 124" in result
     assert agent.requests[0]["args"]["timeout"] == 300.0568
     assert agent.timeouts == [300.0568]
+
+
+def test_exec_command_passes_source_resource_timeline() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "ok", "returncode": 0}})
+    source_resource_timeline = {
+        "version": 1,
+        "samples": [
+            {
+                "offset_s": 0.5,
+                "dt_s": 0.5,
+                "cpu_core_s": 1.0,
+                "net_rx_bytes": 128,
+            }
+        ],
+    }
+
+    _result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "pytest", "timeout": 12}),
+            command_timeout_s=600.0,
+            source_resource_timeline=source_resource_timeline,
+        )
+    )
+
+    assert success is True
+    assert agent.requests[0]["args"]["source_resource_timeline"] == source_resource_timeline
+    assert agent.timeouts == [_RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S]
+
+
+def test_execute_trace_tool_detailed_preserves_resource_metadata() -> None:
+    agent = FakeAgent(
+        {
+            "exec": {
+                "ok": False,
+                "result": "[resource_timeout]",
+                "returncode": 124,
+                "resource_timeout_policy": "resource_integrated",
+                "resource_virtual_time_s": 12.5,
+            }
+        }
+    )
+
+    result, success, _duration, metadata = asyncio.run(
+        execute_trace_tool_detailed(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "pytest", "timeout": 12}),
+            command_timeout_s=600.0,
+            source_resource_timeline={
+                "version": 1,
+                "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
+            },
+        )
+    )
+
+    assert success is False
+    assert "Exit code: 124" in result
+    assert metadata == {
+        "resource_timeout_policy": "resource_integrated",
+        "resource_virtual_time_s": 12.5,
+    }
+
+
+def test_commands_do_not_claim_resource_timeline_support() -> None:
+    agent = FakeAgent({"commands": {"ok": True, "result": "ok", "returncode": 0}})
+    source_resource_timeline = {
+        "version": 1,
+        "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
+    }
+
+    _result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"commands": ["pytest"], "timeout": 12}),
+            command_timeout_s=600.0,
+            source_resource_timeline=source_resource_timeline,
+        )
+    )
+
+    assert success is True
+    assert "source_resource_timeline" not in agent.requests[0]["args"]
+    assert agent.timeouts == [12.0]
+
+
+def test_resource_progress_uses_cpu_and_network_bottleneck() -> None:
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+    timeline = {
+        "version": 1,
+        "samples": [
+            {
+                "dt_s": 1.0,
+                "cpu_core_s": 4.0,
+                "net_rx_bytes": 2000,
+                "net_tx_bytes": 0,
+            }
+        ],
+    }
+    samples = namespace["_resource_source_samples"](timeline)
+
+    progress = namespace["_resource_progress_increment"](
+        samples,
+        0.0,
+        1.0,
+        {"cpu_core_s": 2.0, "rx_bytes": 500.0, "tx_bytes": 0.0},
+    )
+
+    assert progress == 0.25
 
 
 def test_exec_command_source_timeout_does_not_override_trace_timeout() -> None:
