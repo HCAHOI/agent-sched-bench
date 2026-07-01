@@ -171,9 +171,35 @@ def build_run_dir(benchmark: "Benchmark", model: str) -> Path:
     return benchmark.config.trace_root / safe_model / ts
 
 
-def load_completed_ids(run_dir: Path) -> set[str]:
-    """Return instance_ids whose ``attempt_*/run_manifest.json`` is ``completed``.
+_RESUME_TERMINAL_STATUSES = frozenset({"completed", "exhausted"})
+_MAX_ITERATIONS_ERROR_FRAGMENT = "maximum number of tool call iterations"
 
+
+def _is_resume_terminal_manifest(manifest: dict[str, Any]) -> bool:
+    status = manifest.get("status")
+    if status in _RESUME_TERMINAL_STATUSES:
+        return True
+    if status != "error":
+        return False
+    summary = manifest.get("result_summary")
+    if not isinstance(summary, dict):
+        return False
+    exit_status = summary.get("exit_status")
+    if exit_status == "max_iterations":
+        return True
+    if exit_status is not None:
+        return False
+    error = summary.get("error")
+    return isinstance(error, str) and _MAX_ITERATIONS_ERROR_FRAGMENT in error.lower()
+
+
+def load_completed_ids(run_dir: Path) -> set[str]:
+    """Return instance_ids whose attempts are terminal for ``--run-id`` resume.
+
+    ``completed`` attempts and ``exhausted`` max-iteration attempts should not be
+    rerun when resuming the same run directory. Older manifests wrote
+    max-iteration exhaustion as ``status=error`` without ``exit_status``; those
+    are recognized by their stable error message for backward compatibility.
     Only the nested attempt layout is supported — no legacy flat scan.
     """
     completed: set[str] = set()
@@ -190,7 +216,7 @@ def load_completed_ids(run_dir: Path) -> set[str]:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if manifest.get("status") == "completed":
+            if _is_resume_terminal_manifest(manifest):
                 completed.add(instance_dir.name)
                 break
     return completed
@@ -415,7 +441,7 @@ async def _run_scaffold_tasks(
     run_dir.mkdir(parents=True, exist_ok=True)
     completed = load_completed_ids(run_dir)
     if completed:
-        logger.info("Resuming: %d tasks already completed", len(completed))
+        logger.info("Resuming: %d tasks already terminal", len(completed))
 
     results: list[CollectedTaskResult] = []
     total = len(tasks)
@@ -433,7 +459,7 @@ async def _run_scaffold_tasks(
             instance_id = task["instance_id"]
             if instance_id in completed:
                 logger.info(
-                    "[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id
+                    "[%d/%d] SKIP %s (already terminal)", i + 1, total, instance_id
                 )
                 continue
 

@@ -388,7 +388,7 @@ def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> No
     assert "boom" in (manifest["result_summary"]["error"] or "")
 
 
-def test_run_attempt_noncompleted_exit_status_writes_error_manifest(
+def test_run_attempt_max_iterations_writes_exhausted_manifest(
     tmp_path: Path,
 ) -> None:
     ctx = _make_ctx(tmp_path)
@@ -414,11 +414,44 @@ def test_run_attempt_noncompleted_exit_status_writes_error_manifest(
 
     assert result.success is False
     manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
-    assert manifest["status"] == "error"
+    assert manifest["status"] == "exhausted"
     assert manifest["result_summary"]["exit_code"] == 1
+    assert manifest["result_summary"]["exit_status"] == "max_iterations"
     assert manifest["result_summary"]["error"] == (
         "I reached the maximum number of tool call iterations."
     )
+
+
+def test_run_attempt_error_exit_status_writes_error_manifest(
+    tmp_path: Path,
+) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=False,
+            exit_status="tool_error",
+            trace_path=trace_source,
+            error="tool failed",
+        )
+
+    result = asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
+
+    assert result.success is False
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    assert manifest["status"] == "error"
+    assert manifest["result_summary"]["exit_code"] == 1
+    assert manifest["result_summary"]["exit_status"] == "tool_error"
+    assert manifest["result_summary"]["error"] == "tool failed"
 
 
 def test_run_attempt_supports_non_image_success_without_patch(

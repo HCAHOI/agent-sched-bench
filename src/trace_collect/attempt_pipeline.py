@@ -28,12 +28,11 @@ from trace_collect import attempt_layout
 
 logger = logging.getLogger(__name__)
 
-_NONCOMPLETED_EXIT_STATUSES = frozenset(
+_ERROR_EXIT_STATUSES = frozenset(
     {
         "error",
         "tool_error",
         "empty_final_response",
-        "max_iterations",
         "timeout",
         "failed",
     }
@@ -625,11 +624,13 @@ async def run_attempt(
     status = "completed"
     if inner_error is not None:
         status = "error"
+    elif result is not None and result.exit_status == "max_iterations":
+        status = "exhausted"
     elif result is not None and (
         not result.success
         or (
             result.exit_status is not None
-            and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
+            and result.exit_status in _ERROR_EXIT_STATUSES
         )
     ):
         status = "error"
@@ -666,6 +667,7 @@ async def run_attempt(
         },
         "result_summary": {
             "exit_code": 0 if success else 1,
+            "exit_status": result.exit_status if result is not None else None,
             "error": str(inner_error)
             if inner_error is not None
             else (result.error if result is not None else None),
