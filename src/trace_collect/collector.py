@@ -27,6 +27,7 @@ from harness.container_image_prep import (
 from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
+    configure_task_container_apt_mirror,
     mcp_config_label,
     next_attempt_number_in,
     run_attempt,
@@ -852,6 +853,12 @@ async def _run_openclaw_in_task_container(
     )
     ctx.mark_container_ready(container_id)
     try:
+        apt_mirror = configure_task_container_apt_mirror(
+            container_id,
+            executable=container_executable,
+        )
+        if apt_mirror is not None:
+            logger.info("task-container apt mirror: %s", apt_mirror["stdout"])
         exec_config = resolve_running_container_exec_config(
             container_id=container_id,
             exec_config=exec_config,

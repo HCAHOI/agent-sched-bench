@@ -717,6 +717,14 @@ def test_start_task_container_passes_through_network_env_when_present() -> None:
         "NO_PROXY": "localhost,127.0.0.1",
         "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
         "TASK_CONTAINER_PIP_INDEX_URL": "https://mirror.example/simple",
+        "TASK_CONTAINER_PIP_EXTRA_INDEX_URL": "https://extra.example/simple",
+        "TASK_CONTAINER_PIP_TRUSTED_HOST": "mirror.example",
+        "TASK_CONTAINER_PIP_CERT": "/certs/pip.pem",
+        "TASK_CONTAINER_SSL_CERT_FILE": "/certs/ssl.pem",
+        "TASK_CONTAINER_HTTP_PROXY": "http://proxy.example:8080",
+        "TASK_CONTAINER_HTTPS_PROXY": "http://proxy.example:8443",
+        "TASK_CONTAINER_ALL_PROXY": "socks5://proxy.example:1080",
+        "TASK_CONTAINER_NO_PROXY": "localhost,127.0.0.1",
         "TASK_CONTAINER_APT_MIRROR": "https://mirror.example/debian",
         "TASK_CONTAINER_APT_SECURITY_MIRROR": "https://mirror.example/debian-security",
     }
@@ -746,6 +754,14 @@ def test_start_task_container_skips_empty_network_env() -> None:
         "NO_PROXY": "",
         "PIP_INDEX_URL": "",
         "TASK_CONTAINER_PIP_INDEX_URL": "",
+        "TASK_CONTAINER_PIP_EXTRA_INDEX_URL": "",
+        "TASK_CONTAINER_PIP_TRUSTED_HOST": "",
+        "TASK_CONTAINER_PIP_CERT": "",
+        "TASK_CONTAINER_SSL_CERT_FILE": "",
+        "TASK_CONTAINER_HTTP_PROXY": "",
+        "TASK_CONTAINER_HTTPS_PROXY": "",
+        "TASK_CONTAINER_ALL_PROXY": "",
+        "TASK_CONTAINER_NO_PROXY": "",
         "TASK_CONTAINER_APT_MIRROR": "",
         "TASK_CONTAINER_APT_SECURITY_MIRROR": "",
     }
@@ -802,11 +818,20 @@ def test_configure_task_container_apt_mirror_writes_debian_sources(
     with patch("subprocess.run", side_effect=fake_run):
         result = configure_task_container_apt_mirror("cid-1", executable="docker")
 
-    assert seen["cmd"] == ["docker", "exec", "-i", "cid-1", "/bin/sh", "-s"]
+    assert seen["cmd"] == [
+        "docker",
+        "exec",
+        "-i",
+        "--user",
+        "0:0",
+        "cid-1",
+        "/bin/sh",
+        "-s",
+    ]
     script = str(seen["input"])
     assert "TASK_CONTAINER_APT_MIRROR" not in script
     assert "main_mirror=https://mirror.example/debian" in script
-    assert "security_mirror=https://mirror.example/debian-security" in script
+    assert "security_mirror=\"${main_mirror%/debian}/debian-security\"" in script
     assert "URIs: $main_mirror" in script
     assert "URIs: $security_mirror" in script
     assert "Suites: $codename $codename-updates" in script
@@ -821,6 +846,7 @@ def test_configure_task_container_apt_mirror_writes_debian_sources(
             "security=https://mirror.example/debian-security"
         ),
     }
+
 
 
 def test_configure_task_container_apt_mirror_rejects_unsafe_url(
@@ -840,25 +866,36 @@ def test_configure_task_container_apt_mirror_rejects_unsafe_url(
     run.assert_not_called()
 
 
-def test_configure_task_container_apt_mirror_reports_unsupported_distro_skipped(
+def test_configure_task_container_apt_mirror_supports_ubuntu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("TASK_CONTAINER_APT_MIRROR", "https://mirror.example/debian")
+    seen: dict[str, object] = {}
+    monkeypatch.setenv("TASK_CONTAINER_APT_MIRROR", "https://mirror.example/ubuntu/")
+    monkeypatch.delenv("TASK_CONTAINER_APT_SECURITY_MIRROR", raising=False)
 
     def fake_run(cmd, **kwargs):
+        seen["input"] = kwargs["input"]
         return subprocess.CompletedProcess(
             cmd,
             0,
-            stdout="apt mirror skipped: unsupported distro: ubuntu\n",
+            stdout=(
+                "apt mirror configured: distro=ubuntu "
+                "main=https://mirror.example/ubuntu "
+                "security=https://mirror.example/ubuntu\n"
+            ),
             stderr="",
         )
 
     with patch("subprocess.run", side_effect=fake_run):
         result = configure_task_container_apt_mirror("cid-1", executable="docker")
 
+    script = str(seen["input"])
+    assert 'ubuntu)' in script
+    assert 'components="main restricted universe multiverse"' in script
+    assert 'signed_by="/usr/share/keyrings/ubuntu-archive-keyring.gpg"' in script
     assert result is not None
-    assert result["configured"] == "false"
-    assert result["stdout"] == "apt mirror skipped: unsupported distro: ubuntu"
+    assert result["configured"] == "true"
+    assert result["security_mirror"] == "https://mirror.example/ubuntu"
 
 
 def test_stop_task_container_raises_when_container_still_exists() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import ssl
+import subprocess
 import urllib.error
 from pathlib import Path
 
@@ -66,11 +67,14 @@ def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> Non
         bootstrap_site_dir=Path("/tmp/pydeps"),
         image_platform="linux/amd64",
     )
+    seen: dict[str, object] = {}
 
     def fake_run(*args, **kwargs):
+        seen["cmd"] = args[0]
+
         class Result:
             returncode = 0
-            stdout = "/usr/bin/python3\n"
+            stdout = "/opt/miniconda3/bin/python3\n"
             stderr = ""
 
         return Result()
@@ -83,8 +87,67 @@ def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> Non
         container_executable="docker",
     )
 
-    assert resolved.runtime == "/usr/bin/python3"
+    cmd = seen["cmd"]
+    assert isinstance(cmd, list)
+    assert "/opt/miniconda3/bin/python3" in cmd
+    assert resolved.runtime == "/opt/miniconda3/bin/python3"
     assert resolved.pythonpath == exec_config.pythonpath
+
+
+def test_resolve_running_container_exec_config_skips_invalid_candidate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bad_python = tmp_path / "python3.10"
+    good_python = tmp_path / "miniconda-python3"
+    bad_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    good_python.write_text(
+        "#!/bin/sh\n"
+        "case \"$2\" in\n"
+        "  *version_info*) exit 0 ;;\n"
+        "  *sys.executable*) echo \"$0\"; exit 0 ;;\n"
+        "esac\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    bad_python.chmod(0o755)
+    good_python.chmod(0o755)
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath="/deps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=Path("/tmp/pydeps"),
+        image_platform="linux/amd64",
+    )
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container._CONTAINER_PYTHON_CANDIDATES",
+        (str(bad_python), str(good_python)),
+    )
+    real_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        cmd = args[0]
+        candidates = cmd[cmd.index("--") + 1 :]
+        return real_run(
+            ["/bin/sh", "-s", "--", *candidates],
+            input=kwargs["input"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=kwargs["timeout"],
+        )
+
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    resolved = resolve_running_container_exec_config(
+        container_id="cid-1",
+        exec_config=exec_config,
+        container_executable="docker",
+    )
+
+    assert resolved.runtime == str(good_python)
+
 
 
 def test_resolve_running_container_exec_config_raises_without_python(
@@ -168,6 +231,13 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
         fake_urlopen,
     )
     monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+    monkeypatch.setenv("PIP_INDEX_URL", "https://host-only.invalid/simple")
+    monkeypatch.setenv("PIP_NO_INDEX", "1")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:7897")
+    monkeypatch.setenv("https_proxy", "http://127.0.0.1:7897")
+    monkeypatch.setenv("TASK_CONTAINER_PIP_EXTRA_INDEX_URL", "https://extra.example/simple")
+    monkeypatch.setenv("TASK_CONTAINER_HTTPS_PROXY", "http://proxy.example:8080")
+    monkeypatch.setenv("TASK_CONTAINER_SSL_CERT_FILE", "/certs/ca.pem")
 
     bootstrap_task_container_python(
         container_id="cid-1",
@@ -179,6 +249,14 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
     assert "/usr/bin/python3" in seen["cmd"]
     input_script = str(seen["input"])
+    assert "https://host-only.invalid/simple" not in input_script
+    assert "https://pypi.org/simple" in input_script
+    assert "PIP_NO_INDEX" not in input_script
+    assert "explicit_env_map" in input_script
+    assert "TASK_CONTAINER_PIP_EXTRA_INDEX_URL" in input_script
+    assert "TASK_CONTAINER_HTTPS_PROXY" in input_script
+    assert "TASK_CONTAINER_SSL_CERT_FILE" in input_script
+    assert 'env["PIP_CONFIG_FILE"] = os.devnull' in input_script
     for requirement in OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS:
         assert requirement in input_script
     assert "mcp>=1.0" in str(seen["input"])

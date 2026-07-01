@@ -35,10 +35,11 @@ class SWEBenchVerified(Benchmark):
     # Abstract method implementations
 
     def load_tasks(self) -> list[dict[str, Any]]:
-        """Load all tasks from HuggingFace and normalize each row.
+        """Load all tasks from the local cache or HuggingFace dataset."""
+        local_tasks = self.load_tasks_from_local_json()
+        if local_tasks is not None:
+            return local_tasks
 
-        Requires the ``datasets`` package (``pip install datasets``).
-        """
         from datasets import load_dataset  # type: ignore[import]
 
         ds = load_dataset(self.config.harness_dataset, split=self.config.harness_split)

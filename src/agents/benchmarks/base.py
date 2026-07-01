@@ -10,6 +10,7 @@ New code should instantiate benchmarks via::
 from __future__ import annotations
 
 import json
+import os
 import random
 import yaml
 from abc import ABC, abstractmethod
@@ -113,6 +114,39 @@ class Benchmark(ABC):
         Subclasses can raise :class:`ValueError` for missing or invalid config.
         """
         return None
+
+    def load_tasks_from_local_json(
+        self,
+        filename: str = "tasks.json",
+    ) -> list[dict[str, Any]] | None:
+        """Load normalized tasks from ``config.data_root / filename`` if enabled."""
+        if os.environ.get("AGENT_SCHED_BENCH_USE_LOCAL_TASK_CACHE") != "1":
+            return None
+        if self.config.data_root is None:
+            return None
+        path = self.config.data_root / filename
+        if not path.is_file():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise ValueError(f"local task cache must be a list: {path}")
+        tasks: list[dict[str, Any]] = []
+        for index, row in enumerate(raw):
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"local task cache row {index} must be an object: {path}"
+                )
+            task = self.normalize_task(row)
+            instance_id = task.get("instance_id")
+            if not instance_id:
+                raise ValueError(
+                    f"local task cache row {index} missing instance_id: {path}"
+                )
+            task["task_source_kind"] = "benchmark_local_json"
+            task["task_source_id"] = str(instance_id)
+            task["task_source_path"] = str(path)
+            tasks.append(task)
+        return tasks
 
     @property
     def execution_environment(self) -> str:

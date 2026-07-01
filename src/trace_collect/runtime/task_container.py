@@ -34,6 +34,10 @@ _ARCH_ALIASES = {
 _CONTAINER_PYTHON_CANDIDATES = (
     "/usr/bin/python3",
     "/usr/bin/python",
+    "/opt/miniconda3/bin/python3",
+    "/opt/miniconda3/bin/python",
+    "/opt/conda/bin/python3",
+    "/opt/conda/bin/python",
     "python3",
     "python",
 )
@@ -55,11 +59,19 @@ def _bootstrap_marker_matches(
     *,
     requirements: tuple[str, ...],
     runtime: str,
+    pip_index_url: str,
 ) -> bool:
     if not marker.exists():
         return False
-    payload = json.loads(marker.read_text(encoding="utf-8"))
-    return payload == {"requirements": list(requirements), "python": runtime}
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return payload == {
+        "requirements": list(requirements),
+        "python": runtime,
+        "pip_index_url": pip_index_url,
+    }
 
 
 def _is_retryable_get_pip_error(exc: Exception) -> bool:
@@ -489,10 +501,14 @@ def bootstrap_task_container_python(
     requirements = tuple(
         dict.fromkeys(OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS + extra_requirements)
     )
+    pip_index_url = (
+        os.environ.get("TASK_CONTAINER_PIP_INDEX_URL") or _DEFAULT_PIP_INDEX_URL
+    )
     if _bootstrap_marker_matches(
         marker,
         requirements=requirements,
         runtime=exec_config.runtime,
+        pip_index_url=pip_index_url,
     ):
         return
     if marker.exists():
@@ -505,11 +521,6 @@ def bootstrap_task_container_python(
     if not get_pip.exists():
         _download_get_pip(get_pip)
 
-    pip_index_url = (
-        os.environ.get("TASK_CONTAINER_PIP_INDEX_URL")
-        or os.environ.get("PIP_INDEX_URL")
-        or _DEFAULT_PIP_INDEX_URL
-    )
     script = f"""
 import json
 import os
@@ -529,11 +540,45 @@ if marker.exists():
     print("bootstrap runtime: reuse existing site-packages")
     raise SystemExit(0)
 
-env = dict(os.environ)
+env = {{
+    key: value
+    for key, value in {{
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "LC_ALL": os.environ.get("LC_ALL", ""),
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+    }}.items()
+    if value
+}}
 env["PYTHONUSERBASE"] = str(userbase)
+env["PIP_CONFIG_FILE"] = os.devnull
+env["PIP_INDEX_URL"] = {pip_index_url!r}
+explicit_env_map = {{
+    "TASK_CONTAINER_HTTP_PROXY": ("HTTP_PROXY", "http_proxy"),
+    "TASK_CONTAINER_HTTPS_PROXY": ("HTTPS_PROXY", "https_proxy"),
+    "TASK_CONTAINER_ALL_PROXY": ("ALL_PROXY", "all_proxy"),
+    "TASK_CONTAINER_NO_PROXY": ("NO_PROXY", "no_proxy"),
+    "TASK_CONTAINER_PIP_EXTRA_INDEX_URL": ("PIP_EXTRA_INDEX_URL",),
+    "TASK_CONTAINER_PIP_TRUSTED_HOST": ("PIP_TRUSTED_HOST",),
+    "TASK_CONTAINER_PIP_CERT": ("PIP_CERT",),
+    "TASK_CONTAINER_SSL_CERT_FILE": ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"),
+}}
+for source_key, target_keys in explicit_env_map.items():
+    value = os.environ.get(source_key)
+    if not value:
+        continue
+    for target_key in target_keys:
+        env[target_key] = value
 get_pip = userbase / "get-pip.py"
 subprocess.check_call(
-    [sys.executable, str(get_pip), "--user", "--break-system-packages"],
+    [
+        sys.executable,
+        str(get_pip),
+        "--user",
+        "--break-system-packages",
+        "-i",
+        {pip_index_url!r},
+    ],
     env=env,
 )
 pip_bin = userbase / "bin" / "pip"
@@ -558,7 +603,13 @@ subprocess.check_call(
     env=env,
 )
 marker.write_text(
-    json.dumps({{"requirements": requirements, "python": sys.executable}}),
+    json.dumps(
+        {{
+            "requirements": requirements,
+            "python": sys.executable,
+            "pip_index_url": {pip_index_url!r},
+        }}
+    ),
     encoding="utf-8",
 )
 shutil.rmtree(userbase, ignore_errors=True)

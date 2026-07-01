@@ -50,6 +50,14 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "no_proxy",
     "PIP_INDEX_URL",
     "TASK_CONTAINER_PIP_INDEX_URL",
+    "TASK_CONTAINER_PIP_EXTRA_INDEX_URL",
+    "TASK_CONTAINER_PIP_TRUSTED_HOST",
+    "TASK_CONTAINER_PIP_CERT",
+    "TASK_CONTAINER_SSL_CERT_FILE",
+    "TASK_CONTAINER_HTTP_PROXY",
+    "TASK_CONTAINER_HTTPS_PROXY",
+    "TASK_CONTAINER_ALL_PROXY",
+    "TASK_CONTAINER_NO_PROXY",
     "TASK_CONTAINER_APT_MIRROR",
     "TASK_CONTAINER_APT_SECURITY_MIRROR",
     "NANOBOT_MAX_CONCURRENT_REQUESTS",
@@ -235,13 +243,6 @@ def start_task_container(
     return result.stdout.strip()
 
 
-def _derive_debian_security_mirror(main_mirror: str) -> str:
-    normalized = main_mirror.rstrip("/")
-    if normalized.endswith("/debian"):
-        return f"{normalized[:-len('/debian')]}/debian-security"
-    return normalized
-
-
 def _validate_apt_mirror_url(value: str, *, env_name: str) -> str:
     normalized = value.rstrip("/")
     parsed = urllib.parse.urlparse(normalized)
@@ -257,7 +258,7 @@ def configure_task_container_apt_mirror(
     *,
     executable: str,
 ) -> dict[str, str] | None:
-    """Configure Debian apt mirrors inside a running task container.
+    """Configure Debian/Ubuntu apt mirrors inside a running task container.
 
     This is opt-in via TASK_CONTAINER_APT_MIRROR. It is an infrastructure
     mirror, not benchmark-specific behavior; trace commands still execute as
@@ -270,24 +271,50 @@ def configure_task_container_apt_mirror(
         main_mirror,
         env_name="TASK_CONTAINER_APT_MIRROR",
     )
-    security_mirror = _validate_apt_mirror_url(
-        os.environ.get("TASK_CONTAINER_APT_SECURITY_MIRROR")
-        or _derive_debian_security_mirror(main_mirror),
-        env_name="TASK_CONTAINER_APT_SECURITY_MIRROR",
-    )
+    security_mirror_env = os.environ.get("TASK_CONTAINER_APT_SECURITY_MIRROR")
+    if security_mirror_env:
+        security_mirror_env = _validate_apt_mirror_url(
+            security_mirror_env,
+            env_name="TASK_CONTAINER_APT_SECURITY_MIRROR",
+        )
     script = f"""
 set -eu
 main_mirror={shlex.quote(main_mirror)}
-security_mirror={shlex.quote(security_mirror)}
+security_mirror_env={shlex.quote(security_mirror_env or "")}
 . /etc/os-release
-if [ "${{ID:-}}" != "debian" ]; then
-  echo "apt mirror skipped: unsupported distro: ${{ID:-unknown}}"
-  exit 0
-fi
+case "${{ID:-}}" in
+  debian)
+    components="main"
+    signed_by="/usr/share/keyrings/debian-archive-keyring.gpg"
+    ;;
+  ubuntu)
+    components="main restricted universe multiverse"
+    signed_by="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    ;;
+  *)
+    echo "apt mirror skipped: unsupported distro: ${{ID:-unknown}}"
+    exit 0
+    ;;
+esac
 codename="${{VERSION_CODENAME:-}}"
 if [ -z "$codename" ]; then
-  echo "apt mirror unsupported Debian image without VERSION_CODENAME" >&2
+  echo "apt mirror unsupported ${{ID:-unknown}} image without VERSION_CODENAME" >&2
   exit 1
+fi
+if [ -n "$security_mirror_env" ]; then
+  security_mirror="$security_mirror_env"
+else
+  case "${{ID:-}}" in
+    debian)
+      case "$main_mirror" in
+        */debian) security_mirror="${{main_mirror%/debian}}/debian-security" ;;
+        *) security_mirror="$main_mirror" ;;
+      esac
+      ;;
+    ubuntu)
+      security_mirror="$main_mirror"
+      ;;
+  esac
 fi
 mkdir -p /etc/apt/sources.list.d
 for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
@@ -301,19 +328,19 @@ cat > /etc/apt/sources.list.d/agent-sched-bench-mirror.sources <<EOF
 Types: deb
 URIs: $main_mirror
 Suites: $codename $codename-updates
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Components: $components
+Signed-By: $signed_by
 
 Types: deb
 URIs: $security_mirror
 Suites: $codename-security
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Components: $components
+Signed-By: $signed_by
 EOF
-echo "apt mirror configured: main=$main_mirror security=$security_mirror"
+echo "apt mirror configured: distro=${{ID:-unknown}} main=$main_mirror security=$security_mirror"
 """
     result = subprocess.run(
-        [executable, "exec", "-i", container_id, "/bin/sh", "-s"],
+        [executable, "exec", "-i", "--user", "0:0", container_id, "/bin/sh", "-s"],
         input=script,
         capture_output=True,
         text=True,
@@ -326,10 +353,11 @@ echo "apt mirror configured: main=$main_mirror security=$security_mirror"
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
     stdout = result.stdout.strip()
+    security_match = re.search(r"\bsecurity=([^\s]+)", stdout)
     return {
         "configured": "false" if stdout.startswith("apt mirror skipped:") else "true",
         "main_mirror": main_mirror,
-        "security_mirror": security_mirror,
+        "security_mirror": security_match.group(1) if security_match else "",
         "stdout": stdout,
     }
 
