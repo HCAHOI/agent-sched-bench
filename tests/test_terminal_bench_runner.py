@@ -138,9 +138,9 @@ def test_build_tb_command_forwards_task_timeout_without_global() -> None:
 
 def test_terminal_bench_agent_exports_llm_timeout_env() -> None:
     agent = TerminalBenchOpenClawAgent(
-        model_name="local-model",
+        model_name="gpt-4o-mini",
         provider_name="openai",
-        api_base="http://127.0.0.1:1234/v1",
+        api_base="https://api.openai.com/v1",
         env_key="OPENAI_API_KEY",
         api_key="dummy",
         llm_timeout_sec=1800.0,
