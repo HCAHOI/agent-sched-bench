@@ -13,6 +13,7 @@ from pathlib import Path
 from llm_call import add_llm_config_arguments, resolve_llm_config
 from llm_call.config import (
     nonnegative_float_arg,
+    nonnegative_int_arg,
     positive_float_arg,
     positive_int_arg,
     top_p_arg,
@@ -67,9 +68,15 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--sample",
-        type=int,
+        type=nonnegative_int_arg,
         default=None,
-        help="Only run the first N tasks (for testing).",
+        help="Only run the first N tasks after filtering and skipping (for testing).",
+    )
+    parser.add_argument(
+        "--skip",
+        type=nonnegative_int_arg,
+        default=0,
+        help="Skip the first N tasks after --instance-ids filtering and before --sample.",
     )
     parser.add_argument(
         "--instance-ids",
@@ -325,6 +332,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             top_k=args.top_k,
             repetition_penalty=args.repetition_penalty,
             sample=args.sample,
+            skip=args.skip,
             instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
             run_id=args.run_id,
             max_context_tokens=args.max_context_tokens,

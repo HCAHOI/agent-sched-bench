@@ -223,8 +223,9 @@ def _select_tasks(
     *,
     instance_ids: list[str] | None,
     sample: int | None,
+    skip: int = 0,
 ) -> list[dict[str, Any]]:
-    """Filter tasks while preserving the explicit ``instance_ids`` order."""
+    """Filter tasks, then apply ``skip`` and ``sample`` in that order."""
     selected = list(tasks)
     if instance_ids is not None:
         by_id = {task["instance_id"]: task for task in tasks}
@@ -234,7 +235,13 @@ def _select_tasks(
         if missing:
             raise ValueError(f"No tasks matched instance_ids: {missing}")
         selected = [by_id[instance_id] for instance_id in instance_ids]
+    if skip < 0:
+        raise ValueError(f"skip must be non-negative, got {skip}")
+    if skip:
+        selected = selected[skip:]
     if sample is not None:
+        if sample < 0:
+            raise ValueError(f"sample must be non-negative, got {sample}")
         selected = selected[:sample]
     return selected
 
@@ -572,6 +579,7 @@ async def collect_traces(
     top_k: int | None = None,
     repetition_penalty: float | None = None,
     sample: int | None = None,
+    skip: int = 0,
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
@@ -634,6 +642,7 @@ async def collect_traces(
         benchmark.load_tasks(),
         instance_ids=instance_ids,
         sample=sample,
+        skip=skip,
     )
 
     def make_inner(task: dict[str, Any]):

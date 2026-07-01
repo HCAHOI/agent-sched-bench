@@ -58,9 +58,10 @@ PYTHONPATH=src python -m trace_collect.cli \
 ```
 
 Key flags: `--benchmark <slug>`, `--scaffold openclaw`, `--mcp-config` (required
-for OpenClaw; YAML path or literal `none`), `--sample N`, `--instance-ids a,b,c`,
-`--run-id <path>`, `--prompt-template <name>`, and provider sampling flags
-`--temperature`, `--top-p`, `--top-k`, `--repetition-penalty`.
+for OpenClaw; YAML path or literal `none`), `--skip N`, `--sample N`,
+`--instance-ids a,b,c`, `--run-id <path>`, `--prompt-template <name>`, and
+provider sampling flags `--temperature`, `--top-p`, `--top-k`,
+`--repetition-penalty`.
 
 Supported providers live in `src/llm_call/providers.py`: `openrouter`,
 `dashscope`, `openai`, `siliconflow`, and `deepseek`. Use `--api-base` and

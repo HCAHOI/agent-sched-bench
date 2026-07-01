@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
 
-from llm_call.config import resolve_llm_config
+from llm_call.config import nonnegative_int_arg, positive_int_arg, resolve_llm_config
 from llm_call.openai_compat import uses_openrouter
+
+
+def test_nonnegative_int_arg_rejects_negative_values() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="value must be non-negative"):
+        nonnegative_int_arg("-1")
+
+
+def test_positive_int_arg_rejects_negative_values_as_not_positive() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="value must be positive"):
+        positive_int_arg("-1")
 
 
 def test_resolve_llm_config_requires_provider() -> None:

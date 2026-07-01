@@ -74,13 +74,24 @@ def top_p_arg(value: str) -> float:
     return parsed
 
 
-def positive_int_arg(value: str) -> int:
+def _int_arg(value: str) -> int:
     try:
-        parsed = int(value)
+        return int(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             f"value must be an integer, got {value!r}"
         ) from exc
+
+
+def nonnegative_int_arg(value: str) -> int:
+    parsed = _int_arg(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"value must be non-negative, got {value!r}")
+    return parsed
+
+
+def positive_int_arg(value: str) -> int:
+    parsed = _int_arg(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError(f"value must be positive, got {value!r}")
     return parsed
