@@ -115,7 +115,10 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
             pythonpath="/deps:/repo/src:/repo",
             start_extra_args=("--platform", "linux/amd64"),
             bootstrap=True,
-            bootstrap_site_dir=ctx.attempt_dir / "_task_container_runtime" / "bootstrap" / "pydeps",
+            bootstrap_site_dir=ctx.attempt_dir
+            / "_task_container_runtime"
+            / "bootstrap"
+            / "pydeps",
             image_platform="linux/amd64",
         ),
     )
@@ -169,7 +172,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
             task=dict(ctx.task),
             benchmark=SimpleNamespace(
                 execution_environment="container",
-                config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
+                config=SimpleNamespace(slug="swe-rebench", harness_split="filtered"),
             ),
             container_executable="docker",
             provider_name="openrouter",
@@ -201,6 +204,24 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     assert Path(str(seen["trace_file"])) == (ctx.attempt_dir / "trace.jsonl").resolve()
     assert seen["tool_workspace"] == "/testbed"
     assert seen["exec_working_dir"] == "/testbed"
+    assert seen["exec_path_append"] == ":".join(
+        [
+            str(
+                ctx.attempt_dir
+                / "_task_container_runtime"
+                / "bootstrap"
+                / ".pyuserbase"
+                / "bin"
+            ),
+            str(
+                ctx.attempt_dir
+                / "_task_container_runtime"
+                / "bootstrap"
+                / "pydeps"
+                / "bin"
+            ),
+        ]
+    )
     assert preflight_seen["runtime"] == "/usr/bin/python3"
     assert preflight_seen["pythonpath"] == "/deps:/repo/src:/repo"
     assert preflight_seen["container_executable"] == "docker"
@@ -251,7 +272,10 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
             pythonpath="/deps:/repo/src:/repo",
             start_extra_args=(),
             bootstrap=True,
-            bootstrap_site_dir=ctx.attempt_dir / "_task_container_runtime" / "bootstrap" / "pydeps",
+            bootstrap_site_dir=ctx.attempt_dir
+            / "_task_container_runtime"
+            / "bootstrap"
+            / "pydeps",
             image_platform="linux/amd64",
         ),
     )
@@ -302,7 +326,7 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
             task=dict(ctx.task),
             benchmark=SimpleNamespace(
                 execution_environment="container",
-                config=SimpleNamespace(slug="swe-rebench", harness_split="filtered")
+                config=SimpleNamespace(slug="swe-rebench", harness_split="filtered"),
             ),
             container_executable="docker",
             provider_name="openrouter",

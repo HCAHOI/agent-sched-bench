@@ -103,9 +103,9 @@ def test_resolve_running_container_exec_config_skips_invalid_candidate(
     bad_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     good_python.write_text(
         "#!/bin/sh\n"
-        "case \"$2\" in\n"
+        'case "$2" in\n'
         "  *version_info*) exit 0 ;;\n"
-        "  *sys.executable*) echo \"$0\"; exit 0 ;;\n"
+        '  *sys.executable*) echo "$0"; exit 0 ;;\n'
         "esac\n"
         "exit 1\n",
         encoding="utf-8",
@@ -147,7 +147,6 @@ def test_resolve_running_container_exec_config_skips_invalid_candidate(
     )
 
     assert resolved.runtime == str(good_python)
-
 
 
 def test_resolve_running_container_exec_config_raises_without_python(
@@ -235,7 +234,9 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
     monkeypatch.setenv("PIP_NO_INDEX", "1")
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:7897")
     monkeypatch.setenv("https_proxy", "http://127.0.0.1:7897")
-    monkeypatch.setenv("TASK_CONTAINER_PIP_EXTRA_INDEX_URL", "https://extra.example/simple")
+    monkeypatch.setenv(
+        "TASK_CONTAINER_PIP_EXTRA_INDEX_URL", "https://extra.example/simple"
+    )
     monkeypatch.setenv("TASK_CONTAINER_HTTPS_PROXY", "http://proxy.example:8080")
     monkeypatch.setenv("TASK_CONTAINER_SSL_CERT_FILE", "/certs/ca.pem")
 
@@ -376,6 +377,100 @@ def test_bootstrap_task_container_python_does_not_retry_http_error(
         )
 
     assert seen["attempts"] == 1
+
+
+def test_bootstrap_task_container_python_cleans_marker_absent_partial_dirs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    exec_config.bootstrap_site_dir.mkdir(parents=True, exist_ok=True)
+    stale_pydeps = exec_config.bootstrap_site_dir / "stale.txt"
+    stale_pydeps.write_text("stale", encoding="utf-8")
+    userbase = exec_config.bootstrap_site_dir.parent / ".pyuserbase"
+    userbase.mkdir(parents=True, exist_ok=True)
+    stale_userbase = userbase / "stale.txt"
+    stale_userbase.write_text("stale", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"print('ok')\n"
+
+    def fake_urlopen(url: str, timeout: int):
+        seen["url"] = url
+        return FakeResponse()
+
+    def fake_run(*args, **kwargs):
+        seen["cmd"] = args[0]
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    bootstrap_task_container_python(
+        container_id="cid-1",
+        exec_config=exec_config,
+        extra_requirements=(),
+        container_executable="docker",
+    )
+
+    assert not stale_pydeps.exists()
+    assert not stale_userbase.exists()
+    assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+
+
+def test_bootstrap_task_container_python_fails_on_cleanup_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    exec_config.bootstrap_site_dir.mkdir(parents=True, exist_ok=True)
+    (exec_config.bootstrap_site_dir / "stale.txt").write_text("stale", encoding="utf-8")
+
+    def fake_rmtree(path: Path) -> None:
+        raise OSError(f"cannot remove {path}")
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.shutil.rmtree", fake_rmtree
+    )
+
+    with pytest.raises(OSError, match="cannot remove"):
+        bootstrap_task_container_python(
+            container_id="cid-1",
+            exec_config=exec_config,
+            extra_requirements=(),
+            container_executable="docker",
+        )
 
 
 def test_bootstrap_task_container_python_rebuilds_when_marker_requirements_change(

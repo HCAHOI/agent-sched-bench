@@ -137,6 +137,28 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert manifest["model"]["name"] == "qwen-plus-latest"
     assert manifest["result_summary"]["exit_code"] == 0
     assert manifest["result_summary"]["total_time"] >= 0.0
+    # Wall-clock breakdown checkpoints must be recorded and add up.
+    timing = manifest["timing"]
+    assert set(timing) == {
+        "wall_total_s",
+        "setup_s",
+        "agent_exec_s",
+        "teardown_s",
+        "permission_fix_s",
+    }
+    assert timing["wall_total_s"] >= 0.0
+    assert timing["setup_s"] >= 0.0
+    assert timing["agent_exec_s"] >= 0.0
+    assert timing["teardown_s"] >= 0.0
+    assert timing["permission_fix_s"] >= 0.0
+    # The breakdown must reconcile with the wall total within float noise.
+    assert (
+        abs(
+            timing["wall_total_s"]
+            - (timing["setup_s"] + timing["agent_exec_s"] + timing["teardown_s"])
+        )
+        < 1e-3
+    )
     assert manifest["scaffold"] == "openclaw"
     assert manifest["prompt_template"] == "default"
     assert manifest["agent_runtime_mode"] == "task_container_agent"
@@ -157,9 +179,11 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert results["success"] is True
     assert results["model"] == "qwen-plus-latest"
     assert results["agent_runtime_mode"] == "task_container_agent"
-    assert (
-        results["runtime_proof"]["python_executable"] == "/usr/bin/python3"
-    )
+    assert results["runtime_proof"]["python_executable"] == "/usr/bin/python3"
+    assert results["timing"]["wall_total_s"] >= 0.0
+    assert results["timing"]["setup_s"] >= 0.0
+    assert results["timing"]["agent_exec_s"] >= 0.0
+    assert results["timing"]["teardown_s"] >= 0.0
     assert "container_stdout" not in results
     assert "resource_samples" not in results
 
@@ -200,6 +224,19 @@ def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> No
     assert manifest["status"] == "error"
     assert manifest["result_summary"]["exit_code"] == 1
     assert "boom" in (manifest["result_summary"]["error"] or "")
+    timing = manifest["timing"]
+    assert timing["wall_total_s"] >= 0.0
+    assert timing["setup_s"] >= 0.0
+    assert timing["agent_exec_s"] >= 0.0
+    assert timing["teardown_s"] >= 0.0
+    assert abs(
+        timing["wall_total_s"]
+        - (
+            timing["setup_s"]
+            + timing["agent_exec_s"]
+            + timing["teardown_s"]
+        )
+    ) < 1e-3
 
 
 def test_run_attempt_max_iterations_writes_exhausted_manifest(
@@ -357,7 +394,9 @@ def test_run_attempt_waits_for_published_container_name_before_sampling(
     inspect_calls = {"count": 0}
     sampled: dict[str, str] = {}
 
-    def fake_container_is_inspectable(container_id: str, *, container_executable: str) -> bool:
+    def fake_container_is_inspectable(
+        container_id: str, *, container_executable: str
+    ) -> bool:
         inspect_calls["count"] += 1
         return inspect_calls["count"] >= 2
 
@@ -547,7 +586,40 @@ def test_start_task_container_can_use_image_default_user_without_host_home_mount
     assert "--userns=keep-id" not in cmd
     assert "-v" not in cmd
     assert "HOME=/root" in cmd
-    assert "PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin" in cmd
+    # Host ~/.local/bin must NOT leak into the container PATH.
+    assert "PATH=/usr/local/bin:/usr/bin:/bin" in cmd
+    assert all("/.local/bin" not in str(part) for part in cmd)
+
+
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_start_task_container_prepends_bootstrap_userbase_bin(
+    container_executable: str,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        start_task_container(
+            "img:latest",
+            executable=container_executable,
+            run_as_host_user=False,
+            mount_host_home=False,
+            container_home="/root",
+            bootstrap_userbase_bin="/testbed/_task_container_runtime/bootstrap/.pyuserbase/bin",
+        )
+
+    cmd = seen["cmd"]
+    assert (
+        "PATH=/testbed/_task_container_runtime/bootstrap/.pyuserbase/bin:"
+        "/usr/local/bin:/usr/bin:/bin"
+    ) in cmd
+    assert "PYTHONUSERBASE=/testbed/_task_container_runtime/bootstrap/.pyuserbase" in cmd
+    assert "PIP_BREAK_SYSTEM_PACKAGES=1" in cmd
+    # Host ~/.local/bin still must not leak.
+    assert all("/.local/bin" not in str(part) for part in cmd)
 
 
 def test_start_task_container_passes_through_network_env_when_present() -> None:
@@ -678,7 +750,7 @@ def test_configure_task_container_apt_mirror_writes_debian_sources(
     script = str(seen["input"])
     assert "TASK_CONTAINER_APT_MIRROR" not in script
     assert "main_mirror=https://mirror.example/debian" in script
-    assert "security_mirror=\"${main_mirror%/debian}/debian-security\"" in script
+    assert 'security_mirror="${main_mirror%/debian}/debian-security"' in script
     assert "URIs: $main_mirror" in script
     assert "URIs: $security_mirror" in script
     assert "Suites: $codename $codename-updates" in script
@@ -693,7 +765,6 @@ def test_configure_task_container_apt_mirror_writes_debian_sources(
             "security=https://mirror.example/debian-security"
         ),
     }
-
 
 
 def test_configure_task_container_apt_mirror_rejects_unsafe_url(
@@ -737,7 +808,7 @@ def test_configure_task_container_apt_mirror_supports_ubuntu(
         result = configure_task_container_apt_mirror("cid-1", executable="docker")
 
     script = str(seen["input"])
-    assert 'ubuntu)' in script
+    assert "ubuntu)" in script
     assert 'components="main restricted universe multiverse"' in script
     assert 'signed_by="/usr/share/keyrings/ubuntu-archive-keyring.gpg"' in script
     assert result is not None
@@ -777,11 +848,15 @@ def test_stop_task_container_tolerates_stop_error_when_rm_removes_container() ->
         if cmd[:2] == ["docker", "logs"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="logs\n", stderr="")
         if cmd[:2] == ["docker", "stop"]:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="already stopped")
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="already stopped"
+            )
         if cmd[:3] == ["docker", "rm", "-f"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
         if cmd[:2] == ["docker", "inspect"]:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="No such object")
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="No such object"
+            )
         raise AssertionError(f"unexpected command: {cmd}")
 
     with patch("subprocess.run", side_effect=fake_run):

@@ -81,10 +81,14 @@ def _is_missing_container_inspect_error(
 
 def _is_container_removal_in_progress(message: str) -> bool:
     normalized = message.lower()
-    return "removal of container" in normalized and "is already in progress" in normalized
+    return (
+        "removal of container" in normalized and "is already in progress" in normalized
+    )
 
 
-def _inspect_container_exists(container_id: str, *, executable: str) -> tuple[bool, str | None]:
+def _inspect_container_exists(
+    container_id: str, *, executable: str
+) -> tuple[bool, str | None]:
     try:
         inspect = subprocess.run(
             [executable, "inspect", container_id],
@@ -162,6 +166,10 @@ class AttemptContext:
     end_time: datetime | None = None
     container_stdout: str = ""
     permission_fix_time_s: float = 0.0
+    # Timing checkpoints for wall-clock breakdown.
+    image_ready_time: datetime | None = None
+    agent_start_time: datetime | None = None
+    agent_end_time: datetime | None = None
 
     def __post_init__(self) -> None:
         self.attempt_dir = self.run_dir / self.instance_id / f"attempt_{self.attempt}"
@@ -175,10 +183,32 @@ class AttemptContext:
         """Stable string like ``attempt_1`` (matches the manifest field)."""
         return f"attempt_{self.attempt}"
 
+    def _delta_s(self, start: datetime | None, end: datetime | None) -> float:
+        """Seconds between two optional datetimes; 0.0 if either is None."""
+        if start is None or end is None:
+            return 0.0
+        return (end - start).total_seconds()
+
     def elapsed_seconds(self) -> float:
         """Total wall clock between ``start_time`` and ``end_time`` (or now)."""
         end = self.end_time or datetime.now(tz=timezone.utc)
         return (end - self.start_time).total_seconds()
+
+    def setup_seconds(self) -> float:
+        """Wall clock from ``start_time`` to agent start (excl. agent execution).
+
+        Falls back to ``image_ready_time`` when ``agent_start_time`` was not
+        recorded (e.g. ``inner`` never started)."""
+        ref = self.agent_start_time or self.image_ready_time
+        return self._delta_s(self.start_time, ref)
+
+    def agent_seconds(self) -> float:
+        """Wall clock from ``agent_start_time`` to ``agent_end_time``."""
+        return self._delta_s(self.agent_start_time, self.agent_end_time)
+
+    def teardown_seconds(self) -> float:
+        """Wall clock from ``agent_end_time`` to ``end_time``."""
+        return self._delta_s(self.agent_end_time, self.end_time)
 
     def start_time_iso(self) -> str:
         return self.start_time.isoformat().replace("+00:00", "")
@@ -197,9 +227,26 @@ def start_task_container(
     run_as_host_user: bool = True,
     mount_host_home: bool = True,
     container_home: str | None = None,
+    bootstrap_userbase_bin: str | None = None,
 ) -> str:
-    """Launch the task container and return its id."""
+    """Launch the task container and return its id.
+
+    The container PATH is intentionally restricted to container-only
+    directories (``/usr/local/bin:/usr/bin:/bin``).  Host ``~/.local/bin``
+    is never leaked in: doing so would expose host-installed tools (python,
+    pip, …) into the container on native arches while being absent under
+    cross-architecture (QEMU) runs, producing host-dependent behaviour.
+
+    When *bootstrap_userbase_bin* is supplied, it is prepended so that the
+    pip installed by ``bootstrap_task_container_python`` (and any other
+    userbase tools) are resolvable inside the container.
+    """
     home_dir = container_home or os.environ.get("HOME", "/root")
+    container_path = "/usr/local/bin:/usr/bin:/bin"
+    bootstrap_userbase: str | None = None
+    if bootstrap_userbase_bin:
+        container_path = f"{bootstrap_userbase_bin}:{container_path}"
+        bootstrap_userbase = str(Path(bootstrap_userbase_bin).parent)
     cmd = [
         executable,
         "run",
@@ -221,9 +268,18 @@ def start_task_container(
             "-e",
             f"HOME={home_dir}",
             "-e",
-            f"PATH={home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+            f"PATH={container_path}",
         ]
     )
+    if bootstrap_userbase is not None:
+        cmd.extend(
+            [
+                "-e",
+                f"PYTHONUSERBASE={bootstrap_userbase}",
+                "-e",
+                "PIP_BREAK_SYSTEM_PACKAGES=1",
+            ]
+        )
     for env_name in _TASK_CONTAINER_ENV_PASSTHROUGH:
         value = os.environ.get(env_name)
         if value:
@@ -397,9 +453,11 @@ def stop_task_container(container_id: str, *, executable: str) -> str:
             raise RuntimeError(f"container executable not found: {executable}") from exc
         if result.returncode != 0:
             message = (result.stderr or result.stdout or "").strip()
-            if cmd[:3] == [executable, "rm", "-f"] and _is_container_removal_in_progress(
-                message
-            ):
+            if cmd[:3] == [
+                executable,
+                "rm",
+                "-f",
+            ] and _is_container_removal_in_progress(message):
                 removal_in_progress = True
                 continue
             errors.append(
@@ -534,6 +592,7 @@ async def run_attempt(
         )
         ctx.fixed_image = fixed_name
         ctx.permission_fix_time_s = fix_elapsed
+        ctx.image_ready_time = datetime.now(tz=timezone.utc)
         logger.info(
             "image prep: source=%s fixed=%s elapsed=%.2fs",
             ctx.source_image,
@@ -543,6 +602,7 @@ async def run_attempt(
     else:
         ctx.fixed_image = None
         ctx.permission_fix_time_s = 0.0
+        ctx.image_ready_time = datetime.now(tz=timezone.utc)
 
     stop_watcher = threading.Event()
     watcher_task: asyncio.Task[ContainerStatsSampler | None] | None = None
@@ -565,9 +625,21 @@ async def run_attempt(
     result: AttemptResult | None = None
     inner_error: BaseException | None = None
 
+    fallback_agent_start_time = datetime.now(tz=timezone.utc)
     try:
         result = await inner(ctx)
+        if ctx.agent_start_time is None:
+            ctx.agent_start_time = fallback_agent_start_time
+        if ctx.agent_end_time is None:
+            ctx.agent_end_time = datetime.now(tz=timezone.utc)
     except BaseException as exc:
+        fallback_agent_end_time = datetime.now(tz=timezone.utc)
+        if ctx.agent_start_time is None:
+            # If the scaffold failed before reaching the actual agent, count
+            # the failed setup as setup time rather than agent execution.
+            ctx.agent_start_time = fallback_agent_end_time
+        if ctx.agent_end_time is None:
+            ctx.agent_end_time = fallback_agent_end_time
         inner_error = exc
         logger.exception("scaffold inner raised: %s", exc)
     finally:
@@ -640,6 +712,13 @@ async def run_attempt(
             "active_time": (result.total_llm_ms or 0.0) / 1000.0 if result else 0.0,
             "tool_time": (result.total_tool_ms or 0.0) / 1000.0 if result else 0.0,
         },
+        "timing": {
+            "wall_total_s": ctx.elapsed_seconds(),
+            "setup_s": ctx.setup_seconds(),
+            "agent_exec_s": ctx.agent_seconds(),
+            "teardown_s": ctx.teardown_seconds(),
+            "permission_fix_s": ctx.permission_fix_time_s,
+        },
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
         "agent_runtime_mode": ctx.agent_runtime_mode,
@@ -658,6 +737,13 @@ async def run_attempt(
         "total_time": ctx.elapsed_seconds(),
         "active_time": manifest["result_summary"]["active_time"],
         "tool_time": manifest["result_summary"]["tool_time"],
+        "timing": {
+            "wall_total_s": ctx.elapsed_seconds(),
+            "setup_s": ctx.setup_seconds(),
+            "agent_exec_s": ctx.agent_seconds(),
+            "teardown_s": ctx.teardown_seconds(),
+            "permission_fix_s": ctx.permission_fix_time_s,
+        },
         "replay_ready": bool(ctx.fixed_image),
         "instance_id": ctx.instance_id,
         "repo": ctx.task.get("repo"),
@@ -705,9 +791,7 @@ async def run_attempt(
     else:
         tool_calls = []
 
-    openclaw_tool_results_dir = (
-        ctx.attempt_dir / "openclaw-runtime" / "tool-results"
-    )
+    openclaw_tool_results_dir = ctx.attempt_dir / "openclaw-runtime" / "tool-results"
     if openclaw_tool_results_dir.exists():
         manifest.setdefault("artifacts", {})["openclaw_tool_results_dir"] = str(
             openclaw_tool_results_dir.relative_to(ctx.attempt_dir)

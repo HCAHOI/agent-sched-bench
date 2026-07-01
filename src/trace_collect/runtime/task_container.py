@@ -103,6 +103,14 @@ def _download_get_pip(get_pip: Path) -> None:
         raise last_error
 
 
+def _remove_tree_if_exists(path: Path) -> None:
+    """Remove *path* if present; fail fast on real cleanup errors."""
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        return
+
+
 @dataclass(slots=True)
 class TaskContainerPreflightProof:
     hostname: str
@@ -504,18 +512,22 @@ def bootstrap_task_container_python(
     pip_index_url = (
         os.environ.get("TASK_CONTAINER_PIP_INDEX_URL") or _DEFAULT_PIP_INDEX_URL
     )
-    if _bootstrap_marker_matches(
+    userbase = exec_config.bootstrap_site_dir.parent / ".pyuserbase"
+    marker_matches = _bootstrap_marker_matches(
         marker,
         requirements=requirements,
         runtime=exec_config.runtime,
         pip_index_url=pip_index_url,
-    ):
+    )
+    userbase_pip_exists = (userbase / "bin" / "pip").exists() or (
+        userbase / "bin" / "pip3"
+    ).exists()
+    if marker_matches and userbase_pip_exists:
         return
-    if marker.exists():
-        marker.unlink(missing_ok=True)
-        shutil.rmtree(exec_config.bootstrap_site_dir, ignore_errors=True)
+    marker.unlink(missing_ok=True)
+    _remove_tree_if_exists(exec_config.bootstrap_site_dir)
+    _remove_tree_if_exists(userbase)
 
-    userbase = exec_config.bootstrap_site_dir.parent / ".pyuserbase"
     userbase.mkdir(parents=True, exist_ok=True)
     get_pip = userbase / "get-pip.py"
     if not get_pip.exists():
@@ -525,7 +537,6 @@ def bootstrap_task_container_python(
 import json
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
 
@@ -612,7 +623,9 @@ marker.write_text(
     ),
     encoding="utf-8",
 )
-shutil.rmtree(userbase, ignore_errors=True)
+# Keep userbase intact so runtime PATH/PYTHONUSERBASE can resolve pip and
+# other scripts installed by get-pip.py --user.  The enclosing attempt dir is
+# still per-attempt, so this does not introduce cross-task cache sharing.
 """
     result = subprocess.run(
         [

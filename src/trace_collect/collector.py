@@ -87,6 +87,7 @@ def _prepare_collect_model_backend(
         trace_run_config={},
     )
 
+
 def load_mcp_servers(mcp_config: str | None) -> dict:
     """Parse a ``--mcp-config`` argument into ``dict[str, MCPServerConfig]``."""
     if mcp_config is None or mcp_config == "none":
@@ -311,8 +312,7 @@ def _task_image_cleanup_enabled() -> bool:
     if value in _FALSY_ENV_VALUES:
         return False
     raise ValueError(
-        "TASK_CONTAINER_CLEANUP_IMAGES must be one of "
-        "1/true/yes/on or 0/false/no/off"
+        "TASK_CONTAINER_CLEANUP_IMAGES must be one of 1/true/yes/on or 0/false/no/off"
     )
 
 
@@ -503,7 +503,9 @@ async def _run_scaffold_tasks(
                     }
 
                     def run_attempt_sync() -> AttemptResult:
-                        return asyncio.run(run_attempt(attempt_ctx, **run_attempt_kwargs))
+                        return asyncio.run(
+                            run_attempt(attempt_ctx, **run_attempt_kwargs)
+                        )
 
                     result = await asyncio.to_thread(run_attempt_sync)
                 except Exception as exc:
@@ -788,11 +790,15 @@ async def collect_traces(
                 )
 
             assert runner is not None
-            result = await runner.run_task(
-                task,
-                attempt_ctx=ctx,
-                prompt_template=ctx.prompt_template,
-            )
+            ctx.agent_start_time = datetime.now(tz=timezone.utc)
+            try:
+                result = await runner.run_task(
+                    task,
+                    attempt_ctx=ctx,
+                    prompt_template=ctx.prompt_template,
+                )
+            finally:
+                ctx.agent_end_time = datetime.now(tz=timezone.utc)
             if not isinstance(result, AttemptResult):
                 raise TypeError(
                     "benchmark runner returned "
@@ -819,6 +825,7 @@ async def collect_traces(
         inner_factory=make_inner,
         concurrency=concurrency,
     )
+
 
 def _set_run_config(merged: dict[str, Any], key: str, value: Any) -> None:
     run_config = merged.get("run_config") or {}
@@ -980,10 +987,15 @@ async def _run_openclaw_in_task_container(
         image=fixed_image,
         container_executable=container_executable,
     )
+    bootstrap_userbase_bin: str | None = None
+    if exec_config.bootstrap_site_dir is not None:
+        userbase_bin = exec_config.bootstrap_site_dir.parent / ".pyuserbase" / "bin"
+        bootstrap_userbase_bin = str(userbase_bin)
     container_id = start_task_container(
         fixed_image,
         executable=container_executable,
         extra_args=list(exec_config.start_extra_args),
+        bootstrap_userbase_bin=bootstrap_userbase_bin,
     )
     ctx.mark_container_ready(container_id)
     try:
@@ -1022,49 +1034,58 @@ async def _run_openclaw_in_task_container(
             container_executable=container_executable,
         )
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        runtime = run_task_container_agent(
-            container_id=container_id,
-            timeout=(max_iterations * 120) + 300,
-            runtime=exec_config.runtime,
-            pythonpath=exec_config.pythonpath,
-            request={
-                "kind": "run_openclaw",
-                "scaffold": "openclaw",
-                "result_path": str(runtime_dir / "run.result.json"),
-                "container_id": container_id,
-                "benchmark": benchmark.config.slug,
-                "provider_name": provider_name,
-                "api_base": api_base,
-                "api_key": api_key,
-                "model": model,
-                "max_iterations": max_iterations,
-                "generation_config": generation_config or {},
-                "max_context_tokens": max_context_tokens,
-                "prompt_template": ctx.prompt_template,
-                "agent_runtime_mode": ctx.agent_runtime_mode,
-                "mcp_config": (
-                    str(Path(mcp_config).resolve())
-                    if mcp_config not in {None, "none"}
-                    else mcp_config
-                ),
-                "task": task,
-                "workspace_base": str(runtime_dir / "workspace_base"),
-                "workspace_dir": str(runtime_dir / "workspace_base" / ctx.instance_id),
-                "tool_workspace": "/testbed",
-                "exec_path_append": ":".join(
-                    [
-                        str(runtime_dir / "bootstrap" / ".pyuserbase" / "bin"),
-                        str(runtime_dir / "bootstrap" / "pydeps" / "bin"),
-                    ]
-                ),
-                "exec_working_dir": "/testbed",
-                "trace_file": str((ctx.attempt_dir / "trace.jsonl").resolve()),
-                "raw_stdout_path": str(stdout_path),
-                "raw_stderr_path": str(stderr_path),
-                "container_executable": container_executable,
-            },
-            container_executable=container_executable,
-        )
+        exec_path_append = ""
+        if exec_config.bootstrap_site_dir is not None:
+            exec_path_append = ":".join(
+                [
+                    str(exec_config.bootstrap_site_dir.parent / ".pyuserbase" / "bin"),
+                    str(exec_config.bootstrap_site_dir / "bin"),
+                ]
+            )
+        ctx.agent_start_time = datetime.now(tz=timezone.utc)
+        try:
+            runtime = run_task_container_agent(
+                container_id=container_id,
+                timeout=(max_iterations * 120) + 300,
+                runtime=exec_config.runtime,
+                pythonpath=exec_config.pythonpath,
+                request={
+                    "kind": "run_openclaw",
+                    "scaffold": "openclaw",
+                    "result_path": str(runtime_dir / "run.result.json"),
+                    "container_id": container_id,
+                    "benchmark": benchmark.config.slug,
+                    "provider_name": provider_name,
+                    "api_base": api_base,
+                    "api_key": api_key,
+                    "model": model,
+                    "max_iterations": max_iterations,
+                    "generation_config": generation_config or {},
+                    "max_context_tokens": max_context_tokens,
+                    "prompt_template": ctx.prompt_template,
+                    "agent_runtime_mode": ctx.agent_runtime_mode,
+                    "mcp_config": (
+                        str(Path(mcp_config).resolve())
+                        if mcp_config not in {None, "none"}
+                        else mcp_config
+                    ),
+                    "task": task,
+                    "workspace_base": str(runtime_dir / "workspace_base"),
+                    "workspace_dir": str(
+                        runtime_dir / "workspace_base" / ctx.instance_id
+                    ),
+                    "tool_workspace": "/testbed",
+                    "exec_path_append": exec_path_append,
+                    "exec_working_dir": "/testbed",
+                    "trace_file": str((ctx.attempt_dir / "trace.jsonl").resolve()),
+                    "raw_stdout_path": str(stdout_path),
+                    "raw_stderr_path": str(stderr_path),
+                    "container_executable": container_executable,
+                },
+                container_executable=container_executable,
+            )
+        finally:
+            ctx.agent_end_time = datetime.now(tz=timezone.utc)
         runtime_proof = {
             **asdict(proof),
             **runtime.runtime_proof,

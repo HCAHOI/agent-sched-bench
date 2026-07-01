@@ -9,6 +9,7 @@ import textwrap
 from typing import Any
 
 from trace_collect.resource_timeline import valid_resource_timeline
+from trace_collect.runtime.task_container import _CONTAINER_PYTHON_CANDIDATES
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ _OPENCLAW_EXEC_MAX_TIMEOUT_S = 600.0
 _RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S = 24 * 60 * 60.0
 _AGENT_STOP_GRACE_S = 5.0
 _AGENT_KILL_WAIT_S = 5.0
+_PYTHON_PROBE_TIMEOUT_S = 30.0
+_PYTHON_PROBE_KILL_WAIT_S = 5.0
 _SOURCE_RUNTIME_ARTIFACT_MARKERS = (
     (
         "/openclaw-runtime/tool-results/tool-results/",
@@ -66,7 +69,9 @@ def _resolve_exec_timeout_s(
 
 
 def _is_source_runtime_artifact_path(path: str) -> bool:
-    return any(marker in path for marker, _root_suffix in _SOURCE_RUNTIME_ARTIFACT_MARKERS)
+    return any(
+        marker in path for marker, _root_suffix in _SOURCE_RUNTIME_ARTIFACT_MARKERS
+    )
 
 
 def source_runtime_artifact_root_from_path(path: str) -> str | None:
@@ -122,7 +127,7 @@ def remap_source_runtime_artifact_tool_args(
     mapped_root = runtime_root_map.get(source_root)
     if mapped_root is None:
         return tool_args_json, path, None
-    mapped_path = mapped_root + path[len(source_root):]
+    mapped_path = mapped_root + path[len(source_root) :]
     remapped = dict(params)
     remapped["path"] = mapped_path
     return json.dumps(remapped, ensure_ascii=False), path, mapped_path
@@ -130,7 +135,7 @@ def remap_source_runtime_artifact_tool_args(
 
 # Persistent python3 agent script injected into Docker container; reads JSON-line requests
 # from stdin, writes JSON-line responses to stdout (subprocess.run uses capture_output=True).
-_REPLAY_AGENT_SCRIPT = textwrap.dedent(r'''
+_REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
 import json, os, sys, subprocess, difflib, signal, time
 
 def _find_match(content, old_text):
@@ -577,7 +582,7 @@ for line in sys.stdin:
         resp = {"ok": False, "result": f"Error: agent dispatch failed: {e}"}
     sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
     sys.stdout.flush()
-''').strip()
+""").strip()
 
 
 # Idempotent tools safe to retry after agent restart.
@@ -593,25 +598,163 @@ async def _readline_with_timeout(
     return await asyncio.wait_for(stream.readline(), timeout=timeout_s + 5.0)
 
 
-class ContainerAgent:
+async def _kill_and_drain_python_probe_process(
+    proc: asyncio.subprocess.Process,
+    *,
+    candidate: str,
+    container_id: str,
+) -> None:
+    """Terminate and reap a timed-out Python probe process.
 
-    def __init__(self, container_id: str, container_executable: str) -> None:
+    A probe that cannot be reaped is a hard failure: continuing would leave a
+    live ``docker exec``/``podman exec`` process around and make replay state
+    host-dependent.
+    """
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            raise RuntimeError(
+                "ContainerAgent python probe cleanup failed to kill "
+                f"candidate {candidate!r} in container {container_id[:12]}: {exc}"
+            ) from exc
+    try:
+        await asyncio.wait_for(
+            proc.communicate(),
+            timeout=_PYTHON_PROBE_KILL_WAIT_S,
+        )
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            "ContainerAgent python probe cleanup timed out after killing "
+            f"candidate {candidate!r} in container {container_id[:12]}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            "ContainerAgent python probe cleanup failed after killing "
+            f"candidate {candidate!r} in container {container_id[:12]}: {exc}"
+        ) from exc
+
+
+class ContainerAgent:
+    # Container Python interpreter candidates — MUST match
+    # _CONTAINER_PYTHON_CANDIDATES in trace_collect.runtime.task_container
+    # so that collect (resolve_running_container_exec_config) and simulate
+    # (ContainerAgent) select the same interpreter for the same image.
+    _PYTHON_CANDIDATES: tuple[str, ...] = _CONTAINER_PYTHON_CANDIDATES
+
+    def __init__(
+        self,
+        container_id: str,
+        container_executable: str,
+        *,
+        pythonpath: str | None = None,
+    ) -> None:
         self._container_id = container_id
         self._executable = container_executable
         self._process: asyncio.subprocess.Process | None = None
+        self._python_runtime: str = "python3"  # fallback, overwritten in start()
+        self._pythonpath: str | None = pythonpath
+
+    async def _probe_python(self) -> str:
+        """Find a working Python >=3.11 interpreter inside the container."""
+        probe_script = (
+            "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
+        )
+        for cand in self._PYTHON_CANDIDATES:
+            proc: asyncio.subprocess.Process | None = None
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    self._executable,
+                    "exec",
+                    "-i",
+                    "-w",
+                    "/testbed",
+                    self._container_id,
+                    cand,
+                    "-c",
+                    probe_script,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=_PYTHON_PROBE_TIMEOUT_S,
+                )
+                if proc.returncode == 0:
+                    logger.info(
+                        "ContainerAgent python probe: %s (cid=%s)",
+                        cand,
+                        self._container_id[:12],
+                    )
+                    return cand
+            except asyncio.TimeoutError:
+                if proc is not None:
+                    await _kill_and_drain_python_probe_process(
+                        proc,
+                        candidate=cand,
+                        container_id=self._container_id,
+                    )
+                continue
+            except asyncio.CancelledError:
+                if proc is not None:
+                    await _kill_and_drain_python_probe_process(
+                        proc,
+                        candidate=cand,
+                        container_id=self._container_id,
+                    )
+                raise
+            except OSError as exc:
+                if proc is not None and proc.returncode is None:
+                    await _kill_and_drain_python_probe_process(
+                        proc,
+                        candidate=cand,
+                        container_id=self._container_id,
+                    )
+                raise RuntimeError(
+                    "ContainerAgent python probe failed to execute: "
+                    f"{self._executable!r} for container {self._container_id[:12]}"
+                ) from exc
+        raise RuntimeError(
+            "ContainerAgent: no Python >=3.11 found in container "
+            f"{self._container_id[:12]}.  Tried: " + ", ".join(self._PYTHON_CANDIDATES)
+        )
 
     async def start(self) -> None:
+        self._python_runtime = await self._probe_python()
+        cmd: list[str] = [
+            self._executable,
+            "exec",
+            "-i",
+            "-w",
+            "/testbed",
+        ]
+        # Propagate PYTHONPATH so replayed subprocesses (e.g. pytest)
+        # can find packages installed by bootstrap_task_container_python.
+        if self._pythonpath:
+            cmd.extend(["-e", f"PYTHONPATH={self._pythonpath}"])
+        cmd.extend(
+            [
+                self._container_id,
+                self._python_runtime,
+                "-u",
+                "-c",
+                _REPLAY_AGENT_SCRIPT,
+            ]
+        )
         self._process = await asyncio.create_subprocess_exec(
-            self._executable, "exec", "-i", "-w", "/testbed",
-            self._container_id, "python3", "-u", "-c", _REPLAY_AGENT_SCRIPT,
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024,  # 1MB — agent responses can exceed default 64KB
         )
         logger.info(
-            "ContainerAgent started: cid=%s pid=%s",
-            self._container_id[:12], self._process.pid,
+            "ContainerAgent started: cid=%s pid=%s runtime=%s",
+            self._container_id[:12],
+            self._process.pid,
+            self._python_runtime,
         )
 
     async def stop(self) -> None:
@@ -628,7 +771,9 @@ class ContainerAgent:
 
         wait_task = asyncio.create_task(process.wait())
         try:
-            await asyncio.wait_for(asyncio.shield(wait_task), timeout=_AGENT_STOP_GRACE_S)
+            await asyncio.wait_for(
+                asyncio.shield(wait_task), timeout=_AGENT_STOP_GRACE_S
+            )
             return
         except ProcessLookupError:
             return
@@ -642,7 +787,9 @@ class ContainerAgent:
                 pass
 
         try:
-            await asyncio.wait_for(asyncio.shield(wait_task), timeout=_AGENT_KILL_WAIT_S)
+            await asyncio.wait_for(
+                asyncio.shield(wait_task), timeout=_AGENT_KILL_WAIT_S
+            )
         except ProcessLookupError:
             return
         except asyncio.TimeoutError as exc:
@@ -676,7 +823,9 @@ class ContainerAgent:
                     return {"ok": False, "result": "Error: agent process dead"}
 
             proc = self._process
-            assert proc is not None and proc.stdin is not None and proc.stdout is not None
+            assert (
+                proc is not None and proc.stdin is not None and proc.stdout is not None
+            )
 
             line = json.dumps(request, ensure_ascii=False) + "\n"
             try:
@@ -716,7 +865,10 @@ class ContainerAgent:
             try:
                 return json.loads(decoded)
             except json.JSONDecodeError:
-                return {"ok": False, "result": f"Error: invalid agent response: {decoded[:200]}"}
+                return {
+                    "ok": False,
+                    "result": f"Error: invalid agent response: {decoded[:200]}",
+                }
 
         return {"ok": False, "result": "Error: agent restart failed"}
 
@@ -802,30 +954,42 @@ def _resolve_tool_request(
         return None, command_timeout_s  # missing command/commands
 
     if tool_name == "read_file":
-        return {"tool": "read_file", "args": {"path": params.get("path", "")}}, command_timeout_s
+        return {
+            "tool": "read_file",
+            "args": {"path": params.get("path", "")},
+        }, command_timeout_s
 
     if tool_name == "write_file":
         return (
             {
                 "tool": "write_file",
-                "args": {"path": params.get("path", ""), "content": params.get("content", "")},
+                "args": {
+                    "path": params.get("path", ""),
+                    "content": params.get("content", ""),
+                },
             },
             command_timeout_s,
         )
 
     if tool_name == "edit_file":
         return (
-            {"tool": "edit_file", "args": {
-                "path": params.get("path", ""),
-                "old_text": params.get("old_text", ""),
-                "new_text": params.get("new_text", ""),
-                "replace_all": bool(params.get("replace_all", False)),
-            }},
+            {
+                "tool": "edit_file",
+                "args": {
+                    "path": params.get("path", ""),
+                    "old_text": params.get("old_text", ""),
+                    "new_text": params.get("new_text", ""),
+                    "replace_all": bool(params.get("replace_all", False)),
+                },
+            },
             command_timeout_s,
         )
 
     if tool_name == "list_dir":
-        return {"tool": "list_dir", "args": {"path": params.get("path", ".")}}, command_timeout_s
+        return {
+            "tool": "list_dir",
+            "args": {"path": params.get("path", ".")},
+        }, command_timeout_s
 
     return None, command_timeout_s  # unsupported tool
 
