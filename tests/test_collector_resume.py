@@ -58,7 +58,7 @@ def test_load_completed_ids_treats_exhausted_as_resume_terminal(
     assert load_completed_ids(run_dir) == {"task-completed", "task-exhausted"}
 
 
-def test_load_completed_ids_does_not_use_legacy_message_when_exit_status_exists(
+def test_load_completed_ids_does_not_treat_error_manifests_as_terminal(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "run"
@@ -69,20 +69,18 @@ def test_load_completed_ids_does_not_use_legacy_message_when_exit_status_exists(
         exit_status="tool_error",
         error="tool failed after mentioning maximum number of tool call iterations",
     )
-
-    assert load_completed_ids(run_dir) == set()
-
-
-
-def test_load_completed_ids_recognizes_legacy_max_iteration_error_manifest(
-    tmp_path: Path,
-) -> None:
-    run_dir = tmp_path / "run"
     _write_manifest(
         run_dir,
         "task-legacy-exhausted",
         status="error",
         error="I reached the maximum number of tool call iterations.",
     )
+    _write_manifest(
+        run_dir,
+        "task-error-with-max-exit-status",
+        status="error",
+        exit_status="max_iterations",
+        error="I reached the maximum number of tool call iterations.",
+    )
 
-    assert load_completed_ids(run_dir) == {"task-legacy-exhausted"}
+    assert load_completed_ids(run_dir) == set()

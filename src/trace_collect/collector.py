@@ -172,34 +172,18 @@ def build_run_dir(benchmark: "Benchmark", model: str) -> Path:
 
 
 _RESUME_TERMINAL_STATUSES = frozenset({"completed", "exhausted"})
-_MAX_ITERATIONS_ERROR_FRAGMENT = "maximum number of tool call iterations"
 
 
 def _is_resume_terminal_manifest(manifest: dict[str, Any]) -> bool:
-    status = manifest.get("status")
-    if status in _RESUME_TERMINAL_STATUSES:
-        return True
-    if status != "error":
-        return False
-    summary = manifest.get("result_summary")
-    if not isinstance(summary, dict):
-        return False
-    exit_status = summary.get("exit_status")
-    if exit_status == "max_iterations":
-        return True
-    if exit_status is not None:
-        return False
-    error = summary.get("error")
-    return isinstance(error, str) and _MAX_ITERATIONS_ERROR_FRAGMENT in error.lower()
+    return manifest.get("status") in _RESUME_TERMINAL_STATUSES
 
 
 def load_completed_ids(run_dir: Path) -> set[str]:
     """Return instance_ids whose attempts are terminal for ``--run-id`` resume.
 
     ``completed`` attempts and ``exhausted`` max-iteration attempts should not be
-    rerun when resuming the same run directory. Older manifests wrote
-    max-iteration exhaustion as ``status=error`` without ``exit_status``; those
-    are recognized by their stable error message for backward compatibility.
+    rerun when resuming the same run directory. ``error`` manifests are not
+    resume-terminal, even if their error text mentions max-iteration exhaustion.
     Only the nested attempt layout is supported — no legacy flat scan.
     """
     completed: set[str] = set()
