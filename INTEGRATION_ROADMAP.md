@@ -38,20 +38,23 @@ The current branch has several deliberate constraints that should be preserved u
 
 Recommended migration priorities:
 
-### P0: High-value, low-conflict
+### P0: High-value, required for near-term scale
 
 - [x] Collect CLI `--concurrency`. Completed in this integration pass; applies at benchmark task level for both SWE-style task-container runs and Terminal-Bench host-controller runs.
 - [x] Collect CLI `--skip`. Completed in `7b77929`.
 - [x] Resume semantics for `max_iterations` / exhausted attempts. Completed in `8866c39` and tightened in `953dc3f`; resume now keys only on `status=completed` and `status=exhausted`.
 - [x] DeepSeek cloud provider support. Completed in `0072fe7`.
 - [x] Operator documentation for collect/simulate/Gantt/benchmark plugins. Completed in `OPERATIONS.md`.
+- [x] High-concurrency simulate workers: add `simulate --workers` so large replay runs are split across independent OS processes/event loops instead of one congested asyncio loop. Implemented in this pass.
+- [x] Simulate warm-up control: add `--prep-concurrency` and a global all-ready replay barrier so container preparation does not pollute replay timing. Implemented in this pass.
+- [x] Simulate sleep-drift instrumentation: worker-local event loops and shared replay start time are in place; expected-vs-actual sleep drift metrics are recorded on action `sim_metrics` and per-task summaries. Implemented in this pass.
 
 ### P1: Valuable, requires design review
 
 - BFCL benchmark plugin.
 - BrowseComp / DeepResearchBench plugins.
 - Tongyi DeepResearch scaffold, only if it can satisfy current cloud-provider and tracing constraints.
-- Monitoring policy layer and CPU PMU/micro-architecture telemetry.
+- [x] Monitoring policy layer focused on high-concurrency simulate safety: PMU/memory-bandwidth are explicit, auto-disabled or rejected in concurrent replay, and never replace action-level resource timelines. Implemented in this pass for simulate.
 - Attempt timing breakdown and monitoring-disabled markers.
 
 ### P2: Optional / situational
@@ -687,11 +690,41 @@ Required tests:
 - local task cache interaction tests if supported
 - smoke-level dry load tests
 
-### Phase 3: Telemetry policy expansion
+### Phase 3: High-concurrency simulate replay
 
 Candidates:
 
-- monitoring policy layer
+- `simulate --workers` multi-process replay for 100s-1000s of concurrent agents
+- `--prep-concurrency` as a system-wide container-preparation throttle
+- global all-ready barrier and shared replay time-zero across workers
+- per-worker/per-agent trace output to avoid multi-process JSONL write contention
+- sleep-drift metadata for LLM/source-gap replay sleeps — completed in this pass
+
+Rules:
+
+- preserve current cloud-provider-only replay and source-trace timing semantics
+- do not reintroduce local model/vLLM simulation
+- do not let container preparation time count as replay workload time
+- keep resource-integrated timeout behavior unchanged for single `exec.command`
+- default `--workers 1` must preserve the current single-process path
+
+Required tests:
+
+- CLI validation for `--workers` and `--prep-concurrency`
+- partitioning/order tests for worker chunks
+- replay compatibility tests for single-worker/default mode
+- focused multi-worker smoke with mocked container/tool execution where possible
+
+Review audit:
+
+- 2026-07-02: Fresh strict reviewer checked the worker implementation. Initial critical finding: shared replay time-zero was recorded but not used for scheduling. Fixed by adding a small cross-process replay-start grace window and making worker sessions sleep until shared monotonic zero before replay. Initial major findings about append-mode trace collisions and missing worker-mode global resource status were fixed by unlinking trace files before writing, adding millisecond run IDs, and recording global container resources as disabled in worker mode. Re-review found no critical/major issues; minor effective prep-concurrency metadata was added.
+- 2026-07-02: A follow-up strict review after sleep-drift instrumentation found major issues in worker-mode per-task trace metadata and wave scheduling documentation. Fixed by splitting per-task traces from the combined global trace, returning task output dirs from workers, testing per-task metadata, and documenting all-ready wave semantics. Final re-review found no critical/major issues.
+
+### Phase 4: Telemetry policy expansion
+
+Candidates:
+
+- monitoring policy layer — completed for simulate high-concurrency safety in this pass
 - PMU / micro-architecture availability reporting
 - monitoring-disabled marker — completed for attempt/simulate `resources.json` summaries (`disabled`, `enabled_no_samples`, `collected`)
 - richer timing breakdown
@@ -700,15 +733,20 @@ Rules:
 
 - do not replace action-level resource timelines
 - missing PMU must be explicitly recorded, not silently faked
+- PMU and host memory-bandwidth must be disabled/rejected in concurrent replay unless an isolation-safe design is documented
 - replay semantics must remain stable
 
 Required tests:
 
-- policy resolution tests
-- telemetry availability tests
-- replay compatibility tests
+- policy resolution tests — completed for simulate policy resolver
+- telemetry availability tests — completed for memory-bandwidth disable paths
+- replay compatibility tests — completed for simulate focused suite
 
-### Phase 4: Optional imports/visualization/orchestration
+Review audit:
+
+- 2026-07-02: `openai-codex/gpt-5.5` strict reviewer checked monitoring-policy and worker-fix changes. Initial critical finding: worker preparation failure could leak already prepared sessions. Fixed by gathering preparation results with `return_exceptions=True`, retaining successful `PreparedTraceSession`s, aborting the barrier, and finalizing successes in `finally`; regression test added. Major findings about combined trace ordering and worker metadata were fixed by globally sorting combined worker records and logging global `concurrency` plus `worker_chunk_size`. Minor findings about disabled reason spelling and malformed timestamp sorting were fixed. Final focused tests passed.
+
+### Phase 5: Optional imports/visualization/orchestration
 
 Candidates:
 

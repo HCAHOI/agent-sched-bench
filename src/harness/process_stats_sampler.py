@@ -213,11 +213,18 @@ def _fallback_sample() -> dict[str, Any]:
 class ProcessStatsSampler(threading.Thread):
     """Sample host-process stats with the ContainerStatsSampler-like interface."""
 
-    def __init__(self, pid: int | None = None, *, interval_s: float = 1.0) -> None:
+    def __init__(
+        self,
+        pid: int | None = None,
+        *,
+        interval_s: float = 1.0,
+        enable_memory_bandwidth: bool = True,
+    ) -> None:
         target_pid = os.getpid() if pid is None else pid
         super().__init__(daemon=True, name=f"proc-stats-{target_pid}")
         self.pid = target_pid
         self.interval_s = interval_s
+        self.enable_memory_bandwidth = enable_memory_bandwidth
         self._stop_event = threading.Event()
         self._samples: list[dict[str, Any]] = []
         self._psutil_process_cache: dict[int, Any] = {}
@@ -240,7 +247,11 @@ class ProcessStatsSampler(threading.Thread):
         ctxt = _read_proc_context_switches(self.pid)
         if ctxt is not None and "context_switches" not in sample:
             sample["context_switches"] = ctxt
-        attach_host_memory_bandwidth(sample, interval_s=self.interval_s)
+        if self.enable_memory_bandwidth:
+            attach_host_memory_bandwidth(sample, interval_s=self.interval_s)
+        else:
+            sample["memory_bandwidth_available"] = False
+            sample["memory_bandwidth_reason"] = "disabled_by_policy"
         return sample
 
     def run(self) -> None:

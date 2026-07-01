@@ -9,7 +9,15 @@ import pytest
 
 from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.simulator import (
+    LLMTimingConfig,
+    PreparedTraceSession,
+    SimulateError,
+    WorkerTraceInput,
     _checkpoint_after_spec,
+    _chunk_worker_inputs_by_concurrency,
+    _partition_worker_inputs,
+    _resolve_prep_concurrency,
+    _run_worker_wave_async,
     _source_action_excluded_overhead_s,
     _source_exec_timeout_s,
     simulate,
@@ -185,12 +193,14 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
             interval_s: float,
             executable: str,
             sample_all_containers: bool,
+            collect_cgroup_memory_access: bool = True,
         ) -> None:
             self.output_dir = Path(output_dir)
             self.run_id = run_id
             self.interval_s = interval_s
             self.executable = executable
             self.sample_all_containers = sample_all_containers
+            self.collect_cgroup_memory_access = collect_cgroup_memory_access
             self.started = False
             self.stopped = False
             self.registered: list[str] = []
@@ -242,6 +252,7 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
                     "interval_s": self.interval_s,
                     "scope": "registered_containers",
                     "sample_all_containers": self.sample_all_containers,
+                    "collect_cgroup_memory_access": self.collect_cgroup_memory_access,
                     "tick_count": 1,
                     "empty_tick_count": 0,
                     "stop_complete": True,
@@ -391,10 +402,40 @@ def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> 
     assert args.mode == "cloud_model"
     assert args.manifest == "manifest.yaml"
     assert args.concurrency == "8"
+    assert args.workers == 1
+    assert args.prep_concurrency == 0
+    assert args.resource_monitoring == "auto"
+    assert args.pmu_monitoring == "auto"
+    assert args.memory_bandwidth_monitoring == "auto"
     assert args.replay_speed == 1.0
     assert args.llm_timing == "source-scaled"
     assert args.llm_ttft_ms is None
     assert args.llm_tpot_ms is None
+
+
+def test_parse_simulate_args_accepts_workers_and_monitoring_policy() -> None:
+    args = parse_simulate_args(
+        [
+            "--manifest",
+            "manifest.yaml",
+            "--workers",
+            "16",
+            "--prep-concurrency",
+            "64",
+            "--resource-monitoring",
+            "off",
+            "--pmu-monitoring",
+            "off",
+            "--memory-bandwidth-monitoring",
+            "off",
+        ]
+    )
+
+    assert args.workers == 16
+    assert args.prep_concurrency == 64
+    assert args.resource_monitoring == "off"
+    assert args.pmu_monitoring == "off"
+    assert args.memory_bandwidth_monitoring == "off"
 
 
 def test_parse_simulate_args_accepts_ttft_tpot_llm_timing() -> None:
@@ -439,6 +480,139 @@ def test_parse_simulate_args_defaults_container_to_none() -> None:
     assert args.container is None
 
 
+def test_worker_partition_helpers_preserve_order_and_limits() -> None:
+    inputs = [
+        WorkerTraceInput(
+            source_trace=f"/tmp/trace-{index}.jsonl",
+            task_source="/tmp/tasks.json",
+            manifest_index=index,
+            docker_image_override=None,
+            label=None,
+            run_instance_id=f"task-{index}",
+        )
+        for index in range(7)
+    ]
+
+    waves = _chunk_worker_inputs_by_concurrency(inputs, 3)
+    assert [[entry.run_instance_id for entry in wave] for wave in waves] == [
+        ["task-0", "task-1", "task-2"],
+        ["task-3", "task-4", "task-5"],
+        ["task-6"],
+    ]
+
+    chunks = _partition_worker_inputs(waves[0], 2)
+    assert [[entry.run_instance_id for entry in chunk] for chunk in chunks] == [
+        ["task-0", "task-1"],
+        ["task-2"],
+    ]
+
+
+def test_resolve_prep_concurrency_preserves_default_limit() -> None:
+    assert _resolve_prep_concurrency(0, 640) == 20
+    assert _resolve_prep_concurrency(64, 640) == 64
+    assert _resolve_prep_concurrency(64, 2) == 2
+    with pytest.raises(ValueError, match="prep_concurrency must be >= 0"):
+        _resolve_prep_concurrency(-1, 4)
+
+
+class _AbortOnlyBarrier:
+    def __init__(self) -> None:
+        self.aborted = False
+
+    def abort(self) -> None:
+        self.aborted = True
+
+
+class _SetOnlyEvent:
+    def __init__(self) -> None:
+        self.set_called = False
+
+    def set(self) -> None:
+        self.set_called = True
+
+
+def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    good_trace = tmp_path / "good.jsonl"
+    bad_trace = tmp_path / "bad.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(good_trace, agent_id="good", execution_environment="host")
+    _write_trace(bad_trace, agent_id="bad", execution_environment="host")
+    _write_host_tasks(task_source, "good", "bad")
+    inputs = [
+        WorkerTraceInput(
+            source_trace=str(good_trace),
+            task_source=str(task_source),
+            manifest_index=0,
+            docker_image_override=None,
+            label=None,
+            run_instance_id="good",
+        ),
+        WorkerTraceInput(
+            source_trace=str(bad_trace),
+            task_source=str(task_source),
+            manifest_index=1,
+            docker_image_override=None,
+            label=None,
+            run_instance_id="bad",
+        ),
+    ]
+    finalized: list[str] = []
+
+    async def fake_prepare(loaded, **_kwargs):
+        if loaded.agent_id == "bad":
+            raise RuntimeError("prepare failed")
+        return PreparedTraceSession(
+            loaded=loaded,
+            task_output_dir=tmp_path / loaded.agent_id / "attempt_1",
+        )
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared.loaded.agent_id)
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_replay_session_with_shared_limit",
+        fake_prepare,
+    )
+    monkeypatch.setattr("trace_collect.simulator._finalize_prepared_session", fake_finalize)
+    barrier = _AbortOnlyBarrier()
+    event = _SetOnlyEvent()
+
+    with pytest.raises(SimulateError, match="worker preparations failed"):
+        asyncio.run(
+            _run_worker_wave_async(
+                worker_inputs=inputs,
+                output_path=tmp_path / "out",
+                worker_run_id="worker",
+                global_run_id="global",
+                global_concurrency=2,
+                wave_index=0,
+                worker_index=0,
+                worker_count=1,
+                container_executable=None,
+                network_mode="host",
+                replay_speed=1.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=1.0,
+                warmup_skip_iterations=0,
+                fixed_images_by_source=None,
+                resource_monitoring_enabled=False,
+                memory_bandwidth_enabled=False,
+                monitoring_policy={},
+                prep_semaphore=object(),
+                replay_start_barrier=barrier,
+                replay_start_event=event,
+                replay_start_wall_time=object(),
+            )
+        )
+
+    assert finalized == ["good"]
+    assert barrier.aborted is True
+    assert event.set_called is True
+
+
 def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Path) -> None:
     seen: dict[str, object] = {}
 
@@ -466,6 +640,11 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
     assert seen["mode"] == "cloud_model"
     assert seen["manifest"] == Path("manifest.yaml")
     assert seen["concurrency"] == 1
+    assert seen["workers"] == 1
+    assert seen["prep_concurrency"] == 0
+    assert seen["resource_monitoring"] == "auto"
+    assert seen["pmu_monitoring"] == "auto"
+    assert seen["memory_bandwidth_monitoring"] == "auto"
     assert seen["container_executable"] is None
     assert seen["llm_timing_mode"] == "source_scaled"
     assert seen["llm_ttft_ms"] is None
@@ -2083,9 +2262,17 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
             pass
 
     class _FakeSampler:
-        def __init__(self, *, container_id: str, interval_s: float, executable: str) -> None:
+        def __init__(
+            self,
+            *,
+            container_id: str,
+            interval_s: float,
+            executable: str,
+            enable_memory_bandwidth: bool = True,
+        ) -> None:
             assert container_id == "fake-cid"
             assert executable == "docker"
+            assert enable_memory_bandwidth is True
             self.interval_s = interval_s
             kind = "startup" if self.interval_s == 0.25 else "runtime"
             self._samples = [
@@ -2859,6 +3046,89 @@ def test_cloud_model_host_trace_skips_mcp_tools(
     assert tool_record["data"]["replay_source"] == "skipped_host_mode"
     assert tool_record["data"]["sim_metrics"]["source"] == "skipped_host_mode"
     assert tool_record["data"]["success"] is True
+
+
+def test_cloud_model_multi_worker_host_smoke(tmp_path: Path) -> None:
+    trace_paths: list[Path] = []
+    agent_ids = [f"host-task-{index}" for index in range(4)]
+    for agent_id in agent_ids:
+        trace_path = tmp_path / f"{agent_id}.jsonl"
+        _write_trace(
+            trace_path,
+            agent_id=agent_id,
+            execution_environment="host",
+        )
+        trace_paths.append(trace_path)
+    task_source = tmp_path / "tasks.json"
+    _write_host_tasks(task_source, *agent_ids)
+    manifest = _write_manifest(tmp_path / "manifest.yaml", [str(path) for path in trace_paths])
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            concurrency=4,
+            workers=2,
+            prep_concurrency=2,
+            replay_speed=100.0,
+        )
+    )
+
+    summary = json.loads(
+        trace_file.with_name(f"{trace_file.stem}.throughput_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["scheduler_mode"] == "multi_process_workers"
+    assert summary["workers"] == 2
+    assert summary["prep_concurrency"] == 2
+    assert summary["effective_prep_concurrency"] == 2
+    assert summary["attempted_traces"] == 4
+    assert summary["monitoring"]["memory_bandwidth_enabled"] is False
+    assert summary["container_resources"]["status"] == "disabled"
+    assert summary["container_resources"]["monitoring"]["pmu_enabled"] is False
+    records = _read_jsonl(trace_file)
+    assert sum(1 for record in records if record.get("type") == "trace_metadata") == 1
+    summary_records = [record for record in records if record.get("type") == "summary"]
+    assert len(summary_records) == 4
+    assert all(record["sleep_drift"]["sample_count"] >= 3 for record in summary_records)
+    llm_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+    assert "action_sleep" in llm_record["data"]["sim_metrics"]
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert "source_gap_sleep" in tool_record["data"]["sim_metrics"]
+    assert "action_sleep" in tool_record["data"]["sim_metrics"]
+    action_starts = [
+        record["ts_start"]
+        for record in records
+        if record.get("type") == "action"
+    ]
+    assert action_starts == sorted(action_starts)
+    llm_starts = [
+        record["ts_start"]
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    ]
+    assert max(llm_starts) - min(llm_starts) < 0.25
+    for agent_id in agent_ids:
+        per_task_trace = tmp_path / "out" / agent_id / "attempt_1" / "trace.jsonl"
+        assert per_task_trace.exists()
+        per_task_metadata = _read_jsonl(per_task_trace)[0]
+        assert per_task_metadata["manifest"] == str(manifest)
+        assert per_task_metadata["concurrency"] == 4
+        assert per_task_metadata["scheduler_mode"] == "multi_process_workers"
+        assert per_task_metadata["monitoring"]["memory_bandwidth_enabled"] is False
+        assert per_task_metadata["source_trace_count"] == 1
+        assert per_task_metadata["instance_id"] == agent_id
 
 
 def test_cloud_model_replay_marks_warmup_iterations(

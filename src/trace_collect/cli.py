@@ -18,6 +18,7 @@ from llm_call.config import (
     positive_int_arg,
     top_p_arg,
 )
+from trace_collect.monitoring import MONITORING_CHOICES
 
 
 def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -172,6 +173,49 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "Maximum active traces. Use a comma-separated list such as 1,2,4,8 "
             "to run a throughput sweep."
+        ),
+    )
+    parser.add_argument(
+        "--workers",
+        type=positive_int_arg,
+        default=1,
+        help=(
+            "Number of OS worker processes for cloud_model replay. Each worker "
+            "runs an independent asyncio event loop to reduce sleep wake-up "
+            "drift at high concurrency. Default 1 preserves the legacy path."
+        ),
+    )
+    parser.add_argument(
+        "--prep-concurrency",
+        type=nonnegative_int_arg,
+        default=0,
+        help=(
+            "System-wide concurrent container preparation limit shared across "
+            "simulate workers. 0 preserves the default limit of 20."
+        ),
+    )
+    parser.add_argument(
+        "--resource-monitoring",
+        choices=MONITORING_CHOICES,
+        default="auto",
+        help="Built-in simulate resource monitoring policy (default: auto).",
+    )
+    parser.add_argument(
+        "--pmu-monitoring",
+        choices=MONITORING_CHOICES,
+        default="auto",
+        help=(
+            "PMU/cgroup memory-access monitoring policy. Auto enables it only "
+            "for non-concurrent container replay."
+        ),
+    )
+    parser.add_argument(
+        "--memory-bandwidth-monitoring",
+        choices=MONITORING_CHOICES,
+        default="auto",
+        help=(
+            "Host memory-bandwidth monitoring policy. Auto enables it only for "
+            "non-concurrent container replay."
         ),
     )
     parser.add_argument(
@@ -398,6 +442,11 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "mode": args.mode,
         "container_executable": args.container,
         "network_mode": args.network_mode,
+        "workers": args.workers,
+        "prep_concurrency": args.prep_concurrency,
+        "resource_monitoring": args.resource_monitoring,
+        "pmu_monitoring": args.pmu_monitoring,
+        "memory_bandwidth_monitoring": args.memory_bandwidth_monitoring,
         "command_timeout_s": args.command_timeout,
         "warmup_skip_iterations": args.warmup_skip_iterations,
         "replay_speed": args.replay_speed,

@@ -77,16 +77,28 @@ branch supports cloud replay only; there is no local model/vLLM mode.
 PYTHONPATH=src python -m trace_collect.cli simulate \
     --manifest /abs/path/to/simulate-manifest.yaml \
     --concurrency 1,2,4,8 \
+    --workers 8 \
+    --prep-concurrency 20 \
     --container docker \
     --replay-speed 50
 ```
 
-`--concurrency 8` runs one bounded-queue replay with at most 8 active traces.
+`--concurrency 8` runs one bounded replay with at most 8 active traces.
 `--concurrency 1,2,4,8` runs a sweep and writes `throughput_sweep.jsonl`.
-By default, replay sleeps source inter-action gaps and action durations scaled by
-`--replay-speed`. To replace source LLM durations with a fixed model, pass
-`--llm-timing ttft-tpot --llm-ttft-ms <ms> --llm-tpot-ms <ms>`; tool timing and
-inter-action gaps still use source timing scaled by `--replay-speed`.
+For 100s+ concurrent agents, pass `--workers N` to split replay across OS
+processes/event loops and `--prep-concurrency N` to throttle container warm-up
+before the global all-ready replay barrier. Worker mode prepares a full wave
+before replay starts, so wave members wait for the slowest preparation. It
+disables the global container-resource recorder and keeps per-task
+`resources.json` artifacts. `--pmu-monitoring auto` and
+`--memory-bandwidth-monitoring auto` resolve to off for concurrent replay;
+explicit `on` is rejected under `--concurrency > 1` or `--workers > 1`. By
+default, replay sleeps source inter-action gaps and action durations scaled by
+`--replay-speed`. Replay traces include per-action and per-task `sleep_drift`
+metrics for expected-vs-actual sleep timing. To replace source LLM durations
+with a fixed model, pass `--llm-timing ttft-tpot --llm-ttft-ms <ms>
+--llm-tpot-ms <ms>`; tool timing and inter-action gaps still use source timing
+scaled by `--replay-speed`.
 
 Manifest input is YAML. The simplest form is a list of absolute trace paths:
 

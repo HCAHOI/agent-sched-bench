@@ -124,6 +124,8 @@ Cloud replay only. No LLM requests are issued during replay.
 PYTHONPATH=src python -m trace_collect.cli simulate \
     --manifest /abs/path/to/simulate-manifest.yaml \
     --concurrency 1,2,4,8 \
+    --workers 8 \
+    --prep-concurrency 20 \
     --container docker \
     --replay-speed 50
 ```
@@ -134,8 +136,32 @@ PYTHONPATH=src python -m trace_collect.cli simulate \
 
 ### Concurrency
 
-- `--concurrency 8`: one bounded-queue replay with at most 8 active traces.
+- `--concurrency 8`: one bounded replay with at most 8 active traces.
 - `--concurrency 1,2,4,8`: throughput sweep, writes `throughput_sweep.jsonl`.
+- `--workers N`: for high-concurrency replay, split active traces across N OS
+  processes, each with its own asyncio event loop. Default `1` preserves the
+  single-process path.
+- `--prep-concurrency N`: system-wide container preparation throttle shared
+  across workers. `0` preserves the default limit of 20.
+- `--resource-monitoring auto|on|off`: built-in container resource sampling.
+  `auto` enables it for container replay and leaves host replay unmonitored.
+- `--pmu-monitoring auto|on|off`: PMU-backed cgroup memory-access telemetry.
+  `auto` enables it only for non-concurrent container replay; explicit `on` is
+  rejected when `--concurrency > 1` or `--workers > 1`.
+- `--memory-bandwidth-monitoring auto|on|off`: host memory-bandwidth telemetry.
+  `auto` enables it only for non-concurrent container replay; explicit `on` is
+  rejected when `--concurrency > 1` or `--workers > 1`.
+
+For large closed-loop replay, use `--workers` near
+`min(concurrency, os.cpu_count())` (or lower if memory/process overhead matters).
+Worker mode intentionally differs from the legacy bounded queue: it prepares a
+full wave under `--prep-concurrency`, waits for every session in that wave at a
+global all-ready barrier, then releases replay from a shared time zero. This
+excludes container warm-up from action timestamps and improves high-concurrency
+timing comparability, but it means wave members wait for the slowest preparation
+before replay starts. In worker mode the global `ContainerResourceRecorder` is
+disabled to avoid cross-process Docker-stat interference; per-task
+`resources.json` artifacts are still written.
 
 ### Timing
 
@@ -146,6 +172,12 @@ PYTHONPATH=src python -m trace_collect.cli simulate \
 - `--llm-timing ttft-tpot`: sleep for `--llm-ttft-ms + (completion_tokens - 1) *
   --llm-tpot-ms`. Tool timing and inter-action gaps still use source timing
   scaled by `--replay-speed`.
+- Replay records expected-vs-actual sleep drift for source gaps, LLM replay
+  sleeps, and trace-replayed tool sleeps in all modes; worker-mode runs also
+  record worker-start sleep drift. This is an intentional trace-schema addition:
+  per-action details live under `data.sim_metrics.source_gap_sleep` /
+  `data.sim_metrics.action_sleep`, and per-task summaries include aggregate
+  `sleep_drift` statistics.
 
 ### Resource-integrated timeout
 

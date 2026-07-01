@@ -741,7 +741,7 @@ class ContainerResourceRecorder(threading.Thread):
 
     def _ensure_memory_access_backend(self) -> CgroupMemoryAccessBackend | None:
         if not self.collect_cgroup_memory_access:
-            self._memory_access_backend_reason = "disabled"
+            self._memory_access_backend_reason = "disabled_by_policy"
             return None
         if self._memory_access_backend_reason in _TERMINAL_CGROUP_MEMORY_ACCESS_REASONS:
             return None
@@ -1052,12 +1052,14 @@ class ContainerStatsSampler(threading.Thread):
         interval_s: float = 1.0,
         executable: str = "podman",
         subprocess_timeout_s: float = 5.0,
+        enable_memory_bandwidth: bool = True,
     ) -> None:
         super().__init__(daemon=True, name=f"stats-{container_id[:12]}")
         self.container_id = container_id
         self.interval_s = interval_s
         self.executable = executable
         self.subprocess_timeout_s = subprocess_timeout_s
+        self.enable_memory_bandwidth = enable_memory_bandwidth
         self._stop_event = threading.Event()
         self._samples: list[dict[str, Any]] = []
         self._cgroup_path: Path | None = None
@@ -1152,7 +1154,11 @@ class ContainerStatsSampler(threading.Thread):
                 sample["net_rx_bytes"] = rx
             if tx is not None:
                 sample["net_tx_bytes"] = tx
-        attach_host_memory_bandwidth(sample, interval_s=self.interval_s)
+        if self.enable_memory_bandwidth:
+            attach_host_memory_bandwidth(sample, interval_s=self.interval_s)
+        else:
+            sample["memory_bandwidth_available"] = False
+            sample["memory_bandwidth_reason"] = "disabled_by_policy"
 
     def run(self) -> None:
         while not self._stop_event.is_set():

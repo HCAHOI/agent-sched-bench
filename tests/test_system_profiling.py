@@ -566,6 +566,40 @@ def test_sampler_collects_io_via_cgroup() -> None:
     assert s["memory_write_mb_s"] == pytest.approx(5.0)
 
 
+def test_container_sampler_can_disable_host_memory_bandwidth() -> None:
+    pipe_output = "100MB / 1GB|10%|5%|1kB / 2kB"
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if "inspect" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="42\n", stderr="")
+        if "stats" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=pipe_output, stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    sampler = ContainerStatsSampler(
+        container_id="test123",
+        interval_s=0.05,
+        executable="docker",
+        enable_memory_bandwidth=False,
+    )
+    with (
+        patch("harness.container_stats_sampler.subprocess.run", side_effect=fake_subprocess_run),
+        patch(
+            "harness.container_stats_sampler.attach_host_memory_bandwidth",
+            side_effect=AssertionError("memory bandwidth should be disabled"),
+        ),
+        patch.object(Path, "read_text", side_effect=FileNotFoundError("no cgroup")),
+        patch.object(Path, "exists", return_value=False),
+    ):
+        sampler.start()
+        time.sleep(0.15)
+        samples = sampler.stop()
+
+    assert samples
+    assert samples[0]["memory_bandwidth_available"] is False
+    assert samples[0]["memory_bandwidth_reason"] == "disabled_by_policy"
+
+
 def test_sampler_falls_back_to_exec_when_cgroup_unavailable() -> None:
     """When cgroup path can't be resolved, uses exec-based I/O + ctxt aggregation."""
     pipe_output = "100MB / 1GB|10%|5%|0B / 0B"
