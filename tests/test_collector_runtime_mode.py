@@ -104,6 +104,84 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
     }
 
 
+def test_run_scaffold_tasks_runs_host_controller_tasks_concurrently(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: None,
+    )
+
+    benchmark = SimpleNamespace(
+        execution_environment="host",
+        config=SimpleNamespace(
+            slug="terminal-bench",
+            harness_split="core",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: None,
+    )
+
+    def make_inner(task: dict):
+        async def inner(ctx) -> AttemptResult:
+            nonlocal active, max_active
+            trace_path = tmp_path / "trace-source" / f"{task['instance_id']}.jsonl"
+            _write_trace(trace_path)
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            with lock:
+                active -= 1
+            return AttemptResult(
+                success=True,
+                exit_status="ok",
+                trace_path=trace_path,
+            )
+
+        return inner
+
+    run_dir = asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[
+                {"instance_id": "task-1"},
+                {"instance_id": "task-2"},
+                {"instance_id": "task-3"},
+            ],
+            run_dir=tmp_path / "run",
+            model="z-ai/glm-5.1",
+            scaffold="openclaw",
+            container_executable=None,
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=make_inner,
+            concurrency=2,
+        )
+    )
+
+    assert max_active == 2
+    results = (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    assert '"instance_id": "task-1"' in results[0]
+    assert '"instance_id": "task-2"' in results[1]
+    assert '"instance_id": "task-3"' in results[2]
+
+
 @pytest.mark.parametrize(
     ("existing_attempt_dirs", "expected_attempt_dir"),
     [([], "attempt_1"), (["attempt_1"], "attempt_2")],

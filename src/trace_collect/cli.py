@@ -84,6 +84,12 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated list of instance IDs to run (e.g., 'django__django-12345,sympy__sympy-67890').",
     )
     parser.add_argument(
+        "--concurrency",
+        type=positive_int_arg,
+        default=1,
+        help="Maximum concurrent collect tasks.",
+    )
+    parser.add_argument(
         "--scaffold",
         choices=["openclaw"],
         default="openclaw",
@@ -333,6 +339,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             repetition_penalty=args.repetition_penalty,
             sample=args.sample,
             skip=args.skip,
+            concurrency=args.concurrency,
             instance_ids=args.instance_ids.split(",") if args.instance_ids else None,
             run_id=args.run_id,
             max_context_tokens=args.max_context_tokens,

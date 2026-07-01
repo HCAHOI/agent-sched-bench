@@ -40,11 +40,11 @@ Recommended migration priorities:
 
 ### P0: High-value, low-conflict
 
-- Collect CLI `--concurrency`.
-- Collect CLI `--skip`.
-- Resume semantics for `max_iterations` / exhausted attempts.
-- DeepSeek cloud provider support.
-- Operator documentation for collect/simulate/Gantt/benchmark plugins.
+- [x] Collect CLI `--concurrency`. Completed in this integration pass; applies at benchmark task level for both SWE-style task-container runs and Terminal-Bench host-controller runs.
+- [x] Collect CLI `--skip`. Completed in `7b77929`.
+- [x] Resume semantics for `max_iterations` / exhausted attempts. Completed in `8866c39` and tightened in `953dc3f`; resume now keys only on `status=completed` and `status=exhausted`.
+- [x] DeepSeek cloud provider support. Completed in `0072fe7`.
+- [ ] Operator documentation for collect/simulate/Gantt/benchmark plugins.
 
 ### P1: Valuable, requires design review
 
@@ -404,16 +404,16 @@ Sibling supports DeepSeek as a provider.
 
 #### Current repo
 
-Current provider config rejects local/private API bases and excludes DeepSeek.
+Current provider config rejects local/private API bases and now includes DeepSeek as a cloud OpenAI-compatible provider.
 
 Relevant files:
 
 - `src/llm_call/config.py`
 - `src/llm_call/providers.py`
 
-#### Recommendation
+#### Status
 
-Add DeepSeek if it can be implemented as a normal cloud provider. This should not weaken local/private API-base rejection.
+Done in `0072fe7`: DeepSeek was added with `api_base=https://api.deepseek.com` and `DEEPSEEK_API_KEY`, while preserving local/private API-base rejection.
 
 ---
 
@@ -631,39 +631,41 @@ Recommendation:
 
 ### Phase 0: Documentation and invariants
 
-1. Document current branch invariants:
-   - cloud-provider-only
-   - benchmark plugin/YAML architecture
-   - no local/private API base
-   - Gantt-first trace visualization
-   - checkpoint forced-sync semantics
-2. Add a migration checklist for any feature copied from `agent-test-bench`.
+Status: roadmap-level invariants/checklist complete in `1f4a692`; full operator docs remain tracked under Phase 1.
+
+- [x] Document current branch invariants:
+  - cloud-provider-only
+  - benchmark plugin/YAML architecture
+  - no local/private API base
+  - Gantt-first trace visualization
+  - checkpoint forced-sync semantics
+- [x] Add a migration checklist for any feature copied from `agent-test-bench`.
 
 Success criteria:
 
-- Docs clearly state what is intentionally not supported.
-- Future diffs can be reviewed against these invariants.
+- [x] Docs clearly state what is intentionally not supported.
+- [x] Future diffs can be reviewed against these invariants.
 
 ### Phase 1: Low-risk operator improvements
 
 Candidates:
 
-- collect `--skip`
-- collect `--concurrency`
-- exhausted/max-iterations resume semantics
-- DeepSeek provider
-- trace collect/simulate docs
+- [x] collect `--skip` — completed in `7b77929`.
+- [x] collect `--concurrency` — completed in this integration pass with task-level semantics shared by SWE-style and Terminal-Bench collection.
+- [x] exhausted/max-iterations resume semantics — completed in `8866c39`; legacy `status=error` compatibility intentionally removed in `953dc3f`.
+- [x] DeepSeek provider — completed in `0072fe7`.
+- [ ] trace collect/simulate docs.
 
 Risks:
 
-- concurrency can introduce nondeterministic output collisions or provider rate-limit effects.
+- collect concurrency can still introduce Docker/Podman resource pressure and provider rate-limit effects; default remains `--concurrency 1`.
 - exhausted semantics may change retry behavior.
 
 Required tests:
 
-- unit tests for CLI parsing and collector scheduling
-- resume tests for `completed` and `exhausted`
-- provider config tests preserving local/private API rejection
+- [x] unit tests for CLI parsing and collector scheduling (`--skip`, non-negative sample/skip).
+- [x] resume tests for `completed` and `exhausted`; `error` manifests remain non-terminal.
+- [x] provider config tests preserving local/private API rejection.
 
 ### Phase 2: Benchmark expansion
 
@@ -740,7 +742,7 @@ Before merging any feature from `agent-test-bench`, verify:
 
 ## Open Questions
 
-1. Should `max_iterations` be treated as `exhausted` and skipped on resume, or should current retry-on-resume behavior remain intentional?
+1. Resolved: `max_iterations` is recorded as `status=exhausted` and skipped on resume. Only top-level `status=completed` and `status=exhausted` are resume-terminal; legacy `status=error` manifests are intentionally not treated as terminal.
 2. Should BFCL/BrowseComp/DeepResearchBench be part of the CPU-only branch target scope?
 3. Do we need host-mode replay for non-container benchmarks, or should every benchmark be adapted into current container/replay abstractions?
 4. Is PMU/micro-architecture telemetry required for near-term experiments, or is action-level CPU/network resource timeline sufficient?

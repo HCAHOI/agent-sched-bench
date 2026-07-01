@@ -60,7 +60,7 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "TASK_CONTAINER_APT_MIRROR",
     "TASK_CONTAINER_APT_SECURITY_MIRROR",
     "NANOBOT_MAX_CONCURRENT_REQUESTS",
-    # LLM client timeouts: slow recording forwards trip the 90s idle/SDK default.
+    # LLM client timeouts: slow provider streams trip the 90s idle/SDK default.
     "NANOBOT_STREAM_IDLE_TIMEOUT_S",
     "OPENCLAW_LLM_TIMEOUT_S",
 )
@@ -508,45 +508,17 @@ def _container_is_inspectable(
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
-async def _wait_for_recording_provider_idle(
-    recording_provider: Any,
-    *,
-    phase: str,
-) -> None:
-    wait_until_idle = getattr(recording_provider, "wait_until_idle", None)
-    if not callable(wait_until_idle):
-        return
-    logger.info("waiting for recording provider idle before %s", phase)
-    await asyncio.to_thread(wait_until_idle)
-
-
 async def run_attempt(
     ctx: AttemptContext,
     *,
     inner: Callable[[AttemptContext], Awaitable[AttemptResult]],
     min_free_disk_gb: float = 30.0,
     container_executable: str | None,
-    recording_provider: Any | None = None,
 ) -> AttemptResult:
     """Execute one scaffold attempt and write its artifacts."""
-    if recording_provider is not None:
-        await _wait_for_recording_provider_idle(
-            recording_provider,
-            phase="start_attempt",
-        )
-        ctx.start_time = datetime.now(tz=timezone.utc)
-
     try:
         free_gb = preflight_disk(ctx.run_dir, min_free_disk_gb)
         logger.info("disk preflight ok: %.2f GB free at %s", free_gb, ctx.run_dir)
-        if recording_provider is not None:
-            recordings_dir = ctx.attempt_dir / "recordings"
-            recording_free_gb = preflight_disk(recordings_dir, min_free_disk_gb)
-            logger.info(
-                "recording disk preflight ok: %.2f GB free at %s",
-                recording_free_gb,
-                recordings_dir,
-            )
     except DiskSpaceError as exc:
         logger.error("disk preflight failed: %s", exc)
         raise
@@ -587,8 +559,6 @@ async def run_attempt(
     if ctx.execution_environment == "host":
         process_sampler = ProcessStatsSampler(pid=os.getpid(), interval_s=1.0)
         process_sampler.start()
-    if recording_provider is not None:
-        recording_provider.start_attempt(ctx.attempt_dir / "recordings")
 
     sampler: ContainerStatsSampler | ProcessStatsSampler | None = None
     samples: list[dict[str, Any]] = []
@@ -601,11 +571,6 @@ async def run_attempt(
         inner_error = exc
         logger.exception("scaffold inner raised: %s", exc)
     finally:
-        if recording_provider is not None:
-            await _wait_for_recording_provider_idle(
-                recording_provider,
-                phase="attempt finalization",
-            )
         stop_watcher.set()
         if watcher_task is not None:
             try:
@@ -726,21 +691,11 @@ async def run_attempt(
 
     resources_summary = summarize_samples(samples)
 
-    copied_trace_path: Path | None = None
-    try:
-        if result is not None and result.trace_path.exists():
-            copied_trace_path = attempt_layout.copy_trace_jsonl(
-                ctx.attempt_dir,
-                result.trace_path,
-            )
-    finally:
-        if recording_provider is not None:
-            trace_path = copied_trace_path
-            if trace_path is None and result is not None and result.trace_path.exists():
-                trace_path = result.trace_path
-            recording_provider.finish_attempt(
-                trace_path=trace_path if trace_path and trace_path.exists() else None
-            )
+    if result is not None and result.trace_path.exists():
+        attempt_layout.copy_trace_jsonl(
+            ctx.attempt_dir,
+            result.trace_path,
+        )
 
     trace_file = ctx.attempt_dir / attempt_layout.TRACE_FILENAME
     if result is not None and result.tool_calls:

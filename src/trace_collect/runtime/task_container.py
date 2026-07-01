@@ -187,8 +187,8 @@ def project_mount_args(attempt_dir: Path) -> list[str]:
     """Return extra `podman run` args mounting the attempt dir + repo root.
 
     The container runs its own Python via the bootstrap path, so only the
-    attempt dir (recordings + bootstrapped site-dir) and the repo (our source)
-    are mounted — no host system dirs.
+    attempt dir (runtime artifacts + bootstrapped site-dir) and the repo
+    (our source) are mounted — no host system dirs.
     """
     task_container_runtime_dir(attempt_dir, "bootstrap").mkdir(
         parents=True, exist_ok=True

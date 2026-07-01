@@ -7,9 +7,7 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -72,41 +70,6 @@ def _write_trace(path: Path) -> None:
         '{"type":"summary","agent_id":"mozilla__bleach-259","success":true}\n',
         encoding="utf-8",
     )
-
-
-class _RecordingProvider:
-    def __init__(self) -> None:
-        self.recordings_dir: Path | None = None
-        self.finish_trace_path: Path | None = None
-        self.finish_trace_exists = False
-        self.events: list[str] = []
-
-    def wait_until_idle(self) -> None:
-        self.events.append("wait_until_idle")
-
-    def start_attempt(self, recordings_dir: Path) -> None:
-        self.events.append("start_attempt")
-        self.recordings_dir = recordings_dir
-
-    def finish_attempt(self, trace_path: Path | None = None) -> None:
-        self.events.append("finish_attempt")
-        self.finish_trace_path = trace_path
-        self.finish_trace_exists = bool(trace_path and trace_path.exists())
-
-
-class _BlockingRecordingProvider(_RecordingProvider):
-    def __init__(self) -> None:
-        super().__init__()
-        self._lock = threading.Lock()
-        self._lock.acquire()
-
-    def release(self) -> None:
-        self._lock.release()
-
-    def wait_until_idle(self) -> None:
-        self.events.append("wait_until_idle")
-        self._lock.acquire()
-        self._lock.release()
 
 
 def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
@@ -213,155 +176,6 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
 
     trace = (ctx.attempt_dir / "trace.jsonl").read_text()
     assert "trace_metadata" in trace
-
-
-def test_run_attempt_finishes_recording_after_trace_copy(tmp_path: Path) -> None:
-    ctx = _make_ctx(tmp_path)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _RecordingProvider()
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    asyncio.run(
-        run_attempt(
-            ctx,
-            inner=inner,
-            min_free_disk_gb=0.001,
-            container_executable="docker",
-            recording_provider=recording_provider,
-        )
-    )
-
-    assert recording_provider.recordings_dir == ctx.attempt_dir / "recordings"
-    assert recording_provider.finish_trace_path == ctx.attempt_dir / "trace.jsonl"
-    assert recording_provider.finish_trace_exists is True
-    assert recording_provider.events == [
-        "wait_until_idle",
-        "start_attempt",
-        "wait_until_idle",
-        "finish_attempt",
-    ]
-
-
-def test_run_attempt_excludes_pre_start_idle_wait_from_runtime(
-    tmp_path: Path,
-) -> None:
-    ctx = _make_ctx(tmp_path)
-    ctx.start_time = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _BlockingRecordingProvider()
-    release_timer = threading.Timer(0.05, recording_provider.release)
-    release_timer.start()
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    try:
-        asyncio.run(
-            run_attempt(
-                ctx,
-                inner=inner,
-                min_free_disk_gb=0.001,
-                container_executable="docker",
-                recording_provider=recording_provider,
-            )
-        )
-    finally:
-        release_timer.cancel()
-        release_timer.join(timeout=1.0)
-
-    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
-    assert manifest["result_summary"]["total_time"] < 10.0
-    assert recording_provider.events == [
-        "wait_until_idle",
-        "start_attempt",
-        "wait_until_idle",
-        "finish_attempt",
-    ]
-
-
-def test_run_attempt_checks_recording_partition_when_recording_enabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _make_ctx(tmp_path)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _RecordingProvider()
-    preflight_paths: list[Path] = []
-
-    def fake_preflight(path: Path, min_free_gb: float) -> float:
-        del min_free_gb
-        preflight_paths.append(path)
-        return 123.0
-
-    monkeypatch.setattr("trace_collect.attempt_pipeline.preflight_disk", fake_preflight)
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    asyncio.run(
-        run_attempt(
-            ctx,
-            inner=inner,
-            min_free_disk_gb=30.0,
-            container_executable="docker",
-            recording_provider=recording_provider,
-        )
-    )
-
-    assert preflight_paths[:2] == [ctx.run_dir, ctx.attempt_dir / "recordings"]
-
-
-def test_run_attempt_finishes_recording_if_trace_copy_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _make_ctx(tmp_path)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _RecordingProvider()
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    def fail_copy(_attempt_dir: Path, _source_path: Path) -> Path:
-        raise OSError("copy failed")
-
-    monkeypatch.setattr("trace_collect.attempt_pipeline.attempt_layout.copy_trace_jsonl", fail_copy)
-
-    with pytest.raises(OSError, match="copy failed"):
-        asyncio.run(
-            run_attempt(
-                ctx,
-                inner=inner,
-                min_free_disk_gb=0.001,
-                container_executable="docker",
-                recording_provider=recording_provider,
-            )
-        )
-
-    assert recording_provider.finish_trace_path == trace_source
-    assert recording_provider.finish_trace_exists is True
 
 
 def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+import asyncio
 import json
 import logging
 import os
@@ -426,9 +427,11 @@ async def _run_scaffold_tasks(
     prompt_template: str | None,
     min_free_disk_gb: float,
     inner_factory,
-    recording_provider: Any | None = None,
+    concurrency: int = 1,
 ) -> Path:
     """Iterate over tasks, wrapping each in ``run_attempt``."""
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1, got {concurrency}")
     run_dir.mkdir(parents=True, exist_ok=True)
     completed = load_completed_ids(run_dir)
     if completed:
@@ -442,6 +445,116 @@ async def _run_scaffold_tasks(
         benchmark=benchmark,
         prompt_template=prompt_template,
     )
+
+    if concurrency > 1:
+        next_attempt_by_instance: dict[str, int] = {}
+        scheduled: list[tuple[int, dict[str, Any], int]] = []
+        for i, task in enumerate(tasks):
+            instance_id = task["instance_id"]
+            if instance_id in completed:
+                logger.info(
+                    "[%d/%d] SKIP %s (already terminal)", i + 1, total, instance_id
+                )
+                continue
+            attempt = next_attempt_by_instance.get(instance_id)
+            if attempt is None:
+                attempt = next_attempt_number(run_dir, instance_id)
+            next_attempt_by_instance[instance_id] = attempt + 1
+            scheduled.append((i, task, attempt))
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def run_scheduled(
+            index: int,
+            task: dict[str, Any],
+            attempt: int,
+        ) -> tuple[int, CollectedTaskResult, str | None, str | None]:
+            async with semaphore:
+                instance_id = task["instance_id"]
+                logger.info(
+                    "[%d/%d] START %s (%s)", index + 1, total, instance_id, scaffold
+                )
+                t0 = time.monotonic()
+                source_image = _task_source_image(benchmark, task)
+                attempt_ctx = AttemptContext(
+                    run_dir=run_dir,
+                    instance_id=instance_id,
+                    attempt=attempt,
+                    task=task,
+                    model=model,
+                    scaffold=scaffold,
+                    source_image=source_image,
+                    prompt_template=resolved_prompt_template,
+                    agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
+                    execution_environment=benchmark.execution_environment,
+                )
+                try:
+                    _ensure_task_source_ready(
+                        instance_id=instance_id,
+                        source_image=source_image,
+                        prefetched_source_image=None,
+                        prefetch_future=None,
+                        container_executable=container_executable,
+                    )
+                    run_attempt_kwargs: dict[str, Any] = {
+                        "inner": inner_factory(task),
+                        "min_free_disk_gb": min_free_disk_gb,
+                        "container_executable": container_executable,
+                    }
+
+                    def run_attempt_sync() -> AttemptResult:
+                        return asyncio.run(run_attempt(attempt_ctx, **run_attempt_kwargs))
+
+                    result = await asyncio.to_thread(run_attempt_sync)
+                except Exception as exc:
+                    logger.exception("FAILED %s", instance_id)
+                    collected = CollectedTaskResult(
+                        instance_id=instance_id,
+                        attempt_dir=attempt_ctx.attempt_dir,
+                        success=False,
+                        model_patch="",
+                        exit_status="error",
+                        error=f"{type(exc).__name__}: {exc}",
+                        elapsed_s=time.monotonic() - t0,
+                    )
+                else:
+                    collected = CollectedTaskResult(
+                        instance_id=instance_id,
+                        attempt_dir=attempt_ctx.attempt_dir,
+                        success=result.success,
+                        model_patch=result.model_patch,
+                        exit_status=result.exit_status,
+                        error=result.error,
+                        elapsed_s=time.monotonic() - t0,
+                        n_iterations=result.n_iterations,
+                    )
+                    logger.info(
+                        "[%d/%d] DONE %s success=%s elapsed=%.1fs",
+                        index + 1,
+                        total,
+                        instance_id,
+                        collected.success,
+                        collected.elapsed_s,
+                    )
+                return index, collected, source_image, attempt_ctx.fixed_image
+
+        task_results = await asyncio.gather(
+            *(run_scheduled(index, task, attempt) for index, task, attempt in scheduled)
+        )
+        for _, collected, _, _ in sorted(task_results, key=lambda item: item[0]):
+            results.append(collected)
+        for _, collected, source_image, fixed_image in task_results:
+            _cleanup_task_images(
+                instance_id=collected.instance_id,
+                source_image=source_image,
+                fixed_image=fixed_image,
+                keep_source_image=None,
+                container_executable=container_executable,
+                run_dir=run_dir,
+            )
+        write_results_jsonl(results, run_dir / "results.jsonl")
+        logger.info("Results written to %s", run_dir / "results.jsonl")
+        return run_dir
 
     with ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="image-prefetch"
@@ -512,8 +625,6 @@ async def _run_scaffold_tasks(
                     "min_free_disk_gb": min_free_disk_gb,
                     "container_executable": container_executable,
                 }
-                if recording_provider is not None:
-                    run_attempt_kwargs["recording_provider"] = recording_provider
                 result = await run_attempt(attempt_ctx, **run_attempt_kwargs)
             except Exception as exc:
                 logger.exception("FAILED %s", instance_id)
@@ -580,6 +691,7 @@ async def collect_traces(
     repetition_penalty: float | None = None,
     sample: int | None = None,
     skip: int = 0,
+    concurrency: int = 1,
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
@@ -601,6 +713,8 @@ async def collect_traces(
         raise NotImplementedError(
             f"Unsupported benchmark.runtime_mode_for({scaffold!r}): {runtime_mode!r}"
         )
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1, got {concurrency}")
     if (
         execution_environment == "container" or runtime_mode == "task_container_agent"
     ) and container_executable is None:
@@ -703,6 +817,7 @@ async def collect_traces(
         prompt_template=prompt_template,
         min_free_disk_gb=min_free_disk_gb,
         inner_factory=make_inner,
+        concurrency=concurrency,
     )
 
 def _set_run_config(merged: dict[str, Any], key: str, value: Any) -> None:
