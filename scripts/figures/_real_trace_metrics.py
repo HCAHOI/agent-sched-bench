@@ -18,7 +18,7 @@ for candidate in (SCRIPT_DIR, REPO_ROOT, SRC_ROOT):
         sys.path.insert(0, candidate_str)
 
 from demo.gantt_viewer.backend.payload import build_gantt_payload  # noqa: E402
-from trace_collect.trace_inspector import TraceData  # noqa: E402
+from trace_collect.trace_data import TraceData  # noqa: E402
 
 
 @dataclass(frozen=True)

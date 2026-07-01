@@ -4,8 +4,7 @@ This branch is cloud-provider-only. Active subcommands:
 
 - default: collect traces with a configured cloud/OpenAI-compatible provider
 - `simulate`: replay source traces under bounded concurrency using source timing
-- `inspect`: inspect JSONL traces
-- `gantt-serve` / `gantt-export`: viewer helpers
+- `gantt-serve` / `gantt-export`: viewer helpers for trace inspection
 
 Removed from this branch: local-HF recording, KV eviction, sparse attention,
 vLLM serving/metrics, local-model simulation, and GPU profiling. Do not add

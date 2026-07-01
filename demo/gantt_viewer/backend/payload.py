@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from trace_collect.trace_inspector import TraceData
+from trace_collect.trace_data import TraceData
 
 logger = logging.getLogger(__name__)
 

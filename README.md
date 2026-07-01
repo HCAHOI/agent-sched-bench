@@ -24,7 +24,7 @@ agent-sched-bench/
 │   ├── agents/         # scaffolds + benchmark plugins
 │   ├── harness/        # container/runtime samplers and trace logger
 │   ├── llm_call/       # provider registry + OpenAI-compatible client
-│   └── trace_collect/  # CLI: collect / simulate / inspect / gantt-serve
+│   └── trace_collect/  # CLI: collect / simulate / gantt-serve / gantt-export
 └── tests/
 ```
 
@@ -117,12 +117,18 @@ traces:
 Dataset names, image namespaces, and CLI-visible defaults must live in YAML —
 not in `collector.py`, `cli.py`, or scaffold code.
 
-## Inspecting Traces
+## Viewing Traces
+
+Use the Gantt viewer demo for interactive trace inspection:
 
 ```bash
-PYTHONPATH=src python -m trace_collect.cli inspect traces/.../trace.jsonl overview
-PYTHONPATH=src python -m trace_collect.cli inspect traces/.../trace.jsonl timeline
-PYTHONPATH=src python -m trace_collect.cli inspect traces/.../trace.jsonl tools --agent <instance-id>
+PYTHONPATH=src python -m trace_collect.cli gantt-serve
+```
+
+For static exports, use:
+
+```bash
+PYTHONPATH=src python -m trace_collect.cli gantt-export --help
 ```
 
 ## Explicitly removed from this branch

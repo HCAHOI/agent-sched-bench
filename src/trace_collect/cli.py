@@ -1,4 +1,4 @@
-"""CLI entry point for trace collection, import, replay, and viewer helpers."""
+"""CLI entry point for trace collection, simulation, and viewer helpers."""
 
 from __future__ import annotations
 
@@ -244,8 +244,6 @@ def main() -> None:
     sub = sys.argv[1] if len(sys.argv) > 1 else None
     if sub == "simulate":
         _run_simulate(parse_simulate_args(sys.argv[2:]))
-    elif sub == "inspect":
-        _run_inspect(sys.argv[2:])
     elif sub == "gantt-serve":
         from demo.gantt_viewer.backend.dev import main as run_gantt_server
 
@@ -404,162 +402,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
             _append_throughput_sweep_record(sweep_path, trace_file)
     if len(concurrency_values) > 1:
         print(f"Throughput sweep written to: {sweep_path}")
-
-def _run_inspect(argv: list[str]) -> None:
-    import argparse as _argparse
-    from trace_collect.trace_inspector import (
-        TraceData,
-        cmd_overview,
-        cmd_step,
-        cmd_messages,
-        cmd_response,
-        cmd_events,
-        cmd_tools,
-        cmd_search,
-        cmd_timeline,
-    )
-
-    parser = _argparse.ArgumentParser(
-        prog="python -m trace_collect.cli inspect",
-        description="Inspect an OpenClaw JSONL trace file.",
-        epilog="""commands:
-  overview   Summary stats: steps, tokens, tool counts, elapsed time
-  step N     Full details of step N (0-indexed): LLM stats, tool call, result
-  messages N Show messages_in (prompt list) for step N
-  response N Show raw_response (LLM output) for step N
-  events     List fine-grained events (SCHEDULING, SESSION, TOOL, LLM, ...)
-  tools      Tool usage breakdown: name, count, total duration, success rate
-  search P   Regex search through llm_output fields across all steps
-  timeline   Concise per-step timeline with icons, relative timestamps, durations
-
-examples:
-  %(prog)s trace.jsonl overview
-  %(prog)s trace.jsonl step 3 --full
-  %(prog)s trace.jsonl messages 0 --role user
-  %(prog)s trace.jsonl response 5 --truncate 500
-  %(prog)s trace.jsonl events --category SCHEDULING
-  %(prog)s trace.jsonl events --category TOOL --iteration 2
-  %(prog)s trace.jsonl tools
-  %(prog)s trace.jsonl search "def main"
-  %(prog)s trace.jsonl overview --json
-  %(prog)s trace.jsonl step 0 --agent django
-  %(prog)s trace.jsonl timeline
-  %(prog)s trace.jsonl timeline --agent django""",
-        formatter_class=_argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("trace", help="Path to the JSONL trace file.")
-    parser.add_argument(
-        "command",
-        choices=[
-            "overview",
-            "step",
-            "messages",
-            "response",
-            "events",
-            "tools",
-            "search",
-            "timeline",
-        ],
-        help="Inspection command (see above).",
-    )
-    parser.add_argument(
-        "args",
-        nargs="*",
-        help="Command argument: step index (for step/messages/response) or regex pattern (for search).",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        dest="as_json",
-        help="Output as JSON for machine consumption.",
-    )
-    parser.add_argument(
-        "--truncate",
-        type=int,
-        default=2000,
-        help="Truncate long fields to N chars (default: 2000, 0=no truncation).",
-    )
-    parser.add_argument(
-        "--full",
-        action="store_true",
-        help="Disable truncation (show complete content).",
-    )
-    parser.add_argument(
-        "--agent",
-        default=None,
-        help="Filter records by agent_id substring.",
-    )
-    parser.add_argument(
-        "--role",
-        default=None,
-        help="Filter messages by role (system/user/assistant/tool). Used with 'messages' command.",
-    )
-    parser.add_argument(
-        "--category",
-        default=None,
-        help="Filter events by category (SCHEDULING/SESSION/CONTEXT/TOOL/LLM/MCP/MEMORY/SUBAGENT). Used with 'events' command.",
-    )
-    parser.add_argument(
-        "--iteration",
-        type=int,
-        default=None,
-        help="Filter events by iteration number. Used with 'events' command.",
-    )
-    parser.add_argument(
-        "--step",
-        type=int,
-        default=None,
-        help="Filter tool stats by step index. Used with 'tools' command.",
-    )
-    parsed = parser.parse_args(argv)
-
-    truncate = 0 if parsed.full else parsed.truncate
-    data = TraceData.load(Path(parsed.trace), agent_filter=parsed.agent)
-
-    def _parse_step_idx(args: list[str]) -> int:
-        if not args:
-            return 0
-        try:
-            return int(args[0])
-        except ValueError:
-            parser.error(f"step index must be an integer, got: {args[0]!r}")
-
-    cmd = parsed.command
-    if cmd == "overview":
-        cmd_overview(data, as_json=parsed.as_json)
-    elif cmd == "step":
-        step_n = _parse_step_idx(parsed.args)
-        cmd_step(data, step_n, truncate=truncate, as_json=parsed.as_json)
-    elif cmd == "messages":
-        step_n = _parse_step_idx(parsed.args)
-        cmd_messages(
-            data,
-            step_n,
-            role_filter=parsed.role,
-            truncate=truncate,
-            as_json=parsed.as_json,
-        )
-    elif cmd == "response":
-        step_n = _parse_step_idx(parsed.args)
-        cmd_response(data, step_n, truncate=truncate, as_json=parsed.as_json)
-    elif cmd == "events":
-        cmd_events(
-            data,
-            category=parsed.category,
-            iteration=parsed.iteration,
-            as_json=parsed.as_json,
-        )
-    elif cmd == "tools":
-        cmd_tools(data, step_idx=parsed.step, as_json=parsed.as_json)
-    elif cmd == "search":
-        pattern = parsed.args[0] if parsed.args else ""
-        cmd_search(data, pattern, truncate=truncate, as_json=parsed.as_json)
-    elif cmd == "timeline":
-        if parsed.as_json:
-            print(json.dumps({"error": "timeline does not support --json output"}))
-            return
-        cmd_timeline(data)
-
 
 if __name__ == "__main__":
     main()

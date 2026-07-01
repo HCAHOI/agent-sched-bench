@@ -15,7 +15,7 @@ from demo.gantt_viewer.backend.payload import (
     _extract_detail_from_action,
     build_gantt_payload,
 )
-from trace_collect.trace_inspector import TraceData
+from trace_collect.trace_data import TraceData
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OPENCLAW_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "openclaw_minimal_v5.jsonl"

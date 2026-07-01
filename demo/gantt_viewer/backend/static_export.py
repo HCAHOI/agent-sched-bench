@@ -13,7 +13,7 @@ from typing import Any, Iterable, Literal
 from demo.gantt_viewer.backend.app import FRONTEND_DIST_PATH
 from demo.gantt_viewer.backend.discovery import REPO_ROOT
 from demo.gantt_viewer.backend.payload import build_gantt_payload_multi
-from trace_collect.trace_inspector import CURRENT_TRACE_FORMAT_VERSION, TraceData
+from trace_collect.trace_data import CURRENT_TRACE_FORMAT_VERSION, TraceData
 
 
 PRESET_SWE_REBENCH_GLM_OPENCLAW_100 = "swe-rebench-glm-openclaw-100"

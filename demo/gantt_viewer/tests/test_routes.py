@@ -14,7 +14,7 @@ from demo.gantt_viewer.backend.payload import (
 )
 from demo.gantt_viewer.backend.schema import MarkerDef
 from demo.gantt_viewer.tests.helpers import write_config, write_trace
-from trace_collect.trace_inspector import TraceData
+from trace_collect.trace_data import TraceData
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
