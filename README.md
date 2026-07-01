@@ -133,6 +133,10 @@ For static exports, use:
 PYTHONPATH=src python -m trace_collect.cli gantt-export --help
 ```
 
+See `OPERATIONS.md` for detailed operator reference: collect/simulate flags,
+resume semantics, task-container env vars, Gantt viewer, and benchmark plugin
+rules.
+
 ## Explicitly removed from this branch
 
 - `vllm`, `torch`, `transformers`, `accelerate` dependencies

@@ -44,7 +44,7 @@ Recommended migration priorities:
 - [x] Collect CLI `--skip`. Completed in `7b77929`.
 - [x] Resume semantics for `max_iterations` / exhausted attempts. Completed in `8866c39` and tightened in `953dc3f`; resume now keys only on `status=completed` and `status=exhausted`.
 - [x] DeepSeek cloud provider support. Completed in `0072fe7`.
-- [ ] Operator documentation for collect/simulate/Gantt/benchmark plugins.
+- [x] Operator documentation for collect/simulate/Gantt/benchmark plugins. Completed in `OPERATIONS.md`.
 
 ### P1: Valuable, requires design review
 
@@ -654,7 +654,7 @@ Candidates:
 - [x] collect `--concurrency` — completed in this integration pass with task-level semantics shared by SWE-style and Terminal-Bench collection.
 - [x] exhausted/max-iterations resume semantics — completed in `8866c39`; legacy `status=error` compatibility intentionally removed in `953dc3f`.
 - [x] DeepSeek provider — completed in `0072fe7`.
-- [ ] trace collect/simulate docs.
+- [x] trace collect/simulate docs — completed in `OPERATIONS.md`.
 
 Risks:
 
