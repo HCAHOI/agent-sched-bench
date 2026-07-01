@@ -98,6 +98,8 @@ Rows without `instance_id` are rejected.
 
 ### Task-container environment
 
+Task-container Python runtime dependencies are bootstrapped into immutable shared cache generations under `~/.cache/task-container-bootstrap/<platform>/<config-hash>/`. A file lock serializes writes, and each cache marker records requirements, Python runtime, pip index, pip-resolution env fingerprint, architecture, image platform, Python ABI/OS/libc fingerprint, and installed package/version manifests. Stale or contaminated generations are not reused, and active generations are not deleted while another attempt may still be reading them.
+
 Bootstrap and apt/pip behavior inside task containers can be tuned with:
 
 - `TASK_CONTAINER_PIP_INDEX_URL`
@@ -111,6 +113,8 @@ Bootstrap and apt/pip behavior inside task containers can be tuned with:
 
 APT mirror setup supports Debian and Ubuntu task images. It runs as container
 root so it can rewrite `/etc/apt/sources.list.d`.
+
+During task-container agent runs, stdout is streamed live to the operator terminal and also written to the per-attempt raw stdout artifact. `resources.json` summaries include `monitoring.status` (`collected`, `enabled_no_samples`, or `disabled`) plus `monitoring_disabled` so empty sample lists are explicit.
 
 ## Trace Simulate
 

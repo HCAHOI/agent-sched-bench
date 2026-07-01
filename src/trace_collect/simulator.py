@@ -1723,10 +1723,20 @@ def _assign_task_output_dir(prepared: PreparedTraceSession, output_path: Path) -
 def _write_prepared_resources(
     prepared: PreparedTraceSession,
     samples: list[dict[str, Any]],
+    *,
+    monitoring_enabled: bool,
 ) -> None:
     if prepared.task_output_dir is None:
         return
     summary = summarize_samples(samples)
+    if samples:
+        monitoring_status = "collected"
+    elif monitoring_enabled:
+        monitoring_status = "enabled_no_samples"
+    else:
+        monitoring_status = "disabled"
+    summary["monitoring_disabled"] = not monitoring_enabled
+    summary["monitoring"] = {"status": monitoring_status}
     attempt_layout.write_resources_json(
         prepared.task_output_dir,
         samples,
@@ -1743,6 +1753,7 @@ def _write_prepared_resources(
 async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
     resource_write_error: BaseException | None = None
     resource_samples: list[dict[str, Any]] | None = None
+    resource_monitoring_enabled = prepared.sampler is not None
     try:
         if prepared.sampler is not None:
             resource_samples = prepared.sampler.stop()
@@ -1761,7 +1772,11 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
             and not prepared.resources_written
         ):
             try:
-                _write_prepared_resources(prepared, resource_samples)
+                _write_prepared_resources(
+                    prepared,
+                    resource_samples,
+                    monitoring_enabled=resource_monitoring_enabled,
+                )
             except (Exception, asyncio.CancelledError) as exc:
                 resource_write_error = exc
         if resource_write_error is not None:
@@ -1824,7 +1839,11 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         and not prepared.resources_written
     ):
         try:
-            _write_prepared_resources(prepared, resource_samples)
+            _write_prepared_resources(
+                prepared,
+                resource_samples,
+                monitoring_enabled=resource_monitoring_enabled,
+            )
         except (Exception, asyncio.CancelledError) as exc:
             resource_write_error = exc
 

@@ -1019,7 +1019,7 @@ async def _run_openclaw_in_task_container(
         if mcp_config not in {None, "none"}:
             preflight_imports.append("agents.openclaw.tools.mcp")
             bootstrap_requirements = OPENCLAW_MCP_RUNTIME_REQUIREMENTS
-        bootstrap_task_container_python(
+        exec_config = bootstrap_task_container_python(
             container_id=container_id,
             exec_config=exec_config,
             extra_requirements=bootstrap_requirements,
@@ -1076,6 +1076,11 @@ async def _run_openclaw_in_task_container(
                     ),
                     "tool_workspace": "/testbed",
                     "exec_path_append": exec_path_append,
+                    "bootstrap_userbase": (
+                        str(exec_config.bootstrap_site_dir.parent / ".pyuserbase")
+                        if exec_config.bootstrap_site_dir is not None
+                        else None
+                    ),
                     "exec_working_dir": "/testbed",
                     "trace_file": str((ctx.attempt_dir / "trace.jsonl").resolve()),
                     "raw_stdout_path": str(stdout_path),

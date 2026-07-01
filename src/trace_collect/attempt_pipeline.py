@@ -572,6 +572,8 @@ async def run_attempt(
     inner: Callable[[AttemptContext], Awaitable[AttemptResult]],
     min_free_disk_gb: float = 30.0,
     container_executable: str | None,
+    disable_resource_monitoring: bool = False,
+    monitoring_policy: dict[str, object] | None = None,
 ) -> AttemptResult:
     """Execute one scaffold attempt and write its artifacts."""
     try:
@@ -604,9 +606,14 @@ async def run_attempt(
         ctx.permission_fix_time_s = 0.0
         ctx.image_ready_time = datetime.now(tz=timezone.utc)
 
+    resource_monitoring_enabled = not disable_resource_monitoring and (
+        container_executable is not None or ctx.execution_environment == "host"
+    )
+    resolved_monitoring_policy = dict(monitoring_policy or {})
+
     stop_watcher = threading.Event()
     watcher_task: asyncio.Task[ContainerStatsSampler | None] | None = None
-    if container_executable is not None:
+    if container_executable is not None and not disable_resource_monitoring:
         watcher_task = asyncio.create_task(
             _watch_for_container_ready(
                 ctx,
@@ -616,7 +623,7 @@ async def run_attempt(
         )
 
     process_sampler: ProcessStatsSampler | None = None
-    if ctx.execution_environment == "host":
+    if ctx.execution_environment == "host" and not disable_resource_monitoring:
         process_sampler = ProcessStatsSampler(pid=os.getpid(), interval_s=1.0)
         process_sampler.start()
 
@@ -776,6 +783,17 @@ async def run_attempt(
             results_payload["scaffold_summary"] = result.summary
 
     resources_summary = summarize_samples(samples)
+    if samples:
+        monitoring_status = "collected"
+    elif resource_monitoring_enabled:
+        monitoring_status = "enabled_no_samples"
+    else:
+        monitoring_status = "disabled"
+    resources_summary["monitoring_disabled"] = not resource_monitoring_enabled
+    resources_summary["monitoring"] = {
+        **resolved_monitoring_policy,
+        "status": monitoring_status,
+    }
 
     if result is not None and result.trace_path.exists():
         attempt_layout.copy_trace_jsonl(

@@ -229,14 +229,13 @@ def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> No
     assert timing["setup_s"] >= 0.0
     assert timing["agent_exec_s"] >= 0.0
     assert timing["teardown_s"] >= 0.0
-    assert abs(
-        timing["wall_total_s"]
-        - (
-            timing["setup_s"]
-            + timing["agent_exec_s"]
-            + timing["teardown_s"]
+    assert (
+        abs(
+            timing["wall_total_s"]
+            - (timing["setup_s"] + timing["agent_exec_s"] + timing["teardown_s"])
         )
-    ) < 1e-3
+        < 1e-3
+    )
 
 
 def test_run_attempt_max_iterations_writes_exhausted_manifest(
@@ -455,6 +454,83 @@ def test_run_attempt_waits_for_published_container_name_before_sampling(
     resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
     assert len(resources["samples"]) == 1
     assert resources["summary"]["sample_count"] == 1
+    assert resources["summary"]["monitoring_disabled"] is False
+    assert resources["summary"]["monitoring"]["status"] == "collected"
+
+
+def test_run_attempt_marks_enabled_no_samples_resources(tmp_path: Path) -> None:
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="hello-world",
+        attempt=1,
+        task={"instance_id": "hello-world"},
+        model="z-ai/glm-5.1",
+        scaffold="openclaw",
+        source_image=None,
+        prompt_template="default",
+        execution_environment="container",
+    )
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
+
+    resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
+    assert resources["samples"] == []
+    assert resources["summary"]["monitoring_disabled"] is False
+    assert resources["summary"]["monitoring"]["status"] == "enabled_no_samples"
+
+
+def test_run_attempt_marks_disabled_resources(tmp_path: Path) -> None:
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="hello-world",
+        attempt=1,
+        task={"instance_id": "hello-world"},
+        model="z-ai/glm-5.1",
+        scaffold="openclaw",
+        source_image=None,
+        prompt_template="default",
+        execution_environment="container",
+    )
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable=None,
+            disable_resource_monitoring=True,
+        )
+    )
+
+    resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
+    assert resources["samples"] == []
+    assert resources["summary"]["monitoring_disabled"] is True
+    assert resources["summary"]["monitoring"]["status"] == "disabled"
 
 
 def test_run_attempt_disk_shortfall_aborts_early(tmp_path: Path) -> None:
@@ -616,7 +692,9 @@ def test_start_task_container_prepends_bootstrap_userbase_bin(
         "PATH=/testbed/_task_container_runtime/bootstrap/.pyuserbase/bin:"
         "/usr/local/bin:/usr/bin:/bin"
     ) in cmd
-    assert "PYTHONUSERBASE=/testbed/_task_container_runtime/bootstrap/.pyuserbase" in cmd
+    assert (
+        "PYTHONUSERBASE=/testbed/_task_container_runtime/bootstrap/.pyuserbase" in cmd
+    )
     assert "PIP_BREAK_SYSTEM_PACKAGES=1" in cmd
     # Host ~/.local/bin still must not leak.
     assert all("/.local/bin" not in str(part) for part in cmd)

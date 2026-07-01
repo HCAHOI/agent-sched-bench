@@ -128,7 +128,7 @@ def test_run_openclaw_in_task_container_normalizes_trace_on_host(
     )
     monkeypatch.setattr(
         "trace_collect.collector.bootstrap_task_container_python",
-        lambda **kwargs: bootstrap_seen.update(kwargs),
+        lambda **kwargs: (bootstrap_seen.update(kwargs), kwargs["exec_config"])[1],
     )
     monkeypatch.setattr(
         "trace_collect.collector.preflight_task_container_runtime",
@@ -285,7 +285,7 @@ def test_run_openclaw_in_task_container_adds_mcp_bootstrap_requirements(
     )
     monkeypatch.setattr(
         "trace_collect.collector.bootstrap_task_container_python",
-        lambda **kwargs: bootstrap_seen.update(kwargs),
+        lambda **kwargs: (bootstrap_seen.update(kwargs), kwargs["exec_config"])[1],
     )
     monkeypatch.setattr(
         "trace_collect.collector.preflight_task_container_runtime",

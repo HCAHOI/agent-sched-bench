@@ -1651,6 +1651,8 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
     payload = json.loads(resources_path.read_text())
     assert payload["samples"] == []
     assert payload["summary"]["sample_count"] == 0
+    assert payload["summary"]["monitoring_disabled"] is True
+    assert payload["summary"]["monitoring"]["status"] == "disabled"
 
     startup_path = attempt_dir / "container_startup.json"
     assert startup_path.exists()
@@ -2188,6 +2190,8 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert startup["resources"]["summary"]["sample_count"] == 0
     assert resources["samples"][0]["phase"] == "runtime"
     assert resources["summary"]["sample_count"] == 1
+    assert resources["summary"]["monitoring_disabled"] is False
+    assert resources["summary"]["monitoring"]["status"] == "collected"
     assert ensure_calls == [
         {
             "source_image": "docker.io/swebench-test/task-a",
@@ -3631,6 +3635,8 @@ def test_simulator_replays_tongyi_deepresearch_trace(
     payload = json.loads(resources_path.read_text())
     assert payload["samples"] == []
     assert payload["summary"]["sample_count"] == 0
+    assert payload["summary"]["monitoring_disabled"] is True
+    assert payload["summary"]["monitoring"]["status"] == "disabled"
 
 
 def test_execution_environment_infers_host_from_agent_runtime_mode() -> None:

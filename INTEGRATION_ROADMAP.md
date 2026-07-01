@@ -327,14 +327,18 @@ Current visualization path is intentionally simpler and stricter. Sibling has br
 
 #### Current repo
 
-Current task-container runtime emphasizes hermetic per-attempt bootstrap:
+Current task-container runtime now uses a guarded shared bootstrap cache:
 
-- attempt-local runtime dependencies
+- immutable shared runtime dependency generations under `~/.cache/task-container-bootstrap/<platform>/<config-hash>/`
+- host file lock around bootstrap writes
+- cache marker validation for requirements, Python runtime, pip index, pip-resolution env fingerprint, architecture, image platform, Python ABI/OS/libc fingerprint, and installed package/version manifests
+- non-destructive rebuilds so active cache readers are not invalidated
 - explicit in-container Python probing
 - support for `/opt/miniconda3` and `/opt/conda` Python candidates
 - explicit pip mirror support via `TASK_CONTAINER_PIP_INDEX_URL`
 - isolated pip env using `PIP_CONFIG_FILE=os.devnull`
 - apt mirror setup for Debian/Ubuntu task containers
+- run-mode task-container stdout is streamed live while still teeing to raw log artifacts
 
 Relevant files:
 
@@ -344,7 +348,7 @@ Relevant files:
 
 #### Present in `agent-test-bench`
 
-Sibling uses a shared bootstrap cache:
+Sibling uses a similar shared bootstrap cache:
 
 - shared runtime directory
 - file lock around bootstrap
@@ -354,16 +358,11 @@ Sibling uses a shared bootstrap cache:
 
 #### Mechanism differences
 
-Current is slower for repeated attempts but more isolated and reproducible. Sibling is faster but more complex and requires careful cache correctness.
+Current now matches the sibling performance-oriented path while preserving this branch's stricter runtime assumptions. The cache is shared across attempts but rejects stale or contaminated contents before reuse.
 
 #### Recommendation
 
-Keep current per-attempt bootstrap unless bootstrap time becomes a measured bottleneck. If optimizing later, borrow only:
-
-- file-locking discipline
-- contamination detection ideas
-
-Do not reintroduce host conda assumptions.
+Status: aligned for shared bootstrap cache and live run stdout streaming. Keep the current explicit in-container Python probing and do not reintroduce host conda assumptions.
 
 ---
 
@@ -694,7 +693,7 @@ Candidates:
 
 - monitoring policy layer
 - PMU / micro-architecture availability reporting
-- monitoring-disabled marker
+- monitoring-disabled marker — completed for attempt/simulate `resources.json` summaries (`disabled`, `enabled_no_samples`, `collected`)
 - richer timing breakdown
 
 Rules:

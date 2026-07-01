@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from agents.openclaw.runtime_deps import OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
+from trace_collect.runtime import task_container as task_container_module
 from trace_collect.runtime.task_container import (
     TaskContainerExecConfig,
     TaskContainerRunResult,
@@ -21,6 +22,33 @@ from trace_collect.runtime.task_container import (
     resolve_running_container_exec_config,
     run_task_container_agent,
 )
+
+
+_PYTHON_FINGERPRINT = {
+    "version": "3.12.1",
+    "implementation": "CPython",
+    "cache_tag": "cpython-312",
+    "ext_suffix": ".cpython-312-x86_64-linux-gnu.so",
+    "machine": "x86_64",
+    "libc": "glibc 2.36",
+    "os_id": "debian",
+    "os_version_id": "12",
+}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shared_bootstrap_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container._SHARED_BOOTSTRAP_CACHE",
+        tmp_path / "shared-bootstrap-cache",
+    )
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container._container_python_fingerprint",
+        lambda **_: dict(_PYTHON_FINGERPRINT),
+    )
 
 
 def test_project_mount_args_include_attempt_dir_and_repo(
@@ -379,9 +407,93 @@ def test_bootstrap_task_container_python_does_not_retry_http_error(
     assert seen["attempts"] == 1
 
 
-def test_bootstrap_task_container_python_cleans_marker_absent_partial_dirs(
+def _bootstrap_cache_key_for(
+    exec_config: TaskContainerExecConfig,
+    requirements: tuple[str, ...] | None = None,
+) -> str:
+    pip_fingerprint = task_container_module._bootstrap_pip_resolution_fingerprint(
+        "https://pypi.org/simple"
+    )
+    return task_container_module._bootstrap_cache_key(
+        requirements=requirements or tuple(OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS),
+        runtime=exec_config.runtime,
+        pip_index_url="https://pypi.org/simple",
+        arch="amd64",
+        image_platform=exec_config.image_platform,
+        python_fingerprint=dict(_PYTHON_FINGERPRINT),
+        pip_resolution_fingerprint=pip_fingerprint,
+    )
+
+
+def _write_ready_shared_cache(
+    exec_config: TaskContainerExecConfig,
+    *,
+    requirements: tuple[str, ...] | None = None,
+    packages: list[str] | None = None,
+    userbase_packages: list[str] | None = None,
+    generation: str = "gen-existing",
+) -> Path:
+    resolved_requirements = requirements or tuple(
+        OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
+    )
+    cache_key = _bootstrap_cache_key_for(exec_config, resolved_requirements)
+    cache_root = (
+        task_container_module._shared_bootstrap_dir(exec_config.image_platform)
+        / cache_key
+    )
+    generation_dir = cache_root / generation
+    site_dir = generation_dir / "pydeps"
+    userbase = generation_dir / ".pyuserbase"
+    site_dir.mkdir(parents=True)
+    package_list = ["openai==2.0"] if packages is None else packages
+    userbase_package_list = (
+        ["pip==24.0"] if userbase_packages is None else userbase_packages
+    )
+    for package in package_list:
+        (site_dir / f"{package.replace('==', '-')}.dist-info").mkdir()
+    (userbase / "bin").mkdir(parents=True)
+    (userbase / "bin" / "pip").write_text("", encoding="utf-8")
+    userbase_site = userbase / "lib" / "python3.12" / "site-packages"
+    userbase_site.mkdir(parents=True)
+    for package in userbase_package_list:
+        (userbase_site / f"{package.replace('==', '-')}.dist-info").mkdir()
+    pip_fingerprint = task_container_module._bootstrap_pip_resolution_fingerprint(
+        "https://pypi.org/simple"
+    )
+    (site_dir / ".bootstrap-ready.json").write_text(
+        json.dumps(
+            {
+                "requirements": list(resolved_requirements),
+                "python": exec_config.runtime,
+                "pip_index_url": "https://pypi.org/simple",
+                "arch": "amd64",
+                "image_platform": exec_config.image_platform,
+                "python_fingerprint": dict(_PYTHON_FINGERPRINT),
+                "pip_resolution_fingerprint": pip_fingerprint,
+                "cache_key": cache_key,
+                "packages": package_list,
+                "userbase_packages": userbase_package_list,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (cache_root / "current.json").write_text(
+        json.dumps(
+            {
+                "generation": generation,
+                "cache_key": cache_key,
+                "python_fingerprint": dict(_PYTHON_FINGERPRINT),
+                "pip_resolution_fingerprint": pip_fingerprint,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return site_dir
+
+
+def test_bootstrap_task_container_python_ignores_attempt_local_partial_dirs(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exec_config = TaskContainerExecConfig(
         runtime="/usr/bin/python3",
@@ -430,21 +542,24 @@ def test_bootstrap_task_container_python_cleans_marker_absent_partial_dirs(
     )
     monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
 
-    bootstrap_task_container_python(
+    resolved = bootstrap_task_container_python(
         container_id="cid-1",
         exec_config=exec_config,
         extra_requirements=(),
         container_executable="docker",
     )
 
-    assert not stale_pydeps.exists()
-    assert not stale_userbase.exists()
+    assert stale_pydeps.exists()
+    assert stale_userbase.exists()
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+    assert resolved.bootstrap_site_dir is not None
+    assert resolved.bootstrap_site_dir != exec_config.bootstrap_site_dir
+    assert "shared-bootstrap-cache" in str(resolved.bootstrap_site_dir)
 
 
-def test_bootstrap_task_container_python_fails_on_cleanup_error(
+def test_bootstrap_task_container_python_fails_on_generation_cleanup_error(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exec_config = TaskContainerExecConfig(
         runtime="/usr/bin/python3",
@@ -454,12 +569,34 @@ def test_bootstrap_task_container_python_fails_on_cleanup_error(
         bootstrap_site_dir=tmp_path / "pydeps",
         image_platform="linux/amd64",
     )
-    exec_config.bootstrap_site_dir.mkdir(parents=True, exist_ok=True)
-    (exec_config.bootstrap_site_dir / "stale.txt").write_text("stale", encoding="utf-8")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"print('ok')\n"
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        lambda url, timeout: FakeResponse(),
+    )
+
+    def fake_run(*args, **kwargs):
+        class Result:
+            returncode = 1
+            stdout = "bootstrap failed"
+            stderr = ""
+
+        return Result()
 
     def fake_rmtree(path: Path) -> None:
         raise OSError(f"cannot remove {path}")
 
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
     monkeypatch.setattr(
         "trace_collect.runtime.task_container.shutil.rmtree", fake_rmtree
     )
@@ -473,9 +610,9 @@ def test_bootstrap_task_container_python_fails_on_cleanup_error(
         )
 
 
-def test_bootstrap_task_container_python_rebuilds_when_marker_requirements_change(
+def test_bootstrap_task_container_python_publishes_new_generation_when_marker_stale(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exec_config = TaskContainerExecConfig(
         runtime="/usr/bin/python3",
@@ -485,13 +622,13 @@ def test_bootstrap_task_container_python_rebuilds_when_marker_requirements_chang
         bootstrap_site_dir=tmp_path / "pydeps",
         image_platform="linux/amd64",
     )
-    exec_config.bootstrap_site_dir.mkdir(parents=True, exist_ok=True)
-    marker = exec_config.bootstrap_site_dir / ".bootstrap-ready.json"
-    marker.write_text(
-        '{"requirements": ["openai>=2.0,<3.0"], "python": "/usr/bin/python3"}',
-        encoding="utf-8",
+    stale_site_dir = _write_ready_shared_cache(
+        exec_config,
+        requirements=("openai>=2.0,<3.0",),
+        packages=["openai==2.0"],
+        generation="gen-stale",
     )
-    stale_file = exec_config.bootstrap_site_dir / "stale.txt"
+    stale_file = stale_site_dir / "stale.txt"
     stale_file.write_text("stale", encoding="utf-8")
     seen: dict[str, object] = {}
 
@@ -525,16 +662,171 @@ def test_bootstrap_task_container_python_rebuilds_when_marker_requirements_chang
     )
     monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
 
-    bootstrap_task_container_python(
+    resolved = bootstrap_task_container_python(
         container_id="cid-1",
         exec_config=exec_config,
         extra_requirements=(),
         container_executable="docker",
     )
 
-    assert not stale_file.exists()
+    assert stale_file.exists()
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
-    assert marker.exists() is False
+    assert resolved.bootstrap_site_dir is not None
+    assert resolved.bootstrap_site_dir != stale_site_dir
+
+
+def test_bootstrap_task_container_python_reuses_valid_shared_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    site_dir = _write_ready_shared_cache(exec_config)
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("shared cache hit should not run bootstrap")
+
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fail_run)
+
+    resolved = bootstrap_task_container_python(
+        container_id="cid-1",
+        exec_config=exec_config,
+        extra_requirements=(),
+        container_executable="docker",
+    )
+
+    assert resolved.bootstrap_site_dir == site_dir
+    assert str(site_dir) in resolved.pythonpath
+
+
+def test_bootstrap_task_container_python_rebuilds_when_pip_resolution_env_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    site_dir = _write_ready_shared_cache(exec_config)
+    seen: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"print('ok')\n"
+
+    def fake_urlopen(url: str, timeout: int):
+        seen["url"] = url
+        return FakeResponse()
+
+    def fake_run(*args, **kwargs):
+        seen["cmd"] = args[0]
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setenv(
+        "TASK_CONTAINER_PIP_EXTRA_INDEX_URL", "https://extra.example/simple"
+    )
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    resolved = bootstrap_task_container_python(
+        container_id="cid-1",
+        exec_config=exec_config,
+        extra_requirements=(),
+        container_executable="docker",
+    )
+
+    assert resolved.bootstrap_site_dir is not None
+    assert resolved.bootstrap_site_dir != site_dir
+    assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+
+
+def test_bootstrap_task_container_python_rebuilds_contaminated_shared_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exec_config = TaskContainerExecConfig(
+        runtime="/usr/bin/python3",
+        pythonpath=f"{tmp_path}/pydeps:/repo/src:/repo",
+        start_extra_args=(),
+        bootstrap=True,
+        bootstrap_site_dir=tmp_path / "pydeps",
+        image_platform="linux/amd64",
+    )
+    stale_site_dir = _write_ready_shared_cache(
+        exec_config,
+        packages=[],
+        generation="gen-contaminated",
+    )
+    stale_package = stale_site_dir / "stale-1.0.dist-info"
+    stale_package.mkdir()
+    seen: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"print('ok')\n"
+
+    def fake_urlopen(url: str, timeout: int):
+        seen["url"] = url
+        return FakeResponse()
+
+    def fake_run(*args, **kwargs):
+        seen["cmd"] = args[0]
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    monkeypatch.setattr("trace_collect.runtime.task_container.subprocess.run", fake_run)
+
+    resolved = bootstrap_task_container_python(
+        container_id="cid-1",
+        exec_config=exec_config,
+        extra_requirements=(),
+        container_executable="docker",
+    )
+
+    assert stale_package.exists()
+    assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+    assert resolved.bootstrap_site_dir is not None
+    assert resolved.bootstrap_site_dir != stale_site_dir
 
 
 def test_preflight_task_container_runtime_reads_runtime_proof(
@@ -736,6 +1028,66 @@ def test_run_task_container_agent_preserves_existing_raw_logs(
 
     assert stdout_path.read_text(encoding="utf-8") == "container stdout"
     assert stderr_path.read_text(encoding="utf-8") == "container stderr"
+
+
+def test_run_task_container_agent_updates_raw_logs_from_exec_pipe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    result_path = tmp_path / "_task_container_runtime" / "openclaw" / "run.result.json"
+    stdout_path = tmp_path / "_task_container_runtime" / "openclaw" / "stdout.txt"
+    stderr_path = tmp_path / "_task_container_runtime" / "openclaw" / "stderr.txt"
+    trace_path = tmp_path / "_task_container_runtime" / "openclaw" / "trace.jsonl"
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path.write_text("tee stdout", encoding="utf-8")
+    stderr_path.write_text("tee stderr", encoding="utf-8")
+
+    def fake_exec(**kwargs):
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(
+                {
+                    "success": True,
+                    "trace_path": str(trace_path),
+                    "model_patch": "diff --git a/x b/x",
+                    "exit_status": "Submitted",
+                    "error": None,
+                    "runtime_proof": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        class Result:
+            returncode = 0
+            stdout = "pipe stdout"
+            stderr = "pipe stderr"
+
+        return Result()
+
+    monkeypatch.setattr(
+        "trace_collect.runtime.task_container.exec_task_container_entrypoint",
+        fake_exec,
+    )
+
+    run_task_container_agent(
+        container_id="cid-2",
+        timeout=10,
+        runtime="/usr/bin/python3",
+        pythonpath="/tmp/site:/repo/src:/repo",
+        container_executable="docker",
+        request={
+            "kind": "run_openclaw",
+            "scaffold": "openclaw",
+            "result_path": str(result_path),
+            "trace_file": str(trace_path),
+            "raw_stdout_path": str(stdout_path),
+            "raw_stderr_path": str(stderr_path),
+        },
+    )
+
+    assert stdout_path.read_text(encoding="utf-8") == "pipe stdout"
+    assert stderr_path.read_text(encoding="utf-8") == "pipe stderr"
 
 
 def test_run_task_container_agent_prefers_explicit_success_over_patch(

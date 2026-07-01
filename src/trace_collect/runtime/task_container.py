@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
+import platform
+import ssl
 import subprocess
 import shutil
+import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, TextIO
 
 from agents.openclaw.runtime_deps import OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
 
@@ -22,6 +29,7 @@ _REDACTED_SECRET = "***REDACTED***"
 _DEFAULT_RUNTIME_PYTHONPATH = f"{REPO_ROOT / 'src'}:{REPO_ROOT}"
 _CONTAINER_SYSTEM_PYTHON = "/usr/bin/python3"
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple"
+_SHARED_BOOTSTRAP_CACHE = Path.home() / ".cache" / "task-container-bootstrap"
 _GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 _GET_PIP_FETCH_ATTEMPTS = 3
 _GET_PIP_FETCH_BACKOFF_SECONDS = 1.0
@@ -41,6 +49,12 @@ _CONTAINER_PYTHON_CANDIDATES = (
     "python3",
     "python",
 )
+_BOOTSTRAP_PIP_RESOLUTION_ENV_KEYS = (
+    "TASK_CONTAINER_PIP_EXTRA_INDEX_URL",
+    "TASK_CONTAINER_PIP_TRUSTED_HOST",
+    "TASK_CONTAINER_PIP_CERT",
+    "TASK_CONTAINER_SSL_CERT_FILE",
+)
 
 
 def _format_probe_failure_details(result: subprocess.CompletedProcess[str]) -> str:
@@ -54,32 +68,99 @@ def _format_probe_failure_details(result: subprocess.CompletedProcess[str]) -> s
     return "; ".join(parts)
 
 
+def _resolve_userbase_site_packages(userbase: Path) -> Path | None:
+    """Return the first Python userbase site-packages directory, if present."""
+    for lib_dir in ("lib", "lib64"):
+        lib_path = userbase / lib_dir
+        if not lib_path.is_dir():
+            continue
+        for py_dir in sorted(lib_path.iterdir(), reverse=True):
+            if not py_dir.is_dir() or not py_dir.name.startswith("python"):
+                continue
+            site_packages = py_dir / "site-packages"
+            if site_packages.is_dir():
+                return site_packages
+    return None
+
+
+def _list_bootstrap_packages(site_dir: Path) -> set[str]:
+    """Return installed package identifiers from ``*.dist-info`` directories."""
+    packages: set[str] = set()
+    try:
+        entries = list(site_dir.iterdir())
+    except OSError:
+        return packages
+    for entry in entries:
+        if not entry.is_dir() or not entry.name.endswith(".dist-info"):
+            continue
+        stem = entry.name[: -len(".dist-info")]
+        if "-" in stem:
+            package_name, version = stem.rsplit("-", 1)
+            packages.add(f"{package_name}=={version}")
+        else:
+            packages.add(stem)
+    return packages
+
+
 def _bootstrap_marker_matches(
     marker: Path,
     *,
     requirements: tuple[str, ...],
     runtime: str,
     pip_index_url: str,
+    arch: str,
+    image_platform: str | None,
+    python_fingerprint: dict[str, str],
+    pip_resolution_fingerprint: dict[str, object],
+    cache_key: str,
+    site_dir: Path | None = None,
+    userbase_dir: Path | None = None,
 ) -> bool:
+    """Return true when a shared bootstrap cache is safe to reuse."""
     if not marker.exists():
         return False
     try:
         payload = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return payload == {
+
+    expected = {
         "requirements": list(requirements),
         "python": runtime,
         "pip_index_url": pip_index_url,
+        "arch": arch,
+        "image_platform": image_platform,
+        "python_fingerprint": python_fingerprint,
+        "pip_resolution_fingerprint": pip_resolution_fingerprint,
+        "cache_key": cache_key,
     }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        return False
+
+    for manifest_key, check_dir in (
+        ("packages", site_dir),
+        ("userbase_packages", userbase_dir),
+    ):
+        recorded = payload.get(manifest_key)
+        if not isinstance(recorded, list):
+            return False
+        if check_dir is None:
+            if recorded:
+                return False
+            continue
+        actual = _list_bootstrap_packages(check_dir)
+        if actual != set(recorded):
+            return False
+    return True
 
 
 def _is_retryable_get_pip_error(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         return False
-    return isinstance(exc, OSError) or (
-        isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, OSError)
-    )
+    retryable = (ssl.SSLError, TimeoutError, ConnectionResetError, OSError)
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, retryable)
+    return isinstance(exc, retryable)
 
 
 def _download_get_pip(get_pip: Path) -> None:
@@ -152,6 +233,159 @@ def _normalize_arch(raw: str | None) -> str | None:
     if raw is None:
         return None
     return _ARCH_ALIASES.get(raw.lower(), raw.lower())
+
+
+def _host_linux_platform() -> str | None:
+    if platform.system() != "Linux":
+        return None
+    arch = _normalize_arch(platform.machine())
+    if not arch:
+        return None
+    return f"linux/{arch}"
+
+
+def _shared_bootstrap_dir(image_platform: str | None) -> Path:
+    platform_slug = image_platform or _host_linux_platform() or "unknown"
+    return _SHARED_BOOTSTRAP_CACHE / platform_slug.replace("/", "-")
+
+
+@contextmanager
+def _bootstrap_lock() -> Iterator[None]:
+    """Serialize writes to the shared task-container bootstrap cache."""
+    _SHARED_BOOTSTRAP_CACHE.mkdir(parents=True, exist_ok=True)
+    lock_path = _SHARED_BOOTSTRAP_CACHE / ".bootstrap.lock"
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _bootstrap_arch(exec_config: TaskContainerExecConfig) -> str:
+    if exec_config.image_platform:
+        parts = exec_config.image_platform.split("/", 1)
+        if len(parts) == 2:
+            return _normalize_arch(parts[1]) or parts[1].lower()
+    return _normalize_arch(platform.machine()) or "unknown"
+
+
+def _container_python_fingerprint(
+    *,
+    container_id: str,
+    runtime: str,
+    container_executable: str,
+    cwd: str,
+) -> dict[str, str]:
+    script = r"""
+import json
+import platform
+import sys
+import sysconfig
+
+os_release = {}
+try:
+    with open("/etc/os-release", encoding="utf-8") as handle:
+        for line in handle:
+            if "=" not in line:
+                continue
+            key, value = line.rstrip().split("=", 1)
+            if key in {"ID", "VERSION_ID"}:
+                os_release[key.lower()] = value.strip('"')
+except OSError:
+    pass
+
+payload = {
+    "version": platform.python_version(),
+    "implementation": platform.python_implementation(),
+    "cache_tag": sys.implementation.cache_tag or "",
+    "ext_suffix": sysconfig.get_config_var("EXT_SUFFIX") or "",
+    "machine": platform.machine(),
+    "libc": " ".join(part for part in platform.libc_ver() if part),
+    "os_id": os_release.get("id", ""),
+    "os_version_id": os_release.get("version_id", ""),
+}
+print(json.dumps(payload, sort_keys=True))
+"""
+    result = subprocess.run(
+        [
+            container_executable,
+            "exec",
+            "-i",
+            "-w",
+            cwd,
+            container_id,
+            runtime,
+            "-c",
+            script,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "task-container python fingerprint failed: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"task-container python fingerprint failed: invalid JSON {result.stdout!r}"
+        ) from exc
+    return {str(key): str(value) for key, value in payload.items()}
+
+
+def _bootstrap_pip_resolution_fingerprint(pip_index_url: str) -> dict[str, object]:
+    payload = {
+        "pip_index_url": pip_index_url,
+        **{key: os.environ.get(key, "") for key in _BOOTSTRAP_PIP_RESOLUTION_ENV_KEYS},
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "digest": hashlib.sha256(encoded).hexdigest(),
+        "present_env": sorted(key for key in payload if payload[key]),
+    }
+
+
+def _bootstrap_cache_key(
+    *,
+    requirements: tuple[str, ...],
+    runtime: str,
+    pip_index_url: str,
+    arch: str,
+    image_platform: str | None,
+    python_fingerprint: dict[str, str],
+    pip_resolution_fingerprint: dict[str, object],
+) -> str:
+    payload = {
+        "requirements": list(requirements),
+        "python": runtime,
+        "pip_index_url": pip_index_url,
+        "arch": arch,
+        "image_platform": image_platform,
+        "python_fingerprint": python_fingerprint,
+        "pip_resolution_fingerprint": pip_resolution_fingerprint,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:24]
+
+
+def _exec_config_with_bootstrap_site_dir(
+    exec_config: TaskContainerExecConfig,
+    site_dir: Path,
+) -> TaskContainerExecConfig:
+    return TaskContainerExecConfig(
+        runtime=exec_config.runtime,
+        pythonpath=f"{site_dir}:{_DEFAULT_RUNTIME_PYTHONPATH}",
+        start_extra_args=exec_config.start_extra_args,
+        bootstrap=exec_config.bootstrap,
+        bootstrap_site_dir=site_dir,
+        image_platform=exec_config.image_platform,
+    )
 
 
 def _inspect_image_platform(
@@ -227,7 +461,7 @@ def resolve_task_container_exec_config(
     if image_platform is not None:
         start_args = ["--platform", image_platform, *start_args]
 
-    site_dir = task_container_runtime_dir(attempt_dir, "bootstrap") / "pydeps"
+    site_dir = _shared_bootstrap_dir(image_platform) / "pydeps"
     return TaskContainerExecConfig(
         runtime=_CONTAINER_SYSTEM_PYTHON,
         pythonpath=f"{site_dir}:{_DEFAULT_RUNTIME_PYTHONPATH}",
@@ -328,6 +562,98 @@ def _redact_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return _redact(payload)
 
 
+def _collect_pipe(
+    pipe: TextIO,
+    lines: list[str],
+    *,
+    live_stream: TextIO | None = None,
+) -> None:
+    try:
+        for line in pipe:
+            lines.append(line)
+            if live_stream is not None:
+                live_stream.write(line)
+                live_stream.flush()
+    finally:
+        pipe.close()
+
+
+def _run_entrypoint_streaming(
+    cmd: list[str],
+    *,
+    stdin_data: str,
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdin is not None
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    stdout_thread = threading.Thread(
+        target=_collect_pipe,
+        args=(proc.stdout, stdout_lines),
+        kwargs={"live_stream": sys.stdout},
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_collect_pipe,
+        args=(proc.stderr, stderr_lines),
+        daemon=True,
+    )
+    stdin_errors: list[BaseException] = []
+
+    def write_stdin() -> None:
+        try:
+            proc.stdin.write(stdin_data)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
+        except BaseException as exc:  # pragma: no cover - defensive pipe cleanup
+            stdin_errors.append(exc)
+            try:
+                proc.stdin.close()
+            except BaseException:
+                pass
+
+    stdin_thread = threading.Thread(target=write_stdin, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    stdin_thread.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        proc.wait()
+        stdin_thread.join(timeout=1.0)
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+        raise subprocess.TimeoutExpired(
+            cmd=cmd,
+            timeout=timeout,
+            output="".join(stdout_lines),
+            stderr="".join(stderr_lines),
+        ) from exc
+    stdin_thread.join(timeout=1.0)
+    if stdin_errors:
+        raise RuntimeError(f"task-container stdin write failed: {stdin_errors[0]}")
+    stdout_thread.join(timeout=1.0)
+    stderr_thread.join(timeout=1.0)
+    return subprocess.CompletedProcess(
+        args=cmd,
+        returncode=proc.returncode,
+        stdout="".join(stdout_lines),
+        stderr="".join(stderr_lines),
+    )
+
+
 def exec_task_container_entrypoint(
     *,
     container_id: str,
@@ -344,30 +670,36 @@ def exec_task_container_entrypoint(
     if not kind:
         raise ValueError(f"missing request kind in {request_path}")
     mode = "preflight" if kind == "preflight" else "run"
-    return subprocess.run(
-        [
-            container_executable,
-            "exec",
-            "-i",
-            "-w",
-            cwd,
-            "-e",
-            f"PYTHONPATH={pythonpath or _DEFAULT_RUNTIME_PYTHONPATH}",
-            "-e",
-            "PYTHONDONTWRITEBYTECODE=1",
-            container_id,
-            runtime,
-            "-m",
-            "trace_collect.runtime.entrypoint",
-            "--mode",
-            mode,
-        ],
-        input=json.dumps(request, ensure_ascii=False),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
-    )
+    cmd = [
+        container_executable,
+        "exec",
+        "-i",
+        "-w",
+        cwd,
+        "-e",
+        f"PYTHONPATH={pythonpath or _DEFAULT_RUNTIME_PYTHONPATH}",
+        "-e",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "-e",
+        "PYTHONUNBUFFERED=1",
+        container_id,
+        runtime,
+        "-m",
+        "trace_collect.runtime.entrypoint",
+        "--mode",
+        mode,
+    ]
+    stdin_data = json.dumps(request, ensure_ascii=False)
+    if mode == "preflight":
+        return subprocess.run(
+            cmd,
+            input=stdin_data,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    return _run_entrypoint_streaming(cmd, stdin_data=stdin_data, timeout=timeout)
 
 
 def preflight_task_container_runtime(
@@ -465,9 +797,9 @@ def run_task_container_agent(
             raw_stdout_path.write_text("", encoding="utf-8")
         raw_stderr_path.write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
         raise
-    if not raw_stdout_path.exists():
+    if result.stdout or not raw_stdout_path.exists():
         raw_stdout_path.write_text(result.stdout, encoding="utf-8")
-    if not raw_stderr_path.exists():
+    if result.stderr or not raw_stderr_path.exists():
         raw_stderr_path.write_text(result.stderr, encoding="utf-8")
     if result.returncode != 0:
         raise RuntimeError(
@@ -501,55 +833,146 @@ def bootstrap_task_container_python(
     extra_requirements: tuple[str, ...] = (),
     container_executable: str,
     cwd: str = "/testbed",
-) -> None:
+) -> TaskContainerExecConfig:
     if not exec_config.bootstrap or exec_config.bootstrap_site_dir is None:
-        return
+        return exec_config
 
-    marker = exec_config.bootstrap_site_dir / ".bootstrap-ready.json"
+    arch = _bootstrap_arch(exec_config)
     requirements = tuple(
         dict.fromkeys(OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS + extra_requirements)
     )
     pip_index_url = (
         os.environ.get("TASK_CONTAINER_PIP_INDEX_URL") or _DEFAULT_PIP_INDEX_URL
     )
-    userbase = exec_config.bootstrap_site_dir.parent / ".pyuserbase"
-    marker_matches = _bootstrap_marker_matches(
-        marker,
+    python_fingerprint = _container_python_fingerprint(
+        container_id=container_id,
+        runtime=exec_config.runtime,
+        container_executable=container_executable,
+        cwd=cwd,
+    )
+    pip_resolution_fingerprint = _bootstrap_pip_resolution_fingerprint(pip_index_url)
+    cache_key = _bootstrap_cache_key(
         requirements=requirements,
         runtime=exec_config.runtime,
         pip_index_url=pip_index_url,
+        arch=arch,
+        image_platform=exec_config.image_platform,
+        python_fingerprint=python_fingerprint,
+        pip_resolution_fingerprint=pip_resolution_fingerprint,
     )
-    userbase_pip_exists = (userbase / "bin" / "pip").exists() or (
-        userbase / "bin" / "pip3"
-    ).exists()
-    if marker_matches and userbase_pip_exists:
-        return
-    marker.unlink(missing_ok=True)
-    _remove_tree_if_exists(exec_config.bootstrap_site_dir)
-    _remove_tree_if_exists(userbase)
+    cache_root = _shared_bootstrap_dir(exec_config.image_platform) / cache_key
+    current_path = cache_root / "current.json"
 
-    userbase.mkdir(parents=True, exist_ok=True)
-    get_pip = userbase / "get-pip.py"
-    if not get_pip.exists():
-        _download_get_pip(get_pip)
+    def config_from_generation(generation: str) -> TaskContainerExecConfig | None:
+        generation_dir = cache_root / generation
+        site_dir = generation_dir / "pydeps"
+        userbase = generation_dir / ".pyuserbase"
+        marker = site_dir / ".bootstrap-ready.json"
+        userbase_site = _resolve_userbase_site_packages(userbase)
+        userbase_pip_exists = (userbase / "bin" / "pip").exists() or (
+            userbase / "bin" / "pip3"
+        ).exists()
+        if not userbase_pip_exists:
+            return None
+        if not _bootstrap_marker_matches(
+            marker,
+            requirements=requirements,
+            runtime=exec_config.runtime,
+            pip_index_url=pip_index_url,
+            arch=arch,
+            image_platform=exec_config.image_platform,
+            python_fingerprint=python_fingerprint,
+            pip_resolution_fingerprint=pip_resolution_fingerprint,
+            cache_key=cache_key,
+            site_dir=site_dir,
+            userbase_dir=userbase_site,
+        ):
+            return None
+        return _exec_config_with_bootstrap_site_dir(exec_config, site_dir)
 
-    script = f"""
+    def current_config() -> TaskContainerExecConfig | None:
+        try:
+            payload = json.loads(current_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        generation = payload.get("generation")
+        if not isinstance(generation, str) or not generation:
+            return None
+        return config_from_generation(generation)
+
+    cached = current_config()
+    if cached is not None:
+        print(
+            f"[bootstrap] shared cache hit ({arch}): {cached.bootstrap_site_dir}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return cached
+
+    with _bootstrap_lock():
+        cached = current_config()
+        if cached is not None:
+            print(
+                f"[bootstrap] shared cache hit ({arch}, after lock): "
+                f"{cached.bootstrap_site_dir}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return cached
+
+        cache_root.mkdir(parents=True, exist_ok=True)
+        generation = f"gen-{time.time_ns()}-{os.getpid()}"
+        generation_dir = cache_root / generation
+        while generation_dir.exists():
+            generation = f"gen-{time.time_ns()}-{os.getpid()}"
+            generation_dir = cache_root / generation
+        site_dir = generation_dir / "pydeps"
+        marker = site_dir / ".bootstrap-ready.json"
+        userbase = generation_dir / ".pyuserbase"
+        userbase.mkdir(parents=True, exist_ok=True)
+        get_pip = userbase / "get-pip.py"
+        if not get_pip.exists():
+            _download_get_pip(get_pip)
+
+        script = f"""
 import json
 import os
 import pathlib
 import subprocess
 import sys
 
-site_dir = pathlib.Path({str(exec_config.bootstrap_site_dir)!r})
+site_dir = pathlib.Path({str(site_dir)!r})
 marker = pathlib.Path({str(marker)!r})
 userbase = pathlib.Path({str(userbase)!r})
 requirements = {list(requirements)!r}
 site_dir.mkdir(parents=True, exist_ok=True)
 userbase.mkdir(parents=True, exist_ok=True)
 
-if marker.exists():
-    print("bootstrap runtime: reuse existing site-packages")
-    raise SystemExit(0)
+def _list_packages(path):
+    packages = []
+    if path is None or not path.exists():
+        return packages
+    for entry in path.iterdir():
+        if entry.is_dir() and entry.name.endswith(".dist-info"):
+            stem = entry.name[: -len(".dist-info")]
+            if "-" in stem:
+                name, version = stem.rsplit("-", 1)
+                packages.append(f"{{name}}=={{version}}")
+            else:
+                packages.append(stem)
+    return sorted(packages)
+
+def _userbase_site_packages(root):
+    for lib_name in ("lib", "lib64"):
+        lib_dir = root / lib_name
+        if not lib_dir.is_dir():
+            continue
+        for py_dir in sorted(lib_dir.iterdir(), reverse=True):
+            if py_dir.is_dir() and py_dir.name.startswith("python"):
+                site_packages = py_dir / "site-packages"
+                if site_packages.is_dir():
+                    return site_packages
+    return None
 
 env = {{
     key: value
@@ -581,6 +1004,7 @@ for source_key, target_keys in explicit_env_map.items():
     for target_key in target_keys:
         env[target_key] = value
 get_pip = userbase / "get-pip.py"
+print("[bootstrap] step 1/3: bootstrapping pip", flush=True)
 subprocess.check_call(
     [
         sys.executable,
@@ -597,6 +1021,7 @@ if not pip_bin.exists():
     pip_bin = userbase / "bin" / "pip3"
 if not pip_bin.exists():
     raise RuntimeError("pip bootstrap succeeded but pip executable is missing")
+print(f"[bootstrap] step 2/3: installing {{len(requirements)}} runtime deps", flush=True)
 subprocess.check_call(
     [
         str(pip_bin),
@@ -613,39 +1038,66 @@ subprocess.check_call(
     ],
     env=env,
 )
+print("[bootstrap] step 3/3: writing cache marker", flush=True)
 marker.write_text(
     json.dumps(
         {{
             "requirements": requirements,
             "python": sys.executable,
             "pip_index_url": {pip_index_url!r},
+            "arch": {arch!r},
+            "image_platform": {exec_config.image_platform!r},
+            "python_fingerprint": {python_fingerprint!r},
+            "pip_resolution_fingerprint": {pip_resolution_fingerprint!r},
+            "cache_key": {cache_key!r},
+            "packages": _list_packages(site_dir),
+            "userbase_packages": _list_packages(_userbase_site_packages(userbase)),
         }}
     ),
     encoding="utf-8",
 )
 # Keep userbase intact so runtime PATH/PYTHONUSERBASE can resolve pip and
-# other scripts installed by get-pip.py --user.  The enclosing attempt dir is
-# still per-attempt, so this does not introduce cross-task cache sharing.
+# other scripts installed by get-pip.py --user. The enclosing cache generation
+# is immutable once published via current.json.
 """
-    result = subprocess.run(
-        [
-            container_executable,
-            "exec",
-            "-i",
-            "-w",
-            cwd,
-            container_id,
-            exec_config.runtime,
-            "-",
-        ],
-        input=script,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=1800,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            "task-container python bootstrap failed: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
+        result = subprocess.run(
+            [
+                container_executable,
+                "exec",
+                "-i",
+                "-w",
+                cwd,
+                container_id,
+                exec_config.runtime,
+                "-",
+            ],
+            input=script,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=1800,
         )
+        if result.returncode != 0:
+            _remove_tree_if_exists(generation_dir)
+            raise RuntimeError(
+                "task-container python bootstrap failed: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+
+        published_config = _exec_config_with_bootstrap_site_dir(exec_config, site_dir)
+        current_tmp = current_path.with_suffix(".tmp")
+        current_tmp.write_text(
+            json.dumps(
+                {
+                    "generation": generation,
+                    "cache_key": cache_key,
+                    "python_fingerprint": python_fingerprint,
+                    "pip_resolution_fingerprint": pip_resolution_fingerprint,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        current_tmp.replace(current_path)
+        return published_config
