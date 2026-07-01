@@ -377,6 +377,32 @@ def _tool_uses_single_exec_command_semantics(
     return "command" in payload and "commands" not in payload
 
 
+def _tool_mismatch_reason(
+    *,
+    source_success: bool,
+    tool_success: bool,
+    replay_source: str,
+    source_tool_result: Any,
+    replay_tool_result: Any,
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> str | None:
+    if replay_source == "source_artifact_unavailable":
+        return "source_artifact_unavailable"
+    if source_success != tool_success:
+        return "tool_success_mismatch"
+    if _tool_uses_exec_semantics(tool_name, tool_args_json):
+        source_exit = _command_exit_code(str(source_tool_result or ""))
+        replay_exit = _command_exit_code(str(replay_tool_result or ""))
+        if (
+            source_exit is not None
+            and replay_exit is not None
+            and source_exit != replay_exit
+        ):
+            return "command_exit_code_mismatch"
+    return None
+
+
 def _command_metadata(
     *,
     tool_name: str | None,
@@ -452,6 +478,155 @@ def _artifact_unavailable_result(source_path: str) -> str:
         "that is unavailable in the simulator runtime: "
         f"{source_path}"
     )
+
+
+def _checkpoint_after_spec(
+    *,
+    action_data: dict[str, Any],
+    source_trace: Path,
+) -> dict[str, Any] | None:
+    raw = action_data.get("checkpoint_after")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        spec: dict[str, Any] = {"path": raw}
+    elif isinstance(raw, dict):
+        spec = dict(raw)
+    else:
+        return None
+    raw_path = spec.get("path")
+    if not raw_path:
+        return None
+    checkpoint_path = Path(str(raw_path))
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = source_trace.parent / checkpoint_path
+    restore_root = str(spec.get("root") or "/testbed")
+    if restore_root != "/testbed":
+        return None
+    spec["path"] = str(checkpoint_path)
+    spec.setdefault("kind", "filesystem_tar")
+    spec["root"] = restore_root
+    return spec
+
+
+def _copy_checkpoint_archive_to_container(
+    *,
+    checkpoint_path: Path,
+    container_id: str,
+    container_executable: str,
+    container_archive_path: str,
+) -> None:
+    _run_checked_container_command(
+        [
+            container_executable,
+            "cp",
+            str(checkpoint_path.resolve()),
+            f"{container_id}:{container_archive_path}",
+        ],
+        timeout=600,
+    )
+
+
+def _restore_checkpoint_archive_in_container(
+    *,
+    container_id: str,
+    container_executable: str,
+    container_archive_path: str,
+    restore_root: str,
+) -> None:
+    script = r'''
+import os, shutil, tarfile
+archive = os.environ["CHECKPOINT_ARCHIVE"]
+root = os.path.abspath(os.environ["CHECKPOINT_ROOT"])
+if os.path.lexists(root):
+    if os.path.islink(root):
+        os.unlink(root)
+        os.makedirs(root, exist_ok=True)
+    elif not os.path.isdir(root):
+        os.unlink(root)
+        os.makedirs(root, exist_ok=True)
+else:
+    os.makedirs(root, exist_ok=True)
+root_real = os.path.realpath(root)
+if root_real != root:
+    raise RuntimeError(f"checkpoint root symlinks are unsupported: {root}")
+try:
+    with tarfile.open(archive, "r:*") as tf:
+        members = tf.getmembers()
+        for member in members:
+            if member.issym() or member.islnk():
+                raise RuntimeError(f"checkpoint links are unsupported: {member.name}")
+            target = os.path.abspath(os.path.join(root, member.name))
+            if target != root and not target.startswith(root + os.sep):
+                raise RuntimeError(f"unsafe checkpoint member: {member.name}")
+        for name in os.listdir(root):
+            path = os.path.join(root, name)
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.unlink(path)
+        for member in members:
+            tf.extract(member, root)
+finally:
+    if os.path.exists(archive):
+        os.unlink(archive)
+'''
+    _run_checked_container_command(
+        [
+            container_executable,
+            "exec",
+            "-e",
+            f"CHECKPOINT_ARCHIVE={container_archive_path}",
+            "-e",
+            f"CHECKPOINT_ROOT={restore_root}",
+            container_id,
+            "python3",
+            "-c",
+            script,
+        ],
+        timeout=600,
+    )
+
+
+def _restore_checkpoint_to_container(
+    *,
+    checkpoint_spec: dict[str, Any],
+    container: PreparedContainer,
+) -> dict[str, Any]:
+    checkpoint_path = Path(str(checkpoint_spec["path"]))
+    if not checkpoint_path.is_file():
+        return {
+            "forced_sync_success": False,
+            "forced_sync_error": f"checkpoint not found: {checkpoint_path}",
+        }
+    kind = str(checkpoint_spec.get("kind") or "filesystem_tar")
+    if kind not in {"filesystem_tar", "filesystem_tar_gz", "tar", "tar_gz"}:
+        return {
+            "forced_sync_success": False,
+            "forced_sync_error": f"unsupported checkpoint kind: {kind}",
+        }
+    restore_root = str(checkpoint_spec.get("root") or "/testbed")
+    container_archive_path = f"/tmp/agent_sched_checkpoint_{uuid.uuid4().hex}.tar"
+    started = time.monotonic()
+    _copy_checkpoint_archive_to_container(
+        checkpoint_path=checkpoint_path,
+        container_id=container.container_id,
+        container_executable=container.container_executable,
+        container_archive_path=container_archive_path,
+    )
+    _restore_checkpoint_archive_in_container(
+        container_id=container.container_id,
+        container_executable=container.container_executable,
+        container_archive_path=container_archive_path,
+        restore_root=restore_root,
+    )
+    return {
+        "forced_sync_success": True,
+        "forced_sync_elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+        "forced_sync_checkpoint": str(checkpoint_path),
+        "forced_sync_checkpoint_kind": kind,
+        "forced_sync_root": restore_root,
+    }
 
 
 def _source_openclaw_tool_results_dir(source_trace: Path) -> Path | None:
@@ -1935,6 +2110,7 @@ async def _replay_cloud_model_session(
     succeeded_actions = 0
     failed_actions = 0
     fatal_replay_errors = 0
+    forced_sync_actions = 0
     source_failed_actions = 0
     replay_failed_actions = 0
     matched_failed_actions = 0
@@ -2087,7 +2263,6 @@ async def _replay_cloud_model_session(
                     tool_success = False
                     duration_ms = (time.time() - record_ts_start) * 1000
                     replay_source = "source_artifact_unavailable"
-                    fatal_replay_errors += 1
                 else:
                     exec_resource_timeline = (
                         source_resource_timeline
@@ -2170,13 +2345,63 @@ async def _replay_cloud_model_session(
                     )
             if not tool_success:
                 replay_failed_actions += 1
-            replay_outcome_match = (
-                tool_success == source_success
-                and replay_source != "source_artifact_unavailable"
+            mismatch_reason = _tool_mismatch_reason(
+                source_success=source_success,
+                tool_success=tool_success,
+                replay_source=replay_source,
+                source_tool_result=source_tool_result,
+                replay_tool_result=tool_result,
+                tool_name=tool_name,
+                tool_args_json=tool_args,
             )
+            replay_outcome_match = mismatch_reason is None
             if (not tool_success) and replay_outcome_match:
                 matched_failed_actions += 1
             record_ts_end = time.time()
+            forced_sync_fields: dict[str, Any] = {}
+            if mismatch_reason is not None and ctr is not None:
+                checkpoint_spec = _checkpoint_after_spec(
+                    action_data=data,
+                    source_trace=loaded.source_trace,
+                )
+                if checkpoint_spec is None:
+                    forced_sync_fields = {
+                        "forced_sync_attempted": False,
+                        "forced_sync_success": False,
+                        "forced_sync_resolved": False,
+                        "forced_sync_reason": mismatch_reason,
+                        "forced_sync_error": "checkpoint_after missing",
+                    }
+                else:
+                    forced_sync_fields = {
+                        "forced_sync_attempted": True,
+                        "forced_sync_reason": mismatch_reason,
+                        "forced_sync_overhead_excluded": True,
+                    }
+                    try:
+                        restore_result = await asyncio.to_thread(
+                            _restore_checkpoint_to_container,
+                            checkpoint_spec=checkpoint_spec,
+                            container=ctr,
+                        )
+                        forced_sync_fields.update(restore_result)
+                        forced_sync_fields["forced_sync_resolved"] = (
+                            restore_result.get("forced_sync_success") is True
+                            and mismatch_reason != "source_artifact_unavailable"
+                        )
+                    except Exception as exc:
+                        logger.exception(
+                            "Forced sync failed for %s action=%s",
+                            loaded.agent_id,
+                            action_id,
+                        )
+                        forced_sync_fields.update(
+                            {
+                                "forced_sync_success": False,
+                                "forced_sync_resolved": False,
+                                "forced_sync_error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
             extra_tool_fields = _command_metadata(
                 tool_name=tool_name,
                 tool_args_json=tool_args,
@@ -2187,7 +2412,10 @@ async def _replay_cloud_model_session(
                 extra_tool_fields["source_artifact_path"] = original_artifact_path
             if mapped_artifact_path is not None:
                 extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
+            if mismatch_reason is not None:
+                extra_tool_fields["mismatch_reason"] = mismatch_reason
             extra_tool_fields.update(tool_exec_metadata)
+            extra_tool_fields.update(forced_sync_fields)
             if source_exec_timeout is not None:
                 extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
             if source_resource_timeline is not None:
@@ -2235,6 +2463,12 @@ async def _replay_cloud_model_session(
                 },
             )
             trace_logger.log_trace_action(loaded.agent_id, tool_record)
+            forced_sync_success = forced_sync_fields.get("forced_sync_success") is True
+            forced_sync_resolved = (
+                forced_sync_success and mismatch_reason != "source_artifact_unavailable"
+            )
+            if forced_sync_success:
+                forced_sync_actions += 1
             if replay_outcome_match:
                 if tool_success:
                     succeeded_actions += 1
@@ -2245,6 +2479,14 @@ async def _replay_cloud_model_session(
                         action_id,
                         tool_name,
                     )
+            elif forced_sync_resolved:
+                logger.warning(
+                    "Replay mismatch forced-synced for %s action=%s tool=%s reason=%s",
+                    loaded.agent_id,
+                    action_id,
+                    tool_name,
+                    mismatch_reason,
+                )
             else:
                 logger.error(
                     "Replay tool outcome mismatch for %s action=%s tool=%s "
@@ -2256,6 +2498,8 @@ async def _replay_cloud_model_session(
                     tool_success,
                 )
                 failed_actions += 1
+                if replay_source == "source_artifact_unavailable":
+                    fatal_replay_errors += 1
         except Exception as exc:
             logger.error(
                 "Replay action failed for %s action=%s: %s",
@@ -2284,6 +2528,7 @@ async def _replay_cloud_model_session(
                 "replay_failed_actions": replay_failed_actions,
                 "matched_failed_actions": matched_failed_actions,
                 "fatal_replay_errors": fatal_replay_errors,
+                "forced_sync_actions": forced_sync_actions,
                 "outcome_mismatches": failed_actions,
             },
         ),
