@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +240,224 @@ async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
     records = [json.loads(line) for line in trace_file.read_text().splitlines()]
     tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
     assert tool_exec["data"]["resource_timeline"] == resource_timeline
+
+
+def test_trace_collector_emits_exec_checkpoint_after(tmp_path: Path) -> None:
+    asyncio.run(_drive_emits_exec_checkpoint_after(tmp_path))
+
+
+async def _drive_emits_exec_checkpoint_after(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    checkpoint_dir = tmp_path / "runtime" / "checkpoints"
+    testbed.mkdir()
+    (testbed / "result.txt").write_text("source state\n", encoding="utf-8")
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-checkpoint",
+        checkpoint_root=testbed,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_root_label="/testbed",
+    )
+
+    msgs_in = [{"role": "user", "content": "Run test."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    stub_tc = _StubToolCall("exec", {"command": "pytest"})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": stub_tc.id,
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": '{"command":"pytest"}'},
+                }
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    )
+    msgs_after_tool = msgs_after_llm + [
+        {
+            "role": "tool",
+            "tool_call_id": stub_tc.id,
+            "name": "exec",
+            "content": "ok",
+        }
+    ]
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_tool,
+            tool_calls=[stub_tc],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
+    checkpoint_after = tool_exec["data"]["checkpoint_after"]
+    checkpoint_path = trace_file.parent / checkpoint_after["path"]
+
+    assert checkpoint_after["kind"] == "filesystem_tar"
+    assert checkpoint_after["root"] == "/testbed"
+    assert checkpoint_after["overhead_excluded"] is True
+    assert checkpoint_after["elapsed_ms"] >= 0
+    assert checkpoint_after["size_bytes"] == checkpoint_path.stat().st_size
+    with tarfile.open(checkpoint_path, "r") as tf:
+        assert "result.txt" in tf.getnames()
+
+
+def test_trace_collector_skips_checkpoint_when_testbed_has_symlink(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_skips_checkpoint_when_testbed_has_symlink(tmp_path))
+
+
+async def _drive_skips_checkpoint_when_testbed_has_symlink(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    testbed.mkdir()
+    (testbed / "target.txt").write_text("target\n", encoding="utf-8")
+    (testbed / "link.txt").symlink_to(testbed / "target.txt")
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-symlink",
+        checkpoint_root=testbed,
+        checkpoint_dir=tmp_path / "runtime" / "checkpoints",
+        checkpoint_root_label="/testbed",
+    )
+
+    msgs_in = [{"role": "user", "content": "Run test."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    stub_tc = _StubToolCall("exec", {"command": "pytest"})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": stub_tc.id,
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": '{"command":"pytest"}'},
+                }
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    )
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_llm
+            + [
+                {
+                    "role": "tool",
+                    "tool_call_id": stub_tc.id,
+                    "name": "exec",
+                    "content": "ok",
+                }
+            ],
+            tool_calls=[stub_tc],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
+    checkpoint_error = tool_exec["data"]["checkpoint_after_error"]
+    assert "symlinks" in checkpoint_error["error"]
+    assert checkpoint_error["overhead_excluded"] is True
+    assert checkpoint_error["elapsed_ms"] >= 0
+
+
+def test_trace_collector_skips_checkpoint_for_multi_tool_iteration(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_skips_checkpoint_for_multi_tool_iteration(tmp_path))
+
+
+async def _drive_skips_checkpoint_for_multi_tool_iteration(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    testbed.mkdir()
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-multi-tool",
+        checkpoint_root=testbed,
+        checkpoint_dir=tmp_path / "runtime" / "checkpoints",
+        checkpoint_root_label="/testbed",
+    )
+
+    msgs_in = [{"role": "user", "content": "Run test."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    exec_tc = _StubToolCall("exec", {"command": "pytest"})
+    read_tc = _StubToolCall("read_file", {"path": "x.txt"})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": exec_tc.id,
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": '{"command":"pytest"}'},
+                },
+                {
+                    "id": read_tc.id,
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"x.txt"}'},
+                },
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_llm,
+            tool_calls=[exec_tc, read_tc],
+        )
+    )
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_llm
+            + [
+                {
+                    "role": "tool",
+                    "tool_call_id": exec_tc.id,
+                    "name": "exec",
+                    "content": "ok",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": read_tc.id,
+                    "name": "read_file",
+                    "content": "1| x",
+                },
+            ],
+            tool_calls=[exec_tc, read_tc],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    exec_record = next(
+        record
+        for record in records
+        if record.get("type") == "action"
+        and (record.get("data") or {}).get("tool_name") == "exec"
+    )
+    checkpoint_error = exec_record["data"]["checkpoint_after_error"]
+    assert "multiple tool results" in checkpoint_error["error"]
+    assert checkpoint_error["overhead_excluded"] is True
+    assert checkpoint_error["elapsed_ms"] == 0.0
 
 
 def test_trace_collector_llm_only_iteration(tmp_path: Path) -> None:

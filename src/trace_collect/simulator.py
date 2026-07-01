@@ -1869,6 +1869,22 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
 
 
 
+def _source_action_excluded_overhead_s(action: dict[str, Any]) -> float:
+    data = action.get("data") or {}
+    checkpoint_after = data.get("checkpoint_after")
+    if not isinstance(checkpoint_after, dict):
+        checkpoint_after = data.get("checkpoint_after_error")
+    if not isinstance(checkpoint_after, dict):
+        return 0.0
+    if checkpoint_after.get("overhead_excluded") is not True:
+        return 0.0
+    try:
+        elapsed_ms = float(checkpoint_after.get("elapsed_ms") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, elapsed_ms / 1000.0)
+
+
 async def _sleep_source_gap(
     *,
     previous_source_end: float | None,
@@ -2129,9 +2145,13 @@ async def _replay_cloud_model_session(
             action_source_start=action_ts_start,
             replay_speed=replay_speed,
         )
+        action_excluded_overhead_s = _source_action_excluded_overhead_s(action)
+        effective_action_source_end = action_ts_end + action_excluded_overhead_s
         previous_source_end = max(
-            action_ts_end,
-            previous_source_end if previous_source_end is not None else action_ts_end,
+            effective_action_source_end,
+            previous_source_end
+            if previous_source_end is not None
+            else effective_action_source_end,
         )
 
         try:

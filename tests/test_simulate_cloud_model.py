@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from trace_collect.cli import _run_simulate, parse_simulate_args
-from trace_collect.simulator import _checkpoint_after_spec, _source_exec_timeout_s, simulate
+from trace_collect.simulator import (
+    _checkpoint_after_spec,
+    _source_action_excluded_overhead_s,
+    _source_exec_timeout_s,
+    simulate,
+)
 
 
 
@@ -331,6 +336,33 @@ def _patch_noop_sweep_fixed_prebuild(monkeypatch: pytest.MonkeyPatch) -> None:
         "trace_collect.simulator._prebuild_sweep_fixed_images",
         fake_prebuild,
     )
+
+
+def test_source_action_excluded_overhead_reads_checkpoint_after() -> None:
+    action = {
+        "data": {
+            "checkpoint_after": {
+                "elapsed_ms": 250.0,
+                "overhead_excluded": True,
+            }
+        }
+    }
+
+    assert _source_action_excluded_overhead_s(action) == pytest.approx(0.25)
+
+
+def test_source_action_excluded_overhead_reads_checkpoint_after_error() -> None:
+    action = {
+        "data": {
+            "checkpoint_after_error": {
+                "elapsed_ms": 125.0,
+                "overhead_excluded": True,
+                "error": "checkpoint skipped",
+            }
+        }
+    }
+
+    assert _source_action_excluded_overhead_s(action) == pytest.approx(0.125)
 
 
 def test_checkpoint_after_spec_rejects_non_testbed_root(tmp_path: Path) -> None:

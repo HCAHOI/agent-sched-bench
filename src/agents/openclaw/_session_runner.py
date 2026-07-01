@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tarfile
 import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -62,6 +63,53 @@ def _resolve_run_outcome(
     return stop_reason, error
 
 
+def _sanitize_checkpoint_name(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value)
+    return safe[:96] or "tool"
+
+
+def _single_exec_command_args(tool_name: str, args_json: str) -> dict[str, Any] | None:
+    if tool_name != "exec":
+        return None
+    try:
+        parsed = json.loads(args_json or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    payload = parsed.get("exec") if isinstance(parsed.get("exec"), dict) else parsed
+    if not isinstance(payload, dict):
+        return None
+    if "command" not in payload or "commands" in payload:
+        return None
+    return payload
+
+
+def _tree_contains_symlink(root: Path) -> bool:
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            return True
+    return False
+
+
+def _relative_to_or_absolute(path: Path, base: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(base.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def _write_filesystem_checkpoint_tar(
+    *,
+    root: Path,
+    checkpoint_path: Path,
+) -> None:
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(checkpoint_path, "w") as tf:
+        for child in sorted(root.iterdir(), key=lambda p: p.name):
+            tf.add(child, arcname=child.name, recursive=True)
+
+
 class TraceCollectorHook(AgentHook):
     """Collect per-iteration actions, events, and summaries as JSONL."""
 
@@ -72,6 +120,9 @@ class TraceCollectorHook(AgentHook):
         *,
         agent_id: str | None = None,
         task_id: str | None = None,
+        checkpoint_root: Path | None = None,
+        checkpoint_dir: Path | None = None,
+        checkpoint_root_label: str = "/testbed",
     ) -> None:
         self.trace_file = trace_file
         self.instance_id = instance_id
@@ -91,8 +142,72 @@ class TraceCollectorHook(AgentHook):
         self._records: list[dict[str, Any]] = []
         self._actions: list[dict[str, Any]] = []
         self._pending_llm_records: list[dict[str, Any]] = []
+        self._checkpoint_root = Path(checkpoint_root) if checkpoint_root else None
+        self._checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
+        self._checkpoint_root_label = checkpoint_root_label
         self._flushed = False
         self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
+
+    def _checkpoint_after_tool(
+        self,
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        tool_args_json: str,
+        allow_checkpoint: bool,
+    ) -> dict[str, Any] | None:
+        if self._checkpoint_root is None or self._checkpoint_dir is None:
+            return None
+        if _single_exec_command_args(tool_name, tool_args_json) is None:
+            return None
+        if not allow_checkpoint:
+            return {
+                "error": "checkpoint skipped: multiple tool results in iteration",
+                "overhead_excluded": True,
+                "elapsed_ms": 0.0,
+            }
+        started = time.monotonic()
+        root = self._checkpoint_root.resolve()
+        if not root.is_dir():
+            return {
+                "error": f"checkpoint root is unavailable: {root}",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+        if self._checkpoint_root_label != "/testbed":
+            return {
+                "error": f"unsupported checkpoint root: {self._checkpoint_root_label}",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+        if _tree_contains_symlink(root):
+            return {
+                "error": "checkpoint skipped: symlinks under /testbed are unsupported",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+
+        checkpoint_path = (
+            self._checkpoint_dir
+            / f"{_sanitize_checkpoint_name(tool_call_id)}-after.tar"
+        )
+        try:
+            _write_filesystem_checkpoint_tar(root=root, checkpoint_path=checkpoint_path)
+        except OSError as exc:
+            return {
+                "error": f"checkpoint failed: {exc}",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+        elapsed_ms = (time.monotonic() - started) * 1000
+        return {
+            "path": _relative_to_or_absolute(checkpoint_path, self.trace_file.parent),
+            "kind": "filesystem_tar",
+            "root": self._checkpoint_root_label,
+            "elapsed_ms": round(elapsed_ms, 3),
+            "size_bytes": checkpoint_path.stat().st_size,
+            "overhead_excluded": True,
+        }
 
     def close(self) -> None:
         if self._flushed:
@@ -264,11 +379,15 @@ class TraceCollectorHook(AgentHook):
                     )
                     tool_name_by_id[tc.id] = tc.name
 
-            for tc_id, tool_name, tool_content, tool_ok in tool_results_from_messages:
-                if tool_name == "_invalid_tool_call" or (
-                    tc_id and tc_id.startswith("malformed_retry_")
-                ):
-                    continue
+            traceable_tool_results = [
+                result
+                for result in tool_results_from_messages
+                if result[1] != "_invalid_tool_call"
+                and not (result[0] and result[0].startswith("malformed_retry_"))
+            ]
+            allow_checkpoint = len(traceable_tool_results) == 1
+
+            for tc_id, tool_name, tool_content, tool_ok in traceable_tool_results:
                 tool_start_mono = self._tool_start_ts.pop(tc_id, None)
                 duration_ms = (
                     (time.monotonic() - tool_start_mono) * 1000
@@ -320,6 +439,17 @@ class TraceCollectorHook(AgentHook):
                 resource_timeline = resource_timelines.get(tc_id)
                 if resource_timeline is not None:
                     tool_action_data["resource_timeline"] = resource_timeline
+                checkpoint_after = self._checkpoint_after_tool(
+                    tool_call_id=tc_id or action_id_suffix,
+                    tool_name=tool_name,
+                    tool_args_json=tool_action_data["tool_args"],
+                    allow_checkpoint=allow_checkpoint,
+                )
+                if checkpoint_after is not None:
+                    if "error" in checkpoint_after:
+                        tool_action_data["checkpoint_after_error"] = checkpoint_after
+                    else:
+                        tool_action_data["checkpoint_after"] = checkpoint_after
                 tool_action = TraceAction(
                     action_type="tool_exec",
                     action_id=f"tool_{context.iteration}_{action_id_suffix}",
@@ -728,9 +858,25 @@ class SessionRunner:
         effective_memory_dir = effective_runtime_dir / "memory"
         effective_skills_dir = effective_runtime_dir / "skills"
         effective_tool_results_dir = effective_runtime_dir / "tool-results"
+        effective_tool_workspace = tool_workspace or workspace
+        effective_project_workspace = project_workspace or effective_tool_workspace
         iid = instance_id or session_key
 
-        trace_hook = TraceCollectorHook(trace_file, iid, agent_id=iid, task_id=iid)
+        checkpoint_root = (
+            effective_tool_workspace
+            if effective_tool_workspace.resolve() == Path("/testbed")
+            else None
+        )
+        trace_hook = TraceCollectorHook(
+            trace_file,
+            iid,
+            agent_id=iid,
+            task_id=iid,
+            checkpoint_root=checkpoint_root,
+            checkpoint_dir=effective_runtime_dir / "checkpoints"
+            if checkpoint_root is not None
+            else None,
+        )
 
         metadata = {
             "type": "trace_metadata",
@@ -764,8 +910,8 @@ class SessionRunner:
             bus=bus,
             provider=self.provider,
             workspace=workspace,
-            tool_workspace=tool_workspace,
-            project_workspace=project_workspace,
+            tool_workspace=effective_tool_workspace,
+            project_workspace=effective_project_workspace,
             model=self.model,
             max_iterations=self.max_iterations,
             context_window_tokens=self.context_window_tokens,
