@@ -61,12 +61,14 @@ class _StubContext:
         tool_calls: list[_StubToolCall] | None = None,
         usage: dict[str, int] | None = None,
         response: _StubResponse | None = None,
+        tool_resource_timelines: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.iteration = iteration
         self.messages = messages
         self.tool_calls = tool_calls or []
         self.usage = usage or {}
         self.response = response
+        self.tool_resource_timelines = tool_resource_timelines or {}
         self.malformed_retry_count = 0
 
 
@@ -162,6 +164,81 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
     assert llm["data"]["completion_tokens"] == 20
     assert llm["iteration"] == 0
     assert llm["ts_start"] <= llm["ts_end"]
+
+
+def test_trace_collector_emits_tool_resource_timeline(tmp_path: Path) -> None:
+    asyncio.run(_drive_emits_tool_resource_timeline(tmp_path))
+
+
+async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-resource")
+
+    msgs_in = [{"role": "user", "content": "Run test."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    stub_tc = _StubToolCall("exec", {"command": "pytest"})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": stub_tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": '{"command":"pytest"}',
+                    },
+                }
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    )
+    resource_timeline = {
+        "version": 1,
+        "source": "cgroup_cpu_proc_net",
+        "scope": "openclaw_exec_tool_interval",
+        "samples": [
+            {
+                "offset_s": 0.5,
+                "dt_s": 0.5,
+                "cpu_core_s": 1.0,
+                "net_rx_bytes": 128,
+                "net_tx_bytes": 64,
+            }
+        ],
+        "summary": {
+            "sample_count": 1,
+            "wall_s": 0.5,
+            "cpu_core_s": 1.0,
+            "net_rx_bytes": 128,
+            "net_tx_bytes": 64,
+        },
+    }
+    msgs_after_tool = msgs_after_llm + [
+        {
+            "role": "tool",
+            "tool_call_id": stub_tc.id,
+            "name": "exec",
+            "content": "ok",
+        }
+    ]
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_tool,
+            tool_calls=[stub_tc],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+            tool_resource_timelines={stub_tc.id: resource_timeline},
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
+    assert tool_exec["data"]["resource_timeline"] == resource_timeline
 
 
 def test_trace_collector_llm_only_iteration(tmp_path: Path) -> None:

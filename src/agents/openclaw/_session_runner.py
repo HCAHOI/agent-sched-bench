@@ -308,6 +308,18 @@ class TraceCollectorHook(AgentHook):
                     tool_ts_end - duration_ms / 1000 if duration_ms else tool_ts_end
                 )
                 action_id_suffix = tc_id if tc_id else tool_name
+                tool_action_data: dict[str, Any] = {
+                    "tool_name": tool_name,
+                    "tool_call_id": tc_id,
+                    "tool_args": tool_args_by_id.get(tc_id, ""),
+                    "tool_result": tool_content,
+                    "duration_ms": round(duration_ms, 1),
+                    "success": tool_ok,
+                }
+                resource_timelines = getattr(context, "tool_resource_timelines", {})
+                resource_timeline = resource_timelines.get(tc_id)
+                if resource_timeline is not None:
+                    tool_action_data["resource_timeline"] = resource_timeline
                 tool_action = TraceAction(
                     action_type="tool_exec",
                     action_id=f"tool_{context.iteration}_{action_id_suffix}",
@@ -317,14 +329,7 @@ class TraceCollectorHook(AgentHook):
                     iteration=context.iteration,
                     ts_start=tool_ts_start,
                     ts_end=tool_ts_end,
-                    data={
-                        "tool_name": tool_name,
-                        "tool_call_id": tc_id,
-                        "tool_args": tool_args_by_id.get(tc_id, ""),
-                        "tool_result": tool_content,
-                        "duration_ms": round(duration_ms, 1),
-                        "success": tool_ok,
-                    },
+                    data=tool_action_data,
                 )
                 self._write_action(tool_action)
 

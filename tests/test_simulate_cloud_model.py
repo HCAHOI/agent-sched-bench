@@ -23,6 +23,7 @@ def _write_trace(
     tool_end: float = 100.45,
     tool_name: str = "write_file",
     execution_environment: str = "container",
+    resource_timeline: dict | None = None,
 ) -> None:
     path.write_text(
         "\n".join(
@@ -71,6 +72,11 @@ def _write_trace(
                             "tool_result": "source-result",
                             "duration_ms": (tool_end - tool_start) * 1000,
                             "success": True,
+                            **(
+                                {"resource_timeline": resource_timeline}
+                                if resource_timeline is not None
+                                else {}
+                            ),
                         },
                     }
                 ),
@@ -508,6 +514,59 @@ def test_cloud_model_ttft_tpot_llm_timing_records_simulated_latency(
     assert llm_record["data"]["source_llm_latency_ms"] == pytest.approx(200.0)
     assert llm_record["data"]["llm_latency_ms"] == pytest.approx(18.0, abs=25.0)
     assert summary["llm_timing_mode"] == "ttft_tpot"
+
+
+def test_simulate_preserves_source_resource_timeline_as_metadata(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    resource_timeline = {
+        "version": 1,
+        "source": "cgroup_cpu_proc_net",
+        "scope": "openclaw_exec_tool_interval",
+        "samples": [
+            {
+                "offset_s": 0.5,
+                "dt_s": 0.5,
+                "cpu_core_s": 1.0,
+                "net_rx_bytes": 128,
+                "net_tx_bytes": 64,
+            }
+        ],
+        "summary": {
+            "sample_count": 1,
+            "wall_s": 0.5,
+            "cpu_core_s": 1.0,
+            "net_rx_bytes": 128,
+            "net_tx_bytes": 64,
+        },
+    }
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        tool_name="exec",
+        execution_environment="host",
+        resource_timeline=resource_timeline,
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert tool_record["data"]["source_resource_timeline"] == resource_timeline
+    assert tool_record["data"]["resource_timeout_policy"] == "wall_clock"
 
 
 def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:

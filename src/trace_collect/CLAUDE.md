@@ -33,3 +33,7 @@ bounded queue controlled by `--concurrency`.
 
 Keep canonical JSONL trace fields stable: full model responses, timing, tool
 outputs, run config, benchmark metadata, and task/container runtime proofs.
+`tool_exec.data.resource_timeline` is optional v1 telemetry currently emitted
+for OpenClaw `exec` tool intervals. It records cgroup CPU core-seconds plus
+network RX/TX byte deltas. Simulate preserves it as source metadata; integrated
+resource-normalized replay deadlines are not enabled yet.

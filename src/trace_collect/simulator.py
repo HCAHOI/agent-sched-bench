@@ -1978,6 +1978,9 @@ async def _replay_cloud_model_session(
                 source_success=source_success,
                 source_tool_result=source_tool_result,
             )
+            source_resource_timeline = data.get("resource_timeline")
+            if not isinstance(source_resource_timeline, dict):
+                source_resource_timeline = None
             original_artifact_path: str | None = None
             mapped_artifact_path: str | None = None
             if not source_success:
@@ -2080,6 +2083,9 @@ async def _replay_cloud_model_session(
                 extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
             if source_exec_timeout is not None:
                 extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
+            if source_resource_timeline is not None:
+                extra_tool_fields["source_resource_timeline"] = source_resource_timeline
+                extra_tool_fields["resource_timeout_policy"] = "wall_clock"
             tool_record = _make_trace_action(
                 loaded=loaded,
                 action_type="tool_exec",
