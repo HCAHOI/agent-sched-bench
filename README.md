@@ -62,7 +62,8 @@ for OpenClaw; YAML path or literal `none`), `--sample N`, `--instance-ids a,b,c`
 `--run-id <path>`, `--prompt-template <name>`, and provider sampling flags
 `--temperature`, `--top-p`, `--top-k`, `--repetition-penalty`.
 
-Supported providers live in `src/llm_call/providers.py`. Use `--api-base` and
+Supported providers live in `src/llm_call/providers.py`: `openrouter`,
+`dashscope`, `openai`, `siliconflow`, and `deepseek`. Use `--api-base` and
 `--api-key` for OpenAI-compatible gateways when the built-in provider URL or env
 var is not enough.
 

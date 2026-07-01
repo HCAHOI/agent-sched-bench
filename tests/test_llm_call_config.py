@@ -98,6 +98,22 @@ def test_resolve_llm_config_supports_siliconflow() -> None:
     assert resolved.env_key == "SILICONFLOW_API_KEY"
 
 
+def test_resolve_llm_config_supports_deepseek() -> None:
+    resolved = resolve_llm_config(
+        provider="deepseek",
+        api_base=None,
+        api_key=None,
+        model="deepseek-v4-pro",
+        environ={"DEEPSEEK_API_KEY": "deepseek-test-key"},
+    )
+
+    assert resolved.name == "deepseek"
+    assert resolved.api_base == "https://api.deepseek.com"
+    assert resolved.api_key == "deepseek-test-key"
+    assert resolved.model == "deepseek-v4-pro"
+    assert resolved.env_key == "DEEPSEEK_API_KEY"
+
+
 def test_uses_openrouter_matches_base_url() -> None:
     assert uses_openrouter("https://openrouter.ai/api/v1") is True
     assert uses_openrouter("https://api.openai.com/v1") is False
