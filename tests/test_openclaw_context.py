@@ -48,3 +48,27 @@ def test_context_builder_does_not_instruct_workspace_memory_creation(
     # No memory/history instruction lines remain in the prompt.
     assert "managed automatically by the agent runtime" not in prompt
     assert "Agent state workspace" not in prompt
+
+
+def test_context_builder_omits_skills_and_message_attachment_guidance(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    skills_dir = tmp_path / "rt" / "skills"
+    (skills_dir / "demo-skill").mkdir(parents=True)
+    (skills_dir / "demo-skill" / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: demo\nalways: true\n---\nskill body",
+        encoding="utf-8",
+    )
+
+    prompt = ContextBuilder(workspace, skills_dir=skills_dir).build_system_prompt()
+
+    assert "# Active Skills" not in prompt
+    assert "# Skills" not in prompt
+    assert "available=\"false\"" not in prompt
+    assert "demo-skill" not in prompt
+    assert "skill body" not in prompt
+    assert "Only use the 'message' tool" not in prompt
+    assert "media" not in prompt
+    assert "native image content" not in prompt

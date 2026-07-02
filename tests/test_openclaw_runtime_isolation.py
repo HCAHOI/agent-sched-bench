@@ -108,6 +108,11 @@ def test_subagent_prompt_uses_runtime_skills_dir(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
     skills_dir = tmp_path / "rt" / "skills"
+    (skills_dir / "demo-skill").mkdir(parents=True)
+    (skills_dir / "demo-skill" / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: demo\n---\nskill body",
+        encoding="utf-8",
+    )
 
     provider = SimpleNamespace(get_default_model=lambda: "fake")
     manager = SubagentManager(
@@ -117,9 +122,13 @@ def test_subagent_prompt_uses_runtime_skills_dir(tmp_path: Path) -> None:
         max_tool_result_chars=1000,
         skills_dir=skills_dir,
     )
-    # The subagent prompt builder must not instantiate workspace-local skills.
+    # The subagent prompt builder must not instantiate or inject skills.
     prompt = manager._build_subagent_prompt()
     assert str(workspace / "skills") not in prompt
+    assert "## Skills" not in prompt
+    assert "demo-skill" not in prompt
+    assert "skill body" not in prompt
+    assert "native image content" not in prompt
     assert not (workspace / "skills").exists()
 
 
