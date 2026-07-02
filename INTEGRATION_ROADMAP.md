@@ -746,7 +746,35 @@ Review audit:
 
 - 2026-07-02: `openai-codex/gpt-5.5` strict reviewer checked monitoring-policy and worker-fix changes. Initial critical finding: worker preparation failure could leak already prepared sessions. Fixed by gathering preparation results with `return_exceptions=True`, retaining successful `PreparedTraceSession`s, aborting the barrier, and finalizing successes in `finally`; regression test added. Major findings about combined trace ordering and worker metadata were fixed by globally sorting combined worker records and logging global `concurrency` plus `worker_chunk_size`. Minor findings about disabled reason spelling and malformed timestamp sorting were fixed. Final focused tests passed.
 
-### Phase 5: Optional imports/visualization/orchestration
+### Phase 5: VM runtime feasibility
+
+Candidates:
+
+- Firecracker/KVM capability probe — started on `dev/vm`
+- runtime-driver boundary for simulator container lifecycle
+- same-architecture aarch64 Firecracker smoke
+- Docker image to rootfs conversion for same-architecture images
+- snapshot/restore timing comparison against Docker prebuild/start
+
+Rules:
+
+- Firecracker is only a performance candidate for same-architecture guests;
+  x86_64 SWE-rebench images on aarch64 hosts must report
+  `guest_arch_mismatch` rather than pretending to use KVM acceleration.
+- VM work must not alter Docker collect/simulate semantics until an explicit
+  runtime driver is selected and validated.
+- Snapshot/checkpoint metrics must record kernel/rootfs/snapshot provenance.
+
+Remote probe notes:
+
+- 2026-07-02 on `chiyuh@193.124.7.2`: host is aarch64 openEuler 24.03,
+  Firecracker v1.15.1 is installed, `/opt/ear/firecracker/vmlinux` and
+  `rootfs.ext4` exist, and direct `/dev/kvm` access works after adding the user
+  to group `kvm`. A read-only aarch64 rootfs boots under Firecracker. Current
+  SWE-rebench task images are `amd64`, so they remain qemu-binfmt workloads on
+  this ARM host unless same-architecture images are introduced.
+
+### Phase 6: Optional imports/visualization/orchestration
 
 Candidates:
 

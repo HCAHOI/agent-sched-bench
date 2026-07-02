@@ -116,6 +116,26 @@ root so it can rewrite `/etc/apt/sources.list.d`.
 
 During task-container agent runs, stdout is streamed live to the operator terminal and also written to the per-attempt raw stdout artifact. `resources.json` summaries include `monitoring.status` (`collected`, `enabled_no_samples`, or `disabled`) plus `monitoring_disabled` so empty sample lists are explicit.
 
+## VM Runtime Probe
+
+Experimental VM support starts with a read-only capability probe; it does not
+change Docker collection or replay semantics.
+
+```bash
+PYTHONPATH=src python -m trace_collect.cli vm-probe \
+    --image docker.io/swerebench/sweb.eval.x86_64.azure_1776_pykusto-72:latest \
+    --container docker \
+    --kernel /opt/ear/firecracker/vmlinux \
+    --rootfs /opt/ear/firecracker/rootfs.ext4
+```
+
+The probe records host architecture, `/dev/kvm` access, Firecracker version,
+kernel/rootfs availability, container daemon architecture, optional image
+architecture, and explicit reason codes such as `kvm_permission_denied` or
+`guest_arch_mismatch`. Firecracker/KVM is only a candidate for same-architecture
+guests; x86_64 SWE-rebench images on an aarch64 host still require qemu-binfmt
+unless equivalent aarch64 task images are available.
+
 ## Trace Simulate
 
 Cloud replay only. No LLM requests are issued during replay.

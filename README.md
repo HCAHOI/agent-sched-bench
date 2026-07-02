@@ -10,7 +10,9 @@ Top-level capabilities:
    JSONL traces with cloud/OpenAI-compatible model providers.
 2. **Trace simulate** — replay collected traces under bounded concurrency using
    source-trace timing; no LLM requests are issued during replay.
-3. **Gantt viewer demo** — inspect traces as multi-lane Gantt charts under
+3. **VM capability probe** — inspect whether a host can run same-architecture
+   Firecracker replay candidates before changing simulator runtime semantics.
+4. **Gantt viewer demo** — inspect traces as multi-lane Gantt charts under
    `demo/gantt_viewer/`.
 
 ## Repository Layout
@@ -24,7 +26,7 @@ agent-sched-bench/
 │   ├── agents/         # scaffolds + benchmark plugins
 │   ├── harness/        # container/runtime samplers and trace logger
 │   ├── llm_call/       # provider registry + OpenAI-compatible client
-│   └── trace_collect/  # CLI: collect / simulate / gantt-serve / gantt-export
+│   └── trace_collect/  # CLI: collect / simulate / vm-probe / gantt tools
 └── tests/
 ```
 
@@ -121,6 +123,20 @@ traces:
   - trace: /abs/path/task-b/attempt_1/trace.jsonl
     docker_image: custom/image:tag
 ```
+
+## VM Capability Probe
+
+Experimental VM work starts with a read-only Firecracker/KVM probe:
+
+```bash
+PYTHONPATH=src python -m trace_collect.cli vm-probe \
+  --image docker.io/swerebench/sweb.eval.x86_64.azure_1776_pykusto-72:latest \
+  --container docker
+```
+
+The probe records KVM access, Firecracker/kernel/rootfs availability, host and
+image architectures, and reason codes such as `guest_arch_mismatch`. It does not
+change Docker collection or replay behavior.
 
 ## Registered Benchmarks
 

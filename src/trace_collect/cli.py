@@ -297,10 +297,50 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
+def parse_vm_probe_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Probe host capabilities for VM-backed replay runtimes.",
+    )
+    parser.add_argument(
+        "--image",
+        default=None,
+        help="Optional container image to compare against the host architecture.",
+    )
+    parser.add_argument(
+        "--container",
+        choices=["docker", "podman"],
+        default="docker",
+        help="Container executable used for image/server metadata probes.",
+    )
+    parser.add_argument(
+        "--firecracker-bin",
+        default="firecracker",
+        help="Firecracker binary name or path.",
+    )
+    parser.add_argument(
+        "--kernel",
+        default=None,
+        help="Optional Firecracker guest kernel path.",
+    )
+    parser.add_argument(
+        "--rootfs",
+        default=None,
+        help="Optional Firecracker rootfs path.",
+    )
+    parser.add_argument(
+        "--kvm-device",
+        default="/dev/kvm",
+        help="KVM device path.",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
     sub = sys.argv[1] if len(sys.argv) > 1 else None
     if sub == "simulate":
         _run_simulate(parse_simulate_args(sys.argv[2:]))
+    elif sub == "vm-probe":
+        _run_vm_probe(parse_vm_probe_args(sys.argv[2:]))
     elif sub == "gantt-serve":
         from demo.gantt_viewer.backend.dev import main as run_gantt_server
 
@@ -318,6 +358,21 @@ def main() -> None:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _run_vm_probe(args: argparse.Namespace) -> None:
+    from trace_collect.runtime.vm_capability import probe_firecracker_capability
+
+    capability = probe_firecracker_capability(
+        image=args.image,
+        container_executable=args.container,
+        firecracker_bin=args.firecracker_bin,
+        kernel_path=Path(args.kernel) if args.kernel else None,
+        rootfs_path=Path(args.rootfs) if args.rootfs else None,
+        kvm_device=Path(args.kvm_device),
+    )
+    print(json.dumps(capability.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+
 
 def _run_collect(args: argparse.Namespace) -> None:
     logging.basicConfig(
