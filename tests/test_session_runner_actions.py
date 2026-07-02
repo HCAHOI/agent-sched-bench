@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import tarfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ pytest.importorskip("agents.openclaw._session_runner")
 
 from agents.openclaw._session_runner import (
     TraceCollectorHook,
-    _compute_testbed_fs_hash,
+    _any_file_newer_than,
     _resolve_run_outcome,
 )
 
@@ -322,35 +323,48 @@ def test_trace_collector_skips_checkpoint_when_testbed_has_symlink(
     asyncio.run(_drive_skips_checkpoint_when_testbed_has_symlink(tmp_path))
 
 
-def test_compute_testbed_fs_hash_tracks_recovery_relevant_changes(
-    tmp_path: Path,
-) -> None:
+def test_any_file_newer_than_detects_changes(tmp_path: Path) -> None:
     testbed = tmp_path / "testbed"
     testbed.mkdir()
-    tracked_file = testbed / "result.txt"
-    tracked_file.write_text("ab\n", encoding="utf-8")
+    marker_mtime_ns = time.time_ns()
+    mtime_delta_ns = 1_000_000_000
+    old_mtime_ns = marker_mtime_ns - mtime_delta_ns
+    new_mtime_ns = marker_mtime_ns + mtime_delta_ns
 
-    baseline_hash = _compute_testbed_fs_hash(testbed)
-    transient = testbed / "transient.txt"
-    transient.write_text("temporary\n", encoding="utf-8")
-    transient.unlink()
-    assert _compute_testbed_fs_hash(testbed) == baseline_hash
+    assert _any_file_newer_than(testbed, marker_mtime_ns) is False
 
-    original_stat = tracked_file.stat()
-    tracked_file.write_text("cd\n", encoding="utf-8")
-    os.utime(
-        tracked_file,
-        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
-    )
-    content_hash = _compute_testbed_fs_hash(testbed)
-    assert content_hash != baseline_hash
+    old_file = testbed / "old.txt"
+    old_file.write_text("old\n", encoding="utf-8")
+    os.utime(old_file, ns=(old_mtime_ns, old_mtime_ns))
+    os.utime(testbed, ns=(old_mtime_ns, old_mtime_ns))
+    assert _any_file_newer_than(testbed, marker_mtime_ns) is False
 
-    tracked_file.chmod(0o700)
-    mode_hash = _compute_testbed_fs_hash(testbed)
-    assert mode_hash != content_hash
+    os.utime(old_file, ns=(new_mtime_ns, new_mtime_ns))
+    assert _any_file_newer_than(testbed, marker_mtime_ns) is True
 
-    (testbed / "empty-dir").mkdir()
-    assert _compute_testbed_fs_hash(testbed) != mode_hash
+    os.utime(old_file, ns=(old_mtime_ns, old_mtime_ns))
+    os.utime(testbed, ns=(old_mtime_ns, old_mtime_ns))
+    new_file = testbed / "new.txt"
+    new_file.write_text("new\n", encoding="utf-8")
+    os.utime(new_file, ns=(new_mtime_ns, new_mtime_ns))
+    assert _any_file_newer_than(testbed, marker_mtime_ns) is True
+
+    new_file.unlink()
+    os.utime(testbed, ns=(old_mtime_ns, old_mtime_ns))
+    empty_dir = testbed / "empty-dir"
+    empty_dir.mkdir()
+    os.utime(empty_dir, ns=(new_mtime_ns, new_mtime_ns))
+    assert _any_file_newer_than(testbed, marker_mtime_ns) is True
+
+    empty_dir.rmdir()
+    os.utime(testbed, ns=(old_mtime_ns, old_mtime_ns))
+    deleted_file = testbed / "deleted.txt"
+    deleted_file.write_text("deleted\n", encoding="utf-8")
+    os.utime(deleted_file, ns=(old_mtime_ns, old_mtime_ns))
+    os.utime(testbed, ns=(old_mtime_ns, old_mtime_ns))
+    deleted_file.unlink()
+    os.utime(testbed, ns=(new_mtime_ns, new_mtime_ns))
+    assert _any_file_newer_than(testbed, marker_mtime_ns) is True
 
 
 def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
@@ -389,7 +403,12 @@ def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
     assert second["elapsed_ms"] >= 0
     assert not (checkpoint_dir / "call_second-after.tar").exists()
 
-    (testbed / "new.txt").write_text("new state\n", encoding="utf-8")
+    new_file = testbed / "new.txt"
+    new_file.write_text("new state\n", encoding="utf-8")
+    assert hook._checkpoint_marker_mtime_ns is not None
+    new_mtime_ns = time.time_ns()
+    assert new_mtime_ns > hook._checkpoint_marker_mtime_ns
+    os.utime(new_file, ns=(new_mtime_ns, new_mtime_ns))
     third = hook._checkpoint_after_tool(
         tool_call_id="call_third",
         tool_name="exec",
