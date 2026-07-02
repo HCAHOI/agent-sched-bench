@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import multiprocessing
+import re
 import subprocess
 import shutil
 import tarfile
@@ -393,6 +394,29 @@ def _command_exit_code(tool_result: str) -> int | None:
         return None
 
 
+_NONDETERMINISTIC_TOOL_OUTPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"real\s+\d+m\d+\.\d+s"),
+    re.compile(r"user\s+\d+m\d+\.\d+s"),
+    re.compile(r"sys\s+\d+m\d+\.\d+s"),
+)
+
+
+def _normalized_tool_output_hash(text: str) -> str:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if lines and lines[-1].strip().startswith("Exit code:"):
+        lines = lines[:-1]
+    normalized_lines = [
+        line
+        for line in lines
+        if not any(
+            pattern.fullmatch(line.strip())
+            for pattern in _NONDETERMINISTIC_TOOL_OUTPUT_PATTERNS
+        )
+    ]
+    normalized = "\n".join(normalized_lines)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def _exec_semantics_payload(
     tool_name: str | None,
     tool_args_json: Any,
@@ -446,14 +470,17 @@ def _tool_mismatch_reason(
 ) -> str | None:
     if replay_source == "source_artifact_unavailable":
         return "source_artifact_unavailable"
-    if _tool_uses_exec_semantics(tool_name, tool_args_json):
+    uses_exec_semantics = _tool_uses_exec_semantics(tool_name, tool_args_json)
+    source_timeout = False
+    replay_timeout = False
+    if uses_exec_semantics:
         source_timeout = _tool_result_indicates_wrapper_timeout(source_tool_result)
         replay_timeout = _tool_result_indicates_wrapper_timeout(replay_tool_result)
         if source_timeout != replay_timeout:
             return "timeout_mismatch"
     if source_success != tool_success:
         return "tool_success_mismatch"
-    if _tool_uses_exec_semantics(tool_name, tool_args_json):
+    if uses_exec_semantics:
         source_exit = _command_exit_code(str(source_tool_result or ""))
         replay_exit = _command_exit_code(str(replay_tool_result or ""))
         if (
@@ -462,6 +489,11 @@ def _tool_mismatch_reason(
             and source_exit != replay_exit
         ):
             return "command_exit_code_mismatch"
+        if not source_timeout and not replay_timeout:
+            source_hash = _normalized_tool_output_hash(str(source_tool_result or ""))
+            replay_hash = _normalized_tool_output_hash(str(replay_tool_result or ""))
+            if source_hash != replay_hash:
+                return "command_output_mismatch"
     return None
 
 
