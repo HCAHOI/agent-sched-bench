@@ -2955,7 +2955,7 @@ async def _replay_cloud_model_session(
         if start_drift is not None:
             sleep_drifts.append(start_drift)
 
-    for action in loaded.actions:
+    for action_index, action in enumerate(loaded.actions):
         action_id = str(action.get("action_id", ""))
         action_type = str(action.get("action_type", ""))
         iteration = int(action.get("iteration", 0))
@@ -3235,21 +3235,58 @@ async def _replay_cloud_model_session(
                     source_trace=loaded.source_trace,
                 )
                 if checkpoint_spec is None:
-                    forced_sync_fields = {
-                        "forced_sync_attempted": False,
-                        "forced_sync_success": False,
-                        "forced_sync_resolved": False,
-                        "forced_sync_continued": False,
-                        "forced_sync_reason": mismatch_reason,
-                        "forced_sync_status": "checkpoint_missing",
-                        "forced_sync_error": "checkpoint_after missing",
-                    }
+                    fallback_spec: dict[str, Any] | None = None
+                    fallback_action_index: int | None = None
+                    for prev_index in range(action_index - 1, -1, -1):
+                        prev_action = loaded.actions[prev_index]
+                        prev_data = prev_action.get("data") or {}
+                        candidate = _checkpoint_after_spec(
+                            action_data=prev_data,
+                            source_trace=loaded.source_trace,
+                        )
+                        if candidate is not None:
+                            fallback_spec = candidate
+                            fallback_action_index = prev_index
+                            break
+
+                    if fallback_spec is None:
+                        forced_sync_fields = {
+                            "forced_sync_attempted": True,
+                            "forced_sync_success": False,
+                            "forced_sync_resolved": False,
+                            "forced_sync_continued": False,
+                            "forced_sync_reason": mismatch_reason,
+                            "forced_sync_status": "checkpoint_missing",
+                            "forced_sync_error": (
+                                "no checkpoint available (searched entire trace history)"
+                            ),
+                        }
+                    else:
+                        assert fallback_action_index is not None
+                        checkpoint_spec = fallback_spec
+                        forced_sync_fields = {
+                            "forced_sync_attempted": True,
+                            "forced_sync_reason": mismatch_reason,
+                            "forced_sync_overhead_excluded": True,
+                            "forced_sync_fallback": True,
+                            "forced_sync_fallback_from_action_index": (
+                                fallback_action_index
+                            ),
+                            "forced_sync_fallback_from_action_id": str(
+                                loaded.actions[fallback_action_index].get(
+                                    "action_id",
+                                    "",
+                                )
+                            ),
+                        }
                 else:
                     forced_sync_fields = {
                         "forced_sync_attempted": True,
                         "forced_sync_reason": mismatch_reason,
                         "forced_sync_overhead_excluded": True,
                     }
+
+                if checkpoint_spec is not None:
                     try:
                         restore_result = await asyncio.to_thread(
                             _restore_checkpoint_to_container,
