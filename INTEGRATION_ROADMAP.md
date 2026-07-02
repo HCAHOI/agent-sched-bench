@@ -54,7 +54,7 @@ Recommended migration priorities:
 - BFCL benchmark plugin.
 - BrowseComp / DeepResearchBench plugins.
 - Tongyi DeepResearch scaffold, only if it can satisfy current cloud-provider and tracing constraints.
-- [x] Monitoring policy layer focused on high-concurrency simulate safety: PMU/memory-bandwidth are explicit, auto-disabled or rejected in concurrent replay, and never replace action-level resource timelines. Implemented in this pass for simulate.
+- [x] Monitoring policy layer focused on high-concurrency simulate safety: PMU is explicit and rejected when requested for concurrent replay; memory-bandwidth is explicit and safely disabled in concurrent replay; neither replaces action-level resource timelines. Implemented in this pass for simulate.
 - Attempt timing breakdown and monitoring-disabled markers.
 
 ### P2: Optional / situational
@@ -733,7 +733,7 @@ Rules:
 
 - do not replace action-level resource timelines
 - missing PMU must be explicitly recorded, not silently faked
-- PMU and host memory-bandwidth must be disabled/rejected in concurrent replay unless an isolation-safe design is documented
+- PMU must be rejected when explicitly requested for concurrent replay; host memory-bandwidth must be safely disabled in concurrent replay unless an isolation-safe design is documented
 - replay semantics must remain stable
 
 Required tests:

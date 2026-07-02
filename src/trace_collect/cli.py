@@ -427,7 +427,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    from trace_collect.simulator import simulate
+    from trace_collect.simulator import SimulateError, simulate
 
     try:
         concurrency_values = _parse_concurrency_values(args.concurrency)
@@ -460,7 +460,11 @@ def _run_simulate(args: argparse.Namespace) -> None:
     if len(concurrency_values) > 1 and sweep_path.exists():
         sweep_path.unlink()
     for concurrency in concurrency_values:
-        trace_file = asyncio.run(simulate(**simulate_kwargs, concurrency=concurrency))
+        try:
+            trace_file = asyncio.run(simulate(**simulate_kwargs, concurrency=concurrency))
+        except (SimulateError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
         print(f"Simulate trace written to: {trace_file}")
         if len(concurrency_values) > 1:
             _append_throughput_sweep_record(sweep_path, trace_file)

@@ -72,11 +72,6 @@ def resolve_simulate_monitoring(
         raise ValueError(
             "--pmu-monitoring on is forbidden for concurrent simulate replay"
         )
-    if memory_bandwidth == "on" and concurrent:
-        raise ValueError(
-            "--memory-bandwidth-monitoring on is forbidden for concurrent "
-            "simulate replay"
-        )
     if pmu == "on" and not resource_enabled:
         raise ValueError(
             "--pmu-monitoring on requires --resource-monitoring on or auto with "

@@ -150,7 +150,8 @@ PYTHONPATH=src python -m trace_collect.cli simulate \
   rejected when `--concurrency > 1` or `--workers > 1`.
 - `--memory-bandwidth-monitoring auto|on|off`: host memory-bandwidth telemetry.
   `auto` enables it only for non-concurrent container replay; explicit `on` is
-  rejected when `--concurrency > 1` or `--workers > 1`.
+  recorded as requested but safely disabled when `--concurrency > 1` or
+  `--workers > 1`.
 
 For large closed-loop replay, use `--workers` near
 `min(concurrency, os.cpu_count())` (or lower if memory/process overhead matters).

@@ -45,23 +45,40 @@ def test_simulate_monitoring_concurrent_auto_disables_pmu_and_memory_bandwidth()
     assert policy.per_task_resource_enabled is True
 
 
-@pytest.mark.parametrize("field", ["pmu", "memory_bandwidth"])
-def test_simulate_monitoring_rejects_expensive_telemetry_when_concurrent(
-    field: str,
-) -> None:
-    kwargs = {
-        "resource": "auto",
-        "pmu": "auto",
-        "memory_bandwidth": "auto",
-        "concurrency": 2,
-        "workers": 1,
-        "has_container_session": True,
-        "has_host_session": False,
-    }
-    kwargs[field] = "on"
-
+def test_simulate_monitoring_rejects_pmu_when_concurrent() -> None:
     with pytest.raises(ValueError, match="forbidden for concurrent simulate replay"):
-        resolve_simulate_monitoring(**kwargs)
+        resolve_simulate_monitoring(
+            resource="auto",
+            pmu="on",
+            memory_bandwidth="auto",
+            concurrency=2,
+            workers=1,
+            has_container_session=True,
+            has_host_session=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("concurrency", "workers"),
+    [(2, 1), (1, 2)],
+)
+def test_simulate_monitoring_disables_explicit_memory_bandwidth_when_concurrent(
+    concurrency: int,
+    workers: int,
+) -> None:
+    policy = resolve_simulate_monitoring(
+        resource="auto",
+        pmu="auto",
+        memory_bandwidth="on",
+        concurrency=concurrency,
+        workers=workers,
+        has_container_session=True,
+        has_host_session=False,
+    )
+
+    assert policy.memory_bandwidth_requested == "on"
+    assert policy.memory_bandwidth_enabled is False
+    assert policy.memory_bandwidth_reason == "disabled_concurrent_replay"
 
 
 def test_simulate_monitoring_resource_off_disables_all_resource_paths() -> None:

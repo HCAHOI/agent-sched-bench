@@ -3586,6 +3586,7 @@ async def simulate(
                     executable=container_executable,
                     sample_all_containers=False,
                     collect_cgroup_memory_access=monitoring_policy.pmu_enabled,
+                    monitoring_policy=monitoring_policy_dict,
                 )
                 container_resource_recorder.start()
 

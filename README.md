@@ -91,8 +91,10 @@ before the global all-ready replay barrier. Worker mode prepares a full wave
 before replay starts, so wave members wait for the slowest preparation. It
 disables the global container-resource recorder and keeps per-task
 `resources.json` artifacts. `--pmu-monitoring auto` and
-`--memory-bandwidth-monitoring auto` resolve to off for concurrent replay;
-explicit `on` is rejected under `--concurrency > 1` or `--workers > 1`. By
+`--memory-bandwidth-monitoring auto` resolve to off for concurrent replay.
+Explicit `--pmu-monitoring on` is rejected under `--concurrency > 1` or
+`--workers > 1`; explicit memory-bandwidth `on` is recorded as requested but
+safely disabled in concurrent replay. By
 default, replay sleeps source inter-action gaps and action durations scaled by
 `--replay-speed`. Replay traces include per-action and per-task `sleep_drift`
 metrics for expected-vs-actual sleep timing. To replace source LLM durations

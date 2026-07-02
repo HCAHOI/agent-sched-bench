@@ -679,6 +679,7 @@ class ContainerResourceRecorder(threading.Thread):
         subprocess_timeout_s: float = 5.0,
         sample_all_containers: bool = True,
         collect_cgroup_memory_access: bool = True,
+        monitoring_policy: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(daemon=True, name=f"container-resources-{run_id}")
         self.output_dir = Path(output_dir)
@@ -688,6 +689,7 @@ class ContainerResourceRecorder(threading.Thread):
         self.subprocess_timeout_s = subprocess_timeout_s
         self.sample_all_containers = sample_all_containers
         self.collect_cgroup_memory_access = collect_cgroup_memory_access
+        self.monitoring_policy = dict(monitoring_policy or {})
         self.jsonl_path = self.output_dir / f"{run_id}.container_resources.jsonl"
         self.summary_path = (
             self.output_dir / f"{run_id}.container_resources_summary.json"
@@ -1001,6 +1003,7 @@ class ContainerResourceRecorder(threading.Thread):
             "ended_at": self._ended_at,
             "elapsed_s": elapsed_s,
             "sample_count": len(samples),
+            "monitoring": dict(self.monitoring_policy),
             "jsonl_path": str(self.jsonl_path),
             "summary_path": str(self.summary_path),
             "sampling": {

@@ -734,6 +734,10 @@ def test_container_resource_recorder_appends_global_container_samples(
         subprocess_timeout_s=0.1,
         sample_all_containers=False,
         collect_cgroup_memory_access=False,
+        monitoring_policy={
+            "pmu_enabled": False,
+            "pmu_reason": "disabled_by_policy",
+        },
     )
     recorder.register_container(container_id)
     with patch(
@@ -761,6 +765,11 @@ def test_container_resource_recorder_appends_global_container_samples(
     assert records[0]["net_rx_bytes"] == 1000
     assert records[0]["net_tx_bytes"] == 2000
     assert summary["sample_count"] == len(records)
+    assert summary["monitoring"] == {
+        "pmu_enabled": False,
+        "pmu_reason": "disabled_by_policy",
+    }
+    assert persisted_summary["monitoring"] == summary["monitoring"]
     assert persisted_summary["sampling"]["stop_complete"] is True
     assert persisted_summary["sampling"]["sample_all_containers"] is False
     assert len(persisted_summary["containers"]) == 1

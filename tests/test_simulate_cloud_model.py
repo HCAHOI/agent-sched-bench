@@ -194,6 +194,7 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
             executable: str,
             sample_all_containers: bool,
             collect_cgroup_memory_access: bool = True,
+            monitoring_policy: dict[str, object] | None = None,
         ) -> None:
             self.output_dir = Path(output_dir)
             self.run_id = run_id
@@ -201,6 +202,7 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
             self.executable = executable
             self.sample_all_containers = sample_all_containers
             self.collect_cgroup_memory_access = collect_cgroup_memory_access
+            self.monitoring_policy = dict(monitoring_policy or {})
             self.started = False
             self.stopped = False
             self.registered: list[str] = []
@@ -248,6 +250,7 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
                 "jsonl_path": str(self.jsonl_path),
                 "summary_path": str(self.summary_path),
                 "sample_count": 1,
+                "monitoring": dict(self.monitoring_policy),
                 "sampling": {
                     "interval_s": self.interval_s,
                     "scope": "registered_containers",
@@ -649,6 +652,30 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
     assert seen["llm_timing_mode"] == "source_scaled"
     assert seen["llm_ttft_ms"] is None
     assert seen["llm_tpot_ms"] is None
+
+
+@pytest.mark.parametrize("error_type", [ValueError, SimulateError])
+def test_run_simulate_cloud_model_reports_policy_errors_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error_type: type[Exception],
+) -> None:
+    async def fake_simulate(**_kwargs):
+        raise error_type("--pmu-monitoring on is forbidden for concurrent simulate replay")
+
+    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
+    args = parse_simulate_args(["--manifest", "manifest.yaml"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        _run_simulate(args)
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 1
+    assert (
+        "ERROR: --pmu-monitoring on is forbidden for concurrent simulate replay"
+        in captured.err
+    )
+    assert "Traceback" not in captured.err
 
 
 def test_run_simulate_cloud_model_concurrency_sweep(
@@ -3507,6 +3534,11 @@ def test_cloud_model_concurrency_limits_active_traces(
         "fake-task-2",
     ]
     assert summary["container_resources"]["sample_count"] == 1
+    assert summary["container_resources"]["monitoring"] == summary["monitoring"]
+    recorder_summary = json.loads(
+        Path(summary["container_resources"]["summary_path"]).read_text()
+    )
+    assert recorder_summary["monitoring"] == summary["monitoring"]
     assert Path(summary["container_resources"]["jsonl_path"]).exists()
     assert Path(summary["container_resources"]["summary_path"]).exists()
 
