@@ -64,15 +64,23 @@ def main() -> None:
         elif "failed" in status or "error" in str(data.get("forced_sync_error", "")).lower():
             fs_errors[status] += 1
 
-    # --- Checkpoint coverage ---
+    # --- Checkpoint coverage (from source traces, not simulate output) ---
+    # The simulate trace does not copy checkpoint_after from source actions.
+    # Read source traces from simulate metadata to get real coverage.
     cp_present = 0
-    cp_types = Counter()
-    for t in tool_execs:
-        data = t.get("data") or {}
-        cp = data.get("checkpoint_after")
-        if cp and isinstance(cp, dict):
-            cp_present += 1
-            cp_types[cp.get("kind", "unknown")] += 1
+    cp_skipped = 0
+    cp_types: Counter[str] = Counter()
+    source_trace_paths = _load_source_trace_paths(trace_path)
+    if source_trace_paths:
+        cp_present, cp_skipped, cp_types = _scan_source_checkpoint_coverage(
+            source_trace_paths
+        )
+    else:
+        # Fallback: scan sibling directories
+        run_dir = trace_path.parent.parent  # simulate_output/../
+        cp_present, cp_skipped, cp_types = _scan_source_checkpoint_coverage(
+            _discover_source_traces(run_dir)
+        )
 
     # --- Per-agent summary ---
     agent_stats: dict[str, dict] = {}
@@ -127,8 +135,14 @@ def main() -> None:
     print(f"Fallback ratio:    {fs_fallback}/{fs_success} = {fallback_rate:.1f}% (of successful)")
     print()
 
-    print("Checkpoint coverage in source trace:")
-    print(f"  With checkpoint: {cp_present}/{total} ({100*cp_present/total:.1f}%)" if total else "")
+    print("Checkpoint coverage (from source traces):")
+    total_checkpointed = cp_present + cp_skipped
+    if total_checkpointed:
+        print(f"  Checkpoints created: {cp_present}")
+        print(f"  Skipped (no Δ):      {cp_skipped}")
+        print(f"  Coverage:            {cp_present}/{cp_present + cp_skipped} exec tools checkpointed ({100*cp_present/(cp_present+cp_skipped):.1f}%)")
+    else:
+        print(f"  (no source traces found)")
     for kind, count in cp_types.most_common():
         print(f"    {kind}: {count}")
     print()
@@ -155,6 +169,72 @@ def main() -> None:
     print(f"Aggregate from summaries:")
     print(f"  Total wall time:  {total_elapsed:.1f}s")
     print(f"  Unresolved:       {total_unresolved}")
+
+
+def _load_source_trace_paths(simulate_trace: Path) -> list[Path]:
+    """Extract source trace paths from simulate trace metadata (first JSONL line)."""
+    with simulate_trace.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if record.get("type") != "trace_metadata":
+                continue
+            entries = record.get("source_trace_entries", [])
+            if entries:
+                return [Path(e["source_trace"]) for e in entries if "source_trace" in e]
+            # Older format: source_traces list of strings
+            raw = record.get("source_traces", [])
+            return [Path(p) for p in raw if isinstance(p, str)]
+    return []
+
+
+def _discover_source_traces(run_dir: Path) -> list[Path]:
+    """Discover trace.jsonl files under run_dir/<instance>/attempt_*/."""
+    traces = []
+    for instance_dir in sorted(run_dir.iterdir()):
+        if not instance_dir.is_dir():
+            continue
+        attempts = sorted(instance_dir.glob("attempt_*/trace.jsonl"))
+        if attempts:
+            traces.append(attempts[-1])  # latest attempt
+    return traces
+
+
+def _scan_source_checkpoint_coverage(
+    source_paths: list[Path],
+) -> tuple[int, int, Counter[str]]:
+    """Scan source traces for checkpoint_after fields.
+
+    Returns (created, skipped, kind_counts).
+    """
+    created = 0
+    skipped = 0
+    kind_counts: Counter[str] = Counter()
+    for src in source_paths:
+        if not src.is_file():
+            continue
+        for line in src.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("type") != "action" or record.get("action_type") != "tool_exec":
+                continue
+            data = record.get("data") or {}
+            cp = data.get("checkpoint_after")
+            if isinstance(cp, dict):
+                if cp.get("skipped"):
+                    skipped += 1
+                else:
+                    kind = cp.get("kind", "unknown")
+                    kind_counts[kind] += 1
+                    created += 1
+    return created, skipped, kind_counts
 
 
 if __name__ == "__main__":
