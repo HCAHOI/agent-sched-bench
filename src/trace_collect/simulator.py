@@ -653,7 +653,10 @@ def _checkpoint_after_spec(
     spec["path"] = str(checkpoint_path)
     kind = str(spec.setdefault("kind", "filesystem_tar"))
     if "incremental" not in spec:
-        spec["incremental"] = kind == "filesystem_tar_incremental"
+        spec["incremental"] = kind in {
+            "filesystem_tar_incremental",
+            "filesystem_tar_gz_incremental",
+        }
     spec["root"] = restore_root
     return spec
 
@@ -849,6 +852,8 @@ def _restore_checkpoint_to_container(
         "filesystem_tar_full",
         "filesystem_tar_incremental",
         "filesystem_tar_gz",
+        "filesystem_tar_gz_full",
+        "filesystem_tar_gz_incremental",
         "tar",
         "tar_gz",
     }:
@@ -934,7 +939,11 @@ def _restore_checkpoint_to_container(
 
 def _checkpoint_spec_is_incremental(checkpoint_spec: dict[str, Any]) -> bool:
     kind = str(checkpoint_spec.get("kind") or "filesystem_tar")
-    return checkpoint_spec.get("incremental") is True or kind == "filesystem_tar_incremental"
+    return (
+        checkpoint_spec.get("incremental") is True
+        or kind == "filesystem_tar_incremental"
+        or kind == "filesystem_tar_gz_incremental"
+    )
 
 
 def _checkpoint_chain_specs_for_action(

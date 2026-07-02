@@ -308,7 +308,7 @@ async def _drive_emits_exec_checkpoint_after(tmp_path: Path) -> None:
     checkpoint_after = tool_exec["data"]["checkpoint_after"]
     checkpoint_path = trace_file.parent / checkpoint_after["path"]
 
-    assert checkpoint_after["kind"] == "filesystem_tar_full"
+    assert checkpoint_after["kind"] == "filesystem_tar_gz_full"
     assert checkpoint_after["incremental"] is False
     assert checkpoint_after["incremental_since_ns"] is None
     assert checkpoint_after["root"] == "/testbed"
@@ -391,7 +391,7 @@ def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
         tool_args_json='{"command":"ls"}',
     )
     assert first is not None
-    assert first["kind"] == "filesystem_tar_full"
+    assert first["kind"] == "filesystem_tar_gz_full"
     assert first["incremental"] is False
     assert (trace_file.parent / first["path"]).exists()
 
@@ -404,7 +404,7 @@ def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
     assert second["skipped"] == "no filesystem changes since last checkpoint"
     assert second["overhead_excluded"] is True
     assert second["elapsed_ms"] >= 0
-    assert not (checkpoint_dir / "call_second-after.tar").exists()
+    assert not (checkpoint_dir / "call_second-after.tar.gz").exists()
 
     new_file = testbed / "new.txt"
     new_file.write_text("new state\n", encoding="utf-8")
@@ -418,7 +418,7 @@ def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
         tool_args_json='{"command":"echo new > new.txt"}',
     )
     assert third is not None
-    assert third["kind"] == "filesystem_tar_incremental"
+    assert third["kind"] == "filesystem_tar_gz_incremental"
     assert third["incremental"] is True
     assert (trace_file.parent / third["path"]).exists()
     hook.close()
@@ -448,7 +448,7 @@ def test_trace_collector_incremental_checkpoint_only_tars_changed_files(
         tool_args_json='{"command":"pytest"}',
     )
     assert first is not None
-    assert first["kind"] == "filesystem_tar_full"
+    assert first["kind"] == "filesystem_tar_gz_full"
     first_path = trace_file.parent / first["path"]
     previous_marker_ns = hook._last_incremental_checkpoint_ns
     assert previous_marker_ns is not None
@@ -462,7 +462,7 @@ def test_trace_collector_incremental_checkpoint_only_tars_changed_files(
         tool_args_json='{"command":"pytest"}',
     )
     assert second is not None
-    assert second["kind"] == "filesystem_tar_incremental"
+    assert second["kind"] == "filesystem_tar_gz_incremental"
     assert second["incremental"] is True
     assert second["incremental_since_ns"] == previous_marker_ns
     second_path = trace_file.parent / second["path"]
@@ -646,7 +646,7 @@ async def _drive_checkpoints_exec_in_multi_tool_iteration(tmp_path: Path) -> Non
     }
     checkpoint_after = records_by_tool_id[exec_tc.id]["data"]["checkpoint_after"]
     checkpoint_path = trace_file.parent / checkpoint_after["path"]
-    assert checkpoint_after["kind"] == "filesystem_tar_full"
+    assert checkpoint_after["kind"] == "filesystem_tar_gz_full"
     assert checkpoint_after["incremental"] is False
     assert checkpoint_after["root"] == "/testbed"
     assert checkpoint_after["overhead_excluded"] is True

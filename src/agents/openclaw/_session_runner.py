@@ -207,7 +207,7 @@ def _write_filesystem_checkpoint_tar(
         )
     with tarfile.open(
         checkpoint_path,
-        "w",
+        "w:gz",
         format=tarfile.PAX_FORMAT,
         pax_headers=pax_headers,
     ) as tf:
@@ -257,6 +257,7 @@ class TraceCollectorHook(AgentHook):
         checkpoint_root: Path | None = None,
         checkpoint_dir: Path | None = None,
         checkpoint_root_label: str = "/testbed",
+        checkpoint_rebaseline_bytes: int | None = None,
     ) -> None:
         self.trace_file = trace_file
         self.instance_id = instance_id
@@ -282,6 +283,8 @@ class TraceCollectorHook(AgentHook):
         self._last_full_checkpoint_ns: int | None = None
         self._last_incremental_checkpoint_ns: int | None = None
         self._checkpoint_snapshot_entries: dict[str, str] | None = None
+        self._rebaseline_bytes = checkpoint_rebaseline_bytes
+        self._checkpoint_chain_bytes_since_full: int = 0
         self._flushed = False
         self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
 
@@ -347,7 +350,16 @@ class TraceCollectorHook(AgentHook):
             }
 
         is_first = self._last_full_checkpoint_ns is None
-        incremental_since = None if is_first else self._last_incremental_checkpoint_ns
+
+        # Re-baseline: if the incremental chain exceeds the threshold,
+        # promote this checkpoint to full regardless of is_first.
+        force_full = (
+            not is_first
+            and self._rebaseline_bytes is not None
+            and self._checkpoint_chain_bytes_since_full >= self._rebaseline_bytes
+        )
+
+        incremental_since = None if is_first or force_full else self._last_incremental_checkpoint_ns
         deleted_paths: list[str] = []
         if not is_first and self._checkpoint_snapshot_entries is not None:
             deleted_paths = sorted(
@@ -358,7 +370,7 @@ class TraceCollectorHook(AgentHook):
 
         checkpoint_path = (
             self._checkpoint_dir
-            / f"{_sanitize_checkpoint_name(tool_call_id)}-after.tar"
+            / f"{_sanitize_checkpoint_name(tool_call_id)}-after.tar.gz"
         )
         try:
             _write_filesystem_checkpoint_tar(
@@ -390,21 +402,27 @@ class TraceCollectorHook(AgentHook):
             }
 
         elapsed_ms = (time.monotonic() - started) * 1000
-        if is_first:
+        size_bytes = checkpoint_path.stat().st_size
+        is_full = is_first or force_full
+        if is_full:
             self._last_full_checkpoint_ns = marker_before_tar_ns
+            self._checkpoint_chain_bytes_since_full = 0
+        else:
+            self._checkpoint_chain_bytes_since_full += size_bytes
         self._last_incremental_checkpoint_ns = marker_before_tar_ns
         self._checkpoint_snapshot_entries = current_snapshot
         return {
             "path": _relative_to_or_absolute(checkpoint_path, self.trace_file.parent),
             "kind": (
-                "filesystem_tar_full" if is_first else "filesystem_tar_incremental"
+                "filesystem_tar_gz_full" if is_full else "filesystem_tar_gz_incremental"
             ),
             "root": self._checkpoint_root_label,
-            "incremental": not is_first,
+            "incremental": not is_full,
             "incremental_since_ns": incremental_since,
             "elapsed_ms": round(elapsed_ms, 3),
-            "size_bytes": checkpoint_path.stat().st_size,
+            "size_bytes": size_bytes,
             "overhead_excluded": True,
+            "rebaseline": force_full or None,
         }
 
     def close(self) -> None:

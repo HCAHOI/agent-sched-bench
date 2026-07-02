@@ -1048,19 +1048,19 @@ def test_simulate_forced_sync_restores_incremental_checkpoint_chain(
     checkpoints = [
         {
             "path": "checkpoints/full.tar",
-            "kind": "filesystem_tar_full",
+            "kind": "filesystem_tar_gz_full",
             "root": "/testbed",
             "incremental": False,
         },
         {
             "path": "checkpoints/inc-1.tar",
-            "kind": "filesystem_tar_incremental",
+            "kind": "filesystem_tar_gz_incremental",
             "root": "/testbed",
             "incremental": True,
         },
         {
             "path": "checkpoints/inc-2.tar",
-            "kind": "filesystem_tar_incremental",
+            "kind": "filesystem_tar_gz_incremental",
             "root": "/testbed",
             "incremental": True,
         },
