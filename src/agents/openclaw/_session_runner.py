@@ -158,6 +158,21 @@ def _any_file_newer_than(root: Path, marker_mtime_ns: int) -> bool:
     return bool(walk_errors)
 
 
+def _snapshot_checkpoint_entries(root: Path) -> dict[str, str]:
+    root = root.resolve()
+    entries: dict[str, str] = {}
+    for fpath in _iter_checkpoint_entries(root):
+        try:
+            st = os.lstat(fpath)
+        except OSError as exc:
+            raise OSError(f"failed to stat checkpoint entry {fpath}: {exc}") from exc
+        entry_type = _checkpoint_entry_type(st.st_mode)
+        if entry_type not in {"dir", "file"}:
+            raise OSError(f"unsupported checkpoint entry type: {fpath}")
+        entries[_checkpoint_relpath(fpath, root)] = entry_type
+    return entries
+
+
 def _tree_contains_symlink(root: Path) -> bool:
     for path in root.rglob("*"):
         if path.is_symlink():
@@ -172,14 +187,30 @@ def _relative_to_or_absolute(path: Path, base: Path) -> str:
         return str(path.resolve())
 
 
+_CHECKPOINT_DELETIONS_PAX_HEADER = "agent_sched_checkpoint.deleted_paths"
+
+
 def _write_filesystem_checkpoint_tar(
     *,
     root: Path,
     checkpoint_path: Path,
+    incremental_since_ns: int | None = None,
+    deleted_paths: list[str] | None = None,
 ) -> None:
     root = root.resolve()
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(checkpoint_path, "w") as tf:
+    pax_headers: dict[str, str] = {}
+    if deleted_paths:
+        pax_headers[_CHECKPOINT_DELETIONS_PAX_HEADER] = json.dumps(
+            sorted(deleted_paths),
+            separators=(",", ":"),
+        )
+    with tarfile.open(
+        checkpoint_path,
+        "w",
+        format=tarfile.PAX_FORMAT,
+        pax_headers=pax_headers,
+    ) as tf:
         for fpath in _iter_checkpoint_entries(root):
             try:
                 st = os.lstat(fpath)
@@ -189,6 +220,9 @@ def _write_filesystem_checkpoint_tar(
             entry_type = _checkpoint_entry_type(st.st_mode)
             if entry_type not in {"dir", "file"}:
                 raise OSError(f"unsupported checkpoint entry type: {fpath}")
+            if entry_type != "dir" and incremental_since_ns is not None:
+                if st.st_mtime_ns <= incremental_since_ns:
+                    continue
             rel = _checkpoint_relpath(fpath, root)
 
             tar_info = tarfile.TarInfo(rel)
@@ -245,7 +279,9 @@ class TraceCollectorHook(AgentHook):
         self._checkpoint_root = Path(checkpoint_root) if checkpoint_root else None
         self._checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self._checkpoint_root_label = checkpoint_root_label
-        self._checkpoint_marker_mtime_ns: int | None = None
+        self._last_full_checkpoint_ns: int | None = None
+        self._last_incremental_checkpoint_ns: int | None = None
+        self._checkpoint_snapshot_entries: dict[str, str] | None = None
         self._flushed = False
         self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
 
@@ -281,11 +317,11 @@ class TraceCollectorHook(AgentHook):
                 "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             }
 
-        if self._checkpoint_marker_mtime_ns is not None:
+        if self._last_incremental_checkpoint_ns is not None:
             try:
                 has_changes = _any_file_newer_than(
                     root,
-                    self._checkpoint_marker_mtime_ns,
+                    self._last_incremental_checkpoint_ns,
                 )
             except OSError as exc:
                 return {
@@ -301,6 +337,25 @@ class TraceCollectorHook(AgentHook):
                 }
 
         marker_before_tar_ns = time.time_ns()
+        try:
+            current_snapshot = _snapshot_checkpoint_entries(root)
+        except OSError as exc:
+            return {
+                "error": f"checkpoint failed: {exc}",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+
+        is_first = self._last_full_checkpoint_ns is None
+        incremental_since = None if is_first else self._last_incremental_checkpoint_ns
+        deleted_paths: list[str] = []
+        if not is_first and self._checkpoint_snapshot_entries is not None:
+            deleted_paths = sorted(
+                path
+                for path, entry_type in self._checkpoint_snapshot_entries.items()
+                if current_snapshot.get(path) != entry_type
+            )
+
         checkpoint_path = (
             self._checkpoint_dir
             / f"{_sanitize_checkpoint_name(tool_call_id)}-after.tar"
@@ -309,6 +364,8 @@ class TraceCollectorHook(AgentHook):
             _write_filesystem_checkpoint_tar(
                 root=root,
                 checkpoint_path=checkpoint_path,
+                incremental_since_ns=incremental_since,
+                deleted_paths=deleted_paths,
             )
         except OSError as exc:
             return {
@@ -333,11 +390,18 @@ class TraceCollectorHook(AgentHook):
             }
 
         elapsed_ms = (time.monotonic() - started) * 1000
-        self._checkpoint_marker_mtime_ns = marker_before_tar_ns
+        if is_first:
+            self._last_full_checkpoint_ns = marker_before_tar_ns
+        self._last_incremental_checkpoint_ns = marker_before_tar_ns
+        self._checkpoint_snapshot_entries = current_snapshot
         return {
             "path": _relative_to_or_absolute(checkpoint_path, self.trace_file.parent),
-            "kind": "filesystem_tar",
+            "kind": (
+                "filesystem_tar_full" if is_first else "filesystem_tar_incremental"
+            ),
             "root": self._checkpoint_root_label,
+            "incremental": not is_first,
+            "incremental_since_ns": incremental_since,
             "elapsed_ms": round(elapsed_ms, 3),
             "size_bytes": checkpoint_path.stat().st_size,
             "overhead_excluded": True,

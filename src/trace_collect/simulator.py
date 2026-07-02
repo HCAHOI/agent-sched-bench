@@ -52,6 +52,7 @@ GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _DEFAULT_PREP_CONCURRENCY = 20
 _SHARED_SEMAPHORE_POLL_S = 0.05
 _REPLAY_START_DELAY_S = 0.1
+_CHECKPOINT_DELETIONS_PAX_HEADER = "agent_sched_checkpoint.deleted_paths"
 
 
 class SimulateError(Exception):
@@ -650,7 +651,9 @@ def _checkpoint_after_spec(
     if restore_root != "/testbed":
         return None
     spec["path"] = str(checkpoint_path)
-    spec.setdefault("kind", "filesystem_tar")
+    kind = str(spec.setdefault("kind", "filesystem_tar"))
+    if "incremental" not in spec:
+        spec["incremental"] = kind == "filesystem_tar_incremental"
     spec["root"] = restore_root
     return spec
 
@@ -679,11 +682,14 @@ def _restore_checkpoint_archive_in_container(
     container_executable: str,
     container_archive_path: str,
     restore_root: str,
+    clear_root: bool = True,
 ) -> None:
     script = r'''
-import os, shutil, tarfile
+import json, os, shutil, tarfile
 archive = os.environ["CHECKPOINT_ARCHIVE"]
 root = os.path.abspath(os.environ["CHECKPOINT_ROOT"])
+clear_root = os.environ.get("CHECKPOINT_CLEAR_ROOT") == "1"
+deletions_header = os.environ["CHECKPOINT_DELETIONS_HEADER"]
 if os.path.lexists(root):
     if os.path.islink(root):
         os.unlink(root)
@@ -696,21 +702,53 @@ else:
 root_real = os.path.realpath(root)
 if root_real != root:
     raise RuntimeError(f"checkpoint root symlinks are unsupported: {root}")
+
+def safe_target(name, *, allow_root=False):
+    if name == "" or os.path.isabs(name):
+        raise RuntimeError(f"unsafe checkpoint member: {name}")
+    target = os.path.abspath(os.path.join(root, name))
+    if target == root:
+        if allow_root:
+            return target
+        raise RuntimeError(f"unsafe checkpoint member: {name}")
+    if not target.startswith(root + os.sep):
+        raise RuntimeError(f"unsafe checkpoint member: {name}")
+    return target
+
 try:
     with tarfile.open(archive, "r:*") as tf:
         members = tf.getmembers()
         for member in members:
             if member.issym() or member.islnk():
                 raise RuntimeError(f"checkpoint links are unsupported: {member.name}")
-            target = os.path.abspath(os.path.join(root, member.name))
-            if target != root and not target.startswith(root + os.sep):
-                raise RuntimeError(f"unsafe checkpoint member: {member.name}")
-        for name in os.listdir(root):
-            path = os.path.join(root, name)
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path)
-            else:
-                os.unlink(path)
+            safe_target(member.name, allow_root=True)
+        raw_deletions = tf.pax_headers.get(deletions_header, "[]")
+        try:
+            deleted_paths = json.loads(raw_deletions)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("invalid checkpoint deletion manifest") from exc
+        if not isinstance(deleted_paths, list):
+            raise RuntimeError("invalid checkpoint deletion manifest")
+        for deleted_path in deleted_paths:
+            if not isinstance(deleted_path, str):
+                raise RuntimeError("invalid checkpoint deletion manifest")
+            safe_target(deleted_path)
+        if clear_root:
+            for name in os.listdir(root):
+                path = os.path.join(root, name)
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.unlink(path)
+        else:
+            for deleted_path in sorted(deleted_paths, key=lambda p: p.count(os.sep), reverse=True):
+                target = safe_target(deleted_path)
+                if not os.path.lexists(target):
+                    continue
+                if os.path.isdir(target) and not os.path.islink(target):
+                    shutil.rmtree(target)
+                else:
+                    os.unlink(target)
         for member in members:
             tf.extract(member, root)
         if not os.path.isdir(root):
@@ -727,6 +765,10 @@ finally:
             f"CHECKPOINT_ARCHIVE={container_archive_path}",
             "-e",
             f"CHECKPOINT_ROOT={restore_root}",
+            "-e",
+            f"CHECKPOINT_CLEAR_ROOT={'1' if clear_root else '0'}",
+            "-e",
+            f"CHECKPOINT_DELETIONS_HEADER={_CHECKPOINT_DELETIONS_PAX_HEADER}",
             container_id,
             "python3",
             "-c",
@@ -796,12 +838,20 @@ def _restore_checkpoint_to_container(
     *,
     checkpoint_spec: dict[str, Any],
     container: PreparedContainer,
+    clear_root: bool = True,
 ) -> dict[str, Any]:
     checkpoint_path = Path(str(checkpoint_spec["path"]))
     kind = str(checkpoint_spec.get("kind") or "filesystem_tar")
     restore_root = str(checkpoint_spec.get("root") or "/testbed")
     started = time.monotonic()
-    if kind not in {"filesystem_tar", "filesystem_tar_gz", "tar", "tar_gz"}:
+    if kind not in {
+        "filesystem_tar",
+        "filesystem_tar_full",
+        "filesystem_tar_incremental",
+        "filesystem_tar_gz",
+        "tar",
+        "tar_gz",
+    }:
         return _checkpoint_restore_failed_fields(
             checkpoint_path=checkpoint_path,
             kind=kind,
@@ -846,6 +896,7 @@ def _restore_checkpoint_to_container(
             container_executable=container.container_executable,
             container_archive_path=container_archive_path,
             restore_root=restore_root,
+            clear_root=clear_root,
         )
     except Exception as exc:
         return _checkpoint_restore_failed_fields(
@@ -878,6 +929,95 @@ def _restore_checkpoint_to_container(
             "tar_extraction_returncode": 0,
         }
     )
+    return fields
+
+
+def _checkpoint_spec_is_incremental(checkpoint_spec: dict[str, Any]) -> bool:
+    kind = str(checkpoint_spec.get("kind") or "filesystem_tar")
+    return checkpoint_spec.get("incremental") is True or kind == "filesystem_tar_incremental"
+
+
+def _checkpoint_chain_specs_for_action(
+    *,
+    actions: list[dict[str, Any]],
+    target_index: int,
+    source_trace: Path,
+) -> list[dict[str, Any]] | None:
+    if target_index < 0 or target_index >= len(actions):
+        return None
+    target_data = actions[target_index].get("data") or {}
+    target_spec = _checkpoint_after_spec(
+        action_data=target_data,
+        source_trace=source_trace,
+    )
+    if target_spec is None:
+        return None
+    if not _checkpoint_spec_is_incremental(target_spec):
+        return [target_spec]
+
+    reversed_chain: list[dict[str, Any]] = []
+    for index in range(target_index, -1, -1):
+        data = actions[index].get("data") or {}
+        checkpoint_spec = _checkpoint_after_spec(
+            action_data=data,
+            source_trace=source_trace,
+        )
+        if checkpoint_spec is None:
+            continue
+        reversed_chain.append(checkpoint_spec)
+        if not _checkpoint_spec_is_incremental(checkpoint_spec):
+            return list(reversed(reversed_chain))
+    return None
+
+
+def _restore_checkpoint_chain_to_container(
+    *,
+    checkpoint_specs: list[dict[str, Any]],
+    container: PreparedContainer,
+) -> dict[str, Any]:
+    if not checkpoint_specs:
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=Path(""),
+            kind="filesystem_tar_incremental",
+            restore_root="/testbed",
+            status="checkpoint_missing",
+            error="no checkpoint chain available",
+            started=time.monotonic(),
+        )
+
+    started = time.monotonic()
+    chain_paths = [str(Path(str(spec["path"]))) for spec in checkpoint_specs]
+    chain_kinds = [str(spec.get("kind") or "filesystem_tar") for spec in checkpoint_specs]
+    total_size_bytes = 0
+    last_result: dict[str, Any] | None = None
+    for index, checkpoint_spec in enumerate(checkpoint_specs):
+        restore_kwargs: dict[str, Any] = {
+            "checkpoint_spec": checkpoint_spec,
+            "container": container,
+        }
+        if index != 0:
+            restore_kwargs["clear_root"] = False
+        restore_result = _restore_checkpoint_to_container(**restore_kwargs)
+        last_result = restore_result
+        size_bytes = restore_result.get("checkpoint_size_bytes")
+        if isinstance(size_bytes, int):
+            total_size_bytes += size_bytes
+        if restore_result.get("forced_sync_success") is not True:
+            fields = dict(restore_result)
+            break
+    else:
+        assert last_result is not None
+        fields = dict(last_result)
+
+    elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+    fields["restore_elapsed_ms"] = elapsed_ms
+    fields["forced_sync_elapsed_ms"] = elapsed_ms
+    fields["checkpoint_restore_chain_length"] = len(checkpoint_specs)
+    fields["checkpoint_restore_chain_paths"] = chain_paths
+    fields["checkpoint_restore_chain_kinds"] = chain_kinds
+    fields["checkpoint_restore_chain_size_bytes"] = total_size_bytes
+    fields["forced_sync_checkpoint_chain_length"] = len(checkpoint_specs)
+    fields["forced_sync_checkpoint_chain"] = chain_paths
     return fields
 
 
@@ -3278,6 +3418,9 @@ async def _replay_cloud_model_session(
                     action_data=data,
                     source_trace=loaded.source_trace,
                 )
+                checkpoint_action_index: int | None = (
+                    action_index if checkpoint_spec is not None else None
+                )
                 if checkpoint_spec is None:
                     fallback_spec: dict[str, Any] | None = None
                     fallback_action_index: int | None = None
@@ -3308,6 +3451,7 @@ async def _replay_cloud_model_session(
                     else:
                         assert fallback_action_index is not None
                         checkpoint_spec = fallback_spec
+                        checkpoint_action_index = fallback_action_index
                         forced_sync_fields = {
                             "forced_sync_attempted": True,
                             "forced_sync_reason": mismatch_reason,
@@ -3331,12 +3475,39 @@ async def _replay_cloud_model_session(
                     }
 
                 if checkpoint_spec is not None:
+                    assert checkpoint_action_index is not None
+                    checkpoint_chain = _checkpoint_chain_specs_for_action(
+                        actions=loaded.actions,
+                        target_index=checkpoint_action_index,
+                        source_trace=loaded.source_trace,
+                    )
                     try:
-                        restore_result = await asyncio.to_thread(
-                            _restore_checkpoint_to_container,
-                            checkpoint_spec=checkpoint_spec,
-                            container=ctr,
-                        )
+                        if checkpoint_chain is None:
+                            restore_result = _checkpoint_restore_failed_fields(
+                                checkpoint_path=Path(str(checkpoint_spec["path"])),
+                                kind=str(
+                                    checkpoint_spec.get("kind")
+                                    or "filesystem_tar_incremental"
+                                ),
+                                restore_root=str(
+                                    checkpoint_spec.get("root") or "/testbed"
+                                ),
+                                status="checkpoint_full_missing",
+                                error=(
+                                    "incremental checkpoint has no preceding full "
+                                    "checkpoint"
+                                ),
+                                started=time.monotonic(),
+                                archive_exists=Path(
+                                    str(checkpoint_spec["path"])
+                                ).is_file(),
+                            )
+                        else:
+                            restore_result = await asyncio.to_thread(
+                                _restore_checkpoint_chain_to_container,
+                                checkpoint_specs=checkpoint_chain,
+                                container=ctr,
+                            )
                         forced_sync_fields.update(restore_result)
                     except Exception as exc:
                         logger.exception(

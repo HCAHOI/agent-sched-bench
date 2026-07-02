@@ -1039,6 +1039,152 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
     assert summary["unresolved_mismatches"] == 0
 
 
+def test_simulate_forced_sync_restores_incremental_checkpoint_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoints = [
+        {
+            "path": "checkpoints/full.tar",
+            "kind": "filesystem_tar_full",
+            "root": "/testbed",
+            "incremental": False,
+        },
+        {
+            "path": "checkpoints/inc-1.tar",
+            "kind": "filesystem_tar_incremental",
+            "root": "/testbed",
+            "incremental": True,
+        },
+        {
+            "path": "checkpoints/inc-2.tar",
+            "kind": "filesystem_tar_incremental",
+            "root": "/testbed",
+            "incremental": True,
+        },
+    ]
+    records: list[dict[str, object]] = [
+        {
+            "type": "trace_metadata",
+            "trace_format_version": 5,
+            "scaffold": "openclaw",
+            "instance_id": "task-a",
+            "model": "claude-haiku",
+            "mode": "collect",
+            "execution_environment": "container",
+        }
+    ]
+    for index, checkpoint_after in enumerate(checkpoints):
+        records.append(
+            {
+                "type": "action",
+                "action_type": "tool_exec",
+                "action_id": f"task-a-tool-{index}",
+                "agent_id": "task-a",
+                "iteration": index,
+                "ts_start": 100.0 + index,
+                "ts_end": 100.1 + index,
+                "data": {
+                    "tool_name": "exec",
+                    "tool_args": json.dumps({"command": f"step {index}"}),
+                    "tool_result": "source-result",
+                    "duration_ms": 100.0,
+                    "success": True,
+                    "checkpoint_after": checkpoint_after,
+                },
+            }
+        )
+    records.append(
+        {
+            "type": "summary",
+            "agent_id": "task-a",
+            "model": "claude-haiku",
+            "success": True,
+            "n_iterations": 3,
+            "elapsed_s": 3.0,
+        }
+    )
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    call_count = 0
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return "source-result", 1.0, True
+        return "failed", 1.0, False
+
+    restored: list[dict[str, object]] = []
+
+    def fake_restore_checkpoint_to_container(
+        *,
+        checkpoint_spec,
+        container,
+        clear_root=True,
+    ):
+        restored.append(
+            {
+                "checkpoint_spec": checkpoint_spec,
+                "container": container,
+                "clear_root": clear_root,
+            }
+        )
+        return {
+            "forced_sync_success": True,
+            "forced_sync_status": "checkpoint_restored_continuation",
+            "forced_sync_checkpoint": checkpoint_spec["path"],
+            "forced_sync_root": checkpoint_spec["root"],
+        }
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_to_container",
+        fake_restore_checkpoint_to_container,
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_records = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    third_record = tool_records[2]
+
+    assert [Path(str(item["checkpoint_spec"]["path"])).name for item in restored] == [
+        "full.tar",
+        "inc-1.tar",
+        "inc-2.tar",
+    ]
+    assert [item["clear_root"] for item in restored] == [True, False, False]
+    assert third_record["data"]["forced_sync_success"] is True
+    assert third_record["data"]["checkpoint_restore_chain_length"] == 3
+    assert third_record["data"]["forced_sync_checkpoint_chain_length"] == 3
+    assert third_record["data"]["forced_sync_checkpoint_chain"] == [
+        str(trace_path.parent / "checkpoints/full.tar"),
+        str(trace_path.parent / "checkpoints/inc-1.tar"),
+        str(trace_path.parent / "checkpoints/inc-2.tar"),
+    ]
+
+
 def test_simulate_forced_sync_fallback_to_prior_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
