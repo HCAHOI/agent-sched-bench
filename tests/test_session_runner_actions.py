@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import tarfile
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,11 @@ import pytest
 # Skip the entire module if OpenClaw deps are unavailable.
 pytest.importorskip("agents.openclaw._session_runner")
 
-from agents.openclaw._session_runner import TraceCollectorHook, _resolve_run_outcome
+from agents.openclaw._session_runner import (
+    TraceCollectorHook,
+    _compute_testbed_fs_hash,
+    _resolve_run_outcome,
+)
 
 
 class _StubResponse:
@@ -317,6 +322,85 @@ def test_trace_collector_skips_checkpoint_when_testbed_has_symlink(
     asyncio.run(_drive_skips_checkpoint_when_testbed_has_symlink(tmp_path))
 
 
+def test_compute_testbed_fs_hash_tracks_recovery_relevant_changes(
+    tmp_path: Path,
+) -> None:
+    testbed = tmp_path / "testbed"
+    testbed.mkdir()
+    tracked_file = testbed / "result.txt"
+    tracked_file.write_text("ab\n", encoding="utf-8")
+
+    baseline_hash = _compute_testbed_fs_hash(testbed)
+    transient = testbed / "transient.txt"
+    transient.write_text("temporary\n", encoding="utf-8")
+    transient.unlink()
+    assert _compute_testbed_fs_hash(testbed) == baseline_hash
+
+    original_stat = tracked_file.stat()
+    tracked_file.write_text("cd\n", encoding="utf-8")
+    os.utime(
+        tracked_file,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    content_hash = _compute_testbed_fs_hash(testbed)
+    assert content_hash != baseline_hash
+
+    tracked_file.chmod(0o700)
+    mode_hash = _compute_testbed_fs_hash(testbed)
+    assert mode_hash != content_hash
+
+    (testbed / "empty-dir").mkdir()
+    assert _compute_testbed_fs_hash(testbed) != mode_hash
+
+
+def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    checkpoint_dir = tmp_path / "runtime" / "checkpoints"
+    testbed.mkdir()
+    (testbed / "result.txt").write_text("source state\n", encoding="utf-8")
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-smart-checkpoint",
+        checkpoint_root=testbed,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_root_label="/testbed",
+    )
+
+    first = hook._checkpoint_after_tool(
+        tool_call_id="call_first",
+        tool_name="exec",
+        tool_args_json='{"command":"ls"}',
+    )
+    assert first is not None
+    assert first["kind"] == "filesystem_tar"
+    assert (trace_file.parent / first["path"]).exists()
+
+    second = hook._checkpoint_after_tool(
+        tool_call_id="call_second",
+        tool_name="exec",
+        tool_args_json='{"command":"cat result.txt"}',
+    )
+    assert second is not None
+    assert second["skipped"] == "no filesystem changes since last checkpoint"
+    assert second["overhead_excluded"] is True
+    assert second["elapsed_ms"] >= 0
+    assert not (checkpoint_dir / "call_second-after.tar").exists()
+
+    (testbed / "new.txt").write_text("new state\n", encoding="utf-8")
+    third = hook._checkpoint_after_tool(
+        tool_call_id="call_third",
+        tool_name="exec",
+        tool_args_json='{"command":"echo new > new.txt"}',
+    )
+    assert third is not None
+    assert third["kind"] == "filesystem_tar"
+    assert (trace_file.parent / third["path"]).exists()
+    hook.close()
+
+
 async def _drive_skips_checkpoint_when_testbed_has_symlink(tmp_path: Path) -> None:
     trace_file = tmp_path / "trace.jsonl"
     testbed = tmp_path / "testbed"
@@ -485,19 +569,20 @@ async def _drive_checkpoints_exec_in_multi_tool_iteration(tmp_path: Path) -> Non
         if record.get("type") == "action"
         and (record.get("data") or {}).get("tool_call_id") is not None
     }
-    checkpoint_paths = set()
-    for tool_call_id in (exec_tc.id, exec_tc_2.id):
-        checkpoint_after = records_by_tool_id[tool_call_id]["data"]["checkpoint_after"]
-        checkpoint_path = trace_file.parent / checkpoint_after["path"]
-        checkpoint_paths.add(checkpoint_path)
-        assert checkpoint_after["kind"] == "filesystem_tar"
-        assert checkpoint_after["root"] == "/testbed"
-        assert checkpoint_after["overhead_excluded"] is True
-        assert checkpoint_after["elapsed_ms"] >= 0
-        assert checkpoint_after["size_bytes"] == checkpoint_path.stat().st_size
-        with tarfile.open(checkpoint_path, "r") as tf:
-            assert "result.txt" in tf.getnames()
-    assert len(checkpoint_paths) == 2
+    checkpoint_after = records_by_tool_id[exec_tc.id]["data"]["checkpoint_after"]
+    checkpoint_path = trace_file.parent / checkpoint_after["path"]
+    assert checkpoint_after["kind"] == "filesystem_tar"
+    assert checkpoint_after["root"] == "/testbed"
+    assert checkpoint_after["overhead_excluded"] is True
+    assert checkpoint_after["elapsed_ms"] >= 0
+    assert checkpoint_after["size_bytes"] == checkpoint_path.stat().st_size
+    with tarfile.open(checkpoint_path, "r") as tf:
+        assert "result.txt" in tf.getnames()
+
+    skipped_checkpoint = records_by_tool_id[exec_tc_2.id]["data"]["checkpoint_after"]
+    assert skipped_checkpoint["skipped"] == "no filesystem changes since last checkpoint"
+    assert skipped_checkpoint["overhead_excluded"] is True
+    assert skipped_checkpoint["elapsed_ms"] >= 0
 
     for tool_call_id in (batched_exec_tc.id, read_tc.id):
         tool_data = records_by_tool_id[tool_call_id]["data"]

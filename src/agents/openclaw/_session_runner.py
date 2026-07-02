@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
+import stat
 import tarfile
 import time
+from collections.abc import Iterator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,6 +89,105 @@ def _single_exec_command_args(tool_name: str, args_json: str) -> dict[str, Any] 
     return payload
 
 
+def _iter_checkpoint_entries(root: Path) -> Iterator[str]:
+    walk_errors: list[OSError] = []
+
+    def record_walk_error(exc: OSError) -> None:
+        walk_errors.append(exc)
+
+    for dirpath, dirnames, filenames in os.walk(
+        root,
+        topdown=True,
+        onerror=record_walk_error,
+        followlinks=False,
+    ):
+        dirnames.sort()
+        filenames.sort()
+        if Path(dirpath) != root:
+            yield str(dirpath)
+        for fname in filenames:
+            yield os.path.join(dirpath, fname)
+
+    if walk_errors:
+        raise OSError(f"failed to walk checkpoint root {root}: {walk_errors[0]}")
+
+
+def _checkpoint_entry_type(mode: int) -> str:
+    if stat.S_ISDIR(mode):
+        return "dir"
+    if stat.S_ISREG(mode):
+        return "file"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return f"other:{stat.S_IFMT(mode)}"
+
+
+def _checkpoint_relpath(path: str, root: Path) -> str:
+    return Path(os.path.relpath(path, root)).as_posix()
+
+
+def _hash_checkpoint_entry_metadata(
+    h: Any,
+    *,
+    entry_type: str,
+    rel: str,
+    st: os.stat_result,
+) -> None:
+    h.update(
+        f"{entry_type}\0{rel}\0{st.st_mode}\0{st.st_uid}\0{st.st_gid}\0"
+        f"{st.st_size}\0{st.st_mtime_ns}\0".encode()
+    )
+
+
+def _hash_checkpoint_file_content(h: Any, file_obj: Any, path: str) -> None:
+    try:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            h.update(chunk)
+    except OSError as exc:
+        raise OSError(f"failed to read checkpoint entry {path}: {exc}") from exc
+    h.update(b"\0")
+
+
+class _HashingReader:
+    def __init__(self, file_obj: Any, h: Any) -> None:
+        self._file_obj = file_obj
+        self._h = h
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._file_obj.read(size)
+        if chunk:
+            self._h.update(chunk)
+        return chunk
+
+
+def _compute_testbed_fs_hash(root: Path) -> str:
+    """Walk /testbed and hash the recovery-relevant filesystem state."""
+    root = root.resolve()
+    h = hashlib.sha256()
+    for fpath in _iter_checkpoint_entries(root):
+        try:
+            st = os.lstat(fpath)
+        except OSError as exc:
+            raise OSError(f"failed to stat checkpoint entry {fpath}: {exc}") from exc
+
+        entry_type = _checkpoint_entry_type(st.st_mode)
+        rel = _checkpoint_relpath(fpath, root)
+        _hash_checkpoint_entry_metadata(h, entry_type=entry_type, rel=rel, st=st)
+        if stat.S_ISREG(st.st_mode):
+            try:
+                with open(fpath, "rb") as fh:
+                    _hash_checkpoint_file_content(h, fh, fpath)
+            except OSError as exc:
+                raise OSError(f"failed to read checkpoint entry {fpath}: {exc}") from exc
+        elif stat.S_ISLNK(st.st_mode):
+            try:
+                h.update(os.readlink(fpath).encode())
+            except OSError as exc:
+                raise OSError(f"failed to read checkpoint symlink {fpath}: {exc}") from exc
+            h.update(b"\0")
+    return h.hexdigest()
+
+
 def _tree_contains_symlink(root: Path) -> bool:
     for path in root.rglob("*"):
         if path.is_symlink():
@@ -103,11 +206,42 @@ def _write_filesystem_checkpoint_tar(
     *,
     root: Path,
     checkpoint_path: Path,
-) -> None:
+) -> str:
+    root = root.resolve()
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    h = hashlib.sha256()
     with tarfile.open(checkpoint_path, "w") as tf:
-        for child in sorted(root.iterdir(), key=lambda p: p.name):
-            tf.add(child, arcname=child.name, recursive=True)
+        for fpath in _iter_checkpoint_entries(root):
+            try:
+                st = os.lstat(fpath)
+            except OSError as exc:
+                raise OSError(f"failed to stat checkpoint entry {fpath}: {exc}") from exc
+
+            entry_type = _checkpoint_entry_type(st.st_mode)
+            if entry_type not in {"dir", "file"}:
+                raise OSError(f"unsupported checkpoint entry type: {fpath}")
+            rel = _checkpoint_relpath(fpath, root)
+            _hash_checkpoint_entry_metadata(h, entry_type=entry_type, rel=rel, st=st)
+
+            tar_info = tarfile.TarInfo(rel)
+            tar_info.mode = stat.S_IMODE(st.st_mode)
+            tar_info.uid = st.st_uid
+            tar_info.gid = st.st_gid
+            tar_info.mtime = st.st_mtime_ns / 1_000_000_000
+            if stat.S_ISDIR(st.st_mode):
+                tar_info.type = tarfile.DIRTYPE
+                tf.addfile(tar_info)
+                continue
+
+            tar_info.type = tarfile.REGTYPE
+            tar_info.size = st.st_size
+            try:
+                with open(fpath, "rb") as fh:
+                    tf.addfile(tar_info, _HashingReader(fh, h))
+            except OSError as exc:
+                raise OSError(f"failed to read checkpoint entry {fpath}: {exc}") from exc
+            h.update(b"\0")
+    return h.hexdigest()
 
 
 class TraceCollectorHook(AgentHook):
@@ -145,6 +279,7 @@ class TraceCollectorHook(AgentHook):
         self._checkpoint_root = Path(checkpoint_root) if checkpoint_root else None
         self._checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self._checkpoint_root_label = checkpoint_root_label
+        self._last_checkpoint_fs_hash: str | None = None
         self._flushed = False
         self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
 
@@ -180,19 +315,57 @@ class TraceCollectorHook(AgentHook):
                 "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             }
 
+        try:
+            current_hash = _compute_testbed_fs_hash(root)
+        except OSError as exc:
+            return {
+                "error": f"checkpoint hash failed: {exc}",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+        if self._last_checkpoint_fs_hash == current_hash:
+            return {
+                "skipped": "no filesystem changes since last checkpoint",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+
         checkpoint_path = (
             self._checkpoint_dir
             / f"{_sanitize_checkpoint_name(tool_call_id)}-after.tar"
         )
         try:
-            _write_filesystem_checkpoint_tar(root=root, checkpoint_path=checkpoint_path)
+            checkpointed_hash = _write_filesystem_checkpoint_tar(
+                root=root,
+                checkpoint_path=checkpoint_path,
+            )
         except OSError as exc:
             return {
                 "error": f"checkpoint failed: {exc}",
                 "overhead_excluded": True,
                 "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
             }
+        try:
+            post_checkpoint_hash = _compute_testbed_fs_hash(root)
+        except OSError as exc:
+            return {
+                "error": f"checkpoint hash failed after tar creation: {exc}",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+        if post_checkpoint_hash != checkpointed_hash:
+            try:
+                checkpoint_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return {
+                "error": "checkpoint failed: filesystem changed during checkpoint",
+                "overhead_excluded": True,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+            }
+
         elapsed_ms = (time.monotonic() - started) * 1000
+        self._last_checkpoint_fs_hash = checkpointed_hash
         return {
             "path": _relative_to_or_absolute(checkpoint_path, self.trace_file.parent),
             "kind": "filesystem_tar",
