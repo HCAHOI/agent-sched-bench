@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import tarfile
 import time
@@ -17,6 +18,7 @@ from trace_collect.simulator import (
     WorkerTraceInput,
     _checkpoint_after_spec,
     _chunk_worker_inputs_by_concurrency,
+    _compute_output_diff_snippet,
     _partition_worker_inputs,
     _resolve_prep_concurrency,
     _run_worker_wave_async,
@@ -1012,6 +1014,15 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
     )
     assert tool_record["data"]["replay_outcome_match"] is False
     assert tool_record["data"]["mismatch_reason"] == "tool_success_mismatch"
+    assert tool_record["data"]["source_output_hash"] == hashlib.sha256(
+        b"source-result"
+    ).hexdigest()
+    assert tool_record["data"]["replay_output_hash"] == hashlib.sha256(
+        b"failed\n\nExit code: 1"
+    ).hexdigest()
+    assert tool_record["data"]["output_diff_snippet"].startswith(
+        "- source-result\n+ failed"
+    )
     assert tool_record["data"]["forced_sync_attempted"] is True
     assert tool_record["data"]["forced_sync_success"] is True
     assert tool_record["data"]["forced_sync_resolved"] is False
@@ -1294,6 +1305,15 @@ def test_simulate_records_exec_output_mismatch(
 
     assert tool_record["data"]["replay_outcome_match"] is False
     assert tool_record["data"]["mismatch_reason"] == "command_output_mismatch"
+    assert tool_record["data"]["source_output_hash"] == hashlib.sha256(
+        b"source-result"
+    ).hexdigest()
+    assert tool_record["data"]["replay_output_hash"] == hashlib.sha256(
+        b"replay-result\n\nExit code: 0"
+    ).hexdigest()
+    assert tool_record["data"]["output_diff_snippet"].startswith(
+        "- source-result\n+ replay-result"
+    )
     assert summary["success"] is False
     assert summary["outcome_mismatches"] == 1
     assert summary["unresolved_mismatches"] == 1
@@ -1903,6 +1923,25 @@ def test_tool_mismatch_reason_detects_exec_output_mismatch() -> None:
             tool_args_json=tool_args,
         )
         == "command_output_mismatch"
+    )
+
+
+def test_compute_output_diff_snippet_captures_first_divergence() -> None:
+    assert (
+        _compute_output_diff_snippet("same\npid 123\ndone", "same\npid 456\ndone")
+        == "  same\n- pid 123\n+ pid 456\n  done"
+    )
+    assert (
+        _compute_output_diff_snippet("same", "same\nextra")
+        == "  same\n- <missing>\n+ extra"
+    )
+    assert (
+        _compute_output_diff_snippet("same\n", "same")
+        == "raw output differs without line-content difference"
+    )
+    assert (
+        _compute_output_diff_snippet("abcdef", "uvwxyz", max_line_chars=3)
+        == "- abc...<truncated 3 chars>\n+ uvw...<truncated 3 chars>"
     )
 
 

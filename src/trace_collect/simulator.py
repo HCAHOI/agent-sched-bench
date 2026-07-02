@@ -417,6 +417,50 @@ def _normalized_tool_output_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _compute_output_diff_snippet(
+    source: str,
+    replay: str,
+    *,
+    max_lines: int = 5,
+    context_lines: int = 1,
+    max_line_chars: int = 240,
+) -> str | None:
+    """Return a bounded unified-diff-style snippet of the first raw divergence."""
+    if source == replay:
+        return None
+
+    line_limit = max(0, max_line_chars)
+
+    def truncate_line(line: str) -> str:
+        if len(line) <= line_limit:
+            return line
+        omitted = len(line) - line_limit
+        return f"{line[:line_limit]}...<truncated {omitted} chars>"
+
+    source_lines = source.splitlines()
+    replay_lines = replay.splitlines()
+    total_lines = max(len(source_lines), len(replay_lines))
+    for i in range(total_lines):
+        source_line = source_lines[i] if i < len(source_lines) else "<missing>"
+        replay_line = replay_lines[i] if i < len(replay_lines) else "<missing>"
+        if source_line == replay_line:
+            continue
+        start = max(0, i - context_lines)
+        end = min(total_lines, i + max_lines)
+        snippet: list[str] = []
+        for j in range(start, end):
+            s = source_lines[j] if j < len(source_lines) else "<missing>"
+            r = replay_lines[j] if j < len(replay_lines) else "<missing>"
+            if s == r:
+                snippet.append(f"  {truncate_line(s)}")
+            else:
+                snippet.append(f"- {truncate_line(s)}")
+                snippet.append(f"+ {truncate_line(r)}")
+        return "\n".join(snippet)
+
+    return "raw output differs without line-content difference"
+
+
 def _exec_semantics_payload(
     tool_name: str | None,
     tool_args_json: Any,
@@ -3326,6 +3370,18 @@ async def _replay_cloud_model_session(
                         and forced_sync_fields.get("forced_sync_status")
                         == "checkpoint_restored_continuation",
                     )
+            if mismatch_reason is not None:
+                source_raw = "" if source_tool_result is None else str(source_tool_result)
+                replay_raw = "" if tool_result is None else str(tool_result)
+                forced_sync_fields["source_output_hash"] = hashlib.sha256(
+                    source_raw.encode("utf-8")
+                ).hexdigest()
+                forced_sync_fields["replay_output_hash"] = hashlib.sha256(
+                    replay_raw.encode("utf-8")
+                ).hexdigest()
+                diff_snippet = _compute_output_diff_snippet(source_raw, replay_raw)
+                if diff_snippet is not None:
+                    forced_sync_fields["output_diff_snippet"] = diff_snippet
             extra_tool_fields = _command_metadata(
                 tool_name=tool_name,
                 tool_args_json=tool_args,

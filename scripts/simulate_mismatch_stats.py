@@ -8,9 +8,37 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
+
+
+def _normalize_diff_signature(text: str, *, max_chars: int = 120) -> str:
+    return re.sub(r"\d+", "<N>", text[:max_chars])
+
+
+def _output_diff_signature(snippet: str) -> str | None:
+    """Return a normalized signature for the first source/replay diff pair."""
+    source_line: str | None = None
+    lines = snippet.splitlines()
+    for line in lines:
+        if line.startswith("- "):
+            source_line = line[2:]
+            continue
+        if line.startswith("+ ") and source_line is not None:
+            replay_line = line[2:]
+            if source_line == "<missing>":
+                return _normalize_diff_signature(f"+ {replay_line}")
+            if replay_line == "<missing>":
+                return _normalize_diff_signature(f"- {source_line}")
+            return _normalize_diff_signature(f"{source_line} -> {replay_line}")
+    if source_line is not None:
+        return _normalize_diff_signature(source_line)
+    first_line = next((line for line in lines if line), None)
+    if first_line is None:
+        return None
+    return _normalize_diff_signature(first_line)
 
 
 def main() -> None:
@@ -118,6 +146,24 @@ def main() -> None:
             print(f"  {reason}: {count}")
         print()
 
+    if mismatches:
+        print("Output diff patterns (top 10):")
+        diff_first_lines: Counter[str] = Counter()
+        for t in tool_execs:
+            data = t.get("data") or {}
+            snippet = data.get("output_diff_snippet")
+            if not snippet:
+                continue
+            sig = _output_diff_signature(snippet)
+            if sig is not None:
+                diff_first_lines[sig] += 1
+        if diff_first_lines:
+            for sig, count in diff_first_lines.most_common(10):
+                print(f"  [{count}x] {sig}")
+        else:
+            print("  (no diff signatures found)")
+        print()
+
     print("Forced sync:")
     print(f"  Attempted:       {fs_attempted}")
     print(f"  Successful:      {fs_success}")
@@ -142,7 +188,7 @@ def main() -> None:
         print(f"  Skipped (no Δ):      {cp_skipped}")
         print(f"  Coverage:            {cp_present}/{cp_present + cp_skipped} exec tools checkpointed ({100*cp_present/(cp_present+cp_skipped):.1f}%)")
     else:
-        print(f"  (no source traces found)")
+        print("  (no source traces found)")
     for kind, count in cp_types.most_common():
         print(f"    {kind}: {count}")
     print()
@@ -166,7 +212,7 @@ def main() -> None:
     for summary in summaries:
         total_elapsed += summary.get("elapsed_s", 0)
         total_unresolved += summary.get("unresolved_mismatches", 0)
-    print(f"Aggregate from summaries:")
+    print("Aggregate from summaries:")
     print(f"  Total wall time:  {total_elapsed:.1f}s")
     print(f"  Unresolved:       {total_unresolved}")
 
