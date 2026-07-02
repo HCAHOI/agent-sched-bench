@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import subprocess
 import shutil
+import tarfile
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor
@@ -445,6 +446,11 @@ def _tool_mismatch_reason(
 ) -> str | None:
     if replay_source == "source_artifact_unavailable":
         return "source_artifact_unavailable"
+    if _tool_uses_exec_semantics(tool_name, tool_args_json):
+        source_timeout = _tool_result_indicates_wrapper_timeout(source_tool_result)
+        replay_timeout = _tool_result_indicates_wrapper_timeout(replay_tool_result)
+        if source_timeout != replay_timeout:
+            return "timeout_mismatch"
     if source_success != tool_success:
         return "tool_success_mismatch"
     if _tool_uses_exec_semantics(tool_name, tool_args_json):
@@ -485,6 +491,14 @@ def _is_replay_wrapper_timeout_result(tool_result: str) -> bool:
         "[resource_stall_timeout]",
     }
     return any(line.strip() in timeout_markers for line in tool_result.splitlines())
+
+
+def _tool_result_indicates_wrapper_timeout(tool_result: Any) -> bool:
+    text = str(tool_result or "")
+    return (
+        "Error: Command timed out after " in text
+        or _is_replay_wrapper_timeout_result(text)
+    )
 
 
 def _source_exec_timeout_s(
@@ -623,6 +637,8 @@ try:
                 os.unlink(path)
         for member in members:
             tf.extract(member, root)
+        if not os.path.isdir(root):
+            raise RuntimeError(f"checkpoint root missing after restore: {root}")
 finally:
     if os.path.exists(archive):
         os.unlink(archive)
@@ -644,45 +660,149 @@ finally:
     )
 
 
+def _checkpoint_restore_base_fields(
+    *,
+    checkpoint_path: Path,
+    kind: str,
+    restore_root: str,
+    size_bytes: int | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "checkpoint_kind": kind,
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_root": restore_root,
+        "restore_overhead_excluded": True,
+        "forced_sync_checkpoint_kind": kind,
+        "forced_sync_checkpoint": str(checkpoint_path),
+        "forced_sync_root": restore_root,
+    }
+    if size_bytes is not None:
+        fields["checkpoint_size_bytes"] = size_bytes
+    return fields
+
+
+def _checkpoint_restore_failed_fields(
+    *,
+    checkpoint_path: Path,
+    kind: str,
+    restore_root: str,
+    status: str,
+    error: str,
+    started: float | None = None,
+    archive_exists: bool | None = None,
+    size_bytes: int | None = None,
+) -> dict[str, Any]:
+    fields = _checkpoint_restore_base_fields(
+        checkpoint_path=checkpoint_path,
+        kind=kind,
+        restore_root=restore_root,
+        size_bytes=size_bytes,
+    )
+    fields.update(
+        {
+            "forced_sync_success": False,
+            "forced_sync_status": status,
+            "forced_sync_error": error,
+            "forced_sync_resolved": False,
+            "forced_sync_continued": False,
+        }
+    )
+    if started is not None:
+        elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+        fields["restore_elapsed_ms"] = elapsed_ms
+        fields["forced_sync_elapsed_ms"] = elapsed_ms
+    if archive_exists is not None:
+        fields["checkpoint_archive_exists"] = archive_exists
+    return fields
+
+
 def _restore_checkpoint_to_container(
     *,
     checkpoint_spec: dict[str, Any],
     container: PreparedContainer,
 ) -> dict[str, Any]:
     checkpoint_path = Path(str(checkpoint_spec["path"]))
-    if not checkpoint_path.is_file():
-        return {
-            "forced_sync_success": False,
-            "forced_sync_error": f"checkpoint not found: {checkpoint_path}",
-        }
     kind = str(checkpoint_spec.get("kind") or "filesystem_tar")
-    if kind not in {"filesystem_tar", "filesystem_tar_gz", "tar", "tar_gz"}:
-        return {
-            "forced_sync_success": False,
-            "forced_sync_error": f"unsupported checkpoint kind: {kind}",
-        }
     restore_root = str(checkpoint_spec.get("root") or "/testbed")
-    container_archive_path = f"/tmp/agent_sched_checkpoint_{uuid.uuid4().hex}.tar"
     started = time.monotonic()
-    _copy_checkpoint_archive_to_container(
+    if kind not in {"filesystem_tar", "filesystem_tar_gz", "tar", "tar_gz"}:
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error=f"unsupported checkpoint kind: {kind}",
+            started=started,
+            archive_exists=checkpoint_path.is_file(),
+        )
+    if not checkpoint_path.is_file():
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_missing",
+            error=f"checkpoint not found: {checkpoint_path}",
+            started=started,
+            archive_exists=False,
+        )
+    size_bytes = checkpoint_path.stat().st_size
+    if not tarfile.is_tarfile(checkpoint_path):
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error=f"invalid checkpoint archive: {checkpoint_path}",
+            started=started,
+            archive_exists=True,
+            size_bytes=size_bytes,
+        )
+    container_archive_path = f"/tmp/agent_sched_checkpoint_{uuid.uuid4().hex}.tar"
+    try:
+        _copy_checkpoint_archive_to_container(
+            checkpoint_path=checkpoint_path,
+            container_id=container.container_id,
+            container_executable=container.container_executable,
+            container_archive_path=container_archive_path,
+        )
+        _restore_checkpoint_archive_in_container(
+            container_id=container.container_id,
+            container_executable=container.container_executable,
+            container_archive_path=container_archive_path,
+            restore_root=restore_root,
+        )
+    except Exception as exc:
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error=f"{type(exc).__name__}: {exc}",
+            started=started,
+            archive_exists=True,
+            size_bytes=size_bytes,
+        )
+    elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+    fields = _checkpoint_restore_base_fields(
         checkpoint_path=checkpoint_path,
-        container_id=container.container_id,
-        container_executable=container.container_executable,
-        container_archive_path=container_archive_path,
-    )
-    _restore_checkpoint_archive_in_container(
-        container_id=container.container_id,
-        container_executable=container.container_executable,
-        container_archive_path=container_archive_path,
+        kind=kind,
         restore_root=restore_root,
+        size_bytes=size_bytes,
     )
-    return {
-        "forced_sync_success": True,
-        "forced_sync_elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-        "forced_sync_checkpoint": str(checkpoint_path),
-        "forced_sync_checkpoint_kind": kind,
-        "forced_sync_root": restore_root,
-    }
+    fields.update(
+        {
+            "forced_sync_success": True,
+            "forced_sync_status": "checkpoint_restored_continuation",
+            "forced_sync_resolved": False,
+            "forced_sync_continued": True,
+            "forced_sync_elapsed_ms": elapsed_ms,
+            "checkpoint_archive_exists": True,
+            "restore_elapsed_ms": elapsed_ms,
+            "restore_root_exists": True,
+            "tar_extraction_returncode": 0,
+        }
+    )
+    return fields
 
 
 def _source_openclaw_tool_results_dir(source_trace: Path) -> Path | None:
@@ -2784,9 +2904,14 @@ async def _replay_cloud_model_session(
 
     wall_start = time.time()
     succeeded_actions = 0
-    failed_actions = 0
+    outcome_mismatches = 0
+    unresolved_mismatches = 0
+    replay_action_errors = 0
     fatal_replay_errors = 0
     forced_sync_actions = 0
+    forced_sync_attempts = 0
+    forced_sync_successes = 0
+    forced_sync_continued_actions = 0
     source_failed_actions = 0
     replay_failed_actions = 0
     matched_failed_actions = 0
@@ -3082,7 +3207,9 @@ async def _replay_cloud_model_session(
                         "forced_sync_attempted": False,
                         "forced_sync_success": False,
                         "forced_sync_resolved": False,
+                        "forced_sync_continued": False,
                         "forced_sync_reason": mismatch_reason,
+                        "forced_sync_status": "checkpoint_missing",
                         "forced_sync_error": "checkpoint_after missing",
                     }
                 else:
@@ -3098,10 +3225,6 @@ async def _replay_cloud_model_session(
                             container=ctr,
                         )
                         forced_sync_fields.update(restore_result)
-                        forced_sync_fields["forced_sync_resolved"] = (
-                            restore_result.get("forced_sync_success") is True
-                            and mismatch_reason != "source_artifact_unavailable"
-                        )
                     except Exception as exc:
                         logger.exception(
                             "Forced sync failed for %s action=%s",
@@ -3112,9 +3235,28 @@ async def _replay_cloud_model_session(
                             {
                                 "forced_sync_success": False,
                                 "forced_sync_resolved": False,
+                                "forced_sync_continued": False,
+                                "forced_sync_status": "checkpoint_restore_failed",
                                 "forced_sync_error": f"{type(exc).__name__}: {exc}",
                             }
                         )
+                    forced_sync_success = (
+                        forced_sync_fields.get("forced_sync_success") is True
+                    )
+                    forced_sync_fields.setdefault("forced_sync_success", False)
+                    forced_sync_fields["forced_sync_resolved"] = False
+                    forced_sync_fields.setdefault(
+                        "forced_sync_status",
+                        "checkpoint_restored_continuation"
+                        if forced_sync_success
+                        else "checkpoint_restore_failed",
+                    )
+                    forced_sync_fields.setdefault(
+                        "forced_sync_continued",
+                        forced_sync_success
+                        and forced_sync_fields.get("forced_sync_status")
+                        == "checkpoint_restored_continuation",
+                    )
             extra_tool_fields = _command_metadata(
                 tool_name=tool_name,
                 tool_args_json=tool_args,
@@ -3180,12 +3322,20 @@ async def _replay_cloud_model_session(
                 },
             )
             trace_logger.log_trace_action(loaded.agent_id, tool_record)
-            forced_sync_success = forced_sync_fields.get("forced_sync_success") is True
-            forced_sync_resolved = (
-                forced_sync_success and mismatch_reason != "source_artifact_unavailable"
+            forced_sync_attempted = (
+                forced_sync_fields.get("forced_sync_attempted") is True
             )
+            forced_sync_success = forced_sync_fields.get("forced_sync_success") is True
+            forced_sync_continued = (
+                forced_sync_fields.get("forced_sync_continued") is True
+            )
+            if forced_sync_attempted:
+                forced_sync_attempts += 1
             if forced_sync_success:
                 forced_sync_actions += 1
+                forced_sync_successes += 1
+            if forced_sync_continued:
+                forced_sync_continued_actions += 1
             if replay_outcome_match:
                 if tool_success:
                     succeeded_actions += 1
@@ -3196,25 +3346,31 @@ async def _replay_cloud_model_session(
                         action_id,
                         tool_name,
                     )
-            elif forced_sync_resolved:
-                logger.warning(
-                    "Replay mismatch forced-synced for %s action=%s tool=%s reason=%s",
-                    loaded.agent_id,
-                    action_id,
-                    tool_name,
-                    mismatch_reason,
-                )
             else:
-                logger.error(
-                    "Replay tool outcome mismatch for %s action=%s tool=%s "
-                    "source_success=%s replay_success=%s",
-                    loaded.agent_id,
-                    action_id,
-                    tool_name,
-                    source_success,
-                    tool_success,
-                )
-                failed_actions += 1
+                outcome_mismatches += 1
+                if not forced_sync_continued:
+                    unresolved_mismatches += 1
+                if forced_sync_continued:
+                    logger.warning(
+                        "Replay mismatch checkpoint-restored for %s action=%s "
+                        "tool=%s reason=%s status=%s",
+                        loaded.agent_id,
+                        action_id,
+                        tool_name,
+                        mismatch_reason,
+                        forced_sync_fields.get("forced_sync_status"),
+                    )
+                else:
+                    logger.error(
+                        "Replay tool outcome mismatch for %s action=%s tool=%s "
+                        "source_success=%s replay_success=%s status=%s",
+                        loaded.agent_id,
+                        action_id,
+                        tool_name,
+                        source_success,
+                        tool_success,
+                        forced_sync_fields.get("forced_sync_status"),
+                    )
                 if replay_source == "source_artifact_unavailable":
                     fatal_replay_errors += 1
         except Exception as exc:
@@ -3224,9 +3380,10 @@ async def _replay_cloud_model_session(
                 action_id,
                 exc,
             )
-            failed_actions += 1
+            replay_action_errors += 1
 
     wall_end = time.time()
+    failed_actions = outcome_mismatches + replay_action_errors
     success = failed_actions == 0 and fatal_replay_errors == 0
     trace_logger.log_summary(
         loaded.agent_id,
@@ -3245,8 +3402,13 @@ async def _replay_cloud_model_session(
                 "replay_failed_actions": replay_failed_actions,
                 "matched_failed_actions": matched_failed_actions,
                 "fatal_replay_errors": fatal_replay_errors,
+                "replay_action_errors": replay_action_errors,
                 "forced_sync_actions": forced_sync_actions,
-                "outcome_mismatches": failed_actions,
+                "forced_sync_attempts": forced_sync_attempts,
+                "forced_sync_successes": forced_sync_successes,
+                "forced_sync_continued": forced_sync_continued_actions,
+                "outcome_mismatches": outcome_mismatches,
+                "unresolved_mismatches": unresolved_mismatches,
                 "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
             },
         ),

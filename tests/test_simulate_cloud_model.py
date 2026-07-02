@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tarfile
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.simulator import (
     LLMTimingConfig,
+    PreparedContainer,
     PreparedTraceSession,
     SimulateError,
     WorkerTraceInput,
@@ -20,6 +22,8 @@ from trace_collect.simulator import (
     _run_worker_wave_async,
     _source_action_excluded_overhead_s,
     _source_exec_timeout_s,
+    _restore_checkpoint_to_container,
+    _tool_mismatch_reason,
     simulate,
 )
 
@@ -314,6 +318,7 @@ def _patch_simulator_runtime(
         command_timeout_s,
         source_exec_timeout_s=None,
         allow_source_runtime_artifacts=False,
+        source_resource_timeline=None,
     ):
         if tool_delay_s > 0:
             await asyncio.sleep(tool_delay_s)
@@ -388,6 +393,57 @@ def test_checkpoint_after_spec_rejects_non_testbed_root(tmp_path: Path) -> None:
     )
 
     assert spec is None
+
+
+def test_restore_checkpoint_to_container_records_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.tar"
+    source_file = tmp_path / "file.txt"
+    source_file.write_text("checkpoint data", encoding="utf-8")
+    with tarfile.open(checkpoint_path, "w") as tf:
+        tf.add(source_file, arcname="file.txt")
+    copied: list[dict] = []
+    restored: list[dict] = []
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._copy_checkpoint_archive_to_container",
+        lambda **kwargs: copied.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_archive_in_container",
+        lambda **kwargs: restored.append(kwargs),
+    )
+
+    result = _restore_checkpoint_to_container(
+        checkpoint_spec={
+            "path": str(checkpoint_path),
+            "kind": "filesystem_tar",
+            "root": "/testbed",
+        },
+        container=PreparedContainer(
+            container_id="cid",
+            container_executable="docker",
+            docker_image="image",
+            agent=object(),
+        ),
+    )
+
+    assert len(copied) == 1
+    assert len(restored) == 1
+    assert result["forced_sync_success"] is True
+    assert result["forced_sync_status"] == "checkpoint_restored_continuation"
+    assert result["forced_sync_resolved"] is False
+    assert result["forced_sync_continued"] is True
+    assert result["checkpoint_kind"] == "filesystem_tar"
+    assert result["checkpoint_path"] == str(checkpoint_path)
+    assert result["checkpoint_root"] == "/testbed"
+    assert result["checkpoint_size_bytes"] == checkpoint_path.stat().st_size
+    assert result["restore_elapsed_ms"] >= 0.0
+    assert result["restore_overhead_excluded"] is True
+    assert result["restore_root_exists"] is True
+    assert result["tar_extraction_returncode"] == 0
 
 
 def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> None:
@@ -958,11 +1014,234 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
     assert tool_record["data"]["mismatch_reason"] == "tool_success_mismatch"
     assert tool_record["data"]["forced_sync_attempted"] is True
     assert tool_record["data"]["forced_sync_success"] is True
-    assert tool_record["data"]["forced_sync_resolved"] is True
+    assert tool_record["data"]["forced_sync_resolved"] is False
+    assert tool_record["data"]["forced_sync_continued"] is True
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_restored_continuation"
     assert tool_record["data"]["forced_sync_overhead_excluded"] is True
-    assert summary["success"] is True
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
     assert summary["forced_sync_actions"] == 1
-    assert summary["outcome_mismatches"] == 0
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 1
+    assert summary["forced_sync_continued"] == 1
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 0
+
+
+def test_mismatch_without_checkpoint_is_unresolved_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(trace_path, agent_id="task-a", tool_name="write_file")
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["mismatch_reason"] == "tool_success_mismatch"
+    assert tool_record["data"]["forced_sync_attempted"] is False
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_continued"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_missing"
+    assert summary["success"] is False
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
+    assert summary["forced_sync_attempts"] == 0
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+
+
+def test_missing_checkpoint_file_marks_forced_sync_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "pytest"},
+        checkpoint_after={"path": "checkpoints/missing.tar", "root": "/testbed"},
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed\n\nExit code: 1", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["forced_sync_attempted"] is True
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_continued"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_missing"
+    assert tool_record["data"]["checkpoint_archive_exists"] is False
+    assert tool_record["data"]["restore_elapsed_ms"] >= 0.0
+    assert "checkpoint not found" in tool_record["data"]["forced_sync_error"]
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
+
+
+def test_invalid_checkpoint_archive_marks_restore_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_path = tmp_path / "checkpoints" / "corrupt.tar"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_text("not a tar archive", encoding="utf-8")
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "pytest"},
+        checkpoint_after={"path": "checkpoints/corrupt.tar", "root": "/testbed"},
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed\n\nExit code: 1", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_restore_failed"
+    assert tool_record["data"]["checkpoint_archive_exists"] is True
+    assert tool_record["data"]["checkpoint_size_bytes"] == checkpoint_path.stat().st_size
+    assert tool_record["data"]["restore_elapsed_ms"] >= 0.0
+    assert "invalid checkpoint archive" in tool_record["data"]["forced_sync_error"]
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
+
+
+def test_unsupported_checkpoint_kind_marks_restore_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_path = tmp_path / "checkpoints" / "after.snapshot"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_text("snapshot", encoding="utf-8")
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "pytest"},
+        checkpoint_after={
+            "path": "checkpoints/after.snapshot",
+            "kind": "firecracker_snapshot",
+            "root": "/testbed",
+        },
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed\n\nExit code: 1", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_restore_failed"
+    assert tool_record["data"]["checkpoint_archive_exists"] is True
+    assert tool_record["data"]["restore_elapsed_ms"] >= 0.0
+    assert "unsupported checkpoint kind" in tool_record["data"]["forced_sync_error"]
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
 
 
 def test_forced_sync_does_not_resolve_source_artifact_unavailable(
@@ -1015,10 +1294,15 @@ def test_forced_sync_does_not_resolve_source_artifact_unavailable(
     assert tool_record["data"]["mismatch_reason"] == "source_artifact_unavailable"
     assert tool_record["data"]["forced_sync_success"] is True
     assert tool_record["data"]["forced_sync_resolved"] is False
+    assert tool_record["data"]["forced_sync_continued"] is True
     assert summary["success"] is False
     assert summary["forced_sync_actions"] == 1
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 1
+    assert summary["forced_sync_continued"] == 1
     assert summary["fatal_replay_errors"] == 1
     assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 0
 
 
 def test_simulate_keeps_wall_policy_for_commands_resource_timeline(
@@ -1294,6 +1578,7 @@ def test_cloud_model_source_failed_replay_success_marks_mismatch(
     assert tool_record["data"]["success"] is True
     assert tool_record["data"]["source_success"] is False
     assert tool_record["data"]["replay_outcome_match"] is False
+    assert tool_record["data"]["mismatch_reason"] == "timeout_mismatch"
     assert summary["success"] is False
     assert summary["failed_actions"] == 1
     assert summary["source_failed_actions"] == 1
@@ -1349,6 +1634,35 @@ def test_source_exec_timeout_detects_source_timeout_failure() -> None:
         source_success=False,
         source_tool_result="[timeout]\n\nExit code: 124",
     ) is None
+
+
+def test_tool_mismatch_reason_distinguishes_wrapper_timeout() -> None:
+    tool_args = json.dumps({"exec": {"command": "cmd"}})
+
+    assert (
+        _tool_mismatch_reason(
+            source_success=False,
+            tool_success=False,
+            replay_source="executed_in_container",
+            source_tool_result="command returned 124\n\nExit code: 124",
+            replay_tool_result="[timeout]\n\nExit code: 124",
+            tool_name="exec",
+            tool_args_json=tool_args,
+        )
+        == "timeout_mismatch"
+    )
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result="ok\n\nExit code: 0",
+            replay_tool_result="bad\n\nExit code: 1",
+            tool_name="exec",
+            tool_args_json=tool_args,
+        )
+        == "command_exit_code_mismatch"
+    )
 
 
 def test_cloud_model_preserves_source_exec_timeout_for_replay(
@@ -1419,8 +1733,6 @@ def test_cloud_model_preserves_source_exec_timeout_for_replay(
     assert summary["success"] is True
     assert summary["failed_actions"] == 0
     assert summary["matched_failed_actions"] == 1
-
-
 
 
 def test_cloud_model_source_runtime_artifact_path_fails_trace(
@@ -3194,24 +3506,6 @@ def test_cloud_model_replay_marks_warmup_iterations(
 
     assert llm_record["data"]["sim_metrics"]["warmup"] is True
     assert tool_record["data"]["sim_metrics"]["warmup"] is True
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_cloud_model_manifest_replays_multiple_sessions(
