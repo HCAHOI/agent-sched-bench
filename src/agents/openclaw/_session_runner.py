@@ -154,18 +154,11 @@ class TraceCollectorHook(AgentHook):
         tool_call_id: str,
         tool_name: str,
         tool_args_json: str,
-        allow_checkpoint: bool,
     ) -> dict[str, Any] | None:
         if self._checkpoint_root is None or self._checkpoint_dir is None:
             return None
         if _single_exec_command_args(tool_name, tool_args_json) is None:
             return None
-        if not allow_checkpoint:
-            return {
-                "error": "checkpoint skipped: multiple tool results in iteration",
-                "overhead_excluded": True,
-                "elapsed_ms": 0.0,
-            }
         started = time.monotonic()
         root = self._checkpoint_root.resolve()
         if not root.is_dir():
@@ -385,8 +378,6 @@ class TraceCollectorHook(AgentHook):
                 if result[1] != "_invalid_tool_call"
                 and not (result[0] and result[0].startswith("malformed_retry_"))
             ]
-            allow_checkpoint = len(traceable_tool_results) == 1
-
             for tc_id, tool_name, tool_content, tool_ok in traceable_tool_results:
                 tool_start_mono = self._tool_start_ts.pop(tc_id, None)
                 duration_ms = (
@@ -443,7 +434,6 @@ class TraceCollectorHook(AgentHook):
                     tool_call_id=tc_id or action_id_suffix,
                     tool_name=tool_name,
                     tool_args_json=tool_action_data["tool_args"],
-                    allow_checkpoint=allow_checkpoint,
                 )
                 if checkpoint_after is not None:
                     if "error" in checkpoint_after:

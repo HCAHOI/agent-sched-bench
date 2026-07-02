@@ -376,16 +376,17 @@ async def _drive_skips_checkpoint_when_testbed_has_symlink(tmp_path: Path) -> No
     assert checkpoint_error["elapsed_ms"] >= 0
 
 
-def test_trace_collector_skips_checkpoint_for_multi_tool_iteration(
+def test_trace_collector_checkpoints_exec_in_multi_tool_iteration(
     tmp_path: Path,
 ) -> None:
-    asyncio.run(_drive_skips_checkpoint_for_multi_tool_iteration(tmp_path))
+    asyncio.run(_drive_checkpoints_exec_in_multi_tool_iteration(tmp_path))
 
 
-async def _drive_skips_checkpoint_for_multi_tool_iteration(tmp_path: Path) -> None:
+async def _drive_checkpoints_exec_in_multi_tool_iteration(tmp_path: Path) -> None:
     trace_file = tmp_path / "trace.jsonl"
     testbed = tmp_path / "testbed"
     testbed.mkdir()
+    (testbed / "result.txt").write_text("source state\n", encoding="utf-8")
     hook = TraceCollectorHook(
         trace_file,
         instance_id="test-multi-tool",
@@ -397,6 +398,8 @@ async def _drive_skips_checkpoint_for_multi_tool_iteration(tmp_path: Path) -> No
     msgs_in = [{"role": "user", "content": "Run test."}]
     await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
     exec_tc = _StubToolCall("exec", {"command": "pytest"})
+    exec_tc_2 = _StubToolCall("exec", {"command": "python -m pytest"})
+    batched_exec_tc = _StubToolCall("exec", {"commands": ["pytest", "ruff check ."]})
     read_tc = _StubToolCall("read_file", {"path": "x.txt"})
     msgs_after_llm = msgs_in + [
         {
@@ -407,6 +410,22 @@ async def _drive_skips_checkpoint_for_multi_tool_iteration(tmp_path: Path) -> No
                     "id": exec_tc.id,
                     "type": "function",
                     "function": {"name": "exec", "arguments": '{"command":"pytest"}'},
+                },
+                {
+                    "id": exec_tc_2.id,
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": '{"command":"python -m pytest"}',
+                    },
+                },
+                {
+                    "id": batched_exec_tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": '{"commands":["pytest","ruff check ."]}',
+                    },
                 },
                 {
                     "id": read_tc.id,
@@ -420,7 +439,7 @@ async def _drive_skips_checkpoint_for_multi_tool_iteration(tmp_path: Path) -> No
         _StubContext(
             iteration=0,
             messages=msgs_after_llm,
-            tool_calls=[exec_tc, read_tc],
+            tool_calls=[exec_tc, exec_tc_2, batched_exec_tc, read_tc],
         )
     )
     await hook.after_iteration(
@@ -436,28 +455,54 @@ async def _drive_skips_checkpoint_for_multi_tool_iteration(tmp_path: Path) -> No
                 },
                 {
                     "role": "tool",
+                    "tool_call_id": exec_tc_2.id,
+                    "name": "exec",
+                    "content": "ok 2",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": batched_exec_tc.id,
+                    "name": "exec",
+                    "content": "batched ok",
+                },
+                {
+                    "role": "tool",
                     "tool_call_id": read_tc.id,
                     "name": "read_file",
                     "content": "1| x",
                 },
             ],
-            tool_calls=[exec_tc, read_tc],
+            tool_calls=[exec_tc, exec_tc_2, batched_exec_tc, read_tc],
             response=_StubResponse(content="", finish_reason="tool_calls"),
         )
     )
     hook.close()
 
     records = [json.loads(line) for line in trace_file.read_text().splitlines()]
-    exec_record = next(
-        record
+    records_by_tool_id = {
+        record["data"]["tool_call_id"]: record
         for record in records
         if record.get("type") == "action"
-        and (record.get("data") or {}).get("tool_name") == "exec"
-    )
-    checkpoint_error = exec_record["data"]["checkpoint_after_error"]
-    assert "multiple tool results" in checkpoint_error["error"]
-    assert checkpoint_error["overhead_excluded"] is True
-    assert checkpoint_error["elapsed_ms"] == 0.0
+        and (record.get("data") or {}).get("tool_call_id") is not None
+    }
+    checkpoint_paths = set()
+    for tool_call_id in (exec_tc.id, exec_tc_2.id):
+        checkpoint_after = records_by_tool_id[tool_call_id]["data"]["checkpoint_after"]
+        checkpoint_path = trace_file.parent / checkpoint_after["path"]
+        checkpoint_paths.add(checkpoint_path)
+        assert checkpoint_after["kind"] == "filesystem_tar"
+        assert checkpoint_after["root"] == "/testbed"
+        assert checkpoint_after["overhead_excluded"] is True
+        assert checkpoint_after["elapsed_ms"] >= 0
+        assert checkpoint_after["size_bytes"] == checkpoint_path.stat().st_size
+        with tarfile.open(checkpoint_path, "r") as tf:
+            assert "result.txt" in tf.getnames()
+    assert len(checkpoint_paths) == 2
+
+    for tool_call_id in (batched_exec_tc.id, read_tc.id):
+        tool_data = records_by_tool_id[tool_call_id]["data"]
+        assert "checkpoint_after" not in tool_data
+        assert "checkpoint_after_error" not in tool_data
 
 
 def test_trace_collector_llm_only_iteration(tmp_path: Path) -> None:
