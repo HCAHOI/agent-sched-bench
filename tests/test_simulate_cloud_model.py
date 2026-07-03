@@ -2776,6 +2776,9 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         assert container_home == "/root"
         assert extra_args is not None
         assert "agent-sched-bench.component=simulate-replay" in extra_args
+        cas_root = str(Path.home() / ".cache" / "agent-checkpoint-cas")
+        assert "-v" in extra_args
+        assert f"{cas_root}:{cas_root}" in extra_args
         events.append(("prepare", image))
         return f"fake-{len(fixed_images)}"
 

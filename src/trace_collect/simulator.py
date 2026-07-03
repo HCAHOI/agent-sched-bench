@@ -52,6 +52,7 @@ GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _DEFAULT_PREP_CONCURRENCY = 20
 _SHARED_SEMAPHORE_POLL_S = 0.05
 _REPLAY_START_DELAY_S = 0.1
+_CHECKPOINT_CAS_ROOT = os.path.expanduser("~/.cache/agent-checkpoint-cas")
 
 
 class SimulateError(Exception):
@@ -799,7 +800,7 @@ if os.path.exists(manifest_path):
             "-e",
             f"CAS_MANIFEST_PATH={container_manifest_path}",
             "-e",
-            "CAS_ROOT=" + os.path.expanduser("~/.cache/agent-checkpoint-cas"),
+            "CAS_ROOT=" + _CHECKPOINT_CAS_ROOT,
             "-e",
             f"CHECKPOINT_ROOT={restore_root}",
             "-e",
@@ -2025,6 +2026,20 @@ async def _prepare_container_session(
 
         phase = recorder.start_phase("start_task_container")
         try:
+            extra_args = [
+                "--label",
+                "agent-sched-bench.component=simulate-replay",
+                "--label",
+                f"agent-sched-bench.run_instance_id={loaded.agent_id}",
+                "--label",
+                f"agent-sched-bench.source_agent_id={loaded.source_agent_id}",
+                "--label",
+                f"agent-sched-bench.manifest_index={loaded.manifest_index}",
+                "--label",
+                f"agent-sched-bench.output_dir={task_output_dir}",
+                "-v",
+                f"{_CHECKPOINT_CAS_ROOT}:{_CHECKPOINT_CAS_ROOT}",
+            ]
             container_id = await asyncio.to_thread(
                 start_task_container,
                 fixed_name,
@@ -2032,18 +2047,7 @@ async def _prepare_container_session(
                 run_as_host_user=False,
                 mount_host_home=False,
                 container_home="/root",
-                extra_args=[
-                    "--label",
-                    "agent-sched-bench.component=simulate-replay",
-                    "--label",
-                    f"agent-sched-bench.run_instance_id={loaded.agent_id}",
-                    "--label",
-                    f"agent-sched-bench.source_agent_id={loaded.source_agent_id}",
-                    "--label",
-                    f"agent-sched-bench.manifest_index={loaded.manifest_index}",
-                    "--label",
-                    f"agent-sched-bench.output_dir={task_output_dir}",
-                ],
+                extra_args=extra_args,
                 network_mode=network_mode,
             )
             recorder.container_id = container_id
