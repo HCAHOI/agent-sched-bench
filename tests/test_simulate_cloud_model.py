@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import time
@@ -20,6 +21,7 @@ from trace_collect.simulator import (
     _compute_output_diff_snippet,
     _partition_worker_inputs,
     _resolve_prep_concurrency,
+    _restore_cas_manifest_in_container,
     _run_worker_wave_async,
     _source_action_excluded_overhead_s,
     _source_exec_timeout_s,
@@ -358,6 +360,13 @@ def _patch_noop_sweep_fixed_prebuild(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _patch_noop_replay_python_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "trace_collect.simulator.resolve_running_container_exec_config",
+        lambda **kwargs: kwargs["exec_config"],
+    )
+
+
 def test_source_action_excluded_overhead_reads_checkpoint_after() -> None:
     action = {
         "data": {
@@ -456,6 +465,72 @@ def test_restore_checkpoint_to_container_records_provenance(
     assert result["restore_overhead_excluded"] is True
     assert result["restore_root_exists"] is True
     assert result["tar_extraction_returncode"] == 0
+
+
+def test_restore_cas_manifest_script_preserves_testbed_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cas_root = tmp_path / "cas"
+    root = tmp_path / "testbed"
+    manifest_path = tmp_path / "manifest.json"
+    root.mkdir()
+    root_owner = (root.stat().st_uid, root.stat().st_gid)
+    content = b"restored\n"
+    digest = hashlib.sha256(content).hexdigest()
+    blob = cas_root / "blobs" / digest[:2] / digest[2:]
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(content)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "pkg/file.txt": {
+                        "hash": digest,
+                        "mode": 0o644,
+                    }
+                },
+                "deleted_paths": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_run_checked(cmd: list[str], *, timeout: float) -> None:
+        del timeout
+        captured["cmd"] = cmd
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._CHECKPOINT_CAS_ROOT",
+        str(cas_root),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        fake_run_checked,
+    )
+
+    _restore_cas_manifest_in_container(
+        container_id="cid",
+        container_executable="docker",
+        container_manifest_path=str(manifest_path),
+        restore_root=str(root),
+    )
+
+    cmd = captured["cmd"]
+    for index, token in enumerate(cmd):
+        if token == "-e":
+            key, value = cmd[index + 1].split("=", 1)
+            monkeypatch.setenv(key, value)
+    script = cmd[cmd.index("-c") + 1]
+    exec(script, {})
+
+    restored_dir = root / "pkg"
+    restored_file = restored_dir / "file.txt"
+    assert restored_file.read_bytes() == content
+    assert (root.stat().st_uid, root.stat().st_gid) == root_owner
+    assert (restored_dir.stat().st_uid, restored_dir.stat().st_gid) == root_owner
+    assert (restored_file.stat().st_uid, restored_file.stat().st_gid) == root_owner
 
 
 def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> None:
@@ -2130,6 +2205,35 @@ def test_tool_mismatch_reason_ignores_nondeterministic_exec_output_lines() -> No
     )
 
 
+def test_tool_mismatch_reason_preserves_pytest_pass_count() -> None:
+    tool_args = json.dumps({"exec": {"command": "pytest"}})
+
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result="== 12 passed in 1.23s ==\n\nExit code: 0",
+            replay_tool_result="== 12 passed in 9.87s ==\n\nExit code: 0",
+            tool_name="exec",
+            tool_args_json=tool_args,
+        )
+        is None
+    )
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result="== 12 passed in 1.23s ==\n\nExit code: 0",
+            replay_tool_result="== 13 passed in 1.23s ==\n\nExit code: 0",
+            tool_name="exec",
+            tool_args_json=tool_args,
+        )
+        == "command_output_mismatch"
+    )
+
+
 def test_tool_mismatch_reason_ignores_exit_code_metadata_for_output_hash() -> None:
     tool_args = json.dumps({"exec": {"command": "cat file.py"}})
 
@@ -2788,7 +2892,12 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         return True
 
     class _FakeAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             self.container_id = container_id
             self.container_executable = container_executable
 
@@ -2815,6 +2924,11 @@ def test_cloud_model_prefetches_images_before_container_prepare(
     monkeypatch.setattr("trace_collect.simulator.ensure_fixed_image", fake_ensure_fixed_image)
     monkeypatch.setattr("trace_collect.simulator.start_task_container", fake_start_task_container)
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda *args, **kwargs: None,
+    )
+    _patch_noop_replay_python_probe(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeAgent)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
@@ -3089,10 +3203,18 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     _write_trace(trace_path, agent_id="task-a")
     _write_tasks(task_source, "task-a")
 
+    agent_kwargs: list[dict[str, object]] = []
+
     class _FakeContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
+            agent_kwargs.append(kwargs)
 
         async def start(self) -> None:
             pass
@@ -3144,6 +3266,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
 
     ensure_calls: list[dict[str, object]] = []
     removed_images: list[str] = []
+    bootstrap_commands: list[list[str]] = []
 
     def fake_ensure_fixed_image(
         source_image: str,
@@ -3168,6 +3291,12 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         removed_images.append(image)
         return True
 
+    def fake_resolve_running_container_exec_config(**kwargs):
+        return dataclasses.replace(
+            kwargs["exec_config"],
+            runtime="/opt/conda/bin/python3",
+        )
+
     monkeypatch.setattr("trace_collect.simulator.ensure_source_image", lambda *args, **kwargs: None)
     monkeypatch.setattr("trace_collect.simulator.ensure_fixed_image", fake_ensure_fixed_image)
     monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
@@ -3176,6 +3305,14 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda cmd, *, timeout: bootstrap_commands.append(cmd),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.resolve_running_container_exec_config",
+        fake_resolve_running_container_exec_config,
+    )
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeContainerAgent)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
@@ -3206,6 +3343,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         "ensure_fixed_image",
         "start_task_container",
         "configure_apt_mirror",
+        "bootstrap_container_environment",
         "container_agent_start",
     ]
     assert startup["phases"][0]["prebuilt"] is True
@@ -3218,6 +3356,32 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert resources["summary"]["sample_count"] == 1
     assert resources["summary"]["monitoring_disabled"] is False
     assert resources["summary"]["monitoring"]["status"] == "collected"
+    assert agent_kwargs == [
+        {
+            "pythonpath": (
+                "/tmp/.pyuserbase/pydeps:"
+                + str(Path(__file__).resolve().parents[1] / "src")
+                + ":"
+                + str(Path(__file__).resolve().parents[1])
+            ),
+            "path": (
+                "/tmp/.pyuserbase/bin:/tmp/.pyuserbase/pydeps/bin:"
+                "/usr/local/bin:/usr/bin:/bin"
+            ),
+            "pythonuserbase": "/tmp/.pyuserbase",
+        }
+    ]
+    assert any("/opt/conda/bin/python3" in cmd for cmd in bootstrap_commands)
+    assert any("safe.directory" in cmd for cmd in bootstrap_commands)
+    assert any("get-pip.py" in part for cmd in bootstrap_commands for part in cmd)
+    pip_install_commands = [
+        cmd
+        for cmd in bootstrap_commands
+        if any("--target" in part for part in cmd)
+    ]
+    assert len(pip_install_commands) == 1
+    assert any("/tmp/.pyuserbase/pydeps" in part for part in pip_install_commands[0])
+    assert any("openai>=2.0,<3.0" in part for part in pip_install_commands[0])
     assert ensure_calls == [
         {
             "source_image": "docker.io/swebench-test/task-a",
@@ -3241,7 +3405,12 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
     stopped_containers: list[str] = []
 
     class _FailingContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
 
@@ -3268,6 +3437,11 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda *args, **kwargs: None,
+    )
+    _patch_noop_replay_python_probe(monkeypatch)
     monkeypatch.setattr(
         "trace_collect.simulator.remove_image",
         lambda image, *, container_executable: removed_images.append(image) or True,
@@ -3367,7 +3541,12 @@ def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
     _write_tasks(task_source, "task-a")
 
     class _FailingContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
 
@@ -3394,6 +3573,11 @@ def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda *args, **kwargs: None,
+    )
+    _patch_noop_replay_python_probe(monkeypatch)
     monkeypatch.setattr(
         "trace_collect.simulator.remove_image",
         lambda image, *, container_executable: removed_images.append(image) or True,

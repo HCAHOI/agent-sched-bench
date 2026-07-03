@@ -178,7 +178,25 @@ def _truncate_output(text, limit=_MAX_OUTPUT):
     if len(text) <= limit:
         return text
     half = limit // 2
-    return text[:half] + f"\n\n... ({len(text) - limit} chars truncated) ...\n\n" + text[-half:]
+    return text[:half] + f"\n\n... ({len(text) - limit:,} chars truncated) ...\n\n" + text[-half:]
+
+def _format_exec_result(stdout, stderr, returncode):
+    output_parts = []
+    if stdout:
+        output_parts.append(stdout)
+    if stderr and stderr.strip():
+        output_parts.append(f"STDERR:\n{stderr}")
+    output_parts.append(f"\nExit code: {returncode}")
+    return "\n".join(output_parts) if output_parts else "(no output)"
+
+def _insert_before_final_exit_code(text, marker):
+    exit_marker = "\nExit code:"
+    if exit_marker not in text:
+        return text + "\n" + marker if text else marker
+    prefix, suffix = text.rsplit(exit_marker, 1)
+    if prefix:
+        return f"{prefix}\n{marker}{exit_marker}{suffix}"
+    return f"{marker}{exit_marker}{suffix}"
 
 _RESOURCE_CPU_RATE_EPS_CORE = 0.05
 _RESOURCE_NET_RATE_EPS_BPS = 1024.0
@@ -373,7 +391,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
     while True:
         try:
             stdout, stderr = process.communicate(timeout=_RESOURCE_SAMPLE_INTERVAL_S)
-            output = (stdout or "") + (stderr or "")
+            output = _format_exec_result(stdout or "", stderr or "", process.returncode)
             return {
                 "ok": True,
                 "result": _truncate_output(output),
@@ -401,14 +419,11 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
             if virtual_time_s >= timeout_s:
                 _kill_process_group(process)
                 stdout, stderr = process.communicate()
-                output = (stdout or "") + (stderr or "")
-                if output:
-                    output = _truncate_output(output) + "\n[resource_timeout]"
-                else:
-                    output = "[resource_timeout]"
+                output = _format_exec_result(stdout or "", stderr or "", 124)
+                output = _insert_before_final_exit_code(output, "[resource_timeout]")
                 return {
                     "ok": False,
-                    "result": output,
+                    "result": _truncate_output(output),
                     "returncode": 124,
                     "resource_timeout_policy": "resource_integrated",
                     "resource_virtual_time_s": round(virtual_time_s, 6),
@@ -420,15 +435,14 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
             ):
                 _kill_process_group(process)
                 stdout, stderr = process.communicate()
-                output = (stdout or "") + (stderr or "")
-                marker = "[resource_stall_timeout]"
-                if output:
-                    output = _truncate_output(output) + "\n" + marker
-                else:
-                    output = marker
+                output = _format_exec_result(stdout or "", stderr or "", 124)
+                output = _insert_before_final_exit_code(
+                    output,
+                    "[resource_stall_timeout]",
+                )
                 return {
                     "ok": False,
-                    "result": output,
+                    "result": _truncate_output(output),
                     "returncode": 124,
                     "resource_timeout_policy": "resource_integrated",
                     "resource_virtual_time_s": round(virtual_time_s, 6),
@@ -440,7 +454,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
 def handle_exec(args):
     cmd = args.get("command", "")
     timeout = args.get("timeout", 600)
-    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
+    env = {**os.environ}
     resource_response = _run_shell_command_with_resource_timeout(
         cmd,
         timeout,
@@ -452,15 +466,15 @@ def handle_exec(args):
     try:
         r = subprocess.run(cmd, shell=True, cwd="/testbed",
                            capture_output=True, text=True, timeout=timeout, env=env)
-        output = (r.stdout or "") + (r.stderr or "")
+        output = _format_exec_result(r.stdout or "", r.stderr or "", r.returncode)
         return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "result": "[timeout]", "returncode": 124}
+        return {"ok": False, "result": "[timeout]\n\nExit code: 124", "returncode": 124}
 
 def handle_commands(args):
     cmds = args.get("commands", [])
     timeout = args.get("timeout", 600)
-    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
+    env = {**os.environ}
     all_output = []
     last_rc = 0
     first_failed_rc = 0
@@ -469,12 +483,12 @@ def handle_commands(args):
         try:
             r = subprocess.run(cmd, shell=True, cwd="/testbed",
                                capture_output=True, text=True, timeout=timeout, env=env)
-            all_output.append((r.stdout or "") + (r.stderr or ""))
+            all_output.append(_format_exec_result(r.stdout or "", r.stderr or "", r.returncode))
             last_rc = r.returncode
             if r.returncode != 0 and first_failed_rc == 0:
                 first_failed_rc = r.returncode
         except subprocess.TimeoutExpired:
-            all_output.append("[timeout]")
+            all_output.append("[timeout]\n\nExit code: 124")
             last_rc = 124
             any_timeout = True
     if len(cmds) > 1:
@@ -650,12 +664,16 @@ class ContainerAgent:
         container_executable: str,
         *,
         pythonpath: str | None = None,
+        path: str | None = None,
+        pythonuserbase: str | None = None,
     ) -> None:
         self._container_id = container_id
         self._executable = container_executable
         self._process: asyncio.subprocess.Process | None = None
         self._python_runtime: str = "python3"  # fallback, overwritten in start()
         self._pythonpath: str | None = pythonpath
+        self._path: str | None = path
+        self._pythonuserbase: str | None = pythonuserbase
 
     async def _probe_python(self) -> str:
         """Find a working Python >=3.11 interpreter inside the container."""
@@ -734,6 +752,17 @@ class ContainerAgent:
         # can find packages installed by bootstrap_task_container_python.
         if self._pythonpath:
             cmd.extend(["-e", f"PYTHONPATH={self._pythonpath}"])
+        if self._path:
+            cmd.extend(["-e", f"PATH={self._path}"])
+        if self._pythonuserbase:
+            cmd.extend(
+                [
+                    "-e",
+                    f"PYTHONUSERBASE={self._pythonuserbase}",
+                    "-e",
+                    "PIP_BREAK_SYSTEM_PACKAGES=1",
+                ]
+            )
         cmd.extend(
             [
                 self._container_id,
@@ -1006,6 +1035,19 @@ def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def _final_exit_code(result: object) -> int | None:
+    if not isinstance(result, str):
+        return None
+    lines = [line.strip() for line in result.splitlines() if line.strip()]
+    if not lines or not lines[-1].startswith("Exit code:"):
+        return None
+    raw_value = lines[-1].split(":", 1)[1].strip()
+    try:
+        return int(raw_value)
+    except ValueError:
+        return None
+
+
 async def execute_trace_tool_detailed(
     *,
     agent: ContainerAgent,
@@ -1060,9 +1102,11 @@ async def execute_trace_tool_detailed(
     if request["tool"] in ("exec", "commands"):
         rc = resp.get("returncode")
         if not isinstance(rc, int) or isinstance(rc, bool):
-            result = f"{result}\n\nExit code: <missing>".strip()
+            if _final_exit_code(result) is None:
+                result = f"{result}\n\nExit code: <missing>".strip()
             return result, False, inner_duration_ms, metadata
-        result = f"{result}\n\nExit code: {rc}".strip()
+        if _final_exit_code(result) != rc:
+            result = f"{result}\n\nExit code: {rc}".strip()
         ok = bool(ok)
 
     return result, ok, inner_duration_ms, metadata

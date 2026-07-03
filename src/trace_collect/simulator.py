@@ -23,6 +23,7 @@ from typing import Any
 import yaml
 
 from agents.base import TraceAction
+from agents.openclaw.runtime_deps import OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
 from harness.container_image_prep import (
     ensure_fixed_image,
     ensure_source_image,
@@ -45,6 +46,16 @@ from trace_collect.attempt_pipeline import (
     sanitize_path_segment,
     start_task_container,
     stop_task_container,
+)
+from trace_collect.runtime.task_container import (
+    _CONTAINER_SYSTEM_PYTHON,
+    _DEFAULT_PIP_INDEX_URL,
+    _DEFAULT_RUNTIME_PYTHONPATH,
+    _GET_PIP_FETCH_ATTEMPTS,
+    _GET_PIP_FETCH_BACKOFF_SECONDS,
+    _GET_PIP_URL,
+    TaskContainerExecConfig,
+    resolve_running_container_exec_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -400,20 +411,32 @@ _NONDETERMINISTIC_TOOL_OUTPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"user\s+\d+m\d+\.\d+s"),
     re.compile(r"sys\s+\d+m\d+\.\d+s"),
 )
+_NONDETERMINISTIC_TOOL_OUTPUT_REPLACEMENTS: tuple[
+    tuple[re.Pattern[str], str],
+    ...,
+] = (
+    (
+        re.compile(r"(==+\s+\d+\s+passed\s+in\s+)[\d.]+s(\s*==+)"),
+        r"\1<duration>s\2",
+    ),
+)
 
 
 def _normalized_tool_output_hash(text: str) -> str:
     lines = [line for line in text.splitlines() if line.strip()]
     if lines and lines[-1].strip().startswith("Exit code:"):
         lines = lines[:-1]
-    normalized_lines = [
-        line
-        for line in lines
-        if not any(
+    normalized_lines: list[str] = []
+    for line in lines:
+        if any(
             pattern.fullmatch(line.strip())
             for pattern in _NONDETERMINISTIC_TOOL_OUTPUT_PATTERNS
-        )
-    ]
+        ):
+            continue
+        normalized_line = line
+        for pattern, replacement in _NONDETERMINISTIC_TOOL_OUTPUT_REPLACEMENTS:
+            normalized_line = pattern.sub(replacement, normalized_line)
+        normalized_lines.append(normalized_line)
     normalized = "\n".join(normalized_lines)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
@@ -697,6 +720,13 @@ manifest_path = os.environ["CAS_MANIFEST_PATH"]
 cas_root = os.environ["CAS_ROOT"]
 root = os.path.abspath(os.environ["CHECKPOINT_ROOT"])
 clear_root = os.environ.get("CHECKPOINT_CLEAR_ROOT") == "1"
+root_owner = None
+if os.path.lexists(root) and not os.path.islink(root):
+    try:
+        root_stat = os.stat(root)
+        root_owner = (root_stat.st_uid, root_stat.st_gid)
+    except OSError:
+        pass
 if os.path.lexists(root):
     if os.path.islink(root):
         os.unlink(root)
@@ -709,6 +739,14 @@ else:
 root_real = os.path.realpath(root)
 if root_real != root:
     raise RuntimeError(f"checkpoint root symlinks are unsupported: {root}")
+if root_owner is None:
+    root_stat = os.stat(root)
+    root_owner = (root_stat.st_uid, root_stat.st_gid)
+else:
+    try:
+        os.chown(root, root_owner[0], root_owner[1])
+    except OSError:
+        pass
 
 with open(manifest_path, "r") as f:
     manifest = json.load(f)
@@ -719,6 +757,8 @@ if not isinstance(entries, dict):
     raise RuntimeError("checkpoint manifest missing 'entries' dict")
 if not isinstance(deleted, list):
     raise RuntimeError("checkpoint manifest has invalid 'deleted_paths'")
+
+created_dirs = set()
 
 def safe_target(relpath):
     if not isinstance(relpath, str) or relpath == "":
@@ -743,6 +783,7 @@ def ensure_parent_dir(target):
                 raise RuntimeError(f"unsafe checkpoint parent path: {current}")
         else:
             os.mkdir(current)
+            created_dirs.add(current)
 
 for relpath in list(entries) + deleted:
     safe_target(relpath)
@@ -788,6 +829,23 @@ for relpath, entry in entries.items():
             os.utime(target, ns=(mtime_ns, mtime_ns))
         except OSError:
             pass
+if root_owner is not None:
+    try:
+        uid, gid = root_owner
+        os.chown(root, uid, gid)
+        for path in sorted(created_dirs):
+            try:
+                os.chown(path, uid, gid)
+            except OSError:
+                pass
+        for relpath in entries:
+            target = safe_target(relpath)
+            try:
+                os.chown(target, uid, gid)
+            except OSError:
+                pass
+    except OSError:
+        pass
 if not os.path.isdir(root):
     raise RuntimeError(f"checkpoint root missing after restore: {root}")
 if os.path.exists(manifest_path):
@@ -1133,6 +1191,110 @@ def _run_checked_container_command(cmd: list[str], *, timeout: float) -> None:
         f"container command failed ({result.returncode}): {' '.join(cmd)}"
         + (f": {message}" if message else "")
     )
+
+
+def _container_exec_env_args(env: dict[str, str]) -> list[str]:
+    args: list[str] = []
+    for key, value in env.items():
+        if value:
+            args.extend(["-e", f"{key}={value}"])
+    return args
+
+
+def _replay_bootstrap_env_args(userbase_path: str) -> list[str]:
+    pip_index_url = (
+        os.environ.get("TASK_CONTAINER_PIP_INDEX_URL") or _DEFAULT_PIP_INDEX_URL
+    )
+    env: dict[str, str] = {
+        "PYTHONUSERBASE": userbase_path,
+        "PIP_BREAK_SYSTEM_PACKAGES": "1",
+        "PIP_CONFIG_FILE": "/dev/null",
+        "PIP_INDEX_URL": pip_index_url,
+    }
+    passthrough_map = {
+        "TASK_CONTAINER_HTTP_PROXY": ("HTTP_PROXY", "http_proxy"),
+        "TASK_CONTAINER_HTTPS_PROXY": ("HTTPS_PROXY", "https_proxy"),
+        "TASK_CONTAINER_ALL_PROXY": ("ALL_PROXY", "all_proxy"),
+        "TASK_CONTAINER_NO_PROXY": ("NO_PROXY", "no_proxy"),
+        "TASK_CONTAINER_PIP_EXTRA_INDEX_URL": ("PIP_EXTRA_INDEX_URL",),
+        "TASK_CONTAINER_PIP_TRUSTED_HOST": ("PIP_TRUSTED_HOST",),
+        "TASK_CONTAINER_PIP_CERT": ("PIP_CERT",),
+        "TASK_CONTAINER_SSL_CERT_FILE": ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"),
+    }
+    for source_key, target_keys in passthrough_map.items():
+        value = os.environ.get(source_key)
+        if not value:
+            continue
+        for target_key in target_keys:
+            env[target_key] = value
+    return _container_exec_env_args(env)
+
+
+def _replay_python_bootstrap_script(*, pydeps_path: str) -> str:
+    requirements = list(OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS)
+    return f"""
+import os
+import pathlib
+import subprocess
+import sys
+import time
+import urllib.request
+
+userbase = pathlib.Path(os.environ["PYTHONUSERBASE"])
+pydeps = pathlib.Path({pydeps_path!r})
+requirements = {requirements!r}
+userbase.mkdir(parents=True, exist_ok=True)
+pydeps.mkdir(parents=True, exist_ok=True)
+(pydeps / "bin").mkdir(parents=True, exist_ok=True)
+
+get_pip = userbase / "get-pip.py"
+last_error = None
+for attempt in range(1, {_GET_PIP_FETCH_ATTEMPTS + 1}):
+    try:
+        with urllib.request.urlopen({_GET_PIP_URL!r}, timeout=120) as response:
+            payload = response.read()
+        tmp_path = get_pip.with_suffix(".tmp")
+        tmp_path.write_bytes(payload)
+        tmp_path.replace(get_pip)
+        last_error = None
+        break
+    except Exception as exc:
+        last_error = exc
+        if attempt >= {_GET_PIP_FETCH_ATTEMPTS}:
+            raise
+        time.sleep({_GET_PIP_FETCH_BACKOFF_SECONDS!r} * (2 ** (attempt - 1)))
+if last_error is not None:
+    raise last_error
+
+subprocess.check_call(
+    [
+        sys.executable,
+        str(get_pip),
+        "--user",
+        "--break-system-packages",
+        "-i",
+        os.environ["PIP_INDEX_URL"],
+    ]
+)
+pip_bin = userbase / "bin" / "pip"
+if not pip_bin.exists():
+    pip_bin = userbase / "bin" / "pip3"
+if not pip_bin.exists():
+    raise RuntimeError("pip bootstrap succeeded but pip executable is missing")
+subprocess.check_call(
+    [
+        str(pip_bin),
+        "install",
+        "--disable-pip-version-check",
+        "--no-cache-dir",
+        "--only-binary=:all:",
+        "--break-system-packages",
+        "--target",
+        str(pydeps),
+        *requirements,
+    ]
+)
+"""
 
 
 def _copy_source_runtime_artifacts_to_container(
@@ -2082,7 +2244,94 @@ async def _prepare_container_session(
             recorder.finish_phase(phase, status="failed", error=exc)
             raise
 
-        agent = ContainerAgent(container_id, container_executable)
+        userbase_path = "/tmp/.pyuserbase"
+        pydeps_path = f"{userbase_path}/pydeps"
+        container_pythonpath = f"{pydeps_path}:{_DEFAULT_RUNTIME_PYTHONPATH}"
+        container_path = (
+            f"{userbase_path}/bin:{pydeps_path}/bin:/usr/local/bin:/usr/bin:/bin"
+        )
+        bootstrap_env_args = _replay_bootstrap_env_args(userbase_path)
+        phase = recorder.start_phase("bootstrap_container_environment")
+        try:
+            exec_config = TaskContainerExecConfig(
+                runtime=_CONTAINER_SYSTEM_PYTHON,
+                pythonpath=container_pythonpath,
+                start_extra_args=(),
+                bootstrap=True,
+                bootstrap_site_dir=Path(pydeps_path),
+                image_platform=None,
+            )
+            exec_config = await asyncio.to_thread(
+                resolve_running_container_exec_config,
+                container_id=container_id,
+                exec_config=exec_config,
+                container_executable=container_executable,
+            )
+            await asyncio.to_thread(
+                _run_checked_container_command,
+                [
+                    container_executable,
+                    "exec",
+                    container_id,
+                    "git",
+                    "config",
+                    "--system",
+                    "safe.directory",
+                    "*",
+                ],
+                timeout=30,
+            )
+            await asyncio.to_thread(
+                _run_checked_container_command,
+                [
+                    container_executable,
+                    "exec",
+                    container_id,
+                    "mkdir",
+                    "-p",
+                    f"{userbase_path}/bin",
+                    pydeps_path,
+                    f"{pydeps_path}/bin",
+                ],
+                timeout=30,
+            )
+            await asyncio.to_thread(
+                _run_checked_container_command,
+                [
+                    container_executable,
+                    "exec",
+                    *bootstrap_env_args,
+                    container_id,
+                    exec_config.runtime,
+                    "-c",
+                    _replay_python_bootstrap_script(pydeps_path=pydeps_path),
+                ],
+                timeout=1800,
+            )
+            recorder.finish_phase(
+                phase,
+                extra={
+                    "pythonuserbase": userbase_path,
+                    "pydeps": pydeps_path,
+                    "runtime": exec_config.runtime,
+                    "pythonpath": container_pythonpath,
+                    "path": container_path,
+                    "runtime_requirement_count": len(
+                        OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
+                    ),
+                },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        agent = ContainerAgent(
+            container_id,
+            container_executable,
+            pythonpath=container_pythonpath,
+            path=container_path,
+            pythonuserbase=userbase_path,
+        )
         phase = recorder.start_phase("container_agent_start")
         try:
             await agent.start()

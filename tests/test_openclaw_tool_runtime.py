@@ -704,6 +704,64 @@ def test_exec_missing_returncode_fails_closed() -> None:
     assert "Exit code: <missing>" in result
 
 
+def test_exec_embedded_exit_code_text_still_appends_returncode() -> None:
+    agent = FakeAgent(
+        {"exec": {"ok": True, "result": "literal Exit code: string", "returncode": 0}}
+    )
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "printf"}),
+            command_timeout_s=10.0,
+        )
+    )
+
+    assert success is True
+    assert result.endswith("Exit code: 0")
+
+
+def test_resource_timeout_marker_precedes_final_exit_code() -> None:
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+
+    result = namespace["_insert_before_final_exit_code"](
+        "stdout\n\nExit code: 124",
+        "[resource_timeout]",
+    )
+
+    assert result == "stdout\n\n[resource_timeout]\nExit code: 124"
+
+
+def test_commands_appends_aggregate_returncode_when_last_subcommand_succeeds() -> None:
+    agent = FakeAgent(
+        {
+            "commands": {
+                "ok": True,
+                "result": (
+                    "[call 0]\nSTDERR:\napt failed\n\nExit code: 100\n"
+                    "[call 1]\nok\n\nExit code: 0"
+                ),
+                "returncode": 100,
+            }
+        }
+    )
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested(
+                "exec",
+                {"commands": ["apt-get update", "echo ok"]},
+            ),
+            command_timeout_s=10.0,
+        )
+    )
+
+    assert success is True
+    assert result.endswith("Exit code: 100")
+
+
 def test_commands_timeout_is_preserved_across_later_success(monkeypatch) -> None:
     namespace: dict[str, object] = {}
     exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
