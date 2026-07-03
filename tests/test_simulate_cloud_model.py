@@ -2910,16 +2910,10 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         *,
         executable: str,
         network_mode: str,
-        run_as_host_user: bool,
-        mount_host_home: bool,
-        container_home: str,
         extra_args: list[str] | None = None,
     ) -> str:
         assert executable == "docker"
         assert network_mode == "host"
-        assert run_as_host_user is False
-        assert mount_host_home is False
-        assert container_home == "/root"
         assert extra_args is not None
         assert "agent-sched-bench.component=simulate-replay" in extra_args
         cas_root = str(Path.home() / ".cache" / "agent-checkpoint-cas")
@@ -3385,7 +3379,6 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         "ensure_fixed_image",
         "start_task_container",
         "configure_apt_mirror",
-        "bootstrap_container_environment",
         "container_agent_start",
     ]
     assert startup["phases"][0]["prebuilt"] is True
@@ -3398,36 +3391,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert resources["summary"]["sample_count"] == 1
     assert resources["summary"]["monitoring_disabled"] is False
     assert resources["summary"]["monitoring"]["status"] == "collected"
-    assert agent_kwargs == [
-        {
-            "pythonpath": (
-                "/tmp/.pyuserbase/pydeps:"
-                + str(Path(__file__).resolve().parents[1] / "src")
-                + ":"
-                + str(Path(__file__).resolve().parents[1])
-            ),
-            "path": (
-                "/tmp/.pyuserbase/bin:/tmp/.pyuserbase/pydeps/bin:"
-                "/usr/local/bin:/usr/bin:/bin"
-            ),
-            "pythonuserbase": "/tmp/.pyuserbase",
-        }
-    ]
-    assert any("/opt/conda/bin/python3" in cmd for cmd in bootstrap_commands)
-    assert any(
-        "/bin/sh" in cmd and any("command -v git" in part for part in cmd)
-        for cmd in bootstrap_commands
-    )
-    assert any("safe.directory" in part for cmd in bootstrap_commands for part in cmd)
-    assert any("get-pip.py" in part for cmd in bootstrap_commands for part in cmd)
-    pip_install_commands = [
-        cmd
-        for cmd in bootstrap_commands
-        if any("--target" in part for part in cmd)
-    ]
-    assert len(pip_install_commands) == 1
-    assert any("/tmp/.pyuserbase/pydeps" in part for part in pip_install_commands[0])
-    assert any("openai>=2.0,<3.0" in part for part in pip_install_commands[0])
+    assert agent_kwargs == [{}]
     assert ensure_calls == [
         {
             "source_image": "docker.io/swebench-test/task-a",
