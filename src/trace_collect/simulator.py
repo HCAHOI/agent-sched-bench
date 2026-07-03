@@ -7,10 +7,10 @@ import hashlib
 import json
 import logging
 import multiprocessing
+import os
 import re
 import subprocess
 import shutil
-import tarfile
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor
@@ -52,7 +52,6 @@ GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _DEFAULT_PREP_CONCURRENCY = 20
 _SHARED_SEMAPHORE_POLL_S = 0.05
 _REPLAY_START_DELAY_S = 0.1
-_CHECKPOINT_DELETIONS_PAX_HEADER = "agent_sched_checkpoint.deleted_paths"
 
 
 class SimulateError(Exception):
@@ -651,11 +650,10 @@ def _checkpoint_after_spec(
     if restore_root != "/testbed":
         return None
     spec["path"] = str(checkpoint_path)
-    kind = str(spec.setdefault("kind", "filesystem_tar"))
+    kind = str(spec.setdefault("kind", "cas_manifest"))
     if "incremental" not in spec:
         spec["incremental"] = kind in {
-            "filesystem_tar_incremental",
-            "filesystem_tar_gz_incremental",
+            "cas_manifest_incremental",
         }
     spec["root"] = restore_root
     return spec
@@ -679,20 +677,25 @@ def _copy_checkpoint_archive_to_container(
     )
 
 
-def _restore_checkpoint_archive_in_container(
+def _restore_cas_manifest_in_container(
     *,
     container_id: str,
     container_executable: str,
-    container_archive_path: str,
+    container_manifest_path: str,
     restore_root: str,
     clear_root: bool = True,
 ) -> None:
+    """Restore files from a CAS manifest inside the task container.
+
+    The manifest JSON was copied into the container at *container_manifest_path*.
+    Blobs are read from the host-mounted CAS store.
+    """
     script = r'''
-import json, os, shutil, tarfile
-archive = os.environ["CHECKPOINT_ARCHIVE"]
+import json, os, shutil, stat
+manifest_path = os.environ["CAS_MANIFEST_PATH"]
+cas_root = os.environ["CAS_ROOT"]
 root = os.path.abspath(os.environ["CHECKPOINT_ROOT"])
 clear_root = os.environ.get("CHECKPOINT_CLEAR_ROOT") == "1"
-deletions_header = os.environ["CHECKPOINT_DELETIONS_HEADER"]
 if os.path.lexists(root):
     if os.path.islink(root):
         os.unlink(root)
@@ -706,72 +709,101 @@ root_real = os.path.realpath(root)
 if root_real != root:
     raise RuntimeError(f"checkpoint root symlinks are unsupported: {root}")
 
-def safe_target(name, *, allow_root=False):
-    if name == "" or os.path.isabs(name):
-        raise RuntimeError(f"unsafe checkpoint member: {name}")
-    target = os.path.abspath(os.path.join(root, name))
-    if target == root:
-        if allow_root:
-            return target
-        raise RuntimeError(f"unsafe checkpoint member: {name}")
-    if not target.startswith(root + os.sep):
-        raise RuntimeError(f"unsafe checkpoint member: {name}")
+with open(manifest_path, "r") as f:
+    manifest = json.load(f)
+
+entries = manifest.get("entries", {})
+deleted = manifest.get("deleted_paths", [])
+if not isinstance(entries, dict):
+    raise RuntimeError("checkpoint manifest missing 'entries' dict")
+if not isinstance(deleted, list):
+    raise RuntimeError("checkpoint manifest has invalid 'deleted_paths'")
+
+def safe_target(relpath):
+    if not isinstance(relpath, str) or relpath == "":
+        raise RuntimeError(f"unsafe checkpoint path: {relpath}")
+    if os.path.isabs(relpath) or ".." in relpath.split(os.sep):
+        raise RuntimeError(f"unsafe checkpoint path: {relpath}")
+    target = os.path.abspath(os.path.join(root, relpath))
+    if target == root or not target.startswith(root + os.sep):
+        raise RuntimeError(f"unsafe checkpoint path: {relpath}")
     return target
 
-try:
-    with tarfile.open(archive, "r:*") as tf:
-        members = tf.getmembers()
-        for member in members:
-            if member.issym() or member.islnk():
-                raise RuntimeError(f"checkpoint links are unsupported: {member.name}")
-            safe_target(member.name, allow_root=True)
-        raw_deletions = tf.pax_headers.get(deletions_header, "[]")
-        try:
-            deleted_paths = json.loads(raw_deletions)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("invalid checkpoint deletion manifest") from exc
-        if not isinstance(deleted_paths, list):
-            raise RuntimeError("invalid checkpoint deletion manifest")
-        for deleted_path in deleted_paths:
-            if not isinstance(deleted_path, str):
-                raise RuntimeError("invalid checkpoint deletion manifest")
-            safe_target(deleted_path)
-        if clear_root:
-            for name in os.listdir(root):
-                path = os.path.join(root, name)
-                if os.path.isdir(path) and not os.path.islink(path):
-                    shutil.rmtree(path)
-                else:
-                    os.unlink(path)
+def ensure_parent_dir(target):
+    parent = os.path.dirname(target)
+    rel_parent = os.path.relpath(parent, root)
+    current = root
+    if rel_parent == ".":
+        return
+    for part in rel_parent.split(os.sep):
+        current = os.path.join(current, part)
+        if os.path.lexists(current):
+            if os.path.islink(current) or not os.path.isdir(current):
+                raise RuntimeError(f"unsafe checkpoint parent path: {current}")
         else:
-            for deleted_path in sorted(deleted_paths, key=lambda p: p.count(os.sep), reverse=True):
-                target = safe_target(deleted_path)
-                if not os.path.lexists(target):
-                    continue
-                if os.path.isdir(target) and not os.path.islink(target):
-                    shutil.rmtree(target)
-                else:
-                    os.unlink(target)
-        for member in members:
-            tf.extract(member, root)
-        if not os.path.isdir(root):
-            raise RuntimeError(f"checkpoint root missing after restore: {root}")
-finally:
-    if os.path.exists(archive):
-        os.unlink(archive)
+            os.mkdir(current)
+
+for relpath in list(entries) + deleted:
+    safe_target(relpath)
+
+if clear_root:
+    for name in os.listdir(root):
+        path = os.path.join(root, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+else:
+    for del_path in sorted(deleted, key=lambda p: p.count(os.sep), reverse=True):
+        target = safe_target(del_path)
+        if os.path.lexists(target):
+            if os.path.isdir(target) and not os.path.islink(target):
+                shutil.rmtree(target)
+            else:
+                os.unlink(target)
+
+for relpath, entry in entries.items():
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"invalid checkpoint manifest entry: {relpath}")
+    hash_val = entry["hash"]
+    blob_path = os.path.join(cas_root, "blobs", hash_val[:2], hash_val[2:])
+    with open(blob_path, "rb") as f:
+        content = f.read()
+    target = safe_target(relpath)
+    ensure_parent_dir(target)
+    if os.path.lexists(target):
+        if os.path.islink(target):
+            raise RuntimeError(f"checkpoint target symlinks are unsupported: {relpath}")
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        elif not stat.S_ISREG(os.stat(target).st_mode):
+            raise RuntimeError(f"checkpoint special targets are unsupported: {relpath}")
+    with open(target, "wb") as f:
+        f.write(content)
+    os.chmod(target, entry.get("mode", 0o644))
+    mtime_ns = entry.get("mtime_ns")
+    if mtime_ns is not None:
+        try:
+            os.utime(target, ns=(mtime_ns, mtime_ns))
+        except OSError:
+            pass
+if not os.path.isdir(root):
+    raise RuntimeError(f"checkpoint root missing after restore: {root}")
+if os.path.exists(manifest_path):
+    os.unlink(manifest_path)
 '''
     _run_checked_container_command(
         [
             container_executable,
             "exec",
             "-e",
-            f"CHECKPOINT_ARCHIVE={container_archive_path}",
+            f"CAS_MANIFEST_PATH={container_manifest_path}",
+            "-e",
+            "CAS_ROOT=" + os.path.expanduser("~/.cache/agent-checkpoint-cas"),
             "-e",
             f"CHECKPOINT_ROOT={restore_root}",
             "-e",
             f"CHECKPOINT_CLEAR_ROOT={'1' if clear_root else '0'}",
-            "-e",
-            f"CHECKPOINT_DELETIONS_HEADER={_CHECKPOINT_DELETIONS_PAX_HEADER}",
             container_id,
             "python3",
             "-c",
@@ -844,19 +876,10 @@ def _restore_checkpoint_to_container(
     clear_root: bool = True,
 ) -> dict[str, Any]:
     checkpoint_path = Path(str(checkpoint_spec["path"]))
-    kind = str(checkpoint_spec.get("kind") or "filesystem_tar")
+    kind = str(checkpoint_spec.get("kind") or "cas_manifest")
     restore_root = str(checkpoint_spec.get("root") or "/testbed")
     started = time.monotonic()
-    if kind not in {
-        "filesystem_tar",
-        "filesystem_tar_full",
-        "filesystem_tar_incremental",
-        "filesystem_tar_gz",
-        "filesystem_tar_gz_full",
-        "filesystem_tar_gz_incremental",
-        "tar",
-        "tar_gz",
-    }:
+    if kind not in {"cas_manifest_full", "cas_manifest_incremental"}:
         return _checkpoint_restore_failed_fields(
             checkpoint_path=checkpoint_path,
             kind=kind,
@@ -877,29 +900,43 @@ def _restore_checkpoint_to_container(
             archive_exists=False,
         )
     size_bytes = checkpoint_path.stat().st_size
-    if not tarfile.is_tarfile(checkpoint_path):
+    try:
+        manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
         return _checkpoint_restore_failed_fields(
             checkpoint_path=checkpoint_path,
             kind=kind,
             restore_root=restore_root,
             status="checkpoint_restore_failed",
-            error=f"invalid checkpoint archive: {checkpoint_path}",
+            error=f"invalid checkpoint manifest: {exc}",
             started=started,
             archive_exists=True,
             size_bytes=size_bytes,
         )
-    container_archive_path = f"/tmp/agent_sched_checkpoint_{uuid.uuid4().hex}.tar"
+    if not isinstance(manifest.get("entries"), dict):
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error="checkpoint manifest missing 'entries' dict",
+            started=started,
+            archive_exists=True,
+            size_bytes=size_bytes,
+        )
+
+    container_manifest_path = f"/tmp/agent_sched_manifest_{uuid.uuid4().hex}.json"
     try:
         _copy_checkpoint_archive_to_container(
             checkpoint_path=checkpoint_path,
             container_id=container.container_id,
             container_executable=container.container_executable,
-            container_archive_path=container_archive_path,
+            container_archive_path=container_manifest_path,
         )
-        _restore_checkpoint_archive_in_container(
+        _restore_cas_manifest_in_container(
             container_id=container.container_id,
             container_executable=container.container_executable,
-            container_archive_path=container_archive_path,
+            container_manifest_path=container_manifest_path,
             restore_root=restore_root,
             clear_root=clear_root,
         )
@@ -938,11 +975,10 @@ def _restore_checkpoint_to_container(
 
 
 def _checkpoint_spec_is_incremental(checkpoint_spec: dict[str, Any]) -> bool:
-    kind = str(checkpoint_spec.get("kind") or "filesystem_tar")
+    kind = str(checkpoint_spec.get("kind") or "cas_manifest")
     return (
         checkpoint_spec.get("incremental") is True
-        or kind == "filesystem_tar_incremental"
-        or kind == "filesystem_tar_gz_incremental"
+        or kind == "cas_manifest_incremental"
     )
 
 
@@ -987,7 +1023,7 @@ def _restore_checkpoint_chain_to_container(
     if not checkpoint_specs:
         return _checkpoint_restore_failed_fields(
             checkpoint_path=Path(""),
-            kind="filesystem_tar_incremental",
+            kind="cas_manifest_incremental",
             restore_root="/testbed",
             status="checkpoint_missing",
             error="no checkpoint chain available",
@@ -996,7 +1032,7 @@ def _restore_checkpoint_chain_to_container(
 
     started = time.monotonic()
     chain_paths = [str(Path(str(spec["path"]))) for spec in checkpoint_specs]
-    chain_kinds = [str(spec.get("kind") or "filesystem_tar") for spec in checkpoint_specs]
+    chain_kinds = [str(spec.get("kind") or "cas_manifest") for spec in checkpoint_specs]
     total_size_bytes = 0
     last_result: dict[str, Any] | None = None
     for index, checkpoint_spec in enumerate(checkpoint_specs):
@@ -3496,7 +3532,7 @@ async def _replay_cloud_model_session(
                                 checkpoint_path=Path(str(checkpoint_spec["path"])),
                                 kind=str(
                                     checkpoint_spec.get("kind")
-                                    or "filesystem_tar_incremental"
+                                    or "cas_manifest_incremental"
                                 ),
                                 restore_root=str(
                                     checkpoint_spec.get("root") or "/testbed"

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import tarfile
 import time
 from pathlib import Path
 
@@ -390,7 +389,7 @@ def test_checkpoint_after_spec_rejects_non_testbed_root(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
 
     spec = _checkpoint_after_spec(
-        action_data={"checkpoint_after": {"path": "cp.tar", "root": "/"}},
+        action_data={"checkpoint_after": {"path": "cp-manifest.json", "root": "/"}},
         source_trace=trace_path,
     )
 
@@ -401,11 +400,22 @@ def test_restore_checkpoint_to_container_records_provenance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    checkpoint_path = tmp_path / "checkpoint.tar"
-    source_file = tmp_path / "file.txt"
-    source_file.write_text("checkpoint data", encoding="utf-8")
-    with tarfile.open(checkpoint_path, "w") as tf:
-        tf.add(source_file, arcname="file.txt")
+    checkpoint_path = tmp_path / "manifest.json"
+    manifest = {
+        "entries": {
+            "file.txt": {
+                "hash": (
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934"
+                    "ca495991b7852b855"
+                ),
+                "mode": 0o644,
+                "size": 14,
+                "mtime_ns": 1000000,
+            }
+        },
+        "deleted_paths": [],
+    }
+    checkpoint_path.write_text(json.dumps(manifest), encoding="utf-8")
     copied: list[dict] = []
     restored: list[dict] = []
 
@@ -414,14 +424,14 @@ def test_restore_checkpoint_to_container_records_provenance(
         lambda **kwargs: copied.append(kwargs),
     )
     monkeypatch.setattr(
-        "trace_collect.simulator._restore_checkpoint_archive_in_container",
+        "trace_collect.simulator._restore_cas_manifest_in_container",
         lambda **kwargs: restored.append(kwargs),
     )
 
     result = _restore_checkpoint_to_container(
         checkpoint_spec={
             "path": str(checkpoint_path),
-            "kind": "filesystem_tar",
+            "kind": "cas_manifest_full",
             "root": "/testbed",
         },
         container=PreparedContainer(
@@ -438,7 +448,7 @@ def test_restore_checkpoint_to_container_records_provenance(
     assert result["forced_sync_status"] == "checkpoint_restored_continuation"
     assert result["forced_sync_resolved"] is False
     assert result["forced_sync_continued"] is True
-    assert result["checkpoint_kind"] == "filesystem_tar"
+    assert result["checkpoint_kind"] == "cas_manifest_full"
     assert result["checkpoint_path"] == str(checkpoint_path)
     assert result["checkpoint_root"] == "/testbed"
     assert result["checkpoint_size_bytes"] == checkpoint_path.stat().st_size
@@ -955,8 +965,8 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
     checkpoint_after = {
-        "path": "checkpoints/after-tool.tar",
-        "kind": "filesystem_tar",
+        "path": "checkpoints/after-tool-manifest.json",
+        "kind": "cas_manifest_full",
         "root": "/testbed",
     }
     _write_trace(
@@ -1010,7 +1020,7 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
 
     assert len(restored) == 1
     assert restored[0]["checkpoint_spec"]["path"] == str(
-        trace_path.parent / "checkpoints/after-tool.tar"
+        trace_path.parent / "checkpoints/after-tool-manifest.json"
     )
     assert tool_record["data"]["replay_outcome_match"] is False
     assert tool_record["data"]["mismatch_reason"] == "tool_success_mismatch"
@@ -1047,20 +1057,20 @@ def test_simulate_forced_sync_restores_incremental_checkpoint_chain(
     task_source = tmp_path / "tasks.json"
     checkpoints = [
         {
-            "path": "checkpoints/full.tar",
-            "kind": "filesystem_tar_gz_full",
+            "path": "checkpoints/full-manifest.json",
+            "kind": "cas_manifest_full",
             "root": "/testbed",
             "incremental": False,
         },
         {
-            "path": "checkpoints/inc-1.tar",
-            "kind": "filesystem_tar_gz_incremental",
+            "path": "checkpoints/inc-1-manifest.json",
+            "kind": "cas_manifest_incremental",
             "root": "/testbed",
             "incremental": True,
         },
         {
-            "path": "checkpoints/inc-2.tar",
-            "kind": "filesystem_tar_gz_incremental",
+            "path": "checkpoints/inc-2-manifest.json",
+            "kind": "cas_manifest_incremental",
             "root": "/testbed",
             "incremental": True,
         },
@@ -1170,18 +1180,18 @@ def test_simulate_forced_sync_restores_incremental_checkpoint_chain(
     third_record = tool_records[2]
 
     assert [Path(str(item["checkpoint_spec"]["path"])).name for item in restored] == [
-        "full.tar",
-        "inc-1.tar",
-        "inc-2.tar",
+        "full-manifest.json",
+        "inc-1-manifest.json",
+        "inc-2-manifest.json",
     ]
     assert [item["clear_root"] for item in restored] == [True, False, False]
     assert third_record["data"]["forced_sync_success"] is True
     assert third_record["data"]["checkpoint_restore_chain_length"] == 3
     assert third_record["data"]["forced_sync_checkpoint_chain_length"] == 3
     assert third_record["data"]["forced_sync_checkpoint_chain"] == [
-        str(trace_path.parent / "checkpoints/full.tar"),
-        str(trace_path.parent / "checkpoints/inc-1.tar"),
-        str(trace_path.parent / "checkpoints/inc-2.tar"),
+        str(trace_path.parent / "checkpoints/full-manifest.json"),
+        str(trace_path.parent / "checkpoints/inc-1-manifest.json"),
+        str(trace_path.parent / "checkpoints/inc-2-manifest.json"),
     ]
 
 
@@ -1192,8 +1202,8 @@ def test_simulate_forced_sync_fallback_to_prior_checkpoint(
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
     checkpoint_after = {
-        "path": "checkpoints/after-first-tool.tar",
-        "kind": "filesystem_tar",
+        "path": "checkpoints/after-first-tool-manifest.json",
+        "kind": "cas_manifest_full",
         "root": "/testbed",
     }
     trace_path.write_text(
@@ -1330,7 +1340,7 @@ def test_simulate_forced_sync_fallback_to_prior_checkpoint(
 
     assert len(restored) == 1
     assert restored[0]["checkpoint_spec"]["path"] == str(
-        trace_path.parent / "checkpoints/after-first-tool.tar"
+        trace_path.parent / "checkpoints/after-first-tool-manifest.json"
     )
     assert len(tool_records) == 2
     fallback_record = tool_records[1]
@@ -1476,7 +1486,11 @@ def test_missing_checkpoint_file_marks_forced_sync_failed(
         agent_id="task-a",
         tool_name="exec",
         tool_args={"command": "pytest"},
-        checkpoint_after={"path": "checkpoints/missing.tar", "root": "/testbed"},
+        checkpoint_after={
+            "path": "checkpoints/missing-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
     )
     _write_tasks(task_source, "task-a")
     _patch_simulator_runtime(monkeypatch, tmp_path)
@@ -1519,21 +1533,25 @@ def test_missing_checkpoint_file_marks_forced_sync_failed(
     assert summary["unresolved_mismatches"] == 1
 
 
-def test_invalid_checkpoint_archive_marks_restore_failed(
+def test_invalid_checkpoint_manifest_marks_restore_failed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
-    checkpoint_path = tmp_path / "checkpoints" / "corrupt.tar"
+    checkpoint_path = tmp_path / "checkpoints" / "corrupt-manifest.json"
     checkpoint_path.parent.mkdir()
-    checkpoint_path.write_text("not a tar archive", encoding="utf-8")
+    checkpoint_path.write_text("not a manifest", encoding="utf-8")
     _write_trace(
         trace_path,
         agent_id="task-a",
         tool_name="exec",
         tool_args={"command": "pytest"},
-        checkpoint_after={"path": "checkpoints/corrupt.tar", "root": "/testbed"},
+        checkpoint_after={
+            "path": "checkpoints/corrupt-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
     )
     _write_tasks(task_source, "task-a")
     _patch_simulator_runtime(monkeypatch, tmp_path)
@@ -1567,7 +1585,7 @@ def test_invalid_checkpoint_archive_marks_restore_failed(
     assert tool_record["data"]["checkpoint_archive_exists"] is True
     assert tool_record["data"]["checkpoint_size_bytes"] == checkpoint_path.stat().st_size
     assert tool_record["data"]["restore_elapsed_ms"] >= 0.0
-    assert "invalid checkpoint archive" in tool_record["data"]["forced_sync_error"]
+    assert "invalid checkpoint manifest" in tool_record["data"]["forced_sync_error"]
     assert summary["forced_sync_attempts"] == 1
     assert summary["forced_sync_successes"] == 0
     assert summary["forced_sync_continued"] == 0
@@ -1645,7 +1663,11 @@ def test_forced_sync_does_not_resolve_source_artifact_unavailable(
         agent_id="task-a",
         tool_name="read_file",
         tool_args={"path": "/openclaw-runtime/tool-results/tool-results/missing.txt"},
-        checkpoint_after={"path": "checkpoints/after-read.tar", "root": "/testbed"},
+        checkpoint_after={
+            "path": "checkpoints/after-read-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
     )
     _write_tasks(task_source, "task-a")
     _patch_simulator_runtime(monkeypatch, tmp_path)
