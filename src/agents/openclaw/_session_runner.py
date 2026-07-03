@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import stat
-import tarfile
 import time
 from collections.abc import Iterator
 from contextlib import AsyncExitStack
@@ -187,61 +187,100 @@ def _relative_to_or_absolute(path: Path, base: Path) -> str:
         return str(path.resolve())
 
 
-_CHECKPOINT_DELETIONS_PAX_HEADER = "agent_sched_checkpoint.deleted_paths"
+_CHECKPOINT_CAS_ROOT = Path.home() / ".cache" / "agent-checkpoint-cas"
 
 
-def _write_filesystem_checkpoint_tar(
+def _write_cas_manifest(
     *,
     root: Path,
-    checkpoint_path: Path,
+    manifest_path: Path,
     incremental_since_ns: int | None = None,
     deleted_paths: list[str] | None = None,
-) -> None:
+    hash_cache: dict[str, tuple[int, str]] | None = None,
+) -> int:
+    """Walk /testbed, write content-addressed blobs to CAS, emit a JSON manifest.
+
+    Args:
+        root: The directory to snapshot (always /testbed).
+        manifest_path: Where to write the manifest JSON.
+        incremental_since_ns: If set, skip files whose mtime_ns <= this.
+        deleted_paths: Paths to record as deleted (incremental).
+        hash_cache: Optional path-to-(mtime_ns, hexdigest) cache. Updated in place.
+            Files whose path and mtime match the cache entry skip re-hashing.
+
+    Returns:
+        Total size in bytes of all unique blobs written for this manifest.
+
+    Raises:
+        OSError: on stat/read/write failure.
+    """
     root = root.resolve()
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    pax_headers: dict[str, str] = {}
-    if deleted_paths:
-        pax_headers[_CHECKPOINT_DELETIONS_PAX_HEADER] = json.dumps(
-            sorted(deleted_paths),
-            separators=(",", ":"),
-        )
-    with tarfile.open(
-        checkpoint_path,
-        "w:gz",
-        format=tarfile.PAX_FORMAT,
-        pax_headers=pax_headers,
-    ) as tf:
-        for fpath in _iter_checkpoint_entries(root):
-            try:
-                st = os.lstat(fpath)
-            except OSError as exc:
-                raise OSError(f"failed to stat checkpoint entry {fpath}: {exc}") from exc
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    cas_root = _CHECKPOINT_CAS_ROOT
+    entries: dict[str, dict[str, Any]] = {}
+    total_unique_bytes = 0
 
-            entry_type = _checkpoint_entry_type(st.st_mode)
-            if entry_type not in {"dir", "file"}:
-                raise OSError(f"unsupported checkpoint entry type: {fpath}")
-            if entry_type != "dir" and incremental_since_ns is not None:
-                if st.st_mtime_ns <= incremental_since_ns:
-                    continue
-            rel = _checkpoint_relpath(fpath, root)
+    for fpath in _iter_checkpoint_entries(root):
+        try:
+            st = os.lstat(fpath)
+        except OSError as exc:
+            raise OSError(f"failed to stat checkpoint entry {fpath}: {exc}") from exc
 
-            tar_info = tarfile.TarInfo(rel)
-            tar_info.mode = stat.S_IMODE(st.st_mode)
-            tar_info.uid = st.st_uid
-            tar_info.gid = st.st_gid
-            tar_info.mtime = st.st_mtime_ns / 1_000_000_000
-            if stat.S_ISDIR(st.st_mode):
-                tar_info.type = tarfile.DIRTYPE
-                tf.addfile(tar_info)
-                continue
+        entry_type = _checkpoint_entry_type(st.st_mode)
+        if entry_type not in {"dir", "file"}:
+            raise OSError(f"unsupported checkpoint entry type: {fpath}")
+        rel = _checkpoint_relpath(fpath, root)
 
-            tar_info.type = tarfile.REGTYPE
-            tar_info.size = st.st_size
+        if entry_type == "dir":
+            continue
+
+        if incremental_since_ns is not None and st.st_mtime_ns <= incremental_since_ns:
+            continue
+
+        cached = hash_cache.get(rel) if hash_cache else None
+        file_bytes: bytes | None = None
+        if cached is not None and cached[0] == st.st_mtime_ns:
+            digest = cached[1]
+        else:
             try:
                 with open(fpath, "rb") as fh:
-                    tf.addfile(tar_info, fh)
+                    file_bytes = fh.read()
             except OSError as exc:
                 raise OSError(f"failed to read checkpoint entry {fpath}: {exc}") from exc
+            digest = hashlib.sha256(file_bytes).hexdigest()
+            if hash_cache is not None:
+                hash_cache[rel] = (st.st_mtime_ns, digest)
+
+        blob_path = cas_root / "blobs" / digest[:2] / digest[2:]
+        if not blob_path.exists():
+            blob_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = blob_path.with_suffix(".tmp")
+            try:
+                if file_bytes is None:
+                    with open(fpath, "rb") as fh:
+                        file_bytes = fh.read()
+                tmp.write_bytes(file_bytes)
+                tmp.rename(blob_path)
+            except OSError as exc:
+                raise OSError(f"failed to write blob {blob_path}: {exc}") from exc
+            total_unique_bytes += st.st_size
+
+        entries[rel] = {
+            "hash": digest,
+            "mode": stat.S_IMODE(st.st_mode),
+            "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
+        }
+
+    manifest: dict[str, Any] = {
+        "entries": entries,
+        "deleted_paths": sorted(deleted_paths) if deleted_paths else [],
+    }
+
+    tmp = manifest_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.rename(manifest_path)
+    return total_unique_bytes
 
 
 class TraceCollectorHook(AgentHook):
@@ -285,6 +324,7 @@ class TraceCollectorHook(AgentHook):
         self._checkpoint_snapshot_entries: dict[str, str] | None = None
         self._rebaseline_bytes = checkpoint_rebaseline_bytes
         self._checkpoint_chain_bytes_since_full: int = 0
+        self._checkpoint_hash_cache: dict[str, tuple[int, str]] = {}
         self._flushed = False
         self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
 
@@ -339,7 +379,7 @@ class TraceCollectorHook(AgentHook):
                     "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
                 }
 
-        marker_before_tar_ns = time.time_ns()
+        marker_before_ns = time.time_ns()
         try:
             current_snapshot = _snapshot_checkpoint_entries(root)
         except OSError as exc:
@@ -351,8 +391,8 @@ class TraceCollectorHook(AgentHook):
 
         is_first = self._last_full_checkpoint_ns is None
 
-        # Re-baseline: if the incremental chain exceeds the threshold,
-        # promote this checkpoint to full regardless of is_first.
+        # Re-baseline: if the incremental CAS chain exceeds the threshold,
+        # promote this manifest to full regardless of is_first.
         force_full = (
             not is_first
             and self._rebaseline_bytes is not None
@@ -368,16 +408,17 @@ class TraceCollectorHook(AgentHook):
                 if current_snapshot.get(path) != entry_type
             )
 
-        checkpoint_path = (
+        manifest_path = (
             self._checkpoint_dir
-            / f"{_sanitize_checkpoint_name(tool_call_id)}-after.tar.gz"
+            / f"{_sanitize_checkpoint_name(tool_call_id)}-manifest.json"
         )
         try:
-            _write_filesystem_checkpoint_tar(
+            chain_bytes = _write_cas_manifest(
                 root=root,
-                checkpoint_path=checkpoint_path,
+                manifest_path=manifest_path,
                 incremental_since_ns=incremental_since,
                 deleted_paths=deleted_paths,
+                hash_cache=self._checkpoint_hash_cache,
             )
         except OSError as exc:
             return {
@@ -387,14 +428,16 @@ class TraceCollectorHook(AgentHook):
             }
 
         try:
-            changed_during_tar = _any_file_newer_than(root, marker_before_tar_ns)
+            changed_during_write = _any_file_newer_than(root, marker_before_ns)
         except OSError:
-            changed_during_tar = True
-        if changed_during_tar:
+            changed_during_write = True
+        if changed_during_write:
             try:
-                checkpoint_path.unlink(missing_ok=True)
+                manifest_path.unlink(missing_ok=True)
             except OSError:
                 pass
+            # Blobs are content-addressed, so tmp+rename prevents ghost reads.
+            # Only the manifest is rolled back on concurrent-write detection.
             return {
                 "error": "checkpoint failed: filesystem changed during checkpoint",
                 "overhead_excluded": True,
@@ -402,19 +445,19 @@ class TraceCollectorHook(AgentHook):
             }
 
         elapsed_ms = (time.monotonic() - started) * 1000
-        size_bytes = checkpoint_path.stat().st_size
+        size_bytes = manifest_path.stat().st_size
         is_full = is_first or force_full
         if is_full:
-            self._last_full_checkpoint_ns = marker_before_tar_ns
+            self._last_full_checkpoint_ns = marker_before_ns
             self._checkpoint_chain_bytes_since_full = 0
         else:
-            self._checkpoint_chain_bytes_since_full += size_bytes
-        self._last_incremental_checkpoint_ns = marker_before_tar_ns
+            self._checkpoint_chain_bytes_since_full += chain_bytes
+        self._last_incremental_checkpoint_ns = marker_before_ns
         self._checkpoint_snapshot_entries = current_snapshot
         return {
-            "path": _relative_to_or_absolute(checkpoint_path, self.trace_file.parent),
+            "path": _relative_to_or_absolute(manifest_path, self.trace_file.parent),
             "kind": (
-                "filesystem_tar_gz_full" if is_full else "filesystem_tar_gz_incremental"
+                "cas_manifest_full" if is_full else "cas_manifest_incremental"
             ),
             "root": self._checkpoint_root_label,
             "incremental": not is_full,
@@ -423,6 +466,7 @@ class TraceCollectorHook(AgentHook):
             "size_bytes": size_bytes,
             "overhead_excluded": True,
             "rebaseline": force_full or None,
+            "chain_bytes": chain_bytes,
         }
 
     def close(self) -> None:

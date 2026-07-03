@@ -15,9 +15,9 @@ contains BOTH action types after a single iteration.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
-import tarfile
 import time
 from pathlib import Path
 from typing import Any
@@ -27,11 +27,21 @@ import pytest
 # Skip the entire module if OpenClaw deps are unavailable.
 pytest.importorskip("agents.openclaw._session_runner")
 
+import agents.openclaw._session_runner as session_runner
 from agents.openclaw._session_runner import (
     TraceCollectorHook,
     _any_file_newer_than,
     _resolve_run_outcome,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_checkpoint_cas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        session_runner,
+        "_CHECKPOINT_CAS_ROOT",
+        tmp_path / "cas",
+    )
 
 
 class _StubResponse:
@@ -308,15 +318,27 @@ async def _drive_emits_exec_checkpoint_after(tmp_path: Path) -> None:
     checkpoint_after = tool_exec["data"]["checkpoint_after"]
     checkpoint_path = trace_file.parent / checkpoint_after["path"]
 
-    assert checkpoint_after["kind"] == "filesystem_tar_gz_full"
+    assert checkpoint_after["kind"] == "cas_manifest_full"
     assert checkpoint_after["incremental"] is False
     assert checkpoint_after["incremental_since_ns"] is None
     assert checkpoint_after["root"] == "/testbed"
     assert checkpoint_after["overhead_excluded"] is True
     assert checkpoint_after["elapsed_ms"] >= 0
     assert checkpoint_after["size_bytes"] == checkpoint_path.stat().st_size
-    with tarfile.open(checkpoint_path, "r") as tf:
-        assert "result.txt" in tf.getnames()
+    assert checkpoint_after["chain_bytes"] == len("source state\n")
+    manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert sorted(manifest) == ["deleted_paths", "entries"]
+    assert manifest["deleted_paths"] == []
+    result_entry = manifest["entries"]["result.txt"]
+    assert result_entry["size"] == len("source state\n")
+    assert result_entry["mode"] == (testbed / "result.txt").stat().st_mode & 0o777
+    blob_path = (
+        session_runner._CHECKPOINT_CAS_ROOT
+        / "blobs"
+        / result_entry["hash"][:2]
+        / result_entry["hash"][2:]
+    )
+    assert blob_path.exists()
 
 
 def test_trace_collector_skips_checkpoint_when_testbed_has_symlink(
@@ -369,6 +391,48 @@ def test_any_file_newer_than_detects_changes(tmp_path: Path) -> None:
     assert _any_file_newer_than(testbed, marker_mtime_ns) is True
 
 
+def test_write_cas_manifest_reuses_hash_cache_and_deduplicates_blobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    testbed = tmp_path / "testbed"
+    testbed.mkdir()
+    first_file = testbed / "first.txt"
+    second_file = testbed / "second.txt"
+    content = b"shared content\n"
+    first_file.write_bytes(content)
+    second_file.write_bytes(content)
+    first_stat = os.lstat(first_file)
+    second_stat = os.lstat(second_file)
+    digest = hashlib.sha256(content).hexdigest()
+    hash_cache = {
+        "first.txt": (first_stat.st_mtime_ns, digest),
+        "second.txt": (second_stat.st_mtime_ns, digest),
+    }
+
+    def fail_sha256(data: bytes) -> Any:
+        raise AssertionError(f"unexpected hash cache miss for {len(data)} bytes")
+
+    monkeypatch.setattr(session_runner.hashlib, "sha256", fail_sha256)
+
+    manifest_path = tmp_path / "checkpoints" / "manifest.json"
+    chain_bytes = session_runner._write_cas_manifest(
+        root=testbed,
+        manifest_path=manifest_path,
+        hash_cache=hash_cache,
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert set(manifest["entries"]) == {"first.txt", "second.txt"}
+    assert manifest["entries"]["first.txt"]["hash"] == digest
+    assert manifest["entries"]["second.txt"]["hash"] == digest
+    assert chain_bytes == len(content)
+    blob_path = (
+        session_runner._CHECKPOINT_CAS_ROOT / "blobs" / digest[:2] / digest[2:]
+    )
+    assert blob_path.read_bytes() == content
+
+
 def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
     tmp_path: Path,
 ) -> None:
@@ -391,7 +455,7 @@ def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
         tool_args_json='{"command":"ls"}',
     )
     assert first is not None
-    assert first["kind"] == "filesystem_tar_gz_full"
+    assert first["kind"] == "cas_manifest_full"
     assert first["incremental"] is False
     assert (trace_file.parent / first["path"]).exists()
 
@@ -404,7 +468,7 @@ def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
     assert second["skipped"] == "no filesystem changes since last checkpoint"
     assert second["overhead_excluded"] is True
     assert second["elapsed_ms"] >= 0
-    assert not (checkpoint_dir / "call_second-after.tar.gz").exists()
+    assert not (checkpoint_dir / "call_second-manifest.json").exists()
 
     new_file = testbed / "new.txt"
     new_file.write_text("new state\n", encoding="utf-8")
@@ -418,13 +482,13 @@ def test_trace_collector_skips_checkpoint_when_testbed_unchanged(
         tool_args_json='{"command":"echo new > new.txt"}',
     )
     assert third is not None
-    assert third["kind"] == "filesystem_tar_gz_incremental"
+    assert third["kind"] == "cas_manifest_incremental"
     assert third["incremental"] is True
     assert (trace_file.parent / third["path"]).exists()
     hook.close()
 
 
-def test_trace_collector_incremental_checkpoint_only_tars_changed_files(
+def test_trace_collector_incremental_checkpoint_only_manifests_changed_files(
     tmp_path: Path,
 ) -> None:
     trace_file = tmp_path / "trace.jsonl"
@@ -448,8 +512,7 @@ def test_trace_collector_incremental_checkpoint_only_tars_changed_files(
         tool_args_json='{"command":"pytest"}',
     )
     assert first is not None
-    assert first["kind"] == "filesystem_tar_gz_full"
-    first_path = trace_file.parent / first["path"]
+    assert first["kind"] == "cas_manifest_full"
     previous_marker_ns = hook._last_incremental_checkpoint_ns
     assert previous_marker_ns is not None
 
@@ -462,17 +525,16 @@ def test_trace_collector_incremental_checkpoint_only_tars_changed_files(
         tool_args_json='{"command":"pytest"}',
     )
     assert second is not None
-    assert second["kind"] == "filesystem_tar_gz_incremental"
+    assert second["kind"] == "cas_manifest_incremental"
     assert second["incremental"] is True
     assert second["incremental_since_ns"] == previous_marker_ns
     second_path = trace_file.parent / second["path"]
 
     assert second["size_bytes"] == second_path.stat().st_size
-    assert second["size_bytes"] < first_path.stat().st_size
-    with tarfile.open(second_path, "r") as tf:
-        names = set(tf.getnames())
-    assert "result.txt" in names
-    assert "large.bin" not in names
+    assert second["chain_bytes"] == len("changed state\n")
+    manifest = json.loads(second_path.read_text(encoding="utf-8"))
+    assert set(manifest["entries"]) == {"result.txt"}
+    assert manifest["entries"]["result.txt"]["size"] == len("changed state\n")
     hook.close()
 
 
@@ -646,14 +708,14 @@ async def _drive_checkpoints_exec_in_multi_tool_iteration(tmp_path: Path) -> Non
     }
     checkpoint_after = records_by_tool_id[exec_tc.id]["data"]["checkpoint_after"]
     checkpoint_path = trace_file.parent / checkpoint_after["path"]
-    assert checkpoint_after["kind"] == "filesystem_tar_gz_full"
+    assert checkpoint_after["kind"] == "cas_manifest_full"
     assert checkpoint_after["incremental"] is False
     assert checkpoint_after["root"] == "/testbed"
     assert checkpoint_after["overhead_excluded"] is True
     assert checkpoint_after["elapsed_ms"] >= 0
     assert checkpoint_after["size_bytes"] == checkpoint_path.stat().st_size
-    with tarfile.open(checkpoint_path, "r") as tf:
-        assert "result.txt" in tf.getnames()
+    manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert "result.txt" in manifest["entries"]
 
     skipped_checkpoint = records_by_tool_id[exec_tc_2.id]["data"]["checkpoint_after"]
     assert skipped_checkpoint["skipped"] == "no filesystem changes since last checkpoint"
