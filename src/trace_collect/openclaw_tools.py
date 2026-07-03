@@ -187,7 +187,10 @@ def _format_exec_result(stdout, stderr, returncode):
     if stderr and stderr.strip():
         output_parts.append(f"STDERR:\n{stderr}")
     output_parts.append(f"\nExit code: {returncode}")
-    return "\n".join(output_parts) if output_parts else "(no output)"
+    return "\n".join(output_parts)
+
+def _format_command_timeout(timeout):
+    return f"Error: Command timed out after {timeout} seconds"
 
 def _insert_before_final_exit_code(text, marker):
     exit_marker = "\nExit code:"
@@ -469,7 +472,7 @@ def handle_exec(args):
         output = _format_exec_result(r.stdout or "", r.stderr or "", r.returncode)
         return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "result": "[timeout]\n\nExit code: 124", "returncode": 124}
+        return {"ok": False, "result": _format_command_timeout(timeout), "returncode": 124}
 
 def handle_commands(args):
     cmds = args.get("commands", [])
@@ -488,7 +491,7 @@ def handle_commands(args):
             if r.returncode != 0 and first_failed_rc == 0:
                 first_failed_rc = r.returncode
         except subprocess.TimeoutExpired:
-            all_output.append("[timeout]\n\nExit code: 124")
+            all_output.append(_format_command_timeout(timeout))
             last_rc = 124
             any_timeout = True
     if len(cmds) > 1:
@@ -1048,6 +1051,10 @@ def _final_exit_code(result: object) -> int | None:
         return None
 
 
+def _is_collect_command_timeout_result(result: object) -> bool:
+    return isinstance(result, str) and "Error: Command timed out after " in result
+
+
 async def execute_trace_tool_detailed(
     *,
     agent: ContainerAgent,
@@ -1105,6 +1112,12 @@ async def execute_trace_tool_detailed(
             if _final_exit_code(result) is None:
                 result = f"{result}\n\nExit code: <missing>".strip()
             return result, False, inner_duration_ms, metadata
+        if (
+            request["tool"] == "exec"
+            and rc == 124
+            and _is_collect_command_timeout_result(result)
+        ):
+            return result, bool(ok), inner_duration_ms, metadata
         if _final_exit_code(result) != rc:
             result = f"{result}\n\nExit code: {rc}".strip()
         ok = bool(ok)

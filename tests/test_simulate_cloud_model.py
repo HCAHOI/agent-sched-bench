@@ -2169,6 +2169,48 @@ def test_tool_mismatch_reason_detects_exec_output_mismatch() -> None:
     )
 
 
+def test_tool_mismatch_reason_normalizes_container_identity_output() -> None:
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result=(
+                "uid=501(chiyuh) gid=20(staff) groups=20(staff),12(everyone)"
+                "\n\nExit code: 0"
+            ),
+            replay_tool_result="uid=0(root) gid=0(root) groups=0(root)\n\nExit code: 0",
+            tool_name="exec",
+            tool_args_json=json.dumps({"exec": {"command": "id"}}),
+        )
+        is None
+    )
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result="chiyuh\n\nExit code: 0",
+            replay_tool_result="root\n\nExit code: 0",
+            tool_name="exec",
+            tool_args_json=json.dumps({"exec": {"command": "whoami"}}),
+        )
+        is None
+    )
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result="uid=1000(alice)\n\nExit code: 0",
+            replay_tool_result="uid=1001(bob)\n\nExit code: 0",
+            tool_name="exec",
+            tool_args_json=json.dumps({"exec": {"command": "id alice"}}),
+        )
+        == "command_output_mismatch"
+    )
+
+
 def test_compute_output_diff_snippet_captures_first_divergence() -> None:
     assert (
         _compute_output_diff_snippet("same\npid 123\ndone", "same\npid 456\ndone")
@@ -3372,7 +3414,11 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         }
     ]
     assert any("/opt/conda/bin/python3" in cmd for cmd in bootstrap_commands)
-    assert any("safe.directory" in cmd for cmd in bootstrap_commands)
+    assert any(
+        "/bin/sh" in cmd and any("command -v git" in part for part in cmd)
+        for cmd in bootstrap_commands
+    )
+    assert any("safe.directory" in part for cmd in bootstrap_commands for part in cmd)
     assert any("get-pip.py" in part for cmd in bootstrap_commands for part in cmd)
     pip_install_commands = [
         cmd

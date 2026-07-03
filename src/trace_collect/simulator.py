@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import os
 import re
+import shlex
 import subprocess
 import shutil
 import time
@@ -422,10 +423,16 @@ _NONDETERMINISTIC_TOOL_OUTPUT_REPLACEMENTS: tuple[
 )
 
 
-def _normalized_tool_output_hash(text: str) -> str:
+def _normalized_tool_output_hash(
+    text: str,
+    *,
+    identity_command: bool = False,
+) -> str:
     lines = [line for line in text.splitlines() if line.strip()]
     if lines and lines[-1].strip().startswith("Exit code:"):
         lines = lines[:-1]
+    if identity_command and len(lines) == 1:
+        return hashlib.sha256(b"<identity>").hexdigest()
     normalized_lines: list[str] = []
     for line in lines:
         if any(
@@ -526,6 +533,25 @@ def _tool_uses_single_exec_command_semantics(
     return "command" in payload and "commands" not in payload
 
 
+def _tool_uses_identity_command(
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> bool:
+    payload = _exec_semantics_payload(tool_name, tool_args_json)
+    if payload is None or "commands" in payload:
+        return False
+    raw_command = payload.get("command")
+    if not isinstance(raw_command, str):
+        return False
+    try:
+        parts = shlex.split(raw_command)
+    except ValueError:
+        return False
+    if parts == ["whoami"]:
+        return True
+    return bool(parts and parts[0] == "id" and all(part.startswith("-") for part in parts[1:]))
+
+
 def _tool_mismatch_reason(
     *,
     source_success: bool,
@@ -558,8 +584,15 @@ def _tool_mismatch_reason(
         ):
             return "command_exit_code_mismatch"
         if not source_timeout and not replay_timeout:
-            source_hash = _normalized_tool_output_hash(str(source_tool_result or ""))
-            replay_hash = _normalized_tool_output_hash(str(replay_tool_result or ""))
+            identity_command = _tool_uses_identity_command(tool_name, tool_args_json)
+            source_hash = _normalized_tool_output_hash(
+                str(source_tool_result or ""),
+                identity_command=identity_command,
+            )
+            replay_hash = _normalized_tool_output_hash(
+                str(replay_tool_result or ""),
+                identity_command=identity_command,
+            )
             if source_hash != replay_hash:
                 return "command_output_mismatch"
     return None
@@ -2273,11 +2306,9 @@ async def _prepare_container_session(
                     container_executable,
                     "exec",
                     container_id,
-                    "git",
-                    "config",
-                    "--system",
-                    "safe.directory",
-                    "*",
+                    "/bin/sh",
+                    "-lc",
+                    'if command -v git >/dev/null 2>&1; then git config --system safe.directory "*"; fi',
                 ],
                 timeout=30,
             )

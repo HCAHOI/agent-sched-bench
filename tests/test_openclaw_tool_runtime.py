@@ -721,6 +721,47 @@ def test_exec_embedded_exit_code_text_still_appends_returncode() -> None:
     assert result.endswith("Exit code: 0")
 
 
+def test_collect_style_command_timeout_does_not_append_exit_code() -> None:
+    agent = FakeAgent(
+        {
+            "exec": {
+                "ok": False,
+                "result": "Error: Command timed out after 7 seconds",
+                "returncode": 124,
+            }
+        }
+    )
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "sleep 99", "timeout": 7}),
+            command_timeout_s=10.0,
+        )
+    )
+
+    assert success is False
+    assert result == "Error: Command timed out after 7 seconds"
+
+
+def test_replay_agent_command_timeout_matches_collect_format(monkeypatch) -> None:
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+
+    def fake_run(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="slow", timeout=7)
+
+    monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
+
+    response = namespace["handle_exec"]({"command": "slow", "timeout": 7})
+
+    assert response == {
+        "ok": False,
+        "result": "Error: Command timed out after 7 seconds",
+        "returncode": 124,
+    }
+
+
 def test_resource_timeout_marker_precedes_final_exit_code() -> None:
     namespace: dict[str, object] = {}
     exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
@@ -762,6 +803,32 @@ def test_commands_appends_aggregate_returncode_when_last_subcommand_succeeds() -
     assert result.endswith("Exit code: 100")
 
 
+def test_commands_timeout_appends_aggregate_returncode_after_later_success() -> None:
+    agent = FakeAgent(
+        {
+            "commands": {
+                "ok": False,
+                "result": (
+                    "[call 0]\nError: Command timed out after 1 seconds\n"
+                    "[call 1]\nok\n\nExit code: 0"
+                ),
+                "returncode": 124,
+            }
+        }
+    )
+    result, success, _ = asyncio.run(
+        execute_trace_tool(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"commands": ["slow", "echo ok"]}),
+            command_timeout_s=10.0,
+        )
+    )
+
+    assert success is False
+    assert result.endswith("Exit code: 124")
+
+
 def test_commands_timeout_is_preserved_across_later_success(monkeypatch) -> None:
     namespace: dict[str, object] = {}
     exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
@@ -783,7 +850,7 @@ def test_commands_timeout_is_preserved_across_later_success(monkeypatch) -> None
     assert calls == 2
     assert response["ok"] is False
     assert response["returncode"] == 124
-    assert "[timeout]" in response["result"]
+    assert "Error: Command timed out after 1 seconds" in response["result"]
     assert "ok" in response["result"]
 
 
