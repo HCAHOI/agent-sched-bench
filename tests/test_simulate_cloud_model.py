@@ -368,6 +368,7 @@ def _patch_noop_replay_python_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "trace_collect.simulator.resolve_running_container_exec_config",
         lambda **kwargs: kwargs["exec_config"],
+        raising=False,
     )
 
 
@@ -3168,6 +3169,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     monkeypatch.setattr(
         "trace_collect.simulator.resolve_running_container_exec_config",
         fake_resolve_running_container_exec_config,
+        raising=False,
     )
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeContainerAgent)
