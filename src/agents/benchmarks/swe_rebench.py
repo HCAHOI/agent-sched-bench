@@ -1,9 +1,9 @@
 """SWE-rebench benchmark plugin.
 
-This plugin absorbs the benchmark-specific schema quirks that differ from
-SWE-bench Verified: native test-id lists, explicit docker image URIs, and the
-optional opt-in ``exclude_lite`` filter. Keeping that logic here prevents the
-rest of the harness from depending on dataset-specific branches.
+This plugin absorbs the benchmark-specific schema quirks for SWE-rebench:
+native test-id lists, explicit docker image URIs, and the optional opt-in
+``exclude_lite`` filter. Keeping that logic here prevents the rest of the
+harness from depending on dataset-specific branches.
 """
 
 from __future__ import annotations
@@ -16,8 +16,7 @@ from agents.benchmarks.base import Benchmark
 class SWERebenchBenchmark(Benchmark):
     """Benchmark plugin for ``nebius/SWE-rebench`` (filtered or test split).
 
-    Dataset schema is a superset of SWE-Bench Verified; see the module
-    docstring for the three schema quirks this plugin absorbs.
+    See the module docstring for the schema quirks this plugin absorbs.
     """
 
     slug: ClassVar[str] = "swe-rebench"
@@ -26,10 +25,11 @@ class SWERebenchBenchmark(Benchmark):
     # Abstract method implementations
 
     def load_tasks(self) -> list[dict[str, Any]]:
-        """Load all rows from ``nebius/SWE-rebench`` and normalize each.
+        """Load all rows from the local cache or HuggingFace dataset."""
+        local_tasks = self.load_tasks_from_local_json()
+        if local_tasks is not None:
+            return local_tasks
 
-        Requires the ``datasets`` package (``pip install datasets``).
-        """
         from datasets import load_dataset  # type: ignore[import]
 
         ds = load_dataset(self.config.harness_dataset, split=self.config.harness_split)
@@ -117,4 +117,4 @@ class SWERebenchBenchmark(Benchmark):
             raise NotImplementedError(
                 f"SWE-rebench does not support scaffold={scaffold!r}"
             )
-        return "task_container_agent"
+        return "host_agent_docker_tools"

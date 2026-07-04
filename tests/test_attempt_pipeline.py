@@ -7,9 +7,7 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -74,44 +72,9 @@ def _write_trace(path: Path) -> None:
     )
 
 
-class _RecordingProvider:
-    def __init__(self) -> None:
-        self.recordings_dir: Path | None = None
-        self.finish_trace_path: Path | None = None
-        self.finish_trace_exists = False
-        self.events: list[str] = []
-
-    def wait_until_idle(self) -> None:
-        self.events.append("wait_until_idle")
-
-    def start_attempt(self, recordings_dir: Path) -> None:
-        self.events.append("start_attempt")
-        self.recordings_dir = recordings_dir
-
-    def finish_attempt(self, trace_path: Path | None = None) -> None:
-        self.events.append("finish_attempt")
-        self.finish_trace_path = trace_path
-        self.finish_trace_exists = bool(trace_path and trace_path.exists())
-
-
-class _BlockingRecordingProvider(_RecordingProvider):
-    def __init__(self) -> None:
-        super().__init__()
-        self._lock = threading.Lock()
-        self._lock.acquire()
-
-    def release(self) -> None:
-        self._lock.release()
-
-    def wait_until_idle(self) -> None:
-        self.events.append("wait_until_idle")
-        self._lock.acquire()
-        self._lock.release()
-
-
 def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
-    ctx.agent_runtime_mode = "task_container_agent"
+    ctx.agent_runtime_mode = "host_agent_docker_tools"
     trace_source = tmp_path / "scratch" / "trace.jsonl"
     _write_trace(trace_source)
 
@@ -174,10 +137,32 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert manifest["model"]["name"] == "qwen-plus-latest"
     assert manifest["result_summary"]["exit_code"] == 0
     assert manifest["result_summary"]["total_time"] >= 0.0
+    # Wall-clock breakdown checkpoints must be recorded and add up.
+    timing = manifest["timing"]
+    assert set(timing) == {
+        "wall_total_s",
+        "setup_s",
+        "agent_exec_s",
+        "teardown_s",
+        "permission_fix_s",
+    }
+    assert timing["wall_total_s"] >= 0.0
+    assert timing["setup_s"] >= 0.0
+    assert timing["agent_exec_s"] >= 0.0
+    assert timing["teardown_s"] >= 0.0
+    assert timing["permission_fix_s"] >= 0.0
+    # The breakdown must reconcile with the wall total within float noise.
+    assert (
+        abs(
+            timing["wall_total_s"]
+            - (timing["setup_s"] + timing["agent_exec_s"] + timing["teardown_s"])
+        )
+        < 1e-3
+    )
     assert manifest["scaffold"] == "openclaw"
     assert manifest["prompt_template"] == "default"
-    assert manifest["agent_runtime_mode"] == "task_container_agent"
-    assert manifest["runtime"]["agent_runtime_mode"] == "task_container_agent"
+    assert manifest["agent_runtime_mode"] == "host_agent_docker_tools"
+    assert manifest["runtime"]["agent_runtime_mode"] == "host_agent_docker_tools"
     assert (
         manifest["runtime"]["runtime_proof"]["container_id"] == "fake_container_id_xyz"
     )
@@ -193,10 +178,12 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert results["instance_id"] == "mozilla__bleach-259"
     assert results["success"] is True
     assert results["model"] == "qwen-plus-latest"
-    assert results["agent_runtime_mode"] == "task_container_agent"
-    assert (
-        results["runtime_proof"]["python_executable"] == "/usr/bin/python3"
-    )
+    assert results["agent_runtime_mode"] == "host_agent_docker_tools"
+    assert results["runtime_proof"]["python_executable"] == "/usr/bin/python3"
+    assert results["timing"]["wall_total_s"] >= 0.0
+    assert results["timing"]["setup_s"] >= 0.0
+    assert results["timing"]["agent_exec_s"] >= 0.0
+    assert results["timing"]["teardown_s"] >= 0.0
     assert "container_stdout" not in results
     assert "resource_samples" not in results
 
@@ -213,155 +200,6 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
 
     trace = (ctx.attempt_dir / "trace.jsonl").read_text()
     assert "trace_metadata" in trace
-
-
-def test_run_attempt_finishes_recording_after_trace_copy(tmp_path: Path) -> None:
-    ctx = _make_ctx(tmp_path)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _RecordingProvider()
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    asyncio.run(
-        run_attempt(
-            ctx,
-            inner=inner,
-            min_free_disk_gb=0.001,
-            container_executable="docker",
-            recording_provider=recording_provider,
-        )
-    )
-
-    assert recording_provider.recordings_dir == ctx.attempt_dir / "recordings"
-    assert recording_provider.finish_trace_path == ctx.attempt_dir / "trace.jsonl"
-    assert recording_provider.finish_trace_exists is True
-    assert recording_provider.events == [
-        "wait_until_idle",
-        "start_attempt",
-        "wait_until_idle",
-        "finish_attempt",
-    ]
-
-
-def test_run_attempt_excludes_pre_start_idle_wait_from_runtime(
-    tmp_path: Path,
-) -> None:
-    ctx = _make_ctx(tmp_path)
-    ctx.start_time = datetime.now(tz=timezone.utc) - timedelta(seconds=30)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _BlockingRecordingProvider()
-    release_timer = threading.Timer(0.05, recording_provider.release)
-    release_timer.start()
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    try:
-        asyncio.run(
-            run_attempt(
-                ctx,
-                inner=inner,
-                min_free_disk_gb=0.001,
-                container_executable="docker",
-                recording_provider=recording_provider,
-            )
-        )
-    finally:
-        release_timer.cancel()
-        release_timer.join(timeout=1.0)
-
-    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
-    assert manifest["result_summary"]["total_time"] < 10.0
-    assert recording_provider.events == [
-        "wait_until_idle",
-        "start_attempt",
-        "wait_until_idle",
-        "finish_attempt",
-    ]
-
-
-def test_run_attempt_checks_recording_partition_when_recording_enabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _make_ctx(tmp_path)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _RecordingProvider()
-    preflight_paths: list[Path] = []
-
-    def fake_preflight(path: Path, min_free_gb: float) -> float:
-        del min_free_gb
-        preflight_paths.append(path)
-        return 123.0
-
-    monkeypatch.setattr("trace_collect.attempt_pipeline.preflight_disk", fake_preflight)
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    asyncio.run(
-        run_attempt(
-            ctx,
-            inner=inner,
-            min_free_disk_gb=30.0,
-            container_executable="docker",
-            recording_provider=recording_provider,
-        )
-    )
-
-    assert preflight_paths[:2] == [ctx.run_dir, ctx.attempt_dir / "recordings"]
-
-
-def test_run_attempt_finishes_recording_if_trace_copy_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _make_ctx(tmp_path)
-    trace_source = tmp_path / "scratch" / "trace.jsonl"
-    _write_trace(trace_source)
-    recording_provider = _RecordingProvider()
-
-    async def inner(ctx: AttemptContext) -> AttemptResult:
-        return AttemptResult(
-            success=True,
-            exit_status="Submitted",
-            trace_path=trace_source,
-        )
-
-    def fail_copy(_attempt_dir: Path, _source_path: Path) -> Path:
-        raise OSError("copy failed")
-
-    monkeypatch.setattr("trace_collect.attempt_pipeline.attempt_layout.copy_trace_jsonl", fail_copy)
-
-    with pytest.raises(OSError, match="copy failed"):
-        asyncio.run(
-            run_attempt(
-                ctx,
-                inner=inner,
-                min_free_disk_gb=0.001,
-                container_executable="docker",
-                recording_provider=recording_provider,
-            )
-        )
-
-    assert recording_provider.finish_trace_path == trace_source
-    assert recording_provider.finish_trace_exists is True
 
 
 def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> None:
@@ -386,9 +224,21 @@ def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> No
     assert manifest["status"] == "error"
     assert manifest["result_summary"]["exit_code"] == 1
     assert "boom" in (manifest["result_summary"]["error"] or "")
+    timing = manifest["timing"]
+    assert timing["wall_total_s"] >= 0.0
+    assert timing["setup_s"] >= 0.0
+    assert timing["agent_exec_s"] >= 0.0
+    assert timing["teardown_s"] >= 0.0
+    assert (
+        abs(
+            timing["wall_total_s"]
+            - (timing["setup_s"] + timing["agent_exec_s"] + timing["teardown_s"])
+        )
+        < 1e-3
+    )
 
 
-def test_run_attempt_noncompleted_exit_status_writes_error_manifest(
+def test_run_attempt_max_iterations_writes_exhausted_manifest(
     tmp_path: Path,
 ) -> None:
     ctx = _make_ctx(tmp_path)
@@ -414,11 +264,44 @@ def test_run_attempt_noncompleted_exit_status_writes_error_manifest(
 
     assert result.success is False
     manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
-    assert manifest["status"] == "error"
+    assert manifest["status"] == "exhausted"
     assert manifest["result_summary"]["exit_code"] == 1
+    assert manifest["result_summary"]["exit_status"] == "max_iterations"
     assert manifest["result_summary"]["error"] == (
         "I reached the maximum number of tool call iterations."
     )
+
+
+def test_run_attempt_error_exit_status_writes_error_manifest(
+    tmp_path: Path,
+) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=False,
+            exit_status="tool_error",
+            trace_path=trace_source,
+            error="tool failed",
+        )
+
+    result = asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
+
+    assert result.success is False
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    assert manifest["status"] == "error"
+    assert manifest["result_summary"]["exit_code"] == 1
+    assert manifest["result_summary"]["exit_status"] == "tool_error"
+    assert manifest["result_summary"]["error"] == "tool failed"
 
 
 def test_run_attempt_supports_non_image_success_without_patch(
@@ -510,7 +393,9 @@ def test_run_attempt_waits_for_published_container_name_before_sampling(
     inspect_calls = {"count": 0}
     sampled: dict[str, str] = {}
 
-    def fake_container_is_inspectable(container_id: str, *, container_executable: str) -> bool:
+    def fake_container_is_inspectable(
+        container_id: str, *, container_executable: str
+    ) -> bool:
         inspect_calls["count"] += 1
         return inspect_calls["count"] >= 2
 
@@ -569,6 +454,83 @@ def test_run_attempt_waits_for_published_container_name_before_sampling(
     resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
     assert len(resources["samples"]) == 1
     assert resources["summary"]["sample_count"] == 1
+    assert resources["summary"]["monitoring_disabled"] is False
+    assert resources["summary"]["monitoring"]["status"] == "collected"
+
+
+def test_run_attempt_marks_enabled_no_samples_resources(tmp_path: Path) -> None:
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="hello-world",
+        attempt=1,
+        task={"instance_id": "hello-world"},
+        model="z-ai/glm-5.1",
+        scaffold="openclaw",
+        source_image=None,
+        prompt_template="default",
+        execution_environment="container",
+    )
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
+
+    resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
+    assert resources["samples"] == []
+    assert resources["summary"]["monitoring_disabled"] is False
+    assert resources["summary"]["monitoring"]["status"] == "enabled_no_samples"
+
+
+def test_run_attempt_marks_disabled_resources(tmp_path: Path) -> None:
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="hello-world",
+        attempt=1,
+        task={"instance_id": "hello-world"},
+        model="z-ai/glm-5.1",
+        scaffold="openclaw",
+        source_image=None,
+        prompt_template="default",
+        execution_environment="container",
+    )
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable=None,
+            disable_resource_monitoring=True,
+        )
+    )
+
+    resources = json.loads((ctx.attempt_dir / "resources.json").read_text())
+    assert resources["samples"] == []
+    assert resources["summary"]["monitoring_disabled"] is True
+    assert resources["summary"]["monitoring"]["status"] == "disabled"
 
 
 def test_run_attempt_disk_shortfall_aborts_early(tmp_path: Path) -> None:
@@ -642,16 +604,11 @@ def test_run_attempt_passes_container_executable_to_fixed_image(
 
 
 @pytest.mark.parametrize(
-    ("container_executable", "expected_user_args"),
-    [
-        ("docker", ["--user", f"{os.getuid()}:{os.getgid()}"]),
-        ("podman", ["--userns=keep-id"]),
-    ],
+    "container_executable",
+    ["docker", "podman"],
 )
-def test_start_task_container_uses_runtime_specific_user_args(
-    tmp_path: Path,
+def test_start_task_container_runs_as_root_without_host_home(
     container_executable: str,
-    expected_user_args: list[str],
 ) -> None:
     seen: dict[str, object] = {}
 
@@ -668,15 +625,18 @@ def test_start_task_container_uses_runtime_specific_user_args(
     assert container_id == "cid-1"
     assert seen["cmd"][:3] == [container_executable, "run", "-d"]
     assert "-e" in seen["cmd"]
-    assert f"HOME={os.environ.get('HOME', '/root')}" in seen["cmd"]
-    for arg in expected_user_args:
-        assert arg in seen["cmd"]
-    if container_executable == "docker":
-        assert "--userns=keep-id" not in seen["cmd"]
+    assert "HOME=/root" in seen["cmd"]
+    assert seen["cmd"].count("--user") == 1
+    user_index = seen["cmd"].index("--user")
+    assert seen["cmd"][user_index + 1] == "0:0"
+    assert "--userns=keep-id" not in seen["cmd"]
+    bootstrap_root = Path.home() / ".cache" / "task-container-bootstrap"
+    assert f"{bootstrap_root}:{bootstrap_root}" in seen["cmd"]
+    assert f"{Path.home()}:{Path.home()}" not in seen["cmd"]
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
-def test_start_task_container_can_use_image_default_user_without_host_home_mount(
+def test_start_task_container_restricts_home_and_path(
     container_executable: str,
 ) -> None:
     seen: dict[str, object] = {}
@@ -689,18 +649,107 @@ def test_start_task_container_can_use_image_default_user_without_host_home_mount
         container_id = start_task_container(
             "docker.io/swerebench/example:latest",
             executable=container_executable,
-            run_as_host_user=False,
-            mount_host_home=False,
-            container_home="/root",
         )
 
     cmd = seen["cmd"]
     assert container_id == "cid-1"
-    assert "--user" not in cmd
+    assert "--user" in cmd
+    user_index = cmd.index("--user")
+    assert cmd[user_index + 1] == "0:0"
     assert "--userns=keep-id" not in cmd
-    assert "-v" not in cmd
+    bootstrap_root = Path.home() / ".cache" / "task-container-bootstrap"
+    assert f"{bootstrap_root}:{bootstrap_root}" in cmd
+    assert f"{Path.home()}:{Path.home()}" not in cmd
     assert "HOME=/root" in cmd
-    assert "PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin" in cmd
+    # Host ~/.local/bin must NOT leak into the container PATH.
+    assert "PATH=/usr/local/bin:/usr/bin:/bin" in cmd
+    assert all("/.local/bin" not in str(part) for part in cmd)
+
+
+@pytest.mark.parametrize(
+    "forbidden_args",
+    [
+        ["--user", "1000:1000"],
+        ["-u", "1000:1000"],
+        ["-u1000:1000"],
+        ["-u=1000:1000"],
+        ["--user=1000:1000"],
+        ["--userns", "keep-id"],
+        ["--userns=keep-id"],
+    ],
+)
+def test_start_task_container_rejects_extra_args_that_override_user(
+    forbidden_args: list[str],
+) -> None:
+    with pytest.raises(ValueError, match="must not override container user"):
+        start_task_container(
+            "docker.io/swerebench/example:latest",
+            executable="docker",
+            extra_args=forbidden_args,
+        )
+
+
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_start_task_container_prepends_bootstrap_userbase_bin(
+    container_executable: str,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        bootstrap_root = Path.home() / ".cache" / "task-container-bootstrap"
+        bootstrap_bin = (
+            bootstrap_root
+            / "linux-amd64"
+            / "cache-key"
+            / "generation"
+            / ".pyuserbase"
+            / "bin"
+        )
+        start_task_container(
+            "img:latest",
+            executable=container_executable,
+            bootstrap_userbase_bin=str(bootstrap_bin),
+        )
+
+    cmd = seen["cmd"]
+    assert (
+        f"PATH={bootstrap_bin}:"
+        "/usr/local/bin:/usr/bin:/bin"
+    ) in cmd
+    assert (
+        f"PYTHONUSERBASE={bootstrap_bin.parent}" in cmd
+    )
+    assert "PIP_BREAK_SYSTEM_PACKAGES=1" in cmd
+    assert "-v" in cmd
+    assert f"{bootstrap_root}:{bootstrap_root}" in cmd
+    assert cmd.count(f"{bootstrap_root}:{bootstrap_root}") == 1
+    # Host ~/.local/bin still must not leak.
+    assert all("/.local/bin" not in str(part) for part in cmd)
+
+
+def test_start_task_container_rejects_unmounted_bootstrap_userbase_bin(
+    tmp_path: Path,
+) -> None:
+    bootstrap_bin = (
+        tmp_path
+        / "task-container-bootstrap"
+        / "linux-amd64"
+        / "cache-key"
+        / "generation"
+        / ".pyuserbase"
+        / "bin"
+    )
+
+    with pytest.raises(ValueError, match="bootstrap_userbase_bin must be inside"):
+        start_task_container(
+            "img:latest",
+            executable="docker",
+            bootstrap_userbase_bin=str(bootstrap_bin),
+        )
 
 
 def test_start_task_container_passes_through_network_env_when_present() -> None:
@@ -717,6 +766,14 @@ def test_start_task_container_passes_through_network_env_when_present() -> None:
         "NO_PROXY": "localhost,127.0.0.1",
         "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
         "TASK_CONTAINER_PIP_INDEX_URL": "https://mirror.example/simple",
+        "TASK_CONTAINER_PIP_EXTRA_INDEX_URL": "https://extra.example/simple",
+        "TASK_CONTAINER_PIP_TRUSTED_HOST": "mirror.example",
+        "TASK_CONTAINER_PIP_CERT": "/certs/pip.pem",
+        "TASK_CONTAINER_SSL_CERT_FILE": "/certs/ssl.pem",
+        "TASK_CONTAINER_HTTP_PROXY": "http://proxy.example:8080",
+        "TASK_CONTAINER_HTTPS_PROXY": "http://proxy.example:8443",
+        "TASK_CONTAINER_ALL_PROXY": "socks5://proxy.example:1080",
+        "TASK_CONTAINER_NO_PROXY": "localhost,127.0.0.1",
         "TASK_CONTAINER_APT_MIRROR": "https://mirror.example/debian",
         "TASK_CONTAINER_APT_SECURITY_MIRROR": "https://mirror.example/debian-security",
     }
@@ -746,6 +803,14 @@ def test_start_task_container_skips_empty_network_env() -> None:
         "NO_PROXY": "",
         "PIP_INDEX_URL": "",
         "TASK_CONTAINER_PIP_INDEX_URL": "",
+        "TASK_CONTAINER_PIP_EXTRA_INDEX_URL": "",
+        "TASK_CONTAINER_PIP_TRUSTED_HOST": "",
+        "TASK_CONTAINER_PIP_CERT": "",
+        "TASK_CONTAINER_SSL_CERT_FILE": "",
+        "TASK_CONTAINER_HTTP_PROXY": "",
+        "TASK_CONTAINER_HTTPS_PROXY": "",
+        "TASK_CONTAINER_ALL_PROXY": "",
+        "TASK_CONTAINER_NO_PROXY": "",
         "TASK_CONTAINER_APT_MIRROR": "",
         "TASK_CONTAINER_APT_SECURITY_MIRROR": "",
     }
@@ -802,11 +867,20 @@ def test_configure_task_container_apt_mirror_writes_debian_sources(
     with patch("subprocess.run", side_effect=fake_run):
         result = configure_task_container_apt_mirror("cid-1", executable="docker")
 
-    assert seen["cmd"] == ["docker", "exec", "-i", "cid-1", "/bin/sh", "-s"]
+    assert seen["cmd"] == [
+        "docker",
+        "exec",
+        "-i",
+        "--user",
+        "0:0",
+        "cid-1",
+        "/bin/sh",
+        "-s",
+    ]
     script = str(seen["input"])
     assert "TASK_CONTAINER_APT_MIRROR" not in script
     assert "main_mirror=https://mirror.example/debian" in script
-    assert "security_mirror=https://mirror.example/debian-security" in script
+    assert 'security_mirror="${main_mirror%/debian}/debian-security"' in script
     assert "URIs: $main_mirror" in script
     assert "URIs: $security_mirror" in script
     assert "Suites: $codename $codename-updates" in script
@@ -840,25 +914,36 @@ def test_configure_task_container_apt_mirror_rejects_unsafe_url(
     run.assert_not_called()
 
 
-def test_configure_task_container_apt_mirror_reports_unsupported_distro_skipped(
+def test_configure_task_container_apt_mirror_supports_ubuntu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("TASK_CONTAINER_APT_MIRROR", "https://mirror.example/debian")
+    seen: dict[str, object] = {}
+    monkeypatch.setenv("TASK_CONTAINER_APT_MIRROR", "https://mirror.example/ubuntu/")
+    monkeypatch.delenv("TASK_CONTAINER_APT_SECURITY_MIRROR", raising=False)
 
     def fake_run(cmd, **kwargs):
+        seen["input"] = kwargs["input"]
         return subprocess.CompletedProcess(
             cmd,
             0,
-            stdout="apt mirror skipped: unsupported distro: ubuntu\n",
+            stdout=(
+                "apt mirror configured: distro=ubuntu "
+                "main=https://mirror.example/ubuntu "
+                "security=https://mirror.example/ubuntu\n"
+            ),
             stderr="",
         )
 
     with patch("subprocess.run", side_effect=fake_run):
         result = configure_task_container_apt_mirror("cid-1", executable="docker")
 
+    script = str(seen["input"])
+    assert "ubuntu)" in script
+    assert 'components="main restricted universe multiverse"' in script
+    assert 'signed_by="/usr/share/keyrings/ubuntu-archive-keyring.gpg"' in script
     assert result is not None
-    assert result["configured"] == "false"
-    assert result["stdout"] == "apt mirror skipped: unsupported distro: ubuntu"
+    assert result["configured"] == "true"
+    assert result["security_mirror"] == "https://mirror.example/ubuntu"
 
 
 def test_stop_task_container_raises_when_container_still_exists() -> None:
@@ -893,11 +978,15 @@ def test_stop_task_container_tolerates_stop_error_when_rm_removes_container() ->
         if cmd[:2] == ["docker", "logs"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="logs\n", stderr="")
         if cmd[:2] == ["docker", "stop"]:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="already stopped")
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="already stopped"
+            )
         if cmd[:3] == ["docker", "rm", "-f"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
         if cmd[:2] == ["docker", "inspect"]:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="No such object")
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="No such object"
+            )
         raise AssertionError(f"unexpected command: {cmd}")
 
     with patch("subprocess.run", side_effect=fake_run):

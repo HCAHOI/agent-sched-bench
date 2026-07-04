@@ -19,7 +19,7 @@ from demo.gantt_viewer.backend.payload import (
     build_gantt_payload,
     build_gantt_payload_multi,
 )
-from trace_collect.trace_inspector import TraceData
+from trace_collect.trace_data import TraceData
 
 # ── Fixture builders ───────────────────────────────────────────────
 

@@ -50,7 +50,7 @@ def normalize_image_reference(image: str) -> str:
 
 
 def fixed_image_name_for(source_image: str) -> str:
-    return f"swebench-fixed-{_image_slug(source_image)}"
+    return f"swebench-fixed-root-{_image_slug(source_image)}"
 
 
 def _image_exists(image: str, executable: str) -> bool:
@@ -199,14 +199,9 @@ def _build_fixed_image(
     source_image: str,
     fixed_name: str,
     executable: str,
-    uid: int,
-    gid: int,
     image_platform: str | None,
 ) -> None:
-    """Commit a writable derivative with /testbed chowned to ``uid:gid``.
-
-    Implementation mirrors agentcgroup/scripts/run_swebench.py::_fix_permissions.
-    """
+    """Commit a writable derivative with /testbed owned by container root."""
     run_cmd = [executable, "run", "-d"]
     if image_platform:
         run_cmd.extend(["--platform", image_platform])
@@ -221,7 +216,7 @@ def _build_fixed_image(
                 container_id,
                 "chown",
                 "-R",
-                f"{uid}:{gid}",
+                "0:0",
                 "/testbed",
             ],
             check=True,
@@ -251,8 +246,6 @@ def ensure_fixed_image(
     source_image: str,
     *,
     container_executable: str,
-    host_uid: int | None = None,
-    host_gid: int | None = None,
     fixed_image_name: str | None = None,
     rebuild: bool = False,
 ) -> tuple[str, float]:
@@ -286,17 +279,12 @@ def ensure_fixed_image(
         )
         image_platform = _inspect_image_platform(source_image, container_executable)
 
-        uid = host_uid if host_uid is not None else os.getuid()
-        gid = host_gid if host_gid is not None else os.getgid()
-
         t0 = time.time()
         try:
             _build_fixed_image(
                 source_image,
                 fixed_name,
                 container_executable,
-                uid,
-                gid,
                 image_platform,
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:

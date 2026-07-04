@@ -1,8 +1,8 @@
 """Provider-agnostic LLM interface: dataclasses + `LLMProvider` ABC.
 
 This is the canonical home for the provider contract used across the
-repository (`UnifiedProvider`, `HFRecordingProvider`, and the OpenClaw agent
-loop all depend on it). It is a leaf module — only stdlib + `loguru` — so
+repository (`UnifiedProvider` and the OpenClaw agent loop depend on it).
+It is a leaf module — only stdlib + `loguru` — so
 importing it never pulls in `agents.openclaw` or any provider
 implementation, which keeps `llm_call` importable from any layer.
 

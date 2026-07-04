@@ -13,9 +13,7 @@ if [[ "$#" -gt 0 ]]; then
 fi
 
 "${PYTHON_BIN}" -m pytest \
-  tests/test_bootstrap.py \
-  tests/test_env1.py \
-  tests/test_env2.py \
-  tests/test_env3a.py \
-  tests/test_env3b.py \
-  tests/test_env3c.py
+  tests/test_llm_call_config.py \
+  tests/test_openclaw_minimal_install_contract.py \
+  tests/test_task_container_runtime.py \
+  tests/test_simulator_validation.py

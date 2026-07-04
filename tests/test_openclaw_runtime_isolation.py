@@ -108,6 +108,11 @@ def test_subagent_prompt_uses_runtime_skills_dir(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
     skills_dir = tmp_path / "rt" / "skills"
+    (skills_dir / "demo-skill").mkdir(parents=True)
+    (skills_dir / "demo-skill" / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: demo\n---\nskill body",
+        encoding="utf-8",
+    )
 
     provider = SimpleNamespace(get_default_model=lambda: "fake")
     manager = SubagentManager(
@@ -117,9 +122,13 @@ def test_subagent_prompt_uses_runtime_skills_dir(tmp_path: Path) -> None:
         max_tool_result_chars=1000,
         skills_dir=skills_dir,
     )
-    # The subagent prompt builder must not instantiate workspace-local skills.
+    # The subagent prompt builder must not instantiate or inject skills.
     prompt = manager._build_subagent_prompt()
     assert str(workspace / "skills") not in prompt
+    assert "## Skills" not in prompt
+    assert "demo-skill" not in prompt
+    assert "skill body" not in prompt
+    assert "native image content" not in prompt
     assert not (workspace / "skills").exists()
 
 
@@ -276,7 +285,7 @@ def test_terminal_bench_command_includes_runtime_dir() -> None:
             return Path("/tmp/agent_sched_bench-0.1.0-py3-none-any.whl")
 
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -478,3 +487,60 @@ def test_trace_metadata_records_runtime_dirs(tmp_path: Path) -> None:
     assert first["memory_dir"] == str(runtime_dir / "memory")
     assert first["skills_dir"] == str(runtime_dir / "skills")
     assert first["tool_results_dir"] == str(runtime_dir / "tool-results")
+
+
+def test_checkpoint_enabled_when_container_runtime_present(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    runtime_dir = tmp_path / "rt"
+
+    runner = SessionRunner(
+        provider=_ImmediateFinalProvider(),
+        model="fake-model",
+        max_iterations=1,
+        context_window_tokens=4096,
+        container_runtime={"id": "cid-1", "executable": "docker"},
+    )
+    result = asyncio.run(
+        runner.run(
+            prompt="done",
+            workspace=tmp_path / "ws",
+            session_key="cli:chk-test",
+            trace_file=trace_file,
+            runtime_dir=runtime_dir,
+        )
+    )
+
+    metadata = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
+    assert metadata["type"] == "trace_metadata"
+    assert "checkpoint_disabled_reason" not in metadata
+
+
+def test_checkpoint_enabled_when_tool_workspace_is_testbed_no_container(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    runtime_dir = tmp_path / "rt"
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+
+    runner = SessionRunner(
+        provider=_ImmediateFinalProvider(),
+        model="fake-model",
+        max_iterations=1,
+        context_window_tokens=4096,
+    )
+    result = asyncio.run(
+        runner.run(
+            prompt="done",
+            workspace=ws,
+            tool_workspace=Path("/testbed"),
+            session_key="cli:chk-testbed",
+            trace_file=trace_file,
+            runtime_dir=runtime_dir,
+        )
+    )
+
+    metadata = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
+    assert "checkpoint_disabled_reason" not in metadata

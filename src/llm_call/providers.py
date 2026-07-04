@@ -30,6 +30,10 @@ PROVIDERS: dict[str, ProviderDefinition] = {
         api_base="https://api.siliconflow.com/v1",
         env_key="SILICONFLOW_API_KEY",
     ),
+    "deepseek": ProviderDefinition(
+        api_base="https://api.deepseek.com",
+        env_key="DEEPSEEK_API_KEY",
+    ),
 }
 
 

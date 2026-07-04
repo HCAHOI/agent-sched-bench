@@ -3,6 +3,7 @@ import os
 import re
 import signal
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,70 @@ from agents.openclaw.tools.base import Tool
 
 
 MAX_EXEC_TOOL_TIMEOUT_SEC = 600
+_CONTAINER_TIMEOUT_MARKER_PREFIX = "__OPENCLAW_EXEC_WRAPPER_TIMEOUT__"
+_CONTAINER_EXEC_WRAPPER = """
+import os
+import signal
+import subprocess
+import sys
+
+command = sys.argv[1]
+timeout_s = float(sys.argv[2])
+timeout_marker = sys.argv[3]
+
+process = subprocess.Popen(
+    command,
+    shell=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    start_new_session=hasattr(os, "setsid"),
+)
+try:
+    stdout, stderr = process.communicate(timeout=timeout_s)
+except subprocess.TimeoutExpired:
+    pgid = None
+    if hasattr(os, "getpgid"):
+        try:
+            pgid = os.getpgid(process.pid)
+        except Exception:
+            pass
+
+    def terminate_group(sig):
+        try:
+            if pgid is not None and hasattr(os, "killpg"):
+                os.killpg(pgid, sig)
+            elif sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
+        except Exception:
+            pass
+
+    terminate_group(signal.SIGTERM)
+    try:
+        process.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        pass
+    terminate_group(signal.SIGKILL)
+    try:
+        process.communicate(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+    sys.stderr.buffer.write((timeout_marker + "\\n").encode())
+    raise SystemExit(124)
+
+if stdout:
+    sys.stdout.buffer.write(stdout)
+if stderr:
+    sys.stderr.buffer.write(stderr)
+returncode = process.returncode
+if returncode is None:
+    returncode = 1
+elif returncode < 0:
+    returncode = 128 + abs(returncode)
+raise SystemExit(returncode)
+"""
 
 
 class ExecTool(Tool):
@@ -24,9 +89,14 @@ class ExecTool(Tool):
         deny_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
+        *,
+        container_id: str | None = None,
+        container_executable: str | None = None,
+        container_default_cwd: str = "/testbed",
     ):
         self.timeout = timeout
         self.working_dir = working_dir
+        self.container_default_cwd = container_default_cwd
         self.deny_patterns = deny_patterns or [
             r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",  # del /f, del /q
@@ -40,6 +110,8 @@ class ExecTool(Tool):
         ]
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
+        self._container_id = container_id
+        self._container_executable = container_executable
 
     @property
     def name(self) -> str:
@@ -89,13 +161,108 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        in_container = bool(self._container_id and self._container_executable)
+        # Guard must evaluate paths in the namespace the command runs in.
+        cwd = (
+            (working_dir or self.container_default_cwd)
+            if in_container
+            else (working_dir or self.working_dir or os.getcwd())
+        )
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
 
         effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
 
+        # Container mode: redirect through docker exec
+        if in_container:
+            return await self._execute_in_container(
+                command=command,
+                working_dir=working_dir,
+                timeout=effective_timeout,
+            )
+
+        # Local execution via subprocess
+        return await self._execute_locally(
+            command=command,
+            cwd=cwd,
+            effective_timeout=effective_timeout,
+        )
+
+    async def _execute_in_container(
+        self,
+        command: str,
+        working_dir: str | None = None,
+        timeout: int | None = None,
+    ) -> str:
+        cwd = working_dir or self.container_default_cwd
+        effective_timeout = timeout or self._DEFAULT_TIMEOUT
+        try:
+            # Run timeout enforcement inside the container so descendants
+            # of the shell command are killed before checkpoint capture.
+            timeout_marker = f"{_CONTAINER_TIMEOUT_MARKER_PREFIX}{uuid.uuid4().hex}"
+            proc = await asyncio.create_subprocess_exec(
+                self._container_executable,
+                "exec",
+                "-i",
+                "-w", cwd,
+                self._container_id,
+                "python3",
+                "-c",
+                _CONTAINER_EXEC_WRAPPER,
+                command,
+                str(effective_timeout),
+                timeout_marker,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=effective_timeout + 60,
+                )
+            except asyncio.TimeoutError:
+                # Last resort: the container-side wrapper should normally
+                # enforce the timeout and clean up its process group first.
+                try:
+                    proc.kill()
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                    pass
+                return f"Error: Command timed out after {effective_timeout} seconds"
+
+            output_parts = []
+            if stdout:
+                output_parts.append(stdout.decode("utf-8", errors="replace"))
+            if stderr:
+                stderr_text = stderr.decode("utf-8", errors="replace")
+                if (
+                    proc.returncode == 124
+                    and timeout_marker in stderr_text.splitlines()
+                ):
+                    return f"Error: Command timed out after {effective_timeout} seconds"
+                if stderr_text.strip():
+                    output_parts.append(f"STDERR:\n{stderr_text}")
+            output_parts.append(f"\nExit code: {proc.returncode}")
+            result = "\n".join(output_parts) if output_parts else "(no output)"
+
+            max_len = self._MAX_OUTPUT
+            if len(result) > max_len:
+                half = max_len // 2
+                result = (
+                    result[:half]
+                    + f"\n\n... ({len(result) - max_len:,} chars truncated) ...\n\n"
+                    + result[-half:]
+                )
+            return result
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    async def _execute_locally(
+        self,
+        command: str,
+        cwd: str,
+        effective_timeout: int,
+    ) -> str:
         env = os.environ.copy()
         if self.path_append:
             env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append

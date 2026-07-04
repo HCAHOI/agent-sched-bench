@@ -14,47 +14,48 @@ from agents.benchmarks.base import BenchmarkConfig
 from trace_collect.collector import collect_traces
 
 
-def _make_verified_config() -> BenchmarkConfig:
+def _make_rebench_config() -> BenchmarkConfig:
     return BenchmarkConfig(
-        slug="swe-bench-verified",
-        display_name="SWE-Bench Verified",
-        harness_dataset="princeton-nlp/SWE-bench_Verified",
-        harness_split="test",
-        data_root=Path("data/swebench_verified"),
-        repos_root=Path("data/swebench_repos"),
-        trace_root=Path("traces/swebench_verified"),
+        slug="swe-rebench",
+        display_name="SWE-rebench (filtered)",
+        harness_dataset="nebius/SWE-rebench",
+        harness_split="filtered",
+        data_root=Path("data/swe-rebench"),
+        repos_root=Path("data/swe-rebench/repos"),
+        trace_root=Path("traces/swe-rebench"),
         default_max_iterations=100,
         selection_n=32,
         selection_seed=42,
-        default_prompt_template="default",
+        default_prompt_template="cc_aligned",
     )
 
 
-def test_swe_bench_verified_openclaw_uses_task_container_agent() -> None:
-    plugin = get_benchmark_class("swe-bench-verified")(_make_verified_config())
+def test_swe_rebench_openclaw_uses_host_agent_docker_tools() -> None:
+    plugin = get_benchmark_class("swe-rebench")(_make_rebench_config())
 
-    assert plugin.runtime_mode_for("openclaw") == "task_container_agent"
+    assert plugin.runtime_mode_for("openclaw") == "host_agent_docker_tools"
 
 
-def test_swe_bench_verified_rejects_unsupported_scaffold() -> None:
-    plugin = get_benchmark_class("swe-bench-verified")(_make_verified_config())
+def test_swe_rebench_rejects_unsupported_scaffold() -> None:
+    plugin = get_benchmark_class("swe-rebench")(_make_rebench_config())
 
     with pytest.raises(NotImplementedError):
         plugin.runtime_mode_for("unsupported")
 
 
-def test_swe_bench_verified_normalize_task_derives_image_name() -> None:
-    plugin = get_benchmark_class("swe-bench-verified")(_make_verified_config())
+def test_swe_rebench_normalize_task_pins_docker_image() -> None:
+    plugin = get_benchmark_class("swe-rebench")(_make_rebench_config())
 
     normalized = plugin.normalize_task(
         {
-            "instance_id": "Kinto__kinto-http.py-384",
-            "FAIL_TO_PASS": "[]",
+            "instance_id": "encode__httpx-2701",
+            "FAIL_TO_PASS": ["tests/test_bug.py::test_fix"],
+            "docker_image": "swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest",
         }
     )
 
     assert normalized["image_name"] == (
-        "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+        "swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest"
     )
 
 
@@ -128,6 +129,7 @@ def test_collect_traces_supports_host_controller_runner(
             default_prompt_template="default",
             trace_root=tmp_path / "traces",
             harness_split=None,
+            selection_seed=42,
         ),
         image_name_for=lambda task: None,
     )

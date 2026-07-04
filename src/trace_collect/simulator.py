@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import hashlib
 import json
 import logging
+import multiprocessing
+import os
 import subprocess
 import shutil
 import time
 import uuid
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import BrokenBarrierError
 from typing import Any
 
 import yaml
@@ -29,12 +34,10 @@ from harness.container_stats_sampler import (
     ContainerStatsSampler,
     summarize_samples,
 )
-from harness.gpu_resource_sampler import GpuResourceSampler
-from harness.metrics_client import VLLMMetricsClient
-from harness.scheduler_hooks import GpuBaseline
 from harness.trace_logger import TraceLogger
-from llm_call import create_async_openai_client
 from trace_collect import attempt_layout
+from trace_collect.resource_timeline import valid_resource_timeline
+from trace_collect.monitoring import MonitoringMode, resolve_simulate_monitoring
 from trace_collect.attempt_pipeline import (
     configure_task_container_apt_mirror,
     next_attempt_number_in,
@@ -42,9 +45,12 @@ from trace_collect.attempt_pipeline import (
     start_task_container,
     stop_task_container,
 )
-
 logger = logging.getLogger(__name__)
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
+_DEFAULT_PREP_CONCURRENCY = 20
+_SHARED_SEMAPHORE_POLL_S = 0.05
+_REPLAY_START_DELAY_S = 0.1
+_CHECKPOINT_CAS_ROOT = os.path.expanduser("~/.cache/agent-checkpoint-cas")
 
 
 class SimulateError(Exception):
@@ -80,26 +86,35 @@ class ReplayTaskStats:
     failed_action_count: int = 0
 
 
-def validate_gpu_tracking_args(args: Any) -> None:
-    """Validate GPU tracking CLI args. Raises ValueError with a clear message on failure.
+@dataclass(frozen=True, slots=True)
+class LLMTimingConfig:
+    """LLM duration model for cloud replay."""
 
-    Designed to be called from _run_simulate before any work begins,
-    so failures are fast and explicit (CLAUDE.md no-silent-fallback rule).
-    """
-    if args.gpu_tracking != "on":
-        return
+    mode: str = "source_scaled"
+    ttft_ms: float | None = None
+    tpot_ms: float | None = None
 
-    if args.mode == "cloud_model":
-        raise ValueError("--gpu-tracking on is forbidden in cloud_model mode")
 
-    if not args.metrics_url:
-        raise ValueError("--gpu-tracking on requires --metrics-url")
+@dataclass(frozen=True, slots=True)
+class SleepDrift:
+    """Expected-vs-observed asyncio sleep timing for replay diagnostics."""
 
-    if args.vllm_pid is None:
-        raise ValueError("--gpu-tracking on requires --vllm-pid")
+    phase: str
+    expected_s: float
+    actual_s: float
 
-    if args.vllm_startup_log is None:
-        raise ValueError("--gpu-tracking on requires --vllm-startup-log")
+    @property
+    def drift_s(self) -> float:
+        return self.actual_s - self.expected_s
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "phase": self.phase,
+            "expected_s": round(self.expected_s, 6),
+            "actual_s": round(self.actual_s, 6),
+            "drift_s": round(self.drift_s, 6),
+            "drift_ms": round(self.drift_s * 1000.0, 3),
+        }
 
 
 @dataclass(slots=True)
@@ -125,6 +140,29 @@ class LoadedTraceSession:
         return self.run_instance_id
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerTraceInput:
+    """Picklable replay input for a subprocess worker."""
+
+    source_trace: str
+    task_source: str
+    manifest_index: int
+    docker_image_override: str | None
+    label: str | None
+    run_instance_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerReplayResult:
+    """One subprocess worker's replay outputs."""
+
+    wave_index: int
+    worker_index: int
+    trace_file: str
+    task_stats: list[ReplayTaskStats]
+    task_output_dirs: dict[str, str]
+
+
 @dataclass(slots=True)
 class PreparedContainer:
     """Container prepared for trace replay."""
@@ -147,6 +185,9 @@ class PreparedTraceSession:
     sampler: ContainerStatsSampler | None = None
     task_output_dir: Path | None = None
     resources_written: bool = False
+    resource_monitoring_enabled: bool = True
+    memory_bandwidth_enabled: bool = True
+    monitoring_policy: dict[str, object] | None = None
     runtime_artifact_root_map: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
@@ -258,39 +299,6 @@ def _exception_payload(exc: BaseException) -> dict[str, str]:
     }
 
 
-async def _call_local_model_streaming(
-    client: Any,
-    model: str,
-    messages: list[dict[str, Any]],
-    n_tokens: int,
-) -> tuple[float, float, float]:
-    """Send *messages* to the local model and force exactly *n_tokens* of output.
-
-    Returns:
-        (ttft_ms, tpot_ms, total_latency_ms)
-    """
-    t0 = time.monotonic()
-    first_token_ts: float | None = None
-
-    stream = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=n_tokens,
-        stream=True,
-        temperature=0.0,
-        extra_body={"min_tokens": n_tokens},
-    )
-    async for chunk in stream:
-        if first_token_ts is None and chunk.choices and chunk.choices[0].delta.content:
-            first_token_ts = time.monotonic()
-
-    t_end = time.monotonic()
-    total_ms = (t_end - t0) * 1000
-    ttft_ms = (first_token_ts - t0) * 1000 if first_token_ts else total_ms
-    gen_ms = total_ms - ttft_ms
-    tpot_ms = gen_ms / max(1, n_tokens - 1) if n_tokens > 1 else 0.0
-    return ttft_ms, tpot_ms, total_ms
-
 
 async def _exec_tool(
     agent: Any,
@@ -299,33 +307,57 @@ async def _exec_tool(
     command_timeout_s: float,
     source_exec_timeout_s: float | None = None,
     allow_source_runtime_artifacts: bool = False,
-) -> tuple[str, float, bool]:
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[str, float, bool, dict[str, Any]]:
     """Execute one source-trace tool call via the persistent container agent.
 
     Returns:
-        (tool_result, tool_duration_ms, tool_success)
+        (tool_result, tool_duration_ms, tool_success, replay_metadata)
     """
-    from trace_collect.openclaw_tools import execute_trace_tool
+    from trace_collect.openclaw_tools import execute_trace_tool_detailed
 
     t0 = time.monotonic()
-    tool_result, tool_success, inner_duration_ms = await execute_trace_tool(
+    (
+        tool_result,
+        tool_success,
+        inner_duration_ms,
+        tool_metadata,
+    ) = await execute_trace_tool_detailed(
         agent=agent,
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         command_timeout_s=command_timeout_s,
         source_exec_timeout_s=source_exec_timeout_s,
         allow_source_runtime_artifacts=allow_source_runtime_artifacts,
+        source_resource_timeline=source_resource_timeline,
     )
     wall_duration_ms = (time.monotonic() - t0) * 1000
     # Prefer agent-side timing to exclude pipe transfer overhead
     duration_ms = inner_duration_ms if inner_duration_ms is not None else wall_duration_ms
-    return tool_result, duration_ms, tool_success
+    return tool_result, duration_ms, tool_success, tool_metadata
+
+
+def _unpack_exec_tool_result(
+    result: tuple[Any, ...],
+) -> tuple[str, float, bool, dict[str, Any]]:
+    if len(result) == 3:
+        tool_result, duration_ms, tool_success = result
+        return str(tool_result), float(duration_ms), bool(tool_success), {}
+    if len(result) == 4:
+        tool_result, duration_ms, tool_success, metadata = result
+        return (
+            str(tool_result),
+            float(duration_ms),
+            bool(tool_success),
+            metadata if isinstance(metadata, dict) else {},
+        )
+    raise ValueError(f"unexpected _exec_tool result shape: {len(result)}")
 
 
 def _group_actions_by_iteration(
     actions: list[dict[str, Any]],
 ) -> dict[int, dict[str, Any]]:
-    """Group loaded trace actions into the local-model iteration shape."""
+    """Group loaded trace actions into per-iteration replay buckets."""
 
     iterations: dict[int, dict[str, Any]] = {}
     for action in actions:
@@ -360,25 +392,123 @@ def _command_exit_code(tool_result: str) -> int | None:
     except ValueError:
         return None
 
+def _compute_output_diff_snippet(
+    source: str,
+    replay: str,
+    *,
+    max_lines: int = 5,
+    context_lines: int = 1,
+    max_line_chars: int = 240,
+) -> str | None:
+    """Return a bounded unified-diff-style snippet of the first raw divergence."""
+    if source == replay:
+        return None
 
-def _tool_uses_exec_semantics(tool_name: str | None, tool_args_json: Any) -> bool:
-    if tool_name == "exec":
-        return True
+    line_limit = max(0, max_line_chars)
+
+    def truncate_line(line: str) -> str:
+        if len(line) <= line_limit:
+            return line
+        omitted = len(line) - line_limit
+        return f"{line[:line_limit]}...<truncated {omitted} chars>"
+
+    source_lines = source.splitlines()
+    replay_lines = replay.splitlines()
+    total_lines = max(len(source_lines), len(replay_lines))
+    for i in range(total_lines):
+        source_line = source_lines[i] if i < len(source_lines) else "<missing>"
+        replay_line = replay_lines[i] if i < len(replay_lines) else "<missing>"
+        if source_line == replay_line:
+            continue
+        start = max(0, i - context_lines)
+        end = min(total_lines, i + max_lines)
+        snippet: list[str] = []
+        for j in range(start, end):
+            s = source_lines[j] if j < len(source_lines) else "<missing>"
+            r = replay_lines[j] if j < len(replay_lines) else "<missing>"
+            if s == r:
+                snippet.append(f"  {truncate_line(s)}")
+            else:
+                snippet.append(f"- {truncate_line(s)}")
+                snippet.append(f"+ {truncate_line(r)}")
+        return "\n".join(snippet)
+
+    return "raw output differs without line-content difference"
+
+
+def _exec_semantics_payload(
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> dict[str, Any] | None:
     if isinstance(tool_args_json, str):
         try:
             parsed = json.loads(tool_args_json or "{}")
         except json.JSONDecodeError:
-            return False
+            return None
     elif isinstance(tool_args_json, dict):
         parsed = tool_args_json
     else:
-        return False
+        return None
     if not isinstance(parsed, dict):
-        return False
+        return None
+    if tool_name == "exec" and isinstance(parsed, dict):
+        return parsed.get("exec") if isinstance(parsed.get("exec"), dict) else parsed
     payload = parsed.get("exec") if isinstance(parsed.get("exec"), dict) else parsed
+    return payload if isinstance(payload, dict) else None
+
+
+def _tool_uses_exec_semantics(tool_name: str | None, tool_args_json: Any) -> bool:
+    if tool_name == "exec":
+        payload = _exec_semantics_payload(tool_name, tool_args_json)
+        return payload is None or "command" in payload or "commands" in payload
+    payload = _exec_semantics_payload(tool_name, tool_args_json)
     return isinstance(payload, dict) and (
         "command" in payload or "commands" in payload
     )
+
+
+def _tool_uses_single_exec_command_semantics(
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> bool:
+    payload = _exec_semantics_payload(tool_name, tool_args_json)
+    if payload is None:
+        return False
+    return "command" in payload and "commands" not in payload
+
+
+def _tool_mismatch_reason(
+    *,
+    source_success: bool,
+    tool_success: bool,
+    replay_source: str,
+    source_tool_result: Any,
+    replay_tool_result: Any,
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> str | None:
+    if replay_source == "source_artifact_unavailable":
+        return "source_artifact_unavailable"
+    uses_exec_semantics = _tool_uses_exec_semantics(tool_name, tool_args_json)
+    source_timeout = False
+    replay_timeout = False
+    if uses_exec_semantics:
+        source_timeout = _tool_result_indicates_wrapper_timeout(source_tool_result)
+        replay_timeout = _tool_result_indicates_wrapper_timeout(replay_tool_result)
+        if source_timeout != replay_timeout:
+            return "timeout_mismatch"
+    if source_success != tool_success:
+        return "tool_success_mismatch"
+    if uses_exec_semantics:
+        source_exit = _command_exit_code(str(source_tool_result or ""))
+        replay_exit = _command_exit_code(str(replay_tool_result or ""))
+        if (
+            source_exit is not None
+            and replay_exit is not None
+            and source_exit != replay_exit
+        ):
+            return "command_exit_code_mismatch"
+    return None
 
 
 def _command_metadata(
@@ -401,11 +531,20 @@ def _command_metadata(
 
 
 def _is_replay_wrapper_timeout_result(tool_result: str) -> bool:
-    for line in tool_result.splitlines():
-        if not line.strip():
-            continue
-        return line.strip() == "[timeout]"
-    return False
+    timeout_markers = {
+        "[timeout]",
+        "[resource_timeout]",
+        "[resource_stall_timeout]",
+    }
+    return any(line.strip() in timeout_markers for line in tool_result.splitlines())
+
+
+def _tool_result_indicates_wrapper_timeout(tool_result: Any) -> bool:
+    text = str(tool_result or "")
+    return (
+        "Error: Command timed out after " in text
+        or _is_replay_wrapper_timeout_result(text)
+    )
 
 
 def _source_exec_timeout_s(
@@ -455,6 +594,737 @@ def _artifact_unavailable_result(source_path: str) -> str:
         "that is unavailable in the simulator runtime: "
         f"{source_path}"
     )
+
+
+def _checkpoint_after_spec(
+    *,
+    action_data: dict[str, Any],
+    source_trace: Path,
+) -> dict[str, Any] | None:
+    raw = action_data.get("checkpoint_after")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        spec: dict[str, Any] = {"path": raw}
+    elif isinstance(raw, dict):
+        spec = dict(raw)
+    else:
+        return None
+    raw_path = spec.get("path")
+    if not raw_path:
+        return None
+    checkpoint_path = Path(str(raw_path))
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = source_trace.parent / checkpoint_path
+    restore_root = str(spec.get("root") or "/testbed")
+    if restore_root != "/testbed":
+        return None
+    spec["path"] = str(checkpoint_path)
+    kind = str(spec.setdefault("kind", "cas_manifest"))
+    if "incremental" not in spec:
+        spec["incremental"] = kind in {
+            "cas_manifest_incremental",
+        }
+    spec["root"] = restore_root
+    return spec
+
+
+def _copy_checkpoint_archive_to_container(
+    *,
+    checkpoint_path: Path,
+    container_id: str,
+    container_executable: str,
+    container_archive_path: str,
+) -> None:
+    _run_checked_container_command(
+        [
+            container_executable,
+            "cp",
+            str(checkpoint_path.resolve()),
+            f"{container_id}:{container_archive_path}",
+        ],
+        timeout=600,
+    )
+
+
+def _restore_cas_manifest_in_container(
+    *,
+    container_id: str,
+    container_executable: str,
+    container_manifest_path: str,
+    restore_root: str,
+    clear_root: bool = True,
+) -> None:
+    """Restore files from a CAS manifest inside the task container.
+
+    The manifest JSON was copied into the container at *container_manifest_path*.
+    Blobs are read from the host-mounted CAS store.
+    """
+    script = r'''
+import json, os, shutil, stat
+manifest_path = os.environ["CAS_MANIFEST_PATH"]
+cas_root = os.environ["CAS_ROOT"]
+root = os.path.abspath(os.environ["CHECKPOINT_ROOT"])
+clear_root = os.environ.get("CHECKPOINT_CLEAR_ROOT") == "1"
+if os.path.lexists(root):
+    if os.path.islink(root):
+        os.unlink(root)
+        os.makedirs(root, exist_ok=True)
+    elif not os.path.isdir(root):
+        os.unlink(root)
+        os.makedirs(root, exist_ok=True)
+else:
+    os.makedirs(root, exist_ok=True)
+root_real = os.path.realpath(root)
+if root_real != root:
+    raise RuntimeError(f"checkpoint root symlinks are unsupported: {root}")
+
+with open(manifest_path, "r") as f:
+    manifest = json.load(f)
+
+entries = manifest.get("entries", {})
+deleted = manifest.get("deleted_paths", [])
+if not isinstance(entries, dict):
+    raise RuntimeError("checkpoint manifest missing 'entries' dict")
+if not isinstance(deleted, list):
+    raise RuntimeError("checkpoint manifest has invalid 'deleted_paths'")
+
+created_dirs = set()
+
+def safe_target(relpath):
+    if not isinstance(relpath, str) or relpath == "":
+        raise RuntimeError(f"unsafe checkpoint path: {relpath}")
+    if os.path.isabs(relpath) or ".." in relpath.split(os.sep):
+        raise RuntimeError(f"unsafe checkpoint path: {relpath}")
+    target = os.path.abspath(os.path.join(root, relpath))
+    if target == root or not target.startswith(root + os.sep):
+        raise RuntimeError(f"unsafe checkpoint path: {relpath}")
+    return target
+
+def ensure_parent_dir(target):
+    parent = os.path.dirname(target)
+    rel_parent = os.path.relpath(parent, root)
+    current = root
+    if rel_parent == ".":
+        return
+    for part in rel_parent.split(os.sep):
+        current = os.path.join(current, part)
+        if os.path.lexists(current):
+            if os.path.islink(current) or not os.path.isdir(current):
+                raise RuntimeError(f"unsafe checkpoint parent path: {current}")
+        else:
+            os.mkdir(current)
+            created_dirs.add(current)
+
+for relpath in list(entries) + deleted:
+    safe_target(relpath)
+
+if clear_root:
+    for name in os.listdir(root):
+        path = os.path.join(root, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+else:
+    for del_path in sorted(deleted, key=lambda p: p.count(os.sep), reverse=True):
+        target = safe_target(del_path)
+        if os.path.lexists(target):
+            if os.path.isdir(target) and not os.path.islink(target):
+                shutil.rmtree(target)
+            else:
+                os.unlink(target)
+
+for relpath, entry in entries.items():
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"invalid checkpoint manifest entry: {relpath}")
+    hash_val = entry["hash"]
+    blob_path = os.path.join(cas_root, "blobs", hash_val[:2], hash_val[2:])
+    with open(blob_path, "rb") as f:
+        content = f.read()
+    target = safe_target(relpath)
+    ensure_parent_dir(target)
+    if os.path.lexists(target):
+        if os.path.islink(target):
+            raise RuntimeError(f"checkpoint target symlinks are unsupported: {relpath}")
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        elif not stat.S_ISREG(os.stat(target).st_mode):
+            raise RuntimeError(f"checkpoint special targets are unsupported: {relpath}")
+    with open(target, "wb") as f:
+        f.write(content)
+    os.chmod(target, entry.get("mode", 0o644))
+    mtime_ns = entry.get("mtime_ns")
+    if mtime_ns is not None:
+        try:
+            os.utime(target, ns=(mtime_ns, mtime_ns))
+        except OSError:
+            pass
+if not os.path.isdir(root):
+    raise RuntimeError(f"checkpoint root missing after restore: {root}")
+if os.path.exists(manifest_path):
+    os.unlink(manifest_path)
+'''
+    _run_checked_container_command(
+        [
+            container_executable,
+            "exec",
+            "-e",
+            f"CAS_MANIFEST_PATH={container_manifest_path}",
+            "-e",
+            "CAS_ROOT=" + _CHECKPOINT_CAS_ROOT,
+            "-e",
+            f"CHECKPOINT_ROOT={restore_root}",
+            "-e",
+            f"CHECKPOINT_CLEAR_ROOT={'1' if clear_root else '0'}",
+            container_id,
+            "python3",
+            "-c",
+            script,
+        ],
+        timeout=600,
+    )
+
+
+def _capture_snapshot_manifest(
+    *,
+    container_id: str,
+    container_executable: str,
+    root: str = "/testbed",
+    previous_manifest: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Walk /testbed inside a live container, return {relpath: sha256hex}.
+
+    When *previous_manifest* is provided, uses ``find -newer`` with a
+    marker file inside the container to only hash files changed since
+    the last snapshot. Unchanged files are inherited from the previous
+    manifest. A full ``all_paths`` listing (stat only, no hash) is always
+    collected for deletion detection.
+
+    Marker protocol (race-resistant):
+      1. touch temp_marker (capture start timestamp)
+      2. find -newer old_marker → hash changed files
+      3. walk full tree for all_paths (stat only)
+      4. rename temp_marker → old_marker (atomic success signal)
+
+    Skips .git directory. Uses same hash convention as _write_cas_manifest.
+    Returns None on any error (logged as warning), ``{}`` on successful
+    capture of an empty tree — caller must use ``is not None`` to
+    distinguish failure from empty success.
+    """
+    import json as _json_module
+
+
+    if previous_manifest is not None:
+        script = r"""
+import hashlib, json, os, stat, subprocess
+
+root = os.environ.get("SNAPSHOT_ROOT", "/testbed")
+marker = "/tmp/.cas_marker"
+temp_marker = "/tmp/.cas_marker_new"
+
+# Record capture start timestamp
+subprocess.run(["touch", temp_marker], capture_output=True)
+
+# Find files changed since last snapshot
+result = subprocess.run(
+    ["find", root, "-newer", marker, "-type", "f"],
+    capture_output=True, text=True, timeout=30,
+)
+changed = None  # None = find-not-run-or-failed -> full hash
+if result.returncode == 0:
+    changed = set()
+    for p in result.stdout.strip().splitlines():
+        if not p:
+            continue
+        parts = p.split(os.sep)
+        if ".git" in parts:
+            continue
+        rel = os.path.relpath(p, root)
+        changed.add(rel)
+else:
+    # find failed — fall back to full hash (changed stays None)
+    pass
+
+entries = {}
+all_paths = []
+skip_dirs = {".git"}
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+    dirnames.sort()
+    filenames.sort()
+    for fname in filenames:
+        fpath = os.path.join(dirpath, fname)
+        try:
+            st = os.lstat(fpath)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        rel = os.path.relpath(fpath, root)
+        all_paths.append(rel)
+        if changed is not None and rel not in changed:
+            continue
+        try:
+            with open(fpath, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            continue
+        entries[rel] = digest
+
+os.rename(temp_marker, marker)
+print(json.dumps({"entries": entries, "all_paths": all_paths}))
+"""
+    else:
+        script = r"""
+import hashlib, json, os, stat, subprocess
+
+root = os.environ.get("SNAPSHOT_ROOT", "/testbed")
+marker = "/tmp/.cas_marker"
+temp_marker = "/tmp/.cas_marker_new"
+
+# Record capture start timestamp (sets baseline for next incremental)
+subprocess.run(["touch", temp_marker], capture_output=True)
+
+entries = {}
+all_paths = []
+skip_dirs = {".git"}
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+    dirnames.sort()
+    filenames.sort()
+    for fname in filenames:
+        fpath = os.path.join(dirpath, fname)
+        try:
+            st = os.lstat(fpath)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        rel = os.path.relpath(fpath, root)
+        all_paths.append(rel)
+        try:
+            with open(fpath, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            continue
+        entries[rel] = digest
+
+os.rename(temp_marker, marker)
+print(json.dumps({"entries": entries, "all_paths": all_paths}))
+"""
+    result = subprocess.run(
+        [container_executable, "exec", "-i", container_id, "python3", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "Snapshot manifest failed (cid=%s): %s",
+            container_id[:12],
+            (result.stderr or result.stdout).strip()[:200],
+        )
+        return None
+    try:
+        delta = _json_module.loads(result.stdout.strip())
+    except (_json_module.JSONDecodeError, ValueError) as exc:
+        logger.warning("Snapshot manifest parse error: %s", exc)
+        return None
+
+    delta_entries: dict[str, str] = delta.get("entries", {})
+    all_paths: list[str] = delta.get("all_paths", [])
+
+    if previous_manifest is not None:
+        merged = dict(previous_manifest)
+        merged.update(delta_entries)
+        all_paths_set = set(all_paths)
+        for path in list(merged):
+            if path not in all_paths_set:
+                del merged[path]
+        return merged
+
+    if not delta_entries and all_paths:
+        return {}
+    return delta_entries
+
+
+def _cas_manifest_comparison_fields(
+    *,
+    source_entries: dict[str, str],
+    replay_entries: dict[str, str],
+) -> dict[str, Any]:
+    source_keys = set(source_entries.keys())
+    replay_keys = set(replay_entries.keys())
+    common = source_keys & replay_keys
+    modified = [k for k in common if source_entries[k] != replay_entries[k]]
+    added = sorted(replay_keys - source_keys)
+    removed = sorted(source_keys - replay_keys)
+    fields: dict[str, Any] = {
+        "cas_manifest_match": not modified and not removed and not added,
+        "cas_source_entries": len(source_entries),
+        "cas_replay_entries": len(replay_entries),
+        "cas_modified_count": len(modified),
+        "cas_added_count": len(added),
+        "cas_removed_count": len(removed),
+    }
+    if modified:
+        fields["cas_modified_examples"] = modified[:10]
+    return fields
+
+
+def _fold_source_checkpoint_entries(
+    *,
+    checkpoint_spec: dict[str, Any],
+    prev_folded: dict[str, str],
+) -> dict[str, str]:
+    """Fold a source checkpoint spec into the accumulated entries state.
+
+    For full checkpoints (``cas_manifest_full`` or ``filesystem_tar``),
+    replaces *prev_folded* entirely. For incremental CAS manifests, updates
+    *prev_folded* with the new entries and removes entries listed in
+    ``deleted_paths``.
+    """
+    manifest_path = Path(checkpoint_spec["path"])
+    if not manifest_path.is_file():
+        return prev_folded
+
+    is_incremental = _checkpoint_spec_is_incremental(checkpoint_spec)
+
+    # filesystem_tar: treat as full replacement
+    if manifest_path.suffix != ".json":
+        entries = _load_source_manifest_entries(str(manifest_path))
+        return entries if entries is not None else prev_folded
+
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return prev_folded
+
+    raw_entries = data.get("entries", {})
+    if not isinstance(raw_entries, dict):
+        return prev_folded
+
+    entries = {
+        rel: entry["hash"]
+        for rel, entry in raw_entries.items()
+        if isinstance(entry, dict) and "hash" in entry
+    }
+
+    if not is_incremental:
+        return entries
+
+    folded = dict(prev_folded)
+    folded.update(entries)
+    deleted = data.get("deleted_paths", [])
+    if isinstance(deleted, list):
+        for dpath in deleted:
+            folded.pop(dpath, None)
+    return folded
+
+
+def _load_source_manifest_entries(manifest_path: str) -> dict[str, str] | None:
+    """Load source checkpoint entries, return {relpath: sha256hex} or None.
+
+    Handles both CAS manifest (JSON with ``entries`` dict) and
+    ``filesystem_tar`` checkpoints. For tars, extracts files and hashes them.
+    """
+    mpath = Path(manifest_path)
+    if not mpath.is_file():
+        return None
+
+    # CAS manifest (JSON)
+    if mpath.suffix == ".json":
+        try:
+            data = json.loads(mpath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug("Failed to load source manifest %s: %s", manifest_path, exc)
+            return None
+        entries = data.get("entries", {})
+        if not isinstance(entries, dict):
+            return None
+        result = {
+            rel: entry["hash"]
+            for rel, entry in entries.items()
+            if isinstance(entry, dict) and "hash" in entry
+        }
+        # Remove entries for paths that were deleted between checkpoints.
+        deleted = data.get("deleted_paths", [])
+        if isinstance(deleted, list):
+            for dpath in deleted:
+                result.pop(dpath, None)
+        return result
+
+    # filesystem_tar — read archive, hash files
+    import tarfile as _tarfile_mod
+    try:
+        entries: dict[str, str] = {}
+        with _tarfile_mod.open(str(mpath), "r:*") as tf:
+            for member in tf:
+                if not member.isfile():
+                    continue
+                f = tf.extractfile(member)
+                if f is None:
+                    continue
+                digest = hashlib.sha256(f.read()).hexdigest()
+                entries[member.name] = digest
+        return entries
+    except Exception as exc:
+        logger.debug("Failed to read tar checkpoint %s: %s", manifest_path, exc)
+        return None
+
+
+def _checkpoint_restore_base_fields(
+    *,
+    checkpoint_path: Path,
+    kind: str,
+    restore_root: str,
+    size_bytes: int | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "checkpoint_kind": kind,
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_root": restore_root,
+        "restore_overhead_excluded": True,
+        "forced_sync_checkpoint_kind": kind,
+        "forced_sync_checkpoint": str(checkpoint_path),
+        "forced_sync_root": restore_root,
+    }
+    if size_bytes is not None:
+        fields["checkpoint_size_bytes"] = size_bytes
+    return fields
+
+
+def _checkpoint_restore_failed_fields(
+    *,
+    checkpoint_path: Path,
+    kind: str,
+    restore_root: str,
+    status: str,
+    error: str,
+    started: float | None = None,
+    archive_exists: bool | None = None,
+    size_bytes: int | None = None,
+) -> dict[str, Any]:
+    fields = _checkpoint_restore_base_fields(
+        checkpoint_path=checkpoint_path,
+        kind=kind,
+        restore_root=restore_root,
+        size_bytes=size_bytes,
+    )
+    fields.update(
+        {
+            "forced_sync_success": False,
+            "forced_sync_status": status,
+            "forced_sync_error": error,
+            "forced_sync_resolved": False,
+            "forced_sync_continued": False,
+        }
+    )
+    if started is not None:
+        elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+        fields["restore_elapsed_ms"] = elapsed_ms
+        fields["forced_sync_elapsed_ms"] = elapsed_ms
+    if archive_exists is not None:
+        fields["checkpoint_archive_exists"] = archive_exists
+    return fields
+
+
+def _restore_checkpoint_to_container(
+    *,
+    checkpoint_spec: dict[str, Any],
+    container: PreparedContainer,
+    clear_root: bool = True,
+) -> dict[str, Any]:
+    checkpoint_path = Path(str(checkpoint_spec["path"]))
+    kind = str(checkpoint_spec.get("kind") or "cas_manifest")
+    restore_root = str(checkpoint_spec.get("root") or "/testbed")
+    started = time.monotonic()
+    if kind not in {"cas_manifest_full", "cas_manifest_incremental"}:
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error=f"unsupported checkpoint kind: {kind}",
+            started=started,
+            archive_exists=checkpoint_path.is_file(),
+        )
+    if not checkpoint_path.is_file():
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_missing",
+            error=f"checkpoint not found: {checkpoint_path}",
+            started=started,
+            archive_exists=False,
+        )
+    size_bytes = checkpoint_path.stat().st_size
+    try:
+        manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error=f"invalid checkpoint manifest: {exc}",
+            started=started,
+            archive_exists=True,
+            size_bytes=size_bytes,
+        )
+    if not isinstance(manifest.get("entries"), dict):
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error="checkpoint manifest missing 'entries' dict",
+            started=started,
+            archive_exists=True,
+            size_bytes=size_bytes,
+        )
+
+    container_manifest_path = f"/tmp/agent_sched_manifest_{uuid.uuid4().hex}.json"
+    try:
+        _copy_checkpoint_archive_to_container(
+            checkpoint_path=checkpoint_path,
+            container_id=container.container_id,
+            container_executable=container.container_executable,
+            container_archive_path=container_manifest_path,
+        )
+        _restore_cas_manifest_in_container(
+            container_id=container.container_id,
+            container_executable=container.container_executable,
+            container_manifest_path=container_manifest_path,
+            restore_root=restore_root,
+            clear_root=clear_root,
+        )
+    except Exception as exc:
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=checkpoint_path,
+            kind=kind,
+            restore_root=restore_root,
+            status="checkpoint_restore_failed",
+            error=f"{type(exc).__name__}: {exc}",
+            started=started,
+            archive_exists=True,
+            size_bytes=size_bytes,
+        )
+    elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+    fields = _checkpoint_restore_base_fields(
+        checkpoint_path=checkpoint_path,
+        kind=kind,
+        restore_root=restore_root,
+        size_bytes=size_bytes,
+    )
+    fields.update(
+        {
+            "forced_sync_success": True,
+            "forced_sync_status": "checkpoint_restored_continuation",
+            "forced_sync_resolved": False,
+            "forced_sync_continued": True,
+            "forced_sync_elapsed_ms": elapsed_ms,
+            "checkpoint_archive_exists": True,
+            "restore_elapsed_ms": elapsed_ms,
+            "restore_root_exists": True,
+            "tar_extraction_returncode": 0,
+        }
+    )
+    return fields
+
+
+def _checkpoint_spec_is_incremental(checkpoint_spec: dict[str, Any]) -> bool:
+    kind = str(checkpoint_spec.get("kind") or "cas_manifest")
+    return (
+        checkpoint_spec.get("incremental") is True
+        or kind == "cas_manifest_incremental"
+    )
+
+
+def _checkpoint_chain_specs_for_action(
+    *,
+    actions: list[dict[str, Any]],
+    target_index: int,
+    source_trace: Path,
+) -> list[dict[str, Any]] | None:
+    if target_index < 0 or target_index >= len(actions):
+        return None
+    target_data = actions[target_index].get("data") or {}
+    target_spec = _checkpoint_after_spec(
+        action_data=target_data,
+        source_trace=source_trace,
+    )
+    if target_spec is None:
+        return None
+    if not _checkpoint_spec_is_incremental(target_spec):
+        return [target_spec]
+
+    reversed_chain: list[dict[str, Any]] = []
+    for index in range(target_index, -1, -1):
+        data = actions[index].get("data") or {}
+        checkpoint_spec = _checkpoint_after_spec(
+            action_data=data,
+            source_trace=source_trace,
+        )
+        if checkpoint_spec is None:
+            continue
+        reversed_chain.append(checkpoint_spec)
+        if not _checkpoint_spec_is_incremental(checkpoint_spec):
+            return list(reversed(reversed_chain))
+    return None
+
+
+def _restore_checkpoint_chain_to_container(
+    *,
+    checkpoint_specs: list[dict[str, Any]],
+    container: PreparedContainer,
+) -> dict[str, Any]:
+    if not checkpoint_specs:
+        return _checkpoint_restore_failed_fields(
+            checkpoint_path=Path(""),
+            kind="cas_manifest_incremental",
+            restore_root="/testbed",
+            status="checkpoint_missing",
+            error="no checkpoint chain available",
+            started=time.monotonic(),
+        )
+
+    started = time.monotonic()
+    chain_paths = [str(Path(str(spec["path"]))) for spec in checkpoint_specs]
+    chain_kinds = [str(spec.get("kind") or "cas_manifest") for spec in checkpoint_specs]
+    total_size_bytes = 0
+    last_result: dict[str, Any] | None = None
+    for index, checkpoint_spec in enumerate(checkpoint_specs):
+        restore_kwargs: dict[str, Any] = {
+            "checkpoint_spec": checkpoint_spec,
+            "container": container,
+        }
+        if index != 0:
+            restore_kwargs["clear_root"] = False
+        restore_result = _restore_checkpoint_to_container(**restore_kwargs)
+        last_result = restore_result
+        size_bytes = restore_result.get("checkpoint_size_bytes")
+        if isinstance(size_bytes, int):
+            total_size_bytes += size_bytes
+        if restore_result.get("forced_sync_success") is not True:
+            fields = dict(restore_result)
+            break
+    else:
+        assert last_result is not None
+        fields = dict(last_result)
+
+    elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+    fields["restore_elapsed_ms"] = elapsed_ms
+    fields["forced_sync_elapsed_ms"] = elapsed_ms
+    fields["checkpoint_restore_chain_length"] = len(checkpoint_specs)
+    fields["checkpoint_restore_chain_paths"] = chain_paths
+    fields["checkpoint_restore_chain_kinds"] = chain_kinds
+    fields["checkpoint_restore_chain_size_bytes"] = total_size_bytes
+    fields["forced_sync_checkpoint_chain_length"] = len(checkpoint_specs)
+    fields["forced_sync_checkpoint_chain"] = chain_paths
+    return fields
 
 
 def _source_openclaw_tool_results_dir(source_trace: Path) -> Path | None:
@@ -523,6 +1393,8 @@ def _run_checked_container_command(cmd: list[str], *, timeout: float) -> None:
         f"container command failed ({result.returncode}): {' '.join(cmd)}"
         + (f": {message}" if message else "")
     )
+
+
 
 
 def _copy_source_runtime_artifacts_to_container(
@@ -675,6 +1547,7 @@ def _structured_output_subdir(
     sessions: list["LoadedTraceSession"],
     *,
     concurrency: int,
+    workers: int = 1,
 ) -> Path:
     primary = sessions[0].metadata or {}
     benchmark = str(primary.get("benchmark") or "unknown")
@@ -695,18 +1568,25 @@ def _structured_output_subdir(
                 other.get("benchmark"), other.get("model"), other.get("scaffold"),
             )
             break
+    scheduler_dir = "bounded_queue" if workers == 1 else "multi_process_workers"
+    leaf = (
+        f"concurrency_{concurrency}"
+        if workers == 1
+        else f"concurrency_{concurrency}_workers_{workers}"
+    )
     return (
         Path(_sanitize_run_label(benchmark))
         / _sanitize_run_label(model)
         / _sanitize_run_label(scaffold)
-        / "bounded_queue"
-        / f"concurrency_{concurrency}"
+        / scheduler_dir
+        / leaf
     )
 
 
 def _build_run_id(*, mode: str, model: str | None, concurrency: int) -> str:
     label = model if model else mode
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    now = datetime.now(tz=timezone.utc)
+    ts = now.strftime("%Y%m%dT%H%M%S") + f"{now.microsecond // 1000:03d}"
     return f"simulate_{_sanitize_run_label(label)}_c{concurrency}_{ts}"
 
 
@@ -804,6 +1684,201 @@ def _assign_replay_instance_ids(sessions: list[LoadedTraceSession]) -> None:
 
         session.run_instance_id = candidate
         used_ids.add(candidate)
+
+
+def _worker_trace_input(session: LoadedTraceSession) -> WorkerTraceInput:
+    return WorkerTraceInput(
+        source_trace=str(session.source_trace),
+        task_source=str(session.task_source),
+        manifest_index=session.manifest_index,
+        docker_image_override=session.docker_image_override,
+        label=session.label,
+        run_instance_id=session.run_instance_id,
+    )
+
+
+def _load_worker_trace_inputs(inputs: list[WorkerTraceInput]) -> list[LoadedTraceSession]:
+    sessions: list[LoadedTraceSession] = []
+    for entry in inputs:
+        session = _load_trace_session(
+            Path(entry.source_trace),
+            Path(entry.task_source),
+            manifest_index=entry.manifest_index,
+            docker_image_override=entry.docker_image_override,
+            label=entry.label,
+        )
+        session.run_instance_id = entry.run_instance_id
+        sessions.append(session)
+    return sessions
+
+
+def _resolve_prep_concurrency(requested: int, num_sessions: int) -> int:
+    """Resolve the system-wide concurrent container preparation limit."""
+    if requested < 0:
+        raise ValueError("prep_concurrency must be >= 0")
+    if num_sessions < 1:
+        raise ValueError("num_sessions must be >= 1")
+    return min(requested or _DEFAULT_PREP_CONCURRENCY, num_sessions)
+
+
+def _partition_worker_inputs(
+    inputs: list[WorkerTraceInput],
+    workers: int,
+) -> list[list[WorkerTraceInput]]:
+    """Split worker inputs into non-empty contiguous chunks without reordering."""
+    if workers < 1:
+        raise ValueError("workers must be >= 1")
+    if not inputs:
+        raise ValueError("inputs must not be empty")
+    partition_count = min(workers, len(inputs))
+    chunk_size, remainder = divmod(len(inputs), partition_count)
+    chunks: list[list[WorkerTraceInput]] = []
+    start = 0
+    for worker_index in range(partition_count):
+        size = chunk_size + (1 if worker_index < remainder else 0)
+        stop = start + size
+        chunks.append(inputs[start:stop])
+        start = stop
+    return chunks
+
+
+def _chunk_worker_inputs_by_concurrency(
+    inputs: list[WorkerTraceInput],
+    concurrency: int,
+) -> list[list[WorkerTraceInput]]:
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+    return [
+        inputs[index : index + concurrency]
+        for index in range(0, len(inputs), concurrency)
+    ]
+
+
+def _abort_global_replay_start(barrier: Any, start_event: Any) -> None:
+    """Best-effort release of peers waiting for a failed global start."""
+    try:
+        barrier.abort()
+    except Exception:
+        logger.debug("Failed to abort replay-start barrier", exc_info=True)
+    try:
+        start_event.set()
+    except Exception:
+        logger.debug("Failed to set replay-start event", exc_info=True)
+
+
+async def _wait_for_global_replay_start(
+    barrier: Any,
+    start_event: Any,
+    start_wall_time: Any,
+    *,
+    coordinator: bool,
+) -> float:
+    """Wait until every worker is prepared and return shared monotonic time zero."""
+    try:
+        await asyncio.to_thread(barrier.wait)
+    except BrokenBarrierError as exc:
+        raise SimulateError("Global replay start was aborted") from exc
+
+    if coordinator:
+        # Give peer processes a short, fixed grace window to return from the
+        # manager barrier and enter their local replay coroutines before time zero.
+        start_wall_time.value = time.time() + _REPLAY_START_DELAY_S
+        start_event.set()
+    else:
+        await asyncio.to_thread(start_event.wait)
+
+    shared_wall_zero = float(start_wall_time.value)
+    if shared_wall_zero <= 0:
+        raise SimulateError("Global replay start has no valid shared time zero")
+    return time.monotonic() + (shared_wall_zero - time.time())
+
+
+async def _acquire_shared_semaphore(semaphore: Any) -> None:
+    """Acquire a multiprocessing-manager semaphore without blocking the event loop."""
+    while True:
+        acquired = await asyncio.to_thread(semaphore.acquire, False)
+        if acquired:
+            return
+        await asyncio.sleep(_SHARED_SEMAPHORE_POLL_S)
+
+
+async def _sleep_until_monotonic(target_s: float) -> SleepDrift | None:
+    delay_s = target_s - time.monotonic()
+    if delay_s <= 0:
+        return None
+    return await _sleep_and_measure(delay_s, phase="worker_replay_start")
+
+
+async def _sleep_and_measure(expected_s: float, *, phase: str) -> SleepDrift | None:
+    if expected_s <= 0:
+        return None
+    start = time.monotonic()
+    await asyncio.sleep(expected_s)
+    actual_s = time.monotonic() - start
+    return SleepDrift(phase=phase, expected_s=expected_s, actual_s=actual_s)
+
+
+def _sleep_drift_metrics(
+    *,
+    source_gap: SleepDrift | None,
+    action_sleep: SleepDrift | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if source_gap is not None:
+        payload["source_gap_sleep"] = source_gap.to_dict()
+    if action_sleep is not None:
+        payload["action_sleep"] = action_sleep.to_dict()
+    return payload
+
+
+def _summarize_sleep_drifts(drifts: list[SleepDrift]) -> dict[str, Any]:
+    if not drifts:
+        return {
+            "sample_count": 0,
+            "expected_total_s": 0.0,
+            "actual_total_s": 0.0,
+            "drift_s": {"min": 0.0, "max": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0},
+            "by_phase": {},
+        }
+    drift_values = [drift.drift_s for drift in drifts]
+    by_phase: dict[str, list[SleepDrift]] = {}
+    for drift in drifts:
+        by_phase.setdefault(drift.phase, []).append(drift)
+    return {
+        "sample_count": len(drifts),
+        "expected_total_s": round(sum(drift.expected_s for drift in drifts), 6),
+        "actual_total_s": round(sum(drift.actual_s for drift in drifts), 6),
+        "drift_s": _summarize_float_values(drift_values),
+        "by_phase": {
+            phase: {
+                "sample_count": len(items),
+                "expected_total_s": round(sum(item.expected_s for item in items), 6),
+                "actual_total_s": round(sum(item.actual_s for item in items), 6),
+                "drift_s": _summarize_float_values([item.drift_s for item in items]),
+            }
+            for phase, items in sorted(by_phase.items())
+        },
+    }
+
+
+def _summarize_float_values(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"min": 0.0, "max": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0}
+    sorted_values = sorted(values)
+    return {
+        "min": round(sorted_values[0], 6),
+        "max": round(sorted_values[-1], 6),
+        "avg": round(sum(sorted_values) / len(sorted_values), 6),
+        "p50": round(_nearest_rank_percentile(sorted_values, 50), 6),
+        "p95": round(_nearest_rank_percentile(sorted_values, 95), 6),
+    }
+
+
+def _nearest_rank_percentile(sorted_values: list[float], percentile: int) -> float:
+    if not sorted_values:
+        raise ValueError("sorted_values must not be empty")
+    index = max(0, min(len(sorted_values) - 1, (percentile * len(sorted_values) + 99) // 100 - 1))
+    return sorted_values[index]
 
 
 def _resolve_manifest_path(
@@ -982,13 +2057,13 @@ def _validate_loaded_sessions(
     *,
     mode: str,
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
 ) -> None:
     if replay_speed <= 0:
         raise ValueError("replay_speed must be > 0")
     if not sessions:
         raise SimulateError("No trace sessions were loaded")
-    if mode == "local_model" and len(sessions) != 1:
-        raise SimulateError("local_model mode supports exactly one source trace")
+    _validate_llm_timing_config(llm_timing)
     for session in sessions:
         if _is_host_mode(session):
             continue
@@ -1213,25 +2288,25 @@ async def _prepare_container_session(
 
         phase = recorder.start_phase("start_task_container")
         try:
+            extra_args = [
+                "--label",
+                "agent-sched-bench.component=simulate-replay",
+                "--label",
+                f"agent-sched-bench.run_instance_id={loaded.agent_id}",
+                "--label",
+                f"agent-sched-bench.source_agent_id={loaded.source_agent_id}",
+                "--label",
+                f"agent-sched-bench.manifest_index={loaded.manifest_index}",
+                "--label",
+                f"agent-sched-bench.output_dir={task_output_dir}",
+                "-v",
+                f"{_CHECKPOINT_CAS_ROOT}:{_CHECKPOINT_CAS_ROOT}",
+            ]
             container_id = await asyncio.to_thread(
                 start_task_container,
                 fixed_name,
                 executable=container_executable,
-                run_as_host_user=False,
-                mount_host_home=False,
-                container_home="/root",
-                extra_args=[
-                    "--label",
-                    "agent-sched-bench.component=simulate-replay",
-                    "--label",
-                    f"agent-sched-bench.run_instance_id={loaded.agent_id}",
-                    "--label",
-                    f"agent-sched-bench.source_agent_id={loaded.source_agent_id}",
-                    "--label",
-                    f"agent-sched-bench.manifest_index={loaded.manifest_index}",
-                    "--label",
-                    f"agent-sched-bench.output_dir={task_output_dir}",
-                ],
+                extra_args=extra_args,
                 network_mode=network_mode,
             )
             recorder.container_id = container_id
@@ -1266,7 +2341,10 @@ async def _prepare_container_session(
             recorder.finish_phase(phase, status="failed", error=exc)
             raise
 
-        agent = ContainerAgent(container_id, container_executable)
+        agent = ContainerAgent(
+            container_id,
+            container_executable,
+        )
         phase = recorder.start_phase("container_agent_start")
         try:
             await agent.start()
@@ -1341,12 +2419,14 @@ def _log_trace_metadata(
     mode: str,
     sessions: list[LoadedTraceSession],
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
     manifest: Path,
     concurrency: int,
     scheduler_mode: str,
     api_base: str | None,
     model: str | None,
     network_mode: str = "host",
+    extra: dict[str, Any] | None = None,
 ) -> None:
     scaffolds = {session.scaffold for session in sessions}
     source_models = [
@@ -1362,6 +2442,7 @@ def _log_trace_metadata(
         "mode": "simulate",
         "simulate_mode": mode,
         "replay_speed": replay_speed,
+        "llm_timing_mode": llm_timing.mode,
         "source_trace_count": len(sessions),
         "source_traces": [str(session.source_trace) for session in sessions],
         "source_trace_entries": [
@@ -1383,17 +2464,15 @@ def _log_trace_metadata(
         "scheduler_mode": scheduler_mode,
         "network_mode": network_mode,
     }
-    if mode == "local_model":
-        metadata["source_trace"] = str(sessions[0].source_trace)
-        metadata["source_model"] = source_models[0]
-        metadata["local_model"] = model
-        metadata["local_api_base"] = api_base
-        metadata["n_source_iterations"] = _iteration_count(sessions[0].actions)
-    else:
-        metadata["source_model"] = (
-            source_models[0] if len(set(source_models)) == 1 else "multiple"
-        )
-        metadata["replay_target"] = "cloud_replay"
+    if llm_timing.mode == "ttft_tpot":
+        metadata["llm_ttft_ms"] = llm_timing.ttft_ms
+        metadata["llm_tpot_ms"] = llm_timing.tpot_ms
+    metadata["source_model"] = (
+        source_models[0] if len(set(source_models)) == 1 else "multiple"
+    )
+    metadata["replay_target"] = "cloud_replay"
+    if extra:
+        metadata.update(extra)
     trace_logger.log_metadata(**metadata)
 
 
@@ -1487,10 +2566,14 @@ def _write_throughput_summary(
     mode: str,
     concurrency: int,
     scheduler_mode: str,
+    llm_timing: LLMTimingConfig,
+    workers: int = 1,
+    prep_concurrency: int = 0,
     trace_file: Path,
     wall_time_s: float,
     task_stats: list[ReplayTaskStats],
     container_resources: dict[str, Any] | None = None,
+    monitoring_policy: dict[str, object] | None = None,
 ) -> Path:
     attempted = len(task_stats)
     completed = sum(1 for stat in task_stats if stat.success)
@@ -1504,7 +2587,17 @@ def _write_throughput_summary(
         "trace_file": str(trace_file),
         "concurrency": concurrency,
         "effective_concurrency": effective_concurrency,
+        "workers": workers,
+        "effective_workers": min(workers, attempted) if attempted else 0,
+        "prep_concurrency": prep_concurrency,
+        "effective_prep_concurrency": (
+            _resolve_prep_concurrency(prep_concurrency, attempted)
+            if workers > 1 and attempted
+            else None
+        ),
         "scheduler_mode": scheduler_mode,
+        "monitoring": monitoring_policy or {},
+        "llm_timing_mode": llm_timing.mode,
         "wall_time_s": wall_time_s,
         "attempted_traces": attempted,
         "completed_traces": completed,
@@ -1516,11 +2609,17 @@ def _write_throughput_summary(
         "tool_exec_count": sum(stat.tool_exec_count for stat in task_stats),
         "tasks": [dataclasses.asdict(stat) for stat in task_stats],
     }
+    if llm_timing.mode == "ttft_tpot":
+        payload["llm_ttft_ms"] = llm_timing.ttft_ms
+        payload["llm_tpot_ms"] = llm_timing.tpot_ms
     if container_resources is not None:
         payload["container_resources"] = {
+            "status": container_resources.get("status", "collected"),
+            "reason": container_resources.get("reason"),
             "jsonl_path": container_resources.get("jsonl_path"),
             "summary_path": container_resources.get("summary_path"),
             "sample_count": container_resources.get("sample_count", 0),
+            "monitoring": container_resources.get("monitoring", {}),
             "sampling": container_resources.get("sampling", {}),
             "errors": container_resources.get("errors", []),
         }
@@ -1548,10 +2647,23 @@ def _assign_task_output_dir(prepared: PreparedTraceSession, output_path: Path) -
 def _write_prepared_resources(
     prepared: PreparedTraceSession,
     samples: list[dict[str, Any]],
+    *,
+    monitoring_enabled: bool,
 ) -> None:
     if prepared.task_output_dir is None:
         return
     summary = summarize_samples(samples)
+    if samples:
+        monitoring_status = "collected"
+    elif monitoring_enabled:
+        monitoring_status = "enabled_no_samples"
+    else:
+        monitoring_status = "disabled"
+    summary["monitoring_disabled"] = not monitoring_enabled
+    summary["monitoring"] = {
+        **(prepared.monitoring_policy or {}),
+        "status": monitoring_status,
+    }
     attempt_layout.write_resources_json(
         prepared.task_output_dir,
         samples,
@@ -1568,6 +2680,7 @@ def _write_prepared_resources(
 async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
     resource_write_error: BaseException | None = None
     resource_samples: list[dict[str, Any]] | None = None
+    resource_monitoring_enabled = prepared.resource_monitoring_enabled
     try:
         if prepared.sampler is not None:
             resource_samples = prepared.sampler.stop()
@@ -1586,7 +2699,11 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
             and not prepared.resources_written
         ):
             try:
-                _write_prepared_resources(prepared, resource_samples)
+                _write_prepared_resources(
+                    prepared,
+                    resource_samples,
+                    monitoring_enabled=resource_monitoring_enabled,
+                )
             except (Exception, asyncio.CancelledError) as exc:
                 resource_write_error = exc
         if resource_write_error is not None:
@@ -1649,7 +2766,11 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         and not prepared.resources_written
     ):
         try:
-            _write_prepared_resources(prepared, resource_samples)
+            _write_prepared_resources(
+                prepared,
+                resource_samples,
+                monitoring_enabled=resource_monitoring_enabled,
+            )
         except (Exception, asyncio.CancelledError) as exc:
             resource_write_error = exc
 
@@ -1693,379 +2814,83 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         raise fixed_image_cleanup_error
 
 
-async def _run_local_model_simulation(
-    prepared_session: PreparedTraceSession,
-    *,
-    trace_logger: TraceLogger,
-    replay_speed: float,
-    api_base: str,
-    api_key: str,
-    model: str,
-    command_timeout_s: float,
-    metrics_url: str | None,
-    warmup_skip_iterations: int,
-    gpu_baseline: GpuBaseline | None = None,
-    vllm_pid: int | None = None,
-    gpu_sample_hz: float = 10.0,
-    gpu_output_path: Path | None = None,
-) -> ReplayTaskStats:
-    loaded = prepared_session.loaded
-    iterations = loaded.iterations
-    source_model = (loaded.summary or {}).get("model", "unknown")
-    logger.info(
-        "Simulating %s [scaffold=%s]: %d iterations from %s, local model=%s",
-        loaded.agent_id,
-        loaded.scaffold,
-        len(iterations),
-        source_model,
-        model,
-    )
 
-    metrics_client = VLLMMetricsClient(
-        metrics_url=metrics_url,
-        gpu_baseline=gpu_baseline,
-        vllm_pid=vllm_pid,
-    )
-    logger.info(
-        "vLLM metrics client: %s",
-        f"enabled (url={metrics_url})" if metrics_client.is_enabled else "disabled",
-    )
-
-    gpu_sampler: GpuResourceSampler | None = None
-    if gpu_baseline is not None and vllm_pid is not None and metrics_url and gpu_output_path:
-        gpu_sampler = GpuResourceSampler(
-            metrics_url=metrics_url,
-            gpu_baseline=gpu_baseline,
-            vllm_pid=vllm_pid,
-            output_path=gpu_output_path,
-            sample_hz=gpu_sample_hz,
-        )
-        await gpu_sampler.start()
-        logger.info("GPU resource sampler started (%.1f Hz) → %s", gpu_sample_hz, gpu_output_path)
-
-    client = None
-
-    wall_start = time.time()
-    total_iters = len(iterations)
-    succeeded_iters = 0
-    failed_iters = 0
-    fatal_replay_errors = 0
-    sorted_iters = sorted(iterations.keys())
-
+def _source_action_excluded_overhead_s(action: dict[str, Any]) -> float:
+    data = action.get("data") or {}
+    checkpoint_after = data.get("checkpoint_after")
+    if not isinstance(checkpoint_after, dict):
+        checkpoint_after = data.get("checkpoint_after_error")
+    if not isinstance(checkpoint_after, dict):
+        return 0.0
+    if checkpoint_after.get("overhead_excluded") is not True:
+        return 0.0
     try:
-        for i, it_num in enumerate(sorted_iters):
-            it_group = iterations[it_num]
-            llm_actions = it_group.get("llms", [])
-            tool_actions = it_group.get("tools", [])
-
-            if not llm_actions:
-                logger.warning("Iteration %d: no LLM actions, skipping", it_num)
-                continue
-
-            iter_failed = False
-            for llm_idx, llm_action in enumerate(llm_actions):
-                llm_data = llm_action.get("data", {})
-                messages_in = llm_data.get("messages_in")
-                n_tokens = llm_data.get("completion_tokens", 1) or 1
-
-                if llm_data.get("transport_retry_terminal"):
-                    ts_now = time.time()
-                    llm_record = _make_trace_action(
-                        loaded=loaded,
-                        action_type="llm_call",
-                        action_id=f"llm_{it_num}_{llm_idx}",
-                        iteration=it_num,
-                        ts_start=ts_now,
-                        ts_end=ts_now,
-                        data={
-                            "messages_in": messages_in,
-                            "raw_response": llm_data.get("raw_response", {}),
-                            "prompt_tokens": llm_data.get("prompt_tokens", 0),
-                            "completion_tokens": 0,
-                            "llm_latency_ms": 0.0,
-                            "simulate_source": str(loaded.source_trace),
-                            "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
-                            "transport_retry": True,
-                            "transport_retry_terminal": True,
-                            "error": llm_data.get("error"),
-                            "sim_metrics": {
-                                "warmup": i < warmup_skip_iterations,
-                                "failed": True,
-                            },
-                        },
-                    )
-                    trace_logger.log_trace_action(loaded.agent_id, llm_record)
-                    iter_failed = True
-                    break
-
-                if not messages_in:
-                    logger.warning("Iteration %d llm %d: no messages_in, skipping", it_num, llm_idx)
-                    continue
-
-                ts_start = time.time()
-
-                try:
-                    if client is None:
-                        client = create_async_openai_client(
-                            api_base=api_base,
-                            api_key=api_key,
-                            timeout=180.0,
-                        )
-                    ttft_ms, tpot_ms, llm_latency_ms = await _call_local_model_streaming(
-                        client, model, messages_in, n_tokens
-                    )
-                except Exception as exc:
-                    logger.error("Iteration %d llm %d: LLM call failed: %s", it_num, llm_idx, exc)
-                    iter_failed = True
-                    break
-
-                ts_after_llm = time.time()
-
-                scheduler_snapshot = metrics_client.get_snapshot()
-
-                llm_record = _make_trace_action(
-                    loaded=loaded,
-                    action_type="llm_call",
-                    action_id=f"llm_{it_num}_{llm_idx}",
-                    iteration=it_num,
-                    ts_start=ts_start,
-                    ts_end=ts_after_llm,
-                    data={
-                        "messages_in": messages_in,
-                        "raw_response": llm_data.get("raw_response", {}),
-                        "prompt_tokens": llm_data.get("prompt_tokens", 0),
-                        "completion_tokens": llm_data.get("completion_tokens", 0),
-                        "llm_latency_ms": llm_latency_ms,
-                        "ttft_ms": ttft_ms,
-                        "tpot_ms": tpot_ms,
-                        "simulate_source": str(loaded.source_trace),
-                        "source_llm_latency_ms": llm_data.get("llm_latency_ms"),
-                        "sim_metrics": {
-                            "timing": {
-                                "ttft_ms": ttft_ms,
-                                "tpot_ms": tpot_ms,
-                                "total_ms": llm_latency_ms,
-                            },
-                            "vllm_scheduler_snapshot": dataclasses.asdict(
-                                scheduler_snapshot
-                            ),
-                            "warmup": i < warmup_skip_iterations,
-                        },
-                    },
-                )
-                trace_logger.log_trace_action(loaded.agent_id, llm_record)
-
-            if iter_failed:
-                failed_iters += 1
-                continue
-
-            ctr = prepared_session.container
-            total_tool_ms = 0.0
-            failed_tool_actions = 0
-            for tool_act in tool_actions:
-                td = tool_act.get("data", {})
-                tool_name = td.get("tool_name")
-                tool_args = td.get("tool_args", "{}")
-                if not tool_name:
-                    continue
-
-                tool_ts_start = time.time()
-                source_duration_ms = float(td.get("duration_ms") or 0.0)
-                source_success = _source_tool_success(td)
-                source_tool_result = td.get("tool_result", td.get("result", ""))
-                source_exec_timeout = _source_exec_timeout_s(
-                    tool_name=tool_name,
-                    tool_args_json=tool_args,
-                    source_duration_ms=source_duration_ms,
-                    source_success=source_success,
-                    source_tool_result=source_tool_result,
-                )
-                original_artifact_path: str | None = None
-                mapped_artifact_path: str | None = None
-                if ctr is None:
-                    tool_result = td.get("tool_result", td.get("result", ""))
-                    tool_success = source_success
-                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                    tool_ts_end = time.time()
-                    tool_duration_ms = source_duration_ms
-                    sim_provenance = "replayed_from_trace"
-                elif tool_name == "message":
-                    tool_result = td.get("tool_result", td.get("result", ""))
-                    if not tool_result:
-                        tool_result = "Message replayed as no-op"
-                    tool_success = source_success
-                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                    tool_ts_end = time.time()
-                    tool_duration_ms = source_duration_ms
-                    sim_provenance = "message_noop"
-                elif tool_name.startswith("mcp_"):
-                    tool_result = td.get("tool_result", "")
-                    tool_success = source_success
-                    await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                    tool_ts_end = time.time()
-                    tool_duration_ms = source_duration_ms
-                    sim_provenance = "replayed_from_trace"
-                else:
-                    mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
-                        _remap_runtime_artifact_tool_args(
-                            tool_name=tool_name,
-                            tool_args_json=tool_args,
-                            runtime_root_map=prepared_session.runtime_artifact_root_map,
-                        )
-                    )
-                    if original_artifact_path is None and isinstance(tool_args, str):
-                        from trace_collect.openclaw_tools import (
-                            source_runtime_artifact_path_from_tool_call,
-                        )
-
-                        original_artifact_path = source_runtime_artifact_path_from_tool_call(
-                            tool_name=tool_name,
-                            tool_args_json=tool_args,
-                        )
-                    if original_artifact_path is not None and not mapped_exists:
-                        await asyncio.sleep(max(0.0, source_duration_ms / 1000.0 / replay_speed))
-                        tool_result = _artifact_unavailable_result(original_artifact_path)
-                        tool_success = False
-                        tool_ts_end = time.time()
-                        tool_duration_ms = (tool_ts_end - tool_ts_start) * 1000
-                        sim_provenance = "source_artifact_unavailable"
-                        fatal_replay_errors += 1
-                    elif mapped_artifact_path is not None:
-                        tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
-                            tool_name,
-                            mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
-                            True,
-                        )
-                        tool_ts_end = time.time()
-                        sim_provenance = "restored_runtime_artifact"
-                    else:
-                        tool_result, tool_duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
-                            tool_name,
-                            mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
-                        )
-                        tool_ts_end = time.time()
-                        sim_provenance = "executed_in_container"
-                total_tool_ms += tool_duration_ms
-                replay_outcome_match = (
-                    tool_success == source_success
-                    and sim_provenance != "source_artifact_unavailable"
-                )
-                extra_tool_fields = _command_metadata(
-                    tool_name=tool_name,
-                    tool_args_json=tool_args,
-                    tool_result=str(tool_result),
-                    tool_success=tool_success,
-                )
-                if original_artifact_path is not None:
-                    extra_tool_fields["source_artifact_path"] = original_artifact_path
-                if mapped_artifact_path is not None:
-                    extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
-                if source_exec_timeout is not None:
-                    extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
-
-                tool_record = _make_trace_action(
-                    loaded=loaded,
-                    action_type="tool_exec",
-                    action_id=f"tool_{it_num}_{tool_name}",
-                    iteration=it_num,
-                    ts_start=tool_ts_start,
-                    ts_end=tool_ts_end,
-                    data={
-                        "tool_name": tool_name,
-                        "tool_args": tool_args,
-                        "tool_result": tool_result,
-                        "duration_ms": tool_duration_ms,
-                        "success": tool_success,
-                        "source_success": source_success,
-                        "replay_outcome_match": replay_outcome_match,
-                        **extra_tool_fields,
-                        "replay_source": sim_provenance,
-                        "sim_metrics": {
-                            "source": sim_provenance,
-                            "sim_tool_format": (
-                                sim_provenance
-                                if sim_provenance
-                                in {
-                                    "replayed_from_trace",
-                                    "message_noop",
-                                    "source_artifact_unavailable",
-                                    "restored_runtime_artifact",
-                                }
-                                else "container_exec"
-                            ),
-                            "warmup": i < warmup_skip_iterations,
-                        },
-                    },
-                )
-                trace_logger.log_trace_action(loaded.agent_id, tool_record)
-                if not replay_outcome_match:
-                    failed_tool_actions += 1
-
-            if failed_tool_actions:
-                logger.error(
-                    "Local-model replay failed %d tool action(s) for %s iteration=%s",
-                    failed_tool_actions,
-                    loaded.agent_id,
-                    it_num,
-                )
-                failed_iters += 1
-                continue
-
-            succeeded_iters += 1
-
-            logger.info(
-                "[%d/%d] iter %d: %d llm calls, tool=%.0fms",
-                i + 1,
-                total_iters,
-                it_num,
-                len(llm_actions),
-                total_tool_ms,
-            )
-    finally:
-        if gpu_sampler is not None:
-            await gpu_sampler.stop()
-            logger.info("GPU resource sampler stopped → %s", gpu_output_path)
-
-        wall_end = time.time()
-
-        success = failed_iters == 0 and succeeded_iters == total_iters
-        elapsed_s = wall_end - wall_start
-        simulate_summary = _make_trace_summary(
-            loaded=loaded,
-            success=success,
-            elapsed_s=elapsed_s,
-            source_model=source_model,
-            extra={
-                "local_model": model,
-                "local_api_base": api_base,
-                "succeeded_iterations": succeeded_iters,
-                "failed_iterations": failed_iters,
-                "fatal_replay_errors": fatal_replay_errors,
-            },
-        )
-        trace_logger.log_summary(loaded.agent_id, simulate_summary)
-    return _make_task_stats(
-        loaded=loaded,
-        success=success,
-        elapsed_s=elapsed_s,
-        failed_action_count=failed_iters,
-    )
+        elapsed_ms = float(checkpoint_after.get("elapsed_ms") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, elapsed_ms / 1000.0)
 
 
-async def _sleep_until_offset(
+async def _sleep_source_gap(
     *,
-    replay_zero_monotonic: float,
-    target_offset_s: float,
-) -> None:
-    delay_s = target_offset_s - (time.monotonic() - replay_zero_monotonic)
-    if delay_s > 0:
-        await asyncio.sleep(delay_s)
+    previous_source_end: float | None,
+    action_source_start: float,
+    replay_speed: float,
+) -> SleepDrift | None:
+    if previous_source_end is None:
+        return None
+    gap_s = max(0.0, action_source_start - previous_source_end)
+    return await _sleep_and_measure(gap_s / replay_speed, phase="source_gap")
+
+
+def _coerce_completion_tokens(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    tokens = int(value)
+    if tokens < 0:
+        raise ValueError(f"completion_tokens must be non-negative, got {value!r}")
+    return tokens
+
+
+def _validate_llm_timing_config(config: LLMTimingConfig) -> None:
+    if config.mode not in {"source_scaled", "ttft_tpot"}:
+        raise ValueError(f"Unsupported llm_timing_mode: {config.mode}")
+    if config.mode == "source_scaled":
+        return
+    if config.ttft_ms is None:
+        raise ValueError("llm_ttft_ms is required when llm_timing_mode='ttft_tpot'")
+    if config.tpot_ms is None:
+        raise ValueError("llm_tpot_ms is required when llm_timing_mode='ttft_tpot'")
+    if config.ttft_ms < 0:
+        raise ValueError("llm_ttft_ms must be non-negative")
+    if config.tpot_ms < 0:
+        raise ValueError("llm_tpot_ms must be non-negative")
+
+
+def _llm_replay_duration_s(
+    *,
+    data: dict[str, Any],
+    source_duration_s: float,
+    replay_speed: float,
+    timing: LLMTimingConfig,
+) -> tuple[float, dict[str, Any]]:
+    if timing.mode == "source_scaled":
+        return source_duration_s / replay_speed, {
+            "llm_timing_mode": "source_scaled",
+        }
+
+    completion_tokens = _coerce_completion_tokens(data.get("completion_tokens", 0))
+    assert timing.ttft_ms is not None
+    assert timing.tpot_ms is not None
+    simulated_ms = timing.ttft_ms + max(0, completion_tokens - 1) * timing.tpot_ms
+    return simulated_ms / 1000.0, {
+        "llm_timing_mode": "ttft_tpot",
+        "simulated_ttft_ms": timing.ttft_ms,
+        "simulated_tpot_ms": timing.tpot_ms,
+        "simulated_llm_latency_ms": simulated_ms,
+        "source_ttft_ms": data.get("ttft_ms"),
+        "source_tpot_ms": data.get("tpot_ms"),
+    }
 
 
 async def _prepare_replay_session(
@@ -2076,10 +2901,21 @@ async def _prepare_replay_session(
     network_mode: str,
     container_resource_recorder: ContainerResourceRecorder | None = None,
     fixed_images_by_source: dict[str, str] | None = None,
+    resource_monitoring_enabled: bool = True,
+    memory_bandwidth_enabled: bool = True,
+    monitoring_policy: dict[str, object] | None = None,
 ) -> PreparedTraceSession:
     prepared: PreparedTraceSession | None = None
+    session_resource_monitoring_enabled = (
+        resource_monitoring_enabled and not _is_host_mode(loaded)
+    )
     try:
-        prepared = PreparedTraceSession(loaded=loaded)
+        prepared = PreparedTraceSession(
+            loaded=loaded,
+            resource_monitoring_enabled=session_resource_monitoring_enabled,
+            memory_bandwidth_enabled=memory_bandwidth_enabled,
+            monitoring_policy=monitoring_policy,
+        )
         _assign_task_output_dir(prepared, output_path)
         assert prepared.task_output_dir is not None
         task_output_dir = prepared.task_output_dir
@@ -2111,18 +2947,23 @@ async def _prepare_replay_session(
             prepared.task_output_dir = task_output_dir
             await _restore_source_runtime_artifacts(prepared)
         if prepared.container is not None:
+            prepared.resource_monitoring_enabled = session_resource_monitoring_enabled
+            prepared.memory_bandwidth_enabled = memory_bandwidth_enabled
+            prepared.monitoring_policy = monitoring_policy
             prepared.container_resource_recorder = container_resource_recorder
             if container_resource_recorder is not None:
                 container_resource_recorder.register_container(
                     prepared.container.container_id
                 )
-            sampler = ContainerStatsSampler(
-                container_id=prepared.container.container_id,
-                interval_s=1.0,
-                executable=prepared.container.container_executable,
-            )
-            sampler.start()
-            prepared.sampler = sampler
+            if session_resource_monitoring_enabled:
+                sampler = ContainerStatsSampler(
+                    container_id=prepared.container.container_id,
+                    interval_s=1.0,
+                    executable=prepared.container.container_executable,
+                    enable_memory_bandwidth=memory_bandwidth_enabled,
+                )
+                sampler.start()
+                prepared.sampler = sampler
         return prepared
     except (Exception, asyncio.CancelledError):
         if prepared is not None:
@@ -2140,9 +2981,13 @@ async def _run_cloud_model_queue(
     network_mode: str,
     container_resource_recorder: ContainerResourceRecorder | None,
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
     fixed_images_by_source: dict[str, str] | None = None,
+    resource_monitoring_enabled: bool = True,
+    memory_bandwidth_enabled: bool = True,
+    monitoring_policy: dict[str, object] | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -2183,12 +3028,15 @@ async def _run_cloud_model_queue(
                     network_mode=network_mode,
                     container_resource_recorder=container_resource_recorder,
                     fixed_images_by_source=fixed_images_by_source,
+                    resource_monitoring_enabled=resource_monitoring_enabled,
+                    memory_bandwidth_enabled=memory_bandwidth_enabled,
+                    monitoring_policy=monitoring_policy,
                 )
                 stats = await _replay_cloud_model_session(
                     prepared,
                     trace_logger=trace_logger,
-                    replay_zero_monotonic=time.monotonic(),
                     replay_speed=replay_speed,
+                    llm_timing=llm_timing,
                     command_timeout_s=command_timeout_s,
                     warmup_skip_iterations=warmup_skip_iterations,
                 )
@@ -2219,43 +3067,394 @@ async def _run_cloud_model_queue(
     return prepared_sessions, task_stats
 
 
-async def _replay_cloud_model_session(
-    prepared_session: PreparedTraceSession,
+async def _prepare_replay_session_with_shared_limit(
+    loaded: LoadedTraceSession,
+    *,
+    output_path: Path,
+    container_executable: str | None,
+    network_mode: str,
+    prep_semaphore: Any,
+    fixed_images_by_source: dict[str, str] | None,
+    resource_monitoring_enabled: bool,
+    memory_bandwidth_enabled: bool,
+    monitoring_policy: dict[str, object] | None,
+) -> PreparedTraceSession:
+    await _acquire_shared_semaphore(prep_semaphore)
+    try:
+        return await _prepare_replay_session(
+            loaded,
+            output_path=output_path,
+            container_executable=container_executable,
+            network_mode=network_mode,
+            container_resource_recorder=None,
+            fixed_images_by_source=fixed_images_by_source,
+            resource_monitoring_enabled=resource_monitoring_enabled,
+            memory_bandwidth_enabled=memory_bandwidth_enabled,
+            monitoring_policy=monitoring_policy,
+        )
+    finally:
+        prep_semaphore.release()
+
+
+async def _run_prepared_cloud_model_sessions(
+    prepared_sessions: list[PreparedTraceSession],
     *,
     trace_logger: TraceLogger,
     replay_zero_monotonic: float,
     replay_speed: float,
+    llm_timing: LLMTimingConfig,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+) -> list[ReplayTaskStats]:
+    results = await asyncio.gather(
+        *(
+            _replay_cloud_model_session(
+                prepared,
+                trace_logger=trace_logger,
+                replay_zero_monotonic=replay_zero_monotonic,
+                replay_speed=replay_speed,
+                llm_timing=llm_timing,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
+            for prepared in prepared_sessions
+        ),
+        return_exceptions=True,
+    )
+    failures = [result for result in results if isinstance(result, BaseException)]
+    if failures:
+        for failure in failures:
+            logger.error("Worker replay session failed: %s", failure)
+        raise SimulateError(
+            f"{len(failures)}/{len(results)} worker replay sessions failed"
+        ) from failures[0]
+    return [result for result in results if isinstance(result, ReplayTaskStats)]
+
+
+async def _run_worker_wave_async(
+    *,
+    worker_inputs: list[WorkerTraceInput],
+    output_path: Path,
+    worker_run_id: str,
+    global_run_id: str,
+    global_concurrency: int,
+    wave_index: int,
+    worker_index: int,
+    worker_count: int,
+    container_executable: str | None,
+    network_mode: str,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+    fixed_images_by_source: dict[str, str] | None,
+    resource_monitoring_enabled: bool,
+    memory_bandwidth_enabled: bool,
+    monitoring_policy: dict[str, object] | None,
+    prep_semaphore: Any,
+    replay_start_barrier: Any,
+    replay_start_event: Any,
+    replay_start_wall_time: Any,
+) -> WorkerReplayResult:
+    loaded_sessions = _load_worker_trace_inputs(worker_inputs)
+    prepared_sessions: list[PreparedTraceSession] = []
+    trace_logger: TraceLogger | None = None
+    replay_started = False
+    try:
+        logger.info(
+            "Worker %d/%d wave %d preparing %d session(s)",
+            worker_index + 1,
+            worker_count,
+            wave_index,
+            len(loaded_sessions),
+        )
+        prep_results = await asyncio.gather(
+            *(
+                _prepare_replay_session_with_shared_limit(
+                    loaded,
+                    output_path=output_path,
+                    container_executable=container_executable,
+                    network_mode=network_mode,
+                    prep_semaphore=prep_semaphore,
+                    fixed_images_by_source=fixed_images_by_source,
+                    resource_monitoring_enabled=resource_monitoring_enabled,
+                    memory_bandwidth_enabled=memory_bandwidth_enabled,
+                    monitoring_policy=monitoring_policy,
+                )
+                for loaded in loaded_sessions
+            ),
+            return_exceptions=True,
+        )
+        prep_errors: list[BaseException] = []
+        for result in prep_results:
+            if isinstance(result, BaseException):
+                prep_errors.append(result)
+            else:
+                prepared_sessions.append(result)
+        if prep_errors:
+            raise SimulateError(
+                f"{len(prep_errors)}/{len(prep_results)} worker preparations failed"
+            ) from prep_errors[0]
+        worker_trace_path = output_path / f"{worker_run_id}.jsonl"
+        if worker_trace_path.exists():
+            worker_trace_path.unlink()
+        trace_logger = TraceLogger(output_path, worker_run_id)
+        _log_trace_metadata(
+            trace_logger=trace_logger,
+            mode="cloud_model",
+            sessions=loaded_sessions,
+            replay_speed=replay_speed,
+            llm_timing=llm_timing,
+            manifest=Path("<worker>"),
+            concurrency=global_concurrency,
+            scheduler_mode="multi_process_workers",
+            api_base=None,
+            model=None,
+            network_mode=network_mode,
+            extra={
+                "global_run_id": global_run_id,
+                "worker_run_id": worker_run_id,
+                "wave_index": wave_index,
+                "worker_index": worker_index,
+                "worker_count": worker_count,
+                "worker_chunk_size": len(worker_inputs),
+                "replay_start_delay_s": _REPLAY_START_DELAY_S,
+                "monitoring": monitoring_policy or {},
+            },
+        )
+        replay_zero_monotonic = await _wait_for_global_replay_start(
+            replay_start_barrier,
+            replay_start_event,
+            replay_start_wall_time,
+            coordinator=worker_index == 0,
+        )
+        replay_started = True
+        task_stats = await _run_prepared_cloud_model_sessions(
+            prepared_sessions,
+            trace_logger=trace_logger,
+            replay_zero_monotonic=replay_zero_monotonic,
+            replay_speed=replay_speed,
+            llm_timing=llm_timing,
+            command_timeout_s=command_timeout_s,
+            warmup_skip_iterations=warmup_skip_iterations,
+        )
+        trace_logger.close()
+        return WorkerReplayResult(
+            wave_index=wave_index,
+            worker_index=worker_index,
+            trace_file=str(trace_logger.path),
+            task_stats=task_stats,
+            task_output_dirs={
+                prepared.loaded.run_instance_id: str(prepared.task_output_dir)
+                for prepared in prepared_sessions
+                if prepared.task_output_dir is not None
+            },
+        )
+    except BaseException:
+        if not replay_started:
+            _abort_global_replay_start(replay_start_barrier, replay_start_event)
+        raise
+    finally:
+        if trace_logger is not None:
+            trace_logger.close()
+        for prepared in prepared_sessions:
+            await _finalize_prepared_session(prepared)
+
+
+def _run_worker_wave_sync(
+    *,
+    worker_inputs: list[WorkerTraceInput],
+    output_path: str,
+    worker_run_id: str,
+    global_run_id: str,
+    global_concurrency: int,
+    wave_index: int,
+    worker_index: int,
+    worker_count: int,
+    container_executable: str | None,
+    network_mode: str,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+    fixed_images_by_source: dict[str, str] | None,
+    resource_monitoring_enabled: bool,
+    memory_bandwidth_enabled: bool,
+    monitoring_policy: dict[str, object] | None,
+    prep_semaphore: Any,
+    replay_start_barrier: Any,
+    replay_start_event: Any,
+    replay_start_wall_time: Any,
+) -> WorkerReplayResult:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    return asyncio.run(
+        _run_worker_wave_async(
+            worker_inputs=worker_inputs,
+            output_path=Path(output_path),
+            worker_run_id=worker_run_id,
+            global_run_id=global_run_id,
+            global_concurrency=global_concurrency,
+            wave_index=wave_index,
+            worker_index=worker_index,
+            worker_count=worker_count,
+            container_executable=container_executable,
+            network_mode=network_mode,
+            replay_speed=replay_speed,
+            llm_timing=llm_timing,
+            command_timeout_s=command_timeout_s,
+            warmup_skip_iterations=warmup_skip_iterations,
+            fixed_images_by_source=fixed_images_by_source,
+            resource_monitoring_enabled=resource_monitoring_enabled,
+            memory_bandwidth_enabled=memory_bandwidth_enabled,
+            monitoring_policy=monitoring_policy,
+            prep_semaphore=prep_semaphore,
+            replay_start_barrier=replay_start_barrier,
+            replay_start_event=replay_start_event,
+            replay_start_wall_time=replay_start_wall_time,
+        )
+    )
+
+
+async def _run_cloud_model_worker_waves(
+    worker_inputs: list[WorkerTraceInput],
+    *,
+    output_path: Path,
+    run_id: str,
+    concurrency: int,
+    workers: int,
+    prep_concurrency: int,
+    container_executable: str | None,
+    network_mode: str,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+    fixed_images_by_source: dict[str, str] | None,
+    resource_monitoring_enabled: bool,
+    memory_bandwidth_enabled: bool,
+    monitoring_policy: dict[str, object] | None,
+) -> tuple[list[WorkerReplayResult], list[ReplayTaskStats]]:
+    if workers < 1:
+        raise ValueError("workers must be >= 1")
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+    prep_limit = _resolve_prep_concurrency(prep_concurrency, len(worker_inputs))
+    wave_inputs = _chunk_worker_inputs_by_concurrency(worker_inputs, concurrency)
+    replay_results: list[WorkerReplayResult] = []
+    task_stats: list[ReplayTaskStats] = []
+
+    loop = asyncio.get_running_loop()
+    with multiprocessing.Manager() as sync_manager:
+        prep_semaphore = sync_manager.Semaphore(prep_limit)
+        for wave_index, wave in enumerate(wave_inputs):
+            chunks = _partition_worker_inputs(wave, workers)
+            worker_count = len(chunks)
+            replay_start_barrier = sync_manager.Barrier(worker_count)
+            replay_start_event = sync_manager.Event()
+            replay_start_wall_time = sync_manager.Value("d", 0.0)
+            logger.info(
+                "Starting simulate wave %d/%d: sessions=%d workers=%d prep_limit=%d",
+                wave_index + 1,
+                len(wave_inputs),
+                len(wave),
+                worker_count,
+                prep_limit,
+            )
+            with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                futures = [
+                    loop.run_in_executor(
+                        executor,
+                        functools.partial(
+                            _run_worker_wave_sync,
+                            worker_inputs=chunk,
+                            output_path=str(output_path),
+                            worker_run_id=(
+                                f"{run_id}.wave_{wave_index:04d}.worker_{worker_index:04d}"
+                            ),
+                            global_run_id=run_id,
+                            global_concurrency=concurrency,
+                            wave_index=wave_index,
+                            worker_index=worker_index,
+                            worker_count=worker_count,
+                            container_executable=container_executable,
+                            network_mode=network_mode,
+                            replay_speed=replay_speed,
+                            llm_timing=llm_timing,
+                            command_timeout_s=command_timeout_s,
+                            warmup_skip_iterations=warmup_skip_iterations,
+                            fixed_images_by_source=fixed_images_by_source,
+                            resource_monitoring_enabled=resource_monitoring_enabled,
+                            memory_bandwidth_enabled=memory_bandwidth_enabled,
+                            monitoring_policy=monitoring_policy,
+                            prep_semaphore=prep_semaphore,
+                            replay_start_barrier=replay_start_barrier,
+                            replay_start_event=replay_start_event,
+                            replay_start_wall_time=replay_start_wall_time,
+                        ),
+                    )
+                    for worker_index, chunk in enumerate(chunks)
+                ]
+                wave_results = await asyncio.gather(*futures)
+            replay_results.extend(sorted(wave_results, key=lambda item: item.worker_index))
+            for result in sorted(wave_results, key=lambda item: item.worker_index):
+                task_stats.extend(result.task_stats)
+    task_stats.sort(key=lambda stat: stat.manifest_index)
+    replay_results.sort(key=lambda item: (item.wave_index, item.worker_index))
+    return replay_results, task_stats
+
+
+async def _replay_cloud_model_session(
+    prepared_session: PreparedTraceSession,
+    *,
+    trace_logger: TraceLogger,
+    replay_zero_monotonic: float | None = None,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
 ) -> ReplayTaskStats:
     loaded = prepared_session.loaded
     ctr = prepared_session.container
     source_model = (loaded.summary or {}).get("model", "unknown")
-    source_zero = _coerce_timestamp(
-        loaded.actions[0].get("ts_start"),
-        field="ts_start",
-        source_trace=loaded.source_trace,
-        action_id=str(loaded.actions[0].get("action_id", "")),
-    )
-
     logger.info(
-        "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx",
+        "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx (llm_timing=%s)",
         loaded.agent_id,
         loaded.scaffold,
         len(loaded.actions),
         source_model,
         replay_speed,
+        llm_timing.mode,
     )
 
     wall_start = time.time()
     succeeded_actions = 0
-    failed_actions = 0
+    outcome_mismatches = 0
+    unresolved_mismatches = 0
+    replay_action_errors = 0
     fatal_replay_errors = 0
+    forced_sync_actions = 0
+    forced_sync_attempts = 0
+    forced_sync_successes = 0
+    forced_sync_continued_actions = 0
     source_failed_actions = 0
     replay_failed_actions = 0
     matched_failed_actions = 0
+    previous_source_end: float | None = None
+    sleep_drifts: list[SleepDrift] = []
 
-    for action in loaded.actions:
+    if replay_zero_monotonic is not None:
+        start_drift = await _sleep_until_monotonic(replay_zero_monotonic)
+        if start_drift is not None:
+            sleep_drifts.append(start_drift)
+
+    # Per-session CAS tracking state
+    prev_cas_manifest: dict[str, str] | None = None
+    folded_source_entries: dict[str, str] = {}
+
+    for action_index, action in enumerate(loaded.actions):
         action_id = str(action.get("action_id", ""))
         action_type = str(action.get("action_type", ""))
         iteration = int(action.get("iteration", 0))
@@ -2263,16 +3462,37 @@ async def _replay_cloud_model_session(
         action_ts_start, action_ts_end = _coerce_action_bounds(action, source_trace=loaded.source_trace)
         source_duration_s = max(0.0, action_ts_end - action_ts_start)
 
-        await _sleep_until_offset(
-            replay_zero_monotonic=replay_zero_monotonic,
-            target_offset_s=(action_ts_start - source_zero) / replay_speed,
+        source_gap_sleep = await _sleep_source_gap(
+            previous_source_end=previous_source_end,
+            action_source_start=action_ts_start,
+            replay_speed=replay_speed,
+        )
+        if source_gap_sleep is not None:
+            sleep_drifts.append(source_gap_sleep)
+        action_excluded_overhead_s = _source_action_excluded_overhead_s(action)
+        effective_action_source_end = action_ts_end + action_excluded_overhead_s
+        previous_source_end = max(
+            effective_action_source_end,
+            previous_source_end
+            if previous_source_end is not None
+            else effective_action_source_end,
         )
 
         try:
             if action_type == "llm_call":
                 record_ts_start = time.time()
-                if source_duration_s > 0:
-                    await asyncio.sleep(source_duration_s / replay_speed)
+                sleep_s, llm_timing_fields = _llm_replay_duration_s(
+                    data=data,
+                    source_duration_s=source_duration_s,
+                    replay_speed=replay_speed,
+                    timing=llm_timing,
+                )
+                action_sleep = await _sleep_and_measure(
+                    sleep_s,
+                    phase="llm_replay",
+                )
+                if action_sleep is not None:
+                    sleep_drifts.append(action_sleep)
                 record_ts_end = time.time()
                 record = _make_trace_action(
                     loaded=loaded,
@@ -2291,8 +3511,13 @@ async def _replay_cloud_model_session(
                         "source_llm_latency_ms": data.get("llm_latency_ms"),
                         "replay_mode": "cloud_model",
                         "replay_speed": replay_speed,
+                        **llm_timing_fields,
                         "sim_metrics": {
                             "warmup": iteration < warmup_skip_iterations,
+                            **_sleep_drift_metrics(
+                                source_gap=source_gap_sleep,
+                                action_sleep=action_sleep,
+                            ),
                         },
                     },
                 )
@@ -2319,6 +3544,7 @@ async def _replay_cloud_model_session(
 
             record_ts_start = time.time()
             source_duration_ms = float(data.get("duration_ms") or 0.0)
+            action_sleep: SleepDrift | None = None
             source_success = _source_tool_success(data)
             source_tool_result = data.get("tool_result", data.get("result", ""))
             source_exec_timeout = _source_exec_timeout_s(
@@ -2328,8 +3554,13 @@ async def _replay_cloud_model_session(
                 source_success=source_success,
                 source_tool_result=source_tool_result,
             )
+            source_resource_timeline = valid_resource_timeline(
+                data.get("resource_timeline")
+            )
             original_artifact_path: str | None = None
             mapped_artifact_path: str | None = None
+            exec_resource_timeline: dict[str, Any] | None = None
+            tool_exec_metadata: dict[str, Any] = {}
             if not source_success:
                 source_failed_actions += 1
             if ctr is None:
@@ -2342,12 +3573,20 @@ async def _replay_cloud_model_session(
                 replay_source = "skipped_host_mode"
                 tool_result = data.get("tool_result", data.get("result", ""))
                 tool_success = source_success
-                if source_duration_ms > 0:
-                    await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
+                action_sleep = await _sleep_and_measure(
+                    source_duration_ms / 1000 / replay_speed,
+                    phase="tool_trace_replay",
+                )
+                if action_sleep is not None:
+                    sleep_drifts.append(action_sleep)
                 duration_ms = (time.time() - record_ts_start) * 1000
             elif tool_name == "message":
-                if source_duration_ms > 0:
-                    await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
+                action_sleep = await _sleep_and_measure(
+                    source_duration_ms / 1000 / replay_speed,
+                    phase="tool_trace_replay",
+                )
+                if action_sleep is not None:
+                    sleep_drifts.append(action_sleep)
                 tool_result = data.get("tool_result", data.get("result", ""))
                 if not tool_result:
                     tool_result = "Message replayed as no-op"
@@ -2355,8 +3594,12 @@ async def _replay_cloud_model_session(
                 duration_ms = (time.time() - record_ts_start) * 1000
                 replay_source = "message_noop"
             elif tool_name.startswith("mcp_"):
-                if source_duration_ms > 0:
-                    await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
+                action_sleep = await _sleep_and_measure(
+                    source_duration_ms / 1000 / replay_speed,
+                    phase="tool_trace_replay",
+                )
+                if action_sleep is not None:
+                    sleep_drifts.append(action_sleep)
                 tool_result = data.get("tool_result", "")
                 tool_success = source_success
                 duration_ms = (time.time() - record_ts_start) * 1000
@@ -2379,30 +3622,90 @@ async def _replay_cloud_model_session(
                         tool_args_json=tool_args,
                     )
                 if original_artifact_path is not None and not mapped_exists:
-                    if source_duration_ms > 0:
-                        await asyncio.sleep(source_duration_ms / 1000 / replay_speed)
+                    action_sleep = await _sleep_and_measure(
+                        source_duration_ms / 1000 / replay_speed,
+                        phase="tool_trace_replay",
+                    )
+                    if action_sleep is not None:
+                        sleep_drifts.append(action_sleep)
                     tool_result = _artifact_unavailable_result(original_artifact_path)
                     tool_success = False
                     duration_ms = (time.time() - record_ts_start) * 1000
                     replay_source = "source_artifact_unavailable"
-                    fatal_replay_errors += 1
                 else:
-                    if mapped_artifact_path is not None:
-                        tool_result, duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
+                    exec_resource_timeline = (
+                        source_resource_timeline
+                        if _tool_uses_single_exec_command_semantics(
                             tool_name,
                             mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
-                            True,
+                        )
+                        else None
+                    )
+                    if exec_resource_timeline is None:
+                        if mapped_artifact_path is not None:
+                            (
+                                tool_result,
+                                duration_ms,
+                                tool_success,
+                                tool_exec_metadata,
+                            ) = _unpack_exec_tool_result(
+                                await _exec_tool(
+                                    ctr.agent,
+                                    tool_name,
+                                    mapped_tool_args,
+                                    command_timeout_s,
+                                    source_exec_timeout,
+                                    True,
+                                )
+                            )
+                        else:
+                            (
+                                tool_result,
+                                duration_ms,
+                                tool_success,
+                                tool_exec_metadata,
+                            ) = _unpack_exec_tool_result(
+                                await _exec_tool(
+                                    ctr.agent,
+                                    tool_name,
+                                    mapped_tool_args,
+                                    command_timeout_s,
+                                    source_exec_timeout,
+                                )
+                            )
+                    elif mapped_artifact_path is not None:
+                        (
+                            tool_result,
+                            duration_ms,
+                            tool_success,
+                            tool_exec_metadata,
+                        ) = _unpack_exec_tool_result(
+                            await _exec_tool(
+                                ctr.agent,
+                                tool_name,
+                                mapped_tool_args,
+                                command_timeout_s,
+                                source_exec_timeout,
+                                True,
+                                exec_resource_timeline,
+                            )
                         )
                     else:
-                        tool_result, duration_ms, tool_success = await _exec_tool(
-                            ctr.agent,
-                            tool_name,
-                            mapped_tool_args,
-                            command_timeout_s,
-                            source_exec_timeout,
+                        (
+                            tool_result,
+                            duration_ms,
+                            tool_success,
+                            tool_exec_metadata,
+                        ) = _unpack_exec_tool_result(
+                            await _exec_tool(
+                                ctr.agent,
+                                tool_name,
+                                mapped_tool_args,
+                                command_timeout_s,
+                                source_exec_timeout,
+                                False,
+                                exec_resource_timeline,
+                            )
                         )
                     replay_source = (
                         "restored_runtime_artifact"
@@ -2411,13 +3714,186 @@ async def _replay_cloud_model_session(
                     )
             if not tool_success:
                 replay_failed_actions += 1
-            replay_outcome_match = (
-                tool_success == source_success
-                and replay_source != "source_artifact_unavailable"
+            mismatch_reason = _tool_mismatch_reason(
+                source_success=source_success,
+                tool_success=tool_success,
+                replay_source=replay_source,
+                source_tool_result=source_tool_result,
+                replay_tool_result=tool_result,
+                tool_name=tool_name,
+                tool_args_json=tool_args,
             )
+            replay_outcome_match = mismatch_reason is None
             if (not tool_success) and replay_outcome_match:
                 matched_failed_actions += 1
             record_ts_end = time.time()
+            # === CAS manifest comparison at checkpoint boundaries ===
+            cas_manifest_fields: dict[str, Any] = {}
+            cas_spec = _checkpoint_after_spec(
+                action_data=data,
+                source_trace=loaded.source_trace,
+            )
+            if cas_spec is not None and ctr is not None:
+                folded_source_entries = _fold_source_checkpoint_entries(
+                    checkpoint_spec=cas_spec,
+                    prev_folded=folded_source_entries,
+                )
+                source_entries = folded_source_entries
+                replay_entries = _capture_snapshot_manifest(
+                    container_id=ctr.container_id,
+                    container_executable=ctr.container_executable,
+                    root=cas_spec.get("root", "/testbed"),
+                    previous_manifest=prev_cas_manifest,
+                )
+                # Only compare if capture succeeded (None = failure)
+                if replay_entries is not None:
+                    cas_manifest_fields = _cas_manifest_comparison_fields(
+                        source_entries=source_entries,
+                        replay_entries=replay_entries,
+                    )
+                # Store for incremental next snapshot (update even on {} —
+                # next incremental starts from a known empty state)
+                if replay_entries is not None:
+                    prev_cas_manifest = replay_entries
+            forced_sync_fields: dict[str, Any] = {}
+            if mismatch_reason is not None and ctr is not None:
+                checkpoint_spec = _checkpoint_after_spec(
+                    action_data=data,
+                    source_trace=loaded.source_trace,
+                )
+                checkpoint_action_index: int | None = (
+                    action_index if checkpoint_spec is not None else None
+                )
+                if checkpoint_spec is None:
+                    fallback_spec: dict[str, Any] | None = None
+                    fallback_action_index: int | None = None
+                    for prev_index in range(action_index - 1, -1, -1):
+                        prev_action = loaded.actions[prev_index]
+                        prev_data = prev_action.get("data") or {}
+                        candidate = _checkpoint_after_spec(
+                            action_data=prev_data,
+                            source_trace=loaded.source_trace,
+                        )
+                        if candidate is not None:
+                            fallback_spec = candidate
+                            fallback_action_index = prev_index
+                            break
+
+                    if fallback_spec is None:
+                        forced_sync_fields = {
+                            "forced_sync_attempted": True,
+                            "forced_sync_success": False,
+                            "forced_sync_resolved": False,
+                            "forced_sync_continued": False,
+                            "forced_sync_reason": mismatch_reason,
+                            "forced_sync_status": "checkpoint_missing",
+                            "forced_sync_error": (
+                                "no checkpoint available (searched entire trace history)"
+                            ),
+                        }
+                    else:
+                        assert fallback_action_index is not None
+                        checkpoint_spec = fallback_spec
+                        checkpoint_action_index = fallback_action_index
+                        forced_sync_fields = {
+                            "forced_sync_attempted": True,
+                            "forced_sync_reason": mismatch_reason,
+                            "forced_sync_overhead_excluded": True,
+                            "forced_sync_fallback": True,
+                            "forced_sync_fallback_from_action_index": (
+                                fallback_action_index
+                            ),
+                            "forced_sync_fallback_from_action_id": str(
+                                loaded.actions[fallback_action_index].get(
+                                    "action_id",
+                                    "",
+                                )
+                            ),
+                        }
+                else:
+                    forced_sync_fields = {
+                        "forced_sync_attempted": True,
+                        "forced_sync_reason": mismatch_reason,
+                        "forced_sync_overhead_excluded": True,
+                    }
+
+                if checkpoint_spec is not None:
+                    assert checkpoint_action_index is not None
+                    checkpoint_chain = _checkpoint_chain_specs_for_action(
+                        actions=loaded.actions,
+                        target_index=checkpoint_action_index,
+                        source_trace=loaded.source_trace,
+                    )
+                    try:
+                        if checkpoint_chain is None:
+                            restore_result = _checkpoint_restore_failed_fields(
+                                checkpoint_path=Path(str(checkpoint_spec["path"])),
+                                kind=str(
+                                    checkpoint_spec.get("kind")
+                                    or "cas_manifest_incremental"
+                                ),
+                                restore_root=str(
+                                    checkpoint_spec.get("root") or "/testbed"
+                                ),
+                                status="checkpoint_full_missing",
+                                error=(
+                                    "incremental checkpoint has no preceding full "
+                                    "checkpoint"
+                                ),
+                                started=time.monotonic(),
+                                archive_exists=Path(
+                                    str(checkpoint_spec["path"])
+                                ).is_file(),
+                            )
+                        else:
+                            restore_result = await asyncio.to_thread(
+                                _restore_checkpoint_chain_to_container,
+                                checkpoint_specs=checkpoint_chain,
+                                container=ctr,
+                            )
+                        forced_sync_fields.update(restore_result)
+                    except Exception as exc:
+                        logger.exception(
+                            "Forced sync failed for %s action=%s",
+                            loaded.agent_id,
+                            action_id,
+                        )
+                        forced_sync_fields.update(
+                            {
+                                "forced_sync_success": False,
+                                "forced_sync_resolved": False,
+                                "forced_sync_continued": False,
+                                "forced_sync_status": "checkpoint_restore_failed",
+                                "forced_sync_error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+                    forced_sync_success = (
+                        forced_sync_fields.get("forced_sync_success") is True
+                    )
+                    # Container has been restored to source state;
+                    # previous replay manifest entries are stale.
+                    if forced_sync_success:
+                        prev_cas_manifest = None
+                    forced_sync_fields.setdefault("forced_sync_success", False)
+                    forced_sync_fields["forced_sync_resolved"] = False
+                    forced_sync_fields.setdefault(
+                        "forced_sync_status",
+                        "checkpoint_restored_continuation"
+                        if forced_sync_success
+                        else "checkpoint_restore_failed",
+                    )
+                    forced_sync_fields.setdefault(
+                        "forced_sync_continued",
+                        forced_sync_success
+                        and forced_sync_fields.get("forced_sync_status")
+                        == "checkpoint_restored_continuation",
+                    )
+            if mismatch_reason is not None:
+                source_raw = "" if source_tool_result is None else str(source_tool_result)
+                replay_raw = "" if tool_result is None else str(tool_result)
+                diff_snippet = _compute_output_diff_snippet(source_raw, replay_raw)
+                if diff_snippet is not None:
+                    forced_sync_fields["output_diff_snippet"] = diff_snippet
             extra_tool_fields = _command_metadata(
                 tool_name=tool_name,
                 tool_args_json=tool_args,
@@ -2428,8 +3904,20 @@ async def _replay_cloud_model_session(
                 extra_tool_fields["source_artifact_path"] = original_artifact_path
             if mapped_artifact_path is not None:
                 extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
+            if mismatch_reason is not None:
+                extra_tool_fields["mismatch_reason"] = mismatch_reason
+            extra_tool_fields.update(tool_exec_metadata)
+            extra_tool_fields.update(cas_manifest_fields)
+            extra_tool_fields.update(forced_sync_fields)
             if source_exec_timeout is not None:
                 extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
+            if source_resource_timeline is not None:
+                extra_tool_fields["source_resource_timeline"] = source_resource_timeline
+                extra_tool_fields["resource_timeout_policy"] = (
+                    "resource_integrated"
+                    if exec_resource_timeline is not None
+                    else "wall_clock"
+                )
             tool_record = _make_trace_action(
                 loaded=loaded,
                 action_type="tool_exec",
@@ -2464,10 +3952,28 @@ async def _replay_cloud_model_session(
                             "restored_runtime_artifact",
                         }
                         else "container_exec",
+                        **_sleep_drift_metrics(
+                            source_gap=source_gap_sleep,
+                            action_sleep=action_sleep,
+                        ),
                     },
                 },
             )
             trace_logger.log_trace_action(loaded.agent_id, tool_record)
+            forced_sync_attempted = (
+                forced_sync_fields.get("forced_sync_attempted") is True
+            )
+            forced_sync_success = forced_sync_fields.get("forced_sync_success") is True
+            forced_sync_continued = (
+                forced_sync_fields.get("forced_sync_continued") is True
+            )
+            if forced_sync_attempted:
+                forced_sync_attempts += 1
+            if forced_sync_success:
+                forced_sync_actions += 1
+                forced_sync_successes += 1
+            if forced_sync_continued:
+                forced_sync_continued_actions += 1
             if replay_outcome_match:
                 if tool_success:
                     succeeded_actions += 1
@@ -2479,16 +3985,32 @@ async def _replay_cloud_model_session(
                         tool_name,
                     )
             else:
-                logger.error(
-                    "Replay tool outcome mismatch for %s action=%s tool=%s "
-                    "source_success=%s replay_success=%s",
-                    loaded.agent_id,
-                    action_id,
-                    tool_name,
-                    source_success,
-                    tool_success,
-                )
-                failed_actions += 1
+                outcome_mismatches += 1
+                if not forced_sync_continued:
+                    unresolved_mismatches += 1
+                if forced_sync_continued:
+                    logger.warning(
+                        "Replay mismatch checkpoint-restored for %s action=%s "
+                        "tool=%s reason=%s status=%s",
+                        loaded.agent_id,
+                        action_id,
+                        tool_name,
+                        mismatch_reason,
+                        forced_sync_fields.get("forced_sync_status"),
+                    )
+                else:
+                    logger.error(
+                        "Replay tool outcome mismatch for %s action=%s tool=%s "
+                        "source_success=%s replay_success=%s status=%s",
+                        loaded.agent_id,
+                        action_id,
+                        tool_name,
+                        source_success,
+                        tool_success,
+                        forced_sync_fields.get("forced_sync_status"),
+                    )
+                if replay_source == "source_artifact_unavailable":
+                    fatal_replay_errors += 1
         except Exception as exc:
             logger.error(
                 "Replay action failed for %s action=%s: %s",
@@ -2496,9 +4018,10 @@ async def _replay_cloud_model_session(
                 action_id,
                 exc,
             )
-            failed_actions += 1
+            replay_action_errors += 1
 
     wall_end = time.time()
+    failed_actions = outcome_mismatches + replay_action_errors
     success = failed_actions == 0 and fatal_replay_errors == 0
     trace_logger.log_summary(
         loaded.agent_id,
@@ -2510,13 +4033,21 @@ async def _replay_cloud_model_session(
             extra={
                 "replay_mode": "cloud_model",
                 "replay_speed": replay_speed,
+                "llm_timing_mode": llm_timing.mode,
                 "succeeded_actions": succeeded_actions,
                 "failed_actions": failed_actions,
                 "source_failed_actions": source_failed_actions,
                 "replay_failed_actions": replay_failed_actions,
                 "matched_failed_actions": matched_failed_actions,
                 "fatal_replay_errors": fatal_replay_errors,
-                "outcome_mismatches": failed_actions,
+                "replay_action_errors": replay_action_errors,
+                "forced_sync_actions": forced_sync_actions,
+                "forced_sync_attempts": forced_sync_attempts,
+                "forced_sync_successes": forced_sync_successes,
+                "forced_sync_continued": forced_sync_continued_actions,
+                "outcome_mismatches": outcome_mismatches,
+                "unresolved_mismatches": unresolved_mismatches,
+                "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
             },
         ),
     )
@@ -2597,33 +4128,161 @@ def _split_trace_by_agent(
         logger.info("Wrote per-task trace (%d records) → %s", len(lines), out_path)
 
 
+def _worker_task_output_dirs(
+    worker_results: list[WorkerReplayResult],
+) -> dict[str, Path]:
+    task_dirs: dict[str, Path] = {}
+    for result in worker_results:
+        for agent_id, path in result.task_output_dirs.items():
+            task_dirs[agent_id] = Path(path)
+    return task_dirs
+
+
+def _split_combined_worker_trace_by_agent(
+    *,
+    combined_path: Path,
+    sessions: list[LoadedTraceSession],
+    worker_results: list[WorkerReplayResult],
+) -> None:
+    task_dirs = _worker_task_output_dirs(worker_results)
+    prepared_sessions: list[PreparedTraceSession] = []
+    for session in sessions:
+        task_output_dir = task_dirs.get(session.run_instance_id)
+        if task_output_dir is None:
+            continue
+        prepared_sessions.append(
+            PreparedTraceSession(loaded=session, task_output_dir=task_output_dir)
+        )
+    _split_trace_by_agent(combined_path, prepared_sessions)
+
+
+def _write_combined_worker_trace(
+    *,
+    trace_file: Path,
+    worker_results: list[WorkerReplayResult],
+    sessions: list[LoadedTraceSession],
+    mode: str,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
+    manifest: Path,
+    concurrency: int,
+    workers: int,
+    prep_concurrency: int,
+    network_mode: str,
+    model: str | None,
+    monitoring_policy: dict[str, object] | None,
+) -> None:
+    """Concatenate worker JSONL files behind one global metadata header."""
+    if trace_file.exists():
+        trace_file.unlink()
+    trace_logger = TraceLogger(trace_file.parent, trace_file.stem)
+    try:
+        _log_trace_metadata(
+            trace_logger=trace_logger,
+            mode=mode,
+            sessions=sessions,
+            replay_speed=replay_speed,
+            llm_timing=llm_timing,
+            manifest=manifest,
+            concurrency=concurrency,
+            scheduler_mode="multi_process_workers",
+            api_base=None,
+            model=model,
+            network_mode=network_mode,
+            extra={
+                "workers": workers,
+                "prep_concurrency": prep_concurrency,
+                "effective_workers": min(workers, len(sessions)),
+                "worker_trace_files": [result.trace_file for result in worker_results],
+                "monitoring": monitoring_policy or {},
+            },
+        )
+    finally:
+        trace_logger.close()
+
+    records: list[tuple[tuple[float, int, int], dict[str, Any]]] = []
+    sequence = 0
+    for result in worker_results:
+        worker_path = Path(result.trace_file)
+        if not worker_path.exists():
+            raise SimulateError(f"worker trace does not exist: {worker_path}")
+        with worker_path.open(encoding="utf-8") as in_fh:
+            for line in in_fh:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise SimulateError(
+                        f"invalid worker trace JSONL: {worker_path}"
+                    ) from exc
+                if record.get("type") == "trace_metadata":
+                    continue
+                records.append((_combined_trace_sort_key(record, sequence), record))
+                sequence += 1
+
+    with trace_file.open("a", encoding="utf-8") as out_fh:
+        for _sort_key, record in sorted(records, key=lambda item: item[0]):
+            out_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _combined_trace_sort_key(record: dict[str, Any], sequence: int) -> tuple[float, int, int]:
+    rtype = record.get("type")
+    if rtype == "action":
+        return (_float_sort_value(record.get("ts_start"), default=float("inf")), 0, sequence)
+    if rtype == "event":
+        return (_float_sort_value(record.get("ts")), 1, sequence)
+    if rtype == "summary":
+        return (_float_sort_value(record.get("ts"), default=float("inf")), 2, sequence)
+    return (_float_sort_value(record.get("ts"), default=float("inf")), 3, sequence)
+
+
+def _float_sort_value(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 async def simulate(
     *,
     manifest: Path,
     task_source: Path,
     output_dir: Path,
-    mode: str = "local_model",
+    mode: str = "cloud_model",
     concurrency: int = 1,
+    workers: int = 1,
+    prep_concurrency: int = 0,
     container_executable: str | None = None,
     network_mode: str = "host",
     api_base: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
     command_timeout_s: float = 120.0,
-    metrics_url: str | None = None,
     warmup_skip_iterations: int = 0,
     replay_speed: float = 1.0,
+    resource_monitoring: MonitoringMode = "auto",
+    pmu_monitoring: MonitoringMode = "auto",
+    memory_bandwidth_monitoring: MonitoringMode = "auto",
+    llm_timing_mode: str = "source_scaled",
+    llm_ttft_ms: float | None = None,
+    llm_tpot_ms: float | None = None,
     structured_output: bool = False,
-    gpu_baseline: GpuBaseline | None = None,
-    vllm_pid: int | None = None,
-    gpu_sample_hz: float = 10.0,
 ) -> Path:
-    if mode not in {"local_model", "cloud_model"}:
+    if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
-    if mode == "local_model" and concurrency != 1:
-        raise ValueError("local_model simulate requires concurrency=1")
+    if workers < 1:
+        raise ValueError("workers must be >= 1")
+    if prep_concurrency < 0:
+        raise ValueError("prep_concurrency must be >= 0")
+    llm_timing = LLMTimingConfig(
+        mode=llm_timing_mode,
+        ttft_ms=llm_ttft_ms,
+        tpot_ms=llm_tpot_ms,
+    )
+    _validate_llm_timing_config(llm_timing)
 
     manifest_entries = _load_simulate_manifest(
         manifest,
@@ -2645,11 +4304,22 @@ async def simulate(
         loaded_sessions,
         mode=mode,
         replay_speed=replay_speed,
+        llm_timing=llm_timing,
     )
     _validate_container_runtime(
         loaded_sessions,
         container_executable=container_executable,
     )
+    monitoring_policy = resolve_simulate_monitoring(
+        resource=resource_monitoring,
+        pmu=pmu_monitoring,
+        memory_bandwidth=memory_bandwidth_monitoring,
+        concurrency=concurrency,
+        workers=workers,
+        has_container_session=_has_container_mode_sessions(loaded_sessions),
+        has_host_session=any(_is_host_mode(session) for session in loaded_sessions),
+    )
+    monitoring_policy_dict = monitoring_policy.to_dict()
     await _prefetch_container_images(
         loaded_sessions,
         container_executable=container_executable,
@@ -2660,6 +4330,7 @@ async def simulate(
         output_path = output_path / _structured_output_subdir(
             loaded_sessions,
             concurrency=concurrency,
+            workers=workers,
         )
 
     prepared_sessions: list[PreparedTraceSession] = []
@@ -2672,7 +4343,7 @@ async def simulate(
     run_wall_start: float | None = None
     run_wall_end: float | None = None
     output_path.mkdir(parents=True, exist_ok=True)
-    scheduler_mode = "bounded_queue"
+    scheduler_mode = "bounded_queue" if workers == 1 else "multi_process_workers"
 
     try:
         sweep_fixed_images = await _prebuild_sweep_fixed_images(
@@ -2682,68 +4353,43 @@ async def simulate(
         )
         run_wall_start = time.monotonic()
         run_id = _build_run_id(mode=mode, model=model, concurrency=concurrency)
-        trace_logger = TraceLogger(output_path, run_id)
-        _log_trace_metadata(
-            trace_logger=trace_logger,
-            mode=mode,
-            sessions=loaded_sessions,
-            replay_speed=replay_speed,
-            manifest=manifest,
-            concurrency=concurrency,
-            scheduler_mode=scheduler_mode,
-            api_base=api_base,
-            model=model,
-            network_mode=network_mode,
-        )
-        if container_executable is not None and _has_container_mode_sessions(
-            loaded_sessions
-        ):
-            container_resource_recorder = ContainerResourceRecorder(
-                output_dir=output_path,
-                run_id=run_id,
-                interval_s=GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S,
-                executable=container_executable,
-                sample_all_containers=False,
-            )
-            container_resource_recorder.start()
-
-        if mode == "local_model":
-            prepared = await _prepare_replay_session(
-                loaded_sessions[0],
-                output_path=output_path,
-                container_executable=container_executable,
-                network_mode=network_mode,
-                container_resource_recorder=container_resource_recorder,
-                fixed_images_by_source=sweep_fixed_images,
-            )
-            prepared_sessions.append(prepared)
-            assert trace_logger is not None
-            assert api_base is not None
-            assert api_key is not None
-            assert model is not None
-            # Compute gpu_output_path from the single session's attempt dir
-            gpu_output_path: Path | None = None
-            if gpu_baseline is not None and vllm_pid is not None and metrics_url:
-                task_dir = prepared_sessions[0].task_output_dir
-                if task_dir is not None:
-                    gpu_output_path = task_dir / "gpu_resources.json"
-            local_stats = await _run_local_model_simulation(
-                prepared_sessions[0],
+        if workers == 1:
+            trace_path = output_path / f"{run_id}.jsonl"
+            if trace_path.exists():
+                trace_path.unlink()
+            trace_logger = TraceLogger(output_path, run_id)
+            _log_trace_metadata(
                 trace_logger=trace_logger,
+                mode=mode,
+                sessions=loaded_sessions,
                 replay_speed=replay_speed,
-                api_base=api_base,
-                api_key=api_key,
+                llm_timing=llm_timing,
+                manifest=manifest,
+                concurrency=concurrency,
+                scheduler_mode=scheduler_mode,
+                api_base=None,
                 model=model,
-                command_timeout_s=command_timeout_s,
-                metrics_url=metrics_url,
-                warmup_skip_iterations=warmup_skip_iterations,
-                gpu_baseline=gpu_baseline,
-                vllm_pid=vllm_pid,
-                gpu_sample_hz=gpu_sample_hz,
-                gpu_output_path=gpu_output_path,
+                network_mode=network_mode,
+                extra={
+                    "workers": workers,
+                    "prep_concurrency": prep_concurrency,
+                    "monitoring": monitoring_policy_dict,
+                },
             )
-            task_stats = [local_stats]
-        else:
+            if monitoring_policy.global_container_resource_enabled:
+                if container_executable is None:
+                    raise AssertionError("container_executable required for monitoring")
+                container_resource_recorder = ContainerResourceRecorder(
+                    output_dir=output_path,
+                    run_id=run_id,
+                    interval_s=GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S,
+                    executable=container_executable,
+                    sample_all_containers=False,
+                    collect_cgroup_memory_access=monitoring_policy.pmu_enabled,
+                    monitoring_policy=monitoring_policy_dict,
+                )
+                container_resource_recorder.start()
+
             assert trace_logger is not None
             prepared_sessions, task_stats = await _run_cloud_model_queue(
                 loaded_sessions,
@@ -2754,9 +4400,61 @@ async def simulate(
                 network_mode=network_mode,
                 container_resource_recorder=container_resource_recorder,
                 replay_speed=replay_speed,
+                llm_timing=llm_timing,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
                 fixed_images_by_source=sweep_fixed_images,
+                resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
+                memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
+                monitoring_policy=monitoring_policy_dict,
+            )
+        else:
+            worker_results, task_stats = await _run_cloud_model_worker_waves(
+                [_worker_trace_input(session) for session in loaded_sessions],
+                output_path=output_path,
+                run_id=run_id,
+                concurrency=concurrency,
+                workers=workers,
+                prep_concurrency=prep_concurrency,
+                container_executable=container_executable,
+                network_mode=network_mode,
+                replay_speed=replay_speed,
+                llm_timing=llm_timing,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+                fixed_images_by_source=sweep_fixed_images,
+                resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
+                memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
+                monitoring_policy=monitoring_policy_dict,
+            )
+            container_resource_summary = {
+                "status": "disabled",
+                "reason": "multi_process_workers_use_per_task_resources"
+                if monitoring_policy.resource_enabled
+                else "disabled_by_monitoring_policy",
+                "sample_count": 0,
+                "monitoring": monitoring_policy_dict,
+            }
+            combined_trace_file = output_path / f"{run_id}.jsonl"
+            _write_combined_worker_trace(
+                trace_file=combined_trace_file,
+                worker_results=worker_results,
+                sessions=loaded_sessions,
+                mode=mode,
+                replay_speed=replay_speed,
+                llm_timing=llm_timing,
+                manifest=manifest,
+                concurrency=concurrency,
+                workers=workers,
+                prep_concurrency=prep_concurrency,
+                network_mode=network_mode,
+                model=model,
+                monitoring_policy=monitoring_policy_dict,
+            )
+            _split_combined_worker_trace_by_agent(
+                combined_path=combined_trace_file,
+                sessions=loaded_sessions,
+                worker_results=worker_results,
             )
         run_completed_for_fixed_cleanup = True
     finally:
@@ -2799,10 +4497,14 @@ async def simulate(
         mode=mode,
         concurrency=concurrency,
         scheduler_mode=scheduler_mode,
+        llm_timing=llm_timing,
+        workers=workers,
+        prep_concurrency=prep_concurrency,
         trace_file=trace_file,
         wall_time_s=run_wall_end - run_wall_start,
         task_stats=task_stats,
         container_resources=container_resource_summary,
+        monitoring_policy=monitoring_policy_dict,
     )
     logger.info("Simulate complete [%s] -> %s", mode, trace_file)
     return trace_file

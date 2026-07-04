@@ -1,9 +1,0 @@
-# Non-metadata Delta-pos control. Calibrate stride/cluster before campaign use.
-name: position_control
-budget: 1024
-sink_size: 4
-recent_window: 256
-position_control: structured
-position_control_stride: 16
-position_control_cluster_size: 8
-record: true

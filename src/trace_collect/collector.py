@@ -2,26 +2,23 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack
 from concurrent.futures import Future, ThreadPoolExecutor
+import asyncio
 import json
 import logging
 import os
+import random
 import shutil
+import subprocess
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from llm_call import UnifiedProvider
-from agents.openclaw.runtime_deps import OPENCLAW_MCP_RUNTIME_REQUIREMENTS
 
-# `serving.recording` (and its KV-eviction transitive deps) pulls in `torch`
-# via `transformers.cache_utils`. Container venvs that only need MCP/scaffold
-# helpers from this module must not pay that import cost — keep this lazy
-# inside the HF-backend branch in `collect_traces`.
 from harness.container_image_prep import (
     drop_cached_fixed_image,
     ensure_source_image,
@@ -29,6 +26,7 @@ from harness.container_image_prep import (
     prune_dangling_images,
     remove_image,
 )
+from agents.openclaw._session_runner import SessionRunner
 from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
@@ -39,164 +37,48 @@ from trace_collect.attempt_pipeline import (
     start_task_container,
     stop_task_container,
 )
-from trace_collect.runtime.task_container import (
-    bootstrap_task_container_python,
-    preflight_task_container_runtime,
-    resolve_task_container_exec_config,
-    resolve_running_container_exec_config,
-    run_task_container_agent,
-)
 
 if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
-    from serving.kv_policies.base import EvictionPolicyConfig
-    from serving.sparse_attention.base import SparseAttentionConfig
 
 logger = logging.getLogger(__name__)
 _DOCKER_HOST_GATEWAY = "172.17.0.1"
-_INTERNAL_HF_API_KEY = "hf-recording"
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 _FALSY_ENV_VALUES = {"0", "false", "no", "off"}
 
 
 @dataclass(frozen=True)
 class _CollectModelBackend:
-    """Materialized model client and endpoint exposed to the scaffold."""
+    """Materialized cloud model client and endpoint exposed to the scaffold."""
 
     provider: Any
     provider_name: str | None
     api_base: str
     api_key: str
-    recording_provider: Any | None
     trace_run_config: dict[str, Any]
-
-
-def _recording_server_public_host(
-    *,
-    execution_environment: str,
-    runtime_mode: str,
-    container_executable: str | None,
-) -> str | None:
-    explicit = os.environ.get("HF_RECORDING_PUBLIC_HOST")
-    if explicit:
-        return explicit
-    if container_executable == "docker" and (
-        execution_environment == "container" or runtime_mode == "task_container_agent"
-    ):
-        return _DOCKER_HOST_GATEWAY
-    return None
-
-
-def _collect_trace_run_config(
-    *,
-    record_internals: bool,
-    local_hf: bool,
-) -> dict[str, Any]:
-    """Return trace run_config fields implied by collect backend knobs."""
-    run_config: dict[str, Any] = {}
-    if record_internals:
-        run_config["record_internals"] = True
-    if local_hf:
-        run_config["local_hf"] = True
-        run_config["hf_backend"] = "local_hf"
-    return run_config
 
 
 def _prepare_collect_model_backend(
     *,
-    use_hf_backend: bool,
-    record_internals: bool,
-    local_hf: bool,
     model: str,
     api_base: str,
     api_key: str,
     provider_name: str | None,
-    execution_environment: str,
-    runtime_mode: str,
-    container_executable: str | None,
-    cleanup_stack: ExitStack,
-    eviction_config: "EvictionPolicyConfig | None",
-    sparse_attention_config: "SparseAttentionConfig | None",
-    per_head_stats_layers: tuple[int, ...],
-    per_head_block_stats: bool,
-    record_per_head_topk: bool,
-    per_head_topk_rank: int,
-    generation_seed: int,
-    temperature: float | None,
-    top_p: float | None,
-    top_k: int | None,
-    repetition_penalty: float | None,
     generation_config: dict[str, Any],
 ) -> _CollectModelBackend:
-    """Build the single model-provider path used by host and container agents.
-
-    External OpenAI-compatible endpoints (remote providers and local vLLM) pass
-    through unchanged. Internal HF runs materialize an OpenAI-compatible local
-    recording server and expose only that derived endpoint to the scaffold.
-    """
-    trace_run_config = _collect_trace_run_config(
-        record_internals=record_internals,
-        local_hf=local_hf,
-    )
-    if not use_hf_backend:
-        provider = UnifiedProvider(
-            api_key=api_key,
-            api_base=api_base,
-            default_model=model,
-            **generation_config,
-        )
-        return _CollectModelBackend(
-            provider=provider,
-            provider_name=provider_name,
-            api_base=api_base,
-            api_key=api_key,
-            recording_provider=None,
-            trace_run_config=trace_run_config,
-        )
-
-    # Lazy: `serving.recording` triggers `transformers.cache_utils → torch`.
-    from serving.recording import (
-        HFRecordingProvider,
-        HFRecordingServer,
-        RecordingConfig,
-    )
-
-    recording_provider = cleanup_stack.enter_context(
-        HFRecordingProvider(
-            default_model=model,
-            config=RecordingConfig(
-                record_artifacts=bool(record_internals),
-                per_head_stats_layers=tuple(per_head_stats_layers),
-                per_head_block_stats=bool(per_head_block_stats),
-                record_per_head_topk=bool(record_per_head_topk),
-                per_head_topk_rank=int(per_head_topk_rank),
-                generation_seed=int(generation_seed),
-            ),
-            eviction_config=eviction_config,
-            sparse_attention_config=sparse_attention_config,
-            temperature=temperature if temperature is not None else 0.1,
-            top_p=top_p,
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
-        )
-    )
-    recording_server = cleanup_stack.enter_context(
-        HFRecordingServer(
-            recording_provider,
-            public_host=_recording_server_public_host(
-                execution_environment=execution_environment,
-                runtime_mode=runtime_mode,
-                container_executable=container_executable,
-            ),
-        )
+    """Build the cloud/OpenAI-compatible model-provider path."""
+    provider = UnifiedProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+        **generation_config,
     )
     return _CollectModelBackend(
-        provider=recording_provider,
-        provider_name="openai",
-        api_base=recording_server.api_base,
-        api_key=_INTERNAL_HF_API_KEY,
-        recording_provider=recording_provider,
-        trace_run_config=trace_run_config,
+        provider=provider,
+        provider_name=provider_name,
+        api_base=api_base,
+        api_key=api_key,
+        trace_run_config={},
     )
 
 
@@ -285,9 +167,19 @@ def build_run_dir(benchmark: "Benchmark", model: str) -> Path:
     return benchmark.config.trace_root / safe_model / ts
 
 
-def load_completed_ids(run_dir: Path) -> set[str]:
-    """Return instance_ids whose ``attempt_*/run_manifest.json`` is ``completed``.
+_RESUME_TERMINAL_STATUSES = frozenset({"completed", "exhausted"})
 
+
+def _is_resume_terminal_manifest(manifest: dict[str, Any]) -> bool:
+    return manifest.get("status") in _RESUME_TERMINAL_STATUSES
+
+
+def load_completed_ids(run_dir: Path) -> set[str]:
+    """Return instance_ids whose attempts are terminal for ``--run-id`` resume.
+
+    ``completed`` attempts and ``exhausted`` max-iteration attempts should not be
+    rerun when resuming the same run directory. ``error`` manifests are not
+    resume-terminal, even if their error text mentions max-iteration exhaustion.
     Only the nested attempt layout is supported — no legacy flat scan.
     """
     completed: set[str] = set()
@@ -304,7 +196,7 @@ def load_completed_ids(run_dir: Path) -> set[str]:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if manifest.get("status") == "completed":
+            if _is_resume_terminal_manifest(manifest):
                 completed.add(instance_dir.name)
                 break
     return completed
@@ -323,12 +215,13 @@ def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) 
 
 
 def _select_tasks(
+    benchmark: "Benchmark",
     tasks: list[dict[str, Any]],
     *,
     instance_ids: list[str] | None,
     sample: int | None,
 ) -> list[dict[str, Any]]:
-    """Filter tasks while preserving the explicit ``instance_ids`` order."""
+    """Filter tasks, then apply benchmark-seeded random sampling."""
     selected = list(tasks)
     if instance_ids is not None:
         by_id = {task["instance_id"]: task for task in tasks}
@@ -339,7 +232,10 @@ def _select_tasks(
             raise ValueError(f"No tasks matched instance_ids: {missing}")
         selected = [by_id[instance_id] for instance_id in instance_ids]
     if sample is not None:
-        selected = selected[:sample]
+        if sample < 0:
+            raise ValueError(f"sample must be non-negative, got {sample}")
+        rng = random.Random(benchmark.config.selection_seed)
+        selected = rng.sample(selected, k=min(sample, len(selected)))
     return selected
 
 
@@ -407,8 +303,7 @@ def _task_image_cleanup_enabled() -> bool:
     if value in _FALSY_ENV_VALUES:
         return False
     raise ValueError(
-        "TASK_CONTAINER_CLEANUP_IMAGES must be one of "
-        "1/true/yes/on or 0/false/no/off"
+        "TASK_CONTAINER_CLEANUP_IMAGES must be one of 1/true/yes/on or 0/false/no/off"
     )
 
 
@@ -523,13 +418,15 @@ async def _run_scaffold_tasks(
     prompt_template: str | None,
     min_free_disk_gb: float,
     inner_factory,
-    recording_provider: Any | None = None,
+    concurrency: int = 1,
 ) -> Path:
     """Iterate over tasks, wrapping each in ``run_attempt``."""
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1, got {concurrency}")
     run_dir.mkdir(parents=True, exist_ok=True)
     completed = load_completed_ids(run_dir)
     if completed:
-        logger.info("Resuming: %d tasks already completed", len(completed))
+        logger.info("Resuming: %d tasks already terminal", len(completed))
 
     results: list[CollectedTaskResult] = []
     total = len(tasks)
@@ -540,6 +437,118 @@ async def _run_scaffold_tasks(
         prompt_template=prompt_template,
     )
 
+    if concurrency > 1:
+        next_attempt_by_instance: dict[str, int] = {}
+        scheduled: list[tuple[int, dict[str, Any], int]] = []
+        for i, task in enumerate(tasks):
+            instance_id = task["instance_id"]
+            if instance_id in completed:
+                logger.info(
+                    "[%d/%d] SKIP %s (already terminal)", i + 1, total, instance_id
+                )
+                continue
+            attempt = next_attempt_by_instance.get(instance_id)
+            if attempt is None:
+                attempt = next_attempt_number(run_dir, instance_id)
+            next_attempt_by_instance[instance_id] = attempt + 1
+            scheduled.append((i, task, attempt))
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def run_scheduled(
+            index: int,
+            task: dict[str, Any],
+            attempt: int,
+        ) -> tuple[int, CollectedTaskResult, str | None, str | None]:
+            async with semaphore:
+                instance_id = task["instance_id"]
+                logger.info(
+                    "[%d/%d] START %s (%s)", index + 1, total, instance_id, scaffold
+                )
+                t0 = time.monotonic()
+                source_image = _task_source_image(benchmark, task)
+                attempt_ctx = AttemptContext(
+                    run_dir=run_dir,
+                    instance_id=instance_id,
+                    attempt=attempt,
+                    task=task,
+                    model=model,
+                    scaffold=scaffold,
+                    source_image=source_image,
+                    prompt_template=resolved_prompt_template,
+                    agent_runtime_mode=benchmark.runtime_mode_for(scaffold),
+                    execution_environment=benchmark.execution_environment,
+                )
+                try:
+                    _ensure_task_source_ready(
+                        instance_id=instance_id,
+                        source_image=source_image,
+                        prefetched_source_image=None,
+                        prefetch_future=None,
+                        container_executable=container_executable,
+                    )
+                    run_attempt_kwargs: dict[str, Any] = {
+                        "inner": inner_factory(task),
+                        "min_free_disk_gb": min_free_disk_gb,
+                        "container_executable": container_executable,
+                    }
+
+                    def run_attempt_sync() -> AttemptResult:
+                        return asyncio.run(
+                            run_attempt(attempt_ctx, **run_attempt_kwargs)
+                        )
+
+                    result = await asyncio.to_thread(run_attempt_sync)
+                except Exception as exc:
+                    logger.exception("FAILED %s", instance_id)
+                    collected = CollectedTaskResult(
+                        instance_id=instance_id,
+                        attempt_dir=attempt_ctx.attempt_dir,
+                        success=False,
+                        model_patch="",
+                        exit_status="error",
+                        error=f"{type(exc).__name__}: {exc}",
+                        elapsed_s=time.monotonic() - t0,
+                    )
+                else:
+                    collected = CollectedTaskResult(
+                        instance_id=instance_id,
+                        attempt_dir=attempt_ctx.attempt_dir,
+                        success=result.success,
+                        model_patch=result.model_patch,
+                        exit_status=result.exit_status,
+                        error=result.error,
+                        elapsed_s=time.monotonic() - t0,
+                        n_iterations=result.n_iterations,
+                    )
+                    logger.info(
+                        "[%d/%d] DONE %s success=%s elapsed=%.1fs",
+                        index + 1,
+                        total,
+                        instance_id,
+                        collected.success,
+                        collected.elapsed_s,
+                    )
+                return index, collected, source_image, attempt_ctx.fixed_image
+
+        task_results = await asyncio.gather(
+            *(run_scheduled(index, task, attempt) for index, task, attempt in scheduled)
+        )
+        for _, collected, _, _ in sorted(task_results, key=lambda item: item[0]):
+            results.append(collected)
+        for _, collected, source_image, fixed_image in task_results:
+            _cleanup_task_images(
+                instance_id=collected.instance_id,
+                source_image=source_image,
+                fixed_image=fixed_image,
+                keep_source_image=None,
+                container_executable=container_executable,
+                run_dir=run_dir,
+            )
+        write_results_jsonl(results, run_dir / "results.jsonl")
+        logger.info("Results written to %s", run_dir / "results.jsonl")
+        return run_dir
+
     with ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="image-prefetch"
     ) as executor:
@@ -547,7 +556,7 @@ async def _run_scaffold_tasks(
             instance_id = task["instance_id"]
             if instance_id in completed:
                 logger.info(
-                    "[%d/%d] SKIP %s (already completed)", i + 1, total, instance_id
+                    "[%d/%d] SKIP %s (already terminal)", i + 1, total, instance_id
                 )
                 continue
 
@@ -609,8 +618,6 @@ async def _run_scaffold_tasks(
                     "min_free_disk_gb": min_free_disk_gb,
                     "container_executable": container_executable,
                 }
-                if recording_provider is not None:
-                    run_attempt_kwargs["recording_provider"] = recording_provider
                 result = await run_attempt(attempt_ctx, **run_attempt_kwargs)
             except Exception as exc:
                 logger.exception("FAILED %s", instance_id)
@@ -676,6 +683,7 @@ async def collect_traces(
     top_k: int | None = None,
     repetition_penalty: float | None = None,
     sample: int | None = None,
+    concurrency: int = 1,
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
     max_context_tokens: int = 256_000,
@@ -683,33 +691,8 @@ async def collect_traces(
     mcp_config: str | None = None,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
-    record_internals: bool = False,
-    local_hf: bool = False,
-    eviction_config: "EvictionPolicyConfig | None" = None,
-    sparse_attention_config: "SparseAttentionConfig | None" = None,
-    per_head_stats_layers: tuple[int, ...] = (),
-    per_head_block_stats: bool = False,
-    record_per_head_topk: bool = False,
-    per_head_topk_rank: int = 64,
-    generation_seed: int = 0,
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
-    use_hf_backend = bool(local_hf or record_internals or eviction_config is not None)
-    if use_hf_backend and scaffold != "openclaw":
-        raise ValueError(
-            "HF-backed recording / KV eviction currently supports "
-            "scaffold='openclaw' only"
-        )
-    if sparse_attention_config is not None and not record_internals:
-        raise ValueError("--sparse-attn requires --record-internals")
-    if eviction_config is not None and not record_internals:
-        from serving.kv_policies import eviction_policy_requires_attention
-
-        if eviction_policy_requires_attention(eviction_config):
-            raise ValueError(
-                "The selected KV eviction policy requires attention; pass "
-                "--record-internals so AttentionBus can publish post-softmax scores."
-            )
     benchmark.validate_scaffold_support(scaffold)
     execution_environment = benchmark.execution_environment
     if execution_environment not in {"container", "host"}:
@@ -718,12 +701,14 @@ async def collect_traces(
         )
 
     runtime_mode = benchmark.runtime_mode_for(scaffold)
-    if runtime_mode not in {"host_controller", "task_container_agent"}:
+    if runtime_mode not in {"host_controller", "host_agent_docker_tools"}:
         raise NotImplementedError(
             f"Unsupported benchmark.runtime_mode_for({scaffold!r}): {runtime_mode!r}"
         )
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1, got {concurrency}")
     if (
-        execution_environment == "container" or runtime_mode == "task_container_agent"
+        execution_environment == "container" or runtime_mode == "host_agent_docker_tools"
     ) and container_executable is None:
         raise ValueError("--container required for container-mode benchmarks")
 
@@ -734,116 +719,102 @@ async def collect_traces(
         top_k=top_k,
         repetition_penalty=repetition_penalty,
     )
-    with ExitStack() as cleanup_stack:
-        model_backend = _prepare_collect_model_backend(
-            use_hf_backend=use_hf_backend,
-            record_internals=record_internals,
-            local_hf=local_hf,
+    model_backend = _prepare_collect_model_backend(
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
+        provider_name=provider_name,
+        generation_config=generation_config,
+    )
+    runner = None
+    if runtime_mode == "host_controller":
+        runner = benchmark.build_runner(
+            scaffold=scaffold,
+            provider=model_backend.provider,
+            workspace_base=run_dir / "_workspace_base",
+            max_iterations=max_iterations,
+            context_window_tokens=max_context_tokens,
             model=model,
-            api_base=api_base,
-            api_key=api_key,
-            provider_name=provider_name,
-            execution_environment=execution_environment,
-            runtime_mode=runtime_mode,
-            container_executable=container_executable,
-            cleanup_stack=cleanup_stack,
-            eviction_config=eviction_config,
-            sparse_attention_config=sparse_attention_config,
-            per_head_stats_layers=tuple(per_head_stats_layers),
-            per_head_block_stats=per_head_block_stats,
-            record_per_head_topk=record_per_head_topk,
-            per_head_topk_rank=per_head_topk_rank,
-            generation_seed=generation_seed,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            repetition_penalty=repetition_penalty,
+            provider_name=model_backend.provider_name,
+            env_key=env_key,
+            api_base=model_backend.api_base,
+            api_key=model_backend.api_key,
+            mcp_config=mcp_config,
+            mcp_servers=load_mcp_servers(mcp_config),
             generation_config=generation_config,
         )
-        runner = None
-        if runtime_mode == "host_controller":
-            runner = benchmark.build_runner(
-                scaffold=scaffold,
-                provider=model_backend.provider,
-                workspace_base=run_dir / "_workspace_base",
-                max_iterations=max_iterations,
-                context_window_tokens=max_context_tokens,
-                model=model,
-                provider_name=model_backend.provider_name,
-                env_key=env_key,
-                api_base=model_backend.api_base,
-                api_key=model_backend.api_key,
-                mcp_config=mcp_config,
-                mcp_servers=load_mcp_servers(mcp_config),
-                generation_config=generation_config,
-            )
 
-        tasks = _select_tasks(
-            benchmark.load_tasks(),
-            instance_ids=instance_ids,
-            sample=sample,
-        )
+    tasks = _select_tasks(
+        benchmark,
+        benchmark.load_tasks(),
+        instance_ids=instance_ids,
+        sample=sample,
+    )
 
-        def make_inner(task: dict[str, Any]):
-            async def inner(ctx: AttemptContext) -> AttemptResult:
-                if ctx.agent_runtime_mode == "task_container_agent":
-                    if scaffold != "openclaw":
-                        raise NotImplementedError(
-                            "task-container collection currently supports "
-                            f"scaffold='openclaw', got {scaffold!r}"
-                        )
-                    if container_executable is None:
-                        raise ValueError(
-                            "container_executable is required for task-container runs"
-                        )
-                    return await _run_openclaw_in_task_container(
-                        ctx=ctx,
-                        task=task,
-                        benchmark=benchmark,
-                        provider_name=model_backend.provider_name,
-                        api_base=model_backend.api_base,
-                        api_key=model_backend.api_key,
-                        model=model,
-                        max_iterations=max_iterations,
-                        generation_config=generation_config,
-                        max_context_tokens=max_context_tokens,
-                        mcp_config=mcp_config,
-                        container_executable=container_executable,
-                        run_config_overrides=model_backend.trace_run_config,
+    def make_inner(task: dict[str, Any]):
+        async def inner(ctx: AttemptContext) -> AttemptResult:
+            if ctx.agent_runtime_mode == "host_agent_docker_tools":
+                if scaffold != "openclaw":
+                    raise NotImplementedError(
+                        "task-container collection currently supports "
+                        f"scaffold='openclaw', got {scaffold!r}"
                     )
+                if container_executable is None:
+                    raise ValueError(
+                        "container_executable is required for task-container runs"
+                    )
+                return await _run_openclaw_in_task_container(
+                    ctx=ctx,
+                    task=task,
+                    benchmark=benchmark,
+                    provider_name=model_backend.provider_name,
+                    api_base=model_backend.api_base,
+                    api_key=model_backend.api_key,
+                    model=model,
+                    max_iterations=max_iterations,
+                    generation_config=generation_config,
+                    max_context_tokens=max_context_tokens,
+                    mcp_config=mcp_config,
+                    container_executable=container_executable,
+                    run_config_overrides=model_backend.trace_run_config,
+                )
 
-                assert runner is not None
+            assert runner is not None
+            ctx.agent_start_time = datetime.now(tz=timezone.utc)
+            try:
                 result = await runner.run_task(
                     task,
                     attempt_ctx=ctx,
                     prompt_template=ctx.prompt_template,
                 )
-                if not isinstance(result, AttemptResult):
-                    raise TypeError(
-                        "benchmark runner returned "
-                        f"{type(result).__name__}, expected AttemptResult"
-                    )
-                if model_backend.trace_run_config and result.trace_path is not None:
-                    _stamp_trace_run_config(
-                        result.trace_path,
-                        model_backend.trace_run_config,
-                    )
-                return result
+            finally:
+                ctx.agent_end_time = datetime.now(tz=timezone.utc)
+            if not isinstance(result, AttemptResult):
+                raise TypeError(
+                    "benchmark runner returned "
+                    f"{type(result).__name__}, expected AttemptResult"
+                )
+            if model_backend.trace_run_config and result.trace_path is not None:
+                _stamp_trace_run_config(
+                    result.trace_path,
+                    model_backend.trace_run_config,
+                )
+            return result
 
-            return inner
+        return inner
 
-        return await _run_scaffold_tasks(
-            benchmark=benchmark,
-            tasks=tasks,
-            run_dir=run_dir,
-            model=model,
-            scaffold=scaffold,
-            container_executable=container_executable,
-            prompt_template=prompt_template,
-            min_free_disk_gb=min_free_disk_gb,
-            inner_factory=make_inner,
-            recording_provider=model_backend.recording_provider,
-        )
+    return await _run_scaffold_tasks(
+        benchmark=benchmark,
+        tasks=tasks,
+        run_dir=run_dir,
+        model=model,
+        scaffold=scaffold,
+        container_executable=container_executable,
+        prompt_template=prompt_template,
+        min_free_disk_gb=min_free_disk_gb,
+        inner_factory=make_inner,
+        concurrency=concurrency,
+    )
 
 
 def _set_run_config(merged: dict[str, Any], key: str, value: Any) -> None:
@@ -995,103 +966,81 @@ async def _run_openclaw_in_task_container(
     if not fixed_image:
         raise RuntimeError(f"Task {ctx.instance_id!r} has no image_name")
 
-    runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "openclaw"
-    stdout_path = runtime_dir / "stdout.txt"
-    stderr_path = runtime_dir / "stderr.txt"
-    proof = None
-    runtime = None
-    runtime_proof = None
-    exec_config = resolve_task_container_exec_config(
-        attempt_dir=ctx.attempt_dir,
-        image=fixed_image,
-        container_executable=container_executable,
-    )
+    # Start container — no bootstrap, no preflight.
     container_id = start_task_container(
         fixed_image,
         executable=container_executable,
-        extra_args=list(exec_config.start_extra_args),
     )
     ctx.mark_container_ready(container_id)
+
+    # Build the container_runtime dict so host-side tools redirect
+    # file / exec operations into the container via docker exec.
+    container_runtime: dict[str, str] = {
+        "id": container_id,
+        "executable": container_executable,
+    }
+
+    # Host-side LLM provider (container is just the execution sandbox).
+    provider = UnifiedProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+        **(generation_config or {}),
+    )
+
+    # Build the SWE-bench prompt from the task's problem statement.
+    from trace_collect.prompt_loader import load_prompt_template, render_prompt
+
+    prompt_text = render_prompt(
+        load_prompt_template(ctx.prompt_template, benchmark.config.slug),
+        task.get("problem_statement", task.get("hint_text", "")),
+    )
+
+    # Create the session runner with container_runtime so all tools
+    # created inside AgentLoop redirect to the container.
+    mcp_servers = load_mcp_servers(mcp_config)
+    session_runner = SessionRunner(
+        provider,
+        model=model,
+        max_iterations=max_iterations,
+        context_window_tokens=max_context_tokens,
+        mcp_servers=mcp_servers,
+        container_runtime=container_runtime,
+    )
+
+    # Local workspace for session / runtime state; the tool workspace is
+    # /testbed inside the container.
+    runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "openclaw"
+    ws = runtime_dir / "workspace_base" / ctx.instance_id
+    effective_trace_file = ctx.attempt_dir / "trace.jsonl"
+    effective_runtime_dir = effective_trace_file.parent / "openclaw-runtime"
+
+    ctx.agent_start_time = datetime.now(tz=timezone.utc)
+    session_key = f"eval:{ctx.instance_id}"
+    session_result = None
+    container_logs = ""
+    model_patch = ""
+    n_iterations = 0
+    total_llm_ms = 0.0
+    total_tool_ms = 0.0
+    total_tokens = 0
     try:
-        exec_config = resolve_running_container_exec_config(
-            container_id=container_id,
-            exec_config=exec_config,
-            container_executable=container_executable,
+        session_result = await session_runner.run(
+            prompt=prompt_text,
+            workspace=ws,
+            tool_workspace=Path("/testbed"),
+            session_key=session_key,
+            trace_file=effective_trace_file,
+            runtime_dir=effective_runtime_dir,
+            instance_id=ctx.instance_id,
+            channel="cli",
+            prepare_ms=None,
         )
-        preflight_imports = [
-            "trace_collect.runtime.entrypoint",
-            "agents.openclaw.eval.runner",
-            "harness.trace_logger",
-        ]
-        bootstrap_requirements: tuple[str, ...] = ()
-        if mcp_config not in {None, "none"}:
-            preflight_imports.append("agents.openclaw.tools.mcp")
-            bootstrap_requirements = OPENCLAW_MCP_RUNTIME_REQUIREMENTS
-        bootstrap_task_container_python(
-            container_id=container_id,
-            exec_config=exec_config,
-            extra_requirements=bootstrap_requirements,
-            container_executable=container_executable,
-        )
-        proof = preflight_task_container_runtime(
-            container_id=container_id,
-            attempt_dir=ctx.attempt_dir,
-            imports=preflight_imports,
-            runtime=exec_config.runtime,
-            pythonpath=exec_config.pythonpath,
-            container_executable=container_executable,
-        )
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        runtime = run_task_container_agent(
-            container_id=container_id,
-            timeout=(max_iterations * 120) + 300,
-            runtime=exec_config.runtime,
-            pythonpath=exec_config.pythonpath,
-            request={
-                "kind": "run_openclaw",
-                "scaffold": "openclaw",
-                "result_path": str(runtime_dir / "run.result.json"),
-                "container_id": container_id,
-                "benchmark": benchmark.config.slug,
-                "provider_name": provider_name,
-                "api_base": api_base,
-                "api_key": api_key,
-                "model": model,
-                "max_iterations": max_iterations,
-                "generation_config": generation_config or {},
-                "max_context_tokens": max_context_tokens,
-                "prompt_template": ctx.prompt_template,
-                "agent_runtime_mode": ctx.agent_runtime_mode,
-                "mcp_config": (
-                    str(Path(mcp_config).resolve())
-                    if mcp_config not in {None, "none"}
-                    else mcp_config
-                ),
-                "task": task,
-                "workspace_base": str(runtime_dir / "workspace_base"),
-                "workspace_dir": str(runtime_dir / "workspace_base" / ctx.instance_id),
-                "tool_workspace": "/testbed",
-                "exec_path_append": ":".join(
-                    [
-                        str(runtime_dir / "bootstrap" / ".pyuserbase" / "bin"),
-                        str(runtime_dir / "bootstrap" / "pydeps" / "bin"),
-                    ]
-                ),
-                "exec_working_dir": "/testbed",
-                "trace_file": str((ctx.attempt_dir / "trace.jsonl").resolve()),
-                "raw_stdout_path": str(stdout_path),
-                "raw_stderr_path": str(stderr_path),
-                "container_executable": container_executable,
-            },
-            container_executable=container_executable,
-        )
-        runtime_proof = {
-            **asdict(proof),
-            **runtime.runtime_proof,
-        }
+
+        # Merge benchmark metadata into the trace in-place.
         _normalize_openclaw_trace(
-            src=runtime.trace_path,
-            dst=ctx.attempt_dir / "trace.jsonl",
+            src=effective_trace_file,
+            dst=effective_trace_file,
             benchmark=benchmark,
             model=model,
             api_base=api_base,
@@ -1100,35 +1049,70 @@ async def _run_openclaw_in_task_container(
             mcp_config_label=mcp_config_label(mcp_config),
             prompt_template=ctx.prompt_template,
             agent_runtime_mode=ctx.agent_runtime_mode,
-            runtime_proof=runtime_proof,
+            runtime_proof={"container_id": container_id},
             run_config_overrides=run_config_overrides,
             generation_config=generation_config,
         )
+
+        # Parse trace summary for aggregate stats.
+        if effective_trace_file.exists():
+            for line in effective_trace_file.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("type") == "summary":
+                    n_iterations = rec.get("n_iterations", 0) or 0
+                    total_llm_ms = float(rec.get("total_llm_ms", 0) or 0)
+                    total_tool_ms = float(rec.get("total_tool_ms", 0) or 0)
+                    total_tokens = int(rec.get("total_tokens", 0) or 0)
+
+        # Extract the patch from inside the container via shared extraction.
+        from agents.openclaw.eval.runner import SWEBenchRunner
+
+        def _docker_exec_run(argv: list[str], **kwargs: Any) -> "subprocess.CompletedProcess[bytes]":
+            # Supports only the kwargs the extraction flow uses:
+            # capture_output/text/timeout. cwd is replaced by -w /testbed,
+            # check is always False.
+            return subprocess.run(
+                [container_executable, "exec", "-w", "/testbed", container_id, *argv],
+                capture_output=kwargs.get("capture_output", False),
+                text=kwargs.get("text", False),
+                timeout=kwargs.get("timeout", None),
+            )
+
+        raw_patch: str | None = await asyncio.to_thread(
+            SWEBenchRunner._extract_container_patch,
+            "/testbed",
+            base_commit=task.get("base_commit"),
+            run=_docker_exec_run,
+        )
+        model_patch = raw_patch or ""
     finally:
-        container_logs = stop_task_container(
-            container_id,
-            executable=container_executable,
-        )
-        ctx.container_stdout = "\n".join(
-            part
-            for part in [
-                stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else "",
-                stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else "",
-                container_logs,
-            ]
-            if part
-        )
-    assert runtime is not None
-    assert runtime_proof is not None
+        ctx.agent_end_time = datetime.now(tz=timezone.utc)
+        try:
+            container_logs = stop_task_container(
+                container_id,
+                executable=container_executable,
+            )
+        except RuntimeError as exc:
+            logger.warning("stop_task_container failed: %s", exc)
+            container_logs = ""
+
+    ctx.container_stdout = container_logs
+
+    stop_reason = session_result.stop_reason if session_result is not None else "error"
+
     return AttemptResult(
-        success=runtime.success,
-        exit_status=runtime.exit_status,
-        trace_path=ctx.attempt_dir / "trace.jsonl",
-        model_patch=runtime.model_patch,
-        n_iterations=runtime.n_iterations,
-        total_llm_ms=runtime.total_llm_ms,
-        total_tool_ms=runtime.total_tool_ms,
-        total_tokens=runtime.total_tokens,
-        error=runtime.error,
-        runtime_proof=runtime_proof,
+        success=stop_reason == "completed" and bool(model_patch),
+        exit_status=stop_reason,
+        trace_path=effective_trace_file,
+        model_patch=model_patch,
+        error=session_result.error if session_result is not None else None,
+        n_iterations=n_iterations,
+        total_llm_ms=total_llm_ms,
+        total_tool_ms=total_tool_ms,
+        total_tokens=total_tokens,
     )

@@ -16,6 +16,42 @@ from typing import Any
 from llm_call import UnifiedProvider, resolve_llm_config
 
 
+class _TeeOutput:
+    """Write to the container pipe and artifact log file at the same time."""
+
+    def __init__(self, primary, secondary) -> None:
+        self.primary = primary
+        self.secondary = secondary
+
+    def write(self, data: str) -> int:
+        self.primary.write(data)
+        self.primary.flush()
+        self.secondary.write(data)
+        self.secondary.flush()
+        return len(data)
+
+    def flush(self) -> None:
+        self.primary.flush()
+        self.secondary.flush()
+
+    @property
+    def encoding(self) -> str | None:
+        return getattr(self.primary, "encoding", None)
+
+    @property
+    def errors(self) -> str | None:
+        return getattr(self.primary, "errors", None)
+
+    def isatty(self) -> bool:
+        return bool(getattr(self.primary, "isatty", lambda: False)())
+
+    def fileno(self) -> int:
+        return int(self.primary.fileno())
+
+    def __getattr__(self, name: str):
+        return getattr(self.primary, name)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m trace_collect.runtime.entrypoint",
@@ -42,7 +78,10 @@ def _runtime_proof(container_id: str | None = None) -> dict[str, Any]:
 
 
 def _agent_runtime_proof(request: dict[str, Any]) -> dict[str, Any]:
-    return {**_runtime_proof(request.get("container_id")), "agent_runtime_mode": request.get("agent_runtime_mode", "task_container_agent")}
+    return {
+        **_runtime_proof(request.get("container_id")),
+        "agent_runtime_mode": request.get("agent_runtime_mode", "task_container_agent"),
+    }
 
 
 def _write_result(result_path: str, payload: dict[str, Any]) -> None:
@@ -175,6 +214,12 @@ def main() -> None:
         if args.mode == "preflight":
             _run_preflight(request)
             return
+        bootstrap_userbase = request.get("bootstrap_userbase")
+        if bootstrap_userbase:
+            bootstrap_bin = str(Path(str(bootstrap_userbase)) / "bin")
+            os.environ["PYTHONUSERBASE"] = str(bootstrap_userbase)
+            os.environ["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+            os.environ["PATH"] = bootstrap_bin + os.pathsep + os.environ.get("PATH", "")
         stdout_path = Path(request["raw_stdout_path"])
         stderr_path = Path(request["raw_stderr_path"])
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -182,10 +227,14 @@ def main() -> None:
         with (
             stdout_path.open("w", encoding="utf-8") as stdout_handle,
             stderr_path.open("w", encoding="utf-8") as stderr_handle,
-            contextlib.redirect_stdout(stdout_handle),
-            contextlib.redirect_stderr(stderr_handle),
         ):
-            asyncio.run(_run_request(request))
+            stdout_tee = _TeeOutput(sys.stdout, stdout_handle)
+            stderr_tee = _TeeOutput(sys.stderr, stderr_handle)
+            with (
+                contextlib.redirect_stdout(stdout_tee),
+                contextlib.redirect_stderr(stderr_tee),
+            ):
+                asyncio.run(_run_request(request))
     except Exception:
         if "result_path" in request:
             _write_result(

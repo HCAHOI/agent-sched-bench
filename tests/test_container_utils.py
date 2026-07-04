@@ -126,10 +126,8 @@ def test_ensure_fixed_image_builds_when_derivative_missing(
         fixed, elapsed = ensure_fixed_image(
             "swerebench/foo:latest",
             container_executable=container_executable,
-            host_uid=1000,
-            host_gid=1000,
         )
-    assert fixed == "swebench-fixed-docker.io_swerebench_foo_latest"
+    assert fixed == "swebench-fixed-root-docker.io_swerebench_foo_latest"
     assert elapsed >= 0.0
     # Expect: fixed exists (miss), source exists (miss), pull, run -d, exec chown, commit, stop, rm
     verbs = [" ".join(c[1:3]) for c in calls]
@@ -149,6 +147,15 @@ def test_ensure_fixed_image_builds_when_derivative_missing(
         "linux/amd64",
     ]
     assert any("exec cid_xyz" == " ".join(c[1:3]) for c in calls)
+    assert [
+        container_executable,
+        "exec",
+        "cid_xyz",
+        "chown",
+        "-R",
+        "0:0",
+        "/testbed",
+    ] in calls
     assert any("commit cid_xyz" == " ".join(c[1:3]) for c in calls)
 
 
@@ -177,8 +184,6 @@ def test_ensure_fixed_image_rebuild_removes_existing_derivative() -> None:
             container_executable="docker",
             fixed_image_name=fixed_name,
             rebuild=True,
-            host_uid=1000,
-            host_gid=1000,
         )
 
     assert fixed == fixed_name
@@ -199,8 +204,6 @@ def test_ensure_fixed_image_serializes_builds_per_source_image(
         source_image: str,
         fixed_name: str,
         executable: str,
-        uid: int,
-        gid: int,
         image_platform: str | None,
     ) -> None:
         nonlocal active, max_active
@@ -226,8 +229,6 @@ def test_ensure_fixed_image_serializes_builds_per_source_image(
             container_executable="docker",
             fixed_image_name=f"fixed-shared:{index}",
             rebuild=True,
-            host_uid=1000,
-            host_gid=1000,
         )
 
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -261,8 +262,6 @@ def test_ensure_fixed_image_cache_is_scoped_by_container_runtime(
         source_image: str,
         fixed_name: str,
         executable: str,
-        uid: int,
-        gid: int,
         image_platform: str | None,
     ) -> None:
         build_calls.append((executable, fixed_name))
@@ -273,15 +272,11 @@ def test_ensure_fixed_image_cache_is_scoped_by_container_runtime(
         "swerebench/shared:latest",
         container_executable="docker",
         fixed_image_name="fixed-shared:latest",
-        host_uid=1000,
-        host_gid=1000,
     )
     podman_result = ensure_fixed_image(
         "swerebench/shared:latest",
         container_executable="podman",
         fixed_image_name="fixed-shared:latest",
-        host_uid=1000,
-        host_gid=1000,
     )
 
     assert docker_result[0] == "fixed-shared:latest"
@@ -734,6 +729,10 @@ def test_container_resource_recorder_appends_global_container_samples(
         subprocess_timeout_s=0.1,
         sample_all_containers=False,
         collect_cgroup_memory_access=False,
+        monitoring_policy={
+            "pmu_enabled": False,
+            "pmu_reason": "disabled_by_policy",
+        },
     )
     recorder.register_container(container_id)
     with patch(
@@ -761,6 +760,11 @@ def test_container_resource_recorder_appends_global_container_samples(
     assert records[0]["net_rx_bytes"] == 1000
     assert records[0]["net_tx_bytes"] == 2000
     assert summary["sample_count"] == len(records)
+    assert summary["monitoring"] == {
+        "pmu_enabled": False,
+        "pmu_reason": "disabled_by_policy",
+    }
+    assert persisted_summary["monitoring"] == summary["monitoring"]
     assert persisted_summary["sampling"]["stop_complete"] is True
     assert persisted_summary["sampling"]["sample_all_containers"] is False
     assert len(persisted_summary["containers"]) == 1

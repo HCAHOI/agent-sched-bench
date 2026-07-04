@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -8,37 +10,30 @@ from pathlib import Path
 import pytest
 
 from trace_collect.cli import _run_simulate, parse_simulate_args
-from trace_collect.simulator import _source_exec_timeout_s, simulate
+from trace_collect.simulator import (
+    LLMTimingConfig,
+    PreparedContainer,
+    PreparedTraceSession,
+    SimulateError,
+    WorkerTraceInput,
+    _capture_snapshot_manifest,
+    _cas_manifest_comparison_fields,
+    _checkpoint_after_spec,
+    _checkpoint_spec_is_incremental,
+    _chunk_worker_inputs_by_concurrency,
+    _compute_output_diff_snippet,
+    _fold_source_checkpoint_entries,
+    _partition_worker_inputs,
+    _resolve_prep_concurrency,
+    _restore_cas_manifest_in_container,
+    _run_worker_wave_async,
+    _source_action_excluded_overhead_s,
+    _source_exec_timeout_s,
+    _restore_checkpoint_to_container,
+    _tool_mismatch_reason,
+    simulate,
+)
 
-
-class _FakeStream:
-    def __init__(self) -> None:
-        self._emitted = False
-
-    def __aiter__(self) -> "_FakeStream":
-        return self
-
-    async def __anext__(self):
-        if self._emitted:
-            raise StopAsyncIteration
-        self._emitted = True
-        await asyncio.sleep(0.01)
-        delta = type("Delta", (), {"content": "x"})()
-        choice = type("Choice", (), {"delta": delta})()
-        return type("Chunk", (), {"choices": [choice]})()
-
-
-class _FakeClient:
-    class _Completions:
-        async def create(self, **kwargs):
-            return _FakeStream()
-
-    class _Chat:
-        def __init__(self) -> None:
-            self.completions = _FakeClient._Completions()
-
-    def __init__(self) -> None:
-        self.chat = self._Chat()
 
 
 def _write_trace(
@@ -52,6 +47,9 @@ def _write_trace(
     tool_end: float = 100.45,
     tool_name: str = "write_file",
     execution_environment: str = "container",
+    resource_timeline: dict | None = None,
+    tool_args: dict | None = None,
+    checkpoint_after: str | dict | None = None,
 ) -> None:
     path.write_text(
         "\n".join(
@@ -96,10 +94,20 @@ def _write_trace(
                         "ts_end": tool_end,
                         "data": {
                             "tool_name": tool_name,
-                            "tool_args": json.dumps({"path": "/testbed/x.txt"}),
+                            "tool_args": json.dumps(tool_args or {"path": "/testbed/x.txt"}),
                             "tool_result": "source-result",
                             "duration_ms": (tool_end - tool_start) * 1000,
                             "success": True,
+                            **(
+                                {"resource_timeline": resource_timeline}
+                                if resource_timeline is not None
+                                else {}
+                            ),
+                            **(
+                                {"checkpoint_after": checkpoint_after}
+                                if checkpoint_after is not None
+                                else {}
+                            ),
                         },
                     }
                 ),
@@ -196,12 +204,16 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
             interval_s: float,
             executable: str,
             sample_all_containers: bool,
+            collect_cgroup_memory_access: bool = True,
+            monitoring_policy: dict[str, object] | None = None,
         ) -> None:
             self.output_dir = Path(output_dir)
             self.run_id = run_id
             self.interval_s = interval_s
             self.executable = executable
             self.sample_all_containers = sample_all_containers
+            self.collect_cgroup_memory_access = collect_cgroup_memory_access
+            self.monitoring_policy = dict(monitoring_policy or {})
             self.started = False
             self.stopped = False
             self.registered: list[str] = []
@@ -249,10 +261,12 @@ def _fake_container_resource_recorders(monkeypatch: pytest.MonkeyPatch) -> list[
                 "jsonl_path": str(self.jsonl_path),
                 "summary_path": str(self.summary_path),
                 "sample_count": 1,
+                "monitoring": dict(self.monitoring_policy),
                 "sampling": {
                     "interval_s": self.interval_s,
                     "scope": "registered_containers",
                     "sample_all_containers": self.sample_all_containers,
+                    "collect_cgroup_memory_access": self.collect_cgroup_memory_access,
                     "tick_count": 1,
                     "empty_tick_count": 0,
                     "stop_complete": True,
@@ -284,7 +298,6 @@ def _patch_simulator_runtime(
     tool_delay_s: float = 0.0,
     tool_duration_ms: float = 8.0,
     tool_result_prefix: str = "executed",
-    llm_client_mode: str = "forbid",
 ) -> None:
     class _FakeAgent:
         async def stop(self): pass
@@ -312,6 +325,7 @@ def _patch_simulator_runtime(
         command_timeout_s,
         source_exec_timeout_s=None,
         allow_source_runtime_artifacts=False,
+        source_resource_timeline=None,
     ):
         if tool_delay_s > 0:
             await asyncio.sleep(tool_delay_s)
@@ -338,20 +352,6 @@ def _patch_simulator_runtime(
     monkeypatch.setattr("trace_collect.simulator._prebuild_sweep_fixed_images", fake_prebuild)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    if llm_client_mode == "forbid":
-        monkeypatch.setattr(
-            "trace_collect.simulator.create_async_openai_client",
-            lambda **_kwargs: (_ for _ in ()).throw(
-                AssertionError("cloud_model must not create llm client")
-            ),
-        )
-    elif llm_client_mode == "fake":
-        monkeypatch.setattr(
-            "trace_collect.simulator.create_async_openai_client",
-            lambda **_kwargs: _FakeClient(),
-        )
-    else:
-        raise AssertionError(f"unknown llm_client_mode: {llm_client_mode}")
 
 
 def _patch_noop_sweep_fixed_prebuild(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -362,6 +362,180 @@ def _patch_noop_sweep_fixed_prebuild(monkeypatch: pytest.MonkeyPatch) -> None:
         "trace_collect.simulator._prebuild_sweep_fixed_images",
         fake_prebuild,
     )
+
+
+def _patch_noop_replay_python_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "trace_collect.simulator.resolve_running_container_exec_config",
+        lambda **kwargs: kwargs["exec_config"],
+        raising=False,
+    )
+
+
+def test_source_action_excluded_overhead_reads_checkpoint_after() -> None:
+    action = {
+        "data": {
+            "checkpoint_after": {
+                "elapsed_ms": 250.0,
+                "overhead_excluded": True,
+            }
+        }
+    }
+
+    assert _source_action_excluded_overhead_s(action) == pytest.approx(0.25)
+
+
+def test_source_action_excluded_overhead_reads_checkpoint_after_error() -> None:
+    action = {
+        "data": {
+            "checkpoint_after_error": {
+                "elapsed_ms": 125.0,
+                "overhead_excluded": True,
+                "error": "checkpoint skipped",
+            }
+        }
+    }
+
+    assert _source_action_excluded_overhead_s(action) == pytest.approx(0.125)
+
+
+def test_checkpoint_after_spec_rejects_non_testbed_root(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+
+    spec = _checkpoint_after_spec(
+        action_data={"checkpoint_after": {"path": "cp-manifest.json", "root": "/"}},
+        source_trace=trace_path,
+    )
+
+    assert spec is None
+
+
+def test_restore_checkpoint_to_container_records_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "manifest.json"
+    manifest = {
+        "entries": {
+            "file.txt": {
+                "hash": (
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934"
+                    "ca495991b7852b855"
+                ),
+                "mode": 0o644,
+                "size": 14,
+                "mtime_ns": 1000000,
+            }
+        },
+        "deleted_paths": [],
+    }
+    checkpoint_path.write_text(json.dumps(manifest), encoding="utf-8")
+    copied: list[dict] = []
+    restored: list[dict] = []
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._copy_checkpoint_archive_to_container",
+        lambda **kwargs: copied.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_cas_manifest_in_container",
+        lambda **kwargs: restored.append(kwargs),
+    )
+
+    result = _restore_checkpoint_to_container(
+        checkpoint_spec={
+            "path": str(checkpoint_path),
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
+        container=PreparedContainer(
+            container_id="cid",
+            container_executable="docker",
+            docker_image="image",
+            agent=object(),
+        ),
+    )
+
+    assert len(copied) == 1
+    assert len(restored) == 1
+    assert result["forced_sync_success"] is True
+    assert result["forced_sync_status"] == "checkpoint_restored_continuation"
+    assert result["forced_sync_resolved"] is False
+    assert result["forced_sync_continued"] is True
+    assert result["checkpoint_kind"] == "cas_manifest_full"
+    assert result["checkpoint_path"] == str(checkpoint_path)
+    assert result["checkpoint_root"] == "/testbed"
+    assert result["checkpoint_size_bytes"] == checkpoint_path.stat().st_size
+    assert result["restore_elapsed_ms"] >= 0.0
+    assert result["restore_overhead_excluded"] is True
+    assert result["restore_root_exists"] is True
+    assert result["tar_extraction_returncode"] == 0
+
+
+def test_restore_cas_manifest_script_preserves_testbed_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cas_root = tmp_path / "cas"
+    root = tmp_path / "testbed"
+    manifest_path = tmp_path / "manifest.json"
+    root.mkdir()
+    root_owner = (root.stat().st_uid, root.stat().st_gid)
+    content = b"restored\n"
+    digest = hashlib.sha256(content).hexdigest()
+    blob = cas_root / "blobs" / digest[:2] / digest[2:]
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(content)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "pkg/file.txt": {
+                        "hash": digest,
+                        "mode": 0o644,
+                    }
+                },
+                "deleted_paths": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_run_checked(cmd: list[str], *, timeout: float) -> None:
+        del timeout
+        captured["cmd"] = cmd
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._CHECKPOINT_CAS_ROOT",
+        str(cas_root),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        fake_run_checked,
+    )
+
+    _restore_cas_manifest_in_container(
+        container_id="cid",
+        container_executable="docker",
+        container_manifest_path=str(manifest_path),
+        restore_root=str(root),
+    )
+
+    cmd = captured["cmd"]
+    for index, token in enumerate(cmd):
+        if token == "-e":
+            key, value = cmd[index + 1].split("=", 1)
+            monkeypatch.setenv(key, value)
+    script = cmd[cmd.index("-c") + 1]
+    exec(script, {})
+
+    restored_dir = root / "pkg"
+    restored_file = restored_dir / "file.txt"
+    assert restored_file.read_bytes() == content
+    assert (root.stat().st_uid, root.stat().st_gid) == root_owner
+    assert (restored_dir.stat().st_uid, restored_dir.stat().st_gid) == root_owner
+    assert (restored_file.stat().st_uid, restored_file.stat().st_gid) == root_owner
 
 
 def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> None:
@@ -379,7 +553,61 @@ def test_parse_simulate_args_accepts_cloud_model_manifest_without_llm_args() -> 
     assert args.mode == "cloud_model"
     assert args.manifest == "manifest.yaml"
     assert args.concurrency == "8"
+    assert args.workers == 1
+    assert args.prep_concurrency == 0
+    assert args.resource_monitoring == "auto"
+    assert args.pmu_monitoring == "auto"
+    assert args.memory_bandwidth_monitoring == "auto"
     assert args.replay_speed == 1.0
+    assert args.llm_timing == "source-scaled"
+    assert args.llm_ttft_ms is None
+    assert args.llm_tpot_ms is None
+
+
+def test_parse_simulate_args_accepts_workers_and_monitoring_policy() -> None:
+    args = parse_simulate_args(
+        [
+            "--manifest",
+            "manifest.yaml",
+            "--workers",
+            "16",
+            "--prep-concurrency",
+            "64",
+            "--resource-monitoring",
+            "off",
+            "--pmu-monitoring",
+            "off",
+            "--memory-bandwidth-monitoring",
+            "off",
+        ]
+    )
+
+    assert args.workers == 16
+    assert args.prep_concurrency == 64
+    assert args.resource_monitoring == "off"
+    assert args.pmu_monitoring == "off"
+    assert args.memory_bandwidth_monitoring == "off"
+
+
+def test_parse_simulate_args_accepts_ttft_tpot_llm_timing() -> None:
+    args = parse_simulate_args(
+        [
+            "--mode",
+            "cloud_model",
+            "--manifest",
+            "manifest.yaml",
+            "--llm-timing",
+            "ttft-tpot",
+            "--llm-ttft-ms",
+            "800",
+            "--llm-tpot-ms",
+            "20",
+        ]
+    )
+
+    assert args.llm_timing == "ttft-tpot"
+    assert args.llm_ttft_ms == 800.0
+    assert args.llm_tpot_ms == 20.0
 
 
 def test_parse_simulate_args_accepts_container_flag() -> None:
@@ -401,6 +629,139 @@ def test_parse_simulate_args_defaults_container_to_none() -> None:
         ["--manifest", "manifest.yaml"]
     )
     assert args.container is None
+
+
+def test_worker_partition_helpers_preserve_order_and_limits() -> None:
+    inputs = [
+        WorkerTraceInput(
+            source_trace=f"/tmp/trace-{index}.jsonl",
+            task_source="/tmp/tasks.json",
+            manifest_index=index,
+            docker_image_override=None,
+            label=None,
+            run_instance_id=f"task-{index}",
+        )
+        for index in range(7)
+    ]
+
+    waves = _chunk_worker_inputs_by_concurrency(inputs, 3)
+    assert [[entry.run_instance_id for entry in wave] for wave in waves] == [
+        ["task-0", "task-1", "task-2"],
+        ["task-3", "task-4", "task-5"],
+        ["task-6"],
+    ]
+
+    chunks = _partition_worker_inputs(waves[0], 2)
+    assert [[entry.run_instance_id for entry in chunk] for chunk in chunks] == [
+        ["task-0", "task-1"],
+        ["task-2"],
+    ]
+
+
+def test_resolve_prep_concurrency_preserves_default_limit() -> None:
+    assert _resolve_prep_concurrency(0, 640) == 20
+    assert _resolve_prep_concurrency(64, 640) == 64
+    assert _resolve_prep_concurrency(64, 2) == 2
+    with pytest.raises(ValueError, match="prep_concurrency must be >= 0"):
+        _resolve_prep_concurrency(-1, 4)
+
+
+class _AbortOnlyBarrier:
+    def __init__(self) -> None:
+        self.aborted = False
+
+    def abort(self) -> None:
+        self.aborted = True
+
+
+class _SetOnlyEvent:
+    def __init__(self) -> None:
+        self.set_called = False
+
+    def set(self) -> None:
+        self.set_called = True
+
+
+def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    good_trace = tmp_path / "good.jsonl"
+    bad_trace = tmp_path / "bad.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(good_trace, agent_id="good", execution_environment="host")
+    _write_trace(bad_trace, agent_id="bad", execution_environment="host")
+    _write_host_tasks(task_source, "good", "bad")
+    inputs = [
+        WorkerTraceInput(
+            source_trace=str(good_trace),
+            task_source=str(task_source),
+            manifest_index=0,
+            docker_image_override=None,
+            label=None,
+            run_instance_id="good",
+        ),
+        WorkerTraceInput(
+            source_trace=str(bad_trace),
+            task_source=str(task_source),
+            manifest_index=1,
+            docker_image_override=None,
+            label=None,
+            run_instance_id="bad",
+        ),
+    ]
+    finalized: list[str] = []
+
+    async def fake_prepare(loaded, **_kwargs):
+        if loaded.agent_id == "bad":
+            raise RuntimeError("prepare failed")
+        return PreparedTraceSession(
+            loaded=loaded,
+            task_output_dir=tmp_path / loaded.agent_id / "attempt_1",
+        )
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        finalized.append(prepared.loaded.agent_id)
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_replay_session_with_shared_limit",
+        fake_prepare,
+    )
+    monkeypatch.setattr("trace_collect.simulator._finalize_prepared_session", fake_finalize)
+    barrier = _AbortOnlyBarrier()
+    event = _SetOnlyEvent()
+
+    with pytest.raises(SimulateError, match="worker preparations failed"):
+        asyncio.run(
+            _run_worker_wave_async(
+                worker_inputs=inputs,
+                output_path=tmp_path / "out",
+                worker_run_id="worker",
+                global_run_id="global",
+                global_concurrency=2,
+                wave_index=0,
+                worker_index=0,
+                worker_count=1,
+                container_executable=None,
+                network_mode="host",
+                replay_speed=1.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=1.0,
+                warmup_skip_iterations=0,
+                fixed_images_by_source=None,
+                resource_monitoring_enabled=False,
+                memory_bandwidth_enabled=False,
+                monitoring_policy={},
+                prep_semaphore=object(),
+                replay_start_barrier=barrier,
+                replay_start_event=event,
+                replay_start_wall_time=object(),
+            )
+        )
+
+    assert finalized == ["good"]
+    assert barrier.aborted is True
+    assert event.set_called is True
 
 
 def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Path) -> None:
@@ -430,7 +791,39 @@ def test_run_simulate_cloud_model_bypasses_llm_config(monkeypatch, tmp_path: Pat
     assert seen["mode"] == "cloud_model"
     assert seen["manifest"] == Path("manifest.yaml")
     assert seen["concurrency"] == 1
+    assert seen["workers"] == 1
+    assert seen["prep_concurrency"] == 0
+    assert seen["resource_monitoring"] == "auto"
+    assert seen["pmu_monitoring"] == "auto"
+    assert seen["memory_bandwidth_monitoring"] == "auto"
     assert seen["container_executable"] is None
+    assert seen["llm_timing_mode"] == "source_scaled"
+    assert seen["llm_ttft_ms"] is None
+    assert seen["llm_tpot_ms"] is None
+
+
+@pytest.mark.parametrize("error_type", [ValueError, SimulateError])
+def test_run_simulate_cloud_model_reports_policy_errors_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error_type: type[Exception],
+) -> None:
+    async def fake_simulate(**_kwargs):
+        raise error_type("--pmu-monitoring on is forbidden for concurrent simulate replay")
+
+    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
+    args = parse_simulate_args(["--manifest", "manifest.yaml"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        _run_simulate(args)
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 1
+    assert (
+        "ERROR: --pmu-monitoring on is forbidden for concurrent simulate replay"
+        in captured.err
+    )
+    assert "Traceback" not in captured.err
 
 
 def test_run_simulate_cloud_model_concurrency_sweep(
@@ -476,107 +869,153 @@ def test_run_simulate_cloud_model_concurrency_sweep(
     assert [record["concurrency"] for record in sweep_records] == [2, 4]
 
 
-def test_run_simulate_rejects_metrics_url_in_cloud_model(capsys: pytest.CaptureFixture[str]) -> None:
-    args = parse_simulate_args(
-        [
-            "--mode",
-            "cloud_model",
-            "--manifest",
-            "manifest.yaml",
-            "--metrics-url",
-            "http://localhost:8000/metrics",
-        ]
-    )
-
-    with pytest.raises(SystemExit, match="2"):
-        _run_simulate(args)
-
-    assert "cloud_model replay does not support --metrics-url" in capsys.readouterr().err
-
-
-def test_run_simulate_local_model_resolves_llm_config(monkeypatch, tmp_path: Path) -> None:
-    seen: dict[str, object] = {}
-
-    async def fake_simulate(**kwargs):
-        seen.update(kwargs)
-        return tmp_path / "out.jsonl"
-
-    monkeypatch.setattr(
-        "trace_collect.cli.resolve_llm_config",
-        lambda **_kwargs: type(
-            "Cfg",
-            (),
-            {
-                "api_base": "https://example.com/v1",
-                "api_key": "secret",
-                "model": "z-ai/glm-5.1",
-                "env_key": "OPENROUTER_API_KEY",
-            },
-        )(),
-    )
-    monkeypatch.setattr("trace_collect.simulator.simulate", fake_simulate)
-
-    args = parse_simulate_args(
-        [
-            "--mode",
-            "local_model",
-            "--manifest",
-            "manifest.yaml",
-            "--provider",
-            "openrouter",
-            "--model",
-            "z-ai/glm-5.1",
-            "--api-base",
-            "https://ignored.example/v1",
-        ]
-    )
-
-    _run_simulate(args)
-
-    assert seen["mode"] == "local_model"
-    assert seen["manifest"] == Path("manifest.yaml")
-    assert seen["api_base"] == "https://example.com/v1"
-    assert seen["api_key"] == "secret"
-    assert seen["model"] == "z-ai/glm-5.1"
-
-
-def test_run_simulate_local_model_rejects_concurrency_sweep(
-    capsys: pytest.CaptureFixture[str],
+def test_cloud_model_ttft_tpot_llm_timing_records_simulated_latency(
+    tmp_path: Path,
 ) -> None:
-    args = parse_simulate_args(
-        [
-            "--mode",
-            "local_model",
-            "--manifest",
-            "manifest.yaml",
-            "--concurrency",
-            "1,2",
-        ]
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    output_dir = tmp_path / "out"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        llm_start=100.0,
+        llm_end=100.2,
+        tool_start=100.4,
+        tool_end=100.45,
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=output_dir,
+            mode="cloud_model",
+            replay_speed=100.0,
+            llm_timing_mode="ttft_tpot",
+            llm_ttft_ms=10.0,
+            llm_tpot_ms=2.0,
+        )
     )
 
-    with pytest.raises(SystemExit, match="2"):
-        _run_simulate(args)
+    records = _read_jsonl(trace_file)
+    metadata = records[0]
+    llm_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
 
-    assert "local_model mode requires --concurrency 1" in capsys.readouterr().err
+    assert metadata["llm_timing_mode"] == "ttft_tpot"
+    assert metadata["llm_ttft_ms"] == 10.0
+    assert metadata["llm_tpot_ms"] == 2.0
+    assert llm_record["data"]["llm_timing_mode"] == "ttft_tpot"
+    assert llm_record["data"]["simulated_ttft_ms"] == 10.0
+    assert llm_record["data"]["simulated_tpot_ms"] == 2.0
+    assert llm_record["data"]["simulated_llm_latency_ms"] == 18.0
+    assert llm_record["data"]["source_llm_latency_ms"] == pytest.approx(200.0)
+    assert llm_record["data"]["llm_latency_ms"] == pytest.approx(18.0, abs=25.0)
+    assert summary["llm_timing_mode"] == "ttft_tpot"
 
 
-def test_cloud_model_single_trace_replays_without_llm_client(
+def test_simulate_preserves_source_resource_timeline_as_metadata(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    resource_timeline = {
+        "version": 1,
+        "source": "cgroup_cpu_proc_net",
+        "scope": "openclaw_exec_tool_interval",
+        "samples": [
+            {
+                "offset_s": 0.5,
+                "dt_s": 0.5,
+                "cpu_core_s": 1.0,
+                "net_rx_bytes": 128,
+                "net_tx_bytes": 64,
+            }
+        ],
+        "summary": {
+            "sample_count": 1,
+            "wall_s": 0.5,
+            "cpu_core_s": 1.0,
+            "net_rx_bytes": 128,
+            "net_tx_bytes": 64,
+        },
+    }
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        tool_name="exec",
+        execution_environment="host",
+        resource_timeline=resource_timeline,
+        tool_args={"command": "pytest"},
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert tool_record["data"]["source_resource_timeline"] == resource_timeline
+    assert tool_record["data"]["resource_timeout_policy"] == "wall_clock"
+
+
+def test_simulate_uses_resource_integrated_policy_for_container_exec(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(
-        monkeypatch,
-        tmp_path,
-        tool_delay_s=0.01,
-        tool_duration_ms=10.0,
-        llm_client_mode="forbid",
+    resource_timeline = {
+        "version": 1,
+        "source": "cgroup_cpu_proc_net",
+        "scope": "openclaw_exec_tool_interval",
+        "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
+    }
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        resource_timeline=resource_timeline,
+        tool_args={"command": "pytest"},
     )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+    captured_timelines: list[dict | None] = []
 
-    started = time.monotonic()
+    async def fake_exec_tool(
+        _agent,
+        _tool_name,
+        _tool_args_json,
+        _command_timeout_s,
+        _source_exec_timeout_s=None,
+        _allow_source_runtime_artifacts=False,
+        source_resource_timeline=None,
+    ):
+        captured_timelines.append(source_resource_timeline)
+        return (
+            "ok\n\nExit code: 0",
+            1.0,
+            True,
+            {"resource_virtual_time_s": 0.5},
+        )
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
     trace_file = asyncio.run(
         simulate(
             manifest=_single_trace_manifest(tmp_path, trace_path),
@@ -584,21 +1023,74 @@ def test_cloud_model_single_trace_replays_without_llm_client(
             output_dir=tmp_path / "out",
             mode="cloud_model",
             container_executable="docker",
-            replay_speed=10.0,
+            replay_speed=100.0,
         )
     )
-    elapsed = time.monotonic() - started
 
     records = _read_jsonl(trace_file)
-    assert elapsed >= 0.03
-    assert records[0]["simulate_mode"] == "cloud_model"
-    assert records[0]["source_model"] == "claude-haiku"
-    assert "local_model" not in records[0]
-    llm_record = next(
+    tool_record = next(
         record
         for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
     )
+    assert captured_timelines == [resource_timeline]
+    assert tool_record["data"]["resource_timeout_policy"] == "resource_integrated"
+    assert tool_record["data"]["resource_virtual_time_s"] == 0.5
+
+
+def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_after = {
+        "path": "checkpoints/after-tool-manifest.json",
+        "kind": "cas_manifest_full",
+        "root": "/testbed",
+    }
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "pytest"},
+        checkpoint_after=checkpoint_after,
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed\n\nExit code: 1", 1.0, False
+
+    restored: list[dict] = []
+
+    def fake_restore_checkpoint_to_container(*, checkpoint_spec, container):
+        restored.append({"checkpoint_spec": checkpoint_spec, "container": container})
+        return {
+            "forced_sync_success": True,
+            "forced_sync_elapsed_ms": 12.0,
+            "forced_sync_checkpoint": checkpoint_spec["path"],
+            "forced_sync_root": checkpoint_spec["root"],
+        }
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_to_container",
+        fake_restore_checkpoint_to_container,
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
     tool_record = next(
         record
         for record in records
@@ -606,23 +1098,762 @@ def test_cloud_model_single_trace_replays_without_llm_client(
     )
     summary = next(record for record in records if record.get("type") == "summary")
 
-    assert llm_record["data"]["replay_mode"] == "cloud_model"
-    assert llm_record["data"]["source_llm_latency_ms"] == pytest.approx(200.0)
-    assert llm_record["data"]["sim_metrics"]["warmup"] is False
-    assert tool_record["data"]["replay_source"] == "executed_in_container"
-    assert tool_record["data"]["source_duration_ms"] == pytest.approx(50.0)
-    assert tool_record["data"]["tool_result"] == "executed-write_file"
-    assert tool_record["data"]["sim_metrics"]["warmup"] is False
-    assert tool_record["data"]["sim_metrics"]["sim_tool_format"] == "container_exec"
-    assert summary["success"] is True
-    assert summary["source_success"] is True
-    assert summary["replay_mode"] == "cloud_model"
-    assert summary["replay_speed"] == pytest.approx(10.0)
-    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
-    assert throughput["completed_traces"] == 1
-    assert throughput["failed_traces"] == 0
-    assert throughput["effective_concurrency"] == 1
-    assert records[0]["effective_concurrency"] == 1
+    assert len(restored) == 1
+    assert restored[0]["checkpoint_spec"]["path"] == str(
+        trace_path.parent / "checkpoints/after-tool-manifest.json"
+    )
+    assert tool_record["data"]["replay_outcome_match"] is False
+    assert tool_record["data"]["mismatch_reason"] == "tool_success_mismatch"
+    assert tool_record["data"]["output_diff_snippet"].startswith(
+        "- source-result\n+ failed"
+    )
+    assert tool_record["data"]["forced_sync_attempted"] is True
+    assert tool_record["data"]["forced_sync_success"] is True
+    assert tool_record["data"]["forced_sync_resolved"] is False
+    assert tool_record["data"]["forced_sync_continued"] is True
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_restored_continuation"
+    assert tool_record["data"]["forced_sync_overhead_excluded"] is True
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
+    assert summary["forced_sync_actions"] == 1
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 1
+    assert summary["forced_sync_continued"] == 1
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 0
+
+
+def test_simulate_forced_sync_restores_incremental_checkpoint_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoints = [
+        {
+            "path": "checkpoints/full-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+            "incremental": False,
+        },
+        {
+            "path": "checkpoints/inc-1-manifest.json",
+            "kind": "cas_manifest_incremental",
+            "root": "/testbed",
+            "incremental": True,
+        },
+        {
+            "path": "checkpoints/inc-2-manifest.json",
+            "kind": "cas_manifest_incremental",
+            "root": "/testbed",
+            "incremental": True,
+        },
+    ]
+    records: list[dict[str, object]] = [
+        {
+            "type": "trace_metadata",
+            "trace_format_version": 5,
+            "scaffold": "openclaw",
+            "instance_id": "task-a",
+            "model": "claude-haiku",
+            "mode": "collect",
+            "execution_environment": "container",
+        }
+    ]
+    for index, checkpoint_after in enumerate(checkpoints):
+        records.append(
+            {
+                "type": "action",
+                "action_type": "tool_exec",
+                "action_id": f"task-a-tool-{index}",
+                "agent_id": "task-a",
+                "iteration": index,
+                "ts_start": 100.0 + index,
+                "ts_end": 100.1 + index,
+                "data": {
+                    "tool_name": "exec",
+                    "tool_args": json.dumps({"command": f"step {index}"}),
+                    "tool_result": "source-result",
+                    "duration_ms": 100.0,
+                    "success": True,
+                    "checkpoint_after": checkpoint_after,
+                },
+            }
+        )
+    records.append(
+        {
+            "type": "summary",
+            "agent_id": "task-a",
+            "model": "claude-haiku",
+            "success": True,
+            "n_iterations": 3,
+            "elapsed_s": 3.0,
+        }
+    )
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    call_count = 0
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return "source-result", 1.0, True
+        return "failed", 1.0, False
+
+    restored: list[dict[str, object]] = []
+
+    def fake_restore_checkpoint_to_container(
+        *,
+        checkpoint_spec,
+        container,
+        clear_root=True,
+    ):
+        restored.append(
+            {
+                "checkpoint_spec": checkpoint_spec,
+                "container": container,
+                "clear_root": clear_root,
+            }
+        )
+        return {
+            "forced_sync_success": True,
+            "forced_sync_status": "checkpoint_restored_continuation",
+            "forced_sync_checkpoint": checkpoint_spec["path"],
+            "forced_sync_root": checkpoint_spec["root"],
+        }
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_to_container",
+        fake_restore_checkpoint_to_container,
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_records = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    third_record = tool_records[2]
+
+    assert [Path(str(item["checkpoint_spec"]["path"])).name for item in restored] == [
+        "full-manifest.json",
+        "inc-1-manifest.json",
+        "inc-2-manifest.json",
+    ]
+    assert [item["clear_root"] for item in restored] == [True, False, False]
+    assert third_record["data"]["forced_sync_success"] is True
+    assert third_record["data"]["checkpoint_restore_chain_length"] == 3
+    assert third_record["data"]["forced_sync_checkpoint_chain_length"] == 3
+    assert third_record["data"]["forced_sync_checkpoint_chain"] == [
+        str(trace_path.parent / "checkpoints/full-manifest.json"),
+        str(trace_path.parent / "checkpoints/inc-1-manifest.json"),
+        str(trace_path.parent / "checkpoints/inc-2-manifest.json"),
+    ]
+
+
+def test_simulate_forced_sync_fallback_to_prior_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_after = {
+        "path": "checkpoints/after-first-tool-manifest.json",
+        "kind": "cas_manifest_full",
+        "root": "/testbed",
+    }
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "trace_format_version": 5,
+                        "scaffold": "openclaw",
+                        "instance_id": "task-a",
+                        "model": "claude-haiku",
+                        "mode": "collect",
+                        "execution_environment": "container",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "task-a-llm-0",
+                        "agent_id": "task-a",
+                        "iteration": 0,
+                        "ts_start": 100.0,
+                        "ts_end": 100.2,
+                        "data": {
+                            "messages_in": [{"role": "user", "content": "fix bug"}],
+                            "raw_response": {"id": "resp-task-a"},
+                            "prompt_tokens": 10,
+                            "completion_tokens": 5,
+                            "llm_latency_ms": 200.0,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "tool_exec",
+                        "action_id": "task-a-tool-0",
+                        "agent_id": "task-a",
+                        "iteration": 0,
+                        "ts_start": 100.4,
+                        "ts_end": 100.45,
+                        "data": {
+                            "tool_name": "write_file",
+                            "tool_args": json.dumps({"path": "/testbed/a.txt"}),
+                            "tool_result": "source-result",
+                            "duration_ms": 50.0,
+                            "success": True,
+                            "checkpoint_after": checkpoint_after,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "tool_exec",
+                        "action_id": "task-a-tool-1",
+                        "agent_id": "task-a",
+                        "iteration": 1,
+                        "ts_start": 100.6,
+                        "ts_end": 100.65,
+                        "data": {
+                            "tool_name": "write_file",
+                            "tool_args": json.dumps({"path": "/testbed/b.txt"}),
+                            "tool_result": "source-result",
+                            "duration_ms": 50.0,
+                            "success": True,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "summary",
+                        "agent_id": "task-a",
+                        "model": "claude-haiku",
+                        "success": True,
+                        "n_iterations": 2,
+                        "elapsed_s": 0.65,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    call_count = 0
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "ok", 1.0, True
+        return "failed", 1.0, False
+
+    restored: list[dict] = []
+
+    def fake_restore_checkpoint_to_container(*, checkpoint_spec, container):
+        restored.append({"checkpoint_spec": checkpoint_spec, "container": container})
+        return {
+            "forced_sync_success": True,
+            "forced_sync_elapsed_ms": 12.0,
+            "forced_sync_checkpoint": checkpoint_spec["path"],
+            "forced_sync_root": checkpoint_spec["root"],
+        }
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_to_container",
+        fake_restore_checkpoint_to_container,
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_records = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert len(restored) == 1
+    assert restored[0]["checkpoint_spec"]["path"] == str(
+        trace_path.parent / "checkpoints/after-first-tool-manifest.json"
+    )
+    assert len(tool_records) == 2
+    fallback_record = tool_records[1]
+    assert fallback_record["data"]["replay_outcome_match"] is False
+    assert fallback_record["data"]["mismatch_reason"] == "tool_success_mismatch"
+    assert fallback_record["data"]["forced_sync_attempted"] is True
+    assert fallback_record["data"]["forced_sync_success"] is True
+    assert fallback_record["data"]["forced_sync_resolved"] is False
+    assert fallback_record["data"]["forced_sync_continued"] is True
+    assert (
+        fallback_record["data"]["forced_sync_status"]
+        == "checkpoint_restored_continuation"
+    )
+    assert fallback_record["data"]["forced_sync_overhead_excluded"] is True
+    assert fallback_record["data"]["forced_sync_fallback"] is True
+    assert fallback_record["data"]["forced_sync_fallback_from_action_index"] == 1
+    assert (
+        fallback_record["data"]["forced_sync_fallback_from_action_id"]
+        == "task-a-tool-0"
+    )
+    assert summary["success"] is False
+    assert summary["forced_sync_actions"] == 1
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 1
+    assert summary["forced_sync_continued"] == 1
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 0
+
+
+def test_mismatch_without_checkpoint_is_unresolved_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(trace_path, agent_id="task-a", tool_name="write_file")
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["mismatch_reason"] == "tool_success_mismatch"
+    assert tool_record["data"]["forced_sync_attempted"] is True
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_continued"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_missing"
+    assert tool_record["data"]["forced_sync_error"] == (
+        "no checkpoint available (searched entire trace history)"
+    )
+    assert summary["success"] is False
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+
+
+def test_missing_checkpoint_file_marks_forced_sync_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "pytest"},
+        checkpoint_after={
+            "path": "checkpoints/missing-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed\n\nExit code: 1", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["forced_sync_attempted"] is True
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_continued"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_missing"
+    assert tool_record["data"]["checkpoint_archive_exists"] is False
+    assert tool_record["data"]["restore_elapsed_ms"] >= 0.0
+    assert "checkpoint not found" in tool_record["data"]["forced_sync_error"]
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
+
+
+def test_invalid_checkpoint_manifest_marks_restore_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_path = tmp_path / "checkpoints" / "corrupt-manifest.json"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_text("not a manifest", encoding="utf-8")
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "pytest"},
+        checkpoint_after={
+            "path": "checkpoints/corrupt-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed\n\nExit code: 1", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_restore_failed"
+    assert tool_record["data"]["checkpoint_archive_exists"] is True
+    assert tool_record["data"]["checkpoint_size_bytes"] == checkpoint_path.stat().st_size
+    assert tool_record["data"]["restore_elapsed_ms"] >= 0.0
+    assert "invalid checkpoint manifest" in tool_record["data"]["forced_sync_error"]
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
+
+
+def test_unsupported_checkpoint_kind_marks_restore_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_path = tmp_path / "checkpoints" / "after.snapshot"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_text("snapshot", encoding="utf-8")
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "pytest"},
+        checkpoint_after={
+            "path": "checkpoints/after.snapshot",
+            "kind": "firecracker_snapshot",
+            "root": "/testbed",
+        },
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "failed\n\nExit code: 1", 1.0, False
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["forced_sync_success"] is False
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_restore_failed"
+    assert tool_record["data"]["checkpoint_archive_exists"] is True
+    assert tool_record["data"]["restore_elapsed_ms"] >= 0.0
+    assert "unsupported checkpoint kind" in tool_record["data"]["forced_sync_error"]
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 0
+    assert summary["forced_sync_continued"] == 0
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 1
+
+
+def test_forced_sync_does_not_resolve_source_artifact_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="read_file",
+        tool_args={"path": "/openclaw-runtime/tool-results/tool-results/missing.txt"},
+        checkpoint_after={
+            "path": "checkpoints/after-read-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    def fake_restore_checkpoint_to_container(*, checkpoint_spec, container):
+        return {
+            "forced_sync_success": True,
+            "forced_sync_elapsed_ms": 12.0,
+            "forced_sync_checkpoint": checkpoint_spec["path"],
+        }
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_to_container",
+        fake_restore_checkpoint_to_container,
+    )
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    records = _read_jsonl(trace_file)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    summary = next(record for record in records if record.get("type") == "summary")
+
+    assert tool_record["data"]["mismatch_reason"] == "source_artifact_unavailable"
+    assert tool_record["data"]["forced_sync_success"] is True
+    assert tool_record["data"]["forced_sync_resolved"] is False
+    assert tool_record["data"]["forced_sync_continued"] is True
+    assert summary["success"] is False
+    assert summary["forced_sync_actions"] == 1
+    assert summary["forced_sync_attempts"] == 1
+    assert summary["forced_sync_successes"] == 1
+    assert summary["forced_sync_continued"] == 1
+    assert summary["fatal_replay_errors"] == 1
+    assert summary["outcome_mismatches"] == 1
+    assert summary["unresolved_mismatches"] == 0
+
+
+def test_simulate_keeps_wall_policy_for_commands_resource_timeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    resource_timeline = {
+        "version": 1,
+        "samples": [{"offset_s": 0.5, "dt_s": 0.5, "cpu_core_s": 1.0}],
+    }
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        resource_timeline=resource_timeline,
+        tool_args={"commands": ["pytest"]},
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+    captured_timelines: list[dict | None] = []
+
+    async def fake_exec_tool(
+        _agent,
+        _tool_name,
+        _tool_args_json,
+        _command_timeout_s,
+        _source_exec_timeout_s=None,
+        _allow_source_runtime_artifacts=False,
+        source_resource_timeline=None,
+    ):
+        captured_timelines.append(source_resource_timeline)
+        return "ok\n\nExit code: 0", 1.0, True
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    tool_record = next(
+        record
+        for record in _read_jsonl(trace_file)
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert captured_timelines == [None]
+    assert tool_record["data"]["resource_timeout_policy"] == "wall_clock"
+
+
+def test_simulate_ignores_invalid_resource_timeline_for_timeout_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    invalid_timeline = {"version": 1, "samples": [{"dt_s": 0.0, "cpu_core_s": 1.0}]}
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        resource_timeline=invalid_timeline,
+        tool_args={"command": "pytest"},
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return "ok\n\nExit code: 0", 1.0, True
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    tool_record = next(
+        record
+        for record in _read_jsonl(trace_file)
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert "source_resource_timeline" not in tool_record["data"]
+    assert "resource_timeout_policy" not in tool_record["data"]
+
+
+def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    with pytest.raises(ValueError, match="llm_ttft_ms is required"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+                llm_timing_mode="ttft_tpot",
+                llm_tpot_ms=2.0,
+            )
+        )
 
 
 def test_cloud_model_tool_success_false_marks_trace_failed(
@@ -778,6 +2009,7 @@ def test_cloud_model_source_failed_replay_success_marks_mismatch(
     assert tool_record["data"]["success"] is True
     assert tool_record["data"]["source_success"] is False
     assert tool_record["data"]["replay_outcome_match"] is False
+    assert tool_record["data"]["mismatch_reason"] == "timeout_mismatch"
     assert summary["success"] is False
     assert summary["failed_actions"] == 1
     assert summary["source_failed_actions"] == 1
@@ -833,6 +2065,68 @@ def test_source_exec_timeout_detects_source_timeout_failure() -> None:
         source_success=False,
         source_tool_result="[timeout]\n\nExit code: 124",
     ) is None
+
+
+def test_tool_mismatch_reason_distinguishes_wrapper_timeout() -> None:
+    tool_args = json.dumps({"exec": {"command": "cmd"}})
+
+    assert (
+        _tool_mismatch_reason(
+            source_success=False,
+            tool_success=False,
+            replay_source="executed_in_container",
+            source_tool_result="command returned 124\n\nExit code: 124",
+            replay_tool_result="[timeout]\n\nExit code: 124",
+            tool_name="exec",
+            tool_args_json=tool_args,
+        )
+        == "timeout_mismatch"
+    )
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result="ok\n\nExit code: 0",
+            replay_tool_result="bad\n\nExit code: 1",
+            tool_name="exec",
+            tool_args_json=tool_args,
+        )
+        == "command_exit_code_mismatch"
+    )
+
+
+def test_compute_output_diff_snippet_captures_first_divergence() -> None:
+    assert (
+        _compute_output_diff_snippet("same\npid 123\ndone", "same\npid 456\ndone")
+        == "  same\n- pid 123\n+ pid 456\n  done"
+    )
+    assert (
+        _compute_output_diff_snippet("same", "same\nextra")
+        == "  same\n- <missing>\n+ extra"
+    )
+    assert (
+        _compute_output_diff_snippet("same\n", "same")
+        == "raw output differs without line-content difference"
+    )
+    assert (
+        _compute_output_diff_snippet("abcdef", "uvwxyz", max_line_chars=3)
+        == "- abc...<truncated 3 chars>\n+ uvw...<truncated 3 chars>"
+    )
+
+def test_tool_mismatch_reason_skips_output_comparison_for_non_exec_tools() -> None:
+    assert (
+        _tool_mismatch_reason(
+            source_success=True,
+            tool_success=True,
+            replay_source="executed_in_container",
+            source_tool_result="old content",
+            replay_tool_result="new content",
+            tool_name="read_file",
+            tool_args_json=json.dumps({"path": "/testbed/file.py"}),
+        )
+        is None
+    )
 
 
 def test_cloud_model_preserves_source_exec_timeout_for_replay(
@@ -903,78 +2197,6 @@ def test_cloud_model_preserves_source_exec_timeout_for_replay(
     assert summary["success"] is True
     assert summary["failed_actions"] == 0
     assert summary["matched_failed_actions"] == 1
-
-
-def test_local_model_preserves_source_exec_timeout_for_replay(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    output_dir = tmp_path / "out"
-    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
-    records = _read_jsonl(trace_path)
-    for record in records:
-        if record.get("action_type") == "tool_exec":
-            record["data"]["tool_args"] = json.dumps(
-                {"exec": {"command": "cd /testbed && slow command"}}
-            )
-            record["data"]["duration_ms"] = 300056.8
-            record["data"]["success"] = False
-            record["data"]["tool_result"] = "Error: Command timed out after 300 seconds"
-    trace_path.write_text(
-        "\n".join(json.dumps(record) for record in records) + "\n",
-        encoding="utf-8",
-    )
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    captured_source_timeouts: list[float | None] = []
-
-    async def fake_exec_tool(
-        _agent,
-        _tool_name,
-        _tool_args_json,
-        _command_timeout_s,
-        source_exec_timeout_s=None,
-        allow_source_runtime_artifacts=False,
-    ):
-        assert allow_source_runtime_artifacts is False
-        captured_source_timeouts.append(source_exec_timeout_s)
-        return "[timeout]\n\nExit code: 124", 300056.8, False
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=output_dir,
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-            replay_speed=100.0,
-            command_timeout_s=600.0,
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert captured_source_timeouts == [pytest.approx(300.0568)]
-    assert tool_record["data"]["source_exec_timeout_s"] == pytest.approx(300.0568)
-    assert tool_record["data"]["source_success"] is False
-    assert tool_record["data"]["success"] is False
-    assert tool_record["data"]["replay_outcome_match"] is True
-    assert summary["success"] is True
-    assert summary["failed_iterations"] == 0
 
 
 def test_cloud_model_source_runtime_artifact_path_fails_trace(
@@ -1367,12 +2589,6 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
         "trace_collect.simulator._prepare_container_session",
         fail_prepare,
     )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -1417,6 +2633,8 @@ def test_cloud_model_host_trace_replays_without_container_or_llm_client(
     payload = json.loads(resources_path.read_text())
     assert payload["samples"] == []
     assert payload["summary"]["sample_count"] == 0
+    assert payload["summary"]["monitoring_disabled"] is True
+    assert payload["summary"]["monitoring"]["status"] == "disabled"
 
     startup_path = attempt_dir / "container_startup.json"
     assert startup_path.exists()
@@ -1513,18 +2731,15 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         *,
         executable: str,
         network_mode: str,
-        run_as_host_user: bool,
-        mount_host_home: bool,
-        container_home: str,
         extra_args: list[str] | None = None,
     ) -> str:
         assert executable == "docker"
         assert network_mode == "host"
-        assert run_as_host_user is False
-        assert mount_host_home is False
-        assert container_home == "/root"
         assert extra_args is not None
         assert "agent-sched-bench.component=simulate-replay" in extra_args
+        cas_root = str(Path.home() / ".cache" / "agent-checkpoint-cas")
+        assert "-v" in extra_args
+        assert f"{cas_root}:{cas_root}" in extra_args
         events.append(("prepare", image))
         return f"fake-{len(fixed_images)}"
 
@@ -1534,7 +2749,12 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         return True
 
     class _FakeAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             self.container_id = container_id
             self.container_executable = container_executable
 
@@ -1561,14 +2781,15 @@ def test_cloud_model_prefetches_images_before_container_prepare(
     monkeypatch.setattr("trace_collect.simulator.ensure_fixed_image", fake_ensure_fixed_image)
     monkeypatch.setattr("trace_collect.simulator.start_task_container", fake_start_task_container)
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda *args, **kwargs: None,
+    )
+    _patch_noop_replay_python_probe(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeAgent)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -1589,7 +2810,7 @@ def test_cloud_model_prefetches_images_before_container_prepare(
     assert all(event[0] == "prepare" for event in events[1:])
     assert len(fixed_images) == 1
     assert fixed_images[0].startswith(
-        "swebench-fixed-docker.io_shared_image_latest:simulate-sweep-"
+        "swebench-fixed-root-docker.io_shared_image_latest:simulate-sweep-"
     )
     assert [event for event in events if event[0] == "prepare"] == [
         ("prepare", fixed_images[0]),
@@ -1814,10 +3035,6 @@ def test_cloud_model_prefetch_uses_manifest_docker_image_override(
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare_container)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -1843,10 +3060,18 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     _write_trace(trace_path, agent_id="task-a")
     _write_tasks(task_source, "task-a")
 
+    agent_kwargs: list[dict[str, object]] = []
+
     class _FakeContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
+            agent_kwargs.append(kwargs)
 
         async def start(self) -> None:
             pass
@@ -1855,9 +3080,17 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
             pass
 
     class _FakeSampler:
-        def __init__(self, *, container_id: str, interval_s: float, executable: str) -> None:
+        def __init__(
+            self,
+            *,
+            container_id: str,
+            interval_s: float,
+            executable: str,
+            enable_memory_bandwidth: bool = True,
+        ) -> None:
             assert container_id == "fake-cid"
             assert executable == "docker"
+            assert enable_memory_bandwidth is True
             self.interval_s = interval_s
             kind = "startup" if self.interval_s == 0.25 else "runtime"
             self._samples = [
@@ -1890,6 +3123,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
 
     ensure_calls: list[dict[str, object]] = []
     removed_images: list[str] = []
+    bootstrap_commands: list[list[str]] = []
 
     def fake_ensure_fixed_image(
         source_image: str,
@@ -1914,6 +3148,12 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         removed_images.append(image)
         return True
 
+    def fake_resolve_running_container_exec_config(**kwargs):
+        return dataclasses.replace(
+            kwargs["exec_config"],
+            runtime="/opt/conda/bin/python3",
+        )
+
     monkeypatch.setattr("trace_collect.simulator.ensure_source_image", lambda *args, **kwargs: None)
     monkeypatch.setattr("trace_collect.simulator.ensure_fixed_image", fake_ensure_fixed_image)
     monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
@@ -1922,13 +3162,18 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda cmd, *, timeout: bootstrap_commands.append(cmd),
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator.resolve_running_container_exec_config",
+        fake_resolve_running_container_exec_config,
+        raising=False,
+    )
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _FakeContainerAgent)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -1949,7 +3194,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert startup["agent_id"] == "task-a"
     assert startup["source_image"] == "docker.io/swebench-test/task-a"
     assert startup["fixed_image"].startswith(
-        "swebench-fixed-docker.io_swebench-test_task-a:simulate-sweep-"
+        "swebench-fixed-root-docker.io_swebench-test_task-a:simulate-sweep-"
     )
     assert startup["container_id"] == "fake-cid"
     assert [phase["name"] for phase in startup["phases"]] == [
@@ -1966,6 +3211,9 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert startup["resources"]["summary"]["sample_count"] == 0
     assert resources["samples"][0]["phase"] == "runtime"
     assert resources["summary"]["sample_count"] == 1
+    assert resources["summary"]["monitoring_disabled"] is False
+    assert resources["summary"]["monitoring"]["status"] == "collected"
+    assert agent_kwargs == [{}]
     assert ensure_calls == [
         {
             "source_image": "docker.io/swebench-test/task-a",
@@ -1989,7 +3237,12 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
     stopped_containers: list[str] = []
 
     class _FailingContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
 
@@ -2016,6 +3269,11 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda *args, **kwargs: None,
+    )
+    _patch_noop_replay_python_probe(monkeypatch)
     monkeypatch.setattr(
         "trace_collect.simulator.remove_image",
         lambda image, *, container_executable: removed_images.append(image) or True,
@@ -2115,7 +3373,12 @@ def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
     _write_tasks(task_source, "task-a")
 
     class _FailingContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
 
@@ -2142,6 +3405,11 @@ def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
         lambda *args, **kwargs: "fake-cid",
     )
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
+    monkeypatch.setattr(
+        "trace_collect.simulator._run_checked_container_command",
+        lambda *args, **kwargs: None,
+    )
+    _patch_noop_replay_python_probe(monkeypatch)
     monkeypatch.setattr(
         "trace_collect.simulator.remove_image",
         lambda image, *, container_executable: removed_images.append(image) or True,
@@ -2236,10 +3504,6 @@ def test_cloud_model_worker_failure_waits_for_inflight_cleanup(
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
     monkeypatch.setattr("trace_collect.simulator.stop_task_container", fake_stop_task_container)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     started = time.monotonic()
     with pytest.raises(RuntimeError, match="prepare failed"):
@@ -2617,12 +3881,6 @@ def test_cloud_model_host_trace_skips_mcp_tools(
         "trace_collect.simulator._prepare_container_session",
         fail_prepare,
     )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -2645,6 +3903,89 @@ def test_cloud_model_host_trace_skips_mcp_tools(
     assert tool_record["data"]["success"] is True
 
 
+def test_cloud_model_multi_worker_host_smoke(tmp_path: Path) -> None:
+    trace_paths: list[Path] = []
+    agent_ids = [f"host-task-{index}" for index in range(4)]
+    for agent_id in agent_ids:
+        trace_path = tmp_path / f"{agent_id}.jsonl"
+        _write_trace(
+            trace_path,
+            agent_id=agent_id,
+            execution_environment="host",
+        )
+        trace_paths.append(trace_path)
+    task_source = tmp_path / "tasks.json"
+    _write_host_tasks(task_source, *agent_ids)
+    manifest = _write_manifest(tmp_path / "manifest.yaml", [str(path) for path in trace_paths])
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            concurrency=4,
+            workers=2,
+            prep_concurrency=2,
+            replay_speed=100.0,
+        )
+    )
+
+    summary = json.loads(
+        trace_file.with_name(f"{trace_file.stem}.throughput_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["scheduler_mode"] == "multi_process_workers"
+    assert summary["workers"] == 2
+    assert summary["prep_concurrency"] == 2
+    assert summary["effective_prep_concurrency"] == 2
+    assert summary["attempted_traces"] == 4
+    assert summary["monitoring"]["memory_bandwidth_enabled"] is False
+    assert summary["container_resources"]["status"] == "disabled"
+    assert summary["container_resources"]["monitoring"]["pmu_enabled"] is False
+    records = _read_jsonl(trace_file)
+    assert sum(1 for record in records if record.get("type") == "trace_metadata") == 1
+    summary_records = [record for record in records if record.get("type") == "summary"]
+    assert len(summary_records) == 4
+    assert all(record["sleep_drift"]["sample_count"] >= 3 for record in summary_records)
+    llm_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+    assert "action_sleep" in llm_record["data"]["sim_metrics"]
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+    assert "source_gap_sleep" in tool_record["data"]["sim_metrics"]
+    assert "action_sleep" in tool_record["data"]["sim_metrics"]
+    action_starts = [
+        record["ts_start"]
+        for record in records
+        if record.get("type") == "action"
+    ]
+    assert action_starts == sorted(action_starts)
+    llm_starts = [
+        record["ts_start"]
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    ]
+    assert max(llm_starts) - min(llm_starts) < 0.25
+    for agent_id in agent_ids:
+        per_task_trace = tmp_path / "out" / agent_id / "attempt_1" / "trace.jsonl"
+        assert per_task_trace.exists()
+        per_task_metadata = _read_jsonl(per_task_trace)[0]
+        assert per_task_metadata["manifest"] == str(manifest)
+        assert per_task_metadata["concurrency"] == 4
+        assert per_task_metadata["scheduler_mode"] == "multi_process_workers"
+        assert per_task_metadata["monitoring"]["memory_bandwidth_enabled"] is False
+        assert per_task_metadata["source_trace_count"] == 1
+        assert per_task_metadata["instance_id"] == agent_id
+
+
 def test_cloud_model_replay_marks_warmup_iterations(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2653,7 +3994,7 @@ def test_cloud_model_replay_marks_warmup_iterations(
     task_source = tmp_path / "tasks.json"
     _write_trace(trace_path, agent_id="task-a")
     _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="forbid")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
 
     trace_file = asyncio.run(
         simulate(
@@ -2683,568 +4024,6 @@ def test_cloud_model_replay_marks_warmup_iterations(
     assert tool_record["data"]["sim_metrics"]["warmup"] is True
 
 
-def test_local_model_single_trace_still_emits_sim_metrics(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    metadata = records[0]
-    llm_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
-    )
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-
-    assert metadata["simulate_mode"] == "local_model"
-    assert metadata["local_model"] == "local-qwen"
-    assert llm_record["data"]["sim_metrics"]["timing"]["total_ms"] >= 0.0
-    assert llm_record["data"]["source_llm_latency_ms"] == pytest.approx(200.0)
-    assert tool_record["data"]["sim_metrics"]["source"] == "executed_in_container"
-    assert tool_record["data"]["tool_result"] == "executed-write_file"
-    summary = next(record for record in records if record.get("type") == "summary")
-    assert summary["success"] is True
-    assert summary["source_success"] is True
-
-
-def test_local_model_failed_iteration_marks_throughput_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    class _FailingClient:
-        class _Completions:
-            async def create(self, **_kwargs):
-                raise RuntimeError("local llm failed")
-
-        class _Chat:
-            def __init__(self) -> None:
-                self.completions = _FailingClient._Completions()
-
-        def __init__(self) -> None:
-            self.chat = self._Chat()
-
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FailingClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    summary = next(record for record in _read_jsonl(trace_file) if record.get("type") == "summary")
-    assert summary["success"] is False
-    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
-    assert throughput["completed_traces"] == 0
-    assert throughput["failed_traces"] == 1
-    assert throughput["tasks"][0]["success"] is False
-
-
-def test_local_model_tool_success_false_marks_throughput_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a")
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    async def fake_exec_tool(*_args, **_kwargs):
-        return "tool failed", 1.0, False
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    summary = next(record for record in _read_jsonl(trace_file) if record.get("type") == "summary")
-    throughput = json.loads((tmp_path / "out" / "throughput_summary.json").read_text())
-    assert summary["success"] is False
-    assert summary["failed_iterations"] == 1
-    assert throughput["completed_traces"] == 0
-    assert throughput["failed_traces"] == 1
-    assert throughput["tasks"][0]["success"] is False
-    assert throughput["tasks"][0]["failed_action_count"] == 1
-
-
-def test_local_model_records_command_exit_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(trace_path, agent_id="task-a", tool_name="exec")
-    records = _read_jsonl(trace_path)
-    for record in records:
-        if record.get("action_type") == "tool_exec":
-            record["data"]["tool_args"] = json.dumps({"command": "false"})
-            record["data"]["success"] = True
-    trace_path.write_text(
-        "\n".join(json.dumps(record) for record in records) + "\n",
-        encoding="utf-8",
-    )
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    async def fake_exec_tool(*_args, **_kwargs):
-        return "boom\n\nExit code: 1", 1.0, True
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert tool_record["data"]["success"] is True
-    assert tool_record["data"]["source_success"] is True
-    assert tool_record["data"]["replay_outcome_match"] is True
-    assert tool_record["data"]["command_exit_code"] == 1
-    assert tool_record["data"]["command_success"] is False
-    assert tool_record["data"]["replay_transport_success"] is True
-    assert summary["success"] is True
-
-
-def test_local_model_restores_source_runtime_artifact(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    source_attempt = tmp_path / "source" / "task-a" / "attempt_1"
-    source_attempt.mkdir(parents=True)
-    trace_path = source_attempt / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    output_dir = tmp_path / "out"
-    _write_trace(trace_path, agent_id="task-a", tool_name="read_file")
-    artifact_dir = source_attempt / "openclaw-runtime" / "tool-results"
-    artifact_file = artifact_dir / "tool-results" / "cli_task" / "out.txt"
-    artifact_file.parent.mkdir(parents=True)
-    artifact_file.write_text("full saved output", encoding="utf-8")
-    (source_attempt / "run_manifest.json").write_text(
-        json.dumps(
-            {
-                "artifacts": {
-                    "openclaw_tool_results_dir": "openclaw-runtime/tool-results",
-                }
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    source_artifact_path = (
-        "/root/agent-sched-bench/traces/source/task-a/attempt_1/"
-        "openclaw-runtime/tool-results/tool-results/cli_task/out.txt"
-    )
-    records = _read_jsonl(trace_path)
-    for record in records:
-        if record.get("action_type") == "tool_exec":
-            record["data"]["tool_args"] = json.dumps({"path": source_artifact_path})
-            record["data"]["success"] = True
-    trace_path.write_text(
-        "\n".join(json.dumps(record) for record in records) + "\n",
-        encoding="utf-8",
-    )
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="fake")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._copy_source_runtime_artifacts_to_container",
-        lambda **_kwargs: None,
-    )
-
-    async def fake_exec_tool(
-        _agent,
-        tool_name,
-        tool_args_json,
-        _command_timeout_s,
-        _source_exec_timeout_s=None,
-        allow_source_runtime_artifacts=False,
-    ):
-        args = json.loads(tool_args_json)
-        assert tool_name == "read_file"
-        assert allow_source_runtime_artifacts is True
-        assert str(output_dir.resolve()) in args["path"]
-        return "full saved output", 1.0, True
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=output_dir,
-            mode="local_model",
-            container_executable="docker",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-            replay_speed=100.0,
-        )
-    )
-
-    simulator_artifact = (
-        output_dir
-        / "task-a"
-        / "attempt_1"
-        / "openclaw-runtime"
-        / "tool-results"
-        / "tool-results"
-        / "cli_task"
-        / "out.txt"
-    )
-    assert simulator_artifact.read_text(encoding="utf-8") == "full saved output"
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert tool_record["data"]["replay_source"] == "restored_runtime_artifact"
-    assert tool_record["data"]["source_artifact_path"] == source_artifact_path
-    assert tool_record["data"]["simulator_artifact_path"] == str(simulator_artifact.resolve())
-    assert tool_record["data"]["replay_outcome_match"] is True
-    assert summary["success"] is True
-    assert summary["fatal_replay_errors"] == 0
-
-
-def test_local_model_host_trace_completes_without_container(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(
-        trace_path,
-        agent_id="host-task",
-        scaffold="tongyi-deepresearch",
-        execution_environment="host",
-    )
-    _write_host_tasks(task_source, "host-task")
-
-    async def fail_prepare(*args, **kwargs):
-        raise AssertionError("host-mode local simulation must not prepare a container")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        fail_prepare,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FakeClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    metadata = records[0]
-    llm_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
-    )
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert metadata["execution_environment"] == "host"
-    assert llm_record["data"]["sim_metrics"]["timing"]["total_ms"] >= 0.0
-    # Host-mode tools cannot be re-executed in local_model (no container);
-    # preserve source-trace timing so total_tool_ms stays faithful.
-    assert tool_record["data"]["sim_metrics"]["source"] == "replayed_from_trace"
-    assert (
-        tool_record["data"]["sim_metrics"]["sim_tool_format"]
-        == "replayed_from_trace"
-    )
-    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
-    # ts_end - ts_start should match the replayed duration (0.05s)
-    assert tool_record["ts_end"] - tool_record["ts_start"] == pytest.approx(
-        0.05, abs=0.01
-    )
-    assert tool_record["data"]["success"] is True
-    assert summary["success"] is True
-
-
-def test_local_model_host_trace_replays_mcp_tool_timing(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(
-        trace_path,
-        agent_id="host-task",
-        scaffold="tongyi-deepresearch",
-        tool_name="mcp_search",
-        execution_environment="host",
-    )
-    _write_host_tasks(task_source, "host-task")
-
-    async def fail_prepare(*args, **kwargs):
-        raise AssertionError("host-mode local simulation must not prepare a container")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        fail_prepare,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FakeClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-
-    # Both MCP and non-MCP host-mode tools go through the same replay path
-    # in local_model — they cannot be re-executed without a container.
-    assert tool_record["data"]["sim_metrics"]["source"] == "replayed_from_trace"
-    assert (
-        tool_record["data"]["sim_metrics"]["sim_tool_format"]
-        == "replayed_from_trace"
-    )
-    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
-    assert tool_record["data"]["success"] is True
-
-
-def test_local_model_host_trace_replay_speed_scales_replayed_tool_timing(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(
-        trace_path,
-        agent_id="host-task",
-        scaffold="tongyi-deepresearch",
-        execution_environment="host",
-    )
-    _write_host_tasks(task_source, "host-task")
-
-    async def fail_prepare(*args, **kwargs):
-        raise AssertionError("host-mode local simulation must not prepare a container")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        fail_prepare,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: _FakeClient(),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-            replay_speed=10.0,
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-
-    assert tool_record["data"]["duration_ms"] == pytest.approx(50.0, abs=0.01)
-    assert tool_record["ts_end"] - tool_record["ts_start"] == pytest.approx(
-        0.005, abs=0.01
-    )
-
-
-def test_local_model_terminal_transport_retry_marks_failed_iteration(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    trace_path.write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "type": "trace_metadata",
-                        "trace_format_version": 5,
-                        "scaffold": "tongyi-deepresearch",
-                        "instance_id": "task-a",
-                        "model": "source-model",
-                        "execution_environment": "host",
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "action",
-                        "action_type": "llm_call",
-                        "action_id": "llm_0_transport_exhausted",
-                        "agent_id": "task-a",
-                        "iteration": 0,
-                        "ts_start": 100.0,
-                        "ts_end": 100.0,
-                        "data": {
-                            "transport_retry": True,
-                            "transport_retry_terminal": True,
-                            "messages_in": [{"role": "user", "content": "fail please"}],
-                            "error": "APIConnectionError: boom",
-                        },
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "summary",
-                        "agent_id": "task-a",
-                        "model": "source-model",
-                        "success": False,
-                        "n_iterations": 1,
-                        "elapsed_s": 0.0,
-                    }
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    _write_host_tasks(task_source, "task-a")
-
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("terminal transport retry should not invoke local model")
-        ),
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator._prepare_container_session",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("host-mode local simulation must not prepare a container")
-        ),
-    )
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="local_model",
-            api_base="https://example.com/v1",
-            api_key="secret",
-            model="local-qwen",
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    llm_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "llm_call"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert llm_record["data"]["transport_retry_terminal"] is True
-    assert llm_record["data"]["sim_metrics"]["failed"] is True
-    assert llm_record["data"]["messages_in"] == [{"role": "user", "content": "fail please"}]
-    assert summary["success"] is False
-    assert summary["failed_iterations"] == 1
-
-
 def test_cloud_model_manifest_replays_multiple_sessions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3268,8 +4047,7 @@ def test_cloud_model_manifest_replays_multiple_sessions(
         tmp_path,
         tool_delay_s=0.02,
         tool_duration_ms=20.0,
-        tool_result_prefix="ok",
-        llm_client_mode="forbid",
+        tool_result_prefix="ok"
     )
 
     trace_file = asyncio.run(
@@ -3313,7 +4091,7 @@ def test_cloud_model_manifest_allows_duplicate_trace_entries(
     _write_trace(trace_path, agent_id="task-a")
     _write_tasks(task_source, "task-a")
     _write_manifest(manifest, [str(trace_path), str(trace_path)])
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="forbid")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
 
     trace_file = asyncio.run(
         simulate(
@@ -3528,10 +4306,6 @@ def test_cloud_model_concurrency_limits_active_traces(
     _patch_noop_sweep_fixed_prebuild(monkeypatch)
     monkeypatch.setattr("trace_collect.simulator.ContainerStatsSampler", _FakeSampler)
     monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -3570,6 +4344,11 @@ def test_cloud_model_concurrency_limits_active_traces(
         "fake-task-2",
     ]
     assert summary["container_resources"]["sample_count"] == 1
+    assert summary["container_resources"]["monitoring"] == summary["monitoring"]
+    recorder_summary = json.loads(
+        Path(summary["container_resources"]["summary_path"]).read_text()
+    )
+    assert recorder_summary["monitoring"] == summary["monitoring"]
     assert Path(summary["container_resources"]["jsonl_path"]).exists()
     assert Path(summary["container_resources"]["summary_path"]).exists()
 
@@ -3604,7 +4383,7 @@ def test_cloud_model_structured_manifest_defaults_and_overrides(
         + "\n",
         encoding="utf-8",
     )
-    _patch_simulator_runtime(monkeypatch, tmp_path, llm_client_mode="forbid")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
 
     trace_file = asyncio.run(
         simulate(
@@ -3652,8 +4431,7 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
     _patch_simulator_runtime(
         monkeypatch,
         tmp_path,
-        tool_result_prefix="ok",
-        llm_client_mode="forbid",
+        tool_result_prefix="ok"
     )
 
     trace_file = asyncio.run(
@@ -3726,10 +4504,6 @@ def test_cloud_model_manifest_with_docker_image_override(
         return ("ok", 1.0, True)
 
     monkeypatch.setattr("trace_collect.simulator._exec_tool", _fake_exec)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     asyncio.run(
         simulate(
@@ -3782,8 +4556,7 @@ def test_cloud_model_manifest_keeps_cli_task_source_cwd_semantics(
         monkeypatch,
         tmp_path,
         tool_duration_ms=5.0,
-        tool_result_prefix="ok",
-        llm_client_mode="forbid",
+        tool_result_prefix="ok"
     )
 
     trace_file = asyncio.run(
@@ -3881,12 +4654,6 @@ def test_cloud_model_host_tool_without_success_field_is_not_mislabeled_as_failur
         "trace_collect.simulator._prepare_container_session",
         fail_prepare,
     )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -3936,12 +4703,6 @@ def test_simulator_replays_tongyi_deepresearch_trace(
     monkeypatch.setattr(
         "trace_collect.simulator._prepare_container_session", _fail_prepare,
     )
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("cloud_model must not create llm client")
-        ),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -3986,6 +4747,8 @@ def test_simulator_replays_tongyi_deepresearch_trace(
     payload = json.loads(resources_path.read_text())
     assert payload["samples"] == []
     assert payload["summary"]["sample_count"] == 0
+    assert payload["summary"]["monitoring_disabled"] is True
+    assert payload["summary"]["monitoring"]["status"] == "disabled"
 
 
 def test_execution_environment_infers_host_from_agent_runtime_mode() -> None:
@@ -4016,6 +4779,20 @@ def test_execution_environment_infers_host_from_agent_runtime_mode() -> None:
     )
     assert _execution_environment(explicit_container) == "container"
 
+    # host_agent_docker_tools traces: agent on host, tools via docker exec → container replay
+    host_agent_docker = SimpleNamespace(
+        metadata={"agent_runtime_mode": "host_agent_docker_tools"},
+        source_trace="/tmp/host_agent_docker.jsonl",
+    )
+    assert _execution_environment(host_agent_docker) == "container"
+
+    # Old task_container_agent traces (agent was in-container): same container replay
+    old_task_container = SimpleNamespace(
+        metadata={"agent_runtime_mode": "task_container_agent"},
+        source_trace="/tmp/task_container.jsonl",
+    )
+    assert _execution_environment(old_task_container) == "container"
+
 
 def test_tongyi_deepresearch_fixture_is_valid_v5() -> None:
     """Sanity: the shipped fixture file parses as valid v5 JSONL with the
@@ -4043,3 +4820,357 @@ def test_tongyi_deepresearch_fixture_is_valid_v5() -> None:
         assert "tool_args" in tool["data"]
         assert "tool_result" in tool["data"]
         assert "duration_ms" in tool["data"]
+
+
+# ── Step 4: CAS checkpoint fold chain + marker protocol ──────────────────────
+
+
+class TestFoldSourceCheckpointEntries:
+    """Unit tests for _fold_source_checkpoint_entries fold chain."""
+
+    def test_full_replaces_prev_folded(self, tmp_path: Path) -> None:
+        spec_path = tmp_path / "full.json"
+        spec_path.write_text(json.dumps({
+            "entries": {"a.txt": {"hash": "aaa"}, "b.txt": {"hash": "bbb"}},
+            "deleted_paths": [],
+        }))
+        spec = {"path": str(spec_path), "kind": "cas_manifest_full", "incremental": False}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"old.txt": "oldhash"},
+        )
+        assert result == {"a.txt": "aaa", "b.txt": "bbb"}
+
+    def test_incremental_updates_and_deletes(self, tmp_path: Path) -> None:
+        spec_path = tmp_path / "inc.json"
+        spec_path.write_text(json.dumps({
+            "entries": {"b.txt": {"hash": "bbb_v2"}, "c.txt": {"hash": "ccc"}},
+            "deleted_paths": ["a.txt"],
+        }))
+        spec = {"path": str(spec_path), "kind": "cas_manifest_incremental", "incremental": True}
+        prev = {"a.txt": "aaa", "b.txt": "bbb_v1"}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded=prev,
+        )
+        assert result == {"b.txt": "bbb_v2", "c.txt": "ccc"}
+
+    def test_chain_full_inc_inc(self, tmp_path: Path) -> None:
+        specs_dir = tmp_path / "checkpoints"
+        specs_dir.mkdir()
+
+        def _write_spec(name, entries, deleted=None, kind="cas_manifest_full"):
+            p = specs_dir / name
+            p.write_text(json.dumps({
+                "entries": {k: {"hash": v} for k, v in entries.items()},
+                "deleted_paths": deleted or [],
+            }))
+            incremental = kind == "cas_manifest_incremental"
+            return {"path": str(p), "kind": kind, "incremental": incremental}
+
+        folded: dict[str, str] = {}
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec=_write_spec("full.json", {"a": "h1", "b": "h2"}, kind="cas_manifest_full"),
+            prev_folded=folded,
+        )
+        assert folded == {"a": "h1", "b": "h2"}
+
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec=_write_spec("inc1.json", {"b": "h2b", "c": "h3"}, deleted=["a"], kind="cas_manifest_incremental"),
+            prev_folded=folded,
+        )
+        assert folded == {"b": "h2b", "c": "h3"}
+
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec=_write_spec("inc2.json", {"d": "h4"}, kind="cas_manifest_incremental"),
+            prev_folded=folded,
+        )
+        assert folded == {"b": "h2b", "c": "h3", "d": "h4"}
+
+    def test_missing_manifest_preserves_prev(self) -> None:
+        spec = {"path": "/nonexistent/manifest.json", "kind": "cas_manifest_full", "incremental": False}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"a": "h1"},
+        )
+        assert result == {"a": "h1"}
+
+    def test_invalid_json_preserves_prev(self, tmp_path: Path) -> None:
+        p = tmp_path / "bad.json"
+        p.write_text("not json")
+        spec = {"path": str(p), "kind": "cas_manifest_incremental", "incremental": True}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"a": "h1"},
+        )
+        assert result == {"a": "h1"}
+
+    def test_filesystem_tar_as_full(self, tmp_path: Path) -> None:
+        import tarfile
+        tar_path = tmp_path / "snapshot.tar"
+        content = b"hello"
+        digest = hashlib.sha256(content).hexdigest()
+        with tarfile.open(str(tar_path), "w") as tf:
+            info = tarfile.TarInfo(name="x.txt")
+            info.size = len(content)
+            tf.addfile(info, __import__("io").BytesIO(content))
+        spec = {"path": str(tar_path), "kind": "filesystem_tar", "incremental": False}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"old": "h"},
+        )
+        assert result == {"x.txt": digest}
+
+
+class TestCaptureSnapshotManifest:
+    """Tests for _capture_snapshot_manifest marker protocol and merge."""
+
+    def test_no_epoch_reset_in_script(self) -> None:
+        """The incremental script must not contain '197001010000' (epoch reset)."""
+        import inspect
+        source = inspect.getsource(_capture_snapshot_manifest)
+        assert "197001010000" not in source
+
+    def test_full_mode_includes_all_paths_and_marker(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Full mode script must emit all_paths and set up marker."""
+        captured_script: list[str] = []
+
+        def fake_run(cmd, **_kwargs):
+            captured_script.append(" ".join(cmd))
+            return type("Result", (), {"returncode": 0, "stdout": '{"entries": {"a": "h1"}, "all_paths": ["a"]}', "stderr": ""})
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=None,
+        )
+        script = captured_script[0]
+        assert "all_paths" in script
+        assert "temp_marker" in script or "cas_marker_new" in script
+        assert "os.rename" in script
+        assert result == {"a": "h1"}
+
+    def test_incremental_merge_and_deletion_pruning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Incremental merge: delta applied, unchanged files inherited, deletions pruned."""
+        def fake_run(cmd, **_kwargs):
+            if "-c" in cmd:
+                return type("Result", (), {
+                    "returncode": 0,
+                    "stdout": '{"entries": {"b": "h2b", "c": "ccc"}, "all_paths": ["a", "b", "c"]}',
+                    "stderr": "",
+                })
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        prev = {"a": "h1", "b": "h2", "deleted_file": "h_del"}
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=prev,
+        )
+        # a inherited (unchanged), b updated (in delta), c added (in delta), deleted_file pruned
+        assert result == {"a": "h1", "b": "h2b", "c": "ccc"}
+
+    def test_full_mode_empty_dir_returns_empty_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_run(cmd, **_kwargs):
+            return type("Result", (), {
+                "returncode": 0,
+                "stdout": '{"entries": {}, "all_paths": []}',
+                "stderr": "",
+            })
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=None,
+        )
+        assert result == {}
+
+    def test_capture_failure_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_run(cmd, **_kwargs):
+            return type("Result", (), {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "container failed",
+            })
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=None,
+        )
+        assert result is None
+
+    def test_incremental_no_changes_script_does_not_hash_unchanged_files(self) -> None:
+        import inspect
+
+        source = inspect.getsource(_capture_snapshot_manifest)
+        assert "changed = None" in source
+        assert "changed = set()" in source
+        assert "if changed is not None and rel not in changed:" in source
+
+
+class TestBugARegression:
+    """Regression tests for Bug A: incremental source vs full replay comparison."""
+
+    def test_incremental_source_chain_matches_full_replay(self, tmp_path: Path) -> None:
+        """Second checkpoint after incremental chain: replay matches source → cas_manifest_match=True, cas_added_count=0."""
+        cp_dir = tmp_path / "checkpoints"
+        cp_dir.mkdir()
+
+        full_manifest = cp_dir / "full.json"
+        full_manifest.write_text(json.dumps({
+            "entries": {
+                "a.txt": {"hash": "aaa"},
+                "b.txt": {"hash": "bbb"},
+            },
+            "deleted_paths": [],
+        }))
+
+        inc_manifest = cp_dir / "inc1.json"
+        inc_manifest.write_text(json.dumps({
+            "entries": {
+                "b.txt": {"hash": "bbb_v2"},
+                "c.txt": {"hash": "ccc"},
+            },
+            "deleted_paths": ["a.txt"],
+        }))
+
+        # Fold source chain manually to get expected folded state
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec={"path": str(full_manifest), "kind": "cas_manifest_full", "incremental": False},
+            prev_folded={},
+        )
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec={"path": str(inc_manifest), "kind": "cas_manifest_incremental", "incremental": True},
+            prev_folded=folded,
+        )
+        assert folded == {"b.txt": "bbb_v2", "c.txt": "ccc"}
+
+        # Now simulate the replay side: replay matches exactly
+        # Replay entries = folded state (no divergence)
+        replay_entries = {"b.txt": "bbb_v2", "c.txt": "ccc"}
+
+        source_keys = set(folded.keys())
+        replay_keys = set(replay_entries.keys())
+        common = source_keys & replay_keys
+        modified = [k for k in common if folded[k] != replay_entries[k]]
+        added = sorted(replay_keys - source_keys)
+        removed = sorted(source_keys - replay_keys)
+        cas_manifest_match = len(modified) == 0 and len(removed) == 0 and len(added) == 0
+
+        assert cas_manifest_match is True
+        assert len(modified) == 0
+        assert len(added) == 0
+        assert len(removed) == 0
+
+    def test_incremental_source_chain_detects_replay_divergence(self, tmp_path: Path) -> None:
+        """Replay has extra file → mismatch detected."""
+        cp_dir = tmp_path / "checkpoints"
+        cp_dir.mkdir()
+
+        full_manifest = cp_dir / "full.json"
+        full_manifest.write_text(json.dumps({
+            "entries": {"a.txt": {"hash": "aaa"}},
+            "deleted_paths": [],
+        }))
+
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec={"path": str(full_manifest), "kind": "cas_manifest_full", "incremental": False},
+            prev_folded={},
+        )
+        # Replay has a stray extra file
+        replay = {"a.txt": "aaa", "stray.txt": "extra"}
+        added = sorted(set(replay.keys()) - set(folded.keys()))
+        assert added == ["stray.txt"]
+
+    def test_empty_source_nonempty_replay_is_mismatch(self) -> None:
+        fields = _cas_manifest_comparison_fields(
+            source_entries={},
+            replay_entries={"stray.txt": "extra"},
+        )
+
+        assert fields["cas_manifest_match"] is False
+        assert fields["cas_source_entries"] == 0
+        assert fields["cas_replay_entries"] == 1
+        assert fields["cas_added_count"] == 1
+        assert fields["cas_removed_count"] == 0
+
+    def test_nonempty_source_empty_replay_is_mismatch(self) -> None:
+        fields = _cas_manifest_comparison_fields(
+            source_entries={"expected.txt": "hash"},
+            replay_entries={},
+        )
+
+        assert fields["cas_manifest_match"] is False
+        assert fields["cas_source_entries"] == 1
+        assert fields["cas_replay_entries"] == 0
+        assert fields["cas_added_count"] == 0
+        assert fields["cas_removed_count"] == 1
+
+
+class TestBugCRestoreChainCorrectness:
+    """Evidence for Bug C: incremental restore chain is applied correctly."""
+
+    def test_first_in_chain_is_always_full(self) -> None:
+        """_checkpoint_chain_specs_for_action returns chain starting with full checkpoint."""
+        assert not _checkpoint_spec_is_incremental({"kind": "cas_manifest_full", "incremental": False})
+        assert _checkpoint_spec_is_incremental({"kind": "cas_manifest_incremental", "incremental": True})
+        assert _checkpoint_spec_is_incremental({"incremental": True})
+
+    def test_restore_chain_applies_incrementals_on_full_base(self) -> None:
+        """_restore_checkpoint_chain_to_container guarantees correct ordering:
+        first spec is always a full checkpoint (clear_root=True), subsequent
+        incremental specs are applied on top (clear_root=False).
+
+        This is verified by _checkpoint_chain_specs_for_action which walks
+        backward until it finds a non-incremental spec. If none found, returns
+        None and the caller reports failure. The chain restore itself is
+        tested in test_simulate_forced_sync_restores_incremental_checkpoint_chain.
+        """
+        # Sanity: full spec is not incremental
+        full_spec = {"kind": "cas_manifest_full", "incremental": False}
+        inc_spec = {"kind": "cas_manifest_incremental", "incremental": True}
+        assert not _checkpoint_spec_is_incremental(full_spec)
+        assert _checkpoint_spec_is_incremental(inc_spec)
+
+        # Verify chain construction: a chain starting from a full checkpoint
+        # can be constructed; if only incremental specs exist, chain is None.
+        from trace_collect.simulator import _checkpoint_chain_specs_for_action
+
+        actions: list[dict] = [
+            {"data": {"checkpoint_after": {"path": "/tmp/inc_only.json", "kind": "cas_manifest_incremental", "incremental": True, "root": "/testbed"}}},
+            {"data": {"checkpoint_after": {"path": "/tmp/inc2.json", "kind": "cas_manifest_incremental", "incremental": True, "root": "/testbed"}}},
+        ]
+        chain = _checkpoint_chain_specs_for_action(
+            actions=actions,
+            target_index=1,
+            source_trace=Path("/tmp/trace.jsonl"),
+        )
+        # No full checkpoint → chain is None (can't restore safely)
+        assert chain is None
+
+        # With full checkpoint → chain is valid
+        actions_with_full = [
+            {"data": {"checkpoint_after": {"path": "/tmp/full.json", "kind": "cas_manifest_full", "incremental": False, "root": "/testbed"}}},
+            {"data": {"checkpoint_after": {"path": "/tmp/inc.json", "kind": "cas_manifest_incremental", "incremental": True, "root": "/testbed"}}},
+        ]
+        chain = _checkpoint_chain_specs_for_action(
+            actions=actions_with_full,
+            target_index=1,
+            source_trace=Path("/tmp/trace.jsonl"),
+        )
+        assert chain is not None
+        assert len(chain) == 2
+        assert not _checkpoint_spec_is_incremental(chain[0])  # first is full

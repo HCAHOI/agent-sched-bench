@@ -58,6 +58,7 @@ class SWEBenchRunner:
         model: str | None = None,
         exec_path_append: str = "",
         generation_config: dict[str, Any] | None = None,
+        container_runtime: dict | None = None,
     ) -> None:
         del generation_config
         self.provider = provider
@@ -69,6 +70,7 @@ class SWEBenchRunner:
         self.max_tool_result_chars = max_tool_result_chars
         self.model = model or provider.get_default_model()
         self.exec_path_append = exec_path_append
+        self.container_runtime = container_runtime
 
         self._session_runner = SessionRunner(
             provider,
@@ -78,10 +80,22 @@ class SWEBenchRunner:
             max_tool_result_chars=self.max_tool_result_chars,
             mcp_servers=self.mcp_servers,
             exec_config=ExecToolConfig(path_append=self.exec_path_append),
+            container_runtime=self.container_runtime,
         )
 
     @staticmethod
-    def _read_submitted_patch(diff_cwd: str) -> str:
+    def _read_submitted_patch(diff_cwd: str, *, run: Any = None) -> str:
+        if run is not None:
+            try:
+                proc = run(
+                    ["cat", f"{diff_cwd}/patch.txt"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                content = proc.stdout if proc.returncode == 0 else ""
+            except (OSError, subprocess.SubprocessError):
+                content = ""
+            return content.strip() if content.lstrip().startswith("diff --git") else ""
+
         patch_path = Path(diff_cwd) / "patch.txt"
         if not patch_path.exists():
             return ""
@@ -93,12 +107,16 @@ class SWEBenchRunner:
         diff_cwd: str,
         *,
         base_commit: str | None,
+        run: Any = None,
     ) -> str | None:
-        submitted_patch = SWEBenchRunner._read_submitted_patch(diff_cwd)
+        _run = run or subprocess.run
+        # Pass the original run (not _run): with run=None the local
+        # Path.read_text path must stay byte-identical.
+        submitted_patch = SWEBenchRunner._read_submitted_patch(diff_cwd, run=run)
         if submitted_patch:
             return submitted_patch
 
-        subprocess.run(
+        _run(
             ["git", "config", "--add", "safe.directory", diff_cwd],
             cwd=diff_cwd,
             capture_output=True,
@@ -119,6 +137,7 @@ class SWEBenchRunner:
             # slow-but-completing diff is not turned into a hard task failure.
             add_timeout=180,
             diff_timeout=180,
+            run=_run,
         )
         if diff_result.returncode == 0:
             return diff_result.stdout.strip() or None

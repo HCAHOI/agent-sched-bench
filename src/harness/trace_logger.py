@@ -96,5 +96,5 @@ class TraceLogger:
     def __enter__(self) -> "TraceLogger":
         return self
 
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
         self.close()

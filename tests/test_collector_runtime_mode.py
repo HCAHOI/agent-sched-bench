@@ -68,7 +68,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -100,8 +100,86 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
 
     assert seen == {
         "prompt_template": "cc_aligned",
-        "agent_runtime_mode": "task_container_agent",
+        "agent_runtime_mode": "host_agent_docker_tools",
     }
+
+
+def test_run_scaffold_tasks_runs_host_controller_tasks_concurrently(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: None,
+    )
+
+    benchmark = SimpleNamespace(
+        execution_environment="host",
+        config=SimpleNamespace(
+            slug="terminal-bench",
+            harness_split="core",
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: None,
+    )
+
+    def make_inner(task: dict):
+        async def inner(ctx) -> AttemptResult:
+            nonlocal active, max_active
+            trace_path = tmp_path / "trace-source" / f"{task['instance_id']}.jsonl"
+            _write_trace(trace_path)
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            with lock:
+                active -= 1
+            return AttemptResult(
+                success=True,
+                exit_status="ok",
+                trace_path=trace_path,
+            )
+
+        return inner
+
+    run_dir = asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[
+                {"instance_id": "task-1"},
+                {"instance_id": "task-2"},
+                {"instance_id": "task-3"},
+            ],
+            run_dir=tmp_path / "run",
+            model="z-ai/glm-5.1",
+            scaffold="openclaw",
+            container_executable=None,
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=make_inner,
+            concurrency=2,
+        )
+    )
+
+    assert max_active == 2
+    results = (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    assert '"instance_id": "task-1"' in results[0]
+    assert '"instance_id": "task-2"' in results[1]
+    assert '"instance_id": "task-3"' in results[2]
 
 
 @pytest.mark.parametrize(
@@ -159,7 +237,7 @@ def test_run_scaffold_tasks_allocates_next_attempt_dir(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -234,7 +312,7 @@ def test_run_scaffold_tasks_uses_max_sparse_attempt_dir(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -288,7 +366,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -320,7 +398,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
 
     assert seen == {
         "prompt_template": "default",
-        "agent_runtime_mode": "task_container_agent",
+        "agent_runtime_mode": "host_agent_docker_tools",
     }
 
 
@@ -354,14 +432,14 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
     benchmark = SimpleNamespace(
         execution_environment="container",
         config=SimpleNamespace(
-            slug="swe-bench-verified",
-            harness_split="test",
+            slug="swe-rebench",
+            harness_split="filtered",
             trace_root=tmp_path / "traces",
             default_prompt_template="default",
         ),
         runtime_mode_for=lambda scaffold: "host_controller",
         image_name_for=lambda task: (
-            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+            "swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest"
         ),
     )
 
@@ -392,10 +470,10 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
 
     assert seen == {
         "ensure_source_image": (
-            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+            "docker.io/swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest"
         ),
         "ctx_source_image": (
-            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+            "docker.io/swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest"
         ),
     }
 
@@ -475,6 +553,7 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
     ]
 
     selected = _select_tasks(
+        SimpleNamespace(config=SimpleNamespace(selection_seed=42)),
         tasks,
         instance_ids=[
             "encode__httpx-2701",
@@ -487,6 +566,35 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
         "encode__httpx-2701",
         "Kinto__kinto-http.py-384",
     ]
+
+
+def test_select_tasks_applies_benchmark_random_sample() -> None:
+    tasks = [
+        {"instance_id": "task-1"},
+        {"instance_id": "task-2"},
+        {"instance_id": "task-3"},
+        {"instance_id": "task-4"},
+        {"instance_id": "task-5"},
+    ]
+
+    benchmark = SimpleNamespace(config=SimpleNamespace(selection_seed=42))
+    selected = _select_tasks(benchmark, tasks, instance_ids=None, sample=3)
+
+    assert [task["instance_id"] for task in selected] == [
+        "task-1",
+        "task-5",
+        "task-3",
+    ]
+
+
+def test_select_tasks_rejects_negative_sample() -> None:
+    with pytest.raises(ValueError, match="sample must be non-negative"):
+        _select_tasks(
+            SimpleNamespace(config=SimpleNamespace(selection_seed=42)),
+            [{"instance_id": "task-1"}],
+            instance_ids=None,
+            sample=-1,
+        )
 
 
 def test_cleanup_task_images_disabled_by_default(monkeypatch) -> None:
@@ -590,7 +698,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
@@ -699,7 +807,7 @@ def test_run_scaffold_tasks_does_not_clean_images_by_default(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
@@ -779,7 +887,7 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
@@ -877,7 +985,7 @@ def test_run_scaffold_tasks_propagates_container_executable(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 

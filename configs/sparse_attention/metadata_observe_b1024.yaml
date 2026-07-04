@@ -1,8 +1,0 @@
-# Observe-only metadata residency sidecar. Never enforce this sparse method.
-name: metadata
-budget: 1024
-sink_size: 4
-recent_window: 256
-metadata_rung: rung4
-record: true
-observe_only: true

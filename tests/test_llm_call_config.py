@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
 
-from llm_call.config import resolve_llm_config
+from llm_call.config import nonnegative_int_arg, positive_int_arg, resolve_llm_config
 from llm_call.openai_compat import uses_openrouter
+
+
+def test_nonnegative_int_arg_rejects_negative_values() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="value must be non-negative"):
+        nonnegative_int_arg("-1")
+
+
+def test_positive_int_arg_rejects_negative_values_as_not_positive() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="value must be positive"):
+        positive_int_arg("-1")
 
 
 def test_resolve_llm_config_requires_provider() -> None:
@@ -61,6 +73,27 @@ def test_resolve_llm_config_honors_explicit_overrides() -> None:
     assert resolved.model == "override-model"
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://localhost:8000/v1",
+        "http://127.0.0.1:8000/v1",
+        "http://172.17.0.1:8000/v1",
+        "http://0.0.0.0:8000/v1",
+        "http://host.docker.internal:8000/v1",
+    ],
+)
+def test_resolve_llm_config_rejects_local_api_base(api_base: str) -> None:
+    with pytest.raises(ValueError, match="local/private OpenAI-compatible"):
+        resolve_llm_config(
+            provider="openai",
+            api_base=api_base,
+            api_key="test-key",
+            model="test-model",
+            environ={},
+        )
+
+
 def test_resolve_llm_config_supports_siliconflow() -> None:
     resolved = resolve_llm_config(
         provider="siliconflow",
@@ -75,6 +108,22 @@ def test_resolve_llm_config_supports_siliconflow() -> None:
     assert resolved.api_key == "sf-test-key"
     assert resolved.model == "Pro/zai-org/GLM-5.1"
     assert resolved.env_key == "SILICONFLOW_API_KEY"
+
+
+def test_resolve_llm_config_supports_deepseek() -> None:
+    resolved = resolve_llm_config(
+        provider="deepseek",
+        api_base=None,
+        api_key=None,
+        model="deepseek-v4-pro",
+        environ={"DEEPSEEK_API_KEY": "deepseek-test-key"},
+    )
+
+    assert resolved.name == "deepseek"
+    assert resolved.api_base == "https://api.deepseek.com"
+    assert resolved.api_key == "deepseek-test-key"
+    assert resolved.model == "deepseek-v4-pro"
+    assert resolved.env_key == "DEEPSEEK_API_KEY"
 
 
 def test_uses_openrouter_matches_base_url() -> None:

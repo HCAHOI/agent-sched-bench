@@ -185,6 +185,41 @@ def test_process_sampler_attaches_host_memory_bandwidth(monkeypatch) -> None:
     assert sample["memory_write_mb_s"] == 5.0
 
 
+def test_process_sampler_can_disable_host_memory_bandwidth(monkeypatch) -> None:
+    sampler = ProcessStatsSampler(
+        pid=1,
+        interval_s=60.0,
+        enable_memory_bandwidth=False,
+    )
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._sample_with_psutil",
+        lambda pid, *, process_cache: {
+            "epoch": 1.0,
+            "timestamp": "ts",
+            "mem_usage": "60MiB",
+            "mem_percent": "0%",
+            "cpu_percent": "7.5%",
+        },
+    )
+    monkeypatch.setattr("harness.process_stats_sampler._read_proc_io", lambda pid: None)
+    monkeypatch.setattr(
+        "harness.process_stats_sampler._read_proc_context_switches",
+        lambda pid: None,
+    )
+    monkeypatch.setattr(
+        "harness.process_stats_sampler.attach_host_memory_bandwidth",
+        lambda sample, *, interval_s: (_ for _ in ()).throw(
+            AssertionError("memory bandwidth should be disabled")
+        ),
+    )
+
+    sample = sampler._collect_sample()
+
+    assert sample is not None
+    assert sample["memory_bandwidth_available"] is False
+    assert sample["memory_bandwidth_reason"] == "disabled_by_policy"
+
+
 def test_psutil_sampler_reuses_process_handles_for_cpu_deltas(monkeypatch) -> None:
     created: list[int] = []
 

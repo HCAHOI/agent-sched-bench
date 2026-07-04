@@ -20,7 +20,7 @@ class StubAgent(TerminalBenchOpenClawAgent):
 
 def test_install_script_uses_virtualenv() -> None:
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -39,8 +39,6 @@ def test_install_script_uses_virtualenv() -> None:
     for heavy_dep in (
         "datasets",
         "terminal-bench",
-        "transformers",
-        "accelerate",
         "trafilatura",
     ):
         assert heavy_dep not in content
@@ -48,7 +46,7 @@ def test_install_script_uses_virtualenv() -> None:
 
 def test_install_script_adds_mcp_only_when_configured() -> None:
     plain_agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -56,7 +54,7 @@ def test_install_script_adds_mcp_only_when_configured() -> None:
         max_iterations=25,
     )
     mcp_agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -75,7 +73,7 @@ def test_install_script_adds_mcp_only_when_configured() -> None:
 
 def test_run_command_uses_venv_openclaw_and_iteration_limit() -> None:
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -97,7 +95,7 @@ def test_run_command_uses_venv_openclaw_and_iteration_limit() -> None:
 
 def test_run_command_does_not_embed_task_prompt() -> None:
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -113,7 +111,7 @@ def test_run_command_does_not_embed_task_prompt() -> None:
 
 def test_run_command_uses_configured_agent_timeout() -> None:
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -125,33 +123,21 @@ def test_run_command_uses_configured_agent_timeout() -> None:
     assert commands[0].max_timeout_sec == 120.0
 
 
-def test_run_command_resolves_host_local_api_base_inside_container() -> None:
-    agent = StubAgent(
-        model_name="local-model",
-        provider_name="openai",
-        api_base="http://172.17.0.1:33895/v1",
-        api_key="test-key",
-        env_key="OPENAI_API_KEY",
-        max_iterations=25,
-    )
-
-    command = agent._run_agent_commands()[0].command
-
-    assert command.startswith(
-        'OPENAI_API_KEY="$(cat /installed-agent/.openclaw-api-key.fifo)" '
-        "/installed-agent/venv/bin/openclaw "
-    )
-    assert '--api-base "${OPENCLAW_API_BASE}"' in command
-    assert "/installed-agent/venv/bin/openclaw " in command
-
-    env_setup = agent._create_env_setup_file()
-    assert "OPENCLAW_API_BASE='http://172.17.0.1:33895/v1'" in env_setup
-    assert "/proc/net/route" in env_setup
+def test_agent_rejects_host_local_api_base() -> None:
+    with pytest.raises(ValueError, match="local/private OpenAI-compatible"):
+        StubAgent(
+            model_name="local-model",
+            provider_name="openai",
+            api_base="http://172.17.0.1:33895/v1",
+            api_key="test-key",
+            env_key="OPENAI_API_KEY",
+            max_iterations=25,
+        )
 
 
 def test_run_command_forwards_mcp_config_to_container() -> None:
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key="test-key",
@@ -176,7 +162,7 @@ def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
     agent = StubAgent(
-        model_name="nvidia/nemotron-3-super-120b-a12b:free",
+        model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
         api_key=None,
@@ -274,11 +260,11 @@ def test_perform_task_cleans_tmux_session_on_agent_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent = StubAgent(
-        model_name="local-model",
-        provider_name="openai",
-        api_base="http://127.0.0.1:8000/v1",
+        model_name="z-ai/glm-5.1",
+        provider_name="openrouter",
+        api_base="https://openrouter.ai/api/v1",
         api_key="dummy",
-        env_key="OPENAI_API_KEY",
+        env_key="OPENROUTER_API_KEY",
         max_iterations=25,
         agent_timeout_sec=120,
     )
@@ -364,11 +350,11 @@ def test_perform_task_cleans_tmux_session_on_bootstrap_timeout(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(
-        model_name="local-model",
-        provider_name="openai",
-        api_base="http://127.0.0.1:8000/v1",
+        model_name="z-ai/glm-5.1",
+        provider_name="openrouter",
+        api_base="https://openrouter.ai/api/v1",
         api_key="dummy",
-        env_key="OPENAI_API_KEY",
+        env_key="OPENROUTER_API_KEY",
         max_iterations=25,
         agent_timeout_sec=120,
     )

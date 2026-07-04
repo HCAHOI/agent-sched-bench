@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from trace_collect.trace_inspector import CURRENT_TRACE_FORMAT_VERSION
+from trace_collect.trace_data import CURRENT_TRACE_FORMAT_VERSION
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

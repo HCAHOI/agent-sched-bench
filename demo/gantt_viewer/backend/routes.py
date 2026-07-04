@@ -36,7 +36,7 @@ from demo.gantt_viewer.backend.schema import (
     UploadTraceResponse,
 )
 from demo.gantt_viewer.backend.uploads import build_upload_id, persist_upload
-from trace_collect.trace_inspector import TraceData
+from trace_collect.trace_data import TraceData
 
 
 class _TracePayloadError(Exception):

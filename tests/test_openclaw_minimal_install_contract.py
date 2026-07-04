@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
-import venv
 from pathlib import Path
 
 import pytest
@@ -30,15 +28,12 @@ def test_openclaw_minimal_container_requirements_import_runtime_entrypoints(
 
     subprocess.run(
         [
-            sys.executable,
-            "-m",
-            "pip",
-            "wheel",
-            "--no-deps",
-            "--no-build-isolation",
-            str(repo_root),
-            "-w",
+            "uv",
+            "build",
+            "--wheel",
+            "--out-dir",
             str(wheel_dir),
+            str(repo_root),
         ],
         check=True,
     )
@@ -46,18 +41,18 @@ def test_openclaw_minimal_container_requirements_import_runtime_entrypoints(
     assert len(wheels) == 1
 
     venv_dir = tmp_path / "venv"
-    venv.EnvBuilder(with_pip=True).create(venv_dir)
+    subprocess.run(["uv", "venv", str(venv_dir)], check=True)
     python = _venv_python(venv_dir)
     requirements = (
         OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS + OPENCLAW_MCP_RUNTIME_REQUIREMENTS
     )
     subprocess.run(
         [
-            str(python),
-            "-m",
+            "uv",
             "pip",
             "install",
-            "--disable-pip-version-check",
+            "--python",
+            str(python),
             "--only-binary=:all:",
             *requirements,
         ],
@@ -65,11 +60,11 @@ def test_openclaw_minimal_container_requirements_import_runtime_entrypoints(
     )
     subprocess.run(
         [
-            str(python),
-            "-m",
+            "uv",
             "pip",
             "install",
-            "--disable-pip-version-check",
+            "--python",
+            str(python),
             "--no-deps",
             str(wheels[0]),
         ],

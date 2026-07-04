@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from harness.container_image_prep import ensure_fixed_image
-from harness.container_runtime import container_run_user_args
 from harness.container_stats_sampler import (
     ContainerStatsSampler,
     summarize_samples,
@@ -28,12 +27,11 @@ from trace_collect import attempt_layout
 
 logger = logging.getLogger(__name__)
 
-_NONCOMPLETED_EXIT_STATUSES = frozenset(
+_ERROR_EXIT_STATUSES = frozenset(
     {
         "error",
         "tool_error",
         "empty_final_response",
-        "max_iterations",
         "timeout",
         "failed",
     }
@@ -50,13 +48,23 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "no_proxy",
     "PIP_INDEX_URL",
     "TASK_CONTAINER_PIP_INDEX_URL",
+    "TASK_CONTAINER_PIP_EXTRA_INDEX_URL",
+    "TASK_CONTAINER_PIP_TRUSTED_HOST",
+    "TASK_CONTAINER_PIP_CERT",
+    "TASK_CONTAINER_SSL_CERT_FILE",
+    "TASK_CONTAINER_HTTP_PROXY",
+    "TASK_CONTAINER_HTTPS_PROXY",
+    "TASK_CONTAINER_ALL_PROXY",
+    "TASK_CONTAINER_NO_PROXY",
     "TASK_CONTAINER_APT_MIRROR",
     "TASK_CONTAINER_APT_SECURITY_MIRROR",
     "NANOBOT_MAX_CONCURRENT_REQUESTS",
-    # LLM client timeouts: slow recording forwards trip the 90s idle/SDK default.
+    # LLM client timeouts: slow provider streams trip the 90s idle/SDK default.
     "NANOBOT_STREAM_IDLE_TIMEOUT_S",
     "OPENCLAW_LLM_TIMEOUT_S",
 )
+
+_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT = Path.home() / ".cache" / "task-container-bootstrap"
 
 
 def _is_missing_container_inspect_error(
@@ -74,10 +82,14 @@ def _is_missing_container_inspect_error(
 
 def _is_container_removal_in_progress(message: str) -> bool:
     normalized = message.lower()
-    return "removal of container" in normalized and "is already in progress" in normalized
+    return (
+        "removal of container" in normalized and "is already in progress" in normalized
+    )
 
 
-def _inspect_container_exists(container_id: str, *, executable: str) -> tuple[bool, str | None]:
+def _inspect_container_exists(
+    container_id: str, *, executable: str
+) -> tuple[bool, str | None]:
     try:
         inspect = subprocess.run(
             [executable, "inspect", container_id],
@@ -155,6 +167,10 @@ class AttemptContext:
     end_time: datetime | None = None
     container_stdout: str = ""
     permission_fix_time_s: float = 0.0
+    # Timing checkpoints for wall-clock breakdown.
+    image_ready_time: datetime | None = None
+    agent_start_time: datetime | None = None
+    agent_end_time: datetime | None = None
 
     def __post_init__(self) -> None:
         self.attempt_dir = self.run_dir / self.instance_id / f"attempt_{self.attempt}"
@@ -168,10 +184,32 @@ class AttemptContext:
         """Stable string like ``attempt_1`` (matches the manifest field)."""
         return f"attempt_{self.attempt}"
 
+    def _delta_s(self, start: datetime | None, end: datetime | None) -> float:
+        """Seconds between two optional datetimes; 0.0 if either is None."""
+        if start is None or end is None:
+            return 0.0
+        return (end - start).total_seconds()
+
     def elapsed_seconds(self) -> float:
         """Total wall clock between ``start_time`` and ``end_time`` (or now)."""
         end = self.end_time or datetime.now(tz=timezone.utc)
         return (end - self.start_time).total_seconds()
+
+    def setup_seconds(self) -> float:
+        """Wall clock from ``start_time`` to agent start (excl. agent execution).
+
+        Falls back to ``image_ready_time`` when ``agent_start_time`` was not
+        recorded (e.g. ``inner`` never started)."""
+        ref = self.agent_start_time or self.image_ready_time
+        return self._delta_s(self.start_time, ref)
+
+    def agent_seconds(self) -> float:
+        """Wall clock from ``agent_start_time`` to ``agent_end_time``."""
+        return self._delta_s(self.agent_start_time, self.agent_end_time)
+
+    def teardown_seconds(self) -> float:
+        """Wall clock from ``agent_end_time`` to ``end_time``."""
+        return self._delta_s(self.agent_end_time, self.end_time)
 
     def start_time_iso(self) -> str:
         return self.start_time.isoformat().replace("+00:00", "")
@@ -187,12 +225,31 @@ def start_task_container(
     executable: str,
     extra_args: list[str] | None = None,
     network_mode: str = "host",
-    run_as_host_user: bool = True,
-    mount_host_home: bool = True,
-    container_home: str | None = None,
+    bootstrap_userbase_bin: str | None = None,
 ) -> str:
-    """Launch the task container and return its id."""
-    home_dir = container_home or os.environ.get("HOME", "/root")
+    """Launch the task container and return its id.
+
+    Task containers run as container root. SWE-style benchmark images assume
+    root privileges for package installation and repository setup, and mapping
+    the host UID/GID can strand the agent without sudo access.
+
+    The container PATH is intentionally restricted to container-only
+    directories (``/usr/local/bin:/usr/bin:/bin``).  Host ``~/.local/bin``
+    is never leaked in: doing so would expose host-installed tools (python,
+    pip, …) into the container on native arches while being absent under
+    cross-architecture (QEMU) runs, producing host-dependent behaviour.
+
+    When *bootstrap_userbase_bin* is supplied, it is prepended so that the
+    pip installed by ``bootstrap_task_container_python`` (and any other
+    userbase tools) are resolvable inside the container.
+    """
+    _validate_task_container_extra_args(extra_args)
+    container_path = "/usr/local/bin:/usr/bin:/bin"
+    bootstrap_userbase: str | None = None
+    if bootstrap_userbase_bin:
+        container_path = f"{bootstrap_userbase_bin}:{container_path}"
+        bootstrap_userbase = str(Path(bootstrap_userbase_bin).parent)
+        _validate_task_container_bootstrap_userbase(bootstrap_userbase_bin)
     cmd = [
         executable,
         "run",
@@ -202,27 +259,37 @@ def start_task_container(
         "-w",
         "/testbed",
     ]
-    if mount_host_home:
-        cmd.extend(
-            [
-                "-v",
-                f"{home_dir}:{home_dir}",
-            ]
-        )
+    _TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    cmd.extend(
+        [
+            "-v",
+            f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}:"
+            f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}",
+        ]
+    )
     cmd.extend(
         [
             "-e",
-            f"HOME={home_dir}",
+            "HOME=/root",
             "-e",
-            f"PATH={home_dir}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+            f"PATH={container_path}",
+            "--user",
+            "0:0",
         ]
     )
+    if bootstrap_userbase is not None:
+        cmd.extend(
+            [
+                "-e",
+                f"PYTHONUSERBASE={bootstrap_userbase}",
+                "-e",
+                "PIP_BREAK_SYSTEM_PACKAGES=1",
+            ]
+        )
     for env_name in _TASK_CONTAINER_ENV_PASSTHROUGH:
         value = os.environ.get(env_name)
         if value:
             cmd.extend(["-e", f"{env_name}={value}"])
-    if run_as_host_user:
-        cmd.extend(container_run_user_args(executable))
     if extra_args:
         cmd.extend(extra_args)
     cmd.extend([fixed_image, "sleep", "infinity"])
@@ -235,11 +302,33 @@ def start_task_container(
     return result.stdout.strip()
 
 
-def _derive_debian_security_mirror(main_mirror: str) -> str:
-    normalized = main_mirror.rstrip("/")
-    if normalized.endswith("/debian"):
-        return f"{normalized[:-len('/debian')]}/debian-security"
-    return normalized
+def _validate_task_container_bootstrap_userbase(bootstrap_userbase_bin: str) -> None:
+    """Validate that userbase binaries are inside the shared bootstrap cache."""
+    path = Path(bootstrap_userbase_bin).expanduser().resolve()
+    cache_root = _TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.expanduser().resolve()
+    if path == cache_root or path.is_relative_to(cache_root):
+        return
+    raise ValueError(
+        f"bootstrap_userbase_bin must be inside {cache_root}"
+    )
+
+
+def _validate_task_container_extra_args(extra_args: list[str] | None) -> None:
+    """Reject task-container args that can change the enforced root user."""
+    if not extra_args:
+        return
+    forbidden = {"--user", "-u", "--userns"}
+    for arg in extra_args:
+        if (
+            arg in forbidden
+            or arg.startswith("--user=")
+            or arg.startswith("--userns=")
+            or arg.startswith("-u=")
+            or (arg.startswith("-u") and len(arg) > 2)
+        ):
+            raise ValueError(
+                "task container extra_args must not override container user"
+            )
 
 
 def _validate_apt_mirror_url(value: str, *, env_name: str) -> str:
@@ -257,7 +346,7 @@ def configure_task_container_apt_mirror(
     *,
     executable: str,
 ) -> dict[str, str] | None:
-    """Configure Debian apt mirrors inside a running task container.
+    """Configure Debian/Ubuntu apt mirrors inside a running task container.
 
     This is opt-in via TASK_CONTAINER_APT_MIRROR. It is an infrastructure
     mirror, not benchmark-specific behavior; trace commands still execute as
@@ -270,24 +359,50 @@ def configure_task_container_apt_mirror(
         main_mirror,
         env_name="TASK_CONTAINER_APT_MIRROR",
     )
-    security_mirror = _validate_apt_mirror_url(
-        os.environ.get("TASK_CONTAINER_APT_SECURITY_MIRROR")
-        or _derive_debian_security_mirror(main_mirror),
-        env_name="TASK_CONTAINER_APT_SECURITY_MIRROR",
-    )
+    security_mirror_env = os.environ.get("TASK_CONTAINER_APT_SECURITY_MIRROR")
+    if security_mirror_env:
+        security_mirror_env = _validate_apt_mirror_url(
+            security_mirror_env,
+            env_name="TASK_CONTAINER_APT_SECURITY_MIRROR",
+        )
     script = f"""
 set -eu
 main_mirror={shlex.quote(main_mirror)}
-security_mirror={shlex.quote(security_mirror)}
+security_mirror_env={shlex.quote(security_mirror_env or "")}
 . /etc/os-release
-if [ "${{ID:-}}" != "debian" ]; then
-  echo "apt mirror skipped: unsupported distro: ${{ID:-unknown}}"
-  exit 0
-fi
+case "${{ID:-}}" in
+  debian)
+    components="main"
+    signed_by="/usr/share/keyrings/debian-archive-keyring.gpg"
+    ;;
+  ubuntu)
+    components="main restricted universe multiverse"
+    signed_by="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    ;;
+  *)
+    echo "apt mirror skipped: unsupported distro: ${{ID:-unknown}}"
+    exit 0
+    ;;
+esac
 codename="${{VERSION_CODENAME:-}}"
 if [ -z "$codename" ]; then
-  echo "apt mirror unsupported Debian image without VERSION_CODENAME" >&2
+  echo "apt mirror unsupported ${{ID:-unknown}} image without VERSION_CODENAME" >&2
   exit 1
+fi
+if [ -n "$security_mirror_env" ]; then
+  security_mirror="$security_mirror_env"
+else
+  case "${{ID:-}}" in
+    debian)
+      case "$main_mirror" in
+        */debian) security_mirror="${{main_mirror%/debian}}/debian-security" ;;
+        *) security_mirror="$main_mirror" ;;
+      esac
+      ;;
+    ubuntu)
+      security_mirror="$main_mirror"
+      ;;
+  esac
 fi
 mkdir -p /etc/apt/sources.list.d
 for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
@@ -301,19 +416,19 @@ cat > /etc/apt/sources.list.d/agent-sched-bench-mirror.sources <<EOF
 Types: deb
 URIs: $main_mirror
 Suites: $codename $codename-updates
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Components: $components
+Signed-By: $signed_by
 
 Types: deb
 URIs: $security_mirror
 Suites: $codename-security
-Components: main
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Components: $components
+Signed-By: $signed_by
 EOF
-echo "apt mirror configured: main=$main_mirror security=$security_mirror"
+echo "apt mirror configured: distro=${{ID:-unknown}} main=$main_mirror security=$security_mirror"
 """
     result = subprocess.run(
-        [executable, "exec", "-i", container_id, "/bin/sh", "-s"],
+        [executable, "exec", "-i", "--user", "0:0", container_id, "/bin/sh", "-s"],
         input=script,
         capture_output=True,
         text=True,
@@ -326,10 +441,11 @@ echo "apt mirror configured: main=$main_mirror security=$security_mirror"
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
     stdout = result.stdout.strip()
+    security_match = re.search(r"\bsecurity=([^\s]+)", stdout)
     return {
         "configured": "false" if stdout.startswith("apt mirror skipped:") else "true",
         "main_mirror": main_mirror,
-        "security_mirror": security_mirror,
+        "security_mirror": security_match.group(1) if security_match else "",
         "stdout": stdout,
     }
 
@@ -370,9 +486,11 @@ def stop_task_container(container_id: str, *, executable: str) -> str:
             raise RuntimeError(f"container executable not found: {executable}") from exc
         if result.returncode != 0:
             message = (result.stderr or result.stdout or "").strip()
-            if cmd[:3] == [executable, "rm", "-f"] and _is_container_removal_in_progress(
-                message
-            ):
+            if cmd[:3] == [
+                executable,
+                "rm",
+                "-f",
+            ] and _is_container_removal_in_progress(message):
                 removal_in_progress = True
                 continue
             errors.append(
@@ -481,45 +599,19 @@ def _container_is_inspectable(
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
-async def _wait_for_recording_provider_idle(
-    recording_provider: Any,
-    *,
-    phase: str,
-) -> None:
-    wait_until_idle = getattr(recording_provider, "wait_until_idle", None)
-    if not callable(wait_until_idle):
-        return
-    logger.info("waiting for recording provider idle before %s", phase)
-    await asyncio.to_thread(wait_until_idle)
-
-
 async def run_attempt(
     ctx: AttemptContext,
     *,
     inner: Callable[[AttemptContext], Awaitable[AttemptResult]],
     min_free_disk_gb: float = 30.0,
     container_executable: str | None,
-    recording_provider: Any | None = None,
+    disable_resource_monitoring: bool = False,
+    monitoring_policy: dict[str, object] | None = None,
 ) -> AttemptResult:
     """Execute one scaffold attempt and write its artifacts."""
-    if recording_provider is not None:
-        await _wait_for_recording_provider_idle(
-            recording_provider,
-            phase="start_attempt",
-        )
-        ctx.start_time = datetime.now(tz=timezone.utc)
-
     try:
         free_gb = preflight_disk(ctx.run_dir, min_free_disk_gb)
         logger.info("disk preflight ok: %.2f GB free at %s", free_gb, ctx.run_dir)
-        if recording_provider is not None:
-            recordings_dir = ctx.attempt_dir / "recordings"
-            recording_free_gb = preflight_disk(recordings_dir, min_free_disk_gb)
-            logger.info(
-                "recording disk preflight ok: %.2f GB free at %s",
-                recording_free_gb,
-                recordings_dir,
-            )
     except DiskSpaceError as exc:
         logger.error("disk preflight failed: %s", exc)
         raise
@@ -535,6 +627,7 @@ async def run_attempt(
         )
         ctx.fixed_image = fixed_name
         ctx.permission_fix_time_s = fix_elapsed
+        ctx.image_ready_time = datetime.now(tz=timezone.utc)
         logger.info(
             "image prep: source=%s fixed=%s elapsed=%.2fs",
             ctx.source_image,
@@ -544,10 +637,16 @@ async def run_attempt(
     else:
         ctx.fixed_image = None
         ctx.permission_fix_time_s = 0.0
+        ctx.image_ready_time = datetime.now(tz=timezone.utc)
+
+    resource_monitoring_enabled = not disable_resource_monitoring and (
+        container_executable is not None or ctx.execution_environment == "host"
+    )
+    resolved_monitoring_policy = dict(monitoring_policy or {})
 
     stop_watcher = threading.Event()
     watcher_task: asyncio.Task[ContainerStatsSampler | None] | None = None
-    if container_executable is not None:
+    if container_executable is not None and not disable_resource_monitoring:
         watcher_task = asyncio.create_task(
             _watch_for_container_ready(
                 ctx,
@@ -557,28 +656,33 @@ async def run_attempt(
         )
 
     process_sampler: ProcessStatsSampler | None = None
-    if ctx.execution_environment == "host":
+    if ctx.execution_environment == "host" and not disable_resource_monitoring:
         process_sampler = ProcessStatsSampler(pid=os.getpid(), interval_s=1.0)
         process_sampler.start()
-    if recording_provider is not None:
-        recording_provider.start_attempt(ctx.attempt_dir / "recordings")
 
     sampler: ContainerStatsSampler | ProcessStatsSampler | None = None
     samples: list[dict[str, Any]] = []
     result: AttemptResult | None = None
     inner_error: BaseException | None = None
 
+    fallback_agent_start_time = datetime.now(tz=timezone.utc)
     try:
         result = await inner(ctx)
+        if ctx.agent_start_time is None:
+            ctx.agent_start_time = fallback_agent_start_time
+        if ctx.agent_end_time is None:
+            ctx.agent_end_time = datetime.now(tz=timezone.utc)
     except BaseException as exc:
+        fallback_agent_end_time = datetime.now(tz=timezone.utc)
+        if ctx.agent_start_time is None:
+            # If the scaffold failed before reaching the actual agent, count
+            # the failed setup as setup time rather than agent execution.
+            ctx.agent_start_time = fallback_agent_end_time
+        if ctx.agent_end_time is None:
+            ctx.agent_end_time = fallback_agent_end_time
         inner_error = exc
         logger.exception("scaffold inner raised: %s", exc)
     finally:
-        if recording_provider is not None:
-            await _wait_for_recording_provider_idle(
-                recording_provider,
-                phase="attempt finalization",
-            )
         stop_watcher.set()
         if watcher_task is not None:
             try:
@@ -597,11 +701,13 @@ async def run_attempt(
     status = "completed"
     if inner_error is not None:
         status = "error"
+    elif result is not None and result.exit_status == "max_iterations":
+        status = "exhausted"
     elif result is not None and (
         not result.success
         or (
             result.exit_status is not None
-            and result.exit_status in _NONCOMPLETED_EXIT_STATUSES
+            and result.exit_status in _ERROR_EXIT_STATUSES
         )
     ):
         status = "error"
@@ -638,12 +744,20 @@ async def run_attempt(
         },
         "result_summary": {
             "exit_code": 0 if success else 1,
+            "exit_status": result.exit_status if result is not None else None,
             "error": str(inner_error)
             if inner_error is not None
             else (result.error if result is not None else None),
             "total_time": ctx.elapsed_seconds(),
             "active_time": (result.total_llm_ms or 0.0) / 1000.0 if result else 0.0,
             "tool_time": (result.total_tool_ms or 0.0) / 1000.0 if result else 0.0,
+        },
+        "timing": {
+            "wall_total_s": ctx.elapsed_seconds(),
+            "setup_s": ctx.setup_seconds(),
+            "agent_exec_s": ctx.agent_seconds(),
+            "teardown_s": ctx.teardown_seconds(),
+            "permission_fix_s": ctx.permission_fix_time_s,
         },
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
@@ -663,6 +777,13 @@ async def run_attempt(
         "total_time": ctx.elapsed_seconds(),
         "active_time": manifest["result_summary"]["active_time"],
         "tool_time": manifest["result_summary"]["tool_time"],
+        "timing": {
+            "wall_total_s": ctx.elapsed_seconds(),
+            "setup_s": ctx.setup_seconds(),
+            "agent_exec_s": ctx.agent_seconds(),
+            "teardown_s": ctx.teardown_seconds(),
+            "permission_fix_s": ctx.permission_fix_time_s,
+        },
         "replay_ready": bool(ctx.fixed_image),
         "instance_id": ctx.instance_id,
         "repo": ctx.task.get("repo"),
@@ -695,22 +816,23 @@ async def run_attempt(
             results_payload["scaffold_summary"] = result.summary
 
     resources_summary = summarize_samples(samples)
+    if samples:
+        monitoring_status = "collected"
+    elif resource_monitoring_enabled:
+        monitoring_status = "enabled_no_samples"
+    else:
+        monitoring_status = "disabled"
+    resources_summary["monitoring_disabled"] = not resource_monitoring_enabled
+    resources_summary["monitoring"] = {
+        **resolved_monitoring_policy,
+        "status": monitoring_status,
+    }
 
-    copied_trace_path: Path | None = None
-    try:
-        if result is not None and result.trace_path.exists():
-            copied_trace_path = attempt_layout.copy_trace_jsonl(
-                ctx.attempt_dir,
-                result.trace_path,
-            )
-    finally:
-        if recording_provider is not None:
-            trace_path = copied_trace_path
-            if trace_path is None and result is not None and result.trace_path.exists():
-                trace_path = result.trace_path
-            recording_provider.finish_attempt(
-                trace_path=trace_path if trace_path and trace_path.exists() else None
-            )
+    if result is not None and result.trace_path.exists():
+        attempt_layout.copy_trace_jsonl(
+            ctx.attempt_dir,
+            result.trace_path,
+        )
 
     trace_file = ctx.attempt_dir / attempt_layout.TRACE_FILENAME
     if result is not None and result.tool_calls:
@@ -720,9 +842,7 @@ async def run_attempt(
     else:
         tool_calls = []
 
-    openclaw_tool_results_dir = (
-        ctx.attempt_dir / "openclaw-runtime" / "tool-results"
-    )
+    openclaw_tool_results_dir = ctx.attempt_dir / "openclaw-runtime" / "tool-results"
     if openclaw_tool_results_dir.exists():
         manifest.setdefault("artifacts", {})["openclaw_tool_results_dir"] = str(
             openclaw_tool_results_dir.relative_to(ctx.attempt_dir)

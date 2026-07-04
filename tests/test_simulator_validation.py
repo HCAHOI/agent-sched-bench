@@ -167,10 +167,6 @@ def test_simulator_accepts_task_with_image_name(
         return ("ok", 1.0, True)
 
     monkeypatch.setattr("trace_collect.simulator._exec_tool", _fake_exec)
-    monkeypatch.setattr(
-        "trace_collect.simulator.create_async_openai_client",
-        lambda **_: (_ for _ in ()).throw(AssertionError("no llm")),
-    )
 
     trace_file = asyncio.run(
         simulate(
@@ -316,62 +312,3 @@ def test_simulator_rejects_relative_trace_paths_in_manifest(tmp_path: Path) -> N
         )
 
 
-def test_local_model_rejects_multi_trace_manifest(tmp_path: Path) -> None:
-    trace_a = tmp_path / "trace-a.jsonl"
-    trace_b = tmp_path / "trace-b.jsonl"
-    task_source = tmp_path / "tasks.json"
-    manifest = tmp_path / "manifest.yaml"
-    for trace_path, agent_id in ((trace_a, "task-a"), (trace_b, "task-b")):
-        trace_path.write_text(
-            "\n".join(
-                [
-                    json.dumps(
-                        {
-                            "type": "trace_metadata",
-                            "scaffold": "openclaw",
-                            "instance_id": agent_id,
-                            "model": "dummy",
-                            "execution_environment": "host",
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "type": "action",
-                            "action_type": "llm_call",
-                            "action_id": "llm_0",
-                            "agent_id": agent_id,
-                            "iteration": 0,
-                            "ts_start": 1.0,
-                            "ts_end": 2.0,
-                            "data": {"messages_in": [], "completion_tokens": 1},
-                        }
-                    ),
-                ]
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-    task_source.write_text(
-        json.dumps(
-            [
-                {"instance_id": "task-a", "image_name": None},
-                {"instance_id": "task-b", "image_name": None},
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    _write_manifest(manifest, [str(trace_a), str(trace_b)])
-
-    with pytest.raises(SimulateError, match="exactly one"):
-        asyncio.run(
-            simulate(
-                manifest=manifest,
-                task_source=task_source,
-                output_dir=tmp_path / "out",
-                mode="local_model",
-                api_base="http://localhost:8000/v1",
-                api_key="EMPTY",
-                model="dummy",
-            )
-        )

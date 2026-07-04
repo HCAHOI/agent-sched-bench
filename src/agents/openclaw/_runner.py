@@ -29,6 +29,7 @@ from agents.openclaw.utils.runtime import (
     is_blank_text,
     repeated_external_lookup_error,
 )
+from trace_collect.resource_timeline import ResourceTimelineRecorder
 
 _DEFAULT_MAX_ITERATIONS_MESSAGE = (
     "I reached the maximum number of tool call iterations ({max_iterations}) "
@@ -228,13 +229,19 @@ class AgentRunner:
                 self._refresh_hook_context_messages(context, messages)
                 await hook.before_execute_tools(context)
 
-                results, new_events, fatal_error = await self._execute_tools(
+                (
+                    results,
+                    new_events,
+                    fatal_error,
+                    tool_resource_timelines,
+                ) = await self._execute_tools(
                     spec,
                     response.tool_calls,
                     external_lookup_counts,
                 )
                 tool_events.extend(new_events)
                 context.tool_events = list(new_events)
+                context.tool_resource_timelines = tool_resource_timelines
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
@@ -527,9 +534,16 @@ class AgentRunner:
         spec: AgentRunSpec,
         tool_calls: list[ToolCallRequest],
         external_lookup_counts: dict[str, int],
-    ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
+    ) -> tuple[
+        list[Any],
+        list[dict[str, str]],
+        BaseException | None,
+        dict[str, dict[str, Any]],
+    ]:
         batches = self._partition_tool_batches(spec, tool_calls)
-        tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
+        tool_results: list[
+            tuple[Any, dict[str, str], BaseException | None, str, dict[str, Any] | None]
+        ] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
                 tool_results.extend(
@@ -548,20 +562,23 @@ class AgentRunner:
 
         results: list[Any] = []
         events: list[dict[str, str]] = []
+        resource_timelines: dict[str, dict[str, Any]] = {}
         fatal_error: BaseException | None = None
-        for result, event, error in tool_results:
+        for result, event, error, tool_call_id, resource_timeline in tool_results:
             results.append(result)
             events.append(event)
+            if resource_timeline is not None:
+                resource_timelines[tool_call_id] = resource_timeline
             if error is not None and fatal_error is None:
                 fatal_error = error
-        return results, events, fatal_error
+        return results, events, fatal_error, resource_timelines
 
     async def _run_tool(
         self,
         spec: AgentRunSpec,
         tool_call: ToolCallRequest,
         external_lookup_counts: dict[str, int],
-    ) -> tuple[Any, dict[str, str], BaseException | None]:
+    ) -> tuple[Any, dict[str, str], BaseException | None, str, dict[str, Any] | None]:
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
         lookup_error = repeated_external_lookup_error(
             tool_call.name,
@@ -574,9 +591,8 @@ class AgentRunner:
                 "status": "error",
                 "detail": "repeated external lookup blocked",
             }
-            if spec.fail_on_tool_error:
-                return lookup_error + _HINT, event, RuntimeError(lookup_error)
-            return lookup_error + _HINT, event, None
+            error = RuntimeError(lookup_error) if spec.fail_on_tool_error else None
+            return lookup_error + _HINT, event, error, tool_call.id, None
         tool, params, prep_error = spec.tools.prepare_call(
             tool_call.name, tool_call.arguments
         )
@@ -586,27 +602,43 @@ class AgentRunner:
                 "status": "error",
                 "detail": prep_error.split(": ", 1)[-1][:120],
             }
-            return (
-                prep_error + _HINT,
-                event,
-                RuntimeError(prep_error) if spec.fail_on_tool_error else None,
-            )
+            error = RuntimeError(prep_error) if spec.fail_on_tool_error else None
+            return prep_error + _HINT, event, error, tool_call.id, None
+
+        resource_recorder: ResourceTimelineRecorder | None = None
+        resource_timeline: dict[str, Any] | None = None
         try:
-            if tool is not None:
-                result = await tool.execute(**params)
-            else:
-                result = await spec.tools.execute(tool_call.name, params)
+            # The current replay-time timeout mismatch is caused by shell commands;
+            # keep telemetry scoped to OpenClaw exec intervals until other tool
+            # runtimes have per-action resource isolation.
+            resource_recorder = ResourceTimelineRecorder(
+                enabled=tool_call.name == "exec",
+                scope="openclaw_exec_tool_interval",
+            )
+            async with resource_recorder:
+                if tool is not None:
+                    result = await tool.execute(**params)
+                else:
+                    result = await spec.tools.execute(tool_call.name, params)
+            resource_timeline = resource_recorder.to_trace_dict()
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
+            if resource_recorder is not None:
+                resource_timeline = resource_recorder.to_trace_dict()
             event = {
                 "name": tool_call.name,
                 "status": "error",
                 "detail": str(exc),
             }
-            if spec.fail_on_tool_error:
-                return f"Error: {type(exc).__name__}: {exc}", event, exc
-            return f"Error: {type(exc).__name__}: {exc}", event, None
+            error = exc if spec.fail_on_tool_error else None
+            return (
+                f"Error: {type(exc).__name__}: {exc}",
+                event,
+                error,
+                tool_call.id,
+                resource_timeline,
+            )
 
         if isinstance(result, str) and result.startswith("Error"):
             event = {
@@ -614,9 +646,8 @@ class AgentRunner:
                 "status": "error",
                 "detail": result.replace("\n", " ").strip()[:120],
             }
-            if spec.fail_on_tool_error:
-                return result + _HINT, event, RuntimeError(result)
-            return result + _HINT, event, None
+            error = RuntimeError(result) if spec.fail_on_tool_error else None
+            return result + _HINT, event, error, tool_call.id, resource_timeline
 
         detail = "" if result is None else str(result)
         detail = detail.replace("\n", " ").strip()
@@ -624,7 +655,13 @@ class AgentRunner:
             detail = "(empty)"
         elif len(detail) > 120:
             detail = detail[:120] + "..."
-        return result, {"name": tool_call.name, "status": "ok", "detail": detail}, None
+        return (
+            result,
+            {"name": tool_call.name, "status": "ok", "detail": detail},
+            None,
+            tool_call.id,
+            resource_timeline,
+        )
 
     async def _emit_checkpoint(
         self,

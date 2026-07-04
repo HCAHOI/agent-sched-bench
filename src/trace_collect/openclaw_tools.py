@@ -8,12 +8,21 @@ import logging
 import textwrap
 from typing import Any
 
+from trace_collect.resource_timeline import valid_resource_timeline
+from agents.openclaw._checkpoint_container import _CONTAINER_PYTHON_CANDIDATES
+
 logger = logging.getLogger(__name__)
 
 _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S = 300.0
 _OPENCLAW_EXEC_MAX_TIMEOUT_S = 600.0
+# Outer guard for resource-aware exec requests. The in-container watchdog owns
+# the modeled deadline; this only prevents an agent protocol deadlock from
+# blocking simulate forever.
+_RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S = 24 * 60 * 60.0
 _AGENT_STOP_GRACE_S = 5.0
 _AGENT_KILL_WAIT_S = 5.0
+_PYTHON_PROBE_TIMEOUT_S = 30.0
+_PYTHON_PROBE_KILL_WAIT_S = 5.0
 _SOURCE_RUNTIME_ARTIFACT_MARKERS = (
     (
         "/openclaw-runtime/tool-results/tool-results/",
@@ -60,7 +69,9 @@ def _resolve_exec_timeout_s(
 
 
 def _is_source_runtime_artifact_path(path: str) -> bool:
-    return any(marker in path for marker, _root_suffix in _SOURCE_RUNTIME_ARTIFACT_MARKERS)
+    return any(
+        marker in path for marker, _root_suffix in _SOURCE_RUNTIME_ARTIFACT_MARKERS
+    )
 
 
 def source_runtime_artifact_root_from_path(path: str) -> str | None:
@@ -116,7 +127,7 @@ def remap_source_runtime_artifact_tool_args(
     mapped_root = runtime_root_map.get(source_root)
     if mapped_root is None:
         return tool_args_json, path, None
-    mapped_path = mapped_root + path[len(source_root):]
+    mapped_path = mapped_root + path[len(source_root) :]
     remapped = dict(params)
     remapped["path"] = mapped_path
     return json.dumps(remapped, ensure_ascii=False), path, mapped_path
@@ -124,7 +135,7 @@ def remap_source_runtime_artifact_tool_args(
 
 # Persistent python3 agent script injected into Docker container; reads JSON-line requests
 # from stdin, writes JSON-line responses to stdout (subprocess.run uses capture_output=True).
-_REPLAY_AGENT_SCRIPT = textwrap.dedent(r'''
+_REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
 import json, os, sys, subprocess, difflib, signal, time
 
 def _find_match(content, old_text):
@@ -167,24 +178,306 @@ def _truncate_output(text, limit=_MAX_OUTPUT):
     if len(text) <= limit:
         return text
     half = limit // 2
-    return text[:half] + f"\n\n... ({len(text) - limit} chars truncated) ...\n\n" + text[-half:]
+    return text[:half] + f"\n\n... ({len(text) - limit:,} chars truncated) ...\n\n" + text[-half:]
+
+def _format_exec_result(stdout, stderr, returncode):
+    output_parts = []
+    if stdout:
+        output_parts.append(stdout)
+    if stderr and stderr.strip():
+        output_parts.append(f"STDERR:\n{stderr}")
+    output_parts.append(f"\nExit code: {returncode}")
+    return "\n".join(output_parts)
+
+def _format_command_timeout(timeout):
+    return f"Error: Command timed out after {timeout} seconds"
+
+def _insert_before_final_exit_code(text, marker):
+    exit_marker = "\nExit code:"
+    if exit_marker not in text:
+        return text + "\n" + marker if text else marker
+    prefix, suffix = text.rsplit(exit_marker, 1)
+    if prefix:
+        return f"{prefix}\n{marker}{exit_marker}{suffix}"
+    return f"{marker}{exit_marker}{suffix}"
+
+_RESOURCE_CPU_RATE_EPS_CORE = 0.05
+_RESOURCE_NET_RATE_EPS_BPS = 1024.0
+_RESOURCE_PROGRESS_EPS_S = 1e-6
+_RESOURCE_SAMPLE_INTERVAL_S = 0.5
+_RESOURCE_STALL_MIN_S = 5.0
+_RESOURCE_STALL_MAX_S = 60.0
+
+
+def _nonnegative_float(value, default=0.0):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number < 0:
+        return default
+    return number
+
+
+def _resource_source_samples(timeline):
+    if not isinstance(timeline, dict) or timeline.get("version") != 1:
+        return []
+    raw_samples = timeline.get("samples")
+    if not isinstance(raw_samples, list):
+        return []
+    samples = []
+    offset_s = 0.0
+    for raw in raw_samples:
+        if not isinstance(raw, dict):
+            continue
+        dt_s = _nonnegative_float(raw.get("dt_s"))
+        if dt_s <= 0:
+            continue
+        cpu_core_s = _nonnegative_float(raw.get("cpu_core_s"))
+        rx_bytes = _nonnegative_float(raw.get("net_rx_bytes"))
+        tx_bytes = _nonnegative_float(raw.get("net_tx_bytes"))
+        sample = {
+            "start_s": offset_s,
+            "end_s": offset_s + dt_s,
+            "cpu_rate_core": cpu_core_s / dt_s,
+            "rx_rate_bps": rx_bytes / dt_s,
+            "tx_rate_bps": tx_bytes / dt_s,
+        }
+        samples.append(sample)
+        offset_s += dt_s
+    return samples
+
+
+def _resource_sample_at(samples, virtual_time_s):
+    if not samples:
+        return None
+    for sample in samples:
+        if sample["start_s"] <= virtual_time_s < sample["end_s"]:
+            return sample
+    return samples[-1]
+
+
+def _read_cgroup_cpu_usage_s():
+    try:
+        with open("/sys/fs/cgroup/cpu.stat", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == "usage_usec":
+                    return int(parts[1]) / 1_000_000.0
+    except Exception:
+        return None
+    return None
+
+
+def _read_proc_net_bytes():
+    rx_total = 0
+    tx_total = 0
+    found = False
+    try:
+        with open("/proc/net/dev", encoding="utf-8") as fh:
+            lines = fh.readlines()[2:]
+    except Exception:
+        return None, None
+    for line in lines:
+        if ":" not in line:
+            continue
+        iface, rest = line.split(":", 1)
+        if iface.strip() == "lo":
+            continue
+        fields = rest.split()
+        if len(fields) < 16:
+            continue
+        try:
+            rx_total += int(fields[0])
+            tx_total += int(fields[8])
+        except ValueError:
+            continue
+        found = True
+    if not found:
+        return None, None
+    return rx_total, tx_total
+
+
+def _read_resource_counters():
+    rx_bytes, tx_bytes = _read_proc_net_bytes()
+    return {
+        "time_s": time.monotonic(),
+        "cpu_usage_s": _read_cgroup_cpu_usage_s(),
+        "rx_bytes": rx_bytes,
+        "tx_bytes": tx_bytes,
+    }
+
+
+def _counter_delta(previous, current, key):
+    left = previous.get(key)
+    right = current.get(key)
+    if left is None or right is None:
+        return None
+    return max(0.0, float(right) - float(left))
+
+
+def _resource_progress_increment(samples, virtual_time_s, wall_dt_s, deltas):
+    if wall_dt_s <= 0:
+        return 0.0
+    if not samples:
+        return wall_dt_s
+    source_end_s = samples[-1]["end_s"]
+    if virtual_time_s >= source_end_s:
+        return wall_dt_s
+    sample = _resource_sample_at(samples, virtual_time_s)
+    if sample is None:
+        return wall_dt_s
+    candidates = []
+    cpu_rate = sample["cpu_rate_core"]
+    if cpu_rate >= _RESOURCE_CPU_RATE_EPS_CORE and deltas.get("cpu_core_s") is not None:
+        candidates.append(float(deltas["cpu_core_s"]) / cpu_rate)
+    rx_rate = sample["rx_rate_bps"]
+    if rx_rate >= _RESOURCE_NET_RATE_EPS_BPS and deltas.get("rx_bytes") is not None:
+        candidates.append(float(deltas["rx_bytes"]) / rx_rate)
+    tx_rate = sample["tx_rate_bps"]
+    if tx_rate >= _RESOURCE_NET_RATE_EPS_BPS and deltas.get("tx_bytes") is not None:
+        candidates.append(float(deltas["tx_bytes"]) / tx_rate)
+    if not candidates:
+        progress_s = wall_dt_s
+    else:
+        progress_s = max(0.0, min(candidates))
+    return min(progress_s, max(0.0, sample["end_s"] - virtual_time_s))
+
+
+def _resource_has_active_demand(samples, virtual_time_s):
+    sample = _resource_sample_at(samples, virtual_time_s)
+    if sample is None:
+        return False
+    return (
+        sample["cpu_rate_core"] >= _RESOURCE_CPU_RATE_EPS_CORE
+        or sample["rx_rate_bps"] >= _RESOURCE_NET_RATE_EPS_BPS
+        or sample["tx_rate_bps"] >= _RESOURCE_NET_RATE_EPS_BPS
+    )
+
+
+def _kill_process_group(process):
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        else:
+            process.kill()
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_timeline):
+    samples = _resource_source_samples(source_resource_timeline)
+    if not samples:
+        return None
+    timeout_s = float(timeout)
+    stall_timeout_s = max(
+        _RESOURCE_STALL_MIN_S,
+        min(_RESOURCE_STALL_MAX_S, timeout_s),
+    )
+    start_new_session = hasattr(os, "setsid")
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        cwd="/testbed",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=start_new_session,
+    )
+    virtual_time_s = 0.0
+    last_counters = _read_resource_counters()
+    last_progress_wall_s = last_counters["time_s"]
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=_RESOURCE_SAMPLE_INTERVAL_S)
+            output = _format_exec_result(stdout or "", stderr or "", process.returncode)
+            return {
+                "ok": True,
+                "result": _truncate_output(output),
+                "returncode": process.returncode,
+                "resource_timeout_policy": "resource_integrated",
+                "resource_virtual_time_s": round(virtual_time_s, 6),
+            }
+        except subprocess.TimeoutExpired:
+            current_counters = _read_resource_counters()
+            wall_dt_s = max(0.0, current_counters["time_s"] - last_counters["time_s"])
+            deltas = {
+                "cpu_core_s": _counter_delta(last_counters, current_counters, "cpu_usage_s"),
+                "rx_bytes": _counter_delta(last_counters, current_counters, "rx_bytes"),
+                "tx_bytes": _counter_delta(last_counters, current_counters, "tx_bytes"),
+            }
+            progress_s = _resource_progress_increment(
+                samples,
+                virtual_time_s,
+                wall_dt_s,
+                deltas,
+            )
+            virtual_time_s += progress_s
+            if progress_s > _RESOURCE_PROGRESS_EPS_S:
+                last_progress_wall_s = current_counters["time_s"]
+            if virtual_time_s >= timeout_s:
+                _kill_process_group(process)
+                stdout, stderr = process.communicate()
+                output = _format_exec_result(stdout or "", stderr or "", 124)
+                output = _insert_before_final_exit_code(output, "[resource_timeout]")
+                return {
+                    "ok": False,
+                    "result": _truncate_output(output),
+                    "returncode": 124,
+                    "resource_timeout_policy": "resource_integrated",
+                    "resource_virtual_time_s": round(virtual_time_s, 6),
+                }
+            stalled_s = current_counters["time_s"] - last_progress_wall_s
+            if stalled_s >= stall_timeout_s and _resource_has_active_demand(
+                samples,
+                virtual_time_s,
+            ):
+                _kill_process_group(process)
+                stdout, stderr = process.communicate()
+                output = _format_exec_result(stdout or "", stderr or "", 124)
+                output = _insert_before_final_exit_code(
+                    output,
+                    "[resource_stall_timeout]",
+                )
+                return {
+                    "ok": False,
+                    "result": _truncate_output(output),
+                    "returncode": 124,
+                    "resource_timeout_policy": "resource_integrated",
+                    "resource_virtual_time_s": round(virtual_time_s, 6),
+                    "resource_stall_s": round(stalled_s, 6),
+                }
+            last_counters = current_counters
+
 
 def handle_exec(args):
     cmd = args.get("command", "")
     timeout = args.get("timeout", 600)
-    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
+    env = {**os.environ}
+    resource_response = _run_shell_command_with_resource_timeout(
+        cmd,
+        timeout,
+        env,
+        args.get("source_resource_timeline"),
+    )
+    if resource_response is not None:
+        return resource_response
     try:
         r = subprocess.run(cmd, shell=True, cwd="/testbed",
                            capture_output=True, text=True, timeout=timeout, env=env)
-        output = (r.stdout or "") + (r.stderr or "")
+        output = _format_exec_result(r.stdout or "", r.stderr or "", r.returncode)
         return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "result": "[timeout]", "returncode": 124}
+        return {"ok": False, "result": _format_command_timeout(timeout), "returncode": 124}
 
 def handle_commands(args):
     cmds = args.get("commands", [])
     timeout = args.get("timeout", 600)
-    env = {**os.environ, "PAGER": "cat", "MANPAGER": "cat", "LESS": "-R"}
+    env = {**os.environ}
     all_output = []
     last_rc = 0
     first_failed_rc = 0
@@ -193,12 +486,12 @@ def handle_commands(args):
         try:
             r = subprocess.run(cmd, shell=True, cwd="/testbed",
                                capture_output=True, text=True, timeout=timeout, env=env)
-            all_output.append((r.stdout or "") + (r.stderr or ""))
+            all_output.append(_format_exec_result(r.stdout or "", r.stderr or "", r.returncode))
             last_rc = r.returncode
             if r.returncode != 0 and first_failed_rc == 0:
                 first_failed_rc = r.returncode
         except subprocess.TimeoutExpired:
-            all_output.append("[timeout]")
+            all_output.append(_format_command_timeout(timeout))
             last_rc = 124
             any_timeout = True
     if len(cmds) > 1:
@@ -306,32 +599,194 @@ for line in sys.stdin:
         resp = {"ok": False, "result": f"Error: agent dispatch failed: {e}"}
     sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
     sys.stdout.flush()
-''').strip()
+""").strip()
 
 
 # Idempotent tools safe to retry after agent restart.
 _IDEMPOTENT_TOOLS = frozenset({"read_file", "list_dir"})
 
 
-class ContainerAgent:
+async def _readline_with_timeout(
+    stream: asyncio.StreamReader,
+    timeout_s: float | None,
+) -> bytes:
+    if timeout_s is None:
+        return await stream.readline()
+    return await asyncio.wait_for(stream.readline(), timeout=timeout_s + 5.0)
 
-    def __init__(self, container_id: str, container_executable: str) -> None:
+
+async def _kill_and_drain_python_probe_process(
+    proc: asyncio.subprocess.Process,
+    *,
+    candidate: str,
+    container_id: str,
+) -> None:
+    """Terminate and reap a timed-out Python probe process.
+
+    A probe that cannot be reaped is a hard failure: continuing would leave a
+    live ``docker exec``/``podman exec`` process around and make replay state
+    host-dependent.
+    """
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            raise RuntimeError(
+                "ContainerAgent python probe cleanup failed to kill "
+                f"candidate {candidate!r} in container {container_id[:12]}: {exc}"
+            ) from exc
+    try:
+        await asyncio.wait_for(
+            proc.communicate(),
+            timeout=_PYTHON_PROBE_KILL_WAIT_S,
+        )
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            "ContainerAgent python probe cleanup timed out after killing "
+            f"candidate {candidate!r} in container {container_id[:12]}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            "ContainerAgent python probe cleanup failed after killing "
+            f"candidate {candidate!r} in container {container_id[:12]}: {exc}"
+        ) from exc
+
+
+class ContainerAgent:
+    # Container Python interpreter candidates — MUST match
+    # _CONTAINER_PYTHON_CANDIDATES in trace_collect.runtime.task_container
+    # so that collect (resolve_running_container_exec_config) and simulate
+    # (ContainerAgent) select the same interpreter for the same image.
+    _PYTHON_CANDIDATES: tuple[str, ...] = _CONTAINER_PYTHON_CANDIDATES
+
+    def __init__(
+        self,
+        container_id: str,
+        container_executable: str,
+        *,
+        pythonpath: str | None = None,
+        path: str | None = None,
+        pythonuserbase: str | None = None,
+    ) -> None:
         self._container_id = container_id
         self._executable = container_executable
         self._process: asyncio.subprocess.Process | None = None
+        self._python_runtime: str = "python3"  # fallback, overwritten in start()
+        self._pythonpath: str | None = pythonpath
+        self._path: str | None = path
+        self._pythonuserbase: str | None = pythonuserbase
+
+    async def _probe_python(self) -> str:
+        """Find a working Python >=3.11 interpreter inside the container."""
+        probe_script = (
+            "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
+        )
+        for cand in self._PYTHON_CANDIDATES:
+            proc: asyncio.subprocess.Process | None = None
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    self._executable,
+                    "exec",
+                    "-i",
+                    "-w",
+                    "/testbed",
+                    self._container_id,
+                    cand,
+                    "-c",
+                    probe_script,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=_PYTHON_PROBE_TIMEOUT_S,
+                )
+                if proc.returncode == 0:
+                    logger.info(
+                        "ContainerAgent python probe: %s (cid=%s)",
+                        cand,
+                        self._container_id[:12],
+                    )
+                    return cand
+            except asyncio.TimeoutError:
+                if proc is not None:
+                    await _kill_and_drain_python_probe_process(
+                        proc,
+                        candidate=cand,
+                        container_id=self._container_id,
+                    )
+                continue
+            except asyncio.CancelledError:
+                if proc is not None:
+                    await _kill_and_drain_python_probe_process(
+                        proc,
+                        candidate=cand,
+                        container_id=self._container_id,
+                    )
+                raise
+            except OSError as exc:
+                if proc is not None and proc.returncode is None:
+                    await _kill_and_drain_python_probe_process(
+                        proc,
+                        candidate=cand,
+                        container_id=self._container_id,
+                    )
+                raise RuntimeError(
+                    "ContainerAgent python probe failed to execute: "
+                    f"{self._executable!r} for container {self._container_id[:12]}"
+                ) from exc
+        raise RuntimeError(
+            "ContainerAgent: no Python >=3.11 found in container "
+            f"{self._container_id[:12]}.  Tried: " + ", ".join(self._PYTHON_CANDIDATES)
+        )
 
     async def start(self) -> None:
+        self._python_runtime = await self._probe_python()
+        cmd: list[str] = [
+            self._executable,
+            "exec",
+            "-i",
+            "-w",
+            "/testbed",
+        ]
+        # Propagate PYTHONPATH so replayed subprocesses (e.g. pytest)
+        # can find packages installed by bootstrap_task_container_python.
+        if self._pythonpath:
+            cmd.extend(["-e", f"PYTHONPATH={self._pythonpath}"])
+        if self._path:
+            cmd.extend(["-e", f"PATH={self._path}"])
+        if self._pythonuserbase:
+            cmd.extend(
+                [
+                    "-e",
+                    f"PYTHONUSERBASE={self._pythonuserbase}",
+                    "-e",
+                    "PIP_BREAK_SYSTEM_PACKAGES=1",
+                ]
+            )
+        cmd.extend(
+            [
+                self._container_id,
+                self._python_runtime,
+                "-u",
+                "-c",
+                _REPLAY_AGENT_SCRIPT,
+            ]
+        )
         self._process = await asyncio.create_subprocess_exec(
-            self._executable, "exec", "-i", "-w", "/testbed",
-            self._container_id, "python3", "-u", "-c", _REPLAY_AGENT_SCRIPT,
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024,  # 1MB — agent responses can exceed default 64KB
         )
         logger.info(
-            "ContainerAgent started: cid=%s pid=%s",
-            self._container_id[:12], self._process.pid,
+            "ContainerAgent started: cid=%s pid=%s runtime=%s",
+            self._container_id[:12],
+            self._process.pid,
+            self._python_runtime,
         )
 
     async def stop(self) -> None:
@@ -348,7 +803,9 @@ class ContainerAgent:
 
         wait_task = asyncio.create_task(process.wait())
         try:
-            await asyncio.wait_for(asyncio.shield(wait_task), timeout=_AGENT_STOP_GRACE_S)
+            await asyncio.wait_for(
+                asyncio.shield(wait_task), timeout=_AGENT_STOP_GRACE_S
+            )
             return
         except ProcessLookupError:
             return
@@ -362,7 +819,9 @@ class ContainerAgent:
                 pass
 
         try:
-            await asyncio.wait_for(asyncio.shield(wait_task), timeout=_AGENT_KILL_WAIT_S)
+            await asyncio.wait_for(
+                asyncio.shield(wait_task), timeout=_AGENT_KILL_WAIT_S
+            )
         except ProcessLookupError:
             return
         except asyncio.TimeoutError as exc:
@@ -384,7 +843,7 @@ class ContainerAgent:
         self,
         request: dict[str, Any],
         *,
-        timeout_s: float = 600.0,
+        timeout_s: float | None = 600.0,
     ) -> dict[str, Any]:
         """Send a request and return the response. Restarts on crash."""
         tool_name = request.get("tool", "")
@@ -396,15 +855,17 @@ class ContainerAgent:
                     return {"ok": False, "result": "Error: agent process dead"}
 
             proc = self._process
-            assert proc is not None and proc.stdin is not None and proc.stdout is not None
+            assert (
+                proc is not None and proc.stdin is not None and proc.stdout is not None
+            )
 
             line = json.dumps(request, ensure_ascii=False) + "\n"
             try:
                 proc.stdin.write(line.encode())
                 await proc.stdin.drain()
-                raw = await asyncio.wait_for(
-                    proc.stdout.readline(),
-                    timeout=timeout_s + 5.0,
+                raw = await _readline_with_timeout(
+                    proc.stdout,
+                    timeout_s,
                 )
             except (asyncio.TimeoutError, BrokenPipeError, ConnectionResetError):
                 await self._restart()
@@ -426,9 +887,7 @@ class ContainerAgent:
                     break
                 logger.debug("Skipping non-JSON agent output: %s", decoded[:120])
                 try:
-                    raw = await asyncio.wait_for(
-                        proc.stdout.readline(), timeout=timeout_s + 5.0,
-                    )
+                    raw = await _readline_with_timeout(proc.stdout, timeout_s)
                     decoded = raw.decode(errors="replace").strip()
                 except (asyncio.TimeoutError, BrokenPipeError):
                     return {"ok": False, "result": "[timeout]", "returncode": 124}
@@ -438,9 +897,26 @@ class ContainerAgent:
             try:
                 return json.loads(decoded)
             except json.JSONDecodeError:
-                return {"ok": False, "result": f"Error: invalid agent response: {decoded[:200]}"}
+                return {
+                    "ok": False,
+                    "result": f"Error: invalid agent response: {decoded[:200]}",
+                }
 
         return {"ok": False, "result": "Error: agent restart failed"}
+
+
+def _resource_timed_exec_request(
+    *,
+    command: str,
+    timeout_s: float,
+    source_resource_timeline: dict[str, Any] | None,
+) -> tuple[dict[str, Any], float | None]:
+    request = {"tool": "exec", "args": {"command": command, "timeout": timeout_s}}
+    resource_timeline = valid_resource_timeline(source_resource_timeline)
+    if resource_timeline is None:
+        return request, timeout_s
+    request["args"]["source_resource_timeline"] = resource_timeline
+    return request, _RESOURCE_AWARE_AGENT_RESPONSE_TIMEOUT_S
 
 
 def _resolve_tool_request(
@@ -448,7 +924,8 @@ def _resolve_tool_request(
     params: dict[str, Any],
     command_timeout_s: float,
     source_exec_timeout_s: float | None = None,
-) -> tuple[dict[str, Any] | None, float]:
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, float | None]:
     """Build a JSON-line request plus the outer response timeout."""
 
     exec_fallback_timeout_s = (
@@ -463,9 +940,10 @@ def _resolve_tool_request(
             params,
             default_timeout_s=exec_fallback_timeout_s,
         )
-        return (
-            {"tool": "exec", "args": {"command": params["command"], "timeout": timeout_s}},
-            timeout_s,
+        return _resource_timed_exec_request(
+            command=params["command"],
+            timeout_s=timeout_s,
+            source_resource_timeline=source_resource_timeline,
         )
     if "commands" in params:
         timeout_s = _resolve_exec_timeout_s(
@@ -488,9 +966,10 @@ def _resolve_tool_request(
                 params,
                 default_timeout_s=exec_fallback_timeout_s,
             )
-            return (
-                {"tool": "exec", "args": {"command": command, "timeout": timeout_s}},
-                timeout_s,
+            return _resource_timed_exec_request(
+                command=command,
+                timeout_s=timeout_s,
+                source_resource_timeline=source_resource_timeline,
             )
         if commands:
             timeout_s = _resolve_exec_timeout_s(
@@ -507,35 +986,76 @@ def _resolve_tool_request(
         return None, command_timeout_s  # missing command/commands
 
     if tool_name == "read_file":
-        return {"tool": "read_file", "args": {"path": params.get("path", "")}}, command_timeout_s
+        return {
+            "tool": "read_file",
+            "args": {"path": params.get("path", "")},
+        }, command_timeout_s
 
     if tool_name == "write_file":
         return (
             {
                 "tool": "write_file",
-                "args": {"path": params.get("path", ""), "content": params.get("content", "")},
+                "args": {
+                    "path": params.get("path", ""),
+                    "content": params.get("content", ""),
+                },
             },
             command_timeout_s,
         )
 
     if tool_name == "edit_file":
         return (
-            {"tool": "edit_file", "args": {
-                "path": params.get("path", ""),
-                "old_text": params.get("old_text", ""),
-                "new_text": params.get("new_text", ""),
-                "replace_all": bool(params.get("replace_all", False)),
-            }},
+            {
+                "tool": "edit_file",
+                "args": {
+                    "path": params.get("path", ""),
+                    "old_text": params.get("old_text", ""),
+                    "new_text": params.get("new_text", ""),
+                    "replace_all": bool(params.get("replace_all", False)),
+                },
+            },
             command_timeout_s,
         )
 
     if tool_name == "list_dir":
-        return {"tool": "list_dir", "args": {"path": params.get("path", ".")}}, command_timeout_s
+        return {
+            "tool": "list_dir",
+            "args": {"path": params.get("path", ".")},
+        }, command_timeout_s
 
     return None, command_timeout_s  # unsupported tool
 
 
-async def execute_trace_tool(
+def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key in (
+        "resource_timeout_policy",
+        "resource_virtual_time_s",
+        "resource_stall_s",
+    ):
+        if key in resp:
+            metadata[key] = resp[key]
+    return metadata
+
+
+def _final_exit_code(result: object) -> int | None:
+    if not isinstance(result, str):
+        return None
+    lines = [line.strip() for line in result.splitlines() if line.strip()]
+    if not lines or not lines[-1].startswith("Exit code:"):
+        return None
+    raw_value = lines[-1].split(":", 1)[1].strip()
+    try:
+        return int(raw_value)
+    except ValueError:
+        return None
+
+
+def _is_collect_command_timeout_result(result: object) -> bool:
+    return isinstance(result, str) and "Error: Command timed out after " in result
+
+
+async def execute_trace_tool_detailed(
     *,
     agent: ContainerAgent,
     tool_name: str | None,
@@ -543,8 +1063,9 @@ async def execute_trace_tool(
     command_timeout_s: float,
     source_exec_timeout_s: float | None = None,
     allow_source_runtime_artifacts: bool = False,
-) -> tuple[str, bool, float | None]:
-    """Execute one trace tool call via the persistent in-container agent."""
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[str, bool, float | None, dict[str, Any]]:
+    """Execute one trace tool call and return replay metadata."""
 
     resolved_name, params = _unwrap_tool_args(
         tool_name=tool_name,
@@ -556,10 +1077,11 @@ async def execute_trace_tool(
         params,
         command_timeout_s,
         source_exec_timeout_s,
+        source_resource_timeline,
     )
 
     if resolved_name == "message":
-        return "Message replayed as no-op", True, 0.0
+        return "Message replayed as no-op", True, 0.0, {}
 
     artifact_path = source_runtime_artifact_path_from_tool_call(
         tool_name=resolved_name,
@@ -571,23 +1093,57 @@ async def execute_trace_tool(
             f"that is unavailable in a fresh replay container: {artifact_path}",
             False,
             0.0,
+            {},
         )
 
     if request is None:
-        return f"Error: Unsupported replay tool {resolved_name!r}", False, None
+        return f"Error: Unsupported replay tool {resolved_name!r}", False, None, {}
 
     resp = await agent.execute(request, timeout_s=request_timeout_s)
     result = resp.get("result", "")
     ok = resp.get("ok", False)
     inner_duration_ms = resp.get("inner_duration_ms")
+    metadata = _trace_tool_response_metadata(resp)
 
     # Append exit code for exec-style commands
     if request["tool"] in ("exec", "commands"):
         rc = resp.get("returncode")
         if not isinstance(rc, int) or isinstance(rc, bool):
-            result = f"{result}\n\nExit code: <missing>".strip()
-            return result, False, inner_duration_ms
-        result = f"{result}\n\nExit code: {rc}".strip()
+            if _final_exit_code(result) is None:
+                result = f"{result}\n\nExit code: <missing>".strip()
+            return result, False, inner_duration_ms, metadata
+        if (
+            request["tool"] == "exec"
+            and rc == 124
+            and _is_collect_command_timeout_result(result)
+        ):
+            return result, bool(ok), inner_duration_ms, metadata
+        if _final_exit_code(result) != rc:
+            result = f"{result}\n\nExit code: {rc}".strip()
         ok = bool(ok)
 
+    return result, ok, inner_duration_ms, metadata
+
+
+async def execute_trace_tool(
+    *,
+    agent: ContainerAgent,
+    tool_name: str | None,
+    tool_args_json: str,
+    command_timeout_s: float,
+    source_exec_timeout_s: float | None = None,
+    allow_source_runtime_artifacts: bool = False,
+    source_resource_timeline: dict[str, Any] | None = None,
+) -> tuple[str, bool, float | None]:
+    """Execute one trace tool call via the persistent in-container agent."""
+
+    result, ok, inner_duration_ms, _metadata = await execute_trace_tool_detailed(
+        agent=agent,
+        tool_name=tool_name,
+        tool_args_json=tool_args_json,
+        command_timeout_s=command_timeout_s,
+        source_exec_timeout_s=source_exec_timeout_s,
+        allow_source_runtime_artifacts=allow_source_runtime_artifacts,
+        source_resource_timeline=source_resource_timeline,
+    )
     return result, ok, inner_duration_ms
