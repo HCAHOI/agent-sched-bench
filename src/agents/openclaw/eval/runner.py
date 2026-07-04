@@ -58,6 +58,7 @@ class SWEBenchRunner:
         model: str | None = None,
         exec_path_append: str = "",
         generation_config: dict[str, Any] | None = None,
+        container_runtime: dict | None = None,
     ) -> None:
         del generation_config
         self.provider = provider
@@ -69,6 +70,7 @@ class SWEBenchRunner:
         self.max_tool_result_chars = max_tool_result_chars
         self.model = model or provider.get_default_model()
         self.exec_path_append = exec_path_append
+        self.container_runtime = container_runtime
 
         self._session_runner = SessionRunner(
             provider,
@@ -78,6 +80,7 @@ class SWEBenchRunner:
             max_tool_result_chars=self.max_tool_result_chars,
             mcp_servers=self.mcp_servers,
             exec_config=ExecToolConfig(path_append=self.exec_path_append),
+            container_runtime=self.container_runtime,
         )
 
     @staticmethod

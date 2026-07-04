@@ -54,6 +54,7 @@ class SubagentManager:
         restrict_to_workspace: bool = False,
         malformed_retry_budget: int | None = None,
         skills_dir: Path | None = None,
+        container_runtime: dict | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -66,6 +67,7 @@ class SubagentManager:
         self.restrict_to_workspace = restrict_to_workspace
         self.malformed_retry_budget = malformed_retry_budget
         self.skills_dir = skills_dir
+        self.container_runtime = container_runtime
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
@@ -120,16 +122,17 @@ class SubagentManager:
                     workspace=self.workspace,
                     allowed_dir=allowed_dir,
                     extra_allowed_dirs=extra_read,
+                    container_runtime=self.container_runtime,
                 )
             )
             tools.register(
-                WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir)
+                WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir, container_runtime=self.container_runtime)
             )
             tools.register(
-                EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir)
+                EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir, container_runtime=self.container_runtime)
             )
             tools.register(
-                ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir)
+                ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir, container_runtime=self.container_runtime)
             )
             if self.exec_config.enable:
                 tools.register(
@@ -138,6 +141,8 @@ class SubagentManager:
                         timeout=self.exec_config.timeout,
                         restrict_to_workspace=self.restrict_to_workspace,
                         path_append=self.exec_config.path_append,
+                        container_id=self.container_runtime.get("id") if self.container_runtime else None,
+                        container_executable=self.container_runtime.get("executable") if self.container_runtime else None,
                     )
                 )
             tools.register(

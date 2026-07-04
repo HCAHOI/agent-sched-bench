@@ -10,13 +10,12 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from llm_call import UnifiedProvider
-from agents.openclaw.runtime_deps import OPENCLAW_MCP_RUNTIME_REQUIREMENTS
 
 from harness.container_image_prep import (
     drop_cached_fixed_image,
@@ -25,23 +24,16 @@ from harness.container_image_prep import (
     prune_dangling_images,
     remove_image,
 )
+from agents.openclaw._session_runner import SessionRunner
 from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
-    configure_task_container_apt_mirror,
     mcp_config_label,
     next_attempt_number_in,
     run_attempt,
     sanitize_path_segment,
     start_task_container,
     stop_task_container,
-)
-from trace_collect.runtime.task_container import (
-    bootstrap_task_container_python,
-    preflight_task_container_runtime,
-    resolve_task_container_exec_config,
-    resolve_running_container_exec_config,
-    run_task_container_agent,
 )
 
 if TYPE_CHECKING:
@@ -976,165 +968,131 @@ async def _run_openclaw_in_task_container(
     if not fixed_image:
         raise RuntimeError(f"Task {ctx.instance_id!r} has no image_name")
 
-    runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "openclaw"
-    stdout_path = runtime_dir / "stdout.txt"
-    stderr_path = runtime_dir / "stderr.txt"
-    proof = None
-    runtime = None
-    runtime_proof = None
-    exec_config = resolve_task_container_exec_config(
-        attempt_dir=ctx.attempt_dir,
-        image=fixed_image,
-        container_executable=container_executable,
-    )
-    bootstrap_userbase_bin: str | None = None
-    if exec_config.bootstrap_site_dir is not None:
-        userbase_bin = exec_config.bootstrap_site_dir.parent / ".pyuserbase" / "bin"
-        bootstrap_userbase_bin = str(userbase_bin)
+    # Start container — no bootstrap, no preflight.
     container_id = start_task_container(
         fixed_image,
         executable=container_executable,
-        extra_args=list(exec_config.start_extra_args),
-        bootstrap_userbase_bin=bootstrap_userbase_bin,
     )
     ctx.mark_container_ready(container_id)
+
+    # Build the container_runtime dict so host-side tools redirect
+    # file / exec operations into the container via docker exec.
+    container_runtime: dict[str, str] = {
+        "id": container_id,
+        "executable": container_executable,
+    }
+
+    # Host-side LLM provider (container is just the execution sandbox).
+    provider = UnifiedProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+        **(generation_config or {}),
+    )
+
+    # Build the SWE-bench prompt from the task's problem statement.
+    from trace_collect.prompt_loader import load_prompt_template, render_prompt
+
+    prompt_text = render_prompt(
+        load_prompt_template(ctx.prompt_template, benchmark.config.slug),
+        task.get("problem_statement", task.get("hint_text", "")),
+    )
+
+    # Create the session runner with container_runtime so all tools
+    # created inside AgentLoop redirect to the container.
+    mcp_servers = load_mcp_servers(mcp_config)
+    session_runner = SessionRunner(
+        provider,
+        model=model,
+        max_iterations=max_iterations,
+        context_window_tokens=max_context_tokens,
+        mcp_servers=mcp_servers,
+        container_runtime=container_runtime,
+    )
+
+    # Local workspace for session / runtime state; the tool workspace is
+    # /testbed inside the container.
+    runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "openclaw"
+    ws = runtime_dir / "workspace_base" / ctx.instance_id
+    effective_trace_file = ctx.attempt_dir / "trace.jsonl"
+    effective_runtime_dir = effective_trace_file.parent / "openclaw-runtime"
+
+    ctx.agent_start_time = datetime.now(tz=timezone.utc)
+    session_key = f"eval:{ctx.instance_id}"
+    session_result = None
     try:
-        apt_mirror = configure_task_container_apt_mirror(
-            container_id,
-            executable=container_executable,
-        )
-        if apt_mirror is not None:
-            logger.info("task-container apt mirror: %s", apt_mirror["stdout"])
-        exec_config = resolve_running_container_exec_config(
-            container_id=container_id,
-            exec_config=exec_config,
-            container_executable=container_executable,
-        )
-        preflight_imports = [
-            "trace_collect.runtime.entrypoint",
-            "agents.openclaw.eval.runner",
-            "harness.trace_logger",
-        ]
-        bootstrap_requirements: tuple[str, ...] = ()
-        if mcp_config not in {None, "none"}:
-            preflight_imports.append("agents.openclaw.tools.mcp")
-            bootstrap_requirements = OPENCLAW_MCP_RUNTIME_REQUIREMENTS
-        exec_config = bootstrap_task_container_python(
-            container_id=container_id,
-            exec_config=exec_config,
-            extra_requirements=bootstrap_requirements,
-            container_executable=container_executable,
-        )
-        proof = preflight_task_container_runtime(
-            container_id=container_id,
-            attempt_dir=ctx.attempt_dir,
-            imports=preflight_imports,
-            runtime=exec_config.runtime,
-            pythonpath=exec_config.pythonpath,
-            container_executable=container_executable,
-        )
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        exec_path_append = ""
-        if exec_config.bootstrap_site_dir is not None:
-            exec_path_append = ":".join(
-                [
-                    str(exec_config.bootstrap_site_dir.parent / ".pyuserbase" / "bin"),
-                    str(exec_config.bootstrap_site_dir / "bin"),
-                ]
-            )
-        ctx.agent_start_time = datetime.now(tz=timezone.utc)
-        try:
-            runtime = run_task_container_agent(
-                container_id=container_id,
-                timeout=(max_iterations * 120) + 300,
-                runtime=exec_config.runtime,
-                pythonpath=exec_config.pythonpath,
-                request={
-                    "kind": "run_openclaw",
-                    "scaffold": "openclaw",
-                    "result_path": str(runtime_dir / "run.result.json"),
-                    "container_id": container_id,
-                    "benchmark": benchmark.config.slug,
-                    "provider_name": provider_name,
-                    "api_base": api_base,
-                    "api_key": api_key,
-                    "model": model,
-                    "max_iterations": max_iterations,
-                    "generation_config": generation_config or {},
-                    "max_context_tokens": max_context_tokens,
-                    "prompt_template": ctx.prompt_template,
-                    "agent_runtime_mode": ctx.agent_runtime_mode,
-                    "mcp_config": (
-                        str(Path(mcp_config).resolve())
-                        if mcp_config not in {None, "none"}
-                        else mcp_config
-                    ),
-                    "task": task,
-                    "workspace_base": str(runtime_dir / "workspace_base"),
-                    "workspace_dir": str(
-                        runtime_dir / "workspace_base" / ctx.instance_id
-                    ),
-                    "tool_workspace": "/testbed",
-                    "exec_path_append": exec_path_append,
-                    "bootstrap_userbase": (
-                        str(exec_config.bootstrap_site_dir.parent / ".pyuserbase")
-                        if exec_config.bootstrap_site_dir is not None
-                        else None
-                    ),
-                    "exec_working_dir": "/testbed",
-                    "trace_file": str((ctx.attempt_dir / "trace.jsonl").resolve()),
-                    "raw_stdout_path": str(stdout_path),
-                    "raw_stderr_path": str(stderr_path),
-                    "container_executable": container_executable,
-                },
-                container_executable=container_executable,
-            )
-        finally:
-            ctx.agent_end_time = datetime.now(tz=timezone.utc)
-        runtime_proof = {
-            **asdict(proof),
-            **runtime.runtime_proof,
-        }
-        _normalize_openclaw_trace(
-            src=runtime.trace_path,
-            dst=ctx.attempt_dir / "trace.jsonl",
-            benchmark=benchmark,
-            model=model,
-            api_base=api_base,
-            max_iterations=max_iterations,
+        session_result = await session_runner.run(
+            prompt=prompt_text,
+            workspace=ws,
+            tool_workspace=Path("/testbed"),
+            session_key=session_key,
+            trace_file=effective_trace_file,
+            runtime_dir=effective_runtime_dir,
             instance_id=ctx.instance_id,
-            mcp_config_label=mcp_config_label(mcp_config),
-            prompt_template=ctx.prompt_template,
-            agent_runtime_mode=ctx.agent_runtime_mode,
-            runtime_proof=runtime_proof,
-            run_config_overrides=run_config_overrides,
-            generation_config=generation_config,
+            channel="cli",
+            prepare_ms=None,
         )
     finally:
+        ctx.agent_end_time = datetime.now(tz=timezone.utc)
+
+    # Merge benchmark metadata into the trace in-place.
+    _normalize_openclaw_trace(
+        src=effective_trace_file,
+        dst=effective_trace_file,
+        benchmark=benchmark,
+        model=model,
+        api_base=api_base,
+        max_iterations=max_iterations,
+        instance_id=ctx.instance_id,
+        mcp_config_label=mcp_config_label(mcp_config),
+        prompt_template=ctx.prompt_template,
+        agent_runtime_mode=ctx.agent_runtime_mode,
+        runtime_proof={"container_id": container_id},
+        run_config_overrides=run_config_overrides,
+        generation_config=generation_config,
+    )
+
+    # Parse trace summary for aggregate stats.
+    n_iterations = 0
+    total_llm_ms = 0.0
+    total_tool_ms = 0.0
+    total_tokens = 0
+    if effective_trace_file.exists():
+        for line in effective_trace_file.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") == "summary":
+                n_iterations = rec.get("n_iterations", 0) or 0
+                total_llm_ms = float(rec.get("total_llm_ms", 0) or 0)
+                total_tool_ms = float(rec.get("total_tool_ms", 0) or 0)
+                total_tokens = int(rec.get("total_tokens", 0) or 0)
+
+    # Capture and stop the container.
+    try:
         container_logs = stop_task_container(
             container_id,
             executable=container_executable,
         )
-        ctx.container_stdout = "\n".join(
-            part
-            for part in [
-                stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else "",
-                stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else "",
-                container_logs,
-            ]
-            if part
-        )
-    assert runtime is not None
-    assert runtime_proof is not None
+    except RuntimeError as exc:
+        logger.warning("stop_task_container failed: %s", exc)
+        container_logs = ""
+
+    ctx.container_stdout = container_logs
+
+    stop_reason = session_result.stop_reason if session_result is not None else "error"
+
     return AttemptResult(
-        success=runtime.success,
-        exit_status=runtime.exit_status,
-        trace_path=ctx.attempt_dir / "trace.jsonl",
-        model_patch=runtime.model_patch,
-        n_iterations=runtime.n_iterations,
-        total_llm_ms=runtime.total_llm_ms,
-        total_tool_ms=runtime.total_tool_ms,
-        total_tokens=runtime.total_tokens,
-        error=runtime.error,
-        runtime_proof=runtime_proof,
+        success=stop_reason == "completed",
+        exit_status=stop_reason,
+        trace_path=effective_trace_file,
+        model_patch="",
+        error=session_result.error if session_result is not None else None,
+        n_iterations=n_iterations,
+        total_llm_ms=total_llm_ms,
+        total_tool_ms=total_tool_ms,
+        total_tokens=total_tokens,
     )

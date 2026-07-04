@@ -187,6 +187,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
+        container_runtime: dict | None = None,
     ):
         from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -194,6 +195,7 @@ class AgentLoop:
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
+        self.container_runtime = container_runtime
         self.tool_workspace = tool_workspace or workspace
         self.project_workspace = project_workspace or self.tool_workspace
         self.model = model or provider.get_default_model()
@@ -255,6 +257,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
             malformed_retry_budget=self.malformed_retry_budget,
             skills_dir=skills_dir,
+            container_runtime=self.container_runtime,
         )
 
         self._running = False
@@ -291,11 +294,16 @@ class AgentLoop:
                 workspace=self.tool_workspace,
                 allowed_dir=tool_allowed_dir,
                 extra_allowed_dirs=extra_read,
+                container_runtime=self.container_runtime,
             )
         )
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(
-                cls(workspace=self.tool_workspace, allowed_dir=tool_allowed_dir)
+                cls(
+                    workspace=self.tool_workspace,
+                    allowed_dir=tool_allowed_dir,
+                    container_runtime=self.container_runtime,
+                )
             )
         if self.exec_config.enable:
             self.tools.register(
@@ -304,6 +312,8 @@ class AgentLoop:
                     timeout=self.exec_config.timeout,
                     restrict_to_workspace=self.restrict_to_workspace,
                     path_append=self.exec_config.path_append,
+                    container_id=self.container_runtime.get("id") if self.container_runtime else None,
+                    container_executable=self.container_runtime.get("executable") if self.container_runtime else None,
                 )
             )
         self.tools.register(

@@ -1062,6 +1062,7 @@ class SessionRunner:
         extra_hooks: list[AgentHook] | None = None,
         exec_config: ExecToolConfig | None = None,
         malformed_retry_budget: int | None = None,
+        container_runtime: dict | None = None,
     ) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
@@ -1072,6 +1073,7 @@ class SessionRunner:
         self.extra_hooks = extra_hooks or []
         self.exec_config = exec_config or ExecToolConfig()
         self.malformed_retry_budget = malformed_retry_budget
+        self.container_runtime = container_runtime
 
     @staticmethod
     def _scaffold_tools() -> list[str]:
@@ -1182,6 +1184,7 @@ class SessionRunner:
             tool_results_dir=effective_tool_results_dir,
             hooks=all_hooks,
             malformed_retry_budget=self.malformed_retry_budget,
+            container_runtime=self.container_runtime,
         )
 
         inject_event_callbacks(agent, trace_hook)
