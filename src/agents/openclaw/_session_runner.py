@@ -34,6 +34,7 @@ from agents.openclaw.eval.types import (
 from llm_call.provider_base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
 from trace_collect.latency_metrics import summarize_llm_latencies
+from agents.openclaw._checkpoint_container import run_container_checkpoint
 
 
 def _trace_has_llm_error(trace_file: Path | None) -> bool:
@@ -297,6 +298,7 @@ class TraceCollectorHook(AgentHook):
         checkpoint_dir: Path | None = None,
         checkpoint_root_label: str = "/testbed",
         checkpoint_rebaseline_bytes: int | None = None,
+        container_runtime: dict[str, str] | None = None,
     ) -> None:
         self.trace_file = trace_file
         self.instance_id = instance_id
@@ -319,6 +321,7 @@ class TraceCollectorHook(AgentHook):
         self._checkpoint_root = Path(checkpoint_root) if checkpoint_root else None
         self._checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self._checkpoint_root_label = checkpoint_root_label
+        self._container_runtime = container_runtime
         self._last_full_checkpoint_ns: int | None = None
         self._last_incremental_checkpoint_ns: int | None = None
         self._checkpoint_snapshot_entries: dict[str, str] | None = None
@@ -339,6 +342,8 @@ class TraceCollectorHook(AgentHook):
             return None
         if _single_exec_command_args(tool_name, tool_args_json) is None:
             return None
+        if self._container_runtime is not None:
+            return self._checkpoint_container_after_tool(tool_call_id=tool_call_id)
         started = time.monotonic()
         root = self._checkpoint_root.resolve()
         if not root.is_dir():
@@ -468,6 +473,67 @@ class TraceCollectorHook(AgentHook):
             "rebaseline": force_full or None,
             "chain_bytes": chain_bytes,
         }
+
+    def _checkpoint_container_after_tool(
+        self,
+        *,
+        tool_call_id: str,
+    ) -> dict[str, Any] | None:
+        assert self._container_runtime is not None
+        started = time.monotonic()
+
+        is_first = self._last_full_checkpoint_ns is None
+        force_full = (
+            not is_first
+            and self._rebaseline_bytes is not None
+            and self._checkpoint_chain_bytes_since_full >= self._rebaseline_bytes
+        )
+        incremental_since = (
+            None if is_first or force_full else self._last_incremental_checkpoint_ns
+        )
+
+        manifest_path = (
+            self._checkpoint_dir
+            / f"{_sanitize_checkpoint_name(tool_call_id)}-manifest.json"
+        )
+        assert self._checkpoint_dir is not None
+
+        result = run_container_checkpoint(
+            container_runtime=self._container_runtime,
+            manifest_path=manifest_path,
+            incremental_since_ns=incremental_since,
+            prev_snapshot_entries=self._checkpoint_snapshot_entries,
+            force_full=force_full,
+        )
+
+        if "error" in result:
+            if result.get("overhead_excluded") is None:
+                result["overhead_excluded"] = True
+            if "elapsed_ms" not in result:
+                result["elapsed_ms"] = round((time.monotonic() - started) * 1000, 3)
+            return result
+
+        if "skipped" in result:
+            result.pop("_state", None)
+            return result
+
+        state = result.pop("_state", {})
+        now_ns: int | None = state.get("now_ns")
+        chain_bytes: int = state.get("chain_bytes", 0)
+        is_full_state: bool = state.get("is_full", is_first or force_full)
+        current_snapshot: dict[str, str] = state.get("current_snapshot", {})
+
+        result["path"] = _relative_to_or_absolute(manifest_path, self.trace_file.parent)
+
+        if is_full_state:
+            self._last_full_checkpoint_ns = now_ns
+            self._checkpoint_chain_bytes_since_full = 0
+        else:
+            self._checkpoint_chain_bytes_since_full += chain_bytes
+        self._last_incremental_checkpoint_ns = now_ns
+        self._checkpoint_snapshot_entries = current_snapshot
+
+        return result
 
     def close(self) -> None:
         if self._flushed:
@@ -1122,12 +1188,8 @@ class SessionRunner:
         iid = instance_id or session_key
 
         checkpoint_root: Path | None
-        checkpoint_disabled_reason: str | None = None
         if self.container_runtime is not None:
-            checkpoint_root = None
-            checkpoint_disabled_reason = (
-                "host-mode container tools; container-side checkpoint pending (Step 3)"
-            )
+            checkpoint_root = Path("/testbed")
         elif effective_tool_workspace.resolve() == Path("/testbed"):
             checkpoint_root = effective_tool_workspace
         else:
@@ -1141,6 +1203,7 @@ class SessionRunner:
             checkpoint_dir=effective_runtime_dir / "checkpoints"
             if checkpoint_root is not None
             else None,
+            container_runtime=self.container_runtime,
         )
 
         metadata: dict[str, Any] = {
@@ -1164,8 +1227,6 @@ class SessionRunner:
                 "file_ops": "structured",
             },
         }
-        if checkpoint_disabled_reason is not None:
-            metadata["checkpoint_disabled_reason"] = checkpoint_disabled_reason
         trace_hook.add_record(metadata)
 
         bus = MessageBus()

@@ -9,7 +9,7 @@ import textwrap
 from typing import Any
 
 from trace_collect.resource_timeline import valid_resource_timeline
-from trace_collect.runtime.task_container import _CONTAINER_PYTHON_CANDIDATES
+from agents.openclaw._checkpoint_container import _CONTAINER_PYTHON_CANDIDATES
 
 logger = logging.getLogger(__name__)
 

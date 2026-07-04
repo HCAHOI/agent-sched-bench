@@ -39,16 +39,7 @@ _ARCH_ALIASES = {
     "arm64": "arm64",
     "aarch64": "arm64",
 }
-_CONTAINER_PYTHON_CANDIDATES = (
-    "/usr/bin/python3",
-    "/usr/bin/python",
-    "/opt/miniconda3/bin/python3",
-    "/opt/miniconda3/bin/python",
-    "/opt/conda/bin/python3",
-    "/opt/conda/bin/python",
-    "python3",
-    "python",
-)
+from agents.openclaw._checkpoint_container import _CONTAINER_PYTHON_CANDIDATES  # noqa: F401 - re-export
 _BOOTSTRAP_PIP_RESOLUTION_ENV_KEYS = (
     "TASK_CONTAINER_PIP_EXTRA_INDEX_URL",
     "TASK_CONTAINER_PIP_TRUSTED_HOST",

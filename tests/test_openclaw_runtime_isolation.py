@@ -489,7 +489,7 @@ def test_trace_metadata_records_runtime_dirs(tmp_path: Path) -> None:
     assert first["tool_results_dir"] == str(runtime_dir / "tool-results")
 
 
-def test_checkpoint_disabled_when_container_runtime_present(
+def test_checkpoint_enabled_when_container_runtime_present(
     tmp_path: Path,
 ) -> None:
     trace_file = tmp_path / "trace.jsonl"
@@ -514,9 +514,7 @@ def test_checkpoint_disabled_when_container_runtime_present(
 
     metadata = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
     assert metadata["type"] == "trace_metadata"
-    assert metadata["checkpoint_disabled_reason"] == (
-        "host-mode container tools; container-side checkpoint pending (Step 3)"
-    )
+    assert "checkpoint_disabled_reason" not in metadata
 
 
 def test_checkpoint_enabled_when_tool_workspace_is_testbed_no_container(
