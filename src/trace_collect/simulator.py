@@ -926,23 +926,48 @@ print(json.dumps(entries))
 
 
 def _load_source_manifest_entries(manifest_path: str) -> dict[str, str] | None:
-    """Load source checkpoint manifest, return {relpath: sha256hex} or None."""
+    """Load source checkpoint entries, return {relpath: sha256hex} or None.
+
+    Handles both CAS manifest (JSON with ``entries`` dict) and
+    ``filesystem_tar`` checkpoints. For tars, extracts files and hashes them.
+    """
     mpath = Path(manifest_path)
     if not mpath.is_file():
         return None
+
+    # CAS manifest (JSON)
+    if mpath.suffix == ".json":
+        try:
+            data = json.loads(mpath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug("Failed to load source manifest %s: %s", manifest_path, exc)
+            return None
+        entries = data.get("entries", {})
+        if not isinstance(entries, dict):
+            return None
+        return {
+            rel: entry["hash"]
+            for rel, entry in entries.items()
+            if isinstance(entry, dict) and "hash" in entry
+        }
+
+    # filesystem_tar — read archive, hash files
+    import tarfile as _tarfile_mod
     try:
-        data = json.loads(mpath.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.debug("Failed to load source manifest %s: %s", manifest_path, exc)
+        entries: dict[str, str] = {}
+        with _tarfile_mod.open(str(mpath), "r:*") as tf:
+            for member in tf:
+                if not member.isfile():
+                    continue
+                f = tf.extractfile(member)
+                if f is None:
+                    continue
+                digest = hashlib.sha256(f.read()).hexdigest()
+                entries[member.name] = digest
+        return entries
+    except Exception as exc:
+        logger.debug("Failed to read tar checkpoint %s: %s", manifest_path, exc)
         return None
-    entries = data.get("entries", {})
-    if not isinstance(entries, dict):
-        return None
-    return {
-        rel: entry["hash"]
-        for rel, entry in entries.items()
-        if isinstance(entry, dict) and "hash" in entry
-    }
 
 
 def _checkpoint_restore_base_fields(
