@@ -1121,11 +1121,17 @@ class SessionRunner:
         effective_project_workspace = project_workspace or effective_tool_workspace
         iid = instance_id or session_key
 
-        checkpoint_root = (
-            effective_tool_workspace
-            if effective_tool_workspace.resolve() == Path("/testbed")
-            else None
-        )
+        checkpoint_root: Path | None
+        checkpoint_disabled_reason: str | None = None
+        if self.container_runtime is not None:
+            checkpoint_root = None
+            checkpoint_disabled_reason = (
+                "host-mode container tools; container-side checkpoint pending (Step 3)"
+            )
+        elif effective_tool_workspace.resolve() == Path("/testbed"):
+            checkpoint_root = effective_tool_workspace
+        else:
+            checkpoint_root = None
         trace_hook = TraceCollectorHook(
             trace_file,
             iid,
@@ -1137,7 +1143,7 @@ class SessionRunner:
             else None,
         )
 
-        metadata = {
+        metadata: dict[str, Any] = {
             "type": "trace_metadata",
             "scaffold": "openclaw",
             "trace_format_version": 5,
@@ -1158,6 +1164,8 @@ class SessionRunner:
                 "file_ops": "structured",
             },
         }
+        if checkpoint_disabled_reason is not None:
+            metadata["checkpoint_disabled_reason"] = checkpoint_disabled_reason
         trace_hook.add_record(metadata)
 
         bus = MessageBus()

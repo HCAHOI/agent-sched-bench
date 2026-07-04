@@ -68,7 +68,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -100,7 +100,7 @@ def test_run_scaffold_tasks_uses_benchmark_prompt_default_and_runtime_mode(
 
     assert seen == {
         "prompt_template": "cc_aligned",
-        "agent_runtime_mode": "task_container_agent",
+        "agent_runtime_mode": "host_agent_docker_tools",
     }
 
 
@@ -237,7 +237,7 @@ def test_run_scaffold_tasks_allocates_next_attempt_dir(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -312,7 +312,7 @@ def test_run_scaffold_tasks_uses_max_sparse_attempt_dir(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -366,7 +366,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 
@@ -398,7 +398,7 @@ def test_run_scaffold_tasks_prompt_override_stays_independent_of_runtime_mode(
 
     assert seen == {
         "prompt_template": "default",
-        "agent_runtime_mode": "task_container_agent",
+        "agent_runtime_mode": "host_agent_docker_tools",
     }
 
 
@@ -718,7 +718,7 @@ def test_run_scaffold_tasks_prefetches_next_image_and_cleans_after_run(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
@@ -827,7 +827,7 @@ def test_run_scaffold_tasks_does_not_clean_images_by_default(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
@@ -907,7 +907,7 @@ def test_run_scaffold_tasks_reuses_source_image_for_consecutive_tasks(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
     events: list[tuple[str, str]] = []
@@ -1005,7 +1005,7 @@ def test_run_scaffold_tasks_propagates_container_executable(
             trace_root=tmp_path / "traces",
             default_prompt_template="cc_aligned",
         ),
-        runtime_mode_for=lambda scaffold: "task_container_agent",
+        runtime_mode_for=lambda scaffold: "host_agent_docker_tools",
         image_name_for=lambda task: task.get("image_name"),
     )
 

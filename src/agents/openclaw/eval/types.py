@@ -16,6 +16,7 @@ def git_diff_excluding(
     add_excludes: bool = False,
     add_timeout: float = 30.0,
     diff_timeout: float = 30.0,
+    run: Any = None,
 ) -> subprocess.CompletedProcess:
     """Stage all changes and diff against *base_commit*, excluding runtime files.
 
@@ -23,12 +24,16 @@ def git_diff_excluding(
     success/empty handling. *exclude_pathspecs* are fully-formed git pathspec
     magic strings (see ``EvalResult.exclude_pathspecs``); they are appended
     verbatim to both ``git add -A`` (when *add_excludes*) and ``git diff``.
+
+    *run* replaces ``subprocess.run`` for command execution; when provided it
+    must accept ``(argv, **kwargs)`` with the same kwargs as ``subprocess.run``.
     """
+    _run = run or subprocess.run
     add_cmd = ["git", "add", "-A"]
     if add_excludes:
         add_cmd += ["--", ".", *exclude_pathspecs]
     try:
-        subprocess.run(
+        _run(
             add_cmd, cwd=cwd, capture_output=True, text=True, timeout=add_timeout,
             check=False,
         )
@@ -43,7 +48,7 @@ def git_diff_excluding(
         )
     diff_cmd = ["git", "diff", base_commit or "HEAD", "--", ".", *exclude_pathspecs]
     try:
-        return subprocess.run(
+        return _run(
             diff_cmd, cwd=cwd, capture_output=True, text=True, timeout=diff_timeout,
             check=False,
         )

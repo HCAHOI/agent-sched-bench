@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -703,14 +704,14 @@ async def collect_traces(
         )
 
     runtime_mode = benchmark.runtime_mode_for(scaffold)
-    if runtime_mode not in {"host_controller", "task_container_agent"}:
+    if runtime_mode not in {"host_controller", "host_agent_docker_tools"}:
         raise NotImplementedError(
             f"Unsupported benchmark.runtime_mode_for({scaffold!r}): {runtime_mode!r}"
         )
     if concurrency < 1:
         raise ValueError(f"concurrency must be >= 1, got {concurrency}")
     if (
-        execution_environment == "container" or runtime_mode == "task_container_agent"
+        execution_environment == "container" or runtime_mode == "host_agent_docker_tools"
     ) and container_executable is None:
         raise ValueError("--container required for container-mode benchmarks")
 
@@ -755,7 +756,7 @@ async def collect_traces(
 
     def make_inner(task: dict[str, Any]):
         async def inner(ctx: AttemptContext) -> AttemptResult:
-            if ctx.agent_runtime_mode == "task_container_agent":
+            if ctx.agent_runtime_mode == "host_agent_docker_tools":
                 if scaffold != "openclaw":
                     raise NotImplementedError(
                         "task-container collection currently supports "
@@ -1030,7 +1031,7 @@ async def _run_openclaw_in_task_container(
         session_result = await session_runner.run(
             prompt=prompt_text,
             workspace=ws,
-            tool_workspace=ws / "tool_workspace",
+            tool_workspace=Path("/testbed"),
             session_key=session_key,
             trace_file=effective_trace_file,
             runtime_dir=effective_runtime_dir,
@@ -1071,21 +1072,27 @@ async def _run_openclaw_in_task_container(
                     total_tool_ms = float(rec.get("total_tool_ms", 0) or 0)
                     total_tokens = int(rec.get("total_tokens", 0) or 0)
 
-        # Extract the patch from inside the container.
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                container_executable, "exec", "-i", container_id,
-                "git", "-C", "/testbed", "diff",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+        # Extract the patch from inside the container via shared extraction.
+        from agents.openclaw.eval.runner import SWEBenchRunner
+
+        def _docker_exec_run(argv: list[str], **kwargs: Any) -> "subprocess.CompletedProcess[bytes]":
+            # Supports only the kwargs the extraction flow uses:
+            # capture_output/text/timeout. cwd is replaced by -w /testbed,
+            # check is always False.
+            return subprocess.run(
+                [container_executable, "exec", "-w", "/testbed", container_id, *argv],
+                capture_output=kwargs.get("capture_output", False),
+                text=kwargs.get("text", False),
+                timeout=kwargs.get("timeout", None),
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            if proc.returncode == 0:
-                model_patch = stdout.decode("utf-8", errors="replace").strip()
-            else:
-                logger.warning("git diff failed in container: %s", stderr.decode()[:200])
-        except Exception as exc:
-            logger.warning("Failed to extract patch from container: %s", exc)
+
+        raw_patch: str | None = await asyncio.to_thread(
+            SWEBenchRunner._extract_container_patch,
+            "/testbed",
+            base_commit=task.get("base_commit"),
+            run=_docker_exec_run,
+        )
+        model_patch = raw_patch or ""
     finally:
         ctx.agent_end_time = datetime.now(tz=timezone.utc)
         try:
@@ -1102,7 +1109,7 @@ async def _run_openclaw_in_task_container(
     stop_reason = session_result.stop_reason if session_result is not None else "error"
 
     return AttemptResult(
-        success=stop_reason == "completed",
+        success=stop_reason == "completed" and bool(model_patch),
         exit_status=stop_reason,
         trace_path=effective_trace_file,
         model_patch=model_patch,

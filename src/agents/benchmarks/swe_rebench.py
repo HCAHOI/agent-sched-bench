@@ -118,4 +118,4 @@ class SWERebenchBenchmark(Benchmark):
             raise NotImplementedError(
                 f"SWE-rebench does not support scaffold={scaffold!r}"
             )
-        return "task_container_agent"
+        return "host_agent_docker_tools"

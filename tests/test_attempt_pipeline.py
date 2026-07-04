@@ -74,7 +74,7 @@ def _write_trace(path: Path) -> None:
 
 def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)
-    ctx.agent_runtime_mode = "task_container_agent"
+    ctx.agent_runtime_mode = "host_agent_docker_tools"
     trace_source = tmp_path / "scratch" / "trace.jsonl"
     _write_trace(trace_source)
 
@@ -161,8 +161,8 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     )
     assert manifest["scaffold"] == "openclaw"
     assert manifest["prompt_template"] == "default"
-    assert manifest["agent_runtime_mode"] == "task_container_agent"
-    assert manifest["runtime"]["agent_runtime_mode"] == "task_container_agent"
+    assert manifest["agent_runtime_mode"] == "host_agent_docker_tools"
+    assert manifest["runtime"]["agent_runtime_mode"] == "host_agent_docker_tools"
     assert (
         manifest["runtime"]["runtime_proof"]["container_id"] == "fake_container_id_xyz"
     )
@@ -178,7 +178,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert results["instance_id"] == "mozilla__bleach-259"
     assert results["success"] is True
     assert results["model"] == "qwen-plus-latest"
-    assert results["agent_runtime_mode"] == "task_container_agent"
+    assert results["agent_runtime_mode"] == "host_agent_docker_tools"
     assert results["runtime_proof"]["python_executable"] == "/usr/bin/python3"
     assert results["timing"]["wall_total_s"] >= 0.0
     assert results["timing"]["setup_s"] >= 0.0

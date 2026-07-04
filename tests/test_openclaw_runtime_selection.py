@@ -30,10 +30,10 @@ def _make_verified_config() -> BenchmarkConfig:
     )
 
 
-def test_swe_bench_verified_openclaw_uses_task_container_agent() -> None:
+def test_swe_bench_verified_openclaw_uses_host_agent_docker_tools() -> None:
     plugin = get_benchmark_class("swe-bench-verified")(_make_verified_config())
 
-    assert plugin.runtime_mode_for("openclaw") == "task_container_agent"
+    assert plugin.runtime_mode_for("openclaw") == "host_agent_docker_tools"
 
 
 def test_swe_bench_verified_rejects_unsupported_scaffold() -> None:

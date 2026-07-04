@@ -131,7 +131,7 @@ class SWEBenchVerified(Benchmark):
 
     def runtime_mode_for(self, scaffold: str) -> str:
         if scaffold == "openclaw":
-            return "task_container_agent"
+            return "host_agent_docker_tools"
         raise NotImplementedError(
             f"SWE-bench Verified does not support scaffold={scaffold!r}"
         )

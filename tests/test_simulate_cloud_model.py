@@ -4773,6 +4773,20 @@ def test_execution_environment_infers_host_from_agent_runtime_mode() -> None:
     )
     assert _execution_environment(explicit_container) == "container"
 
+    # host_agent_docker_tools traces: agent on host, tools via docker exec → container replay
+    host_agent_docker = SimpleNamespace(
+        metadata={"agent_runtime_mode": "host_agent_docker_tools"},
+        source_trace="/tmp/host_agent_docker.jsonl",
+    )
+    assert _execution_environment(host_agent_docker) == "container"
+
+    # Old task_container_agent traces (agent was in-container): same container replay
+    old_task_container = SimpleNamespace(
+        metadata={"agent_runtime_mode": "task_container_agent"},
+        source_trace="/tmp/task_container.jsonl",
+    )
+    assert _execution_environment(old_task_container) == "container"
+
 
 def test_tongyi_deepresearch_fixture_is_valid_v5() -> None:
     """Sanity: the shipped fixture file parses as valid v5 JSONL with the

@@ -84,7 +84,18 @@ class SWEBenchRunner:
         )
 
     @staticmethod
-    def _read_submitted_patch(diff_cwd: str) -> str:
+    def _read_submitted_patch(diff_cwd: str, *, run: Any = None) -> str:
+        if run is not None:
+            try:
+                proc = run(
+                    ["cat", f"{diff_cwd}/patch.txt"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                content = proc.stdout if proc.returncode == 0 else ""
+            except (OSError, subprocess.SubprocessError):
+                content = ""
+            return content.strip() if content.lstrip().startswith("diff --git") else ""
+
         patch_path = Path(diff_cwd) / "patch.txt"
         if not patch_path.exists():
             return ""
@@ -96,12 +107,16 @@ class SWEBenchRunner:
         diff_cwd: str,
         *,
         base_commit: str | None,
+        run: Any = None,
     ) -> str | None:
-        submitted_patch = SWEBenchRunner._read_submitted_patch(diff_cwd)
+        _run = run or subprocess.run
+        # Pass the original run (not _run): with run=None the local
+        # Path.read_text path must stay byte-identical.
+        submitted_patch = SWEBenchRunner._read_submitted_patch(diff_cwd, run=run)
         if submitted_patch:
             return submitted_patch
 
-        subprocess.run(
+        _run(
             ["git", "config", "--add", "safe.directory", diff_cwd],
             cwd=diff_cwd,
             capture_output=True,
@@ -122,6 +137,7 @@ class SWEBenchRunner:
             # slow-but-completing diff is not turned into a hard task failure.
             add_timeout=180,
             diff_timeout=180,
+            run=_run,
         )
         if diff_result.returncode == 0:
             return diff_result.stdout.strip() or None

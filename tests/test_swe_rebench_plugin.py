@@ -148,7 +148,7 @@ def test_swe_rebench_config_default_prompt_is_cc_aligned() -> None:
 
 def test_swe_rebench_runtime_mode_for_openclaw_only() -> None:
     plugin = SWERebenchBenchmark(_make_config())
-    assert plugin.runtime_mode_for("openclaw") == "task_container_agent"
+    assert plugin.runtime_mode_for("openclaw") == "host_agent_docker_tools"
     with pytest.raises(NotImplementedError):
         plugin.runtime_mode_for("unsupported")
 

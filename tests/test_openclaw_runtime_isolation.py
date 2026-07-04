@@ -487,3 +487,62 @@ def test_trace_metadata_records_runtime_dirs(tmp_path: Path) -> None:
     assert first["memory_dir"] == str(runtime_dir / "memory")
     assert first["skills_dir"] == str(runtime_dir / "skills")
     assert first["tool_results_dir"] == str(runtime_dir / "tool-results")
+
+
+def test_checkpoint_disabled_when_container_runtime_present(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    runtime_dir = tmp_path / "rt"
+
+    runner = SessionRunner(
+        provider=_ImmediateFinalProvider(),
+        model="fake-model",
+        max_iterations=1,
+        context_window_tokens=4096,
+        container_runtime={"id": "cid-1", "executable": "docker"},
+    )
+    result = asyncio.run(
+        runner.run(
+            prompt="done",
+            workspace=tmp_path / "ws",
+            session_key="cli:chk-test",
+            trace_file=trace_file,
+            runtime_dir=runtime_dir,
+        )
+    )
+
+    metadata = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
+    assert metadata["type"] == "trace_metadata"
+    assert metadata["checkpoint_disabled_reason"] == (
+        "host-mode container tools; container-side checkpoint pending (Step 3)"
+    )
+
+
+def test_checkpoint_enabled_when_tool_workspace_is_testbed_no_container(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    runtime_dir = tmp_path / "rt"
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+
+    runner = SessionRunner(
+        provider=_ImmediateFinalProvider(),
+        model="fake-model",
+        max_iterations=1,
+        context_window_tokens=4096,
+    )
+    result = asyncio.run(
+        runner.run(
+            prompt="done",
+            workspace=ws,
+            tool_workspace=Path("/testbed"),
+            session_key="cli:chk-testbed",
+            trace_file=trace_file,
+            runtime_dir=runtime_dir,
+        )
+    )
+
+    metadata = json.loads(trace_file.read_text(encoding="utf-8").splitlines()[0])
+    assert "checkpoint_disabled_reason" not in metadata
