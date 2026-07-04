@@ -2810,7 +2810,7 @@ def test_cloud_model_prefetches_images_before_container_prepare(
     assert all(event[0] == "prepare" for event in events[1:])
     assert len(fixed_images) == 1
     assert fixed_images[0].startswith(
-        "swebench-fixed-docker.io_shared_image_latest:simulate-sweep-"
+        "swebench-fixed-root-docker.io_shared_image_latest:simulate-sweep-"
     )
     assert [event for event in events if event[0] == "prepare"] == [
         ("prepare", fixed_images[0]),
@@ -3194,7 +3194,7 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     assert startup["agent_id"] == "task-a"
     assert startup["source_image"] == "docker.io/swebench-test/task-a"
     assert startup["fixed_image"].startswith(
-        "swebench-fixed-docker.io_swebench-test_task-a:simulate-sweep-"
+        "swebench-fixed-root-docker.io_swebench-test_task-a:simulate-sweep-"
     )
     assert startup["container_id"] == "fake-cid"
     assert [phase["name"] for phase in startup["phases"]] == [

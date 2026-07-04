@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from harness.container_image_prep import ensure_fixed_image
-from harness.container_runtime import container_run_user_args
 from harness.container_stats_sampler import (
     ContainerStatsSampler,
     summarize_samples,
@@ -64,6 +63,8 @@ _TASK_CONTAINER_ENV_PASSTHROUGH = (
     "NANOBOT_STREAM_IDLE_TIMEOUT_S",
     "OPENCLAW_LLM_TIMEOUT_S",
 )
+
+_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT = Path.home() / ".cache" / "task-container-bootstrap"
 
 
 def _is_missing_container_inspect_error(
@@ -224,12 +225,13 @@ def start_task_container(
     executable: str,
     extra_args: list[str] | None = None,
     network_mode: str = "host",
-    run_as_host_user: bool = True,
-    mount_host_home: bool = True,
-    container_home: str | None = None,
     bootstrap_userbase_bin: str | None = None,
 ) -> str:
     """Launch the task container and return its id.
+
+    Task containers run as container root. SWE-style benchmark images assume
+    root privileges for package installation and repository setup, and mapping
+    the host UID/GID can strand the agent without sudo access.
 
     The container PATH is intentionally restricted to container-only
     directories (``/usr/local/bin:/usr/bin:/bin``).  Host ``~/.local/bin``
@@ -241,12 +243,13 @@ def start_task_container(
     pip installed by ``bootstrap_task_container_python`` (and any other
     userbase tools) are resolvable inside the container.
     """
-    home_dir = container_home or os.environ.get("HOME", "/root")
+    _validate_task_container_extra_args(extra_args)
     container_path = "/usr/local/bin:/usr/bin:/bin"
     bootstrap_userbase: str | None = None
     if bootstrap_userbase_bin:
         container_path = f"{bootstrap_userbase_bin}:{container_path}"
         bootstrap_userbase = str(Path(bootstrap_userbase_bin).parent)
+        _validate_task_container_bootstrap_userbase(bootstrap_userbase_bin)
     cmd = [
         executable,
         "run",
@@ -256,19 +259,22 @@ def start_task_container(
         "-w",
         "/testbed",
     ]
-    if mount_host_home:
-        cmd.extend(
-            [
-                "-v",
-                f"{home_dir}:{home_dir}",
-            ]
-        )
+    _TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    cmd.extend(
+        [
+            "-v",
+            f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}:"
+            f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}",
+        ]
+    )
     cmd.extend(
         [
             "-e",
-            f"HOME={home_dir}",
+            "HOME=/root",
             "-e",
             f"PATH={container_path}",
+            "--user",
+            "0:0",
         ]
     )
     if bootstrap_userbase is not None:
@@ -284,8 +290,6 @@ def start_task_container(
         value = os.environ.get(env_name)
         if value:
             cmd.extend(["-e", f"{env_name}={value}"])
-    if run_as_host_user:
-        cmd.extend(container_run_user_args(executable))
     if extra_args:
         cmd.extend(extra_args)
     cmd.extend([fixed_image, "sleep", "infinity"])
@@ -296,6 +300,35 @@ def start_task_container(
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
     return result.stdout.strip()
+
+
+def _validate_task_container_bootstrap_userbase(bootstrap_userbase_bin: str) -> None:
+    """Validate that userbase binaries are inside the shared bootstrap cache."""
+    path = Path(bootstrap_userbase_bin).expanduser().resolve()
+    cache_root = _TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.expanduser().resolve()
+    if path == cache_root or path.is_relative_to(cache_root):
+        return
+    raise ValueError(
+        f"bootstrap_userbase_bin must be inside {cache_root}"
+    )
+
+
+def _validate_task_container_extra_args(extra_args: list[str] | None) -> None:
+    """Reject task-container args that can change the enforced root user."""
+    if not extra_args:
+        return
+    forbidden = {"--user", "-u", "--userns"}
+    for arg in extra_args:
+        if (
+            arg in forbidden
+            or arg.startswith("--user=")
+            or arg.startswith("--userns=")
+            or arg.startswith("-u=")
+            or (arg.startswith("-u") and len(arg) > 2)
+        ):
+            raise ValueError(
+                "task container extra_args must not override container user"
+            )
 
 
 def _validate_apt_mirror_url(value: str, *, env_name: str) -> str:

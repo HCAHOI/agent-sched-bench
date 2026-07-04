@@ -98,6 +98,18 @@ Rows without `instance_id` are rejected.
 
 ### Task-container environment
 
+Task containers are launched as container root (`--user 0:0`) with `HOME=/root`.
+They do not mount the host home directory. This matches SWE-style benchmark
+images where repository setup and package installation may require root inside
+the container, while avoiding root-owned files in the operator's host home.
+The writable derivative image also keeps `/testbed` owned by container root;
+root-owned derivative tags use the `swebench-fixed-root-...` prefix so stale
+host-owned derivatives are not reused.
+Only the shared bootstrap cache root (`~/.cache/task-container-bootstrap`) is
+bind-mounted at the same path so cold and cached task-container Python bootstrap
+can resolve userbase binaries and packages; the rest of the host home is still
+not mounted.
+
 Task-container Python runtime dependencies are bootstrapped into immutable shared cache generations under `~/.cache/task-container-bootstrap/<platform>/<config-hash>/`. A file lock serializes writes, and each cache marker records requirements, Python runtime, pip index, pip-resolution env fingerprint, architecture, image platform, Python ABI/OS/libc fingerprint, and installed package/version manifests. Stale or contaminated generations are not reused, and active generations are not deleted while another attempt may still be reading them.
 
 Bootstrap and apt/pip behavior inside task containers can be tuned with:

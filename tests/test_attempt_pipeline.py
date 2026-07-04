@@ -604,16 +604,11 @@ def test_run_attempt_passes_container_executable_to_fixed_image(
 
 
 @pytest.mark.parametrize(
-    ("container_executable", "expected_user_args"),
-    [
-        ("docker", ["--user", f"{os.getuid()}:{os.getgid()}"]),
-        ("podman", ["--userns=keep-id"]),
-    ],
+    "container_executable",
+    ["docker", "podman"],
 )
-def test_start_task_container_uses_runtime_specific_user_args(
-    tmp_path: Path,
+def test_start_task_container_runs_as_root_without_host_home(
     container_executable: str,
-    expected_user_args: list[str],
 ) -> None:
     seen: dict[str, object] = {}
 
@@ -630,15 +625,18 @@ def test_start_task_container_uses_runtime_specific_user_args(
     assert container_id == "cid-1"
     assert seen["cmd"][:3] == [container_executable, "run", "-d"]
     assert "-e" in seen["cmd"]
-    assert f"HOME={os.environ.get('HOME', '/root')}" in seen["cmd"]
-    for arg in expected_user_args:
-        assert arg in seen["cmd"]
-    if container_executable == "docker":
-        assert "--userns=keep-id" not in seen["cmd"]
+    assert "HOME=/root" in seen["cmd"]
+    assert seen["cmd"].count("--user") == 1
+    user_index = seen["cmd"].index("--user")
+    assert seen["cmd"][user_index + 1] == "0:0"
+    assert "--userns=keep-id" not in seen["cmd"]
+    bootstrap_root = Path.home() / ".cache" / "task-container-bootstrap"
+    assert f"{bootstrap_root}:{bootstrap_root}" in seen["cmd"]
+    assert f"{Path.home()}:{Path.home()}" not in seen["cmd"]
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
-def test_start_task_container_can_use_image_default_user_without_host_home_mount(
+def test_start_task_container_restricts_home_and_path(
     container_executable: str,
 ) -> None:
     seen: dict[str, object] = {}
@@ -651,20 +649,44 @@ def test_start_task_container_can_use_image_default_user_without_host_home_mount
         container_id = start_task_container(
             "docker.io/swerebench/example:latest",
             executable=container_executable,
-            run_as_host_user=False,
-            mount_host_home=False,
-            container_home="/root",
         )
 
     cmd = seen["cmd"]
     assert container_id == "cid-1"
-    assert "--user" not in cmd
+    assert "--user" in cmd
+    user_index = cmd.index("--user")
+    assert cmd[user_index + 1] == "0:0"
     assert "--userns=keep-id" not in cmd
-    assert "-v" not in cmd
+    bootstrap_root = Path.home() / ".cache" / "task-container-bootstrap"
+    assert f"{bootstrap_root}:{bootstrap_root}" in cmd
+    assert f"{Path.home()}:{Path.home()}" not in cmd
     assert "HOME=/root" in cmd
     # Host ~/.local/bin must NOT leak into the container PATH.
     assert "PATH=/usr/local/bin:/usr/bin:/bin" in cmd
     assert all("/.local/bin" not in str(part) for part in cmd)
+
+
+@pytest.mark.parametrize(
+    "forbidden_args",
+    [
+        ["--user", "1000:1000"],
+        ["-u", "1000:1000"],
+        ["-u1000:1000"],
+        ["-u=1000:1000"],
+        ["--user=1000:1000"],
+        ["--userns", "keep-id"],
+        ["--userns=keep-id"],
+    ],
+)
+def test_start_task_container_rejects_extra_args_that_override_user(
+    forbidden_args: list[str],
+) -> None:
+    with pytest.raises(ValueError, match="must not override container user"):
+        start_task_container(
+            "docker.io/swerebench/example:latest",
+            executable="docker",
+            extra_args=forbidden_args,
+        )
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
@@ -678,26 +700,56 @@ def test_start_task_container_prepends_bootstrap_userbase_bin(
         return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
 
     with patch("subprocess.run", side_effect=fake_run):
+        bootstrap_root = Path.home() / ".cache" / "task-container-bootstrap"
+        bootstrap_bin = (
+            bootstrap_root
+            / "linux-amd64"
+            / "cache-key"
+            / "generation"
+            / ".pyuserbase"
+            / "bin"
+        )
         start_task_container(
             "img:latest",
             executable=container_executable,
-            run_as_host_user=False,
-            mount_host_home=False,
-            container_home="/root",
-            bootstrap_userbase_bin="/testbed/_task_container_runtime/bootstrap/.pyuserbase/bin",
+            bootstrap_userbase_bin=str(bootstrap_bin),
         )
 
     cmd = seen["cmd"]
     assert (
-        "PATH=/testbed/_task_container_runtime/bootstrap/.pyuserbase/bin:"
+        f"PATH={bootstrap_bin}:"
         "/usr/local/bin:/usr/bin:/bin"
     ) in cmd
     assert (
-        "PYTHONUSERBASE=/testbed/_task_container_runtime/bootstrap/.pyuserbase" in cmd
+        f"PYTHONUSERBASE={bootstrap_bin.parent}" in cmd
     )
     assert "PIP_BREAK_SYSTEM_PACKAGES=1" in cmd
+    assert "-v" in cmd
+    assert f"{bootstrap_root}:{bootstrap_root}" in cmd
+    assert cmd.count(f"{bootstrap_root}:{bootstrap_root}") == 1
     # Host ~/.local/bin still must not leak.
     assert all("/.local/bin" not in str(part) for part in cmd)
+
+
+def test_start_task_container_rejects_unmounted_bootstrap_userbase_bin(
+    tmp_path: Path,
+) -> None:
+    bootstrap_bin = (
+        tmp_path
+        / "task-container-bootstrap"
+        / "linux-amd64"
+        / "cache-key"
+        / "generation"
+        / ".pyuserbase"
+        / "bin"
+    )
+
+    with pytest.raises(ValueError, match="bootstrap_userbase_bin must be inside"):
+        start_task_container(
+            "img:latest",
+            executable="docker",
+            bootstrap_userbase_bin=str(bootstrap_bin),
+        )
 
 
 def test_start_task_container_passes_through_network_env_when_present() -> None:
