@@ -796,7 +796,7 @@ def _capture_snapshot_manifest(
     container_executable: str,
     root: str = "/testbed",
     previous_manifest: dict[str, str] | None = None,
-) -> dict[str, str]:
+) -> dict[str, str] | None:
     """Walk /testbed inside a live container, return {relpath: sha256hex}.
 
     When *previous_manifest* is provided, uses ``find -newer`` with a
@@ -812,7 +812,9 @@ def _capture_snapshot_manifest(
       4. rename temp_marker → old_marker (atomic success signal)
 
     Skips .git directory. Uses same hash convention as _write_cas_manifest.
-    Returns empty dict on any error (logged as warning).
+    Returns None on any error (logged as warning), ``{}`` on successful
+    capture of an empty tree — caller must use ``is not None`` to
+    distinguish failure from empty success.
     """
     import json as _json_module
 
@@ -833,8 +835,9 @@ result = subprocess.run(
     ["find", root, "-newer", marker, "-type", "f"],
     capture_output=True, text=True, timeout=30,
 )
-changed = set()
+changed = None  # None = find-not-run-or-failed -> full hash
 if result.returncode == 0:
+    changed = set()
     for p in result.stdout.strip().splitlines():
         if not p:
             continue
@@ -844,7 +847,7 @@ if result.returncode == 0:
         rel = os.path.relpath(p, root)
         changed.add(rel)
 else:
-    # find failed — fall back to full hash
+    # find failed — fall back to full hash (changed stays None)
     pass
 
 entries = {}
@@ -864,7 +867,7 @@ for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             continue
         rel = os.path.relpath(fpath, root)
         all_paths.append(rel)
-        if changed and rel not in changed:
+        if changed is not None and rel not in changed:
             continue
         try:
             with open(fpath, "rb") as f:
@@ -926,12 +929,12 @@ print(json.dumps({"entries": entries, "all_paths": all_paths}))
             container_id[:12],
             (result.stderr or result.stdout).strip()[:200],
         )
-        return {}
+        return None
     try:
         delta = _json_module.loads(result.stdout.strip())
     except (_json_module.JSONDecodeError, ValueError) as exc:
         logger.warning("Snapshot manifest parse error: %s", exc)
-        return {}
+        return None
 
     delta_entries: dict[str, str] = delta.get("entries", {})
     all_paths: list[str] = delta.get("all_paths", [])
@@ -3716,34 +3719,35 @@ async def _replay_cloud_model_session(
                     prev_folded=folded_source_entries,
                 )
                 source_entries = folded_source_entries
-                if source_entries:
-                    replay_entries = _capture_snapshot_manifest(
-                        container_id=ctr.container_id,
-                        container_executable=ctr.container_executable,
-                        root=cas_spec.get("root", "/testbed"),
-                        previous_manifest=prev_cas_manifest,
-                    )
-                    if replay_entries:
-                        source_keys = set(source_entries.keys())
-                        replay_keys = set(replay_entries.keys())
-                        common = source_keys & replay_keys
-                        modified = [k for k in common if source_entries[k] != replay_entries[k]]
-                        added = sorted(replay_keys - source_keys)
-                        removed = sorted(source_keys - replay_keys)
-                        cas_manifest_match = len(modified) == 0 and len(removed) == 0 and len(added) == 0
-                        cas_manifest_fields = {
-                            "cas_manifest_match": cas_manifest_match,
-                            "cas_source_entries": len(source_entries),
-                            "cas_replay_entries": len(replay_entries),
-                            "cas_modified_count": len(modified),
-                            "cas_added_count": len(added),
-                            "cas_removed_count": len(removed),
-                        }
-                        if modified:
-                            cas_manifest_fields["cas_modified_examples"] = modified[:10]
-                    # Store for incremental next snapshot
-                    if replay_entries:
-                        prev_cas_manifest = replay_entries
+                replay_entries = _capture_snapshot_manifest(
+                    container_id=ctr.container_id,
+                    container_executable=ctr.container_executable,
+                    root=cas_spec.get("root", "/testbed"),
+                    previous_manifest=prev_cas_manifest,
+                )
+                # Only compare if capture succeeded (None = failure)
+                if replay_entries is not None:
+                    source_keys = set(source_entries.keys())
+                    replay_keys = set(replay_entries.keys())
+                    common = source_keys & replay_keys
+                    modified = [k for k in common if source_entries[k] != replay_entries[k]]
+                    added = sorted(replay_keys - source_keys)
+                    removed = sorted(source_keys - replay_keys)
+                    cas_manifest_match = len(modified) == 0 and len(removed) == 0 and len(added) == 0
+                    cas_manifest_fields = {
+                        "cas_manifest_match": cas_manifest_match,
+                        "cas_source_entries": len(source_entries),
+                        "cas_replay_entries": len(replay_entries),
+                        "cas_modified_count": len(modified),
+                        "cas_added_count": len(added),
+                        "cas_removed_count": len(removed),
+                    }
+                    if modified:
+                        cas_manifest_fields["cas_modified_examples"] = modified[:10]
+                # Store for incremental next snapshot (update even on {} —
+                # next incremental starts from a known empty state)
+                if replay_entries is not None:
+                    prev_cas_manifest = replay_entries
             forced_sync_fields: dict[str, Any] = {}
             if mismatch_reason is not None and ctr is not None:
                 checkpoint_spec = _checkpoint_after_spec(

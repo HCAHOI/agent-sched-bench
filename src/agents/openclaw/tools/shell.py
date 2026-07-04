@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import shlex
 import signal
 import sys
 from pathlib import Path
@@ -133,26 +134,41 @@ class ExecTool(Tool):
         cwd = working_dir or self.container_default_cwd
         effective_timeout = timeout or self._DEFAULT_TIMEOUT
         try:
+            # Wrap with timeout(1) inside the container so the entire
+            # process tree (descendants of sh -c) is killed on deadline,
+            # not just the local docker exec process.  The asyncio
+            # deadline has a generous margin (+60 s) so timeout(1) does
+            # the real enforcement; the outer guard catches the rare
+            # case where timeout(1) is missing in the container image.
+            timeout_command = f"timeout {effective_timeout} /bin/sh -c {shlex.quote(command)}"
             proc = await asyncio.create_subprocess_exec(
                 self._container_executable,
                 "exec",
                 "-i",
                 "-w", cwd,
                 self._container_id,
-                "/bin/sh", "-c", command,
+                "/bin/sh", "-c", timeout_command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=effective_timeout,
+                    proc.communicate(), timeout=effective_timeout + 60,
                 )
             except asyncio.TimeoutError:
+                # Last resort — timeout(1) inside the container may be
+                # absent.  Kill the local docker exec; the orphaned
+                # container-side process is a minor leak that the
+                # container's PID 1 will reap on container stop.
                 try:
                     proc.kill()
                     await asyncio.wait_for(proc.wait(), timeout=5.0)
                 except (asyncio.TimeoutError, ProcessLookupError, OSError):
                     pass
+                return f"Error: Command timed out after {effective_timeout} seconds"
+
+            # timeout(1) exits 124 when it kills the process tree
+            if proc.returncode == 124:
                 return f"Error: Command timed out after {effective_timeout} seconds"
 
             output_parts = []
