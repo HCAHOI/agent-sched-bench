@@ -870,11 +870,17 @@ def _load_source_manifest_entries(manifest_path: str) -> dict[str, str] | None:
         entries = data.get("entries", {})
         if not isinstance(entries, dict):
             return None
-        return {
+        result = {
             rel: entry["hash"]
             for rel, entry in entries.items()
             if isinstance(entry, dict) and "hash" in entry
         }
+        # Remove entries for paths that were deleted between checkpoints.
+        deleted = data.get("deleted_paths", [])
+        if isinstance(deleted, list):
+            for dpath in deleted:
+                result.pop(dpath, None)
+        return result
 
     # filesystem_tar — read archive, hash files
     import tarfile as _tarfile_mod
@@ -3565,7 +3571,7 @@ async def _replay_cloud_model_session(
                         modified = [k for k in common if source_entries[k] != replay_entries[k]]
                         added = sorted(replay_keys - source_keys)
                         removed = sorted(source_keys - replay_keys)
-                        cas_manifest_match = len(modified) == 0 and len(removed) == 0
+                        cas_manifest_match = len(modified) == 0 and len(removed) == 0 and len(added) == 0
                         cas_manifest_fields = {
                             "cas_manifest_match": cas_manifest_match,
                             "cas_source_entries": len(source_entries),

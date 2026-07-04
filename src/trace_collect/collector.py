@@ -1020,11 +1020,17 @@ async def _run_openclaw_in_task_container(
     ctx.agent_start_time = datetime.now(tz=timezone.utc)
     session_key = f"eval:{ctx.instance_id}"
     session_result = None
+    container_logs = ""
+    model_patch = ""
+    n_iterations = 0
+    total_llm_ms = 0.0
+    total_tool_ms = 0.0
+    total_tokens = 0
     try:
         session_result = await session_runner.run(
             prompt=prompt_text,
             workspace=ws,
-            tool_workspace=Path("/testbed"),
+            tool_workspace=ws / "tool_workspace",
             session_key=session_key,
             trace_file=effective_trace_file,
             runtime_dir=effective_runtime_dir,
@@ -1032,54 +1038,64 @@ async def _run_openclaw_in_task_container(
             channel="cli",
             prepare_ms=None,
         )
+
+        # Merge benchmark metadata into the trace in-place.
+        _normalize_openclaw_trace(
+            src=effective_trace_file,
+            dst=effective_trace_file,
+            benchmark=benchmark,
+            model=model,
+            api_base=api_base,
+            max_iterations=max_iterations,
+            instance_id=ctx.instance_id,
+            mcp_config_label=mcp_config_label(mcp_config),
+            prompt_template=ctx.prompt_template,
+            agent_runtime_mode=ctx.agent_runtime_mode,
+            runtime_proof={"container_id": container_id},
+            run_config_overrides=run_config_overrides,
+            generation_config=generation_config,
+        )
+
+        # Parse trace summary for aggregate stats.
+        if effective_trace_file.exists():
+            for line in effective_trace_file.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("type") == "summary":
+                    n_iterations = rec.get("n_iterations", 0) or 0
+                    total_llm_ms = float(rec.get("total_llm_ms", 0) or 0)
+                    total_tool_ms = float(rec.get("total_tool_ms", 0) or 0)
+                    total_tokens = int(rec.get("total_tokens", 0) or 0)
+
+        # Extract the patch from inside the container.
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                container_executable, "exec", "-i", container_id,
+                "git", "-C", "/testbed", "diff",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode == 0:
+                model_patch = stdout.decode("utf-8", errors="replace").strip()
+            else:
+                logger.warning("git diff failed in container: %s", stderr.decode()[:200])
+        except Exception as exc:
+            logger.warning("Failed to extract patch from container: %s", exc)
     finally:
         ctx.agent_end_time = datetime.now(tz=timezone.utc)
-
-    # Merge benchmark metadata into the trace in-place.
-    _normalize_openclaw_trace(
-        src=effective_trace_file,
-        dst=effective_trace_file,
-        benchmark=benchmark,
-        model=model,
-        api_base=api_base,
-        max_iterations=max_iterations,
-        instance_id=ctx.instance_id,
-        mcp_config_label=mcp_config_label(mcp_config),
-        prompt_template=ctx.prompt_template,
-        agent_runtime_mode=ctx.agent_runtime_mode,
-        runtime_proof={"container_id": container_id},
-        run_config_overrides=run_config_overrides,
-        generation_config=generation_config,
-    )
-
-    # Parse trace summary for aggregate stats.
-    n_iterations = 0
-    total_llm_ms = 0.0
-    total_tool_ms = 0.0
-    total_tokens = 0
-    if effective_trace_file.exists():
-        for line in effective_trace_file.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("type") == "summary":
-                n_iterations = rec.get("n_iterations", 0) or 0
-                total_llm_ms = float(rec.get("total_llm_ms", 0) or 0)
-                total_tool_ms = float(rec.get("total_tool_ms", 0) or 0)
-                total_tokens = int(rec.get("total_tokens", 0) or 0)
-
-    # Capture and stop the container.
-    try:
-        container_logs = stop_task_container(
-            container_id,
-            executable=container_executable,
-        )
-    except RuntimeError as exc:
-        logger.warning("stop_task_container failed: %s", exc)
-        container_logs = ""
+        try:
+            container_logs = stop_task_container(
+                container_id,
+                executable=container_executable,
+            )
+        except RuntimeError as exc:
+            logger.warning("stop_task_container failed: %s", exc)
+            container_logs = ""
 
     ctx.container_stdout = container_logs
 
@@ -1089,7 +1105,7 @@ async def _run_openclaw_in_task_container(
         success=stop_reason == "completed",
         exit_status=stop_reason,
         trace_path=effective_trace_file,
-        model_patch="",
+        model_patch=model_patch,
         error=session_result.error if session_result is not None else None,
         n_iterations=n_iterations,
         total_llm_ms=total_llm_ms,

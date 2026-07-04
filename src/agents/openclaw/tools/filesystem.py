@@ -60,37 +60,45 @@ class _FsTool(Tool):
 
     async def _container_read_file(self, path: str) -> str:
         """Read a file from inside the container via docker exec."""
+        safe_path = str(self._resolve(path))
         proc = await asyncio.create_subprocess_exec(
             self._container["executable"],
             "exec",
             "-i",
             self._container["id"],
             "cat",
-            path,
+            safe_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            raise FileNotFoundError(f"File not found in container: {path}")
+            raise FileNotFoundError(f"File not found in container: {safe_path}")
         return stdout.decode("utf-8", errors="replace")
 
     async def _container_write_file(self, path: str, content: str) -> None:
         """Write a file inside the container via docker exec."""
-        proc = await asyncio.create_subprocess_exec(
-            self._container["executable"],
-            "exec",
-            "-i",
-            self._container["id"],
-            "sh",
-            "-c",
-            f"cat > {path}",
-            stdin=asyncio.subprocess.PIPE,
+        safe_path = str(self._resolve(path))
+        write_script = (
+            "import pathlib;"
+            f"pathlib.Path({safe_path!r}).parent.mkdir(parents=True, exist_ok=True);"
+            f"pathlib.Path({safe_path!r}).write_bytes(__import__('sys').stdin.buffer.read())"
         )
-        await proc.communicate(input=content.encode("utf-8"))
+        proc = await asyncio.create_subprocess_exec(
+            self._container["executable"], "exec", "-i",
+            self._container["id"],
+            "python3", "-c", write_script,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate(input=content.encode("utf-8"))
+        if proc.returncode != 0:
+            raise IOError(f"Failed to write {safe_path}: {stderr.decode()[:200]}")
 
     async def _container_list_dir(self, path: str) -> str:
         """List directory contents inside the container."""
+        safe_path = str(self._resolve(path))
         proc = await asyncio.create_subprocess_exec(
             self._container["executable"],
             "exec",
@@ -98,7 +106,7 @@ class _FsTool(Tool):
             self._container["id"],
             "ls",
             "-la",
-            path,
+            safe_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
