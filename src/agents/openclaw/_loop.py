@@ -5,7 +5,7 @@ import json
 import os
 import time
 from contextlib import AsyncExitStack, nullcontext
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
@@ -289,26 +289,35 @@ class AgentLoop:
         """Register the default set of tools."""
         tool_allowed_dir = self.tool_workspace if self.restrict_to_workspace else None
         extra_read = [BUILTIN_SKILLS_DIR] if tool_allowed_dir else None
+        # Container mode: filesystem workspace is the container-namespace path
+        # (Step 2 will make collector pass /testbed as tool_workspace natively).
+        fs_workspace = (
+            PurePosixPath("/testbed")
+            if self.container_runtime
+            else self.tool_workspace
+        )
+        fs_allowed_dir = None if self.container_runtime else tool_allowed_dir
+        fs_extra_read = None if self.container_runtime else extra_read
         self.tools.register(
             ReadFileTool(
-                workspace=self.tool_workspace,
-                allowed_dir=tool_allowed_dir,
-                extra_allowed_dirs=extra_read,
+                workspace=fs_workspace,
+                allowed_dir=fs_allowed_dir,
+                extra_allowed_dirs=fs_extra_read,
                 container_runtime=self.container_runtime,
             )
         )
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(
                 cls(
-                    workspace=self.tool_workspace,
-                    allowed_dir=tool_allowed_dir,
+                    workspace=fs_workspace,
+                    allowed_dir=fs_allowed_dir,
                     container_runtime=self.container_runtime,
                 )
             )
         if self.exec_config.enable:
             self.tools.register(
                 ExecTool(
-                    working_dir=str(self.tool_workspace),
+                    working_dir=None if self.container_runtime else str(self.tool_workspace),
                     timeout=self.exec_config.timeout,
                     restrict_to_workspace=self.restrict_to_workspace,
                     path_append=self.exec_config.path_append,

@@ -1,9 +1,12 @@
 """File system tools: read, write, edit, list."""
 
 import asyncio
+import base64
 import difflib
 import mimetypes
-from pathlib import Path
+import os
+import shlex
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from agents.openclaw.tools.base import Tool
@@ -38,6 +41,14 @@ def _is_under(path: Path, directory: Path) -> bool:
         return False
 
 
+def _is_under_pure(path: PurePosixPath, directory: PurePosixPath) -> bool:
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
 class _FsTool(Tool):
     """Shared base for filesystem tools — common init and path resolution."""
 
@@ -54,64 +65,198 @@ class _FsTool(Tool):
         self._container = container_runtime
 
     def _resolve(self, path: str) -> Path:
+        """Local-mode path resolution (host filesystem)."""
         return _resolve_path(
             path, self._workspace, self._allowed_dir, self._extra_allowed_dirs
         )
 
-    async def _container_read_file(self, path: str) -> str:
-        """Read a file from inside the container via docker exec."""
-        safe_path = str(self._resolve(path))
+    # ------------------------------------------------------------------
+    # I/O primitives — local
+    # ------------------------------------------------------------------
+
+    async def _read_bytes_local(self, path: str) -> bytes:
+        fp = self._resolve(path)
+        if not fp.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if not fp.is_file():
+            raise IsADirectoryError(f"Not a file: {path}")
+        return fp.read_bytes()
+
+    async def _write_bytes_local(self, path: str, data: bytes) -> None:
+        fp = self._resolve(path)
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_bytes(data)
+
+    def _list_entries_local(
+        self, path: str, recursive: bool
+    ) -> list[tuple[str, bool]]:
+        dp = self._resolve(path)
+        if not dp.exists():
+            raise FileNotFoundError(f"Directory not found: {path}")
+        if not dp.is_dir():
+            raise NotADirectoryError(f"Not a directory: {path}")
+        entries: list[tuple[str, bool]] = []
+        if recursive:
+            for item in sorted(dp.rglob("*")):
+                rel = str(item.relative_to(dp))
+                entries.append((rel, item.is_dir()))
+        else:
+            for item in sorted(dp.iterdir()):
+                entries.append((item.name, item.is_dir()))
+        return entries
+
+    # ------------------------------------------------------------------
+    # I/O primitives — container
+    # ------------------------------------------------------------------
+
+    def _resolve_container_path(self, path_str: str) -> str:
+        """Resolve path in container namespace (pure lexical, no host fs access).
+
+        Relative paths are joined against the container workspace (e.g. /testbed).
+        Absolute paths are used as-is. '..' and '.' are normalised via os.path.normpath.
+        """
+        ws = PurePosixPath(str(self._workspace))
+        p = PurePosixPath(path_str)
+        if not p.is_absolute():
+            p = ws / p
+        normalized_str = os.path.normpath(str(p))
+        if self._allowed_dir:
+            all_dirs = [PurePosixPath(str(self._allowed_dir))] + [
+                PurePosixPath(str(d)) for d in (self._extra_allowed_dirs or [])
+            ]
+            if not any(
+                _is_under_pure(PurePosixPath(normalized_str), d) for d in all_dirs
+            ):
+                raise PermissionError(
+                    f"Path {path_str} is outside allowed directory {self._allowed_dir}"
+                )
+        return normalized_str
+
+    async def _read_bytes_container(self, path: str) -> bytes:
+        container_path = self._resolve_container_path(path)
+        q = shlex.quote(container_path)
+        # Sentinel pre-checks: classify errors via tokens we control, not
+        # image/locale-dependent stderr text from base64.
+        script = (
+            f"if [ -d {q} ]; then echo __ISDIR__ >&2; exit 1; fi; "
+            f"if [ ! -e {q} ]; then echo __NOENT__ >&2; exit 1; fi; "
+            f"if [ ! -r {q} ]; then echo __EACCES__ >&2; exit 1; fi; "
+            f"base64 < {q}"
+        )
         proc = await asyncio.create_subprocess_exec(
             self._container["executable"],
             "exec",
             "-i",
             self._container["id"],
-            "cat",
-            safe_path,
+            "sh",
+            "-c",
+            script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            raise FileNotFoundError(f"File not found in container: {safe_path}")
-        return stdout.decode("utf-8", errors="replace")
+            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+            if "__ISDIR__" in stderr_text:
+                raise IsADirectoryError(f"Not a file: {path}")
+            if "__NOENT__" in stderr_text:
+                raise FileNotFoundError(f"File not found: {path}")
+            if "__EACCES__" in stderr_text:
+                raise PermissionError(f"Permission denied: {path}")
+            raise IOError(f"Failed to read {path}: {stderr_text[:200]}")
+        return base64.b64decode(stdout.strip())
 
-    async def _container_write_file(self, path: str, content: str) -> None:
-        """Write a file inside the container via docker exec."""
-        safe_path = str(self._resolve(path))
-        write_script = (
-            "import pathlib;"
-            f"pathlib.Path({safe_path!r}).parent.mkdir(parents=True, exist_ok=True);"
-            f"pathlib.Path({safe_path!r}).write_bytes(__import__('sys').stdin.buffer.read())"
-        )
+    async def _write_bytes_container(self, path: str, data: bytes) -> None:
+        container_path = self._resolve_container_path(path)
+        dir_path = str(PurePosixPath(container_path).parent)
         proc = await asyncio.create_subprocess_exec(
-            self._container["executable"], "exec", "-i",
+            self._container["executable"],
+            "exec",
+            "-i",
             self._container["id"],
-            "python3", "-c", write_script,
+            "sh",
+            "-c",
+            f"mkdir -p {shlex.quote(dir_path)} && cat > {shlex.quote(container_path)}",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate(input=content.encode("utf-8"))
+        stdout, stderr = await proc.communicate(input=data)
         if proc.returncode != 0:
-            raise IOError(f"Failed to write {safe_path}: {stderr.decode()[:200]}")
+            raise IOError(
+                f"Failed to write {container_path}: {stderr.decode()[:200]}"
+            )
 
-    async def _container_list_dir(self, path: str) -> str:
-        """List directory contents inside the container."""
-        safe_path = str(self._resolve(path))
+    async def _list_entries_container(
+        self, path: str, recursive: bool
+    ) -> list[tuple[str, bool]]:
+        container_path = self._resolve_container_path(path)
+        q = shlex.quote(container_path)
+        maxdepth = "" if recursive else "-maxdepth 1 "
+        # Sentinel pre-checks mirror _list_entries_local's exists/is_dir order.
+        # {{}} renders as literal {} for find -exec.
+        cmd = (
+            f"if [ ! -e {q} ]; then echo __NOENT__ >&2; exit 1; fi; "
+            f"if [ ! -d {q} ]; then echo __NOTDIR__ >&2; exit 1; fi; "
+            f"find {q} -mindepth 1 {maxdepth}"
+            f"-exec sh -c 'for p; do [ -d \"$p\" ] && echo \"d:$p\" || echo \"f:$p\"; done' _ {{}} +"
+        )
         proc = await asyncio.create_subprocess_exec(
             self._container["executable"],
             "exec",
             "-i",
             self._container["id"],
-            "ls",
-            "-la",
-            safe_path,
+            "sh",
+            "-c",
+            cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
-        return stdout.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+            if "__NOENT__" in stderr_text:
+                raise FileNotFoundError(f"Directory not found: {path}")
+            if "__NOTDIR__" in stderr_text:
+                raise NotADirectoryError(f"Not a directory: {path}")
+            raise RuntimeError(stderr_text[:200])
+
+        entries: list[tuple[str, bool]] = []
+        prefix_len = len(container_path) + 1  # +1 for trailing /
+        for line in stdout.decode("utf-8", errors="replace").strip().split("\n"):
+            if not line:
+                continue
+            type_char = line[0]
+            full_path = line[2:]
+            rel = (
+                full_path[prefix_len:]
+                if full_path.startswith(container_path + "/")
+                else full_path
+            )
+            entries.append((rel, type_char == "d"))
+        return sorted(entries)
+
+    # ------------------------------------------------------------------
+    # I/O primitives — dispatch
+    # ------------------------------------------------------------------
+
+    async def _read_bytes(self, path: str) -> bytes:
+        if self._container:
+            return await self._read_bytes_container(path)
+        return await self._read_bytes_local(path)
+
+    async def _write_bytes(self, path: str, data: bytes) -> None:
+        if self._container:
+            await self._write_bytes_container(path, data)
+        else:
+            await self._write_bytes_local(path, data)
+
+    async def _list_entries(
+        self, path: str, recursive: bool
+    ) -> list[tuple[str, bool]]:
+        if self._container:
+            return await self._list_entries_container(path, recursive)
+        return self._list_entries_local(path, recursive)
 
 
 # ---------------------------------------------------------------------------
@@ -214,27 +359,20 @@ class ReadFileTool(_FsTool):
             if not path:
                 return "Error reading file: Unknown path"
 
-            if self._container:
-                try:
-                    text_content = await self._container_read_file(path)
-                except FileNotFoundError:
-                    return f"Error: File not found: {path}"
-                return self._format_paginated_output(text_content, offset, limit, path)
-
-            fp = self._resolve(path)
-            if not fp.exists():
+            try:
+                raw = await self._read_bytes(path)
+            except FileNotFoundError:
                 return f"Error: File not found: {path}"
-            if not fp.is_file():
+            except IsADirectoryError:
                 return f"Error: Not a file: {path}"
 
-            raw = fp.read_bytes()
             if not raw:
                 return f"(Empty file: {path})"
 
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
             if mime and mime.startswith("image/"):
                 return build_image_content_blocks(
-                    raw, mime, str(fp), f"(Image file: {path})"
+                    raw, mime, path, f"(Image file: {path})"
                 )
 
             try:
@@ -285,14 +423,8 @@ class WriteFileTool(_FsTool):
             if content is None:
                 raise ValueError("Unknown content")
 
-            if self._container:
-                await self._container_write_file(path, content)
-                return f"Successfully wrote {len(content)} bytes to {path}"
-
-            fp = self._resolve(path)
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_text(content, encoding="utf-8")
-            return f"Successfully wrote {len(content)} bytes to {fp}"
+            await self._write_bytes(path, content.encode("utf-8"))
+            return f"Successfully wrote {len(content)} bytes to {path}"
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -383,33 +515,11 @@ class EditFileTool(_FsTool):
             if new_text is None:
                 raise ValueError("Unknown new_text")
 
-            if self._container:
-                try:
-                    content = await self._container_read_file(path)
-                except FileNotFoundError:
-                    return f"Error: File not found: {path}"
-                match, count = _find_match(content, old_text.replace("\r\n", "\n"))
-                if match is None:
-                    return self._not_found_msg(old_text, content, path)
-                if count > 1 and not replace_all:
-                    return (
-                        f"Warning: old_text appears {count} times. "
-                        "Provide more context to make it unique, or set replace_all=true."
-                    )
-                norm_new = new_text.replace("\r\n", "\n")
-                new_content = (
-                    content.replace(match, norm_new)
-                    if replace_all
-                    else content.replace(match, norm_new, 1)
-                )
-                await self._container_write_file(path, new_content)
-                return f"Successfully edited {path}"
-
-            fp = self._resolve(path)
-            if not fp.exists():
+            try:
+                raw = await self._read_bytes(path)
+            except FileNotFoundError:
                 return f"Error: File not found: {path}"
 
-            raw = fp.read_bytes()
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
             match, count = _find_match(content, old_text.replace("\r\n", "\n"))
@@ -431,8 +541,8 @@ class EditFileTool(_FsTool):
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
-            fp.write_bytes(new_content.encode("utf-8"))
-            return f"Successfully edited {fp}"
+            await self._write_bytes(path, new_content.encode("utf-8"))
+            return f"Successfully edited {path}"
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -526,6 +636,14 @@ class ListDirTool(_FsTool):
             "required": ["path"],
         }
 
+    @staticmethod
+    def _is_ignored(rel: str, is_dir: bool, recursive: bool) -> bool:
+        parts = rel.replace("\\", "/").split("/")
+        if recursive:
+            return any(p in ListDirTool._IGNORE_DIRS for p in parts)
+        leaf = parts[-1] if parts else ""
+        return leaf in ListDirTool._IGNORE_DIRS
+
     async def execute(
         self,
         path: str | None = None,
@@ -537,35 +655,29 @@ class ListDirTool(_FsTool):
             if path is None:
                 raise ValueError("Unknown path")
 
-            if self._container:
-                return await self._container_list_dir(path)
-
-            dp = self._resolve(path)
-            if not dp.exists():
+            try:
+                entries = await self._list_entries(path, recursive)
+            except FileNotFoundError:
                 return f"Error: Directory not found: {path}"
-            if not dp.is_dir():
+            except NotADirectoryError:
                 return f"Error: Not a directory: {path}"
+            except RuntimeError as e:
+                return f"Error: {e}"
 
             cap = max_entries or self._DEFAULT_MAX
             items: list[str] = []
             total = 0
 
-            if recursive:
-                for item in sorted(dp.rglob("*")):
-                    if any(p in self._IGNORE_DIRS for p in item.parts):
-                        continue
-                    total += 1
-                    if len(items) < cap:
-                        rel = item.relative_to(dp)
-                        items.append(f"{rel}/" if item.is_dir() else str(rel))
-            else:
-                for item in sorted(dp.iterdir()):
-                    if item.name in self._IGNORE_DIRS:
-                        continue
-                    total += 1
-                    if len(items) < cap:
-                        pfx = "📁 " if item.is_dir() else "📄 "
-                        items.append(f"{pfx}{item.name}")
+            for rel, is_dir in entries:
+                if self._is_ignored(rel, is_dir, recursive):
+                    continue
+                total += 1
+                if len(items) < cap:
+                    if recursive:
+                        items.append(f"{rel}/" if is_dir else rel)
+                    else:
+                        pfx = "📁 " if is_dir else "📄 "
+                        items.append(f"{pfx}{rel}")
 
             if not items and total == 0:
                 return f"Directory {path} is empty"

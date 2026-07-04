@@ -27,9 +27,11 @@ class ExecTool(Tool):
         *,
         container_id: str | None = None,
         container_executable: str | None = None,
+        container_default_cwd: str = "/testbed",
     ):
         self.timeout = timeout
         self.working_dir = working_dir
+        self.container_default_cwd = container_default_cwd
         self.deny_patterns = deny_patterns or [
             r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",  # del /f, del /q
@@ -94,7 +96,13 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        in_container = bool(self._container_id and self._container_executable)
+        # Guard must evaluate paths in the namespace the command runs in.
+        cwd = (
+            (working_dir or self.container_default_cwd)
+            if in_container
+            else (working_dir or self.working_dir or os.getcwd())
+        )
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
@@ -102,7 +110,7 @@ class ExecTool(Tool):
         effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
 
         # Container mode: redirect through docker exec
-        if self._container_id and self._container_executable:
+        if in_container:
             return await self._execute_in_container(
                 command=command,
                 working_dir=working_dir,
@@ -122,7 +130,7 @@ class ExecTool(Tool):
         working_dir: str | None = None,
         timeout: int | None = None,
     ) -> str:
-        cwd = working_dir or self.working_dir or "/testbed"
+        cwd = working_dir or self.container_default_cwd
         effective_timeout = timeout or self._DEFAULT_TIMEOUT
         try:
             proc = await asyncio.create_subprocess_exec(
