@@ -1,5 +1,6 @@
 """File system tools: read, write, edit, list."""
 
+import asyncio
 import difflib
 import mimetypes
 from pathlib import Path
@@ -45,15 +46,64 @@ class _FsTool(Tool):
         workspace: Path | None = None,
         allowed_dir: Path | None = None,
         extra_allowed_dirs: list[Path] | None = None,
+        container_runtime: dict | None = None,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
         self._extra_allowed_dirs = extra_allowed_dirs
+        self._container = container_runtime
 
     def _resolve(self, path: str) -> Path:
         return _resolve_path(
             path, self._workspace, self._allowed_dir, self._extra_allowed_dirs
         )
+
+    async def _container_read_file(self, path: str) -> str:
+        """Read a file from inside the container via docker exec."""
+        proc = await asyncio.create_subprocess_exec(
+            self._container["executable"],
+            "exec",
+            "-i",
+            self._container["id"],
+            "cat",
+            path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise FileNotFoundError(f"File not found in container: {path}")
+        return stdout.decode("utf-8", errors="replace")
+
+    async def _container_write_file(self, path: str, content: str) -> None:
+        """Write a file inside the container via docker exec."""
+        proc = await asyncio.create_subprocess_exec(
+            self._container["executable"],
+            "exec",
+            "-i",
+            self._container["id"],
+            "sh",
+            "-c",
+            f"cat > {path}",
+            stdin=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate(input=content.encode("utf-8"))
+
+    async def _container_list_dir(self, path: str) -> str:
+        """List directory contents inside the container."""
+        proc = await asyncio.create_subprocess_exec(
+            self._container["executable"],
+            "exec",
+            "-i",
+            self._container["id"],
+            "ls",
+            "-la",
+            path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return stdout.decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +152,49 @@ class ReadFileTool(_FsTool):
             "required": ["path"],
         }
 
+    def _format_paginated_output(
+        self,
+        text_content: str,
+        offset: int,
+        limit: int | None,
+        path: str,
+    ) -> str:
+        """Format paginated read output from text content."""
+        all_lines = text_content.splitlines()
+        total = len(all_lines)
+
+        if offset < 1:
+            offset = 1
+        if offset > total:
+            return f"Error: offset {offset} is beyond end of file ({total} lines)"
+
+        start = offset - 1
+        end = min(start + (limit or self._DEFAULT_LIMIT), total)
+        numbered = [
+            f"{start + i + 1}| {line}"
+            for i, line in enumerate(all_lines[start:end])
+        ]
+        result = "\n".join(numbered)
+
+        if len(result) > self._MAX_CHARS:
+            trimmed, chars = [], 0
+            for line in numbered:
+                chars += len(line) + 1
+                if chars > self._MAX_CHARS:
+                    break
+                trimmed.append(line)
+            end = start + len(trimmed)
+            result = "\n".join(trimmed)
+
+        if end < total:
+            result += (
+                f"\n\n(Showing lines {offset}-{end} of {total}."
+                f" Use offset={end + 1} to continue.)"
+            )
+        else:
+            result += f"\n\n(End of file — {total} lines total)"
+        return result
+
     async def execute(
         self,
         path: str | None = None,
@@ -112,6 +205,14 @@ class ReadFileTool(_FsTool):
         try:
             if not path:
                 return "Error reading file: Unknown path"
+
+            if self._container:
+                try:
+                    text_content = await self._container_read_file(path)
+                except FileNotFoundError:
+                    return f"Error: File not found: {path}"
+                return self._format_paginated_output(text_content, offset, limit, path)
+
             fp = self._resolve(path)
             if not fp.exists():
                 return f"Error: File not found: {path}"
@@ -133,37 +234,7 @@ class ReadFileTool(_FsTool):
             except UnicodeDecodeError:
                 return f"Error: Cannot read binary file {path} (MIME: {mime or 'unknown'}). Only UTF-8 text and images are supported."
 
-            all_lines = text_content.splitlines()
-            total = len(all_lines)
-
-            if offset < 1:
-                offset = 1
-            if offset > total:
-                return f"Error: offset {offset} is beyond end of file ({total} lines)"
-
-            start = offset - 1
-            end = min(start + (limit or self._DEFAULT_LIMIT), total)
-            numbered = [
-                f"{start + i + 1}| {line}"
-                for i, line in enumerate(all_lines[start:end])
-            ]
-            result = "\n".join(numbered)
-
-            if len(result) > self._MAX_CHARS:
-                trimmed, chars = [], 0
-                for line in numbered:
-                    chars += len(line) + 1
-                    if chars > self._MAX_CHARS:
-                        break
-                    trimmed.append(line)
-                end = start + len(trimmed)
-                result = "\n".join(trimmed)
-
-            if end < total:
-                result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
-            else:
-                result += f"\n\n(End of file — {total} lines total)"
-            return result
+            return self._format_paginated_output(text_content, offset, limit, path)
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -205,6 +276,11 @@ class WriteFileTool(_FsTool):
                 raise ValueError("Unknown path")
             if content is None:
                 raise ValueError("Unknown content")
+
+            if self._container:
+                await self._container_write_file(path, content)
+                return f"Successfully wrote {len(content)} bytes to {path}"
+
             fp = self._resolve(path)
             fp.parent.mkdir(parents=True, exist_ok=True)
             fp.write_text(content, encoding="utf-8")
@@ -298,6 +374,28 @@ class EditFileTool(_FsTool):
                 raise ValueError("Unknown old_text")
             if new_text is None:
                 raise ValueError("Unknown new_text")
+
+            if self._container:
+                try:
+                    content = await self._container_read_file(path)
+                except FileNotFoundError:
+                    return f"Error: File not found: {path}"
+                match, count = _find_match(content, old_text.replace("\r\n", "\n"))
+                if match is None:
+                    return self._not_found_msg(old_text, content, path)
+                if count > 1 and not replace_all:
+                    return (
+                        f"Warning: old_text appears {count} times. "
+                        "Provide more context to make it unique, or set replace_all=true."
+                    )
+                norm_new = new_text.replace("\r\n", "\n")
+                new_content = (
+                    content.replace(match, norm_new)
+                    if replace_all
+                    else content.replace(match, norm_new, 1)
+                )
+                await self._container_write_file(path, new_content)
+                return f"Successfully edited {path}"
 
             fp = self._resolve(path)
             if not fp.exists():
@@ -430,6 +528,10 @@ class ListDirTool(_FsTool):
         try:
             if path is None:
                 raise ValueError("Unknown path")
+
+            if self._container:
+                return await self._container_list_dir(path)
+
             dp = self._resolve(path)
             if not dp.exists():
                 return f"Error: Directory not found: {path}"
