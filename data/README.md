@@ -2,7 +2,6 @@
 
 Populate these directories during the environment checkpoints:
 
-- `swebench_verified/`: SWE-bench Verified tasks and task metadata
-- `swebench_repos/`: cloned repositories for SWE-bench tasks
+- `swe-rebench/`: SWE-rebench task metadata and cloned repositories
 
 Do not commit large downloaded artifacts or cloned benchmark repositories.

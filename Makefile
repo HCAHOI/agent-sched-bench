@@ -3,7 +3,7 @@ UV ?= uv
 TRACE_COLLECT = PYTHONPATH=src $(PYTHON) -m trace_collect.cli --provider $(PROVIDER)
 GANTT_VIEWER_FRONTEND = demo/gantt_viewer/frontend
 
-.PHONY: help pull test lint run-smoke collect-results setup-swebench-repos build-swebench-images download-swebench-verified download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
+.PHONY: help pull test lint run-smoke collect-results download-swe-rebench setup-swe-rebench-repos setup-swe-rebench setup-arm-host smoke-swe-rebench-openclaw gantt-viewer-install gantt-viewer-dev gantt-viewer-build gantt-viewer-test gantt-viewer-smoke gantt-viewer-clean
 
 help:
 	@printf "Targets:\n"
@@ -12,9 +12,6 @@ help:
 	@printf "  lint              Run ruff\n"
 	@printf "  run-smoke         Run the current infrastructure smoke suite\n"
 	@printf "  collect-results   Pull result artifacts back via rsync\n"
-	@printf "  download-swebench-verified  Download & select 32 tasks from SWE-bench Verified\n"
-	@printf "  setup-swebench-repos        Clone repos referenced by selected tasks\n"
-	@printf "  build-swebench-images       Build Podman container images\n"
 	@printf "  download-swe-rebench        Download SWE-rebench (nebius/SWE-rebench) filtered split\n"
 	@printf "  setup-swe-rebench-repos     Clone repos referenced by SWE-rebench tasks\n"
 	@printf "  setup-swe-rebench           Shortcut: download-swe-rebench + setup-swe-rebench-repos\n"
@@ -41,15 +38,6 @@ run-smoke:
 
 collect-results:
 	./scripts/collect_results.sh
-
-setup-swebench-repos:
-	./scripts/setup/clone_repos.sh data/swebench_verified/tasks.json
-
-build-swebench-images:
-	./scripts/setup/build_images.sh
-
-download-swebench-verified:
-	./scripts/setup/swebench_data.sh
 
 download-swe-rebench:
 	./scripts/setup/swe_rebench_data.sh

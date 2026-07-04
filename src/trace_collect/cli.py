@@ -61,9 +61,9 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--benchmark",
-        default="swe-bench-verified",
+        default="swe-rebench",
         help=(
-            "Benchmark slug (e.g. 'swe-bench-verified', 'swe-rebench'). "
+            "Benchmark slug (e.g. 'swe-rebench', 'terminal-bench'). "
             "Loads configs/benchmarks/<slug>.yaml and constructs the plugin."
         ),
     )

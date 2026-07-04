@@ -21,6 +21,7 @@ def test_parse_collect_args_accepts_sample_and_concurrency() -> None:
 
     assert args.sample == 7
     assert args.concurrency == 3
+    assert args.benchmark == "swe-rebench"
 
 
 def test_parse_collect_args_rejects_skip_argument() -> None:

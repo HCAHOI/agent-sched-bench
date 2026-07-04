@@ -86,9 +86,9 @@ has:
 
 ### Local task cache
 
-Opt-in via `AGENT_SCHED_BENCH_USE_LOCAL_TASK_CACHE=1`. When enabled, SWE-Bench
-Verified and SWE-rebench load from `<data_root>/tasks.json` before hitting
-HuggingFace. Locally cached rows are stamped with provenance:
+Opt-in via `AGENT_SCHED_BENCH_USE_LOCAL_TASK_CACHE=1`. When enabled,
+SWE-rebench loads from `<data_root>/tasks.json` before hitting HuggingFace.
+Locally cached rows are stamped with provenance:
 
 - `task_source_kind=benchmark_local_json`
 - `task_source_id=<instance_id>`
@@ -258,7 +258,6 @@ Forbidden:
 
 | Slug | Runtime mode | Dataset | Scaffold |
 |---|---|---|---|
-| `swe-bench-verified` | `task_container_agent` | `princeton-nlp/SWE-bench_Verified` | openclaw |
 | `swe-rebench` | `task_container_agent` | `nebius/SWE-rebench` | openclaw |
 | `terminal-bench` | `host_controller` | Terminal-Bench tasks | openclaw |
 

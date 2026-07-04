@@ -432,14 +432,14 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
     benchmark = SimpleNamespace(
         execution_environment="container",
         config=SimpleNamespace(
-            slug="swe-bench-verified",
-            harness_split="test",
+            slug="swe-rebench",
+            harness_split="filtered",
             trace_root=tmp_path / "traces",
             default_prompt_template="default",
         ),
         runtime_mode_for=lambda scaffold: "host_controller",
         image_name_for=lambda task: (
-            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+            "swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest"
         ),
     )
 
@@ -470,10 +470,10 @@ def test_run_scaffold_tasks_uses_benchmark_image_name_for_source_image(
 
     assert seen == {
         "ensure_source_image": (
-            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+            "docker.io/swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest"
         ),
         "ctx_source_image": (
-            "docker.io/swebench/sweb.eval.x86_64.kinto_1776_kinto-http.py-384:latest"
+            "docker.io/swerebench/sweb.eval.x86_64.encode_1776_httpx-2701:latest"
         ),
     }
 

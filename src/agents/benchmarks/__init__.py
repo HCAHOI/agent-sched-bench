@@ -3,7 +3,7 @@
 Usage::
 
     from agents.benchmarks import get_benchmark_class
-    cls = get_benchmark_class("swe-bench-verified")
+    cls = get_benchmark_class("swe-rebench")
     plugin = cls(config)
 
 New benchmarks register here by adding an entry to :data:`REGISTRY`.
@@ -12,7 +12,6 @@ New benchmarks register here by adding an entry to :data:`REGISTRY`.
 from __future__ import annotations
 
 from agents.benchmarks.base import Benchmark, BenchmarkConfig
-from agents.benchmarks.swe_bench_verified import SWEBenchVerified
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
 from agents.benchmarks.terminal_bench import TerminalBenchBenchmark
 
@@ -21,14 +20,12 @@ __all__ = [
     "get_benchmark_class",
     "Benchmark",
     "BenchmarkConfig",
-    "SWEBenchVerified",
     "SWERebenchBenchmark",
     "TerminalBenchBenchmark",
 ]
 
 #: Maps benchmark slug → concrete :class:`~agents.benchmarks.base.Benchmark` subclass.
 REGISTRY: dict[str, type[Benchmark]] = {
-    "swe-bench-verified": SWEBenchVerified,
     "swe-rebench": SWERebenchBenchmark,
     "terminal-bench": TerminalBenchBenchmark,
 }
@@ -38,7 +35,7 @@ def get_benchmark_class(slug: str) -> type[Benchmark]:
     """Return the :class:`~agents.benchmarks.base.Benchmark` subclass for *slug*.
 
     Args:
-        slug: Benchmark identifier, e.g. ``"swe-bench-verified"``.
+        slug: Benchmark identifier, e.g. ``"swe-rebench"``.
 
     Returns:
         The registered benchmark class.

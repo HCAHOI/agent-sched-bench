@@ -23,8 +23,8 @@ def test_load_default_for_terminal_bench_returns_minimal_template() -> None:
     assert "{{task}}" in text
 
 
-def test_load_default_for_swe_bench_verified_returns_swe_template() -> None:
-    text = load_prompt_template("default", "swe-bench-verified")
+def test_load_default_for_swe_rebench_returns_swe_template() -> None:
+    text = load_prompt_template("default", "swe-rebench")
     assert "<pr_description>" in text
     assert "{{task}}" in text
 
@@ -70,5 +70,5 @@ def test_real_prompt_dirs_match_committed_layout() -> None:
     # Regression guard: if any per-benchmark dir disappears or is renamed,
     # the corresponding benchmark plugin's runtime load will break. Pin the
     # required dirs explicitly so the failure surfaces here, not in a run.
-    for slug in ("swe_rebench", "swe_bench_verified", "terminal_bench"):
+    for slug in ("swe_rebench", "terminal_bench"):
         assert (_PROMPTS_ROOT / slug).is_dir(), f"missing prompt dir: {slug}"

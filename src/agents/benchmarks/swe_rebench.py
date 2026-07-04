@@ -1,9 +1,9 @@
 """SWE-rebench benchmark plugin.
 
-This plugin absorbs the benchmark-specific schema quirks that differ from
-SWE-bench Verified: native test-id lists, explicit docker image URIs, and the
-optional opt-in ``exclude_lite`` filter. Keeping that logic here prevents the
-rest of the harness from depending on dataset-specific branches.
+This plugin absorbs the benchmark-specific schema quirks for SWE-rebench:
+native test-id lists, explicit docker image URIs, and the optional opt-in
+``exclude_lite`` filter. Keeping that logic here prevents the rest of the
+harness from depending on dataset-specific branches.
 """
 
 from __future__ import annotations
@@ -16,8 +16,7 @@ from agents.benchmarks.base import Benchmark
 class SWERebenchBenchmark(Benchmark):
     """Benchmark plugin for ``nebius/SWE-rebench`` (filtered or test split).
 
-    Dataset schema is a superset of SWE-Bench Verified; see the module
-    docstring for the three schema quirks this plugin absorbs.
+    See the module docstring for the schema quirks this plugin absorbs.
     """
 
     slug: ClassVar[str] = "swe-rebench"

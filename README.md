@@ -126,7 +126,6 @@ traces:
 
 | Slug | Task shape | Dataset | Scaffolds |
 |---|---|---|---|
-| `swe-bench-verified` | `swe_patch` | `princeton-nlp/SWE-bench_Verified` | openclaw |
 | `swe-rebench` | `swe_patch` | `nebius/SWE-rebench` | openclaw |
 | `terminal-bench` | `terminal_task` | Terminal-Bench tasks | openclaw |
 

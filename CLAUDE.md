@@ -273,8 +273,8 @@ All benchmarks MUST be added via the plugin layer in `src/agents/benchmarks/`
 and `configs/benchmarks/<slug>.yaml`.
 
 **FORBIDDEN:**
-- Hardcoding dataset names (`princeton-nlp/SWE-bench_Verified`,
-  `nebius/SWE-rebench`, etc.) in `src/trace_collect/collector.py`,
+- Hardcoding dataset names (`nebius/SWE-rebench`, Terminal-Bench registry
+  details, etc.) in `src/trace_collect/collector.py`,
   `src/trace_collect/cli.py`, or any scaffold module.
 - Adding `--harness-dataset` / `--harness-split` / `--harness-namespace`
   or similar "per-benchmark" CLI flags — those belong in the YAML.

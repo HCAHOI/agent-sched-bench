@@ -39,15 +39,6 @@ if TYPE_CHECKING:
     from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
 
-try:
-    _BaseExceptionGroup = BaseExceptionGroup
-except NameError:  # Python 3.10 uses the exceptiongroup backport.
-    try:
-        from exceptiongroup import BaseExceptionGroup as _BaseExceptionGroup
-    except ImportError:
-        _BaseExceptionGroup = RuntimeError
-
-
 class _LoopHook(AgentHook):
     def __init__(
         self,

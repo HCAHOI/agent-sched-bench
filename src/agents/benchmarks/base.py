@@ -3,7 +3,7 @@
 New code should instantiate benchmarks via::
 
     from agents.benchmarks import get_benchmark_class
-    cls = get_benchmark_class("swe-bench-verified")
+    cls = get_benchmark_class("swe-rebench")
     plugin = cls(config)
 """
 
@@ -160,8 +160,7 @@ class Benchmark(ABC):
     def derive_test_cmd(self, task: dict[str, Any]) -> str:
         """Derive a pytest command from ``task["FAIL_TO_PASS"]``.
 
-        Handles both native list (SWE-rebench) and JSON-encoded string
-        (SWE-Bench Verified) forms.
+        Handles both native-list and legacy JSON-encoded string forms.
         """
         raw = task.get("FAIL_TO_PASS", "[]")
         if isinstance(raw, str):
