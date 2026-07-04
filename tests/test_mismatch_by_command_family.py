@@ -134,10 +134,8 @@ def test_mismatch_by_command_family_reports_families(
             "data": {
                 "tool_name": "exec",
                 "tool_args": json.dumps({"command": "pip install pytest"}),
-                "mismatch_reason": "command_output_mismatch",
+                "mismatch_reason": "tool_success_mismatch",
                 "replay_outcome_match": False,
-                "source_output_hash": "abc",
-                "replay_output_hash": "def",
                 "output_diff_snippet": "- foo\n+ bar",
             },
         },
@@ -219,7 +217,6 @@ def test_mismatch_by_command_family_reports_families(
     assert "readonly" in output
     assert "git_local" in output
     assert "network_fetch" in output
-    assert "command_output_mismatch" in output
     assert "timeout_mismatch" in output
     assert "command_exit_code_mismatch" in output
     assert "tool_success_mismatch" in output

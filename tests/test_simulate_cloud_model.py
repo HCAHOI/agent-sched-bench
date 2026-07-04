@@ -1099,12 +1099,6 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
     )
     assert tool_record["data"]["replay_outcome_match"] is False
     assert tool_record["data"]["mismatch_reason"] == "tool_success_mismatch"
-    assert tool_record["data"]["source_output_hash"] == hashlib.sha256(
-        b"source-result"
-    ).hexdigest()
-    assert tool_record["data"]["replay_output_hash"] == hashlib.sha256(
-        b"failed\n\nExit code: 1"
-    ).hexdigest()
     assert tool_record["data"]["output_diff_snippet"].startswith(
         "- source-result\n+ failed"
     )
@@ -1493,61 +1487,6 @@ def test_mismatch_without_checkpoint_is_unresolved_mismatch(
     assert summary["forced_sync_attempts"] == 1
     assert summary["forced_sync_successes"] == 0
     assert summary["forced_sync_continued"] == 0
-
-
-def test_simulate_records_exec_output_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    task_source = tmp_path / "tasks.json"
-    _write_trace(
-        trace_path,
-        agent_id="task-a",
-        tool_name="exec",
-        tool_args={"command": "cat file.py"},
-    )
-    _write_tasks(task_source, "task-a")
-    _patch_simulator_runtime(monkeypatch, tmp_path)
-
-    async def fake_exec_tool(*_args, **_kwargs):
-        return "replay-result\n\nExit code: 0", 1.0, True
-
-    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
-
-    trace_file = asyncio.run(
-        simulate(
-            manifest=_single_trace_manifest(tmp_path, trace_path),
-            task_source=task_source,
-            output_dir=tmp_path / "out",
-            mode="cloud_model",
-            container_executable="docker",
-            replay_speed=100.0,
-        )
-    )
-
-    records = _read_jsonl(trace_file)
-    tool_record = next(
-        record
-        for record in records
-        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
-    )
-    summary = next(record for record in records if record.get("type") == "summary")
-
-    assert tool_record["data"]["replay_outcome_match"] is False
-    assert tool_record["data"]["mismatch_reason"] == "command_output_mismatch"
-    assert tool_record["data"]["source_output_hash"] == hashlib.sha256(
-        b"source-result"
-    ).hexdigest()
-    assert tool_record["data"]["replay_output_hash"] == hashlib.sha256(
-        b"replay-result\n\nExit code: 0"
-    ).hexdigest()
-    assert tool_record["data"]["output_diff_snippet"].startswith(
-        "- source-result\n+ replay-result"
-    )
-    assert summary["success"] is False
-    assert summary["outcome_mismatches"] == 1
-    assert summary["unresolved_mismatches"] == 1
 
 
 def test_missing_checkpoint_file_marks_forced_sync_failed(
@@ -2152,65 +2091,6 @@ def test_tool_mismatch_reason_distinguishes_wrapper_timeout() -> None:
     )
 
 
-def test_tool_mismatch_reason_detects_exec_output_mismatch() -> None:
-    tool_args = json.dumps({"exec": {"command": "ls /testbed"}})
-
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result="a.py\nb.py\n\nExit code: 0",
-            replay_tool_result="a.py\nc.py\n\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=tool_args,
-        )
-        == "command_output_mismatch"
-    )
-
-
-def test_tool_mismatch_reason_normalizes_container_identity_output() -> None:
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result=(
-                "uid=501(chiyuh) gid=20(staff) groups=20(staff),12(everyone)"
-                "\n\nExit code: 0"
-            ),
-            replay_tool_result="uid=0(root) gid=0(root) groups=0(root)\n\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=json.dumps({"exec": {"command": "id"}}),
-        )
-        is None
-    )
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result="chiyuh\n\nExit code: 0",
-            replay_tool_result="root\n\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=json.dumps({"exec": {"command": "whoami"}}),
-        )
-        is None
-    )
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result="uid=1000(alice)\n\nExit code: 0",
-            replay_tool_result="uid=1001(bob)\n\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=json.dumps({"exec": {"command": "id alice"}}),
-        )
-        == "command_output_mismatch"
-    )
-
-
 def test_compute_output_diff_snippet_captures_first_divergence() -> None:
     assert (
         _compute_output_diff_snippet("same\npid 123\ndone", "same\npid 456\ndone")
@@ -2228,70 +2108,6 @@ def test_compute_output_diff_snippet_captures_first_divergence() -> None:
         _compute_output_diff_snippet("abcdef", "uvwxyz", max_line_chars=3)
         == "- abc...<truncated 3 chars>\n+ uvw...<truncated 3 chars>"
     )
-
-
-def test_tool_mismatch_reason_ignores_nondeterministic_exec_output_lines() -> None:
-    tool_args = json.dumps({"exec": {"command": "time pytest"}})
-
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result="ok\n\nreal 0m1.234s\nuser 0m0.111s\nsys 0m0.222s\nExit code: 0",
-            replay_tool_result="ok\n\nreal 0m9.876s\nuser 0m8.765s\nsys 0m7.654s\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=tool_args,
-        )
-        is None
-    )
-
-
-def test_tool_mismatch_reason_preserves_pytest_pass_count() -> None:
-    tool_args = json.dumps({"exec": {"command": "pytest"}})
-
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result="== 12 passed in 1.23s ==\n\nExit code: 0",
-            replay_tool_result="== 12 passed in 9.87s ==\n\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=tool_args,
-        )
-        is None
-    )
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result="== 12 passed in 1.23s ==\n\nExit code: 0",
-            replay_tool_result="== 13 passed in 1.23s ==\n\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=tool_args,
-        )
-        == "command_output_mismatch"
-    )
-
-
-def test_tool_mismatch_reason_ignores_exit_code_metadata_for_output_hash() -> None:
-    tool_args = json.dumps({"exec": {"command": "cat file.py"}})
-
-    assert (
-        _tool_mismatch_reason(
-            source_success=True,
-            tool_success=True,
-            replay_source="executed_in_container",
-            source_tool_result="same stdout",
-            replay_tool_result="same stdout\n\nExit code: 0",
-            tool_name="exec",
-            tool_args_json=tool_args,
-        )
-        is None
-    )
-
 
 def test_tool_mismatch_reason_skips_output_comparison_for_non_exec_tools() -> None:
     assert (

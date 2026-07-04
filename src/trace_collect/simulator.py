@@ -8,8 +8,6 @@ import json
 import logging
 import multiprocessing
 import os
-import re
-import shlex
 import subprocess
 import shutil
 import time
@@ -398,48 +396,6 @@ def _command_exit_code(tool_result: str) -> int | None:
     except ValueError:
         return None
 
-
-_NONDETERMINISTIC_TOOL_OUTPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"real\s+\d+m\d+\.\d+s"),
-    re.compile(r"user\s+\d+m\d+\.\d+s"),
-    re.compile(r"sys\s+\d+m\d+\.\d+s"),
-)
-_NONDETERMINISTIC_TOOL_OUTPUT_REPLACEMENTS: tuple[
-    tuple[re.Pattern[str], str],
-    ...,
-] = (
-    (
-        re.compile(r"(==+\s+\d+\s+passed\s+in\s+)[\d.]+s(\s*==+)"),
-        r"\1<duration>s\2",
-    ),
-)
-
-
-def _normalized_tool_output_hash(
-    text: str,
-    *,
-    identity_command: bool = False,
-) -> str:
-    lines = [line for line in text.splitlines() if line.strip()]
-    if lines and lines[-1].strip().startswith("Exit code:"):
-        lines = lines[:-1]
-    if identity_command and len(lines) == 1:
-        return hashlib.sha256(b"<identity>").hexdigest()
-    normalized_lines: list[str] = []
-    for line in lines:
-        if any(
-            pattern.fullmatch(line.strip())
-            for pattern in _NONDETERMINISTIC_TOOL_OUTPUT_PATTERNS
-        ):
-            continue
-        normalized_line = line
-        for pattern, replacement in _NONDETERMINISTIC_TOOL_OUTPUT_REPLACEMENTS:
-            normalized_line = pattern.sub(replacement, normalized_line)
-        normalized_lines.append(normalized_line)
-    normalized = "\n".join(normalized_lines)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
 def _compute_output_diff_snippet(
     source: str,
     replay: str,
@@ -525,25 +481,6 @@ def _tool_uses_single_exec_command_semantics(
     return "command" in payload and "commands" not in payload
 
 
-def _tool_uses_identity_command(
-    tool_name: str | None,
-    tool_args_json: Any,
-) -> bool:
-    payload = _exec_semantics_payload(tool_name, tool_args_json)
-    if payload is None or "commands" in payload:
-        return False
-    raw_command = payload.get("command")
-    if not isinstance(raw_command, str):
-        return False
-    try:
-        parts = shlex.split(raw_command)
-    except ValueError:
-        return False
-    if parts == ["whoami"]:
-        return True
-    return bool(parts and parts[0] == "id" and all(part.startswith("-") for part in parts[1:]))
-
-
 def _tool_mismatch_reason(
     *,
     source_success: bool,
@@ -575,18 +512,6 @@ def _tool_mismatch_reason(
             and source_exit != replay_exit
         ):
             return "command_exit_code_mismatch"
-        if not source_timeout and not replay_timeout:
-            identity_command = _tool_uses_identity_command(tool_name, tool_args_json)
-            source_hash = _normalized_tool_output_hash(
-                str(source_tool_result or ""),
-                identity_command=identity_command,
-            )
-            replay_hash = _normalized_tool_output_hash(
-                str(replay_tool_result or ""),
-                identity_command=identity_command,
-            )
-            if source_hash != replay_hash:
-                return "command_output_mismatch"
     return None
 
 
@@ -3783,12 +3708,6 @@ async def _replay_cloud_model_session(
             if mismatch_reason is not None:
                 source_raw = "" if source_tool_result is None else str(source_tool_result)
                 replay_raw = "" if tool_result is None else str(tool_result)
-                forced_sync_fields["source_output_hash"] = hashlib.sha256(
-                    source_raw.encode("utf-8")
-                ).hexdigest()
-                forced_sync_fields["replay_output_hash"] = hashlib.sha256(
-                    replay_raw.encode("utf-8")
-                ).hexdigest()
                 diff_snippet = _compute_output_diff_snippet(source_raw, replay_raw)
                 if diff_snippet is not None:
                     forced_sync_fields["output_diff_snippet"] = diff_snippet
