@@ -24,6 +24,9 @@ class ExecTool(Tool):
         deny_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
+        *,
+        container_id: str | None = None,
+        container_executable: str | None = None,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
@@ -40,6 +43,8 @@ class ExecTool(Tool):
         ]
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
+        self._container_id = container_id
+        self._container_executable = container_executable
 
     @property
     def name(self) -> str:
@@ -96,6 +101,80 @@ class ExecTool(Tool):
 
         effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
 
+        # Container mode: redirect through docker exec
+        if self._container_id and self._container_executable:
+            return await self._execute_in_container(
+                command=command,
+                working_dir=working_dir,
+                timeout=effective_timeout,
+            )
+
+        # Local execution via subprocess
+        return await self._execute_locally(
+            command=command,
+            cwd=cwd,
+            effective_timeout=effective_timeout,
+        )
+
+    async def _execute_in_container(
+        self,
+        command: str,
+        working_dir: str | None = None,
+        timeout: int | None = None,
+    ) -> str:
+        cwd = working_dir or self.working_dir or "/testbed"
+        effective_timeout = timeout or self._DEFAULT_TIMEOUT
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self._container_executable,
+                "exec",
+                "-i",
+                "-w", cwd,
+                self._container_id,
+                "/bin/sh", "-c", command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=effective_timeout,
+                )
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                    pass
+                return f"Error: Command timed out after {effective_timeout} seconds"
+
+            output_parts = []
+            if stdout:
+                output_parts.append(stdout.decode("utf-8", errors="replace"))
+            if stderr:
+                stderr_text = stderr.decode("utf-8", errors="replace")
+                if stderr_text.strip():
+                    output_parts.append(f"STDERR:\n{stderr_text}")
+            output_parts.append(f"\nExit code: {proc.returncode}")
+            result = "\n".join(output_parts) if output_parts else "(no output)"
+
+            max_len = self._MAX_OUTPUT
+            if len(result) > max_len:
+                half = max_len // 2
+                result = (
+                    result[:half]
+                    + f"\n\n... ({len(result) - max_len:,} chars truncated) ...\n\n"
+                    + result[-half:]
+                )
+            return result
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    async def _execute_locally(
+        self,
+        command: str,
+        cwd: str,
+        effective_timeout: int,
+    ) -> str:
         env = os.environ.copy()
         if self.path_append:
             env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
