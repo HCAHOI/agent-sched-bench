@@ -553,6 +553,7 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
     ]
 
     selected = _select_tasks(
+        SimpleNamespace(config=SimpleNamespace(selection_seed=42)),
         tasks,
         instance_ids=[
             "encode__httpx-2701",
@@ -567,53 +568,32 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
     ]
 
 
-def test_select_tasks_applies_skip_before_sample() -> None:
+def test_select_tasks_applies_benchmark_random_sample() -> None:
     tasks = [
         {"instance_id": "task-1"},
         {"instance_id": "task-2"},
         {"instance_id": "task-3"},
         {"instance_id": "task-4"},
+        {"instance_id": "task-5"},
     ]
 
-    selected = _select_tasks(tasks, instance_ids=None, sample=2, skip=1)
+    benchmark = SimpleNamespace(config=SimpleNamespace(selection_seed=42))
+    selected = _select_tasks(benchmark, tasks, instance_ids=None, sample=3)
 
-    assert [task["instance_id"] for task in selected] == ["task-2", "task-3"]
-
-
-def test_select_tasks_applies_skip_after_instance_filter() -> None:
-    tasks = [
-        {"instance_id": "task-1"},
-        {"instance_id": "task-2"},
-        {"instance_id": "task-3"},
+    assert [task["instance_id"] for task in selected] == [
+        "task-1",
+        "task-5",
+        "task-3",
     ]
-
-    selected = _select_tasks(
-        tasks,
-        instance_ids=["task-3", "task-1", "task-2"],
-        sample=1,
-        skip=1,
-    )
-
-    assert [task["instance_id"] for task in selected] == ["task-1"]
-
-
-def test_select_tasks_rejects_negative_skip() -> None:
-    with pytest.raises(ValueError, match="skip must be non-negative"):
-        _select_tasks(
-            [{"instance_id": "task-1"}],
-            instance_ids=None,
-            sample=None,
-            skip=-1,
-        )
 
 
 def test_select_tasks_rejects_negative_sample() -> None:
     with pytest.raises(ValueError, match="sample must be non-negative"):
         _select_tasks(
+            SimpleNamespace(config=SimpleNamespace(selection_seed=42)),
             [{"instance_id": "task-1"}],
             instance_ids=None,
             sample=-1,
-            skip=0,
         )
 
 

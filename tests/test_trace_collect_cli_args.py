@@ -7,23 +7,23 @@ import pytest
 from trace_collect.cli import parse_collect_args
 
 
-def test_parse_collect_args_accepts_skip_and_concurrency() -> None:
+def test_parse_collect_args_accepts_sample_and_concurrency() -> None:
     args = parse_collect_args([
         "--provider",
         "openrouter",
         "--model",
         "z-ai/glm-5.1",
-        "--skip",
+        "--sample",
         "7",
         "--concurrency",
         "3",
     ])
 
-    assert args.skip == 7
+    assert args.sample == 7
     assert args.concurrency == 3
 
 
-def test_parse_collect_args_rejects_negative_skip() -> None:
+def test_parse_collect_args_rejects_skip_argument() -> None:
     with pytest.raises(SystemExit):
         parse_collect_args([
             "--provider",
@@ -31,7 +31,7 @@ def test_parse_collect_args_rejects_negative_skip() -> None:
             "--model",
             "z-ai/glm-5.1",
             "--skip",
-            "-1",
+            "7",
         ])
 
 

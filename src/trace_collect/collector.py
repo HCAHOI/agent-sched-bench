@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -214,13 +215,13 @@ def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) 
 
 
 def _select_tasks(
+    benchmark: "Benchmark",
     tasks: list[dict[str, Any]],
     *,
     instance_ids: list[str] | None,
     sample: int | None,
-    skip: int = 0,
 ) -> list[dict[str, Any]]:
-    """Filter tasks, then apply ``skip`` and ``sample`` in that order."""
+    """Filter tasks, then apply benchmark-seeded random sampling."""
     selected = list(tasks)
     if instance_ids is not None:
         by_id = {task["instance_id"]: task for task in tasks}
@@ -230,14 +231,11 @@ def _select_tasks(
         if missing:
             raise ValueError(f"No tasks matched instance_ids: {missing}")
         selected = [by_id[instance_id] for instance_id in instance_ids]
-    if skip < 0:
-        raise ValueError(f"skip must be non-negative, got {skip}")
-    if skip:
-        selected = selected[skip:]
     if sample is not None:
         if sample < 0:
             raise ValueError(f"sample must be non-negative, got {sample}")
-        selected = selected[:sample]
+        rng = random.Random(benchmark.config.selection_seed)
+        selected = rng.sample(selected, k=min(sample, len(selected)))
     return selected
 
 
@@ -685,7 +683,6 @@ async def collect_traces(
     top_k: int | None = None,
     repetition_penalty: float | None = None,
     sample: int | None = None,
-    skip: int = 0,
     concurrency: int = 1,
     instance_ids: list[str] | None = None,
     run_id: str | None = None,
@@ -748,10 +745,10 @@ async def collect_traces(
         )
 
     tasks = _select_tasks(
+        benchmark,
         benchmark.load_tasks(),
         instance_ids=instance_ids,
         sample=sample,
-        skip=skip,
     )
 
     def make_inner(task: dict[str, Any]):

@@ -128,6 +128,7 @@ def test_collect_traces_supports_host_controller_runner(
             default_prompt_template="default",
             trace_root=tmp_path / "traces",
             harness_split=None,
+            selection_seed=42,
         ),
         image_name_for=lambda task: None,
     )
