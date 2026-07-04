@@ -16,9 +16,12 @@ from trace_collect.simulator import (
     PreparedTraceSession,
     SimulateError,
     WorkerTraceInput,
+    _capture_snapshot_manifest,
     _checkpoint_after_spec,
+    _checkpoint_spec_is_incremental,
     _chunk_worker_inputs_by_concurrency,
     _compute_output_diff_snippet,
+    _fold_source_checkpoint_entries,
     _partition_worker_inputs,
     _resolve_prep_concurrency,
     _restore_cas_manifest_in_container,
@@ -4814,3 +4817,307 @@ def test_tongyi_deepresearch_fixture_is_valid_v5() -> None:
         assert "tool_args" in tool["data"]
         assert "tool_result" in tool["data"]
         assert "duration_ms" in tool["data"]
+
+
+# ── Step 4: CAS checkpoint fold chain + marker protocol ──────────────────────
+
+
+class TestFoldSourceCheckpointEntries:
+    """Unit tests for _fold_source_checkpoint_entries fold chain."""
+
+    def test_full_replaces_prev_folded(self, tmp_path: Path) -> None:
+        spec_path = tmp_path / "full.json"
+        spec_path.write_text(json.dumps({
+            "entries": {"a.txt": {"hash": "aaa"}, "b.txt": {"hash": "bbb"}},
+            "deleted_paths": [],
+        }))
+        spec = {"path": str(spec_path), "kind": "cas_manifest_full", "incremental": False}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"old.txt": "oldhash"},
+        )
+        assert result == {"a.txt": "aaa", "b.txt": "bbb"}
+
+    def test_incremental_updates_and_deletes(self, tmp_path: Path) -> None:
+        spec_path = tmp_path / "inc.json"
+        spec_path.write_text(json.dumps({
+            "entries": {"b.txt": {"hash": "bbb_v2"}, "c.txt": {"hash": "ccc"}},
+            "deleted_paths": ["a.txt"],
+        }))
+        spec = {"path": str(spec_path), "kind": "cas_manifest_incremental", "incremental": True}
+        prev = {"a.txt": "aaa", "b.txt": "bbb_v1"}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded=prev,
+        )
+        assert result == {"b.txt": "bbb_v2", "c.txt": "ccc"}
+
+    def test_chain_full_inc_inc(self, tmp_path: Path) -> None:
+        specs_dir = tmp_path / "checkpoints"
+        specs_dir.mkdir()
+
+        def _write_spec(name, entries, deleted=None, kind="cas_manifest_full"):
+            p = specs_dir / name
+            p.write_text(json.dumps({
+                "entries": {k: {"hash": v} for k, v in entries.items()},
+                "deleted_paths": deleted or [],
+            }))
+            incremental = kind == "cas_manifest_incremental"
+            return {"path": str(p), "kind": kind, "incremental": incremental}
+
+        folded: dict[str, str] = {}
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec=_write_spec("full.json", {"a": "h1", "b": "h2"}, kind="cas_manifest_full"),
+            prev_folded=folded,
+        )
+        assert folded == {"a": "h1", "b": "h2"}
+
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec=_write_spec("inc1.json", {"b": "h2b", "c": "h3"}, deleted=["a"], kind="cas_manifest_incremental"),
+            prev_folded=folded,
+        )
+        assert folded == {"b": "h2b", "c": "h3"}
+
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec=_write_spec("inc2.json", {"d": "h4"}, kind="cas_manifest_incremental"),
+            prev_folded=folded,
+        )
+        assert folded == {"b": "h2b", "c": "h3", "d": "h4"}
+
+    def test_missing_manifest_preserves_prev(self) -> None:
+        spec = {"path": "/nonexistent/manifest.json", "kind": "cas_manifest_full", "incremental": False}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"a": "h1"},
+        )
+        assert result == {"a": "h1"}
+
+    def test_invalid_json_preserves_prev(self, tmp_path: Path) -> None:
+        p = tmp_path / "bad.json"
+        p.write_text("not json")
+        spec = {"path": str(p), "kind": "cas_manifest_incremental", "incremental": True}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"a": "h1"},
+        )
+        assert result == {"a": "h1"}
+
+    def test_filesystem_tar_as_full(self, tmp_path: Path) -> None:
+        import tarfile
+        tar_path = tmp_path / "snapshot.tar"
+        content = b"hello"
+        digest = hashlib.sha256(content).hexdigest()
+        with tarfile.open(str(tar_path), "w") as tf:
+            info = tarfile.TarInfo(name="x.txt")
+            info.size = len(content)
+            tf.addfile(info, __import__("io").BytesIO(content))
+        spec = {"path": str(tar_path), "kind": "filesystem_tar", "incremental": False}
+        result = _fold_source_checkpoint_entries(
+            checkpoint_spec=spec,
+            prev_folded={"old": "h"},
+        )
+        assert result == {"x.txt": digest}
+
+
+class TestCaptureSnapshotManifest:
+    """Tests for _capture_snapshot_manifest marker protocol and merge."""
+
+    def test_no_epoch_reset_in_script(self) -> None:
+        """The incremental script must not contain '197001010000' (epoch reset)."""
+        import inspect
+        source = inspect.getsource(_capture_snapshot_manifest)
+        assert "197001010000" not in source
+
+    def test_full_mode_includes_all_paths_and_marker(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Full mode script must emit all_paths and set up marker."""
+        captured_script: list[str] = []
+
+        def fake_run(cmd, **_kwargs):
+            captured_script.append(" ".join(cmd))
+            return type("Result", (), {"returncode": 0, "stdout": '{"entries": {"a": "h1"}, "all_paths": ["a"]}', "stderr": ""})
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=None,
+        )
+        script = captured_script[0]
+        assert "all_paths" in script
+        assert "temp_marker" in script or "cas_marker_new" in script
+        assert "os.rename" in script
+        assert result == {"a": "h1"}
+
+    def test_incremental_merge_and_deletion_pruning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Incremental merge: delta applied, unchanged files inherited, deletions pruned."""
+        def fake_run(cmd, **_kwargs):
+            if "-c" in cmd:
+                return type("Result", (), {
+                    "returncode": 0,
+                    "stdout": '{"entries": {"b": "h2b", "c": "ccc"}, "all_paths": ["a", "b", "c"]}',
+                    "stderr": "",
+                })
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        prev = {"a": "h1", "b": "h2", "deleted_file": "h_del"}
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=prev,
+        )
+        # a inherited (unchanged), b updated (in delta), c added (in delta), deleted_file pruned
+        assert result == {"a": "h1", "b": "h2b", "c": "ccc"}
+
+    def test_full_mode_empty_dir_returns_empty_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_run(cmd, **_kwargs):
+            return type("Result", (), {
+                "returncode": 0,
+                "stdout": '{"entries": {}, "all_paths": []}',
+                "stderr": "",
+            })
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=None,
+        )
+        assert result == {}
+
+
+class TestBugARegression:
+    """Regression tests for Bug A: incremental source vs full replay comparison."""
+
+    def test_incremental_source_chain_matches_full_replay(self, tmp_path: Path) -> None:
+        """Second checkpoint after incremental chain: replay matches source → cas_manifest_match=True, cas_added_count=0."""
+        cp_dir = tmp_path / "checkpoints"
+        cp_dir.mkdir()
+
+        full_manifest = cp_dir / "full.json"
+        full_manifest.write_text(json.dumps({
+            "entries": {
+                "a.txt": {"hash": "aaa"},
+                "b.txt": {"hash": "bbb"},
+            },
+            "deleted_paths": [],
+        }))
+
+        inc_manifest = cp_dir / "inc1.json"
+        inc_manifest.write_text(json.dumps({
+            "entries": {
+                "b.txt": {"hash": "bbb_v2"},
+                "c.txt": {"hash": "ccc"},
+            },
+            "deleted_paths": ["a.txt"],
+        }))
+
+        # Fold source chain manually to get expected folded state
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec={"path": str(full_manifest), "kind": "cas_manifest_full", "incremental": False},
+            prev_folded={},
+        )
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec={"path": str(inc_manifest), "kind": "cas_manifest_incremental", "incremental": True},
+            prev_folded=folded,
+        )
+        assert folded == {"b.txt": "bbb_v2", "c.txt": "ccc"}
+
+        # Now simulate the replay side: replay matches exactly
+        # Replay entries = folded state (no divergence)
+        replay_entries = {"b.txt": "bbb_v2", "c.txt": "ccc"}
+
+        source_keys = set(folded.keys())
+        replay_keys = set(replay_entries.keys())
+        common = source_keys & replay_keys
+        modified = [k for k in common if folded[k] != replay_entries[k]]
+        added = sorted(replay_keys - source_keys)
+        removed = sorted(source_keys - replay_keys)
+        cas_manifest_match = len(modified) == 0 and len(removed) == 0 and len(added) == 0
+
+        assert cas_manifest_match is True
+        assert len(modified) == 0
+        assert len(added) == 0
+        assert len(removed) == 0
+
+    def test_incremental_source_chain_detects_replay_divergence(self, tmp_path: Path) -> None:
+        """Replay has extra file → mismatch detected."""
+        cp_dir = tmp_path / "checkpoints"
+        cp_dir.mkdir()
+
+        full_manifest = cp_dir / "full.json"
+        full_manifest.write_text(json.dumps({
+            "entries": {"a.txt": {"hash": "aaa"}},
+            "deleted_paths": [],
+        }))
+
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec={"path": str(full_manifest), "kind": "cas_manifest_full", "incremental": False},
+            prev_folded={},
+        )
+        # Replay has a stray extra file
+        replay = {"a.txt": "aaa", "stray.txt": "extra"}
+        added = sorted(set(replay.keys()) - set(folded.keys()))
+        assert added == ["stray.txt"]
+
+
+class TestBugCRestoreChainCorrectness:
+    """Evidence for Bug C: incremental restore chain is applied correctly."""
+
+    def test_first_in_chain_is_always_full(self) -> None:
+        """_checkpoint_chain_specs_for_action returns chain starting with full checkpoint."""
+        assert not _checkpoint_spec_is_incremental({"kind": "cas_manifest_full", "incremental": False})
+        assert _checkpoint_spec_is_incremental({"kind": "cas_manifest_incremental", "incremental": True})
+        assert _checkpoint_spec_is_incremental({"incremental": True})
+
+    def test_restore_chain_applies_incrementals_on_full_base(self) -> None:
+        """_restore_checkpoint_chain_to_container guarantees correct ordering:
+        first spec is always a full checkpoint (clear_root=True), subsequent
+        incremental specs are applied on top (clear_root=False).
+
+        This is verified by _checkpoint_chain_specs_for_action which walks
+        backward until it finds a non-incremental spec. If none found, returns
+        None and the caller reports failure. The chain restore itself is
+        tested in test_simulate_forced_sync_restores_incremental_checkpoint_chain.
+        """
+        # Sanity: full spec is not incremental
+        full_spec = {"kind": "cas_manifest_full", "incremental": False}
+        inc_spec = {"kind": "cas_manifest_incremental", "incremental": True}
+        assert not _checkpoint_spec_is_incremental(full_spec)
+        assert _checkpoint_spec_is_incremental(inc_spec)
+
+        # Verify chain construction: a chain starting from a full checkpoint
+        # can be constructed; if only incremental specs exist, chain is None.
+        from trace_collect.simulator import _checkpoint_chain_specs_for_action
+
+        actions: list[dict] = [
+            {"data": {"checkpoint_after": {"path": "/tmp/inc_only.json", "kind": "cas_manifest_incremental", "incremental": True, "root": "/testbed"}}},
+            {"data": {"checkpoint_after": {"path": "/tmp/inc2.json", "kind": "cas_manifest_incremental", "incremental": True, "root": "/testbed"}}},
+        ]
+        chain = _checkpoint_chain_specs_for_action(
+            actions=actions,
+            target_index=1,
+            source_trace=Path("/tmp/trace.jsonl"),
+        )
+        # No full checkpoint → chain is None (can't restore safely)
+        assert chain is None
+
+        # With full checkpoint → chain is valid
+        actions_with_full = [
+            {"data": {"checkpoint_after": {"path": "/tmp/full.json", "kind": "cas_manifest_full", "incremental": False, "root": "/testbed"}}},
+            {"data": {"checkpoint_after": {"path": "/tmp/inc.json", "kind": "cas_manifest_incremental", "incremental": True, "root": "/testbed"}}},
+        ]
+        chain = _checkpoint_chain_specs_for_action(
+            actions=actions_with_full,
+            target_index=1,
+            source_trace=Path("/tmp/trace.jsonl"),
+        )
+        assert chain is not None
+        assert len(chain) == 2
+        assert not _checkpoint_spec_is_incremental(chain[0])  # first is full

@@ -800,67 +800,55 @@ def _capture_snapshot_manifest(
     """Walk /testbed inside a live container, return {relpath: sha256hex}.
 
     When *previous_manifest* is provided, uses ``find -newer`` with a
-    reference file inside the container to only hash files changed since
+    marker file inside the container to only hash files changed since
     the last snapshot. Unchanged files are inherited from the previous
-    manifest. This avoids an O(repo) SHA256 walk per snapshot.
+    manifest. A full ``all_paths`` listing (stat only, no hash) is always
+    collected for deletion detection.
+
+    Marker protocol (race-resistant):
+      1. touch temp_marker (capture start timestamp)
+      2. find -newer old_marker → hash changed files
+      3. walk full tree for all_paths (stat only)
+      4. rename temp_marker → old_marker (atomic success signal)
 
     Skips .git directory. Uses same hash convention as _write_cas_manifest.
     Returns empty dict on any error (logged as warning).
     """
     import json as _json_module
 
+
     if previous_manifest is not None:
-        # Incremental mode: only hash files newer than the reference.
-        # The marker file is created before each snapshot and touched
-        # after tool re-execution so find -newer picks up all changes.
-        marker = "/tmp/.cas_marker"
-        script = rf"""
+        script = r"""
 import hashlib, json, os, stat, subprocess
 
 root = os.environ.get("SNAPSHOT_ROOT", "/testbed")
-marker = "{marker}"
-# Touch the marker so find -newer uses its mtime as baseline
-subprocess.run(["touch", "-t", "197001010000", marker], capture_output=True)
+marker = "/tmp/.cas_marker"
+temp_marker = "/tmp/.cas_marker_new"
 
-# Find files changed since marker was last updated in the prior run
-# (the marker mtime is set to epoch-0 and then updated by touch before each tool exec).
+# Record capture start timestamp
+subprocess.run(["touch", temp_marker], capture_output=True)
+
+# Find files changed since last snapshot
 result = subprocess.run(
     ["find", root, "-newer", marker, "-type", "f"],
     capture_output=True, text=True, timeout=30,
 )
-changed_paths = [p for p in result.stdout.strip().splitlines() if p]
+changed = set()
+if result.returncode == 0:
+    for p in result.stdout.strip().splitlines():
+        if not p:
+            continue
+        parts = p.split(os.sep)
+        if ".git" in parts:
+            continue
+        rel = os.path.relpath(p, root)
+        changed.add(rel)
+else:
+    # find failed — fall back to full hash
+    pass
 
-# Touch the marker to now for the next snapshot
-subprocess.run(["touch", marker], capture_output=True)
-
-entries = {{}}
-skip_prefixes = {{".git"}}
-for fpath in changed_paths:
-    # Skip .git paths
-    parts = fpath.split(os.sep)
-    if any(p in skip_prefixes for p in parts):
-        continue
-    try:
-        st = os.lstat(fpath)
-    except OSError:
-        continue
-    if not stat.S_ISREG(st.st_mode):
-        continue
-    rel = os.path.relpath(fpath, root)
-    try:
-        with open(fpath, "rb") as f:
-            digest = hashlib.sha256(f.read()).hexdigest()
-    except OSError:
-        continue
-    entries[rel] = digest
-print(json.dumps(entries))
-"""
-    else:
-        script = r"""
-import hashlib, json, os, stat
-
-root = os.environ.get("SNAPSHOT_ROOT", "/testbed")
 entries = {}
+all_paths = []
 skip_dirs = {".git"}
 for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
     dirnames[:] = [d for d in dirnames if d not in skip_dirs]
@@ -875,13 +863,56 @@ for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         if not stat.S_ISREG(st.st_mode):
             continue
         rel = os.path.relpath(fpath, root)
+        all_paths.append(rel)
+        if changed and rel not in changed:
+            continue
         try:
             with open(fpath, "rb") as f:
                 digest = hashlib.sha256(f.read()).hexdigest()
         except OSError:
             continue
         entries[rel] = digest
-print(json.dumps(entries))
+
+os.rename(temp_marker, marker)
+print(json.dumps({"entries": entries, "all_paths": all_paths}))
+"""
+    else:
+        script = r"""
+import hashlib, json, os, stat, subprocess
+
+root = os.environ.get("SNAPSHOT_ROOT", "/testbed")
+marker = "/tmp/.cas_marker"
+temp_marker = "/tmp/.cas_marker_new"
+
+# Record capture start timestamp (sets baseline for next incremental)
+subprocess.run(["touch", temp_marker], capture_output=True)
+
+entries = {}
+all_paths = []
+skip_dirs = {".git"}
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+    dirnames.sort()
+    filenames.sort()
+    for fname in filenames:
+        fpath = os.path.join(dirpath, fname)
+        try:
+            st = os.lstat(fpath)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        rel = os.path.relpath(fpath, root)
+        all_paths.append(rel)
+        try:
+            with open(fpath, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            continue
+        entries[rel] = digest
+
+os.rename(temp_marker, marker)
+print(json.dumps({"entries": entries, "all_paths": all_paths}))
 """
     result = subprocess.run(
         [container_executable, "exec", "-i", container_id, "python3", "-c", script],
@@ -897,27 +928,76 @@ print(json.dumps(entries))
         )
         return {}
     try:
-        delta = json.loads(result.stdout.strip())
-    except (json.JSONDecodeError, ValueError) as exc:
+        delta = _json_module.loads(result.stdout.strip())
+    except (_json_module.JSONDecodeError, ValueError) as exc:
         logger.warning("Snapshot manifest parse error: %s", exc)
         return {}
 
-    if previous_manifest is not None and delta:
-        # Merge: inherit unchanged files, apply delta
+    delta_entries: dict[str, str] = delta.get("entries", {})
+    all_paths: list[str] = delta.get("all_paths", [])
+
+    if previous_manifest is not None:
         merged = dict(previous_manifest)
-        merged.update(delta)
-        # Remove files that no longer exist (detected by find-newer + os.lstat fail)
-        for relpath in delta:
-            if relpath not in previous_manifest:
-                continue
-            # File was present before but may have been deleted — check
-            # by comparing: if it's in delta but find -newer found it as
-            # removed, it won't exist in the directory. We handle deletions
-            # by also checking for files in previous but absent in live dir.
-            # This simplified merge trusts that find -newer catches deletes
-            # (via -newer on parent dir mtime change).
+        merged.update(delta_entries)
+        all_paths_set = set(all_paths)
+        for path in list(merged):
+            if path not in all_paths_set:
+                del merged[path]
         return merged
-    return delta if delta else {}
+
+    if not delta_entries and all_paths:
+        return {}
+    return delta_entries
+
+
+def _fold_source_checkpoint_entries(
+    *,
+    checkpoint_spec: dict[str, Any],
+    prev_folded: dict[str, str],
+) -> dict[str, str]:
+    """Fold a source checkpoint spec into the accumulated entries state.
+
+    For full checkpoints (``cas_manifest_full`` or ``filesystem_tar``),
+    replaces *prev_folded* entirely. For incremental CAS manifests, updates
+    *prev_folded* with the new entries and removes entries listed in
+    ``deleted_paths``.
+    """
+    manifest_path = Path(checkpoint_spec["path"])
+    if not manifest_path.is_file():
+        return prev_folded
+
+    is_incremental = _checkpoint_spec_is_incremental(checkpoint_spec)
+
+    # filesystem_tar: treat as full replacement
+    if manifest_path.suffix != ".json":
+        entries = _load_source_manifest_entries(str(manifest_path))
+        return entries if entries is not None else prev_folded
+
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return prev_folded
+
+    raw_entries = data.get("entries", {})
+    if not isinstance(raw_entries, dict):
+        return prev_folded
+
+    entries = {
+        rel: entry["hash"]
+        for rel, entry in raw_entries.items()
+        if isinstance(entry, dict) and "hash" in entry
+    }
+
+    if not is_incremental:
+        return entries
+
+    folded = dict(prev_folded)
+    folded.update(entries)
+    deleted = data.get("deleted_paths", [])
+    if isinstance(deleted, list):
+        for dpath in deleted:
+            folded.pop(dpath, None)
+    return folded
 
 
 def _load_source_manifest_entries(manifest_path: str) -> dict[str, str] | None:
@@ -3347,14 +3427,9 @@ async def _replay_cloud_model_session(
         if start_drift is not None:
             sleep_drifts.append(start_drift)
 
-    # Initialize CAS incremental snapshot tracking
-    prev_cas_manifest = None
-    if ctr is not None:
-        subprocess.run(
-            [ctr.container_executable, "exec", ctr.container_id,
-             "touch", "/tmp/.cas_marker"],
-            capture_output=True, timeout=10,
-        )
+    # Per-session CAS tracking state
+    prev_cas_manifest: dict[str, str] | None = None
+    folded_source_entries: dict[str, str] = {}
 
     for action_index, action in enumerate(loaded.actions):
         action_id = str(action.get("action_id", ""))
@@ -3636,14 +3711,12 @@ async def _replay_cloud_model_session(
                 source_trace=loaded.source_trace,
             )
             if cas_spec is not None and ctr is not None:
-                source_entries = _load_source_manifest_entries(cas_spec["path"])
-                if source_entries is not None:
-                    # Touch marker before tool, so find -newer catches changes
-                    subprocess.run(
-                        [ctr.container_executable, "exec", ctr.container_id,
-                         "touch", "/tmp/.cas_marker"],
-                        capture_output=True, timeout=10,
-                    )
+                folded_source_entries = _fold_source_checkpoint_entries(
+                    checkpoint_spec=cas_spec,
+                    prev_folded=folded_source_entries,
+                )
+                source_entries = folded_source_entries
+                if source_entries:
                     replay_entries = _capture_snapshot_manifest(
                         container_id=ctr.container_id,
                         container_executable=ctr.container_executable,
@@ -3786,6 +3859,10 @@ async def _replay_cloud_model_session(
                     forced_sync_success = (
                         forced_sync_fields.get("forced_sync_success") is True
                     )
+                    # Container has been restored to source state;
+                    # previous replay manifest entries are stale.
+                    if forced_sync_success:
+                        prev_cas_manifest = None
                     forced_sync_fields.setdefault("forced_sync_success", False)
                     forced_sync_fields["forced_sync_resolved"] = False
                     forced_sync_fields.setdefault(
