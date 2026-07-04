@@ -6,15 +6,13 @@ import asyncio
 import base64
 from pathlib import Path, PurePosixPath
 
-import pytest
-
 from agents.openclaw.tools.filesystem import (
     EditFileTool,
     ListDirTool,
     ReadFileTool,
     WriteFileTool,
 )
-from agents.openclaw.tools.shell import ExecTool
+from agents.openclaw.tools.shell import ExecTool, _CONTAINER_TIMEOUT_MARKER_PREFIX
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +108,65 @@ def test_exec_tool_container_default_cwd_custom(monkeypatch):
     argv = calls[0]
     w_idx = argv.index("-w")
     assert argv[w_idx + 1] == "/workspace"
+
+
+def test_exec_tool_container_uses_python_wrapper_with_raw_command(monkeypatch):
+    calls: list[list[str]] = []
+
+    async def fake_exec(*cmd, **kwargs):
+        calls.append(list(cmd))
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr("agents.openclaw.tools.shell.asyncio.create_subprocess_exec", fake_exec)
+
+    command = "printf 'a && b' | cat"
+    tool = ExecTool(container_id="cid-1", container_executable="docker")
+    asyncio.run(tool.execute(command, timeout=7))
+
+    argv = calls[0]
+    cid_idx = argv.index("cid-1")
+    assert argv[cid_idx + 1] == "python3"
+    assert argv[cid_idx + 2] == "-c"
+    assert "subprocess.Popen" in argv[cid_idx + 3]
+    assert argv[cid_idx + 4] == command
+    assert argv[cid_idx + 5] == "7"
+    assert argv[cid_idx + 6].startswith(_CONTAINER_TIMEOUT_MARKER_PREFIX)
+
+
+def test_exec_tool_container_preserves_user_exit_124(monkeypatch):
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "agents.openclaw.tools.shell.asyncio.create_subprocess_exec",
+        _recorded_exec(calls, stdout=b"user failed", returncode=124),
+    )
+
+    tool = ExecTool(container_id="cid-1", container_executable="docker")
+    result = asyncio.run(tool.execute("exit 124", timeout=7))
+
+    assert result == "user failed\n\nExit code: 124"
+
+
+def test_exec_tool_container_timeout_marker_reports_timeout(monkeypatch):
+    calls: list[list[str]] = []
+
+    async def fake_exec(*cmd, **kwargs):
+        calls.append(list(cmd))
+        timeout_marker = cmd[-1]
+        return _FakeProc(
+            stderr=f"{timeout_marker}\n".encode(),
+            returncode=124,
+        )
+
+    monkeypatch.setattr(
+        "agents.openclaw.tools.shell.asyncio.create_subprocess_exec",
+        fake_exec,
+    )
+
+    tool = ExecTool(container_id="cid-1", container_executable="docker")
+    result = asyncio.run(tool.execute("sleep 99", timeout=7))
+
+    assert result == "Error: Command timed out after 7 seconds"
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +383,6 @@ def test_edit_file_container_preserves_crlf(monkeypatch):
             self.stdin_received = input
             return self.stdout_data, self.stderr_data
 
-    read_calls = []
     write_calls = []
 
     async def fake_exec(*cmd, **kwargs):

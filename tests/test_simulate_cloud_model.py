@@ -17,6 +17,7 @@ from trace_collect.simulator import (
     SimulateError,
     WorkerTraceInput,
     _capture_snapshot_manifest,
+    _cas_manifest_comparison_fields,
     _checkpoint_after_spec,
     _checkpoint_spec_is_incremental,
     _chunk_worker_inputs_by_concurrency,
@@ -4991,6 +4992,32 @@ class TestCaptureSnapshotManifest:
         )
         assert result == {}
 
+    def test_capture_failure_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_run(cmd, **_kwargs):
+            return type("Result", (), {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "container failed",
+            })
+
+        monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+        result = _capture_snapshot_manifest(
+            container_id="cid",
+            container_executable="docker",
+            root="/testbed",
+            previous_manifest=None,
+        )
+        assert result is None
+
+    def test_incremental_no_changes_script_does_not_hash_unchanged_files(self) -> None:
+        import inspect
+
+        source = inspect.getsource(_capture_snapshot_manifest)
+        assert "changed = None" in source
+        assert "changed = set()" in source
+        assert "if changed is not None and rel not in changed:" in source
+
 
 class TestBugARegression:
     """Regression tests for Bug A: incremental source vs full replay comparison."""
@@ -5065,6 +5092,30 @@ class TestBugARegression:
         replay = {"a.txt": "aaa", "stray.txt": "extra"}
         added = sorted(set(replay.keys()) - set(folded.keys()))
         assert added == ["stray.txt"]
+
+    def test_empty_source_nonempty_replay_is_mismatch(self) -> None:
+        fields = _cas_manifest_comparison_fields(
+            source_entries={},
+            replay_entries={"stray.txt": "extra"},
+        )
+
+        assert fields["cas_manifest_match"] is False
+        assert fields["cas_source_entries"] == 0
+        assert fields["cas_replay_entries"] == 1
+        assert fields["cas_added_count"] == 1
+        assert fields["cas_removed_count"] == 0
+
+    def test_nonempty_source_empty_replay_is_mismatch(self) -> None:
+        fields = _cas_manifest_comparison_fields(
+            source_entries={"expected.txt": "hash"},
+            replay_entries={},
+        )
+
+        assert fields["cas_manifest_match"] is False
+        assert fields["cas_source_entries"] == 1
+        assert fields["cas_replay_entries"] == 0
+        assert fields["cas_added_count"] == 0
+        assert fields["cas_removed_count"] == 1
 
 
 class TestBugCRestoreChainCorrectness:

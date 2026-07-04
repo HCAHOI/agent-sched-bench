@@ -1,9 +1,9 @@
 import asyncio
 import os
 import re
-import shlex
 import signal
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,70 @@ from agents.openclaw.tools.base import Tool
 
 
 MAX_EXEC_TOOL_TIMEOUT_SEC = 600
+_CONTAINER_TIMEOUT_MARKER_PREFIX = "__OPENCLAW_EXEC_WRAPPER_TIMEOUT__"
+_CONTAINER_EXEC_WRAPPER = """
+import os
+import signal
+import subprocess
+import sys
+
+command = sys.argv[1]
+timeout_s = float(sys.argv[2])
+timeout_marker = sys.argv[3]
+
+process = subprocess.Popen(
+    command,
+    shell=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    start_new_session=hasattr(os, "setsid"),
+)
+try:
+    stdout, stderr = process.communicate(timeout=timeout_s)
+except subprocess.TimeoutExpired:
+    pgid = None
+    if hasattr(os, "getpgid"):
+        try:
+            pgid = os.getpgid(process.pid)
+        except Exception:
+            pass
+
+    def terminate_group(sig):
+        try:
+            if pgid is not None and hasattr(os, "killpg"):
+                os.killpg(pgid, sig)
+            elif sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
+        except Exception:
+            pass
+
+    terminate_group(signal.SIGTERM)
+    try:
+        process.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        pass
+    terminate_group(signal.SIGKILL)
+    try:
+        process.communicate(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+    sys.stderr.buffer.write((timeout_marker + "\\n").encode())
+    raise SystemExit(124)
+
+if stdout:
+    sys.stdout.buffer.write(stdout)
+if stderr:
+    sys.stderr.buffer.write(stderr)
+returncode = process.returncode
+if returncode is None:
+    returncode = 1
+elif returncode < 0:
+    returncode = 128 + abs(returncode)
+raise SystemExit(returncode)
+"""
 
 
 class ExecTool(Tool):
@@ -134,20 +198,21 @@ class ExecTool(Tool):
         cwd = working_dir or self.container_default_cwd
         effective_timeout = timeout or self._DEFAULT_TIMEOUT
         try:
-            # Wrap with timeout(1) inside the container so the entire
-            # process tree (descendants of sh -c) is killed on deadline,
-            # not just the local docker exec process.  The asyncio
-            # deadline has a generous margin (+60 s) so timeout(1) does
-            # the real enforcement; the outer guard catches the rare
-            # case where timeout(1) is missing in the container image.
-            timeout_command = f"timeout {effective_timeout} /bin/sh -c {shlex.quote(command)}"
+            # Run timeout enforcement inside the container so descendants
+            # of the shell command are killed before checkpoint capture.
+            timeout_marker = f"{_CONTAINER_TIMEOUT_MARKER_PREFIX}{uuid.uuid4().hex}"
             proc = await asyncio.create_subprocess_exec(
                 self._container_executable,
                 "exec",
                 "-i",
                 "-w", cwd,
                 self._container_id,
-                "/bin/sh", "-c", timeout_command,
+                "python3",
+                "-c",
+                _CONTAINER_EXEC_WRAPPER,
+                command,
+                str(effective_timeout),
+                timeout_marker,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -156,10 +221,8 @@ class ExecTool(Tool):
                     proc.communicate(), timeout=effective_timeout + 60,
                 )
             except asyncio.TimeoutError:
-                # Last resort — timeout(1) inside the container may be
-                # absent.  Kill the local docker exec; the orphaned
-                # container-side process is a minor leak that the
-                # container's PID 1 will reap on container stop.
+                # Last resort: the container-side wrapper should normally
+                # enforce the timeout and clean up its process group first.
                 try:
                     proc.kill()
                     await asyncio.wait_for(proc.wait(), timeout=5.0)
@@ -167,15 +230,16 @@ class ExecTool(Tool):
                     pass
                 return f"Error: Command timed out after {effective_timeout} seconds"
 
-            # timeout(1) exits 124 when it kills the process tree
-            if proc.returncode == 124:
-                return f"Error: Command timed out after {effective_timeout} seconds"
-
             output_parts = []
             if stdout:
                 output_parts.append(stdout.decode("utf-8", errors="replace"))
             if stderr:
                 stderr_text = stderr.decode("utf-8", errors="replace")
+                if (
+                    proc.returncode == 124
+                    and timeout_marker in stderr_text.splitlines()
+                ):
+                    return f"Error: Command timed out after {effective_timeout} seconds"
                 if stderr_text.strip():
                     output_parts.append(f"STDERR:\n{stderr_text}")
             output_parts.append(f"\nExit code: {proc.returncode}")

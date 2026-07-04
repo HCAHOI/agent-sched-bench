@@ -45,10 +45,6 @@ from trace_collect.attempt_pipeline import (
     start_task_container,
     stop_task_container,
 )
-from trace_collect.runtime.task_container import (
-    resolve_running_container_exec_config,
-)
-
 logger = logging.getLogger(__name__)
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _DEFAULT_PREP_CONCURRENCY = 20
@@ -951,6 +947,30 @@ print(json.dumps({"entries": entries, "all_paths": all_paths}))
     if not delta_entries and all_paths:
         return {}
     return delta_entries
+
+
+def _cas_manifest_comparison_fields(
+    *,
+    source_entries: dict[str, str],
+    replay_entries: dict[str, str],
+) -> dict[str, Any]:
+    source_keys = set(source_entries.keys())
+    replay_keys = set(replay_entries.keys())
+    common = source_keys & replay_keys
+    modified = [k for k in common if source_entries[k] != replay_entries[k]]
+    added = sorted(replay_keys - source_keys)
+    removed = sorted(source_keys - replay_keys)
+    fields: dict[str, Any] = {
+        "cas_manifest_match": not modified and not removed and not added,
+        "cas_source_entries": len(source_entries),
+        "cas_replay_entries": len(replay_entries),
+        "cas_modified_count": len(modified),
+        "cas_added_count": len(added),
+        "cas_removed_count": len(removed),
+    }
+    if modified:
+        fields["cas_modified_examples"] = modified[:10]
+    return fields
 
 
 def _fold_source_checkpoint_entries(
@@ -3727,23 +3747,10 @@ async def _replay_cloud_model_session(
                 )
                 # Only compare if capture succeeded (None = failure)
                 if replay_entries is not None:
-                    source_keys = set(source_entries.keys())
-                    replay_keys = set(replay_entries.keys())
-                    common = source_keys & replay_keys
-                    modified = [k for k in common if source_entries[k] != replay_entries[k]]
-                    added = sorted(replay_keys - source_keys)
-                    removed = sorted(source_keys - replay_keys)
-                    cas_manifest_match = len(modified) == 0 and len(removed) == 0 and len(added) == 0
-                    cas_manifest_fields = {
-                        "cas_manifest_match": cas_manifest_match,
-                        "cas_source_entries": len(source_entries),
-                        "cas_replay_entries": len(replay_entries),
-                        "cas_modified_count": len(modified),
-                        "cas_added_count": len(added),
-                        "cas_removed_count": len(removed),
-                    }
-                    if modified:
-                        cas_manifest_fields["cas_modified_examples"] = modified[:10]
+                    cas_manifest_fields = _cas_manifest_comparison_fields(
+                        source_entries=source_entries,
+                        replay_entries=replay_entries,
+                    )
                 # Store for incremental next snapshot (update even on {} —
                 # next incremental starts from a known empty state)
                 if replay_entries is not None:
