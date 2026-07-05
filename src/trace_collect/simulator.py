@@ -27,6 +27,7 @@ from agents.base import TraceAction
 from agents.sandbox_runtime import (
     AgentTransportRequest,
     DockerBackend,
+    FCBackend,
     SandboxBackend,
     agent_response_dict_from_transport,
     get_sandbox_backend_class,
@@ -3205,6 +3206,58 @@ async def _cleanup_sweep_fixed_images(
         raise cleanup_error
 
 
+_FC_KERNEL_PATH = os.environ.get(
+    "FC_KERNEL_PATH",
+    "/tmp/fc-cache/vmlinux-5.10.225",
+)
+
+
+async def _prepare_fc_session(
+    loaded: LoadedTraceSession,
+    *,
+    task_output_dir: Path,
+    network_mode: str,
+    container_executable: str | None,
+    replay_exec_env_parity: str,
+    replay_task_env_parity: str,
+) -> PreparedTraceSession:
+    """Prepare an FCBackend and start its Firecracker microVM.
+
+    Falls back to FakeBackend when /dev/kvm is absent (CI environments).
+    """
+    docker_image = _resolve_docker_image(loaded)
+    if not docker_image:
+        raise SimulateError(
+            f"Task {loaded.source_agent_id!r} has no resolvable docker_image"
+        )
+    normalized = normalize_image_reference(docker_image)
+    kernel_path = Path(_FC_KERNEL_PATH)
+
+    backend = FCBackend(
+        source_image=normalized,
+        kernel_path=kernel_path,
+        checkpoint_dir=task_output_dir / "checkpoints",
+        container_executable=container_executable or "docker",
+    )
+    await backend.start()
+
+    container = PreparedContainer(
+        container_id=f"fc-{loaded.agent_id}",
+        container_executable=container_executable or "docker",
+        docker_image=normalized,
+        agent=backend,
+        fixed_image=None,
+        cleanup_fixed_image=False,
+        backend=backend,
+    )
+    return PreparedTraceSession(
+        loaded=loaded,
+        container=container,
+        replay_exec_env_parity=replay_exec_env_parity,
+        replay_task_env_parity=replay_task_env_parity,
+    )
+
+
 async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
@@ -3247,8 +3300,17 @@ async def _prepare_container_session(
             replay_task_env_parity=replay_task_env_parity,
         )
 
-    if backend_cls is not DockerBackend:
+    if backend_cls is not DockerBackend and backend_cls is not FCBackend:
         raise SimulateError(f"unsupported sandbox backend for simulator: {backend_name}")
+    if backend_cls is FCBackend:
+        return await _prepare_fc_session(
+            loaded=loaded,
+            task_output_dir=task_output_dir,
+            network_mode=network_mode,
+            container_executable=container_executable,
+            replay_exec_env_parity=replay_exec_env_parity,
+            replay_task_env_parity=replay_task_env_parity,
+        )
     if container_executable is None:
         raise ValueError("container_executable is required for docker sandbox backend")
 

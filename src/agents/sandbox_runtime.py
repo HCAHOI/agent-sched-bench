@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import posixpath
+import socket
 import subprocess
 import stat
 import time
@@ -1492,9 +1493,617 @@ def _checkpoint_cas_root() -> Path:
     return Path.home() / ".cache" / "agent-checkpoint-cas"
 
 
+class FCBackend(SandboxBackend):
+    """Firecracker microVM sandbox with vsock agent transport.
+
+    Lifecycle
+    ---------
+    ``start`` builds a rootfs from a Docker image, sets up a TAP device
+    with NAT, launches a Firecracker process, configures the VM via the
+    FC API socket, and polls the vsock agent until it is ready.
+
+    ``stop`` sends ``InstanceHalt``, waits for the process to exit, and
+    tears down the TAP device and iptables rules.
+
+    Agent transport
+    ---------------
+    Every ``execute`` call opens a vsock connection to the guest (CID 3),
+    sends one JSON-line request, and reads one JSON-line response.  The
+    guest agent speaks the same protocol as the container-based
+    ``ContainerAgent`` used by ``DockerBackend``.
+
+    Snapshots
+    ---------
+    Snapshots use the Firecracker snapshot API (pause → PUT /snapshot/create →
+    resume).  In Phase F1 they are disk-only: only write-count deltas are
+    tracked; memory-diff snapshots arrive in Phase F2.
+
+    Probe
+    -----
+    ``probe_changes_since`` compares the current per-drive write-byte
+    counters (from the FC metrics endpoint) against the value recorded at
+    the snapshot timestamp — an O(1) signal that avoids walking the
+    filesystem.
+    """
+
+    def __init__(  # noqa: PLR0913
+        self,
+        *,
+        source_image: str,
+        kernel_path: Path,
+        checkpoint_dir: Path | None = None,
+        api_sock: str = "/tmp/fc-agent.sock",
+        vsock_port: int = 5678,
+        vcpu_count: int = 2,
+        mem_size_mib: int = 1024,
+        tap_dev: str = "fc-tap0",
+        host_ip: str = "172.16.0.1",
+        guest_ip: str = "172.16.0.2",
+        netmask: int = 24,
+        root: str = "/testbed",
+        fc_binary: str = "firecracker",
+        container_executable: str = "docker",
+    ) -> None:
+        self._source_image = source_image
+        self._kernel_path = kernel_path
+        self._checkpoint_dir = checkpoint_dir or Path("/tmp/fc-checkpoints")
+        self._api_sock = api_sock
+        self._vsock_port = vsock_port
+        self._vcpu_count = vcpu_count
+        self._mem_size_mib = mem_size_mib
+        self._tap_dev = tap_dev
+        self._host_ip = host_ip
+        self._guest_ip = guest_ip
+        self._netmask = netmask
+        self.root = root
+        self._fc_binary = fc_binary
+        self._container_executable = container_executable
+
+        self._process: subprocess.Popen[str] | None = None
+        self._rootfs_path: Path | None = None
+        self._snapshot_counter: int = 0
+        self._last_write_bytes: int | None = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        if not Path("/dev/kvm").exists():
+            raise RuntimeError(
+                "FCBackend requires /dev/kvm; this host has no KVM support"
+            )
+        if not Path("/dev/kvm").is_char_device():
+            raise RuntimeError("/dev/kvm exists but is not a character device")
+
+        from harness.fc_rootfs_builder import build_fc_rootfs
+
+        self._rootfs_path = await asyncio.to_thread(
+            build_fc_rootfs,
+            docker_image=self._source_image,
+            container_executable=self._container_executable,
+        )
+
+        await asyncio.to_thread(self._setup_tap_and_nat)
+        await asyncio.to_thread(self._launch_fc)
+        await asyncio.to_thread(self._configure_vm)
+
+        await asyncio.to_thread(self._api_put, "/actions", {"action_type": "InstanceStart"})
+
+        ready = await asyncio.to_thread(
+            self._poll_vsock_ready,
+            timeout_s=60.0,
+        )
+        if not ready:
+            await self.stop()
+            raise RuntimeError("FCBackend: vsock agent did not become ready within 60s")
+
+        self._last_write_bytes = await asyncio.to_thread(self._read_write_bytes)
+
+    async def stop(self) -> None:
+        error: BaseException | None = None
+
+        # 1. Halt the VM.
+        process = self._process
+        if process is not None and process.poll() is None:
+            try:
+                await asyncio.to_thread(self._stop_vm)
+            except (OSError, RuntimeError) as exc:
+                error = exc
+        self._process = None
+
+        # 2. Clean up API socket.
+        if os.path.exists(self._api_sock):
+            try:
+                os.unlink(self._api_sock)
+            except OSError:
+                pass
+
+        # 3. Tear down TAP + iptables.
+        try:
+            await asyncio.to_thread(self._teardown_tap_and_nat)
+        except (OSError, RuntimeError) as exc:
+            if error is None:
+                error = exc
+
+        self._rootfs_path = None
+        self._last_write_bytes = None
+
+        if error is not None:
+            raise error
+
+    # ------------------------------------------------------------------
+    # Agent transport
+    # ------------------------------------------------------------------
+
+    async def execute(
+        self,
+        request: AgentTransportRequest,
+        *,
+        timeout_s: float | None = 600.0,
+    ) -> AgentTransportResponse:
+        raw_response = await asyncio.to_thread(
+            self._execute_vsock,
+            {"tool": request.tool, "args": request.args},
+            timeout_s,
+        )
+        if not isinstance(raw_response, dict):
+            raise RuntimeError(
+                f"FC agent returned non-dict response: {raw_response!r}"
+            )
+        return transport_response_from_agent_dict(raw_response)
+
+    # ------------------------------------------------------------------
+    # Snapshots (disk-only for Phase F1)
+    # ------------------------------------------------------------------
+
+    async def capture_snapshot(
+        self,
+        *,
+        incremental_since: SandboxSnapshot | None = None,
+    ) -> SandboxSnapshot:
+        del incremental_since  # not used for full snapshots in F1
+        timestamp_ns = time.time_ns()
+        snap_index = self._snapshot_counter
+        self._snapshot_counter += 1
+
+        mem_path = str(
+            self._checkpoint_dir / f"snap-{snap_index:04d}-mem.snap"
+        )
+        state_path = str(
+            self._checkpoint_dir / f"snap-{snap_index:04d}-vmstate.snap"
+        )
+
+        self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        await asyncio.to_thread(self._api_patch, "/vm", {"state": "Paused"})
+        try:
+            await asyncio.to_thread(
+                self._api_put,
+                "/snapshot/create",
+                {
+                    "snapshot_type": "Full",
+                    "snapshot_path": mem_path,
+                    "mem_file_path": mem_path,
+                    "version": "1.1.0",
+                },
+            )
+        finally:
+            await asyncio.to_thread(
+                self._api_patch, "/vm", {"state": "Resumed"},
+            )
+
+        write_bytes = await asyncio.to_thread(self._read_write_bytes)
+        return SandboxSnapshot(
+            process_state=None,
+            disk_state={
+                "snapshot_mem_path": mem_path,
+                "snapshot_state_path": state_path,
+                "write_bytes": write_bytes,
+                "kind": "fc_full_snapshot",
+                "rootfs_path": str(self._rootfs_path)
+                if self._rootfs_path is not None
+                else None,
+            },
+            root=self.root,
+            timestamp_ns=timestamp_ns,
+        )
+
+    async def restore_snapshot(self, snapshot: SandboxSnapshot) -> None:
+        mem_path = snapshot.disk_state.get("snapshot_mem_path")
+        state_path = snapshot.disk_state.get("snapshot_state_path")
+        if not isinstance(mem_path, str) or not mem_path:
+            raise ValueError(
+                "FC snapshot disk_state.snapshot_mem_path must be set"
+            )
+        if isinstance(state_path, str) and state_path and Path(state_path).exists():
+            pass  # snapshot state path present on disk
+
+        # Stop the current VM.
+        await self.stop()
+
+        # Launch a fresh FC instance to load the snapshot.
+        await asyncio.to_thread(self._setup_tap_and_nat)
+        await asyncio.to_thread(self._launch_fc)
+
+        await asyncio.to_thread(
+            self._api_put,
+            "/snapshot/load",
+            {
+                "snapshot_path": mem_path,
+                "mem_file_path": mem_path,
+                "enable_diff_snapshots": True,
+            },
+        )
+        await asyncio.to_thread(
+            self._api_patch, "/vm", {"state": "Resumed"},
+        )
+
+        ready = await asyncio.to_thread(
+            self._poll_vsock_ready,
+            timeout_s=60.0,
+        )
+        if not ready:
+            raise RuntimeError(
+                "FCBackend: vsock agent did not become ready after snapshot restore"
+            )
+
+        self._last_write_bytes = await asyncio.to_thread(self._read_write_bytes)
+
+    # ------------------------------------------------------------------
+    # Change probe
+    # ------------------------------------------------------------------
+
+    async def probe_changes_since(self, marker_ns: int) -> bool:
+        del marker_ns  # not used; we compare write counters
+        if self._last_write_bytes is None:
+            return True  # no baseline → assume changed
+        current = await asyncio.to_thread(self._read_write_bytes)
+        return current != self._last_write_bytes
+
+    # ------------------------------------------------------------------
+    # Internal — TAP and networking
+    # ------------------------------------------------------------------
+
+    def _setup_tap_and_nat(self) -> None:
+        """Create TAP device, enable NAT + forwarding."""
+        _checked_run(
+            ["sudo", "ip", "tuntap", "add", self._tap_dev, "mode", "tap"],
+            check=False,
+            timeout=30,
+        )
+        _checked_run(
+            [
+                "sudo", "ip", "addr", "add",
+                f"{self._host_ip}/{self._netmask}",
+                "dev", self._tap_dev,
+            ],
+            check=False,
+            timeout=30,
+        )
+        _checked_run(
+            ["sudo", "ip", "link", "set", self._tap_dev, "up"],
+            check=False,
+            timeout=30,
+        )
+        _checked_run(
+            ["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"],
+            check=False,
+            timeout=30,
+        )
+        # Delete stale MASQUERADE rule, then add.
+        _checked_run(
+            [
+                "sudo", "iptables", "-t", "nat", "-D", "POSTROUTING",
+                "-s", f"{self._guest_ip}/32", "-j", "MASQUERADE",
+            ],
+            check=False,
+            timeout=30,
+        )
+        _checked_run(
+            [
+                "sudo", "iptables", "-t", "nat", "-A", "POSTROUTING",
+                "-s", f"{self._guest_ip}/32", "-j", "MASQUERADE",
+            ],
+            check=False,
+            timeout=30,
+        )
+
+    def _teardown_tap_and_nat(self) -> None:
+        """Remove NAT rules and TAP device."""
+        _checked_run(
+            [
+                "sudo", "iptables", "-t", "nat", "-D", "POSTROUTING",
+                "-s", f"{self._guest_ip}/32", "-j", "MASQUERADE",
+            ],
+            check=False,
+            timeout=30,
+        )
+        _checked_run(
+            ["sudo", "ip", "link", "delete", self._tap_dev],
+            check=False,
+            timeout=30,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal — Firecracker process
+    # ------------------------------------------------------------------
+
+    def _launch_fc(self) -> None:
+        """Start the firecracker binary and wait for the API socket."""
+        if os.path.exists(self._api_sock):
+            os.unlink(self._api_sock)
+
+        self._process = subprocess.Popen(
+            [self._fc_binary, "--api-sock", self._api_sock],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+
+        deadline = time.monotonic() + 10.0
+        while not os.path.exists(self._api_sock):
+            if time.monotonic() > deadline:
+                self._process.kill()
+                self._process.wait()
+                self._process = None
+                raise TimeoutError(
+                    "Firecracker API socket did not appear within 10s"
+                )
+            if self._process.poll() is not None:
+                rc = self._process.returncode
+                self._process = None
+                raise RuntimeError(
+                    f"Firecracker exited early (rc={rc})"
+                )
+            time.sleep(0.1)
+
+    def _configure_vm(self) -> None:
+        """Push machine-config, boot-source, root drive, and net iface."""
+        assert self._rootfs_path is not None
+        self._api_put(
+            "/machine-config",
+            {
+                "vcpu_count": self._vcpu_count,
+                "mem_size_mib": self._mem_size_mib,
+                "track_dirty_pages": True,
+            },
+        )
+        self._api_put(
+            "/boot-source",
+            {
+                "kernel_image_path": str(self._kernel_path),
+                "boot_args": (
+                    "console=ttyS0 reboot=k panic=1 pci=off "
+                    "root=/dev/vda rw quiet"
+                ),
+            },
+        )
+        self._api_put(
+            "/drives/rootfs",
+            {
+                "drive_id": "rootfs",
+                "path_on_host": str(self._rootfs_path),
+                "is_root_device": True,
+                "is_read_only": False,
+            },
+        )
+        self._api_put(
+            "/network-interfaces/eth0",
+            {
+                "iface_id": "eth0",
+                "guest_mac": "AA:FC:00:00:00:01",
+                "host_dev_name": self._tap_dev,
+            },
+        )
+
+    def _stop_vm(self) -> None:
+        """Send halt to the VM and wait for process exit."""
+        if self._process is None or self._process.poll() is not None:
+            return
+        try:
+            self._api_put("/actions", {"action_type": "SendCtrlAltDel"})
+        except RuntimeError:
+            try:
+                self._api_put("/actions", {"action_type": "InstanceHalt"})
+            except RuntimeError:
+                pass
+
+        try:
+            self._process.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=5.0)
+
+    # ------------------------------------------------------------------
+    # Internal — FC API over Unix socket
+    # ------------------------------------------------------------------
+
+    def _api_request(
+        self, method: str, path: str, body: str | None = None,
+    ) -> tuple[int, str]:
+        """Send an HTTP request over the FC API socket.
+
+        Returns ``(status_code, response_body)``.
+        """
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        try:
+            sock.connect(self._api_sock)
+            headers = f"{method} {path} HTTP/1.1\r\nHost: localhost\r\n"
+            if body is not None:
+                body_bytes = body.encode("utf-8")
+                headers += (
+                    f"Content-Type: application/json\r\n"
+                    f"Content-Length: {len(body_bytes)}\r\n"
+                )
+            else:
+                body_bytes = b""
+            headers += "Connection: close\r\n\r\n"
+            sock.sendall(headers.encode("utf-8") + body_bytes)
+
+            chunks: list[bytes] = []
+            while True:
+                try:
+                    chunk = sock.recv(65536)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            response = b"".join(chunks).decode("utf-8", errors="replace")
+        finally:
+            sock.close()
+
+        header_section, _, resp_body = response.partition("\r\n\r\n")
+        status_line = header_section.split("\r\n")[0]
+        try:
+            status_code = int(status_line.split(" ")[1])
+        except (IndexError, ValueError):
+            status_code = 0
+        return status_code, resp_body
+
+    def _api_put(self, path: str, data: dict[str, Any]) -> None:
+        body = json.dumps(data)
+        status, resp = self._api_request("PUT", path, body)
+        if status not in (200, 204):
+            raise RuntimeError(
+                f"FC API PUT {path} returned {status}: {resp[:200]}"
+            )
+
+    def _api_patch(self, path: str, data: dict[str, Any]) -> None:
+        body = json.dumps(data)
+        status, resp = self._api_request("PATCH", path, body)
+        if status not in (200, 204):
+            raise RuntimeError(
+                f"FC API PATCH {path} returned {status}: {resp[:200]}"
+            )
+
+    # ------------------------------------------------------------------
+    # Internal — vsock agent communication
+    # ------------------------------------------------------------------
+
+    def _execute_vsock(
+        self,
+        request: dict[str, Any],
+        timeout_s: float | None,
+    ) -> dict[str, Any]:
+        """Send one JSON-line request via vsock and return the response."""
+        effective_timeout = timeout_s if timeout_s is not None else 600.0
+
+        sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+        sock.settimeout(5.0)  # connect timeout
+        try:
+            sock.connect((3, self._vsock_port))
+        except (OSError, TimeoutError) as exc:
+            sock.close()
+            raise ConnectionError(
+                f"vsock connect to guest CID 3 port {self._vsock_port} failed"
+            ) from exc
+
+        sock.settimeout(effective_timeout)
+        try:
+            payload = json.dumps(request, ensure_ascii=False) + "\n"
+            sock.sendall(payload.encode())
+
+            chunks: list[bytes] = []
+            while True:
+                try:
+                    chunk = sock.recv(65536)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if b"\n" in chunk:
+                    # Got at least one full line — agent sends exactly one
+                    # JSON-line response per request.
+                    break
+            raw = b"".join(chunks).decode("utf-8", errors="replace")
+        finally:
+            sock.close()
+
+        # Skip stray non-JSON prefix (e.g. init messages).
+        for i in range(len(raw)):
+            if raw[i] == "{":
+                raw = raw[i:]
+                break
+
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("{"):
+                return json.loads(stripped)  # type: ignore[no-any-return]
+
+        raise RuntimeError(
+            f"FC agent returned no valid JSON: {raw[:200]!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Internal — readiness
+    # ------------------------------------------------------------------
+
+    def _poll_vsock_ready(
+        self, timeout_s: float = 60.0, interval_s: float = 0.2,
+    ) -> bool:
+        """Block until the vsock agent accepts a connection."""
+        from harness.fc_vsock_transport import poll_vsock_ready
+
+        return poll_vsock_ready(
+            port=self._vsock_port,
+            timeout_s=timeout_s,
+            interval_s=interval_s,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal — FC metrics
+    # ------------------------------------------------------------------
+
+    def _read_write_bytes(self) -> int:
+        """Parse total write bytes from the FC Prometheus-style metrics."""
+        status, body = self._api_request("GET", "/metrics")
+        if status != 200:
+            raise RuntimeError(
+                f"FC API GET /metrics returned {status}: {body[:200]}"
+            )
+        total = 0
+        for line in body.splitlines():
+            line = line.strip()
+            if line.startswith("#") or not line:
+                continue
+            if "block_drive_write_bytes" in line and (
+                'drive_id="rootfs"' in line
+            ):
+                try:
+                    _, val = line.rsplit(None, 1)
+                    total += int(float(val))
+                except (ValueError, IndexError):
+                    pass
+        return total
+
+
+def _checked_run(
+    cmd: list[str],
+    *,
+    check: bool = False,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess command, return ``CompletedProcess``, or raise on
+    ``check=True`` and a non-zero exit."""
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, check=False,
+    )
+    if check and result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(
+            f"command failed (rc={result.returncode}): {' '.join(cmd)}\n{detail}"
+        )
+    return result
+
+
 BACKENDS: dict[str, type[SandboxBackend]] = {
     "fake": FakeBackend,
     "docker": DockerBackend,
+    "fc": FCBackend,
 }
 
 
