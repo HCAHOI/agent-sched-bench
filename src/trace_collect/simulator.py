@@ -164,6 +164,24 @@ class ReplaySchedulerConfig:
     predictive_skip: str = "off"          # {"off", "gate"}
     rebaseline_bytes: int | None = None
 
+    def __post_init__(self) -> None:
+        """Validate config values."""
+        if self.predictive_skip == "speculative":
+            raise ValueError(
+                "predictive_skip='speculative' is reserved for PR3 (CAS "
+                "speculation) and is not yet implemented."
+            )
+        if self.predictive_skip not in ("off", "gate"):
+            raise ValueError(
+                f"predictive_skip must be 'off' or 'gate', "
+                f"got {self.predictive_skip!r}"
+            )
+        if self.checkpoint_scheduling not in ("sync", "deferred"):
+            raise ValueError(
+                f"checkpoint_scheduling must be 'sync' or 'deferred', "
+                f"got {self.checkpoint_scheduling!r}"
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class SleepDrift:
@@ -1918,14 +1936,12 @@ def _checkpoint_restore_failed_fields(
             "forced_sync_success": False,
             "forced_sync_status": status,
             "forced_sync_error": error,
-            "forced_sync_resolved": False,
             "forced_sync_continued": False,
         }
     )
     if started is not None:
         elapsed_ms = round((time.monotonic() - started) * 1000, 3)
         fields["restore_elapsed_ms"] = elapsed_ms
-        fields["forced_sync_elapsed_ms"] = elapsed_ms
     if archive_exists is not None:
         fields["checkpoint_archive_exists"] = archive_exists
     return fields
@@ -2024,9 +2040,7 @@ def _restore_checkpoint_to_container(
         {
             "forced_sync_success": True,
             "forced_sync_status": "checkpoint_restored_continuation",
-            "forced_sync_resolved": False,
             "forced_sync_continued": True,
-            "forced_sync_elapsed_ms": elapsed_ms,
             "checkpoint_archive_exists": True,
             "restore_elapsed_ms": elapsed_ms,
             "restore_root_exists": True,
@@ -2118,7 +2132,6 @@ def _restore_checkpoint_chain_to_container(
 
     elapsed_ms = round((time.monotonic() - started) * 1000, 3)
     fields["restore_elapsed_ms"] = elapsed_ms
-    fields["forced_sync_elapsed_ms"] = elapsed_ms
     fields["checkpoint_restore_chain_length"] = len(checkpoint_specs)
     fields["checkpoint_restore_chain_paths"] = chain_paths
     fields["checkpoint_restore_chain_kinds"] = chain_kinds
@@ -2262,7 +2275,6 @@ async def _run_deferred_forced_sync(
                         if restored
                         else "fc_paired_restore_failed"
                     ),
-                    "forced_sync_resolved": False,
                     "forced_sync_continued": restored,
                     "forced_sync_overhead_excluded": True,
                     "forced_sync_fc_snapshot_index": fc_restore_snapshot_index,
@@ -2280,7 +2292,6 @@ async def _run_deferred_forced_sync(
                 restore_result = {
                     "forced_sync_success": False,
                     "forced_sync_status": "fc_paired_restore_failed",
-                    "forced_sync_resolved": False,
                     "forced_sync_continued": False,
                     "forced_sync_error": f"{type(exc).__name__}: {exc}",
                 }
@@ -2288,7 +2299,6 @@ async def _run_deferred_forced_sync(
             restore_result = {
                 "forced_sync_success": False,
                 "forced_sync_status": "fc_no_paired_snapshot",
-                "forced_sync_resolved": False,
                 "forced_sync_continued": False,
                 "forced_sync_error": (
                     "no FC paired snapshot available for "
@@ -2317,7 +2327,6 @@ async def _run_deferred_forced_sync(
             if reapply_fields["forced_sync_reapply_errors"]:
                 forced_sync_fields.update({
                     "forced_sync_success": False,
-                    "forced_sync_resolved": False,
                     "forced_sync_continued": False,
                     "forced_sync_status": "fc_reapply_failed",
                     "forced_sync_error": "; ".join(
@@ -2363,14 +2372,12 @@ async def _run_deferred_forced_sync(
         except Exception as exc:
             forced_sync_fields.update({
                 "forced_sync_success": False,
-                "forced_sync_resolved": False,
                 "forced_sync_continued": False,
                 "forced_sync_status": "checkpoint_restore_failed",
                 "forced_sync_error": f"{type(exc).__name__}: {exc}",
             })
     forced_sync_success = forced_sync_fields.get("forced_sync_success") is True
     forced_sync_fields.setdefault("forced_sync_success", False)
-    forced_sync_fields["forced_sync_resolved"] = False
     forced_sync_fields.setdefault(
         "forced_sync_status",
         "checkpoint_restored_continuation"
@@ -4888,6 +4895,9 @@ class ReplayCheckpointScheduler:
         self._scheduler_overhead_ms = 0.0
         self._boundaries_total = 0
         self._captures_fully_absorbed = 0
+        # LLM sleep window accumulators (note_window)
+        self._window_total_s = 0.0
+        self._window_count = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -5033,8 +5043,13 @@ class ReplayCheckpointScheduler:
             self._log_action(agent_id, record)
 
     def note_window(self, sleep_s: float) -> None:
-        """Record that an LLM sleep window occurred (metric purposes)."""
-        pass  # PR1: metrics only; no behavioral coupling
+        """Record that an LLM sleep window occurred (metric purposes).
+
+        Accumulates total window time and count so overlap/absorbed metrics
+        have a real denominator.  No behavioral coupling (PR1 semantics).
+        """
+        self._window_total_s += sleep_s
+        self._window_count += 1
 
     def set_prev_manifest(self, entries: CasManifestEntries | None) -> None:
         """Explicit setter for prev_cas_manifest (used by forced-sync callers)."""
@@ -5467,6 +5482,8 @@ class ReplayCheckpointScheduler:
             "scheduler_overhead_ms": round(self._scheduler_overhead_ms, 3),
             "boundaries_total": self._boundaries_total,
             "captures_fully_absorbed": self._captures_fully_absorbed,
+            "llm_sleep_window_total_s": round(self._window_total_s, 3),
+            "llm_sleep_window_count": self._window_count,
         }
 
     # ------------------------------------------------------------------
@@ -5804,7 +5821,7 @@ async def _replay_cloud_model_session(
                                     )
                                     if _fs_checkpoint_spec is not None:
                                         _fs_pending = scheduler._pending_boundary_record
-                                        _fs_fields = _run_deferred_forced_sync(
+                                        _fs_fields = await _run_deferred_forced_sync(
                                             prepared_session=prepared_session,
                                             effective_mismatch_reason="cas_state_mismatch",
                                             checkpoint_spec=_fs_checkpoint_spec,
@@ -5910,6 +5927,19 @@ async def _replay_cloud_model_session(
                         lane_induced_mismatch_candidate = (
                             lane_active_at_parent_boundary
                         )
+            # Output content mismatch: transport tiers matched (same timeout,
+            # success, exit code) but normalized output differs.  Exclude
+            # FLAKY_READ tools (web_search, web_fetch) whose content
+            # legitimately varies across runs.  Checked after CAS mismatch so
+            # cas_state_mismatch (root cause) takes priority over
+            # output_content_mismatch (symptom).
+            if effective_mismatch_reason is None and normalized_output_match is False:
+                from trace_collect.predictive_policy import (
+                    CommandFamily,
+                    classify_tool_result,
+                )
+                if classify_tool_result(tool_name, tool_args) != CommandFamily.FLAKY_READ:
+                    effective_mismatch_reason = "output_content_mismatch"
             replay_outcome_match = mismatch_reason is None
             output_diff_snippet: str | None = None
             if effective_mismatch_reason is not None or normalized_output_match is False:
@@ -5986,7 +6016,6 @@ async def _replay_cloud_model_session(
                         forced_sync_fields = {
                             "forced_sync_attempted": True,
                             "forced_sync_success": False,
-                            "forced_sync_resolved": False,
                             "forced_sync_continued": False,
                             "forced_sync_reason": effective_mismatch_reason,
                             "forced_sync_status": "checkpoint_missing",
@@ -6054,7 +6083,6 @@ async def _replay_cloud_model_session(
                                         if restored
                                         else "fc_paired_restore_failed"
                                     ),
-                                    "forced_sync_resolved": False,
                                     "forced_sync_continued": restored,
                                     "forced_sync_overhead_excluded": True,
                                     "forced_sync_fc_snapshot_index": (
@@ -6078,7 +6106,6 @@ async def _replay_cloud_model_session(
                                 restore_result = {
                                     "forced_sync_success": False,
                                     "forced_sync_status": "fc_paired_restore_failed",
-                                    "forced_sync_resolved": False,
                                     "forced_sync_continued": False,
                                     "forced_sync_error": (
                                         f"{type(exc).__name__}: {exc}"
@@ -6088,7 +6115,6 @@ async def _replay_cloud_model_session(
                             restore_result = {
                                 "forced_sync_success": False,
                                 "forced_sync_status": "fc_no_paired_snapshot",
-                                "forced_sync_resolved": False,
                                 "forced_sync_continued": False,
                                 "forced_sync_error": (
                                     "no FC paired snapshot available "
@@ -6122,7 +6148,6 @@ async def _replay_cloud_model_session(
                                 forced_sync_fields.update(
                                     {
                                         "forced_sync_success": False,
-                                        "forced_sync_resolved": False,
                                         "forced_sync_continued": False,
                                         "forced_sync_status": "fc_reapply_failed",
                                         "forced_sync_error": "; ".join(
@@ -6220,7 +6245,6 @@ async def _replay_cloud_model_session(
                                     forced_sync_fields.update(
                                         {
                                             "forced_sync_success": False,
-                                            "forced_sync_resolved": False,
                                             "forced_sync_continued": False,
                                             "forced_sync_status": "reapply_failed",
                                             "forced_sync_error": "; ".join(
@@ -6320,7 +6344,6 @@ async def _replay_cloud_model_session(
                             forced_sync_fields.update(
                                 {
                                     "forced_sync_success": False,
-                                    "forced_sync_resolved": False,
                                     "forced_sync_continued": False,
                                     "forced_sync_status": "checkpoint_restore_failed",
                                     "forced_sync_error": f"{type(exc).__name__}: {exc}",
@@ -6330,7 +6353,6 @@ async def _replay_cloud_model_session(
                         forced_sync_fields.get("forced_sync_success") is True
                     )
                     forced_sync_fields.setdefault("forced_sync_success", False)
-                    forced_sync_fields["forced_sync_resolved"] = False
                     forced_sync_fields.setdefault(
                         "forced_sync_status",
                         "checkpoint_restored_continuation"

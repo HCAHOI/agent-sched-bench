@@ -499,9 +499,14 @@ def _build_cross_benchmark_report(
                 misprediction_rates.append(rate)
         benchmark_family_rates[benchmark] = family_rates
 
+    bench_gt_counts = {
+        bench: stats.ground_truth_available
+        for bench, stats in by_benchmark.items()
+    }
     overfitting_flags = _detect_overfitting(
         benchmark_family_rates,
         misprediction_rates,
+        bench_gt_counts,
     )
 
     return {
@@ -513,13 +518,14 @@ def _build_cross_benchmark_report(
 def _detect_overfitting(
     benchmark_family_rates: dict[str, dict[str, Any]],
     misprediction_rates: list[float],
+    bench_gt_counts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Flag benchmarks whose misprediction rate is anomalously high."""
     if not misprediction_rates or len(misprediction_rates) < 2:
         return []
 
     sorted_rates = sorted(misprediction_rates)
-    # Use lower-quartile as baseline to avoid one bad benchmark
+    # Use median as baseline to avoid one bad benchmark
     # inflating the median and hiding real outliers.
     n = len(sorted_rates)
     if n % 2 == 0:
@@ -529,6 +535,10 @@ def _detect_overfitting(
 
     flags: list[dict[str, Any]] = []
     for benchmark, family_rates in sorted(benchmark_family_rates.items()):
+        # Skip benchmarks with too few ground truth actions;
+        # their misprediction rate is likely noise.
+        if bench_gt_counts and bench_gt_counts.get(benchmark, 0) < _MIN_ACTIONS_FOR_OVERFITTING_CHECK:
+            continue
         # Collect per-family rates for this benchmark.
         bench_rates = [
             fr.get("misprediction_rate")

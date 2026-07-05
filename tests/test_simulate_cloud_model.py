@@ -497,7 +497,6 @@ def test_restore_checkpoint_to_container_records_provenance(
     assert len(restored) == 1
     assert result["forced_sync_success"] is True
     assert result["forced_sync_status"] == "checkpoint_restored_continuation"
-    assert result["forced_sync_resolved"] is False
     assert result["forced_sync_continued"] is True
     assert result["checkpoint_kind"] == "cas_manifest_full"
     assert result["checkpoint_path"] == str(checkpoint_path)
@@ -1320,7 +1319,9 @@ def test_simulate_records_replay_structured_exec_fields(
     assert tool_record["data"]["command_exit_code"] == 0
     assert tool_record["data"]["normalized_output_match"] is False
     assert tool_record["data"]["replay_outcome_match"] is True
-    assert "mismatch_reason" not in tool_record["data"]
+    # Output content differs after normalization, so effective_mismatch_reason
+    # is set to output_content_mismatch (transport tiers matched).
+    assert tool_record["data"]["mismatch_reason"] == "output_content_mismatch"
 
 
 def test_simulate_records_normalized_output_match_without_forced_sync(
@@ -1540,7 +1541,6 @@ def test_simulate_forced_syncs_from_checkpoint_after_on_mismatch(
     )
     assert tool_record["data"]["forced_sync_attempted"] is True
     assert tool_record["data"]["forced_sync_success"] is True
-    assert tool_record["data"]["forced_sync_resolved"] is False
     assert tool_record["data"]["forced_sync_continued"] is True
     assert tool_record["data"]["forced_sync_status"] == "checkpoint_restored_continuation"
     assert tool_record["data"]["forced_sync_overhead_excluded"] is True
@@ -2150,7 +2150,6 @@ def test_simulate_forced_sync_fallback_to_prior_checkpoint(
     assert fallback_record["data"]["mismatch_reason"] == "tool_success_mismatch"
     assert fallback_record["data"]["forced_sync_attempted"] is True
     assert fallback_record["data"]["forced_sync_success"] is True
-    assert fallback_record["data"]["forced_sync_resolved"] is False
     assert fallback_record["data"]["forced_sync_continued"] is True
     assert (
         fallback_record["data"]["forced_sync_status"]
@@ -2828,7 +2827,6 @@ def test_forced_sync_does_not_resolve_source_artifact_unavailable(
     assert tool_record["data"]["forced_sync_success"] is True
     assert tool_record["data"]["forced_sync_verified"] is None
     assert tool_record["data"]["forced_sync_verification"]["snapshot_captured"] is False
-    assert tool_record["data"]["forced_sync_resolved"] is False
     assert tool_record["data"]["forced_sync_continued"] is True
     assert summary["success"] is False
     assert summary["forced_sync_actions"] == 1
@@ -7309,6 +7307,21 @@ class TestReplayCheckpointSchedulerBasic:
         scheduler.note_window(0.5)
         assert scheduler.state == "IDLE"  # unchanged
 
+    def test_note_window_accumulation(self) -> None:
+        """note_window accumulates totals in get_metrics."""
+        scheduler, _ = _make_scheduler()
+        metrics = scheduler.get_metrics()
+        assert metrics["llm_sleep_window_total_s"] == 0.0
+        assert metrics["llm_sleep_window_count"] == 0
+
+        scheduler.note_window(0.5)
+        scheduler.note_window(1.2)
+        scheduler.note_window(0.3)
+
+        metrics = scheduler.get_metrics()
+        assert metrics["llm_sleep_window_total_s"] == 2.0
+        assert metrics["llm_sleep_window_count"] == 3
+
     def test_scheduler_overhead_non_negative(self) -> None:
         """scheduler_overhead_ms is recorded and non-negative."""
         scheduler, _ = _make_scheduler(scheduling="sync")
@@ -7639,6 +7652,24 @@ class TestReplayCheckpointSchedulerConfig:
         assert hash(config) is not None
         d = {config: "test"}
         assert d[config] == "test"
+
+    def test_speculative_rejected(self) -> None:
+        """predictive_skip='speculative' raises ValueError."""
+        with pytest.raises(ValueError, match="speculative"):
+            ReplaySchedulerConfig(
+                checkpoint_scheduling="sync",
+                predictive_skip="speculative",
+            )
+
+    def test_unknown_scheduling_rejected(self) -> None:
+        """Unknown checkpoint_scheduling value raises ValueError."""
+        with pytest.raises(ValueError, match="checkpoint_scheduling"):
+            ReplaySchedulerConfig(checkpoint_scheduling="unknown")
+
+    def test_unknown_predictive_skip_rejected(self) -> None:
+        """Unknown predictive_skip value raises ValueError."""
+        with pytest.raises(ValueError, match="predictive_skip"):
+            ReplaySchedulerConfig(predictive_skip="unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -8025,3 +8056,292 @@ def test_pr1_ab_mismatch_parity(
     deferred_summaries = [r for r in deferred_records if r.get("type") == "summary"]
     assert deferred_summaries[0]["forced_sync_actions"] == sync_summaries[0]["forced_sync_actions"]
     assert deferred_summaries[0]["forced_sync_attempts"] == sync_summaries[0]["forced_sync_attempts"]
+
+
+# ---------------------------------------------------------------------------
+# Output-content mismatch detection
+# ---------------------------------------------------------------------------
+
+
+def test_output_content_mismatch_detected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Diffing outputs triggers output_content_mismatch when transport matches."""
+    from harness.trace_logger import TraceLogger
+    from trace_collect.simulator import (
+        _load_trace_session,
+        _replay_cloud_model_session,
+    )
+
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "printf volatile"},
+    )
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            # Source output: content that differs after normalization
+            record["data"]["tool_result"] = "apple\n\nExit code: 0"
+            record["data"]["returncode"] = 0
+    _write_jsonl(trace_path, records)
+    _write_tasks(task_source, "task-a")
+    loaded = _load_trace_session(trace_path, task_source, 0)
+    prepared = PreparedTraceSession(
+        loaded=loaded,
+        container=PreparedContainer(
+            container_id="fake-cid",
+            container_executable="docker",
+            docker_image="fake-image",
+            agent=object(),
+        ),
+    )
+
+    async def fake_exec_tool(
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> tuple[str, float, bool]:
+        # Different content but same exit code
+        return ("orange\n\nExit code: 0", 1.0, True)
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+    trace_logger = TraceLogger(tmp_path / "out", "run")
+    try:
+        asyncio.run(
+            _replay_cloud_model_session(
+                prepared,
+                trace_logger=trace_logger,
+                replay_speed=100.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=600.0,
+                warmup_skip_iterations=0,
+            )
+        )
+    finally:
+        trace_logger.close()
+
+    records = _read_jsonl(trace_logger.path)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+
+    # Transport tiers matched: same return code, no timeout
+    assert tool_record["data"]["replay_outcome_match"] is True
+    # Output differs after normalization
+    assert tool_record["data"]["normalized_output_match"] is False
+    # Effective mismatch reason is output_content_mismatch
+    assert tool_record["data"]["mismatch_reason"] == "output_content_mismatch"
+    # forced-sync is attempted but fails because no checkpoint spec exists.
+    # The output_content_mismatch sets effective_mismatch_reason, which
+    # enters the forced-sync gate; the gate falls back to "no checkpoint".
+    assert tool_record["data"]["forced_sync_attempted"] is True
+    assert tool_record["data"]["forced_sync_reason"] == "output_content_mismatch"
+    assert tool_record["data"]["forced_sync_status"] == "checkpoint_missing"
+
+
+def test_output_content_mismatch_skipped_for_flaky_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """FLAKY_READ tools (web_search) avoid output_content_mismatch."""
+    from harness.trace_logger import TraceLogger
+    from trace_collect.simulator import (
+        _load_trace_session,
+        _replay_cloud_model_session,
+    )
+
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    # web_search is a non-exec tool that uses exec-like semantics check path
+    # but is classified as FLAKY_READ by predictive_policy.
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="web_search",
+        tool_args={"query": "hello"},
+    )
+    _write_tasks(task_source, "task-a")
+    loaded = _load_trace_session(trace_path, task_source, 0)
+    prepared = PreparedTraceSession(
+        loaded=loaded,
+        container=PreparedContainer(
+            container_id="fake-cid",
+            container_executable="docker",
+            docker_image="fake-image",
+            agent=object(),
+        ),
+    )
+
+    async def fake_exec_tool(
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> tuple[str, float, bool]:
+        return ("search result B", 1.0, True)
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+    trace_logger = TraceLogger(tmp_path / "out", "run")
+    try:
+        asyncio.run(
+            _replay_cloud_model_session(
+                prepared,
+                trace_logger=trace_logger,
+                replay_speed=100.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=600.0,
+                warmup_skip_iterations=0,
+            )
+        )
+    finally:
+        trace_logger.close()
+
+    records = _read_jsonl(trace_logger.path)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+
+    # web_search is non-exec, so normalized_output_match is None (not set)
+    assert "normalized_output_match" not in tool_record["data"]
+    # Replay succeeded, no transport-level mismatch
+    assert tool_record["data"]["replay_outcome_match"] is True
+    # No output_content_mismatch (FLAKY_READ excluded by guard)
+    assert "mismatch_reason" not in tool_record["data"]
+
+
+# ---------------------------------------------------------------------------
+# Deferred mode: CAS-only mismatch triggers forced sync
+# ---------------------------------------------------------------------------
+
+
+def test_cas_only_mismatch_triggers_forced_sync_deferred_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CAS mismatch triggers forced sync in deferred mode via transport-mismatch gate."""
+    from harness.trace_logger import TraceLogger
+    from trace_collect.simulator import (
+        _load_trace_session,
+        _replay_cloud_model_session,
+    )
+
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_path = tmp_path / "checkpoints" / "after-tool-manifest.json"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "entries": {"expected.txt": {"hash": "source-hash"}},
+                "deleted_paths": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_trace(
+        trace_path,
+        agent_id="task-a",
+        tool_name="exec",
+        tool_args={"command": "printf volatile"},
+        checkpoint_after={
+            "path": "checkpoints/after-tool-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        },
+    )
+    records = _read_jsonl(trace_path)
+    for record in records:
+        if record.get("action_type") == "tool_exec":
+            # Source output: content that differs after normalization
+            record["data"]["tool_result"] = "apple\n\nExit code: 0"
+            record["data"]["returncode"] = 0
+    _write_jsonl(trace_path, records)
+    _write_tasks(task_source, "task-a")
+    loaded = _load_trace_session(trace_path, task_source, 0)
+    prepared = PreparedTraceSession(
+        loaded=loaded,
+        container=PreparedContainer(
+            container_id="fake-cid",
+            container_executable="docker",
+            docker_image="fake-image",
+            agent=object(),
+        ),
+    )
+
+    async def fake_exec_tool(*_args, **_kwargs):
+        return ("orange\n\nExit code: 0", 1.0, True)
+
+    restored: list[dict[str, object]] = []
+
+    def fake_restore_checkpoint_to_container(*, checkpoint_spec, container):
+        restored.append({"checkpoint_spec": checkpoint_spec, "container": container})
+        return {
+            "forced_sync_success": True,
+            "forced_sync_status": "checkpoint_restored_continuation",
+            "forced_sync_checkpoint": checkpoint_spec["path"],
+            "forced_sync_root": checkpoint_spec["root"],
+        }
+
+    snapshot_calls = 0
+
+    def fake_capture_snapshot_manifest(**_kwargs):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        if snapshot_calls == 1:
+            return {"expected.txt": "replay-hash"}
+        return {"expected.txt": "source-hash"}
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+    monkeypatch.setattr(
+        "trace_collect.simulator._capture_snapshot_manifest",
+        fake_capture_snapshot_manifest,
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_to_container",
+        fake_restore_checkpoint_to_container,
+    )
+
+    trace_logger = TraceLogger(tmp_path / "out", "run")
+    try:
+        asyncio.run(
+            _replay_cloud_model_session(
+                prepared,
+                trace_logger=trace_logger,
+                replay_speed=100.0,
+                llm_timing=LLMTimingConfig(),
+                command_timeout_s=600.0,
+                warmup_skip_iterations=0,
+                replay_scheduler_config=ReplaySchedulerConfig(
+                    checkpoint_scheduling="deferred",
+                ),
+            )
+        )
+    finally:
+        trace_logger.close()
+
+    records = _read_jsonl(trace_logger.path)
+    tool_record = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    )
+
+    # Transport tiers matched: same return code, no timeout.
+    assert tool_record["data"]["replay_outcome_match"] is True
+    # Output differs after normalization, which triggers the output_content_mismatch.
+    # In deferred mode, this sets effective_mismatch_reason so the deferred
+    # drain at line 5976 fires and drains the background CAS comparison task.
+    # The CAS comparison detects the manifest mismatch and upgrades the
+    # effective_mismatch_reason to "cas_state_mismatch".
+    assert tool_record["data"]["normalized_output_match"] is False
+    assert tool_record["data"]["mismatch_reason"] == "cas_state_mismatch"
+    assert tool_record["data"]["cas_manifest_match"] is False
+    assert tool_record["data"]["forced_sync_attempted"] is True
+    assert tool_record["data"]["forced_sync_reason"] == "cas_state_mismatch"
+    assert tool_record["data"]["forced_sync_success"] is True

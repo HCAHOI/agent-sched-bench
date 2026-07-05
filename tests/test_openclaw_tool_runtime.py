@@ -812,7 +812,7 @@ def test_commands_timeout_appends_aggregate_returncode_after_later_success() -> 
             "commands": {
                 "ok": False,
                 "result": (
-                    "[call 0]\nError: Command timed out after 1 seconds\n"
+                    "[call 0]\nError: Command timed out after 1.0 seconds\n"
                     "[call 1]\nok\n\nExit code: 0"
                 ),
                 "returncode": 124,
@@ -854,7 +854,7 @@ def test_commands_timeout_is_preserved_across_later_success(monkeypatch) -> None
     assert response["ok"] is False
     assert response["returncode"] == 124
     assert response["timed_out"] is True
-    assert "Error: Command timed out after 1 seconds" in response["result"]
+    assert "Error: Command timed out after 1.0 seconds" in response["result"]
     assert "ok" in response["result"]
 
 
