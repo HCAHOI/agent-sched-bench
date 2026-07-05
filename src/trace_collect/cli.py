@@ -262,6 +262,12 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--checkpoint-scheduling",
+        choices=["sync", "deferred"],
+        default="sync",
+        help="Checkpoint scheduling mode for replay (default: sync).",
+    )
+    parser.add_argument(
         "--network-mode",
         default="host",
         help="Container network mode (default: host). Use 'none' for isolated replay.",
@@ -315,6 +321,28 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         type=nonnegative_float_arg,
         default=None,
         help="Simulated TPOT in milliseconds when --llm-timing ttft-tpot.",
+    )
+    parser.add_argument(
+        "--predictive-skip",
+        choices=["off", "gate"],
+        default="off",
+        help=(
+            "Predictive skip mode for replay checkpoint captures. "
+            "'off' captures at every boundary (today's behavior). "
+            "'gate' uses classifier-first prediction to skip captures "
+            "for read-only / flaky-read tool families. "
+            "(default: off)"
+        ),
+    )
+    parser.add_argument(
+        "--rebaseline-bytes",
+        type=positive_int_arg,
+        default=None,
+        help=(
+            "Reserved for future use (PR2): re-baseline threshold in bytes "
+            "for incremental checkpoint manifests. Currently a no-op; the "
+            "value is recorded in trace_metadata for forward compatibility."
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -483,6 +511,9 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_timing_mode": args.llm_timing.replace("-", "_"),
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,
+        "checkpoint_scheduling": args.checkpoint_scheduling,
+        "predictive_skip": args.predictive_skip,
+        "rebaseline_bytes": args.rebaseline_bytes,
         "structured_output": args.output_dir == "traces/simulate",
     }
 

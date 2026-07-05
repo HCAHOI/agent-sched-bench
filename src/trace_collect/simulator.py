@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import BrokenBarrierError
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -124,6 +124,15 @@ class ReplayTaskStats:
     failed_action_count: int = 0
     replay_env_parity: str = "default_env"
     prep_error: str | None = None
+    # STORY-3: scheduler metric aggregates
+    total_checkpoint_exposed_ms: float = 0.0
+    total_capture_elapsed_ms: float = 0.0
+    total_probe_elapsed_ms: float = 0.0
+    total_compare_elapsed_ms: float = 0.0
+    captures_fully_absorbed: int = 0
+    boundaries_total: int = 0
+    overlap_fraction_avg: float = 0.0
+    predictive_skip: str = "off"
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +142,27 @@ class LLMTimingConfig:
     mode: str = "source_scaled"
     ttft_ms: float | None = None
     tpot_ms: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaySchedulerConfig:
+    """Replay-side checkpoint scheduler configuration.
+
+    Two orthogonal experimental factors (scheduling x skip matrix):
+
+    |                          | predictive_skip=off | gate            | speculative |
+    |--------------------------|---------------------|-----------------|-------------|
+    | checkpoint_scheduling=sync | Today's behavior   | Skip-only ablat | Invalid     |
+    | deferred                 | Pure-overlap arm    | Headline config | PR3 (CAS)   |
+
+    Not configurable: gate placement, lane depth (1), restore chunking,
+    speculation eligibility (CAS backends only). Each is a correctness
+    or no-unjustified-complexity consequence.
+    """
+
+    checkpoint_scheduling: str = "sync"   # {"sync", "deferred"}
+    predictive_skip: str = "off"          # {"off", "gate"}
+    rebaseline_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2181,6 +2211,184 @@ async def _reapply_forced_sync_actions(
     }
 
 
+async def _run_deferred_forced_sync(
+    *,
+    prepared_session: PreparedTraceSession,
+    effective_mismatch_reason: str,
+    checkpoint_spec: dict[str, Any],
+    checkpoint_action_index: int,
+    ctr: PreparedContainer,
+    scheduler: "ReplayCheckpointScheduler",
+    lane_induced: bool = False,
+    replay_speed: float = 1.0,
+    command_timeout_s: float = 120.0,
+) -> dict[str, Any]:
+    """Run forced-sync for a deferred CAS mismatch found during LLM sleep.
+
+    Called from Hook 2 when a background boundary task completed during an
+    LLM sleep window and found a CAS state mismatch.  Runs the same inline
+    restore logic as the tool-result-mismatch path, but uses the stored
+    boundary context rather than the current loop iteration's variables.
+    """
+    import time as _time
+
+    forced_sync_fields: dict[str, Any] = {
+        "forced_sync_attempted": True,
+        "forced_sync_reason": effective_mismatch_reason,
+        "forced_sync_overhead_excluded": True,
+    }
+    if lane_induced:
+        forced_sync_fields["lane_induced_mismatch_candidate"] = True
+
+    forced_sync_started = _time.monotonic()
+
+    if isinstance(ctr.backend, FCBackend):
+        fc_restore_snapshot_index: int | None = None
+        available = sorted(
+            idx for idx in ctr.replay_snapshots
+            if idx <= checkpoint_action_index
+        )
+        if available:
+            fc_restore_snapshot_index = available[-1]
+            fc_snapshot = ctr.replay_snapshots[fc_restore_snapshot_index]
+        if fc_restore_snapshot_index is not None:
+            try:
+                restored = await ctr.backend.restore_snapshot(fc_snapshot)
+                scheduler.set_prev_manifest(None)
+                restore_result = {
+                    "forced_sync_success": restored,
+                    "forced_sync_status": (
+                        "fc_paired_restored_continuation"
+                        if restored
+                        else "fc_paired_restore_failed"
+                    ),
+                    "forced_sync_resolved": False,
+                    "forced_sync_continued": restored,
+                    "forced_sync_overhead_excluded": True,
+                    "forced_sync_fc_snapshot_index": fc_restore_snapshot_index,
+                    "forced_sync_fc_mem_version": (
+                        fc_snapshot.process_state.get("mem_version")
+                        if fc_snapshot.process_state
+                        else None
+                    ),
+                    "forced_sync_fc_disk_version": (
+                        fc_snapshot.disk_state.get("disk_version")
+                    ),
+                    "restore_root_exists": True,
+                }
+            except Exception as exc:
+                restore_result = {
+                    "forced_sync_success": False,
+                    "forced_sync_status": "fc_paired_restore_failed",
+                    "forced_sync_resolved": False,
+                    "forced_sync_continued": False,
+                    "forced_sync_error": f"{type(exc).__name__}: {exc}",
+                }
+        else:
+            restore_result = {
+                "forced_sync_success": False,
+                "forced_sync_status": "fc_no_paired_snapshot",
+                "forced_sync_resolved": False,
+                "forced_sync_continued": False,
+                "forced_sync_error": (
+                    "no FC paired snapshot available for "
+                    f"checkpoint_action_index={checkpoint_action_index}"
+                ),
+            }
+        forced_sync_fields.update(restore_result)
+        fc_reapply_start = (
+            fc_restore_snapshot_index + 1
+            if fc_restore_snapshot_index is not None
+            and fc_restore_snapshot_index < checkpoint_action_index
+            else None
+        )
+        if (
+            restore_result.get("forced_sync_success") is True
+            and fc_reapply_start is not None
+        ):
+            reapply_fields = await _reapply_forced_sync_actions(
+                prepared_session=prepared_session,
+                start_index=fc_reapply_start,
+                end_index=checkpoint_action_index,
+                replay_speed=replay_speed,
+                command_timeout_s=command_timeout_s,
+            )
+            forced_sync_fields.update(reapply_fields)
+            if reapply_fields["forced_sync_reapply_errors"]:
+                forced_sync_fields.update({
+                    "forced_sync_success": False,
+                    "forced_sync_resolved": False,
+                    "forced_sync_continued": False,
+                    "forced_sync_status": "fc_reapply_failed",
+                    "forced_sync_error": "; ".join(
+                        reapply_fields["forced_sync_reapply_errors"]
+                    ),
+                })
+    else:
+        checkpoint_chain = _checkpoint_chain_specs_for_action(
+            actions=prepared_session.loaded.actions,
+            target_index=checkpoint_action_index,
+            source_trace=prepared_session.loaded.source_trace,
+        )
+        try:
+            if checkpoint_chain is None:
+                restore_result = _checkpoint_restore_failed_fields(
+                    checkpoint_path=Path(str(checkpoint_spec["path"])),
+                    kind=str(
+                        checkpoint_spec.get("kind")
+                        or "cas_manifest_incremental"
+                    ),
+                    restore_root=str(
+                        checkpoint_spec.get("root") or "/testbed"
+                    ),
+                    status="checkpoint_full_missing",
+                    error=(
+                        "incremental checkpoint has no preceding full "
+                        "checkpoint"
+                    ),
+                    started=_time.monotonic(),
+                    archive_exists=Path(
+                        str(checkpoint_spec["path"])
+                    ).is_file(),
+                )
+            else:
+                restore_result = await asyncio.to_thread(
+                    _restore_checkpoint_chain_to_container,
+                    checkpoint_specs=checkpoint_chain,
+                    container=ctr,
+                )
+            forced_sync_fields.update(restore_result)
+            if forced_sync_fields.get("forced_sync_success") is True:
+                scheduler.set_prev_manifest(None)
+        except Exception as exc:
+            forced_sync_fields.update({
+                "forced_sync_success": False,
+                "forced_sync_resolved": False,
+                "forced_sync_continued": False,
+                "forced_sync_status": "checkpoint_restore_failed",
+                "forced_sync_error": f"{type(exc).__name__}: {exc}",
+            })
+    forced_sync_success = forced_sync_fields.get("forced_sync_success") is True
+    forced_sync_fields.setdefault("forced_sync_success", False)
+    forced_sync_fields["forced_sync_resolved"] = False
+    forced_sync_fields.setdefault(
+        "forced_sync_status",
+        "checkpoint_restored_continuation"
+        if forced_sync_success
+        else "checkpoint_restore_failed",
+    )
+    forced_sync_fields.setdefault(
+        "forced_sync_continued",
+        forced_sync_success
+        and forced_sync_fields.get("forced_sync_status")
+        == "checkpoint_restored_continuation",
+    )
+    forced_sync_fields["forced_sync_elapsed_ms"] = round(
+        (_time.monotonic() - forced_sync_started) * 1000, 3,
+    )
+    return forced_sync_fields
+
+
 def _source_openclaw_tool_results_dir(source_trace: Path) -> Path | None:
     attempt_dir = source_trace.parent
     candidates: list[Path] = []
@@ -2769,6 +2977,46 @@ def _summarize_sleep_drifts(drifts: list[SleepDrift]) -> dict[str, Any]:
             }
             for phase, items in sorted(by_phase.items())
         },
+    }
+
+
+def _check_sleep_drift_tolerance(
+    sync_drift_summary: dict[str, Any],
+    deferred_drift_summary: dict[str, Any],
+    *,
+    tolerance_factor: float = 1.5,
+) -> dict[str, Any]:
+    """Check that deferred-arm sleep drift is within tolerance of sync-arm.
+
+    Rule: deferred-arm drift p95 <= tolerance_factor * sync-arm drift p95.
+    A zero sync-arm p95 is treated as within tolerance (no meaningful drift
+    to compare against). The A/B harness (STORY-5) uses this as a regression
+    gate: drift regression in the deferred arm means boundary work leaked
+    onto the event loop.
+
+    Returns a dict with ``within_tolerance`` (bool), both p95 values, and
+    the effective bound.
+    """
+    sync_drift_stats = sync_drift_summary.get("drift_s", {})
+    deferred_drift_stats = deferred_drift_summary.get("drift_s", {})
+    sync_p95 = float(sync_drift_stats.get("p95", 0.0))
+    deferred_p95 = float(deferred_drift_stats.get("p95", 0.0))
+    if sync_p95 <= 0.0:
+        return {
+            "within_tolerance": True,
+            "reason": "sync_arm_no_drift",
+            "sync_p95": sync_p95,
+            "deferred_p95": deferred_p95,
+            "bound": None,
+            "tolerance_factor": tolerance_factor,
+        }
+    bound = tolerance_factor * sync_p95
+    return {
+        "within_tolerance": deferred_p95 <= bound,
+        "sync_p95": round(sync_p95, 6),
+        "deferred_p95": round(deferred_p95, 6),
+        "bound": round(bound, 6),
+        "tolerance_factor": tolerance_factor,
     }
 
 
@@ -3515,9 +3763,22 @@ def _make_task_stats(
     failed_action_count: int = 0,
     replay_env_parity: str = "default_env",
     prep_error: str | None = None,
+    scheduler_metrics: dict[str, Any] | None = None,
+    predictive_skip: str = "off",
 ) -> ReplayTaskStats:
     llm_call_count = sum(1 for action in loaded.actions if action.get("action_type") == "llm_call")
     tool_exec_count = sum(1 for action in loaded.actions if action.get("action_type") == "tool_exec")
+    sm: dict[str, Any] = scheduler_metrics or {}
+    boundaries_total = sm.get("boundaries_total", 0)
+    total_work = (
+        sm.get("capture_elapsed_ms", 0.0)
+        + sm.get("probe_elapsed_ms", 0.0)
+        + sm.get("compare_elapsed_ms", 0.0)
+    )
+    overlap_fraction_avg: float = 0.0
+    if boundaries_total > 0 and total_work > 0:
+        total_absorbed = max(0.0, total_work - sm.get("checkpoint_exposed_ms", 0.0))
+        overlap_fraction_avg = round(total_absorbed / total_work, 6)
     return ReplayTaskStats(
         agent_id=loaded.run_instance_id,
         run_instance_id=loaded.run_instance_id,
@@ -3533,6 +3794,14 @@ def _make_task_stats(
         failed_action_count=failed_action_count,
         replay_env_parity=replay_env_parity,
         prep_error=prep_error,
+        total_checkpoint_exposed_ms=sm.get("checkpoint_exposed_ms", 0.0),
+        total_capture_elapsed_ms=sm.get("capture_elapsed_ms", 0.0),
+        total_probe_elapsed_ms=sm.get("probe_elapsed_ms", 0.0),
+        total_compare_elapsed_ms=sm.get("compare_elapsed_ms", 0.0),
+        captures_fully_absorbed=sm.get("captures_fully_absorbed", 0),
+        boundaries_total=boundaries_total,
+        overlap_fraction_avg=overlap_fraction_avg,
+        predictive_skip=predictive_skip,
     )
 
 
@@ -4051,7 +4320,10 @@ async def _run_cloud_model_queue(
     resource_monitoring_enabled: bool = True,
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
+    replay_scheduler_config: ReplaySchedulerConfig | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
+    if replay_scheduler_config is None:
+        replay_scheduler_config = ReplaySchedulerConfig()
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
 
@@ -4122,6 +4394,7 @@ async def _run_cloud_model_queue(
                     llm_timing=llm_timing,
                     command_timeout_s=command_timeout_s,
                     warmup_skip_iterations=warmup_skip_iterations,
+                    replay_scheduler_config=replay_scheduler_config,
                 )
             except Exception as exc:
                 async with result_lock:
@@ -4195,7 +4468,10 @@ async def _run_prepared_cloud_model_sessions(
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
+    replay_scheduler_config: ReplaySchedulerConfig | None = None,
 ) -> list[ReplayTaskStats]:
+    if replay_scheduler_config is None:
+        replay_scheduler_config = ReplaySchedulerConfig()
     results = await asyncio.gather(
         *(
             _replay_cloud_model_session(
@@ -4206,6 +4482,7 @@ async def _run_prepared_cloud_model_sessions(
                 llm_timing=llm_timing,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
+                replay_scheduler_config=replay_scheduler_config,
             )
             for prepared in prepared_sessions
         ),
@@ -4245,7 +4522,10 @@ async def _run_worker_wave_async(
     replay_start_barrier: Any,
     replay_start_event: Any,
     replay_start_wall_time: Any,
+    replay_scheduler_config: ReplaySchedulerConfig | None = None,
 ) -> WorkerReplayResult:
+    if replay_scheduler_config is None:
+        replay_scheduler_config = ReplaySchedulerConfig()
     loaded_sessions = _load_worker_trace_inputs(worker_inputs)
     prepared_sessions: list[PreparedTraceSession] = []
     trace_logger: TraceLogger | None = None
@@ -4333,6 +4613,9 @@ async def _run_worker_wave_async(
                 "worker_chunk_size": len(worker_inputs),
                 "replay_start_delay_s": _REPLAY_START_DELAY_S,
                 "monitoring": monitoring_policy or {},
+                "checkpoint_scheduling": replay_scheduler_config.checkpoint_scheduling,
+                "predictive_skip": replay_scheduler_config.predictive_skip,
+                "rebaseline_bytes": replay_scheduler_config.rebaseline_bytes,
             },
         )
         task_stats = [
@@ -4362,6 +4645,7 @@ async def _run_worker_wave_async(
                 llm_timing=llm_timing,
                 command_timeout_s=command_timeout_s,
                 warmup_skip_iterations=warmup_skip_iterations,
+                replay_scheduler_config=replay_scheduler_config,
             )
         )
         task_stats.sort(key=lambda stat: stat.manifest_index)
@@ -4416,7 +4700,10 @@ def _run_worker_wave_sync(
     replay_start_barrier: Any,
     replay_start_event: Any,
     replay_start_wall_time: Any,
+    replay_scheduler_config: ReplaySchedulerConfig | None = None,
 ) -> WorkerReplayResult:
+    if replay_scheduler_config is None:
+        replay_scheduler_config = ReplaySchedulerConfig()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -4445,6 +4732,7 @@ def _run_worker_wave_sync(
             replay_start_barrier=replay_start_barrier,
             replay_start_event=replay_start_event,
             replay_start_wall_time=replay_start_wall_time,
+            replay_scheduler_config=replay_scheduler_config,
         )
     )
 
@@ -4467,7 +4755,10 @@ async def _run_cloud_model_worker_waves(
     resource_monitoring_enabled: bool,
     memory_bandwidth_enabled: bool,
     monitoring_policy: dict[str, object] | None,
+    replay_scheduler_config: ReplaySchedulerConfig | None = None,
 ) -> tuple[list[WorkerReplayResult], list[ReplayTaskStats]]:
+    if replay_scheduler_config is None:
+        replay_scheduler_config = ReplaySchedulerConfig()
     if workers < 1:
         raise ValueError("workers must be >= 1")
     if concurrency < 1:
@@ -4524,6 +4815,7 @@ async def _run_cloud_model_worker_waves(
                             replay_start_barrier=replay_start_barrier,
                             replay_start_event=replay_start_event,
                             replay_start_wall_time=replay_start_wall_time,
+                            replay_scheduler_config=replay_scheduler_config,
                         ),
                     )
                     for worker_index, chunk in enumerate(chunks)
@@ -4544,6 +4836,657 @@ async def _run_cloud_model_worker_waves(
     return replay_results, task_stats
 
 
+class ReplayCheckpointScheduler:
+    """Replay-side checkpoint work scheduler with deferred capture/compare.
+
+    States: IDLE -> DECIDING -> CAPTURING -> COMPARING -> {IDLE|RESTORING} -> IDLE
+
+    Invariant: at most one boundary's work in flight (single lane, not configurable).
+    Container mutation requires serialization, and prev_cas_manifest incremental
+    chaining requires captures to resolve in boundary order.
+    """
+
+    def __init__(
+        self,
+        config: ReplaySchedulerConfig,
+        container: PreparedContainer | None,
+        source_trace: Path,
+        log_action: Callable[[str, dict[str, Any]], None],
+    ):
+        self._state = "IDLE"
+        self._config = config
+        self._container = container
+        self._source_trace = source_trace
+        self._log_action = log_action  # (agent_id, record) -> None
+        self._in_flight_task: asyncio.Task | None = None
+        self._deferred_records: list[dict[str, Any]] = []
+        self._pending_boundary_record: dict[str, Any] | None = None
+        self._prev_cas_manifest: CasManifestEntries | None = None
+        self._prev_timestamp_ns: int | None = None
+        self._folded_source_entries: CasManifestEntries = {}
+        # Per-boundary metric accumulators
+        self._pending_boundary_agent_id: str | None = None
+        self._boundary_probe_elapsed_ms: float = 0.0
+        self._boundary_capture_elapsed_ms: float = 0.0
+        self._boundary_compare_elapsed_ms: float = 0.0
+        self._boundary_exposed_ms: float = 0.0
+        self._boundary_scheduler_overhead_ms: float = 0.0
+        self._boundary_cas_compare_source: str = ""
+        # Pending forced-sync context (preserved across iterations for deferred
+        # CAS mismatches resolved at the next Hook 2 gate).
+        self._pending_action_index: int | None = None
+        self._pending_cas_spec: dict[str, Any] | None = None
+        self._pending_lane_active: bool = False
+        self._pending_tool_mismatch_reason: str | None = None
+        self._pending_iteration: int = 0
+        self._pending_warmup: bool = False
+        # Session-aggregate accumulators
+        self._capture_elapsed_ms = 0.0
+        self._probe_elapsed_ms = 0.0
+        self._compare_elapsed_ms = 0.0
+        self._exposed_ms = 0.0
+        self._scheduler_overhead_ms = 0.0
+        self._boundaries_total = 0
+        self._captures_fully_absorbed = 0
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def on_boundary(
+        self,
+        action_index: int,
+        cas_spec: dict[str, Any] | None,
+        tool_name: str | None,
+        tool_args_json: str | None,
+        tool_mismatch_reason: str | None,
+        record_slot: dict[str, Any],
+        agent_id: str,
+        lane_active_at_parent: bool = False,
+        iteration: int = 0,
+        warmup: bool = False,
+    ) -> None:
+        """Called when a checkpoint boundary is reached.
+
+        Drains in-flight work first (per Critic condition 1: drain FIRST, then
+        check pending_forced_sync), then starts new probe/capture chain.
+
+        In sync mode, runs the capture/compare inline so drain is a no-op
+        and record_slot is fully populated by the time this returns.
+        """
+        self._boundaries_total += 1
+
+        # Drain in-flight work before starting new boundary.
+        # The wait time is charged to the in-flight boundary's
+        # _boundary_exposed_ms (which has not been reset yet).
+        if self._state != "IDLE" and self._in_flight_task is not None and not self._in_flight_task.done():
+            exposed = await self._drain_internal()
+            self._boundary_exposed_ms += exposed
+        # Handle the back-to-back boundary case where the previous boundary's
+        # task completed but its record was never flushed (gate-less path:
+        # denied-command, artifact-unavailable, trace-replayed tools).  Flush
+        # the pending record now so the new boundary starts with a clean
+        # slot.
+        if self._state == "IDLE" and self._pending_boundary_record is not None:
+            self._finalize_and_accumulate()
+            self.flush_pending()
+
+        # Reset per-boundary accumulators for the new boundary
+        self._boundary_probe_elapsed_ms = 0.0
+        self._boundary_capture_elapsed_ms = 0.0
+        self._boundary_compare_elapsed_ms = 0.0
+        self._boundary_exposed_ms = 0.0
+        self._boundary_scheduler_overhead_ms = 0.0
+        self._boundary_cas_compare_source = ""
+
+        # Fold source entries for this boundary.
+        # Runs manifest JSON reads via asyncio.to_thread so filesystem I/O
+        # never blocks the event loop (Critic condition 2).
+        if cas_spec is not None:
+            self._folded_source_entries = await asyncio.to_thread(
+                _fold_source_checkpoint_entries,
+                checkpoint_spec=cas_spec,
+                prev_folded=self._folded_source_entries,
+            )
+
+        # Scheduling overhead: time spent on bookkeeping after drain + fold
+        sched_t0 = time.monotonic()
+
+        if self._scheduling == "sync":
+            self._state = "COMPARING"
+            work_t0 = time.monotonic()
+            await self._run_capture_compare_inline(
+                action_index=action_index,
+                cas_spec=cas_spec,
+                record_slot=record_slot,
+                tool_name=tool_name,
+                tool_args_json=tool_args_json,
+            )
+            work_elapsed_ms = (time.monotonic() - work_t0) * 1000
+            # Sync mode: all work runs inline, no separate probe or compare phase
+            self._boundary_capture_elapsed_ms = work_elapsed_ms
+            self._boundary_exposed_ms = work_elapsed_ms
+            self._boundary_cas_compare_source = record_slot.get("cas_compare_source", "")
+            self._boundary_scheduler_overhead_ms = (time.monotonic() - sched_t0) * 1000
+            self._finalize_boundary_record(record_slot)
+            self._state = "IDLE"
+            return
+
+        # Deferred mode: start probe/capture as background task
+        self._state = "DECIDING"
+        self._pending_boundary_record = record_slot
+        self._pending_boundary_agent_id = agent_id
+        # Store forced-sync context for deferred CAS-mismatch resolution
+        self._pending_action_index = action_index
+        self._pending_cas_spec = cas_spec
+        self._pending_lane_active = lane_active_at_parent
+        self._pending_tool_mismatch_reason = tool_mismatch_reason
+        self._pending_iteration = iteration
+        self._pending_warmup = warmup
+        self._in_flight_task = asyncio.create_task(
+            self._boundary_work(
+                action_index=action_index,
+                cas_spec=cas_spec,
+                tool_name=tool_name,
+                tool_args_json=tool_args_json,
+                tool_mismatch_reason=tool_mismatch_reason,
+                record_slot=record_slot,
+                lane_active_at_parent=lane_active_at_parent,
+                iteration=iteration,
+                warmup=warmup,
+            )
+        )
+        self._boundary_scheduler_overhead_ms += (time.monotonic() - sched_t0) * 1000
+
+    async def drain(self) -> float:
+        """Wait for in-flight work, measure exposed_ms. Returns exposed_ms.
+
+        After the in-flight task resolves, calls _finalize_boundary_record to
+        compute per-boundary metrics (including checkpoint_exposed_ms) and
+        accumulate session totals.  The record stays pending until
+        flush_pending() is called — the caller may need to run forced-sync
+        first when pending_forced_sync is True.
+        """
+        if self._in_flight_task is None:
+            return 0.0
+        # If the task already completed (state is IDLE) there is nothing to
+        # wait for, but the pending record may still need finalization.
+        if self._state == "IDLE" and self._in_flight_task.done():
+            self._finalize_and_accumulate()
+            return 0.0
+        if self._state == "IDLE":
+            return 0.0
+        t0 = time.monotonic()
+        exposed = await self._drain_internal()
+        self._boundary_exposed_ms += exposed
+        drain_overhead_ms = (time.monotonic() - t0) * 1000
+        self._boundary_scheduler_overhead_ms += drain_overhead_ms
+        # Finalize the pending record now that exposed_ms has been charged.
+        self._finalize_and_accumulate()
+        return exposed
+
+    def log_or_defer(self, agent_id: str, record: dict[str, Any]) -> None:
+        """Log immediately unless a boundary record is pending."""
+        if self._pending_boundary_record is not None and self._state not in ("IDLE",):
+            self._deferred_records.append(record)
+        else:
+            self._log_action(agent_id, record)
+
+    def note_window(self, sleep_s: float) -> None:
+        """Record that an LLM sleep window occurred (metric purposes)."""
+        pass  # PR1: metrics only; no behavioral coupling
+
+    def set_prev_manifest(self, entries: CasManifestEntries | None) -> None:
+        """Explicit setter for prev_cas_manifest (used by forced-sync callers)."""
+        self._prev_cas_manifest = entries
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def pending_forced_sync(self) -> bool:
+        """True when the resolved boundary requires forced-sync."""
+        return bool(
+            self._pending_boundary_record is not None
+            and self._pending_boundary_record.get("checkpoint_pending_forced_sync")
+        )
+
+    @property
+    def pending_action_index(self) -> int | None:
+        """Action index of the pending boundary (for forced-sync context)."""
+        return self._pending_action_index
+
+    @property
+    def pending_cas_spec(self) -> dict[str, Any] | None:
+        """CAS spec of the pending boundary (for forced-sync context)."""
+        return self._pending_cas_spec
+
+    @property
+    def pending_lane_active(self) -> bool:
+        """Whether a subagent lane was active before the pending boundary."""
+        return self._pending_lane_active
+
+    @property
+    def pending_tool_mismatch_reason(self) -> str | None:
+        """Tool-level mismatch reason stored with the pending boundary."""
+        return self._pending_tool_mismatch_reason
+
+    @property
+    def pending_iteration(self) -> int:
+        return self._pending_iteration
+
+    @property
+    def pending_warmup(self) -> bool:
+        return self._pending_warmup
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def prev_cas_manifest(self) -> CasManifestEntries | None:
+        return self._prev_cas_manifest
+
+    @property
+    def _scheduling(self) -> str:
+        return self._config.checkpoint_scheduling
+
+    @property
+    def _predictive_skip(self) -> str:
+        return self._config.predictive_skip
+
+    # ------------------------------------------------------------------
+    # Internal: drain
+    # ------------------------------------------------------------------
+
+    async def _drain_internal(self) -> float:
+        t0 = time.monotonic()
+        try:
+            if self._in_flight_task and not self._in_flight_task.done():
+                await asyncio.wait_for(self._in_flight_task, timeout=None)
+        except asyncio.CancelledError:
+            pass
+        return (time.monotonic() - t0) * 1000
+
+    # ------------------------------------------------------------------
+    # Internal: inline capture/compare (sync mode)
+    # ------------------------------------------------------------------
+
+    async def _run_capture_compare_inline(
+        self,
+        action_index: int,
+        cas_spec: dict[str, Any] | None,
+        record_slot: dict[str, Any],
+        tool_name: str | None = None,
+        tool_args_json: str | None = None,
+    ) -> None:
+        """Run capture + compare synchronously (sync mode path).
+
+        When predictive_skip is "gate", runs classifier-first: READ_ONLY
+        and FLAKY_READ tools skip the probe/capture entirely (ADR-12:
+        oracle compare against prev_cas_manifest). MUTATING and UNKNOWN
+        tools fall through to the normal inline capture path with
+        classifier annotations on the record.
+        """
+        if self._container is None or cas_spec is None:
+            record_slot.setdefault("cas_compare_source", "skip_audit")
+            return
+
+        # --- classifier-first decision (gate mode) ---
+        if self._predictive_skip == "gate" and tool_name is not None:
+            from trace_collect.predictive_policy import (
+                classify_tool_result,
+                needs_checkpoint,
+            )
+            family = classify_tool_result(tool_name, tool_args_json or "{}")
+            record_slot["predicted_family"] = family.value
+
+            if not needs_checkpoint(family):
+                # READ_ONLY or FLAKY_READ: skip probe AND capture entirely.
+                record_slot["checkpoint_decision"] = f"predicted_{family.value}"
+                # ADR-12: oracle compare against prev manifest on skip
+                if self._folded_source_entries and self._prev_cas_manifest is not None:
+                    fields = _cas_manifest_comparison_fields(
+                        source_entries=self._folded_source_entries,
+                        replay_entries=self._prev_cas_manifest,
+                    )
+                    record_slot.update(fields)
+                    if not fields.get("cas_manifest_match", True):
+                        record_slot["checkpoint_pending_forced_sync"] = True
+                else:
+                    record_slot.setdefault("cas_manifest_match", True)
+                record_slot.setdefault("cas_compare_source", "skip_audit")
+                return
+
+            # MUTATING or UNKNOWN: flag and fall through to inline capture.
+            record_slot["checkpoint_decision"] = (
+                f"predicted_{family.value}_probe_verified"
+            )
+
+        # FCBackend captures paired snapshots
+        if isinstance(self._container.backend, FCBackend):
+            try:
+                fc_snapshot = await self._container.backend.capture_snapshot()
+                self._container.replay_snapshots[action_index] = fc_snapshot
+                self._prev_timestamp_ns = getattr(fc_snapshot, "timestamp_ns", time.time_ns())
+            except Exception:
+                pass
+            record_slot.setdefault("cas_compare_source", "skip_audit")
+            return
+
+        replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
+            container=self._container,
+            root=cas_spec.get("root", "/testbed"),
+            previous_manifest=self._prev_cas_manifest,
+            context="checkpoint_boundary",
+        )
+        if replay_entries is not None:
+            self._prev_cas_manifest = replay_entries
+            self._prev_timestamp_ns = time.time_ns()
+            source_entries = self._folded_source_entries
+            if source_entries:
+                cas_fields = _cas_manifest_comparison_fields(
+                    source_entries=source_entries,
+                    replay_entries=replay_entries,
+                )
+                record_slot.update(cas_fields)
+                record_slot["cas_compare_source"] = "normal"
+            else:
+                record_slot.setdefault("cas_compare_source", "normal")
+        else:
+            record_slot.setdefault("cas_compare_source", "skip_audit")
+
+    # ------------------------------------------------------------------
+    # Internal: boundary work task (deferred mode)
+    # ------------------------------------------------------------------
+
+    async def _boundary_work(
+        self,
+        action_index: int,
+        cas_spec: dict[str, Any] | None,
+        tool_name: str | None,
+        tool_args_json: str | None,
+        tool_mismatch_reason: str | None,
+        record_slot: dict[str, Any],
+        lane_active_at_parent: bool = False,
+        iteration: int = 0,
+        warmup: bool = False,
+    ) -> None:
+        """Run probe -> classify -> capture -> compare chain as background task.
+
+        Runs as an asyncio task created by on_boundary. The replay-side
+        _capture_replay_snapshot_manifest_diagnostic already dispatches walk
+        operations via asyncio.to_thread internally; backend.capture_snapshot()
+        is an async method so it naturally yields the event loop during I/O.
+
+        Stores per-boundary durations in _boundary_* accumulators and records
+        the oracle verdict in *record_slot*.  Does NOT flush the pending record
+        — finalization (including checkpoint_exposed_ms charging) is deferred
+        to drain() / close(), so the gate wait is measured correctly.
+        """
+        import time as _time
+
+        if self._container is None or cas_spec is None:
+            self._boundary_cas_compare_source = "skip_audit"
+            self._state = "IDLE"
+            return
+
+        probe_t0 = _time.monotonic()
+
+        # Step 1: classifier-first decision
+        should_capture = True
+        checkpoint_decision = None
+        probe_result = None
+        predicted_family = None
+
+        if self._predictive_skip != "off" and tool_name is not None:
+            from trace_collect.predictive_policy import (
+                classify_tool_result,
+                needs_checkpoint,
+            )
+            family = classify_tool_result(tool_name, tool_args_json or "{}")
+            predicted_family = family.value
+            if not needs_checkpoint(family):
+                # READ_ONLY / FLAKY_READ: skip probe AND capture
+                should_capture = False
+                checkpoint_decision = f"predicted_{family.value}"
+                probe_result = "skipped"
+                record_slot["checkpoint_decision"] = checkpoint_decision
+                record_slot["predicted_family"] = predicted_family
+                record_slot["probe_result"] = probe_result
+
+        self._boundary_probe_elapsed_ms = (_time.monotonic() - probe_t0) * 1000
+
+        if should_capture:
+            self._state = "CAPTURING"
+            cap_t0 = _time.monotonic()
+
+            try:
+                # FCBackend captures paired snapshots
+                if isinstance(self._container.backend, FCBackend):
+                    try:
+                        fc_snapshot = await self._container.backend.capture_snapshot()
+                        self._container.replay_snapshots[action_index] = fc_snapshot
+                        self._prev_timestamp_ns = getattr(fc_snapshot, "timestamp_ns", time.time_ns())
+                    except Exception:
+                        pass
+                    self._boundary_capture_elapsed_ms = (_time.monotonic() - cap_t0) * 1000
+                    self._boundary_cas_compare_source = "skip_audit"
+                else:
+                    # CAS backend: use the diagnostic capture (handles to_thread internally)
+                    replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
+                        container=self._container,
+                        root=cas_spec.get("root", "/testbed"),
+                        previous_manifest=self._prev_cas_manifest,
+                        context="checkpoint_boundary",
+                    )
+                    self._boundary_capture_elapsed_ms = (_time.monotonic() - cap_t0) * 1000
+
+                    # Step 2: oracle compare
+                    self._state = "COMPARING"
+                    comp_t0 = _time.monotonic()
+                    if replay_entries is not None and self._folded_source_entries:
+                        fields = _cas_manifest_comparison_fields(
+                            source_entries=self._folded_source_entries,
+                            replay_entries=replay_entries,
+                        )
+                        record_slot.update(fields)
+                        record_slot["cas_compare_source"] = "normal"
+                        if not fields.get("cas_manifest_match", True):
+                            record_slot["checkpoint_pending_forced_sync"] = True
+                    elif replay_entries is not None:
+                        record_slot["cas_compare_source"] = "normal"
+                    else:
+                        record_slot["cas_compare_source"] = "skip_audit"
+                    if replay_entries is not None:
+                        self._prev_cas_manifest = replay_entries
+                        # Set prev_timestamp_ns from capture time for future probe baseline
+                        self._prev_timestamp_ns = time.time_ns()
+                    self._boundary_compare_elapsed_ms = (_time.monotonic() - comp_t0) * 1000
+                    self._boundary_cas_compare_source = record_slot.get("cas_compare_source", "")
+            except Exception as exc:
+                record_slot["checkpoint_after_error"] = {"error": str(exc)}
+                record_slot.setdefault("cas_compare_source", "skip_audit")
+                self._boundary_cas_compare_source = "skip_audit"
+                self._state = "IDLE"
+                return
+        else:
+            # Skip capture but still run oracle compare against prev manifest
+            # (ADR-12: oracle coverage is identical across all skip modes)
+            self._state = "COMPARING"
+            comp_t0 = _time.monotonic()
+            record_slot["cas_compare_source"] = "prev_manifest_unchanged"
+            if self._prev_cas_manifest is not None and self._folded_source_entries:
+                fields = _cas_manifest_comparison_fields(
+                    source_entries=self._folded_source_entries,
+                    replay_entries=self._prev_cas_manifest,
+                )
+                record_slot.update(fields)
+                if not fields.get("cas_manifest_match", True):
+                    record_slot["checkpoint_pending_forced_sync"] = True
+            else:
+                # First boundary: no prev manifest, optimistic match
+                record_slot["cas_manifest_match"] = True
+            self._boundary_compare_elapsed_ms = (_time.monotonic() - comp_t0) * 1000
+            self._boundary_cas_compare_source = record_slot["cas_compare_source"]
+
+        # Task complete — record stays pending.  drain() / close() will call
+        # _finalize_boundary_record after charging exposed_ms, then flush.
+        self._state = "IDLE"
+
+    # ------------------------------------------------------------------
+    # Internal: CAS oracle compare (used by inline sync path)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Internal: deferred record management
+    # ------------------------------------------------------------------
+
+    def _finalize_and_accumulate(self) -> None:
+        """Finalize the pending boundary record (compute per-boundary metrics).
+
+        Called by drain() / close() after exposed_ms has been charged, so
+        checkpoint_exposed_ms reflects the actual gate wait time.  Does NOT
+        flush the record — the caller may need to run forced-sync first when
+        pending_forced_sync is True.
+        """
+        pending = self._pending_boundary_record
+        if pending is None:
+            return
+        # Decouple finalization from flushing so exposed_ms is charged first.
+        self._finalize_boundary_record(pending)
+
+    def flush_pending(self) -> None:
+        """Emit the pending boundary record and any deferred records.
+
+        Must be called after drain() (and, when applicable, after forced-sync
+        has resolved a pending mismatch).  Idempotent — a no-op when there is
+        no pending record.
+        """
+        self._flush_deferred()
+
+    def _finalize_boundary_record(self, record_slot: dict[str, Any]) -> None:
+        """Compute derived per-boundary metrics and accumulate session totals.
+
+        Writes per-boundary timing fields into *record_slot* and increments
+        session-aggregate accumulators. Must be called exactly once per boundary.
+        """
+        probe = self._boundary_probe_elapsed_ms
+        capture = self._boundary_capture_elapsed_ms
+        compare = self._boundary_compare_elapsed_ms
+        exposed = self._boundary_exposed_ms
+        total_work = probe + capture + compare
+        absorbed = max(0.0, total_work - exposed)
+        overlap_fraction = absorbed / total_work if total_work > 0 else 1.0
+
+        record_slot["checkpoint_exposed_ms"] = round(exposed, 3)
+        record_slot["probe_elapsed_ms"] = round(probe, 3)
+        record_slot["capture_elapsed_ms"] = round(capture, 3)
+        record_slot["compare_elapsed_ms"] = round(compare, 3)
+        record_slot["capture_absorbed_ms"] = round(absorbed, 3)
+        record_slot["overlap_fraction"] = round(overlap_fraction, 3)
+        record_slot["scheduler_overhead_ms"] = round(
+            self._boundary_scheduler_overhead_ms, 3
+        )
+
+        # Ensure cas_compare_source is always populated
+        if not record_slot.get("cas_compare_source"):
+            record_slot["cas_compare_source"] = (
+                self._boundary_cas_compare_source or "skip_audit"
+            )
+
+        # Accumulate into session totals
+        self._probe_elapsed_ms += probe
+        self._capture_elapsed_ms += capture
+        self._compare_elapsed_ms += compare
+        self._exposed_ms += exposed
+        self._scheduler_overhead_ms += self._boundary_scheduler_overhead_ms
+        if exposed == 0.0 and total_work > 0:
+            self._captures_fully_absorbed += 1
+
+    def _flush_deferred(self) -> None:
+        """Flush all deferred records through the logging callback.
+
+        Emits the pending boundary record (after finalization has already been
+        applied by drain() / close()) followed by any queued records.
+        """
+        records = self._deferred_records[:]
+        self._deferred_records.clear()
+        pending = self._pending_boundary_record
+        agent_id = self._pending_boundary_agent_id
+        if pending is None:
+            # No pending record — just emit any deferred records.
+            for r in records:
+                record_agent_id = (
+                    r.agent_id
+                    if isinstance(r, TraceAction)
+                    else r.get("agent_id", "unknown")
+                )
+                self._log_action(record_agent_id, r)
+            return
+        # Clear pending state BEFORE logging so log_or_defer sees no pending
+        # record and writes immediately.
+        self._pending_boundary_record = None
+        self._pending_boundary_agent_id = None
+        # The pending record is the tool_exec record slot (cas_manifest_fields
+        # in the loop), already populated with CAS and timing fields.  It is
+        # emitted as part of the normal tool_exec logging from the loop, not
+        # here — so we only log the deferred records queued behind it.
+        for r in records:
+            record_agent_id = (
+                r.agent_id
+                if isinstance(r, TraceAction)
+                else r.get("agent_id", agent_id or "unknown")
+            )
+            self._log_action(record_agent_id, r)
+
+    # ------------------------------------------------------------------
+    # Internal: previous manifest info for incremental captures
+    # ------------------------------------------------------------------
+
+    def _prev_manifest_info(self) -> dict[str, Any] | None:
+        """Return info for incremental capture."""
+        if self._prev_cas_manifest is not None:
+            return {
+                "manifest": self._prev_cas_manifest,
+                "timestamp_ns": self._prev_timestamp_ns,
+            }
+        return None
+
+    # ------------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------------
+
+    def get_metrics(self) -> dict[str, Any]:
+        return {
+            "checkpoint_exposed_ms": round(self._exposed_ms, 3),
+            "capture_elapsed_ms": round(self._capture_elapsed_ms, 3),
+            "probe_elapsed_ms": round(self._probe_elapsed_ms, 3),
+            "compare_elapsed_ms": round(self._compare_elapsed_ms, 3),
+            "scheduler_overhead_ms": round(self._scheduler_overhead_ms, 3),
+            "boundaries_total": self._boundaries_total,
+            "captures_fully_absorbed": self._captures_fully_absorbed,
+        }
+
+    # ------------------------------------------------------------------
+    # Close
+    # ------------------------------------------------------------------
+
+    async def close(self) -> dict[str, Any]:
+        """Drain in-flight work, flush deferred records. Returns aggregates.
+
+        Any pending boundary record that has not yet been flushed (e.g. a
+        deferred CAS mismatch whose forced-sync could not be invoked because
+        no further container-touching op occurred) is emitted here so the
+        session JSONL is always complete.
+        """
+        await self.drain()
+        if self._deferred_records or self._pending_boundary_record is not None:
+            self.flush_pending()
+        return self.get_metrics()
+
+
 async def _replay_cloud_model_session(
     prepared_session: PreparedTraceSession,
     *,
@@ -4553,7 +5496,10 @@ async def _replay_cloud_model_session(
     llm_timing: LLMTimingConfig,
     command_timeout_s: float,
     warmup_skip_iterations: int,
+    replay_scheduler_config: ReplaySchedulerConfig | None = None,
 ) -> ReplayTaskStats:
+    if replay_scheduler_config is None:
+        replay_scheduler_config = ReplaySchedulerConfig()
     loaded = prepared_session.loaded
     ctr = prepared_session.container
     source_model = (loaded.summary or {}).get("model", "unknown")
@@ -4588,9 +5534,16 @@ async def _replay_cloud_model_session(
         if start_drift is not None:
             sleep_drifts.append(start_drift)
 
-    # Per-session CAS tracking state
-    prev_cas_manifest: CasManifestEntries | None = None
-    folded_source_entries: CasManifestEntries = {}
+    # Create replay checkpoint scheduler (Hook 0 — session initialization).
+    # The scheduler owns prev_cas_manifest, folded_source_entries, and the
+    # pending-background-work state. In sync mode it runs capture/compare
+    # inline; in deferred mode it overlaps them with LLM sleep windows.
+    scheduler = ReplayCheckpointScheduler(
+        config=replay_scheduler_config,
+        container=ctr,
+        source_trace=loaded.source_trace,
+        log_action=trace_logger.log_trace_action,
+    )
     lane_active_since_last_boundary = False
 
     for action_index, action in enumerate(loaded.actions):
@@ -4637,6 +5590,7 @@ async def _replay_cloud_model_session(
                     sleep_s,
                     phase="llm_replay",
                 )
+                scheduler.note_window(sleep_s)  # Hook 3: metrics (no behavioral coupling)
                 if action_sleep is not None:
                     sleep_drifts.append(action_sleep)
                 record_ts_end = time.time()
@@ -4679,7 +5633,7 @@ async def _replay_cloud_model_session(
                         },
                     },
                 )
-                trace_logger.log_trace_action(loaded.agent_id, record)
+                scheduler.log_or_defer(loaded.agent_id, record)  # Hook 4
                 succeeded_actions += 1
                 continue
 
@@ -4829,6 +5783,47 @@ async def _replay_cloud_model_session(
                             )
                             else None
                         )
+                        # Hook 2 — gate: drain pending boundary work before container mutation
+                        if replay_scheduler_config.checkpoint_scheduling == "deferred":
+                            await scheduler.drain()
+                            # Check for a pending CAS mismatch from a previous
+                            # boundary whose work completed during the last LLM
+                            # sleep.  If set, run forced-sync now (inline) before
+                            # the next container-touching tool executes.
+                            if scheduler.pending_forced_sync:
+                                _fs_index = scheduler.pending_action_index
+                                _fs_spec = scheduler.pending_cas_spec
+                                if _fs_spec is not None and _fs_index is not None:
+                                    # Build a minimal forced-sync record for the
+                                    # pending boundary.  Uses stored context from
+                                    # the mismatch boundary.
+                                    _fs_data = loaded.actions[_fs_index].get("data") or {}
+                                    _fs_checkpoint_spec = _checkpoint_after_spec(
+                                        action_data=_fs_data,
+                                        source_trace=loaded.source_trace,
+                                    )
+                                    if _fs_checkpoint_spec is not None:
+                                        _fs_pending = scheduler._pending_boundary_record
+                                        _fs_fields = _run_deferred_forced_sync(
+                                            prepared_session=prepared_session,
+                                            effective_mismatch_reason="cas_state_mismatch",
+                                            checkpoint_spec=_fs_checkpoint_spec,
+                                            checkpoint_action_index=_fs_index,
+                                            ctr=ctr,
+                                            scheduler=scheduler,
+                                            lane_induced=(
+                                                scheduler.pending_lane_active
+                                            ),
+                                            replay_speed=replay_speed,
+                                            command_timeout_s=command_timeout_s,
+                                        )
+                                        if _fs_pending is not None:
+                                            _fs_pending.update(_fs_fields)
+                                scheduler.flush_pending()
+                            elif scheduler.state == "IDLE":
+                                # Clean boundary (no mismatch) — the record has
+                                # been finalized by drain(); flush it now.
+                                scheduler.flush_pending()
                         (
                             tool_result,
                             duration_ms,
@@ -4889,45 +5884,32 @@ async def _replay_cloud_model_session(
             ):
                 lane_active_at_parent_boundary = lane_active_since_last_boundary
                 lane_active_since_last_boundary = False
-                folded_source_entries = _fold_source_checkpoint_entries(
-                    checkpoint_spec=cas_spec,
-                    prev_folded=folded_source_entries,
+
+                # Hook 1: hand off to scheduler
+                # Sync mode: capture/compare runs inline, cas_manifest_fields populated
+                # Deferred mode: background task started, fields filled asynchronously
+                await scheduler.on_boundary(
+                    action_index=action_index,
+                    cas_spec=cas_spec,
+                    tool_name=tool_name,
+                    tool_args_json=tool_args,
+                    tool_mismatch_reason=mismatch_reason,
+                    record_slot=cas_manifest_fields,
+                    agent_id=loaded.agent_id,
+                    lane_active_at_parent=lane_active_at_parent_boundary,
+                    iteration=iteration,
+                    warmup=iteration < warmup_skip_iterations,
                 )
-                source_entries = folded_source_entries
-                # FCBackend captures paired snapshots instead of CAS manifests.
-                if isinstance(ctr.backend, FCBackend):
-                    try:
-                        fc_snapshot = await ctr.backend.capture_snapshot()
-                        ctr.replay_snapshots[action_index] = fc_snapshot
-                    except Exception:
-                        # Snapshot capture is best-effort for forced-sync;
-                        # the absence is handled when restoring.
-                        pass
-                else:
-                    replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
-                        container=ctr,
-                        root=cas_spec.get("root", "/testbed"),
-                        previous_manifest=prev_cas_manifest,
-                        context="checkpoint_boundary",
-                    )
-                    # Only compare if capture succeeded (None = failure)
-                    if replay_entries is not None:
-                        cas_manifest_fields = _cas_manifest_comparison_fields(
-                            source_entries=source_entries,
-                            replay_entries=replay_entries,
+                if replay_scheduler_config.checkpoint_scheduling == "sync":
+                    # Sync mode: cas_manifest_fields already populated
+                    if (
+                        effective_mismatch_reason is None
+                        and not cas_manifest_fields.get("cas_manifest_match", True)
+                    ):
+                        effective_mismatch_reason = "cas_state_mismatch"
+                        lane_induced_mismatch_candidate = (
+                            lane_active_at_parent_boundary
                         )
-                        if (
-                            effective_mismatch_reason is None
-                            and not cas_manifest_fields["cas_manifest_match"]
-                        ):
-                            effective_mismatch_reason = "cas_state_mismatch"
-                            lane_induced_mismatch_candidate = (
-                                lane_active_at_parent_boundary
-                            )
-                    # Store for incremental next snapshot (update even on {} —
-                    # next incremental starts from a known empty state)
-                    if replay_entries is not None:
-                        prev_cas_manifest = replay_entries
             replay_outcome_match = mismatch_reason is None
             output_diff_snippet: str | None = None
             if effective_mismatch_reason is not None or normalized_output_match is False:
@@ -4955,6 +5937,23 @@ async def _replay_cloud_model_session(
             if (not tool_success) and replay_outcome_match:
                 matched_failed_actions += 1
             forced_sync_fields: dict[str, Any] = {}
+            # Hook 2 — second gate: drain before forced-sync.
+            # Only drain when a tool-result mismatch is already known
+            # (effective_mismatch_reason is set before the gate).  For clean
+            # boundaries the background task overlaps with the upcoming LLM
+            # sleep and checkpoint_exposed_ms is measured at the next
+            # Hook 2 drain — this is the correct exposure measurement point.
+            if (
+                replay_scheduler_config.checkpoint_scheduling == "deferred"
+                and effective_mismatch_reason is not None
+            ):
+                _exposed = await scheduler.drain()
+                # Upgrade effective_mismatch_reason from record_slot if the
+                # deferred CAS compare found a mismatch.
+                if cas_manifest_fields.get(
+                    "checkpoint_pending_forced_sync"
+                ):
+                    effective_mismatch_reason = "cas_state_mismatch"
             if (
                 effective_mismatch_reason is not None
                 and ctr is not None
@@ -5047,7 +6046,7 @@ async def _replay_cloud_model_session(
                                 restored = await ctr.backend.restore_snapshot(
                                     fc_snapshot,
                                 )
-                                prev_cas_manifest = None
+                                scheduler.set_prev_manifest(None)  # FC restore
                                 restore_result = {
                                     "forced_sync_success": restored,
                                     "forced_sync_status": (
@@ -5168,7 +6167,7 @@ async def _replay_cloud_model_session(
                                 )
                             forced_sync_fields.update(restore_result)
                             if forced_sync_fields.get("forced_sync_success") is True:
-                                prev_cas_manifest = None
+                                scheduler.set_prev_manifest(None)  # FC restore
                             skip_post_restore_verification = False
                             if (
                                 forced_sync_fields.get("forced_sync_success") is True
@@ -5232,7 +6231,7 @@ async def _replay_cloud_model_session(
                                         }
                                     )
                                 elif skip_post_restore_verification:
-                                    prev_cas_manifest = None
+                                    scheduler.set_prev_manifest(None)  # FC restore
                                     forced_sync_fields.update(
                                         {
                                             "forced_sync_verified": None,
@@ -5281,10 +6280,10 @@ async def _replay_cloud_model_session(
                                         )
                                     )
                                     if replay_entries is None:
-                                        prev_cas_manifest = None
+                                        scheduler.set_prev_manifest(None)  # FC restore
                                         forced_sync_fields.update(verification_fields)
                                     else:
-                                        prev_cas_manifest = replay_entries
+                                        scheduler.set_prev_manifest(replay_entries)
                                         forced_sync_fields.update(verification_fields)
                                         if not verification_fields[
                                             "forced_sync_verification"
@@ -5306,7 +6305,7 @@ async def _replay_cloud_model_session(
                                         action_id,
                                         exc,
                                     )
-                                    prev_cas_manifest = None
+                                    scheduler.set_prev_manifest(None)  # FC restore
                                     forced_sync_fields.update(
                                         _forced_sync_verification_unavailable_fields(
                                             f"{type(exc).__name__}: {exc}",
@@ -5348,6 +6347,14 @@ async def _replay_cloud_model_session(
                         (time.monotonic() - forced_sync_started) * 1000,
                         3,
                     )
+            # Flush the pending boundary record now that forced-sync has
+            # resolved (tool-result mismatch path).  For clean boundaries
+            # the flush happens at the next Hook 2 drain or close().
+            if (
+                replay_scheduler_config.checkpoint_scheduling == "deferred"
+                and forced_sync_fields
+            ):
+                scheduler.flush_pending()
             extra_tool_fields = _command_metadata(
                 tool_name=tool_name,
                 tool_args_json=tool_args,
@@ -5461,7 +6468,7 @@ async def _replay_cloud_model_session(
                     "sim_metrics": sim_metrics,
                 },
             )
-            trace_logger.log_trace_action(loaded.agent_id, tool_record)
+            scheduler.log_or_defer(loaded.agent_id, tool_record)  # Hook 4
             forced_sync_attempted = (
                 forced_sync_fields.get("forced_sync_attempted") is True
             )
@@ -5525,6 +6532,10 @@ async def _replay_cloud_model_session(
     wall_end = time.time()
     failed_actions = outcome_mismatches + replay_action_errors
     success = failed_actions == 0 and fatal_replay_errors == 0
+
+    # Session end: drain in-flight work, flush deferred records
+    scheduler_aggregates = await scheduler.close()
+
     trace_logger.log_summary(
         loaded.agent_id,
         _make_trace_summary(
@@ -5551,6 +6562,12 @@ async def _replay_cloud_model_session(
                 "outcome_mismatches": outcome_mismatches,
                 "unresolved_mismatches": unresolved_mismatches,
                 "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
+                "checkpoint_scheduling": {
+                    "mode": replay_scheduler_config.checkpoint_scheduling,
+                    "predictive_skip": replay_scheduler_config.predictive_skip,
+                    "rebaseline_bytes": replay_scheduler_config.rebaseline_bytes,
+                },
+                "scheduler_metrics": scheduler_aggregates,
             },
         ),
     )
@@ -5560,6 +6577,8 @@ async def _replay_cloud_model_session(
         elapsed_s=wall_end - wall_start,
         failed_action_count=failed_actions,
         replay_env_parity=prepared_session.replay_task_env_parity,
+        scheduler_metrics=scheduler_aggregates,
+        predictive_skip=replay_scheduler_config.predictive_skip,
     )
 
 
@@ -5773,8 +6792,36 @@ async def simulate(
     llm_timing_mode: str = "source_scaled",
     llm_ttft_ms: float | None = None,
     llm_tpot_ms: float | None = None,
+    checkpoint_scheduling: str = "sync",
+    predictive_skip: str = "off",
+    rebaseline_bytes: int | None = None,
     structured_output: bool = False,
 ) -> Path:
+    if mode != "cloud_model":
+        raise ValueError(f"Unsupported simulate mode: {mode}")
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+    if workers < 1:
+        raise ValueError("workers must be >= 1")
+    if prep_concurrency < 0:
+        raise ValueError("prep_concurrency must be >= 0")
+    if checkpoint_scheduling not in ("sync", "deferred"):
+        raise ValueError(f"checkpoint_scheduling must be sync or deferred, got {checkpoint_scheduling!r}")
+    if predictive_skip == "speculative":
+        raise ValueError("reserved for PR3")
+    if predictive_skip not in ("off", "gate"):
+        raise ValueError(f"predictive_skip must be off or gate, got {predictive_skip!r}")
+    if predictive_skip == "gate" and checkpoint_scheduling == "sync":
+        # sync+gate is valid (skip-only ablation), but warn
+        logger.warning(
+            "sync+gate measures skip-only ablation; captures are inline, "
+            "only skip applied."
+        )
+    replay_scheduler_config = ReplaySchedulerConfig(
+        checkpoint_scheduling=checkpoint_scheduling,
+        predictive_skip=predictive_skip,
+        rebaseline_bytes=rebaseline_bytes,
+    )
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
     if concurrency < 1:
@@ -5917,6 +6964,7 @@ async def simulate(
                 resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
+                replay_scheduler_config=replay_scheduler_config,
             )
         else:
             worker_results, task_stats = await _run_cloud_model_worker_waves(
@@ -5936,6 +6984,7 @@ async def simulate(
                 resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
+                replay_scheduler_config=replay_scheduler_config,
             )
             container_resource_summary = {
                 "status": "disabled",

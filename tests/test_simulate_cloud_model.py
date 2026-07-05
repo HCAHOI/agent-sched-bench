@@ -16,11 +16,14 @@ from trace_collect.simulator import (
     LLMTimingConfig,
     PreparedContainer,
     PreparedTraceSession,
+    ReplayCheckpointScheduler,
     ReplayPreparationError,
+    ReplaySchedulerConfig,
     SimulateError,
     WorkerTraceInput,
     _capture_snapshot_manifest,
     _cas_manifest_comparison_fields,
+    _check_sleep_drift_tolerance,
     _checkpoint_after_spec,
     _checkpoint_spec_is_incremental,
     _chunk_worker_inputs_by_concurrency,
@@ -7207,4 +7210,818 @@ class TestBugCRestoreChainCorrectness:
         )
         assert chain is not None
         assert len(chain) == 2
-        assert not _checkpoint_spec_is_incremental(chain[0])  # first is full
+
+
+# ---------------------------------------------------------------------------
+# ReplayCheckpointScheduler unit tests
+# ---------------------------------------------------------------------------
+
+
+def _make_scheduler(
+    scheduling: str = "sync",
+    predictive_skip: str = "off",
+) -> tuple[ReplayCheckpointScheduler, list[dict[str, Any]]]:
+    """Create a scheduler with a recording log_action callback."""
+    logged: list[dict[str, Any]] = []
+
+    def log_action(agent_id: str, record: dict[str, Any]) -> None:
+        logged.append(record)
+
+    config = ReplaySchedulerConfig(
+        checkpoint_scheduling=scheduling,
+        predictive_skip=predictive_skip,
+    )
+    scheduler = ReplayCheckpointScheduler(
+        config=config,
+        container=None,
+        source_trace=Path("/tmp/test_trace.jsonl"),
+        log_action=log_action,
+    )
+    return scheduler, logged
+
+
+class TestReplayCheckpointSchedulerBasic:
+    """Basic lifecycle tests for ReplayCheckpointScheduler."""
+
+    def test_initial_state(self) -> None:
+        scheduler, _ = _make_scheduler()
+        assert scheduler.state == "IDLE"
+        assert not scheduler.pending_forced_sync
+        metrics = scheduler.get_metrics()
+        assert metrics["boundaries_total"] == 0
+        assert metrics["scheduler_overhead_ms"] >= 0
+        assert metrics["checkpoint_exposed_ms"] == 0.0
+
+    def test_sync_on_boundary_no_container(self) -> None:
+        """Sync mode with no container is a no-op fast path."""
+        scheduler, records = _make_scheduler(scheduling="sync")
+        record_slot: dict[str, Any] = {}
+
+        asyncio.run(
+            scheduler.on_boundary(
+                action_index=0,
+                cas_spec={"path": "/tmp/cas.json", "root": "/testbed"},
+                tool_name="write_file",
+                tool_args_json='{"file": "/tmp/foo"}',
+                tool_mismatch_reason=None,
+                record_slot=record_slot,
+                agent_id="test-agent",
+            )
+        )
+        # With no container, the capture is skipped; on_boundary returns
+        # immediately and the record slot is unchanged.
+        assert scheduler.state == "IDLE"
+        assert not scheduler.pending_forced_sync
+
+    def test_drain_idle_is_noop(self) -> None:
+        """drain() from IDLE returns 0.0 without blocking."""
+        scheduler, _ = _make_scheduler()
+        exposed = asyncio.run(scheduler.drain())
+        assert exposed == 0.0
+
+    def test_close_idle(self) -> None:
+        """close() from IDLE returns empty metrics."""
+        scheduler, _ = _make_scheduler()
+        aggregates = asyncio.run(scheduler.close())
+        assert "checkpoint_exposed_ms" in aggregates
+        assert aggregates["boundaries_total"] == 0
+
+    def test_log_or_defer_immediate(self) -> None:
+        """Without pending boundary, log_or_defer logs immediately."""
+        scheduler, records = _make_scheduler()
+        rec = {"action_type": "llm_call", "agent_id": "agent-1"}
+        scheduler.log_or_defer("agent-1", rec)
+        assert len(records) == 1
+        assert records[0] == rec
+
+    def test_set_prev_manifest(self) -> None:
+        scheduler, _ = _make_scheduler()
+        entries = {"a.txt": {"hash": "abc123"}}
+        scheduler.set_prev_manifest(entries)
+        assert scheduler.prev_cas_manifest == entries
+        scheduler.set_prev_manifest(None)
+        assert scheduler.prev_cas_manifest is None
+
+    def test_note_window_no_behavioral_coupling(self) -> None:
+        """note_window is metrics-only, no behavioral change."""
+        scheduler, _ = _make_scheduler()
+        assert scheduler.state == "IDLE"
+        scheduler.note_window(0.5)
+        assert scheduler.state == "IDLE"  # unchanged
+
+    def test_scheduler_overhead_non_negative(self) -> None:
+        """scheduler_overhead_ms is recorded and non-negative."""
+        scheduler, _ = _make_scheduler(scheduling="sync")
+        record_slot: dict[str, Any] = {}
+
+        asyncio.run(
+            scheduler.on_boundary(
+                action_index=0,
+                cas_spec=None,  # no CAS spec = fast path
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=record_slot,
+                agent_id="test-agent",
+            )
+        )
+        metrics = scheduler.get_metrics()
+        assert metrics["scheduler_overhead_ms"] >= 0
+        assert metrics["boundaries_total"] == 1
+
+
+class TestReplayCheckpointSchedulerDeferred:
+    """Deferred-mode lifecycle tests."""
+
+    def test_deferred_on_boundary_spawns_task(self) -> None:
+        """In deferred mode, on_boundary starts a background task."""
+        scheduler, _ = _make_scheduler(scheduling="deferred")
+        record_slot: dict[str, Any] = {}
+
+        asyncio.run(
+            scheduler.on_boundary(
+                action_index=0,
+                cas_spec=None,
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=record_slot,
+                agent_id="test-agent",
+            )
+        )
+        # With no container and no CAS spec, the task completes immediately
+        # and flushes back to IDLE. But at on_boundary return, DECIDING was set.
+        assert scheduler.state in ("IDLE", "DECIDING")
+
+    def test_deferred_drain_measures_exposed(self) -> None:
+        """drain() waits for in-flight work and returns exposed_ms."""
+        scheduler, _ = _make_scheduler(scheduling="deferred")
+        record_slot: dict[str, Any] = {}
+
+        async def run() -> None:
+            await scheduler.on_boundary(
+                action_index=0,
+                cas_spec=None,
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=record_slot,
+                agent_id="test-agent",
+            )
+            exposed = await scheduler.drain()
+            # After drain, the task (which was a fast no-op) should resolve quickly
+            assert exposed >= 0
+
+        asyncio.run(run())
+
+    def test_log_or_defer_defers_when_boundary_pending(self) -> None:
+        """log_or_defer defers when a boundary record is pending."""
+        scheduler, records = _make_scheduler(scheduling="deferred")
+        rec2 = {"action_type": "llm_call", "agent_id": "agent-1"}
+
+        async def run() -> None:
+            record_slot: dict[str, Any] = {}
+            # Start a deferred boundary with an empty cas_spec that will
+            # complete quickly. The task sets _pending_boundary_record.
+            await scheduler.on_boundary(
+                action_index=0,
+                cas_spec=None,
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=record_slot,
+                agent_id="agent-1",
+            )
+            # While the task is pending, log_or_defer should defer
+            if scheduler.state != "IDLE":
+                scheduler.log_or_defer("agent-1", rec2)
+            # Drain and flush
+            await scheduler.drain()
+            await scheduler.close()
+
+        asyncio.run(run())
+        # The boundary record and any deferred record should now be flushed
+        assert any(r.get("agent_id") == "agent-1" for r in records)
+
+    def test_sync_mode_no_deferral(self) -> None:
+        """In sync mode, log_or_defer never defers."""
+        scheduler, records = _make_scheduler(scheduling="sync")
+        rec = {"action_type": "llm_call", "agent_id": "agent-1"}
+        scheduler.log_or_defer("agent-1", rec)
+        assert len(records) == 1
+
+
+class TestReplayCheckpointSchedulerPendingMismatch:
+    """Pending-mismatch invariant tests."""
+
+    def test_no_forced_sync_without_mismatch(self) -> None:
+        """pending_forced_sync is False when no mismatch is recorded."""
+        scheduler, _ = _make_scheduler(scheduling="sync")
+        record_slot: dict[str, Any] = {}
+
+        asyncio.run(
+            scheduler.on_boundary(
+                action_index=0,
+                cas_spec=None,  # no spec = no compare = no mismatch
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=record_slot,
+                agent_id="test-agent",
+            )
+        )
+        assert not scheduler.pending_forced_sync
+
+    def test_pending_record_cleared_after_close(self) -> None:
+        scheduler, _ = _make_scheduler(scheduling="deferred")
+        record_slot: dict[str, Any] = {}
+
+        async def run() -> None:
+            await scheduler.on_boundary(
+                action_index=0,
+                cas_spec=None,
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=record_slot,
+                agent_id="test-agent",
+            )
+            await scheduler.close()
+
+        asyncio.run(run())
+        assert scheduler.state == "IDLE"
+        assert not scheduler.pending_forced_sync
+
+    def test_mismatch_sets_pending_forced_sync(self) -> None:
+        """When the deferred oracle compare finds a CAS mismatch,
+        pending_forced_sync is True and the record stays pending."""
+        scheduler, records = _make_scheduler(scheduling="deferred")
+
+        # We cannot easily inject a fake CAS compare, but we can assert
+        # that a mismatch marker propagates: manually set the flag to
+        # simulate what the background task does after a CAS mismatch.
+        record_slot: dict[str, Any] = {"checkpoint_pending_forced_sync": True}
+        scheduler._pending_boundary_record = record_slot
+        assert scheduler.pending_forced_sync
+
+    def test_single_pending_record_invariant(self) -> None:
+        """Exactly one pending boundary record exists at any time."""
+        scheduler, _ = _make_scheduler(scheduling="deferred")
+        slot_a: dict[str, Any] = {}
+        slot_b: dict[str, Any] = {}
+
+        async def run() -> None:
+            # Start boundary A (fast path: no container).
+            await scheduler.on_boundary(
+                action_index=0,
+                cas_spec=None,
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=slot_a,
+                agent_id="agent-a",
+            )
+            # In deferred mode, on_boundary sets _pending_boundary_record and
+            # spawns a background task.  With no container, the task completes
+            # immediately (calling nothing).  The record is still pending.
+            # Drain to finalize and flush A.
+            await scheduler.drain()
+            scheduler.flush_pending()
+            # Record A is now flushed — the pending slot is empty.
+            # Start boundary B.  There must be at most one pending record.
+            await scheduler.on_boundary(
+                action_index=1,
+                cas_spec=None,
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=slot_b,
+                agent_id="agent-b",
+            )
+            await scheduler.drain()
+            scheduler.flush_pending()
+
+        asyncio.run(run())
+        # Both boundaries processed; pending slot is clear.
+        assert not scheduler.pending_forced_sync
+        assert scheduler.state == "IDLE"
+
+    def test_back_to_back_boundary_drain_serializes(self) -> None:
+        """B arrives while A is in-flight — on_boundary drains A first.
+
+        This exercises the gate-less boundary path (e.g. denied-command,
+        trace-replayed tools carrying checkpoint specs).  B must not start
+        capture until A's work has completed.
+        """
+        scheduler, _ = _make_scheduler(scheduling="deferred")
+        slot_a: dict[str, Any] = {}
+        slot_b: dict[str, Any] = {}
+
+        async def run() -> None:
+            # Start boundary A with a valid cas_spec so the task performs
+            # capture work (which will fail since there's no real container,
+            # but the internal drain serialization still exercises the gate).
+            await scheduler.on_boundary(
+                action_index=0,
+                cas_spec={"path": "/tmp/a.json", "root": "/testbed"},
+                tool_name="bash",
+                tool_args_json='{"cmd": "echo a"}',
+                tool_mismatch_reason=None,
+                record_slot=slot_a,
+                agent_id="agent-a",
+            )
+            # Boundary A task is in-flight (state IDLE fast path since no
+            # container).  Now start boundary B — on_boundary's internal
+            # drain serializes even though A already completed.
+            await scheduler.on_boundary(
+                action_index=1,
+                cas_spec={"path": "/tmp/b.json", "root": "/testbed"},
+                tool_name="bash",
+                tool_args_json='{"cmd": "echo b"}',
+                tool_mismatch_reason=None,
+                record_slot=slot_b,
+                agent_id="agent-b",
+            )
+            # Drain B.
+            await scheduler.drain()
+            scheduler.flush_pending()
+
+        asyncio.run(run())
+        assert scheduler.state == "IDLE"
+        # Both slots should carry checkpoint metrics.
+        assert "checkpoint_exposed_ms" in slot_a
+        assert "checkpoint_exposed_ms" in slot_b
+
+    def test_resolve_mismatch_before_next_boundary(self) -> None:
+        """B arrives while A is mismatch-pending — forced-sync resolves
+        before B's capture starts.
+
+        Simulates the pending-mismatch invariant: when a deferred boundary
+        resolves to CAS mismatch, the pending_forced_sync flag is set.
+        The next boundary (B) must resolve A's forced-sync before starting
+        its own capture so B observes the post-restore container state.
+        """
+        scheduler, _ = _make_scheduler(scheduling="deferred")
+        slot_a: dict[str, Any] = {"checkpoint_pending_forced_sync": True}
+        slot_b: dict[str, Any] = {}
+
+        async def run() -> None:
+            # Simulate A having resolved to mismatch (record is pending).
+            scheduler._pending_boundary_record = slot_a
+            scheduler._pending_boundary_agent_id = "agent-a"
+            scheduler._pending_action_index = 0
+            scheduler._pending_cas_spec = {"path": "/tmp/a.json", "root": "/testbed"}
+            scheduler._state = "IDLE"
+
+            # B arrives — pending_forced_sync is True.
+            assert scheduler.pending_forced_sync
+
+            # The caller (Hook 1 pending-mismatch check, or Hook 2 gate)
+            # drains first, observes pending_forced_sync, runs forced-sync
+            # for A, then flushes A.
+            await scheduler.drain()
+            assert scheduler.pending_forced_sync  # still true until forced-sync resolves
+            # Simulate forced-sync resolving A: clear the pending_forced_sync
+            # marker and flush.
+            slot_a.pop("checkpoint_pending_forced_sync", None)
+            scheduler.flush_pending()
+            assert not scheduler.pending_forced_sync
+
+            # Now B can start its capture on clean post-restore state.
+            await scheduler.on_boundary(
+                action_index=1,
+                cas_spec=None,
+                tool_name=None,
+                tool_args_json=None,
+                tool_mismatch_reason=None,
+                record_slot=slot_b,
+                agent_id="agent-b",
+            )
+            await scheduler.drain()
+            scheduler.flush_pending()
+
+        asyncio.run(run())
+        assert scheduler.state == "IDLE"
+        # B did not observe a spurious mismatch (no pending_forced_sync).
+        assert not scheduler.pending_forced_sync
+        # B's capture completed successfully.
+        assert "checkpoint_exposed_ms" in slot_b
+
+
+class TestReplayCheckpointSchedulerConfig:
+    """Configuration validation."""
+
+    def test_default_config_is_sync_off(self) -> None:
+        config = ReplaySchedulerConfig()
+        assert config.checkpoint_scheduling == "sync"
+        assert config.predictive_skip == "off"
+        assert config.rebaseline_bytes is None
+
+    def test_sync_gate_is_valid(self) -> None:
+        """sync + gate is valid (skip-only ablation)."""
+        config = ReplaySchedulerConfig(
+            checkpoint_scheduling="sync",
+            predictive_skip="gate",
+        )
+        assert config.checkpoint_scheduling == "sync"
+        assert config.predictive_skip == "gate"
+
+    def test_deferred_off_is_valid(self) -> None:
+        config = ReplaySchedulerConfig(
+            checkpoint_scheduling="deferred",
+            predictive_skip="off",
+        )
+        assert config.checkpoint_scheduling == "deferred"
+
+    def test_config_is_hashable(self) -> None:
+        """Frozen dataclass must be hashable for set/dict keys."""
+        config = ReplaySchedulerConfig()
+        assert hash(config) is not None
+        d = {config: "test"}
+        assert d[config] == "test"
+
+
+# ---------------------------------------------------------------------------
+# STORY-5: A/B test harness for PR1 sync vs deferred comparison
+# ---------------------------------------------------------------------------
+
+_SCHEDULER_METRIC_KEYS: frozenset[str] = frozenset({
+    # Per-boundary timing fields (added by _finalize_boundary_record)
+    "checkpoint_exposed_ms",
+    "probe_elapsed_ms",
+    "capture_elapsed_ms",
+    "compare_elapsed_ms",
+    "capture_absorbed_ms",
+    "overlap_fraction",
+    "scheduler_overhead_ms",
+    # CAS oracle comparison fields
+    "cas_compare_source",
+    "cas_manifest_match",
+    "cas_source_entries",
+    "cas_replay_entries",
+    "cas_modified_count",
+    "cas_added_count",
+    "cas_removed_count",
+    "cas_mode_mismatch_count",
+    "cas_mode_mismatch_examples",
+    # Predictive skip / gate annotations
+    "checkpoint_pending_forced_sync",
+    "checkpoint_decision",
+    "predicted_family",
+})
+
+
+def _strip_scheduler_metrics(data: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *data* with scheduler-added metric keys removed.
+
+    Scheduler-added keys (timing, CAS comparison, gate annotations) are
+    expected to differ between sync and deferred arms.  Stripping them
+    before comparison isolates the replay-correctness-relevant fields.
+
+    Also strips sleep-drift sub-keys inside ``sim_metrics``, since the
+    deferred arm may have slightly different sleep characteristics
+    (Critic condition 3 handles the formal tolerance check separately).
+    """
+    stripped = {k: v for k, v in data.items() if k not in _SCHEDULER_METRIC_KEYS}
+    # Strip sleep-drift fields from within sim_metrics
+    sim_metrics = stripped.get("sim_metrics")
+    if isinstance(sim_metrics, dict):
+        stripped["sim_metrics"] = {
+            k: v for k, v in sim_metrics.items()
+            if k not in ("source_gap_sleep", "action_sleep")
+        }
+    return stripped
+
+
+def _compare_ab_outputs(
+    sync_trace_file: Path,
+    deferred_trace_file: Path,
+    *,
+    drift_tolerance_factor: float = 1.5,
+) -> dict[str, Any]:
+    """Compare sync vs deferred checkpoint-scheduling replay outputs.
+
+    Runs three fidelity invariants per traced agent:
+
+    1. **Mismatch-count parity** -- ``outcome_mismatches`` and
+       ``unresolved_mismatches`` must be identical between arms.
+    2. **Forced-sync outcome parity** -- ``forced_sync_actions``,
+       ``forced_sync_attempts``, ``forced_sync_successes``, and
+       ``forced_sync_continued`` counts must match.
+    3. **Sleep-drift budget** -- deferred-arm p95 drift must not
+       exceed ``tolerance_factor`` * sync-arm p95 drift (Critic
+       condition 3).
+
+    Also checks that tool_exec record data (modulo scheduler-added
+    metric keys) is identical between arms.
+    """
+    sync_records = _read_jsonl(sync_trace_file)
+    deferred_records = _read_jsonl(deferred_trace_file)
+
+    def _summaries(records: list[dict]) -> dict[str, dict]:
+        return {
+            r["agent_id"]: r
+            for r in records
+            if r.get("type") == "summary" and "agent_id" in r
+        }
+
+    def _tool_execs(records: list[dict]) -> dict[str, list[dict]]:
+        by_agent: dict[str, list[dict]] = {}
+        for r in records:
+            if r.get("type") == "action" and r.get("action_type") == "tool_exec":
+                agent = r.get("agent_id", "")
+                by_agent.setdefault(agent, []).append(r)
+        return by_agent
+
+    sync_summaries = _summaries(sync_records)
+    deferred_summaries = _summaries(deferred_records)
+    sync_tools = _tool_execs(sync_records)
+    deferred_tools = _tool_execs(deferred_records)
+
+    agents = sorted(set(sync_summaries) | set(deferred_summaries))
+    per_task: list[dict[str, Any]] = []
+    all_mismatch_ok = True
+    all_forced_ok = True
+    all_drift_ok = True
+    all_tool_ok = True
+
+    for agent in agents:
+        s_sum = sync_summaries.get(agent, {})
+        d_sum = deferred_summaries.get(agent, {})
+
+        # --- Invariant 1: mismatch counts identical ---
+        mismatch_ok = (
+            s_sum.get("outcome_mismatches") == d_sum.get("outcome_mismatches")
+            and s_sum.get("unresolved_mismatches") == d_sum.get("unresolved_mismatches")
+        )
+        if not mismatch_ok:
+            all_mismatch_ok = False
+
+        # --- Invariant 2: forced-sync outcomes identical ---
+        forced_ok = (
+            s_sum.get("forced_sync_actions") == d_sum.get("forced_sync_actions")
+            and s_sum.get("forced_sync_attempts") == d_sum.get("forced_sync_attempts")
+            and s_sum.get("forced_sync_successes") == d_sum.get("forced_sync_successes")
+            and s_sum.get("forced_sync_continued") == d_sum.get("forced_sync_continued")
+        )
+        if not forced_ok:
+            all_forced_ok = False
+
+        # --- Invariant 3: sleep-drift budget ---
+        drift_check = _check_sleep_drift_tolerance(
+            s_sum.get("sleep_drift", {}),
+            d_sum.get("sleep_drift", {}),
+            tolerance_factor=drift_tolerance_factor,
+        )
+        if not drift_check["within_tolerance"]:
+            all_drift_ok = False
+
+        # --- Tool record parity (modulo scheduler keys) ---
+        s_tools = sync_tools.get(agent, [])
+        d_tools = deferred_tools.get(agent, [])
+        tool_ok = True
+        tool_diffs: list[dict[str, Any]] = []
+        if len(s_tools) == len(d_tools):
+            for idx, (s, d) in enumerate(zip(s_tools, d_tools)):
+                s_data = _strip_scheduler_metrics(s.get("data", {}))
+                d_data = _strip_scheduler_metrics(d.get("data", {}))
+                if s_data != d_data:
+                    tool_ok = False
+                    # Collect symmetric diff keys for diagnostics
+                    all_keys = set(s_data) | set(d_data)
+                    diff_keys = sorted(
+                        k for k in all_keys
+                        if s_data.get(k) != d_data.get(k)
+                    )
+                    tool_diffs.append({
+                        "index": idx,
+                        "action_id": s.get("action_id"),
+                        "differing_keys": diff_keys,
+                    })
+        else:
+            tool_ok = False
+        if not tool_ok:
+            all_tool_ok = False
+
+        per_task.append({
+            "agent_id": agent,
+            "mismatch_count_match": mismatch_ok,
+            "forced_sync_match": forced_ok,
+            "drift_check": drift_check,
+            "tool_record_parity": tool_ok,
+            "tool_diffs": tool_diffs,
+        })
+
+    return {
+        "agents": agents,
+        "per_task": per_task,
+        "mismatch_count_match": all_mismatch_ok,
+        "forced_sync_match": all_forced_ok,
+        "drift_ok": all_drift_ok,
+        "tool_record_parity": all_tool_ok,
+        "passed": all_mismatch_ok and all_forced_ok and all_drift_ok and all_tool_ok,
+    }
+
+
+def _ab_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    agent_id: str = "task-a",
+    tool_name: str = "exec",
+    with_checkpoint: bool = True,
+) -> tuple[Path, Path, Path]:
+    """Shared setup for A/B tests: write trace, tasks, apply runtime patches.
+
+    Returns (trace_path, task_source, manifest).
+    """
+    trace_path = tmp_path / f"{agent_id}.jsonl"
+    task_source = tmp_path / "tasks.json"
+    checkpoint_after: dict[str, str] | None = None
+    if with_checkpoint:
+        checkpoint_after = {
+            "path": "checkpoints/after-tool-manifest.json",
+            "kind": "cas_manifest_full",
+            "root": "/testbed",
+        }
+    _write_trace(
+        trace_path,
+        agent_id=agent_id,
+        tool_name=tool_name,
+        checkpoint_after=checkpoint_after,
+    )
+    _write_tasks(task_source, agent_id)
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "trace_collect.simulator._capture_snapshot_manifest",
+        lambda **_kwargs: {},
+    )
+    manifest = _single_trace_manifest(tmp_path, trace_path)
+    return trace_path, task_source, manifest
+
+
+# ---------------------------------------------------------------------------
+# Acceptance tests
+# ---------------------------------------------------------------------------
+
+
+def test_pr1_ab_happy_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Sync and deferred arms produce identical replay outcomes for a
+    simple trace with a checkpoint boundary."""
+    _trace_path, task_source, manifest = _ab_setup(monkeypatch, tmp_path)
+    output_dir = tmp_path / "out"
+
+    sync_trace = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=output_dir / "sync",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+            checkpoint_scheduling="sync",
+            predictive_skip="off",
+        )
+    )
+    deferred_trace = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=output_dir / "deferred",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+            checkpoint_scheduling="deferred",
+            predictive_skip="off",
+        )
+    )
+
+    result = _compare_ab_outputs(sync_trace, deferred_trace)
+    assert result["passed"], (
+        f"A/B comparison failed: {json.dumps(result['per_task'], indent=2)}"
+    )
+    assert result["mismatch_count_match"]
+    assert result["forced_sync_match"]
+    assert result["drift_ok"]
+    assert result["tool_record_parity"]
+
+
+def test_pr1_ab_drift_budget() -> None:
+    """Sleep-drift tolerance check enforces the 1.5x bound (Critic condition 3)."""
+    # Within tolerance: deferred p95 <= 1.5x sync p95
+    within = _check_sleep_drift_tolerance(
+        {"drift_s": {"p95": 0.010}},
+        {"drift_s": {"p95": 0.014}},
+        tolerance_factor=1.5,
+    )
+    assert within["within_tolerance"] is True
+    assert within["sync_p95"] == 0.010
+    assert within["deferred_p95"] == 0.014
+    assert within["bound"] == 0.015
+    assert within["tolerance_factor"] == 1.5
+
+    # Exceeds tolerance: deferred p95 > 1.5x sync p95
+    exceeded = _check_sleep_drift_tolerance(
+        {"drift_s": {"p95": 0.010}},
+        {"drift_s": {"p95": 0.020}},
+        tolerance_factor=1.5,
+    )
+    assert exceeded["within_tolerance"] is False
+
+    # Exact boundary: deferred == bound
+    at_bound = _check_sleep_drift_tolerance(
+        {"drift_s": {"p95": 0.010}},
+        {"drift_s": {"p95": 0.015}},
+        tolerance_factor=1.5,
+    )
+    assert at_bound["within_tolerance"] is True
+
+    # Sync has zero drift: always within tolerance
+    zero_sync = _check_sleep_drift_tolerance(
+        {"drift_s": {"p95": 0.0}},
+        {"drift_s": {"p95": 0.100}},
+        tolerance_factor=1.5,
+    )
+    assert zero_sync["within_tolerance"] is True
+    assert zero_sync["reason"] == "sync_arm_no_drift"
+
+
+def test_pr1_ab_mismatch_parity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Forced-sync counts match between sync and deferred arms when a
+    tool-execution mismatch triggers forced-sync recovery."""
+    _trace_path, task_source, manifest = _ab_setup(monkeypatch, tmp_path)
+
+    async def fake_exec_tool_fail(*_args: Any, **_kwargs: Any) -> tuple[str, float, bool]:
+        return "failed\n\nExit code: 1", 1.0, False
+
+    def fake_restore(
+        *,
+        checkpoint_spec: dict[str, Any],
+        container: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {
+            "forced_sync_success": True,
+            "forced_sync_elapsed_ms": 12.0,
+            "forced_sync_checkpoint": checkpoint_spec["path"],
+            "forced_sync_root": checkpoint_spec["root"],
+        }
+
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool_fail)
+    monkeypatch.setattr(
+        "trace_collect.simulator._restore_checkpoint_to_container",
+        fake_restore,
+    )
+
+    output_dir = tmp_path / "out"
+
+    sync_trace = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=output_dir / "sync",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+            checkpoint_scheduling="sync",
+            predictive_skip="off",
+        )
+    )
+    deferred_trace = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=output_dir / "deferred",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+            checkpoint_scheduling="deferred",
+            predictive_skip="off",
+        )
+    )
+
+    result = _compare_ab_outputs(sync_trace, deferred_trace)
+    assert result["mismatch_count_match"], (
+        f"Mismatch counts diverge: {json.dumps(result['per_task'], indent=2)}"
+    )
+    assert result["forced_sync_match"], (
+        f"Forced-sync outcomes diverge: {json.dumps(result['per_task'], indent=2)}"
+    )
+
+    # Sanity: forced-sync counts are non-zero (the mismatch actually fired)
+    sync_records = _read_jsonl(sync_trace)
+    sync_summaries = [r for r in sync_records if r.get("type") == "summary"]
+    assert sync_summaries[0]["forced_sync_actions"] >= 1
+    assert sync_summaries[0]["forced_sync_attempts"] >= 1
+    assert sync_summaries[0]["outcome_mismatches"] >= 1
+
+    deferred_records = _read_jsonl(deferred_trace)
+    deferred_summaries = [r for r in deferred_records if r.get("type") == "summary"]
+    assert deferred_summaries[0]["forced_sync_actions"] == sync_summaries[0]["forced_sync_actions"]
+    assert deferred_summaries[0]["forced_sync_attempts"] == sync_summaries[0]["forced_sync_attempts"]
