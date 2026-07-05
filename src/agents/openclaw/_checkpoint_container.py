@@ -11,11 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 import subprocess
 import tarfile
+import threading
 import time
-from io import BytesIO
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -32,23 +32,135 @@ _CONTAINER_PYTHON_CANDIDATES = (
 )
 
 _CHECKPOINT_CAS_ROOT = Path.home() / ".cache" / "agent-checkpoint-cas"
+_CHECKPOINT_SKIP_DIRS = frozenset({".git"})
+CheckpointEntryType = str | dict[str, str]
+CheckpointSnapshotEntry = (
+    CheckpointEntryType | tuple[CheckpointEntryType, int, int]
+)
 
-_CONTAINER_SNAPSHOT_SCRIPT = r"""
+
+def _unique_blob_tmp_path(blob_path: Path) -> Path:
+    return blob_path.parent / f".tmp.{os.getpid()}.{uuid.uuid4().hex}"
+
+
+def _checkpoint_relpath_is_skipped(relpath: str) -> bool:
+    return any(part in _CHECKPOINT_SKIP_DIRS for part in relpath.split("/"))
+
+
+def _checkpoint_snapshot_entry_type(
+    entry: CheckpointSnapshotEntry,
+) -> CheckpointEntryType:
+    if isinstance(entry, tuple):
+        return entry[0]
+    return entry
+
+
+def _normalize_checkpoint_entry_type(value: Any) -> CheckpointEntryType:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and all(
+        isinstance(key, str) and isinstance(item, str)
+        for key, item in value.items()
+    ):
+        return value
+    raise RuntimeError(f"invalid checkpoint entry type: {value!r}")
+
+
+def _normalize_checkpoint_snapshot_entry(value: Any) -> CheckpointSnapshotEntry:
+    if isinstance(value, str) or isinstance(value, dict):
+        return _normalize_checkpoint_entry_type(value)
+    if isinstance(value, list | tuple) and len(value) == 3:
+        entry_type = _normalize_checkpoint_entry_type(value[0])
+        size = value[1]
+        mtime_ns = value[2]
+        if isinstance(size, bool) or not isinstance(size, int):
+            raise RuntimeError(f"invalid checkpoint entry size: {value!r}")
+        if isinstance(mtime_ns, bool) or not isinstance(mtime_ns, int):
+            raise RuntimeError(f"invalid checkpoint entry mtime_ns: {value!r}")
+        return (entry_type, size, mtime_ns)
+    raise RuntimeError(f"invalid checkpoint snapshot entry: {value!r}")
+
+
+def _normalize_checkpoint_snapshot_entries(
+    entries: dict[str, Any],
+) -> dict[str, CheckpointSnapshotEntry]:
+    return {
+        path: _normalize_checkpoint_snapshot_entry(entry)
+        for path, entry in entries.items()
+    }
+
+
+_CONTAINER_SNAPSHOT_SCRIPT = (
+    r"""
 import json, os, stat, hashlib, sys, time
 
 root = "/testbed"
 since_ns_str = os.environ.get("CHECKPOINT_SINCE_NS", "")
 since_ns = int(since_ns_str) if since_ns_str else 0
+prev_entries_raw = sys.stdin.read()
+prev_entries = json.loads(prev_entries_raw) if prev_entries_raw else {}
 now_ns = time.time_ns()
+skip_dirs = set(
+"""
+    f"{tuple(sorted(_CHECKPOINT_SKIP_DIRS))!r}"
+    r"""
+)
 
 entries = {}
 changed = {}
 symlinks = []
 changed_during_walk = False
 
+def snapshot_entry(entry_type, st):
+    return [entry_type, st.st_size, st.st_mtime_ns]
+
+def entry_type(entry):
+    if isinstance(entry, list) and len(entry) == 3:
+        return entry[0]
+    return entry
+
+def entry_size_mtime(entry):
+    if isinstance(entry, list) and len(entry) == 3:
+        return (entry[1], entry[2])
+    return None
+
+def entry_changed(rel, entry):
+    previous = prev_entries.get(rel)
+    if previous is None:
+        return True
+    if entry_type(previous) != entry_type(entry):
+        return True
+    previous_size_mtime = entry_size_mtime(previous)
+    current_size_mtime = entry_size_mtime(entry)
+    if previous_size_mtime is None or current_size_mtime is None:
+        return True
+    return previous_size_mtime != current_size_mtime
+
+def record_symlink(full, rel, st):
+    try:
+        target = os.readlink(full)
+    except OSError:
+        return
+    entry_type_value = {"type": "symlink", "target": target}
+    entry = snapshot_entry(entry_type_value, st)
+    entries[rel] = entry
+    if entry_changed(rel, entry):
+        changed[rel] = entry_type_value
+
 for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+    dirnames[:] = [name for name in dirnames if name not in skip_dirs]
     dirnames.sort()
     filenames.sort()
+
+    for dname in dirnames:
+        full = os.path.join(dirpath, dname)
+        rel = os.path.relpath(full, root)
+        try:
+            dst = os.lstat(full)
+        except OSError:
+            continue
+        if stat.S_ISLNK(dst.st_mode):
+            record_symlink(full, rel, dst)
 
     if dirpath != root:
         rel = os.path.relpath(dirpath, root)
@@ -57,9 +169,9 @@ for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=Fals
         except OSError:
             continue
         if stat.S_ISDIR(dst.st_mode):
-            entries[rel] = "dir"
+            entries[rel] = snapshot_entry("dir", dst)
         elif stat.S_ISLNK(dst.st_mode):
-            symlinks.append(rel)
+            record_symlink(dirpath, rel, dst)
 
     for fname in filenames:
         full = os.path.join(dirpath, fname)
@@ -70,10 +182,11 @@ for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=Fals
             continue
 
         if stat.S_ISDIR(fst.st_mode):
-            entries[rel] = "dir"
+            entries[rel] = snapshot_entry("dir", fst)
         elif stat.S_ISREG(fst.st_mode):
-            entries[rel] = "file"
-            if since_ns and fst.st_mtime_ns <= since_ns:
+            entry = snapshot_entry("file", fst)
+            entries[rel] = entry
+            if not entry_changed(rel, entry):
                 continue
             try:
                 with open(full, "rb") as fh:
@@ -87,9 +200,10 @@ for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=Fals
                 "mtime_ns": fst.st_mtime_ns,
             }
         elif stat.S_ISLNK(fst.st_mode):
-            symlinks.append(rel)
+            record_symlink(full, rel, fst)
 
 for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+    dirnames[:] = [name for name in dirnames if name not in skip_dirs]
     for name in (*dirnames, *filenames):
         full = os.path.join(dirpath, name)
         try:
@@ -112,6 +226,7 @@ json.dump({
 }, sys.stdout)
 sys.stdout.write("\n")
 """
+)
 
 _CONTAINER_BLOB_FETCH_SCRIPT = r"""
 import json, os, sys, tarfile
@@ -198,16 +313,24 @@ def _run_snapshot(
     container_runtime: dict[str, str],
     python_path: str,
     since_ns: int | None,
+    prev_entries: dict[str, CheckpointSnapshotEntry] | None = None,
     *,
     timeout: int = 600,
 ) -> dict[str, Any]:
+    # TODO: remove after full migration to WalkBackend.
     """Run the snapshot script in the container and return parsed JSON."""
     extra_env: dict[str, str] = {}
     if since_ns is not None:
         extra_env["CHECKPOINT_SINCE_NS"] = str(since_ns)
 
     cmd = _build_exec_cmd(container_runtime, python_path, _CONTAINER_SNAPSHOT_SCRIPT, extra_env=extra_env)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    result = subprocess.run(
+        cmd,
+        input=json.dumps(prev_entries or {}),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"checkpoint snapshot failed: {detail}")
@@ -224,44 +347,94 @@ def _fetch_blobs(
     *,
     timeout: int = 600,
 ) -> dict[str, bytes]:
+    # TODO: remove after full migration to WalkBackend.
     """Fetch file contents via streaming tar, verify digests."""
     if not paths:
         return {}
 
     cmd = _build_exec_cmd(container_runtime, python_path, _CONTAINER_BLOB_FETCH_SCRIPT)
     stdin_data = json.dumps(paths).encode("utf-8")
-    result = subprocess.run(
+    process = subprocess.Popen(
         cmd,
-        input=stdin_data,
-        capture_output=True,
-        timeout=timeout,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip() if result.stderr else ""
-        raise RuntimeError(f"checkpoint blob fetch failed: {detail}")
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    stderr_chunks: list[bytes] = []
+
+    def drain_stderr() -> None:
+        stderr_chunks.append(process.stderr.read())
+
+    timed_out = False
+
+    def kill_on_timeout() -> None:
+        nonlocal timed_out
+        timed_out = True
+        process.kill()
+
+    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+    timer = threading.Timer(timeout, kill_on_timeout)
+    stderr_thread.start()
+    timer.start()
 
     contents: dict[str, bytes] = {}
-    with tarfile.open(fileobj=BytesIO(result.stdout), mode="r|") as tf:
-        for member in tf:
-            if not member.isfile():
-                continue
-            fh = tf.extractfile(member)
-            if fh is None:
-                continue
-            contents[member.name] = fh.read()
+    stream_error: Exception | None = None
+    returncode: int | None = None
+    try:
+        process.stdin.write(stdin_data)
+        process.stdin.close()
+        with tarfile.open(fileobj=process.stdout, mode="r|") as tf:
+            for member in tf:
+                if not member.isfile():
+                    continue
+                fh = tf.extractfile(member)
+                if fh is None:
+                    continue
+                contents[member.name] = fh.read()
+        returncode = process.wait()
+    except Exception as exc:
+        stream_error = exc
+    finally:
+        timer.cancel()
+        if process.poll() is None:
+            process.kill()
+            returncode = process.wait()
+        elif returncode is None:
+            returncode = process.returncode
+        stderr_thread.join()
+
+    stderr = b"".join(stderr_chunks)
+    if timed_out:
+        raise subprocess.TimeoutExpired(cmd, timeout, stderr=stderr)
+    if returncode != 0:
+        detail = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"checkpoint blob fetch failed: {detail}")
+    if stream_error is not None:
+        raise stream_error
     return contents
 
 
 def _compute_deleted_paths(
-    prev_entries: dict[str, str] | None,
-    current_entries: dict[str, str],
+    prev_entries: dict[str, CheckpointSnapshotEntry] | None,
+    current_entries: dict[str, CheckpointSnapshotEntry],
 ) -> list[str]:
     if prev_entries is None:
         return []
     return sorted(
         path
         for path, entry_type in prev_entries.items()
-        if current_entries.get(path) != entry_type
+        if (
+            (
+                path not in current_entries
+                or _checkpoint_snapshot_entry_type(current_entries[path])
+                != _checkpoint_snapshot_entry_type(entry_type)
+            )
+            and not _checkpoint_relpath_is_skipped(path)
+        )
     )
 
 
@@ -282,6 +455,17 @@ def _write_container_manifest(
 
     entries: dict[str, dict[str, Any]] = {}
     for rel, info in sorted(changed.items()):
+        if _checkpoint_relpath_is_skipped(rel):
+            continue
+        entry_type = info.get("type", "file")
+        if entry_type == "symlink":
+            target = info.get("target")
+            if not isinstance(target, str):
+                raise RuntimeError(f"checkpoint symlink target missing for {rel}")
+            entries[rel] = {"type": "symlink", "target": target}
+            continue
+        if entry_type != "file":
+            raise RuntimeError(f"unsupported checkpoint entry type for {rel}: {entry_type}")
         digest = info["hash"]
         blob_path = cas_root / "blobs" / digest[:2] / digest[2:]
 
@@ -300,7 +484,7 @@ def _write_container_manifest(
                     f"expected {digest}, got {expected_digest}"
                 )
             blob_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = blob_path.with_suffix(".tmp")
+            tmp = _unique_blob_tmp_path(blob_path)
             tmp.write_bytes(verified)
             tmp.rename(blob_path)
             total_unique_bytes += info["size"]
@@ -314,7 +498,11 @@ def _write_container_manifest(
 
     manifest: dict[str, Any] = {
         "entries": entries,
-        "deleted_paths": sorted(deleted_paths) if deleted_paths else [],
+        "deleted_paths": sorted(
+            path
+            for path in (deleted_paths or [])
+            if not _checkpoint_relpath_is_skipped(path)
+        ),
     }
 
     tmp = manifest_path.with_suffix(".tmp")
@@ -328,9 +516,10 @@ def run_container_checkpoint(
     container_runtime: dict[str, str],
     manifest_path: Path,
     incremental_since_ns: int | None,
-    prev_snapshot_entries: dict[str, str] | None,
+    prev_snapshot_entries: dict[str, CheckpointSnapshotEntry] | None,
     force_full: bool = False,
 ) -> dict[str, Any]:
+    # TODO: remove after full migration to WalkBackend.
     """Execute a container-side checkpoint and return a result dict.
 
     The result has the same shape as the host-side ``_checkpoint_after_tool``
@@ -341,6 +530,11 @@ def run_container_checkpoint(
     when *prev_snapshot_entries* is not None (rebaseline).
     """
     started = time.monotonic()
+    normalized_prev_entries = (
+        None
+        if prev_snapshot_entries is None
+        else _normalize_checkpoint_snapshot_entries(prev_snapshot_entries)
+    )
 
     try:
         python_path = _probe_container_python(container_runtime)
@@ -352,17 +546,16 @@ def run_container_checkpoint(
         }
 
     try:
-        snapshot = _run_snapshot(container_runtime, python_path, incremental_since_ns)
+        snapshot_prev_entries = None if force_full else normalized_prev_entries
+        snapshot = _run_snapshot(
+            container_runtime,
+            python_path,
+            incremental_since_ns,
+            snapshot_prev_entries,
+        )
     except (RuntimeError, subprocess.TimeoutExpired) as exc:
         return {
             "error": f"checkpoint snapshot failed: {exc}",
-            "overhead_excluded": True,
-            "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-        }
-
-    if snapshot.get("symlinks"):
-        return {
-            "error": "checkpoint skipped: symlinks under /testbed are unsupported",
             "overhead_excluded": True,
             "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
         }
@@ -374,14 +567,13 @@ def run_container_checkpoint(
             "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
         }
 
-    current_entries: dict[str, str] = snapshot["entries"]
+    current_entries = _normalize_checkpoint_snapshot_entries(snapshot["entries"])
     changed: dict[str, dict[str, Any]] = snapshot["changed"]
     now_ns: int = snapshot["now_ns"]
 
-    prev = prev_snapshot_entries or {}
-    deleted_paths = _compute_deleted_paths(prev_snapshot_entries, current_entries)
+    deleted_paths = _compute_deleted_paths(normalized_prev_entries, current_entries)
 
-    is_first = prev_snapshot_entries is None
+    is_first = normalized_prev_entries is None
     has_changes = bool(changed or deleted_paths)
 
     if not is_first and not force_full and not has_changes:
@@ -396,6 +588,8 @@ def run_container_checkpoint(
     missing_paths: list[str] = []
     cas_root = _CHECKPOINT_CAS_ROOT
     for rel, info in changed.items():
+        if info.get("type", "file") != "file":
+            continue
         digest = info["hash"]
         blob_path = cas_root / "blobs" / digest[:2] / digest[2:]
         if not blob_path.exists():

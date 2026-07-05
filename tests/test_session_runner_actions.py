@@ -28,11 +28,15 @@ import pytest
 pytest.importorskip("agents.openclaw._session_runner")
 
 import agents.openclaw._session_runner as session_runner
+from agents.openclaw._runner import AgentRunner, AgentRunSpec
 from agents.openclaw._session_runner import (
     TraceCollectorHook,
     _any_file_newer_than,
     _resolve_run_outcome,
 )
+from agents.openclaw.tools.registry import ToolRegistry
+from agents.openclaw.tools.shell import ExecTool
+from llm_call.provider_base import ToolCallRequest
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +83,7 @@ class _StubContext:
         usage: dict[str, int] | None = None,
         response: _StubResponse | None = None,
         tool_resource_timelines: dict[str, dict[str, Any]] | None = None,
+        tool_structured_results: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.iteration = iteration
         self.messages = messages
@@ -86,6 +91,7 @@ class _StubContext:
         self.usage = usage or {}
         self.response = response
         self.tool_resource_timelines = tool_resource_timelines or {}
+        self.tool_structured_results = tool_structured_results or {}
         self.malformed_retry_count = 0
 
 
@@ -93,6 +99,27 @@ def test_trace_collector_emits_llm_call_action(tmp_path: Path) -> None:
     import asyncio
 
     asyncio.run(_drive_emits_llm_call_action(tmp_path))
+
+
+def test_trace_collector_delta_mode_emits_message_deltas(tmp_path: Path) -> None:
+    asyncio.run(_drive_delta_mode_emits_message_deltas(tmp_path))
+
+
+def test_trace_collector_rejects_invalid_message_recording_mode(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="message_recording_mode"):
+        TraceCollectorHook(
+            tmp_path / "trace.jsonl",
+            instance_id="test-invalid-mode",
+            message_recording_mode="compact",
+        )
+
+
+def test_trace_collector_delta_mode_requires_append_only_messages(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_delta_mode_requires_append_only_messages(tmp_path))
 
 
 async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
@@ -183,8 +210,237 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
     assert llm["ts_start"] <= llm["ts_end"]
 
 
+async def _drive_delta_mode_emits_message_deltas(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-delta",
+        message_recording_mode="delta",
+    )
+
+    msgs_initial = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "Run tests."},
+    ]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_initial))
+
+    stub_tc = _StubToolCall("exec", {"command": "pytest"})
+    assistant_tool_call = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": stub_tc.id,
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "arguments": '{"command":"pytest"}',
+                },
+            }
+        ],
+    }
+    msgs_after_llm = msgs_initial + [assistant_tool_call]
+    await hook.before_execute_tools(
+        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    )
+    tool_result = {
+        "role": "tool",
+        "tool_call_id": stub_tc.id,
+        "name": "exec",
+        "content": "ok",
+    }
+    msgs_after_tool = msgs_after_llm + [tool_result]
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_tool,
+            tool_calls=[stub_tc],
+            usage={"prompt_tokens": 100, "completion_tokens": 20},
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+        )
+    )
+
+    await hook.before_iteration(_StubContext(iteration=1, messages=msgs_after_tool))
+    await hook.after_iteration(
+        _StubContext(
+            iteration=1,
+            messages=msgs_after_tool
+            + [{"role": "assistant", "content": "Done."}],
+            usage={"prompt_tokens": 120, "completion_tokens": 10},
+            response=_StubResponse(content="Done.", finish_reason="stop"),
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    llm_calls = [
+        record
+        for record in records
+        if record.get("type") == "action"
+        and record.get("action_type") == "llm_call"
+    ]
+    assert len(llm_calls) == 2
+
+    first_data = llm_calls[0]["data"]
+    assert "messages_in" not in first_data
+    assert first_data["messages_delta"] == msgs_initial
+    assert first_data["is_delta"] is True
+
+    second_data = llm_calls[1]["data"]
+    assert "messages_in" not in second_data
+    assert second_data["messages_delta"] == [assistant_tool_call, tool_result]
+    assert second_data["is_delta"] is True
+
+    start_events = [
+        record
+        for record in records
+        if record.get("type") == "event" and record.get("event") == "llm_call_start"
+    ]
+    assert start_events[0]["data"]["messages_delta"] == msgs_initial
+    assert start_events[1]["data"]["messages_delta"] == [
+        assistant_tool_call,
+        tool_result,
+    ]
+
+
+async def _drive_delta_mode_requires_append_only_messages(tmp_path: Path) -> None:
+    hook = TraceCollectorHook(
+        tmp_path / "trace.jsonl",
+        instance_id="test-delta-prefix",
+        message_recording_mode="delta",
+    )
+    try:
+        await hook.before_iteration(
+            _StubContext(
+                iteration=0,
+                messages=[{"role": "user", "content": "first"}],
+            )
+        )
+        await hook.after_iteration(
+            _StubContext(
+                iteration=0,
+                messages=[{"role": "user", "content": "first"}],
+                response=_StubResponse(content="", finish_reason="stop"),
+            )
+        )
+        with pytest.raises(ValueError, match="append-only"):
+            await hook.before_iteration(
+                _StubContext(
+                    iteration=1,
+                    messages=[{"role": "user", "content": "rewritten"}],
+                )
+            )
+    finally:
+        hook.close()
+
+
 def test_trace_collector_emits_tool_resource_timeline(tmp_path: Path) -> None:
     asyncio.run(_drive_emits_tool_resource_timeline(tmp_path))
+
+
+def test_agent_runner_carries_exec_structured_result(tmp_path: Path) -> None:
+    asyncio.run(_drive_agent_runner_carries_exec_structured_result(tmp_path))
+
+
+async def _drive_agent_runner_carries_exec_structured_result(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(ExecTool(working_dir=str(tmp_path)))
+    runner = AgentRunner(provider=object())
+    spec = AgentRunSpec(
+        initial_messages=[],
+        tools=registry,
+        model="test",
+        max_iterations=1,
+        max_tool_result_chars=10_000,
+    )
+
+    command = "printf '%s\\n%s\\n' 'Error: literal stdout' 'Exit code: 7'"
+    (
+        results,
+        events,
+        fatal_error,
+        _resource_timelines,
+        structured_results,
+    ) = await runner._execute_tools(
+        spec,
+        [
+            ToolCallRequest(
+                id="call_exec",
+                name="exec",
+                arguments={"command": command},
+            )
+        ],
+        {},
+    )
+
+    assert fatal_error is None
+    assert events[0]["status"] == "ok"
+    assert "[Analyze the error above" not in str(results[0])
+    assert structured_results == {
+        "call_exec": {"returncode": 0, "timed_out": False}
+    }
+
+
+def test_trace_collector_emits_structured_exec_result(tmp_path: Path) -> None:
+    asyncio.run(_drive_emits_structured_exec_result(tmp_path))
+
+
+async def _drive_emits_structured_exec_result(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-structured")
+
+    msgs_in = [{"role": "user", "content": "Run command."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    stub_tc = _StubToolCall("exec", {"command": "printf"})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": stub_tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": '{"command":"printf"}',
+                    },
+                }
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    )
+    msgs_after_tool = msgs_after_llm + [
+        {
+            "role": "tool",
+            "tool_call_id": stub_tc.id,
+            "name": "exec",
+            "content": "Error: literal stdout\nExit code: 7\n\nExit code: 0",
+        }
+    ]
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_tool,
+            tool_calls=[stub_tc],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+            tool_structured_results={
+                stub_tc.id: {"returncode": 0, "timed_out": False}
+            },
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    tool_exec = next(
+        record for record in records if record.get("action_type") == "tool_exec"
+    )
+
+    assert tool_exec["data"]["success"] is True
+    assert tool_exec["data"]["success_source"] == "structured"
+    assert tool_exec["data"]["returncode"] == 0
+    assert tool_exec["data"]["timed_out"] is False
 
 
 async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
@@ -260,6 +516,18 @@ async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
 
 def test_trace_collector_emits_exec_checkpoint_after(tmp_path: Path) -> None:
     asyncio.run(_drive_emits_exec_checkpoint_after(tmp_path))
+
+
+def test_trace_collector_deferred_checkpoint_captures_on_next_tool_gate(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_deferred_checkpoint_captures_on_next_tool_gate(tmp_path))
+
+
+def test_trace_collector_deferred_predictive_skip_records_verified_decision(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_deferred_predictive_skip_records_verified_decision(tmp_path))
 
 
 async def _drive_emits_exec_checkpoint_after(tmp_path: Path) -> None:
@@ -341,10 +609,140 @@ async def _drive_emits_exec_checkpoint_after(tmp_path: Path) -> None:
     assert blob_path.exists()
 
 
-def test_trace_collector_skips_checkpoint_when_testbed_has_symlink(
+async def _drive_deferred_checkpoint_captures_on_next_tool_gate(
     tmp_path: Path,
 ) -> None:
-    asyncio.run(_drive_skips_checkpoint_when_testbed_has_symlink(tmp_path))
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    checkpoint_dir = tmp_path / "runtime" / "checkpoints"
+    testbed.mkdir()
+    (testbed / "result.txt").write_text("source state\n", encoding="utf-8")
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-deferred-checkpoint",
+        checkpoint_root=testbed,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_root_label="/testbed",
+        checkpoint_scheduling="deferred",
+    )
+
+    msgs_in = [{"role": "user", "content": "Run test."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    stub_tc = _StubToolCall("exec", {"command": "pytest"})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": stub_tc.id,
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": '{"command":"pytest"}'},
+                }
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    )
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_llm
+            + [
+                {
+                    "role": "tool",
+                    "tool_call_id": stub_tc.id,
+                    "name": "exec",
+                    "content": "ok",
+                }
+            ],
+            tool_calls=[stub_tc],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+        )
+    )
+
+    next_tc = _StubToolCall("exec", {"command": "cat result.txt"})
+    await hook.before_execute_tools(
+        _StubContext(iteration=1, messages=[], tool_calls=[next_tc])
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
+    checkpoint_after = tool_exec["data"]["checkpoint_after"]
+    checkpoint_path = trace_file.parent / checkpoint_after["path"]
+
+    assert checkpoint_after["kind"] == "cas_manifest_full"
+    assert checkpoint_after["incremental"] is False
+    assert checkpoint_after["probe_result"] == "initial"
+    assert checkpoint_after["overhead_excluded"] is True
+    assert checkpoint_after["size_bytes"] == checkpoint_path.stat().st_size
+    assert tool_exec["data"]["checkpoint_exposed_ms"] >= 0
+
+
+async def _drive_deferred_predictive_skip_records_verified_decision(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    checkpoint_dir = tmp_path / "runtime" / "checkpoints"
+    testbed.mkdir()
+    (testbed / "result.txt").write_text("source state\n", encoding="utf-8")
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-deferred-skip",
+        checkpoint_root=testbed,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_root_label="/testbed",
+        checkpoint_scheduling="deferred",
+    )
+
+    first_action_data: dict[str, Any] = {}
+    first = await hook._checkpoint_after_tool_deferred(
+        tool_call_id="call_first",
+        tool_name="exec",
+        tool_args_json='{"command":"pytest"}',
+        action_data=first_action_data,
+        source_concurrent_execs=False,
+    )
+    assert first is None
+    await hook._await_pending_checkpoint_captures()
+    assert first_action_data["checkpoint_after"]["kind"] == "cas_manifest_full"
+
+    read_only_action_data: dict[str, Any] = {}
+    read_only = await hook._checkpoint_after_tool_deferred(
+        tool_call_id="call_read",
+        tool_name="exec",
+        tool_args_json='{"command":"ls"}',
+        action_data=read_only_action_data,
+        source_concurrent_execs=False,
+    )
+    assert read_only is not None
+    assert read_only["skipped"] == "no filesystem changes since last checkpoint"
+    assert read_only["probe_result"] == "unchanged"
+    assert read_only["checkpoint_schedule"] == "deferred_skip"
+    assert read_only["checkpoint_decision"] == "predicted_skip_verified"
+
+    unknown_action_data: dict[str, Any] = {}
+    unknown = await hook._checkpoint_after_tool_deferred(
+        tool_call_id="call_unknown",
+        tool_name="exec",
+        tool_args_json='{"command":"python -m pytest"}',
+        action_data=unknown_action_data,
+        source_concurrent_execs=False,
+    )
+    assert unknown is not None
+    assert unknown["skipped"] == "no filesystem changes since last checkpoint"
+    assert unknown["checkpoint_schedule"] == "await_prediction"
+    assert unknown["predicted_checkpoint_skip_disagreement"] is True
+    hook.close()
+
+
+def test_trace_collector_checkpoints_testbed_symlink(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_checkpoints_testbed_symlink(tmp_path))
 
 
 def test_any_file_newer_than_detects_changes(tmp_path: Path) -> None:
@@ -406,8 +804,8 @@ def test_write_cas_manifest_reuses_hash_cache_and_deduplicates_blobs(
     second_stat = os.lstat(second_file)
     digest = hashlib.sha256(content).hexdigest()
     hash_cache = {
-        "first.txt": (first_stat.st_mtime_ns, digest),
-        "second.txt": (second_stat.st_mtime_ns, digest),
+        "first.txt": (first_stat.st_size, first_stat.st_mtime_ns, digest),
+        "second.txt": (second_stat.st_size, second_stat.st_mtime_ns, digest),
     }
 
     def fail_sha256(data: bytes) -> Any:
@@ -538,12 +936,115 @@ def test_trace_collector_incremental_checkpoint_only_manifests_changed_files(
     hook.close()
 
 
-async def _drive_skips_checkpoint_when_testbed_has_symlink(tmp_path: Path) -> None:
+def test_trace_collector_incremental_checkpoint_detects_backdated_size_change(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    checkpoint_dir = tmp_path / "runtime" / "checkpoints"
+    testbed.mkdir()
+    backdated_file = testbed / "backdated.txt"
+    trigger_file = testbed / "trigger.txt"
+    backdated_file.write_text("old\n", encoding="utf-8")
+    trigger_file.write_text("old trigger\n", encoding="utf-8")
+    original_mtime_ns = os.lstat(backdated_file).st_mtime_ns
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-backdated-size-change",
+        checkpoint_root=testbed,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_root_label="/testbed",
+    )
+
+    first = hook._checkpoint_after_tool(
+        tool_call_id="call_first",
+        tool_name="exec",
+        tool_args_json='{"command":"pytest"}',
+    )
+    assert first is not None
+    assert first["kind"] == "cas_manifest_full"
+    previous_marker_ns = hook._last_incremental_checkpoint_ns
+    assert previous_marker_ns is not None
+
+    changed_content = b"changed with different size\n"
+    backdated_file.write_bytes(changed_content)
+    os.utime(backdated_file, ns=(original_mtime_ns, original_mtime_ns))
+    trigger_file.write_text("trigger changed\n", encoding="utf-8")
+    trigger_mtime_ns = max(time.time_ns(), previous_marker_ns + 1)
+    os.utime(trigger_file, ns=(trigger_mtime_ns, trigger_mtime_ns))
+
+    second = hook._checkpoint_after_tool(
+        tool_call_id="call_second",
+        tool_name="exec",
+        tool_args_json='{"command":"pytest"}',
+    )
+    assert second is not None
+    assert second["kind"] == "cas_manifest_incremental"
+    second_path = trace_file.parent / second["path"]
+    manifest = json.loads(second_path.read_text(encoding="utf-8"))
+    backdated_entry = manifest["entries"]["backdated.txt"]
+    assert set(manifest["entries"]) == {"backdated.txt", "trigger.txt"}
+    assert backdated_entry["size"] == len(changed_content)
+    assert backdated_entry["mtime_ns"] == original_mtime_ns
+    assert backdated_entry["hash"] == hashlib.sha256(changed_content).hexdigest()
+    hook.close()
+
+
+def test_trace_collector_incremental_checkpoint_detects_backdated_size_change_without_trigger(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    testbed = tmp_path / "testbed"
+    checkpoint_dir = tmp_path / "runtime" / "checkpoints"
+    testbed.mkdir()
+    backdated_file = testbed / "backdated.txt"
+    backdated_file.write_text("old\n", encoding="utf-8")
+    original_file_mtime_ns = os.lstat(backdated_file).st_mtime_ns
+    original_dir_mtime_ns = os.lstat(testbed).st_mtime_ns
+    hook = TraceCollectorHook(
+        trace_file,
+        instance_id="test-backdated-size-change-without-trigger",
+        checkpoint_root=testbed,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_root_label="/testbed",
+    )
+
+    first = hook._checkpoint_after_tool(
+        tool_call_id="call_first",
+        tool_name="exec",
+        tool_args_json='{"command":"pytest"}',
+    )
+    assert first is not None
+    assert first["kind"] == "cas_manifest_full"
+
+    changed_content = b"changed with different size\n"
+    backdated_file.write_bytes(changed_content)
+    os.utime(backdated_file, ns=(original_file_mtime_ns, original_file_mtime_ns))
+    os.utime(testbed, ns=(original_dir_mtime_ns, original_dir_mtime_ns))
+
+    second = hook._checkpoint_after_tool(
+        tool_call_id="call_second",
+        tool_name="exec",
+        tool_args_json='{"command":"pytest"}',
+    )
+    assert second is not None
+    assert second["kind"] == "cas_manifest_incremental"
+    second_path = trace_file.parent / second["path"]
+    manifest = json.loads(second_path.read_text(encoding="utf-8"))
+    backdated_entry = manifest["entries"]["backdated.txt"]
+    assert set(manifest["entries"]) == {"backdated.txt"}
+    assert backdated_entry["size"] == len(changed_content)
+    assert backdated_entry["mtime_ns"] == original_file_mtime_ns
+    assert backdated_entry["hash"] == hashlib.sha256(changed_content).hexdigest()
+    hook.close()
+
+
+async def _drive_checkpoints_testbed_symlink(tmp_path: Path) -> None:
     trace_file = tmp_path / "trace.jsonl"
     testbed = tmp_path / "testbed"
     testbed.mkdir()
     (testbed / "target.txt").write_text("target\n", encoding="utf-8")
-    (testbed / "link.txt").symlink_to(testbed / "target.txt")
+    (testbed / "link.txt").symlink_to("target.txt")
     hook = TraceCollectorHook(
         trace_file,
         instance_id="test-symlink",
@@ -591,10 +1092,17 @@ async def _drive_skips_checkpoint_when_testbed_has_symlink(tmp_path: Path) -> No
 
     records = [json.loads(line) for line in trace_file.read_text().splitlines()]
     tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
-    checkpoint_error = tool_exec["data"]["checkpoint_after_error"]
-    assert "symlinks" in checkpoint_error["error"]
-    assert checkpoint_error["overhead_excluded"] is True
-    assert checkpoint_error["elapsed_ms"] >= 0
+    assert "checkpoint_after_error" not in tool_exec["data"]
+    checkpoint_after = tool_exec["data"]["checkpoint_after"]
+    assert checkpoint_after["kind"] == "cas_manifest_full"
+    assert checkpoint_after["overhead_excluded"] is True
+    assert checkpoint_after["elapsed_ms"] >= 0
+    checkpoint_path = trace_file.parent / checkpoint_after["path"]
+    manifest = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert manifest["entries"]["link.txt"] == {
+        "type": "symlink",
+        "target": "target.txt",
+    }
 
 
 def test_trace_collector_checkpoints_exec_in_multi_tool_iteration(
@@ -708,6 +1216,8 @@ async def _drive_checkpoints_exec_in_multi_tool_iteration(tmp_path: Path) -> Non
     }
     checkpoint_after = records_by_tool_id[exec_tc.id]["data"]["checkpoint_after"]
     checkpoint_path = trace_file.parent / checkpoint_after["path"]
+    assert records_by_tool_id[exec_tc.id]["data"]["source_concurrent_execs"] is True
+    assert records_by_tool_id[exec_tc.id]["data"]["smeared_checkpoint"] is True
     assert checkpoint_after["kind"] == "cas_manifest_full"
     assert checkpoint_after["incremental"] is False
     assert checkpoint_after["root"] == "/testbed"
@@ -718,14 +1228,18 @@ async def _drive_checkpoints_exec_in_multi_tool_iteration(tmp_path: Path) -> Non
     assert "result.txt" in manifest["entries"]
 
     skipped_checkpoint = records_by_tool_id[exec_tc_2.id]["data"]["checkpoint_after"]
+    assert records_by_tool_id[exec_tc_2.id]["data"]["source_concurrent_execs"] is True
+    assert records_by_tool_id[exec_tc_2.id]["data"]["smeared_checkpoint"] is True
     assert skipped_checkpoint["skipped"] == "no filesystem changes since last checkpoint"
     assert skipped_checkpoint["overhead_excluded"] is True
     assert skipped_checkpoint["elapsed_ms"] >= 0
 
     for tool_call_id in (batched_exec_tc.id, read_tc.id):
         tool_data = records_by_tool_id[tool_call_id]["data"]
+        assert tool_data["source_concurrent_execs"] is True
         assert "checkpoint_after" not in tool_data
         assert "checkpoint_after_error" not in tool_data
+        assert "smeared_checkpoint" not in tool_data
 
 
 def test_trace_collector_llm_only_iteration(tmp_path: Path) -> None:

@@ -9,7 +9,12 @@ from types import SimpleNamespace
 
 from trace_collect.attempt_pipeline import AttemptContext
 from trace_collect.collector import (
+    _normalize_openclaw_trace,
     _run_openclaw_in_task_container,
+)
+from trace_collect.runtime.task_container import (
+    TaskContainerExecConfig,
+    task_container_exec_env_metadata,
 )
 
 
@@ -52,6 +57,55 @@ def _make_relative_ctx(monkeypatch, tmp_path: Path, *, scaffold: str) -> Attempt
         prompt_template="cc_aligned",
         agent_runtime_mode="host_agent_docker_tools",
     )
+
+
+def test_normalize_openclaw_trace_stamps_container_exec_env(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "type": "trace_metadata",
+                "scaffold": "openclaw",
+                "trace_format_version": 5,
+                "run_config": {"provider": "test"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    env = task_container_exec_env_metadata(
+        TaskContainerExecConfig(
+            runtime="/usr/bin/python3",
+            pythonpath="/cache/pydeps:/repo/src:/repo",
+            path="/cache/.pyuserbase/bin:/usr/local/bin:/usr/bin:/bin",
+            pythonuserbase="/cache/.pyuserbase",
+            start_extra_args=(),
+            bootstrap=True,
+            bootstrap_site_dir=Path("/cache/pydeps"),
+            image_platform="linux/amd64",
+        )
+    )
+
+    _normalize_openclaw_trace(
+        src=trace_path,
+        dst=trace_path,
+        benchmark=SimpleNamespace(
+            execution_environment="container",
+            config=SimpleNamespace(slug="swe-rebench", harness_split=None),
+        ),
+        model="qwen-plus-latest",
+        api_base="https://example.com",
+        max_iterations=10,
+        instance_id="task-a",
+        container_exec_env=env,
+    )
+
+    metadata = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+
+    assert metadata["run_config"]["provider"] == "test"
+    assert metadata["run_config"]["container_exec_env"] == env
 
 
 def test_run_openclaw_in_task_container_normalizes_trace_on_host(

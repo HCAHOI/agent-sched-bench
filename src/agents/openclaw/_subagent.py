@@ -1,13 +1,15 @@
 import asyncio
 import json
+import time
 import uuid
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 
 from loguru import logger
 
-from agents.openclaw._hook import AgentHook, AgentHookContext
+from agents.openclaw._hook import AgentHook, AgentHookContext, CompositeHook
 from agents.openclaw._runner import AgentRunSpec, AgentRunner
 from agents.openclaw._skills import BUILTIN_SKILLS_DIR
 from agents.openclaw.tools.filesystem import (
@@ -55,6 +57,7 @@ class SubagentManager:
         malformed_retry_budget: int | None = None,
         skills_dir: Path | None = None,
         container_runtime: dict | None = None,
+        trace_hook_factory: Callable[[str], AgentHook] | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -68,6 +71,7 @@ class SubagentManager:
         self.malformed_retry_budget = malformed_retry_budget
         self.skills_dir = skills_dir
         self.container_runtime = container_runtime
+        self.trace_hook_factory = trace_hook_factory
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
@@ -111,6 +115,13 @@ class SubagentManager:
         origin: dict[str, str],
     ) -> None:
         logger.info("Subagent [{}] starting task: {}", task_id, label)
+        trace_hook = (
+            self.trace_hook_factory(task_id)
+            if self.trace_hook_factory is not None
+            else None
+        )
+        trace_started = time.monotonic()
+        trace_summary_written = False
 
         try:
             # Build subagent tools (no message tool, no spawn tool)
@@ -156,18 +167,29 @@ class SubagentManager:
                 {"role": "user", "content": task},
             ]
 
+            hooks: list[AgentHook] = [_SubagentHook(task_id)]
+            if trace_hook is not None:
+                hooks.append(trace_hook)
+
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=messages,
                 tools=tools,
                 model=self.model,
                 max_iterations=15,
                 max_tool_result_chars=self.max_tool_result_chars,
-                hook=_SubagentHook(task_id),
+                hook=CompositeHook(hooks),
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,
                 fail_on_tool_error=True,
                 malformed_retry_budget=self.malformed_retry_budget,
             ))
+            if trace_hook is not None:
+                await self._write_trace_summary(
+                    trace_hook,
+                    success=result.stop_reason not in {"tool_error", "error"},
+                    elapsed_s=time.monotonic() - trace_started,
+                )
+                trace_summary_written = True
             if result.stop_reason == "tool_error":
                 await self._announce_result(
                     task_id,
@@ -199,6 +221,12 @@ class SubagentManager:
             )
 
         except Exception as e:
+            if trace_hook is not None and not trace_summary_written:
+                await self._write_trace_summary(
+                    trace_hook,
+                    success=False,
+                    elapsed_s=time.monotonic() - trace_started,
+                )
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
             await self._announce_result(
@@ -240,6 +268,15 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             origin["channel"],
             origin["chat_id"],
         )
+
+    @staticmethod
+    async def _write_trace_summary(
+        trace_hook: AgentHook,
+        *,
+        success: bool,
+        elapsed_s: float,
+    ) -> None:
+        await trace_hook.write_summary(success=success, elapsed_s=elapsed_s)
 
     @staticmethod
     def _format_partial_progress(result) -> str:

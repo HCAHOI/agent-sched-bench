@@ -691,6 +691,8 @@ async def collect_traces(
     mcp_config: str | None = None,
     prompt_template: str | None = None,
     min_free_disk_gb: float = 30.0,
+    checkpoint_scheduling: str = "sync",
+    checkpoint_backend: str = "walk",
 ) -> Path:
     """Collect traces for any scaffold supported by the benchmark plugin."""
     benchmark.validate_scaffold_support(scaffold)
@@ -735,6 +737,8 @@ async def collect_traces(
             max_iterations=max_iterations,
             context_window_tokens=max_context_tokens,
             model=model,
+            checkpoint_scheduling=checkpoint_scheduling,
+            checkpoint_backend=checkpoint_backend,
             provider_name=model_backend.provider_name,
             env_key=env_key,
             api_base=model_backend.api_base,
@@ -776,7 +780,13 @@ async def collect_traces(
                     max_context_tokens=max_context_tokens,
                     mcp_config=mcp_config,
                     container_executable=container_executable,
-                    run_config_overrides=model_backend.trace_run_config,
+                    run_config_overrides={
+                        **model_backend.trace_run_config,
+                        "checkpoint_scheduling": checkpoint_scheduling,
+                        "checkpoint_backend": checkpoint_backend,
+                    },
+                    checkpoint_scheduling=checkpoint_scheduling,
+                    checkpoint_backend=checkpoint_backend,
                 )
 
             assert runner is not None
@@ -838,6 +848,7 @@ def _normalize_openclaw_trace(
     runtime_proof: dict[str, Any] | None = None,
     run_config_overrides: dict[str, Any] | None = None,
     generation_config: dict[str, Any] | None = None,
+    container_exec_env: dict[str, str] | None = None,
 ) -> None:
     """Copy an OpenClaw trace into the attempt dir, merging trace metadata."""
     lines = src.read_text(encoding="utf-8").splitlines()
@@ -890,6 +901,8 @@ def _normalize_openclaw_trace(
             _set_run_config(merged, key, value)
     if generation_config:
         _set_run_config(merged, "generation", dict(generation_config))
+    if container_exec_env is not None:
+        _set_run_config(merged, "container_exec_env", dict(container_exec_env))
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path | None = None
@@ -961,6 +974,8 @@ async def _run_openclaw_in_task_container(
     max_context_tokens: int,
     mcp_config: str | None,
     run_config_overrides: dict[str, Any] | None = None,
+    checkpoint_scheduling: str = "sync",
+    checkpoint_backend: str = "walk",
 ) -> AttemptResult:
     fixed_image = ctx.fixed_image or task.get("image_name") or ""
     if not fixed_image:
@@ -1006,6 +1021,8 @@ async def _run_openclaw_in_task_container(
         context_window_tokens=max_context_tokens,
         mcp_servers=mcp_servers,
         container_runtime=container_runtime,
+        checkpoint_scheduling=checkpoint_scheduling,
+        checkpoint_backend=checkpoint_backend,
     )
 
     # Local workspace for session / runtime state; the tool workspace is

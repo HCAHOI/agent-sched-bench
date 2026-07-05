@@ -22,6 +22,7 @@ class AgentHookContext:
     tool_results: list[Any] = field(default_factory=list)
     tool_events: list[dict[str, str]] = field(default_factory=list)
     tool_resource_timelines: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tool_structured_results: dict[str, dict[str, Any]] = field(default_factory=dict)
     final_content: str | None = None
     stop_reason: str | None = None
     error: str | None = None
@@ -56,6 +57,15 @@ class AgentHook:
         self, context: AgentHookContext, content: str | None
     ) -> str | None:
         return content
+
+    async def write_summary(
+        self,
+        *,
+        success: bool | None = None,
+        elapsed_s: float = 0.0,
+        prepare_ms: float | None = None,
+    ) -> None:
+        pass  # default no-op; subclasses override
 
 
 class CompositeHook(AgentHook):
@@ -132,3 +142,20 @@ class CompositeHook(AgentHook):
         for h in self._hooks:
             content = h.finalize_content(context, content)
         return content
+
+    async def write_summary(
+        self,
+        *,
+        success: bool | None = None,
+        elapsed_s: float = 0.0,
+        prepare_ms: float | None = None,
+    ) -> None:
+        for h in self._hooks:
+            try:
+                await h.write_summary(
+                    success=success, elapsed_s=elapsed_s, prepare_ms=prepare_ms
+                )
+            except Exception:
+                logger.exception(
+                    "AgentHook.write_summary error in {}", type(h).__name__
+                )

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, TextIO
 
+from agents.openclaw._checkpoint_container import _CONTAINER_PYTHON_CANDIDATES  # noqa: F401 - re-export
 from agents.openclaw.runtime_deps import OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS
 
 
@@ -27,6 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOTNAME = "_task_container_runtime"
 _REDACTED_SECRET = "***REDACTED***"
 _DEFAULT_RUNTIME_PYTHONPATH = f"{REPO_ROOT / 'src'}:{REPO_ROOT}"
+_DEFAULT_CONTAINER_PATH = "/usr/local/bin:/usr/bin:/bin"
 _CONTAINER_SYSTEM_PYTHON = "/usr/bin/python3"
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple"
 _SHARED_BOOTSTRAP_CACHE = Path.home() / ".cache" / "task-container-bootstrap"
@@ -39,7 +41,6 @@ _ARCH_ALIASES = {
     "arm64": "arm64",
     "aarch64": "arm64",
 }
-from agents.openclaw._checkpoint_container import _CONTAINER_PYTHON_CANDIDATES  # noqa: F401 - re-export
 _BOOTSTRAP_PIP_RESOLUTION_ENV_KEYS = (
     "TASK_CONTAINER_PIP_EXTRA_INDEX_URL",
     "TASK_CONTAINER_PIP_TRUSTED_HOST",
@@ -218,6 +219,8 @@ class TaskContainerExecConfig:
     bootstrap: bool = False
     bootstrap_site_dir: Path | None = None
     image_platform: str | None = None
+    path: str | None = None
+    pythonuserbase: str | None = None
 
 
 def _normalize_arch(raw: str | None) -> str | None:
@@ -369,6 +372,7 @@ def _exec_config_with_bootstrap_site_dir(
     exec_config: TaskContainerExecConfig,
     site_dir: Path,
 ) -> TaskContainerExecConfig:
+    userbase = site_dir.parent / ".pyuserbase"
     return TaskContainerExecConfig(
         runtime=exec_config.runtime,
         pythonpath=f"{site_dir}:{_DEFAULT_RUNTIME_PYTHONPATH}",
@@ -376,7 +380,25 @@ def _exec_config_with_bootstrap_site_dir(
         bootstrap=exec_config.bootstrap,
         bootstrap_site_dir=site_dir,
         image_platform=exec_config.image_platform,
+        path=f"{userbase / 'bin'}:{_DEFAULT_CONTAINER_PATH}",
+        pythonuserbase=str(userbase),
     )
+
+
+def task_container_exec_env_metadata(
+    exec_config: TaskContainerExecConfig,
+) -> dict[str, str]:
+    """Serialize effective task-container exec environment for trace metadata."""
+    payload: dict[str, str] = {
+        "pythonpath": exec_config.pythonpath,
+    }
+    if exec_config.path:
+        payload["path"] = exec_config.path
+    if exec_config.pythonuserbase:
+        payload["pythonuserbase"] = exec_config.pythonuserbase
+    if exec_config.bootstrap_site_dir is not None:
+        payload["bootstrap_site_dir"] = str(exec_config.bootstrap_site_dir)
+    return payload
 
 
 def _inspect_image_platform(
@@ -460,6 +482,7 @@ def resolve_task_container_exec_config(
         bootstrap=True,
         bootstrap_site_dir=site_dir,
         image_platform=image_platform,
+        path=_DEFAULT_CONTAINER_PATH,
     )
 
 
@@ -521,6 +544,8 @@ exit 1
         bootstrap=exec_config.bootstrap,
         bootstrap_site_dir=exec_config.bootstrap_site_dir,
         image_platform=exec_config.image_platform,
+        path=exec_config.path,
+        pythonuserbase=exec_config.pythonuserbase,
     )
 
 

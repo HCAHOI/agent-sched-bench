@@ -8,8 +8,10 @@ import json
 import logging
 import multiprocessing
 import os
+import re
 import subprocess
 import shutil
+import stat
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor
@@ -22,6 +24,14 @@ from typing import Any
 import yaml
 
 from agents.base import TraceAction
+from agents.sandbox_runtime import (
+    AgentTransportRequest,
+    DockerBackend,
+    SandboxBackend,
+    agent_response_dict_from_transport,
+    get_sandbox_backend_class,
+    validate_checkpoint_backend,
+)
 from harness.container_image_prep import (
     ensure_fixed_image,
     ensure_source_image,
@@ -36,6 +46,8 @@ from harness.container_stats_sampler import (
 )
 from harness.trace_logger import TraceLogger
 from trace_collect import attempt_layout
+from trace_collect.mismatch import MismatchOracle
+from trace_collect.output_normalize import normalize_tool_output
 from trace_collect.resource_timeline import valid_resource_timeline
 from trace_collect.monitoring import MonitoringMode, resolve_simulate_monitoring
 from trace_collect.attempt_pipeline import (
@@ -46,15 +58,38 @@ from trace_collect.attempt_pipeline import (
     stop_task_container,
 )
 logger = logging.getLogger(__name__)
+CasManifestValue = str | dict[str, Any]
+CasManifestEntries = dict[str, CasManifestValue]
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
 _DEFAULT_PREP_CONCURRENCY = 20
 _SHARED_SEMAPHORE_POLL_S = 0.05
 _REPLAY_START_DELAY_S = 0.1
+_SOURCE_EXEC_TIMEOUT_REPLAY_FLOOR_S = 5.0
+_PREP_ERROR_MAX_CHARS = 500
 _CHECKPOINT_CAS_ROOT = os.path.expanduser("~/.cache/agent-checkpoint-cas")
+_CHECKPOINT_SKIP_DIRS = frozenset({".git"})
+_TRACE_REPLAY_TOOL_NAMES = frozenset({"spawn", "web_search", "web_fetch"})
+_MISMATCH_ORACLE = MismatchOracle()
 
 
 class SimulateError(Exception):
     """Raised when simulation encounters a fatal issue."""
+
+
+class ReplayPreparationError(Exception):
+    """Raised when one replay session cannot be prepared."""
+
+    def __init__(
+        self,
+        *,
+        loaded: "LoadedTraceSession",
+        original: BaseException,
+        prepared: "PreparedTraceSession | None",
+    ) -> None:
+        super().__init__(f"{type(original).__name__}: {original}")
+        self.loaded = loaded
+        self.original = original
+        self.prepared = prepared
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +101,8 @@ class TraceManifestEntry:
     task_source: Path
     docker_image: str | None = None
     label: str | None = None
+    sandbox_backend: str = "docker"
+    checkpoint_backend: str = "walk"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +121,8 @@ class ReplayTaskStats:
     llm_call_count: int
     tool_exec_count: int
     failed_action_count: int = 0
+    replay_env_parity: str = "default_env"
+    prep_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +173,8 @@ class LoadedTraceSession:
     iterations: dict[int, dict[str, Any]]
     docker_image_override: str | None = None
     label: str | None = None
+    sandbox_backend: str = "docker"
+    checkpoint_backend: str = "walk"
 
     @property
     def agent_id(self) -> str:
@@ -150,6 +191,8 @@ class WorkerTraceInput:
     docker_image_override: str | None
     label: str | None
     run_instance_id: str
+    sandbox_backend: str = "docker"
+    checkpoint_backend: str = "walk"
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +216,7 @@ class PreparedContainer:
     agent: Any  # ContainerAgent
     fixed_image: str | None = None
     cleanup_fixed_image: bool = True
+    backend: SandboxBackend | None = None
 
 
 @dataclass(slots=True)
@@ -189,6 +233,18 @@ class PreparedTraceSession:
     memory_bandwidth_enabled: bool = True
     monitoring_policy: dict[str, object] | None = None
     runtime_artifact_root_map: dict[str, str] = dataclasses.field(default_factory=dict)
+    replay_exec_env_parity: str = "default_env"
+    replay_task_env_parity: str = "default_env"
+
+
+@dataclass(frozen=True, slots=True)
+class FailedPreparedTraceSession:
+    """Preparation failure plus the task output context kept for reporting."""
+
+    loaded: LoadedTraceSession
+    prepared: PreparedTraceSession
+    error: BaseException
+    elapsed_s: float
 
 
 class ContainerStartupRecorder:
@@ -317,13 +373,33 @@ async def _exec_tool(
     from trace_collect.openclaw_tools import execute_trace_tool_detailed
 
     t0 = time.monotonic()
+    request_executor = None
+    raw_agent = agent
+    if isinstance(agent, SandboxBackend):
+        backend = agent
+        raw_agent = None
+
+        async def request_executor(
+            request: dict[str, Any],
+            timeout_s: float | None,
+        ) -> dict[str, Any]:
+            response = await backend.execute(
+                AgentTransportRequest(
+                    tool=str(request.get("tool", "")),
+                    args=dict(request.get("args") or {}),
+                ),
+                timeout_s=timeout_s,
+            )
+            return agent_response_dict_from_transport(response)
+
     (
         tool_result,
         tool_success,
         inner_duration_ms,
         tool_metadata,
     ) = await execute_trace_tool_detailed(
-        agent=agent,
+        agent=raw_agent,
+        request_executor=request_executor,
         tool_name=tool_name,
         tool_args_json=tool_args_json,
         command_timeout_s=command_timeout_s,
@@ -380,7 +456,38 @@ def _source_tool_success(data: dict[str, Any]) -> bool:
     raise ValueError(f"tool success must be boolean when present, got {raw_success!r}")
 
 
-def _command_exit_code(tool_result: str) -> int | None:
+def _source_llm_message_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "messages_delta" in data:
+        return {
+            "messages_delta": data.get("messages_delta"),
+            "is_delta": data.get("is_delta", True),
+        }
+    return {"messages_in": data.get("messages_in")}
+
+
+def _structured_returncode(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"structured returncode must be int, got {value!r}")
+    return value
+
+
+def _structured_timed_out(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"structured timed_out must be boolean, got {value!r}")
+    return value
+
+
+def _command_exit_code(
+    tool_result: str,
+    structured_returncode: Any = None,
+) -> int | None:
+    returncode = _structured_returncode(structured_returncode)
+    if returncode is not None:
+        return returncode
     marker = "Exit code:"
     if marker not in tool_result:
         return None
@@ -391,6 +498,7 @@ def _command_exit_code(tool_result: str) -> int | None:
         return int(suffix)
     except ValueError:
         return None
+
 
 def _compute_output_diff_snippet(
     source: str,
@@ -477,6 +585,156 @@ def _tool_uses_single_exec_command_semantics(
     return "command" in payload and "commands" not in payload
 
 
+def _source_container_exec_env(
+    metadata: dict[str, Any] | None,
+) -> dict[str, str] | None:
+    if metadata is None:
+        return None
+    raw_run_config = metadata.get("run_config")
+    if raw_run_config is None:
+        return None
+    if not isinstance(raw_run_config, dict):
+        raise ValueError("trace metadata run_config must be a dict when present")
+    raw_env = raw_run_config.get("container_exec_env")
+    if raw_env is None:
+        return None
+    if not isinstance(raw_env, dict):
+        raise ValueError("run_config.container_exec_env must be a dict")
+
+    normalized: dict[str, str] = {}
+    for key in ("pythonpath", "path", "pythonuserbase", "bootstrap_site_dir"):
+        value = raw_env.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(
+                f"run_config.container_exec_env.{key} must be a string"
+            )
+        if value:
+            normalized[key] = value
+    return normalized
+
+
+def _path_under(path: Path, root: Path) -> bool:
+    resolved_path = path.expanduser().resolve()
+    resolved_root = root.expanduser().resolve()
+    return resolved_path == resolved_root or resolved_path.is_relative_to(
+        resolved_root,
+    )
+
+
+def _bootstrap_site_dir_from_exec_env(
+    container_exec_env: dict[str, str] | None,
+) -> Path | None:
+    if container_exec_env is None:
+        return None
+    from trace_collect.runtime.task_container import _SHARED_BOOTSTRAP_CACHE
+
+    cache_root = _SHARED_BOOTSTRAP_CACHE.expanduser()
+    raw_site_dir = container_exec_env.get("bootstrap_site_dir")
+    if raw_site_dir:
+        site_dir = Path(raw_site_dir).expanduser()
+        return site_dir if _path_under(site_dir, cache_root) else None
+
+    pythonpath = container_exec_env.get("pythonpath")
+    if not pythonpath:
+        return None
+    for raw_entry in pythonpath.split(os.pathsep):
+        if not raw_entry:
+            continue
+        entry = Path(raw_entry).expanduser()
+        if _path_under(entry, cache_root):
+            return entry
+    return None
+
+
+def _bootstrap_cache_mount_args(
+    container_exec_env: dict[str, str] | None,
+) -> tuple[list[str], str | None]:
+    site_dir = _bootstrap_site_dir_from_exec_env(container_exec_env)
+    if site_dir is None:
+        return [], None
+
+    from trace_collect.runtime.task_container import _SHARED_BOOTSTRAP_CACHE
+
+    cache_root = _SHARED_BOOTSTRAP_CACHE.expanduser().resolve()
+    if not site_dir.exists():
+        logger.warning(
+            "Replay source references missing task-container bootstrap site dir: %s",
+            site_dir,
+        )
+        if not cache_root.exists():
+            return [], "bootstrap_cache_missing"
+        return ["-v", f"{cache_root}:{cache_root}:ro"], "bootstrap_cache_missing"
+    return ["-v", f"{cache_root}:{cache_root}:ro"], None
+
+
+def _container_agent_env_kwargs(
+    container_exec_env: dict[str, str] | None,
+) -> dict[str, str]:
+    if container_exec_env is None:
+        return {}
+    return {
+        key: container_exec_env[key]
+        for key in ("pythonpath", "path", "pythonuserbase")
+        if key in container_exec_env
+    }
+
+
+def _denied_exec_command(
+    *,
+    tool_name: str | None,
+    tool_args_json: Any,
+) -> str | None:
+    payload = _exec_semantics_payload(tool_name, tool_args_json)
+    if payload is None:
+        return None
+
+    commands: list[str] = []
+    command = payload.get("command")
+    if isinstance(command, str):
+        commands.append(command)
+    raw_commands = payload.get("commands")
+    if isinstance(raw_commands, list):
+        commands.extend(command for command in raw_commands if isinstance(command, str))
+
+    if not commands:
+        return None
+
+    from agents.openclaw.tools.shell import EXEC_TOOL_DENY_PATTERNS
+
+    for command_text in commands:
+        lower = command_text.strip().lower()
+        if any(re.search(pattern, lower) for pattern in EXEC_TOOL_DENY_PATTERNS):
+            return command_text
+    return None
+
+
+def _source_tool_exec_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    returncode = data.get("returncode")
+    if isinstance(returncode, int) and not isinstance(returncode, bool):
+        metadata["returncode"] = returncode
+    timed_out = data.get("timed_out")
+    if isinstance(timed_out, bool):
+        metadata["timed_out"] = timed_out
+    return metadata
+
+
+def _exec_normalized_output_match(
+    *,
+    tool_name: str | None,
+    tool_args_json: Any,
+    source_tool_result: Any,
+    replay_tool_result: Any,
+) -> bool | None:
+    if not _tool_uses_exec_semantics(tool_name, tool_args_json):
+        return None
+    source_text = "" if source_tool_result is None else str(source_tool_result)
+    replay_text = "" if replay_tool_result is None else str(replay_tool_result)
+    return normalize_tool_output(source_text) == normalize_tool_output(replay_text)
+
+
 def _tool_mismatch_reason(
     *,
     source_success: bool,
@@ -486,6 +744,10 @@ def _tool_mismatch_reason(
     replay_tool_result: Any,
     tool_name: str | None,
     tool_args_json: Any,
+    source_returncode: Any = None,
+    replay_returncode: Any = None,
+    source_timed_out: Any = None,
+    replay_timed_out: Any = None,
 ) -> str | None:
     if replay_source == "source_artifact_unavailable":
         return "source_artifact_unavailable"
@@ -493,15 +755,27 @@ def _tool_mismatch_reason(
     source_timeout = False
     replay_timeout = False
     if uses_exec_semantics:
-        source_timeout = _tool_result_indicates_wrapper_timeout(source_tool_result)
-        replay_timeout = _tool_result_indicates_wrapper_timeout(replay_tool_result)
+        source_timeout = _tool_result_indicates_wrapper_timeout(
+            source_tool_result,
+            structured_timed_out=source_timed_out,
+        )
+        replay_timeout = _tool_result_indicates_wrapper_timeout(
+            replay_tool_result,
+            structured_timed_out=replay_timed_out,
+        )
         if source_timeout != replay_timeout:
             return "timeout_mismatch"
     if source_success != tool_success:
         return "tool_success_mismatch"
     if uses_exec_semantics:
-        source_exit = _command_exit_code(str(source_tool_result or ""))
-        replay_exit = _command_exit_code(str(replay_tool_result or ""))
+        source_exit = _command_exit_code(
+            str(source_tool_result or ""),
+            source_returncode,
+        )
+        replay_exit = _command_exit_code(
+            str(replay_tool_result or ""),
+            replay_returncode,
+        )
         if (
             source_exit is not None
             and replay_exit is not None
@@ -517,10 +791,11 @@ def _command_metadata(
     tool_args_json: Any,
     tool_result: str,
     tool_success: bool,
+    returncode: Any = None,
 ) -> dict[str, Any]:
     if not _tool_uses_exec_semantics(tool_name, tool_args_json):
         return {}
-    exit_code = _command_exit_code(tool_result)
+    exit_code = _command_exit_code(tool_result, returncode)
     if exit_code is None:
         return {}
     return {
@@ -539,7 +814,13 @@ def _is_replay_wrapper_timeout_result(tool_result: str) -> bool:
     return any(line.strip() in timeout_markers for line in tool_result.splitlines())
 
 
-def _tool_result_indicates_wrapper_timeout(tool_result: Any) -> bool:
+def _tool_result_indicates_wrapper_timeout(
+    tool_result: Any,
+    structured_timed_out: Any = None,
+) -> bool:
+    timed_out = _structured_timed_out(structured_timed_out)
+    if timed_out is not None:
+        return timed_out
     text = str(tool_result or "")
     return (
         "Error: Command timed out after " in text
@@ -554,10 +835,16 @@ def _source_exec_timeout_s(
     source_duration_ms: float,
     source_success: bool,
     source_tool_result: Any,
+    source_timed_out: Any = None,
 ) -> float | None:
-    if source_success or source_duration_ms <= 0:
+    if source_duration_ms <= 0:
         return None
     if not _tool_uses_exec_semantics(tool_name, tool_args_json):
+        return None
+    timed_out = _structured_timed_out(source_timed_out)
+    if timed_out is not None:
+        return max(0.001, source_duration_ms / 1000.0) if timed_out else None
+    if source_success:
         return None
 
     source_tool_result_text = str(source_tool_result or "")
@@ -567,6 +854,21 @@ def _source_exec_timeout_s(
     ):
         return None
     return max(0.001, source_duration_ms / 1000.0)
+
+
+def _effective_source_exec_timeout_s(
+    *,
+    source_exec_timeout_s: float | None,
+    replay_speed: float,
+) -> float | None:
+    if source_exec_timeout_s is None:
+        return None
+    if replay_speed <= 0:
+        raise ValueError("replay_speed must be > 0")
+    return max(
+        _SOURCE_EXEC_TIMEOUT_REPLAY_FLOOR_S,
+        source_exec_timeout_s / replay_speed,
+    )
 
 
 def _remap_runtime_artifact_tool_args(
@@ -593,6 +895,87 @@ def _artifact_unavailable_result(source_path: str) -> str:
         "Error: source trace references an OpenClaw runtime artifact "
         "that is unavailable in the simulator runtime: "
         f"{source_path}"
+    )
+
+
+def _container_tool_runtime_args(
+    *,
+    tool_name: str | None,
+    tool_args_json: Any,
+    runtime_root_map: dict[str, str],
+) -> tuple[Any, str | None, str | None, bool]:
+    mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
+        _remap_runtime_artifact_tool_args(
+            tool_name=tool_name,
+            tool_args_json=tool_args_json,
+            runtime_root_map=runtime_root_map,
+        )
+    )
+    if original_artifact_path is None and isinstance(tool_args_json, str):
+        from trace_collect.openclaw_tools import (
+            source_runtime_artifact_path_from_tool_call,
+        )
+
+        original_artifact_path = source_runtime_artifact_path_from_tool_call(
+            tool_name=tool_name,
+            tool_args_json=tool_args_json,
+        )
+    return mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists
+
+
+async def _execute_container_tool_call(
+    *,
+    agent: Any,
+    tool_name: str | None,
+    mapped_tool_args: Any,
+    command_timeout_s: float,
+    source_exec_timeout: float | None,
+    mapped_artifact_path: str | None,
+    exec_resource_timeline: dict[str, Any] | None,
+) -> tuple[str, float, bool, dict[str, Any]]:
+    if exec_resource_timeline is None:
+        if mapped_artifact_path is not None:
+            return _unpack_exec_tool_result(
+                await _exec_tool(
+                    agent,
+                    tool_name,
+                    mapped_tool_args,
+                    command_timeout_s,
+                    source_exec_timeout,
+                    True,
+                )
+            )
+        return _unpack_exec_tool_result(
+            await _exec_tool(
+                agent,
+                tool_name,
+                mapped_tool_args,
+                command_timeout_s,
+                source_exec_timeout,
+            )
+        )
+    if mapped_artifact_path is not None:
+        return _unpack_exec_tool_result(
+            await _exec_tool(
+                agent,
+                tool_name,
+                mapped_tool_args,
+                command_timeout_s,
+                source_exec_timeout,
+                True,
+                exec_resource_timeline,
+            )
+        )
+    return _unpack_exec_tool_result(
+        await _exec_tool(
+            agent,
+            tool_name,
+            mapped_tool_args,
+            command_timeout_s,
+            source_exec_timeout,
+            False,
+            exec_resource_timeline,
+        )
     )
 
 
@@ -661,11 +1044,13 @@ def _restore_cas_manifest_in_container(
     Blobs are read from the host-mounted CAS store.
     """
     script = r'''
-import json, os, shutil, stat
+import hashlib, json, logging, os, shutil, stat
+logger = logging.getLogger("trace_collect.restore_cas_manifest")
 manifest_path = os.environ["CAS_MANIFEST_PATH"]
 cas_root = os.environ["CAS_ROOT"]
 root = os.path.abspath(os.environ["CHECKPOINT_ROOT"])
 clear_root = os.environ.get("CHECKPOINT_CLEAR_ROOT") == "1"
+preserved_top_level_dirs = set(json.loads(os.environ["CHECKPOINT_PRESERVE_TOP_LEVEL_DIRS"]))
 if os.path.lexists(root):
     if os.path.islink(root):
         os.unlink(root)
@@ -701,6 +1086,22 @@ def safe_target(relpath):
         raise RuntimeError(f"unsafe checkpoint path: {relpath}")
     return target
 
+def safe_symlink_target(relpath, link_target):
+    if not isinstance(link_target, str) or link_target == "":
+        raise RuntimeError(f"unsafe checkpoint symlink target: {relpath}")
+    link_path = safe_target(relpath)
+    if os.path.isabs(link_target):
+        resolved = os.path.abspath(link_target)
+    else:
+        resolved = os.path.abspath(os.path.join(os.path.dirname(link_path), link_target))
+    if resolved != root and not resolved.startswith(root + os.sep):
+        logger.debug(
+            "checkpoint symlink target resolves outside restore root: %s -> %s",
+            relpath,
+            link_target,
+        )
+    return link_path
+
 def ensure_parent_dir(target):
     parent = os.path.dirname(target)
     rel_parent = os.path.relpath(parent, root)
@@ -716,11 +1117,17 @@ def ensure_parent_dir(target):
             os.mkdir(current)
             created_dirs.add(current)
 
+def is_preserved_relpath(relpath):
+    parts = relpath.split(os.sep)
+    return bool(parts) and parts[0] in preserved_top_level_dirs
+
 for relpath in list(entries) + deleted:
     safe_target(relpath)
 
 if clear_root:
     for name in os.listdir(root):
+        if name in preserved_top_level_dirs:
+            continue
         path = os.path.join(root, name)
         if os.path.isdir(path) and not os.path.islink(path):
             shutil.rmtree(path)
@@ -728,6 +1135,8 @@ if clear_root:
             os.unlink(path)
 else:
     for del_path in sorted(deleted, key=lambda p: p.count(os.sep), reverse=True):
+        if is_preserved_relpath(del_path):
+            continue
         target = safe_target(del_path)
         if os.path.lexists(target):
             if os.path.isdir(target) and not os.path.islink(target):
@@ -735,13 +1144,32 @@ else:
             else:
                 os.unlink(target)
 
+file_entries = []
+symlink_entries = []
 for relpath, entry in entries.items():
+    if is_preserved_relpath(relpath):
+        continue
     if not isinstance(entry, dict):
         raise RuntimeError(f"invalid checkpoint manifest entry: {relpath}")
+    entry_type = entry.get("type", "file")
+    if entry_type == "symlink":
+        symlink_entries.append((relpath, entry))
+        continue
+    if entry_type != "file":
+        raise RuntimeError(f"unsupported checkpoint manifest entry type: {relpath}")
+    file_entries.append((relpath, entry))
+
+for relpath, entry in file_entries:
     hash_val = entry["hash"]
     blob_path = os.path.join(cas_root, "blobs", hash_val[:2], hash_val[2:])
     with open(blob_path, "rb") as f:
         content = f.read()
+    actual_hash = hashlib.sha256(content).hexdigest()
+    if actual_hash != hash_val:
+        raise RuntimeError(
+            f"checkpoint blob digest mismatch for {relpath}: "
+            f"expected {hash_val}, got {actual_hash}"
+        )
     target = safe_target(relpath)
     ensure_parent_dir(target)
     if os.path.lexists(target):
@@ -760,6 +1188,16 @@ for relpath, entry in entries.items():
             os.utime(target, ns=(mtime_ns, mtime_ns))
         except OSError:
             pass
+for relpath, entry in symlink_entries:
+    link_target = entry.get("target")
+    target = safe_symlink_target(relpath, link_target)
+    ensure_parent_dir(target)
+    if os.path.lexists(target):
+        if os.path.isdir(target) and not os.path.islink(target):
+            shutil.rmtree(target)
+        else:
+            os.unlink(target)
+    os.symlink(link_target, target)
 if not os.path.isdir(root):
     raise RuntimeError(f"checkpoint root missing after restore: {root}")
 if os.path.exists(manifest_path):
@@ -777,6 +1215,9 @@ if os.path.exists(manifest_path):
             f"CHECKPOINT_ROOT={restore_root}",
             "-e",
             f"CHECKPOINT_CLEAR_ROOT={'1' if clear_root else '0'}",
+            "-e",
+            "CHECKPOINT_PRESERVE_TOP_LEVEL_DIRS="
+            + json.dumps(sorted(_CHECKPOINT_SKIP_DIRS)),
             container_id,
             "python3",
             "-c",
@@ -786,14 +1227,66 @@ if os.path.exists(manifest_path):
     )
 
 
+def _cas_manifest_entry_hash(entry: CasManifestValue) -> str:
+    if isinstance(entry, str):
+        return entry
+    entry_type = entry.get("type", "file")
+    if entry_type == "symlink":
+        target = entry.get("target")
+        if not isinstance(target, str):
+            raise ValueError(f"CAS manifest symlink entry missing target: {entry!r}")
+        return json.dumps({"type": "symlink", "target": target}, sort_keys=True)
+    if entry_type != "file":
+        raise ValueError(f"unsupported CAS manifest entry type: {entry_type!r}")
+    hash_value = entry.get("hash")
+    if not isinstance(hash_value, str):
+        raise ValueError(f"CAS manifest entry missing string hash: {entry!r}")
+    return hash_value
+
+
+def _cas_manifest_entry_mode(entry: CasManifestValue) -> int | None:
+    if isinstance(entry, str):
+        return None
+    if entry.get("type", "file") == "symlink":
+        return None
+    mode = entry.get("mode")
+    if mode is None:
+        return None
+    if isinstance(mode, bool) or not isinstance(mode, int):
+        raise ValueError(f"CAS manifest entry mode must be int, got {mode!r}")
+    return stat.S_IMODE(mode)
+
+
+def _source_cas_manifest_entry(entry: Any) -> CasManifestValue | None:
+    if not isinstance(entry, dict):
+        return None
+    entry_type = entry.get("type", "file")
+    if entry_type == "symlink":
+        target = entry.get("target")
+        if not isinstance(target, str):
+            raise ValueError(f"CAS source symlink entry missing target: {entry!r}")
+        return {"type": "symlink", "target": target}
+    if entry_type != "file":
+        raise ValueError(f"unsupported CAS source manifest entry type: {entry_type!r}")
+    hash_value = entry.get("hash")
+    if not isinstance(hash_value, str):
+        return None
+    mode = entry.get("mode")
+    if mode is None:
+        return hash_value
+    if isinstance(mode, bool) or not isinstance(mode, int):
+        raise ValueError(f"CAS source manifest entry mode must be int, got {mode!r}")
+    return {"hash": hash_value, "mode": stat.S_IMODE(mode)}
+
+
 def _capture_snapshot_manifest(
     *,
     container_id: str,
     container_executable: str,
     root: str = "/testbed",
-    previous_manifest: dict[str, str] | None = None,
-) -> dict[str, str] | None:
-    """Walk /testbed inside a live container, return {relpath: sha256hex}.
+    previous_manifest: CasManifestEntries | None = None,
+) -> CasManifestEntries | None:
+    """Walk /testbed inside a live container, return CAS manifest entries.
 
     When *previous_manifest* is provided, uses ``find -newer`` with a
     marker file inside the container to only hash files changed since
@@ -822,6 +1315,7 @@ import hashlib, json, os, stat, subprocess
 root = os.environ.get("SNAPSHOT_ROOT", "/testbed")
 marker = "/tmp/.cas_marker"
 temp_marker = "/tmp/.cas_marker_new"
+skip_dirs = set(json.loads(os.environ["SNAPSHOT_SKIP_DIRS"]))
 
 # Record capture start timestamp
 subprocess.run(["touch", temp_marker], capture_output=True)
@@ -838,7 +1332,7 @@ if result.returncode == 0:
         if not p:
             continue
         parts = p.split(os.sep)
-        if ".git" in parts:
+        if any(part in skip_dirs for part in parts):
             continue
         rel = os.path.relpath(p, root)
         changed.add(rel)
@@ -848,20 +1342,39 @@ else:
 
 entries = {}
 all_paths = []
-skip_dirs = {".git"}
+def record_symlink(fpath, rel):
+    try:
+        target = os.readlink(fpath)
+    except OSError:
+        return
+    all_paths.append(rel)
+    entries[rel] = {"type": "symlink", "target": target}
+
 for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
     dirnames[:] = [d for d in dirnames if d not in skip_dirs]
     dirnames.sort()
     filenames.sort()
+    for dname in dirnames:
+        dpath = os.path.join(dirpath, dname)
+        rel = os.path.relpath(dpath, root)
+        try:
+            st = os.lstat(dpath)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            record_symlink(dpath, rel)
     for fname in filenames:
         fpath = os.path.join(dirpath, fname)
         try:
             st = os.lstat(fpath)
         except OSError:
             continue
+        rel = os.path.relpath(fpath, root)
+        if stat.S_ISLNK(st.st_mode):
+            record_symlink(fpath, rel)
+            continue
         if not stat.S_ISREG(st.st_mode):
             continue
-        rel = os.path.relpath(fpath, root)
         all_paths.append(rel)
         if changed is not None and rel not in changed:
             continue
@@ -870,7 +1383,7 @@ for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
                 digest = hashlib.sha256(f.read()).hexdigest()
         except OSError:
             continue
-        entries[rel] = digest
+        entries[rel] = {"hash": digest, "mode": stat.S_IMODE(st.st_mode)}
 
 os.rename(temp_marker, marker)
 print(json.dumps({"entries": entries, "all_paths": all_paths}))
@@ -882,39 +1395,69 @@ import hashlib, json, os, stat, subprocess
 root = os.environ.get("SNAPSHOT_ROOT", "/testbed")
 marker = "/tmp/.cas_marker"
 temp_marker = "/tmp/.cas_marker_new"
+skip_dirs = set(json.loads(os.environ["SNAPSHOT_SKIP_DIRS"]))
 
 # Record capture start timestamp (sets baseline for next incremental)
 subprocess.run(["touch", temp_marker], capture_output=True)
 
 entries = {}
 all_paths = []
-skip_dirs = {".git"}
+def record_symlink(fpath, rel):
+    try:
+        target = os.readlink(fpath)
+    except OSError:
+        return
+    all_paths.append(rel)
+    entries[rel] = {"type": "symlink", "target": target}
+
 for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
     dirnames[:] = [d for d in dirnames if d not in skip_dirs]
     dirnames.sort()
     filenames.sort()
+    for dname in dirnames:
+        dpath = os.path.join(dirpath, dname)
+        rel = os.path.relpath(dpath, root)
+        try:
+            st = os.lstat(dpath)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            record_symlink(dpath, rel)
     for fname in filenames:
         fpath = os.path.join(dirpath, fname)
         try:
             st = os.lstat(fpath)
         except OSError:
             continue
+        rel = os.path.relpath(fpath, root)
+        if stat.S_ISLNK(st.st_mode):
+            record_symlink(fpath, rel)
+            continue
         if not stat.S_ISREG(st.st_mode):
             continue
-        rel = os.path.relpath(fpath, root)
         all_paths.append(rel)
         try:
             with open(fpath, "rb") as f:
                 digest = hashlib.sha256(f.read()).hexdigest()
         except OSError:
             continue
-        entries[rel] = digest
+        entries[rel] = {"hash": digest, "mode": stat.S_IMODE(st.st_mode)}
 
 os.rename(temp_marker, marker)
 print(json.dumps({"entries": entries, "all_paths": all_paths}))
 """
     result = subprocess.run(
-        [container_executable, "exec", "-i", container_id, "python3", "-c", script],
+        [
+            container_executable,
+            "exec",
+            "-i",
+            "-e",
+            "SNAPSHOT_SKIP_DIRS=" + json.dumps(sorted(_CHECKPOINT_SKIP_DIRS)),
+            container_id,
+            "python3",
+            "-c",
+            script,
+        ],
         capture_output=True,
         text=True,
         timeout=120,
@@ -932,7 +1475,7 @@ print(json.dumps({"entries": entries, "all_paths": all_paths}))
         logger.warning("Snapshot manifest parse error: %s", exc)
         return None
 
-    delta_entries: dict[str, str] = delta.get("entries", {})
+    delta_entries: CasManifestEntries = delta.get("entries", {})
     all_paths: list[str] = delta.get("all_paths", [])
 
     if previous_manifest is not None:
@@ -949,19 +1492,164 @@ print(json.dumps({"entries": entries, "all_paths": all_paths}))
     return delta_entries
 
 
+def _capture_snapshot_manifest_diagnostic(
+    *,
+    container_id: str,
+    container_executable: str,
+    root: str = "/testbed",
+    previous_manifest: CasManifestEntries | None = None,
+    context: str,
+) -> tuple[CasManifestEntries | None, str | None]:
+    try:
+        return (
+            _capture_snapshot_manifest(
+                container_id=container_id,
+                container_executable=container_executable,
+                root=root,
+                previous_manifest=previous_manifest,
+            ),
+            None,
+        )
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "Snapshot manifest diagnostic capture failed during %s (cid=%s): %s",
+            context,
+            container_id[:12],
+            error,
+        )
+        return None, error
+
+
+def _sandbox_snapshot_entries_to_cas_entries(
+    snapshot_entries: dict[str, Any],
+) -> CasManifestEntries:
+    cas_entries: CasManifestEntries = {}
+    for relpath, entry in snapshot_entries.items():
+        if not isinstance(relpath, str):
+            raise ValueError(f"sandbox snapshot path must be a string: {relpath!r}")
+        if isinstance(entry, str):
+            cas_entries[relpath] = entry
+            continue
+        if not isinstance(entry, dict):
+            raise ValueError(f"sandbox snapshot entry must be a dict: {relpath}")
+        entry_type = entry.get("type", "file")
+        if entry_type == "symlink":
+            target = entry.get("target")
+            if not isinstance(target, str):
+                raise ValueError(f"sandbox snapshot symlink missing target: {relpath}")
+            cas_entries[relpath] = {"type": "symlink", "target": target}
+            continue
+        if entry_type != "file":
+            raise ValueError(f"unsupported sandbox snapshot entry type: {entry_type!r}")
+        hash_value = entry.get("hash")
+        if not isinstance(hash_value, str):
+            raise ValueError(f"sandbox snapshot file missing hash: {relpath}")
+        mode = entry.get("mode")
+        cas_entries[relpath] = (
+            {"hash": hash_value, "mode": stat.S_IMODE(mode)}
+            if isinstance(mode, int) and not isinstance(mode, bool)
+            else hash_value
+        )
+    return cas_entries
+
+
+async def _capture_replay_snapshot_manifest_diagnostic(
+    *,
+    container: PreparedContainer,
+    root: str,
+    previous_manifest: CasManifestEntries | None,
+    context: str,
+) -> tuple[CasManifestEntries | None, str | None]:
+    if container.backend is not None:
+        try:
+            snapshot = await container.backend.capture_snapshot()
+            entries = snapshot.disk_state.get("entries")
+            if not isinstance(entries, dict):
+                raise ValueError("sandbox snapshot missing entries")
+            replay_entries = _sandbox_snapshot_entries_to_cas_entries(entries)
+            deleted_paths = snapshot.disk_state.get("deleted_paths", [])
+            if not isinstance(deleted_paths, list):
+                raise ValueError("sandbox snapshot deleted_paths must be a list")
+            if snapshot.disk_state.get("incremental") is True and previous_manifest is not None:
+                merged_entries = dict(previous_manifest)
+                for deleted_path in deleted_paths:
+                    if not isinstance(deleted_path, str):
+                        raise ValueError(
+                            f"sandbox snapshot deleted path must be a string: {deleted_path!r}"
+                        )
+                    merged_entries.pop(deleted_path, None)
+                merged_entries.update(replay_entries)
+                replay_entries = merged_entries
+            return replay_entries, None
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "Snapshot manifest diagnostic capture failed during %s "
+                "(backend=%s): %s",
+                context,
+                container.docker_image,
+                error,
+            )
+            return None, error
+    return await asyncio.to_thread(
+        _capture_snapshot_manifest_diagnostic,
+        container_id=container.container_id,
+        container_executable=container.container_executable,
+        root=root,
+        previous_manifest=previous_manifest,
+        context=context,
+    )
+
+
+def _forced_sync_verification_unavailable_fields(
+    error: str | None = None,
+) -> dict[str, Any]:
+    verification: dict[str, Any] = {"snapshot_captured": False}
+    if error is not None:
+        verification["error"] = error
+    return {
+        "forced_sync_verified": None,
+        "forced_sync_verification": verification,
+    }
+
+
 def _cas_manifest_comparison_fields(
     *,
-    source_entries: dict[str, str],
-    replay_entries: dict[str, str],
+    source_entries: CasManifestEntries,
+    replay_entries: CasManifestEntries,
 ) -> dict[str, Any]:
     source_keys = set(source_entries.keys())
     replay_keys = set(replay_entries.keys())
     common = source_keys & replay_keys
-    modified = [k for k in common if source_entries[k] != replay_entries[k]]
+    modified = [
+        k
+        for k in common
+        if _cas_manifest_entry_hash(source_entries[k])
+        != _cas_manifest_entry_hash(replay_entries[k])
+    ]
+    mode_mismatches: list[dict[str, Any]] = []
+    mode_comparison_available = False
+    for path in sorted(common):
+        source_mode = _cas_manifest_entry_mode(source_entries[path])
+        replay_mode = _cas_manifest_entry_mode(replay_entries[path])
+        if source_mode is None or replay_mode is None:
+            continue
+        mode_comparison_available = True
+        if source_mode != replay_mode:
+            mode_mismatches.append(
+                {
+                    "path": path,
+                    "source_mode": format(source_mode, "o"),
+                    "replay_mode": format(replay_mode, "o"),
+                }
+            )
     added = sorted(replay_keys - source_keys)
     removed = sorted(source_keys - replay_keys)
     fields: dict[str, Any] = {
-        "cas_manifest_match": not modified and not removed and not added,
+        "cas_manifest_match": (
+            not modified and not removed and not added and not mode_mismatches
+        ),
         "cas_source_entries": len(source_entries),
         "cas_replay_entries": len(replay_entries),
         "cas_modified_count": len(modified),
@@ -970,14 +1658,84 @@ def _cas_manifest_comparison_fields(
     }
     if modified:
         fields["cas_modified_examples"] = modified[:10]
+    if mode_comparison_available:
+        fields["cas_mode_mismatch_count"] = len(mode_mismatches)
+        if mode_mismatches:
+            fields["cas_mode_mismatch_examples"] = mode_mismatches[:10]
     return fields
+
+
+async def _verify_forced_sync_restore_state(
+    *,
+    container: PreparedContainer,
+    checkpoint_spec: dict[str, Any],
+    source_entries: CasManifestEntries,
+    context: str,
+) -> tuple[dict[str, Any], CasManifestEntries | None]:
+    replay_entries, capture_error = await _capture_replay_snapshot_manifest_diagnostic(
+        container=container,
+        root=str(checkpoint_spec.get("root") or "/testbed"),
+        previous_manifest=None,
+        context=context,
+    )
+    if replay_entries is None:
+        return _forced_sync_verification_unavailable_fields(capture_error), None
+
+    verification_fields = _cas_manifest_comparison_fields(
+        source_entries=source_entries,
+        replay_entries=replay_entries,
+    )
+    return (
+        {
+            "forced_sync_verified": verification_fields["cas_manifest_match"],
+            "forced_sync_verification": verification_fields,
+        },
+        replay_entries,
+    )
+
+
+def _checkpoint_relpath_is_skipped(relpath: str) -> bool:
+    return any(part in _CHECKPOINT_SKIP_DIRS for part in relpath.split("/"))
+
+
+def _tool_executes_in_container(tool_name: str | None) -> bool:
+    return (
+        bool(tool_name)
+        and tool_name != "message"
+        and not str(tool_name).startswith("mcp_")
+        and tool_name not in _TRACE_REPLAY_TOOL_NAMES
+    )
+
+
+def _fold_source_checkpoint_entries_through_action(
+    *,
+    actions: list[dict[str, Any]],
+    target_index: int,
+    source_trace: Path,
+) -> CasManifestEntries:
+    folded: CasManifestEntries = {}
+    if target_index < 0:
+        return folded
+    for action in actions[: target_index + 1]:
+        data = action.get("data") or {}
+        checkpoint_spec = _checkpoint_after_spec(
+            action_data=data,
+            source_trace=source_trace,
+        )
+        if checkpoint_spec is None:
+            continue
+        folded = _fold_source_checkpoint_entries(
+            checkpoint_spec=checkpoint_spec,
+            prev_folded=folded,
+        )
+    return folded
 
 
 def _fold_source_checkpoint_entries(
     *,
     checkpoint_spec: dict[str, Any],
-    prev_folded: dict[str, str],
-) -> dict[str, str]:
+    prev_folded: CasManifestEntries,
+) -> CasManifestEntries:
     """Fold a source checkpoint spec into the accumulated entries state.
 
     For full checkpoints (``cas_manifest_full`` or ``filesystem_tar``),
@@ -1005,11 +1763,13 @@ def _fold_source_checkpoint_entries(
     if not isinstance(raw_entries, dict):
         return prev_folded
 
-    entries = {
-        rel: entry["hash"]
-        for rel, entry in raw_entries.items()
-        if isinstance(entry, dict) and "hash" in entry
-    }
+    entries: CasManifestEntries = {}
+    for rel, entry in raw_entries.items():
+        if not isinstance(rel, str) or _checkpoint_relpath_is_skipped(rel):
+            continue
+        normalized_entry = _source_cas_manifest_entry(entry)
+        if normalized_entry is not None:
+            entries[rel] = normalized_entry
 
     if not is_incremental:
         return entries
@@ -1019,12 +1779,14 @@ def _fold_source_checkpoint_entries(
     deleted = data.get("deleted_paths", [])
     if isinstance(deleted, list):
         for dpath in deleted:
+            if not isinstance(dpath, str) or _checkpoint_relpath_is_skipped(dpath):
+                continue
             folded.pop(dpath, None)
     return folded
 
 
-def _load_source_manifest_entries(manifest_path: str) -> dict[str, str] | None:
-    """Load source checkpoint entries, return {relpath: sha256hex} or None.
+def _load_source_manifest_entries(manifest_path: str) -> CasManifestEntries | None:
+    """Load source checkpoint entries, return CAS manifest entries or None.
 
     Handles both CAS manifest (JSON with ``entries`` dict) and
     ``filesystem_tar`` checkpoints. For tars, extracts files and hashes them.
@@ -1043,22 +1805,26 @@ def _load_source_manifest_entries(manifest_path: str) -> dict[str, str] | None:
         entries = data.get("entries", {})
         if not isinstance(entries, dict):
             return None
-        result = {
-            rel: entry["hash"]
-            for rel, entry in entries.items()
-            if isinstance(entry, dict) and "hash" in entry
-        }
+        result: CasManifestEntries = {}
+        for rel, entry in entries.items():
+            if not isinstance(rel, str) or _checkpoint_relpath_is_skipped(rel):
+                continue
+            normalized_entry = _source_cas_manifest_entry(entry)
+            if normalized_entry is not None:
+                result[rel] = normalized_entry
         # Remove entries for paths that were deleted between checkpoints.
         deleted = data.get("deleted_paths", [])
         if isinstance(deleted, list):
             for dpath in deleted:
+                if not isinstance(dpath, str) or _checkpoint_relpath_is_skipped(dpath):
+                    continue
                 result.pop(dpath, None)
         return result
 
     # filesystem_tar — read archive, hash files
     import tarfile as _tarfile_mod
     try:
-        entries: dict[str, str] = {}
+        entries: CasManifestEntries = {}
         with _tarfile_mod.open(str(mpath), "r:*") as tf:
             for member in tf:
                 if not member.isfile():
@@ -1067,6 +1833,8 @@ def _load_source_manifest_entries(manifest_path: str) -> dict[str, str] | None:
                 if f is None:
                     continue
                 digest = hashlib.sha256(f.read()).hexdigest()
+                if _checkpoint_relpath_is_skipped(member.name):
+                    continue
                 entries[member.name] = digest
         return entries
     except Exception as exc:
@@ -1327,6 +2095,89 @@ def _restore_checkpoint_chain_to_container(
     return fields
 
 
+async def _reapply_forced_sync_actions(
+    *,
+    prepared_session: PreparedTraceSession,
+    start_index: int,
+    end_index: int,
+    replay_speed: float,
+    command_timeout_s: float,
+) -> dict[str, Any]:
+    container = prepared_session.container
+    if container is None:
+        raise ValueError("cannot reapply forced-sync actions without a container")
+
+    reapplied_action_ids: list[str] = []
+    reapply_errors: list[str] = []
+    for index in range(start_index, end_index + 1):
+        action = prepared_session.loaded.actions[index]
+        if action.get("action_type") != "tool_exec":
+            continue
+        data = action.get("data") or {}
+        tool_name = data.get("tool_name")
+        if not _tool_executes_in_container(tool_name):
+            continue
+        tool_args = data.get("tool_args", "{}")
+        source_duration_ms = float(data.get("duration_ms") or 0.0)
+        source_success = _source_tool_success(data)
+        source_tool_result = data.get("tool_result", data.get("result", ""))
+        source_exec_timeout = _source_exec_timeout_s(
+            tool_name=tool_name,
+            tool_args_json=tool_args,
+            source_duration_ms=source_duration_ms,
+            source_success=source_success,
+            source_tool_result=source_tool_result,
+            source_timed_out=data.get("timed_out"),
+        )
+        replay_exec_timeout = _effective_source_exec_timeout_s(
+            source_exec_timeout_s=source_exec_timeout,
+            replay_speed=replay_speed,
+        )
+        mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
+            _container_tool_runtime_args(
+                tool_name=tool_name,
+                tool_args_json=tool_args,
+                runtime_root_map=prepared_session.runtime_artifact_root_map,
+            )
+        )
+        if original_artifact_path is not None and not mapped_exists:
+            continue
+        source_resource_timeline = valid_resource_timeline(
+            data.get("resource_timeline")
+        )
+        exec_resource_timeline = (
+            source_resource_timeline
+            if _tool_uses_single_exec_command_semantics(tool_name, mapped_tool_args)
+            else None
+        )
+        action_id = str(action.get("action_id") or f"action-{index}")
+        if _denied_exec_command(tool_name=tool_name, tool_args_json=tool_args):
+            continue
+        reapplied_action_ids.append(action_id)
+        try:
+            await _execute_container_tool_call(
+                agent=container.backend or container.agent,
+                tool_name=tool_name,
+                mapped_tool_args=mapped_tool_args,
+                command_timeout_s=command_timeout_s,
+                source_exec_timeout=replay_exec_timeout,
+                mapped_artifact_path=mapped_artifact_path,
+                exec_resource_timeline=exec_resource_timeline,
+            )
+        except Exception as exc:
+            reapply_errors.append(
+                f"action_index={index} action_id={action_id}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            break
+
+    return {
+        "forced_sync_reapplied_action_count": len(reapplied_action_ids),
+        "forced_sync_reapplied_action_ids": reapplied_action_ids,
+        "forced_sync_reapply_errors": reapply_errors,
+    }
+
+
 def _source_openclaw_tool_results_dir(source_trace: Path) -> Path | None:
     attempt_dir = source_trace.parent
     candidates: list[Path] = []
@@ -1461,11 +2312,12 @@ async def _restore_source_runtime_artifacts(
 def _parse_trace_session_file(
     trace_path: Path,
 ) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
-    """Read one canonical trace once and extract the primary replay lane."""
+    """Read one canonical trace once and extract primary plus subagent lanes."""
 
     metadata: dict[str, Any] | None = None
     first_agent_id: str | None = None
-    actions: list[dict[str, Any]] = []
+    all_actions: list[dict[str, Any]] = []
+    actions_by_agent: dict[str, list[dict[str, Any]]] = {}
     summaries: dict[str, dict[str, Any]] = {}
 
     with open(trace_path, encoding="utf-8") as f:
@@ -1482,17 +2334,40 @@ def _parse_trace_session_file(
 
             agent_id = record.get("agent_id")
             if record_type == "action" and agent_id:
+                agent_id = str(agent_id)
                 if first_agent_id is None:
                     first_agent_id = agent_id
-                if agent_id == first_agent_id:
-                    actions.append(record)
+                all_actions.append(record)
+                actions_by_agent.setdefault(agent_id, []).append(record)
                 continue
 
             if record_type == "summary" and agent_id:
-                summaries[agent_id] = record
+                summaries[str(agent_id)] = record
 
-    if first_agent_id is None or not actions:
+    if first_agent_id is None or not all_actions:
         raise SimulateError(f"No action records with agent_id found in {trace_path}")
+
+    metadata_agent_id = metadata.get("instance_id") if metadata else None
+    if isinstance(metadata_agent_id, str) and metadata_agent_id in actions_by_agent:
+        primary_agent_id = metadata_agent_id
+    elif first_agent_id and "/" in first_agent_id:
+        primary_agent_id = first_agent_id.split("/", 1)[0]
+        if primary_agent_id not in actions_by_agent:
+            primary_agent_id = first_agent_id
+    else:
+        primary_agent_id = first_agent_id
+
+    subagent_prefix = f"{primary_agent_id}/"
+    actions = [
+        action
+        for action in all_actions
+        if action.get("agent_id") == primary_agent_id
+        or str(action.get("agent_id", "")).startswith(subagent_prefix)
+    ]
+    if not actions_by_agent.get(primary_agent_id):
+        raise SimulateError(
+            f"No primary action records for agent_id {primary_agent_id!r} in {trace_path}"
+        )
 
     actions.sort(
         key=lambda action: (
@@ -1502,7 +2377,32 @@ def _parse_trace_session_file(
             str(action.get("action_id", "")),
         )
     )
-    return first_agent_id, metadata, actions, summaries.get(first_agent_id)
+    return primary_agent_id, metadata, actions, summaries.get(primary_agent_id)
+
+
+def _source_action_agent_id(action: dict[str, Any]) -> str:
+    return str(action.get("agent_id") or "")
+
+
+def _is_subagent_lane_action(
+    action: dict[str, Any],
+    *,
+    source_agent_id: str,
+) -> bool:
+    return _source_action_agent_id(action).startswith(f"{source_agent_id}/")
+
+
+def _replay_action_id(
+    action: dict[str, Any],
+    *,
+    source_agent_id: str,
+    fallback: str,
+) -> str:
+    action_id = str(action.get("action_id") or fallback)
+    lane_agent_id = _source_action_agent_id(action)
+    if lane_agent_id and lane_agent_id != source_agent_id:
+        return f"{lane_agent_id}:{action_id}"
+    return action_id
 
 
 def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
@@ -1632,6 +2532,8 @@ def _load_trace_session(
     manifest_index: int,
     docker_image_override: str | None = None,
     label: str | None = None,
+    sandbox_backend: str = "docker",
+    checkpoint_backend: str = "walk",
 ) -> LoadedTraceSession:
     source_agent_id, metadata, actions, summary = _parse_trace_session_file(source_trace)
     scaffold = metadata.get("scaffold", "unknown") if metadata else "unknown"
@@ -1650,6 +2552,8 @@ def _load_trace_session(
         iterations=_group_actions_by_iteration(actions),
         docker_image_override=docker_image_override,
         label=label,
+        sandbox_backend=sandbox_backend,
+        checkpoint_backend=checkpoint_backend,
     )
 
 
@@ -1694,6 +2598,8 @@ def _worker_trace_input(session: LoadedTraceSession) -> WorkerTraceInput:
         docker_image_override=session.docker_image_override,
         label=session.label,
         run_instance_id=session.run_instance_id,
+        sandbox_backend=session.sandbox_backend,
+        checkpoint_backend=session.checkpoint_backend,
     )
 
 
@@ -1706,6 +2612,8 @@ def _load_worker_trace_inputs(inputs: list[WorkerTraceInput]) -> list[LoadedTrac
             manifest_index=entry.manifest_index,
             docker_image_override=entry.docker_image_override,
             label=entry.label,
+            sandbox_backend=entry.sandbox_backend,
+            checkpoint_backend=entry.checkpoint_backend,
         )
         session.run_instance_id = entry.run_instance_id
         sessions.append(session)
@@ -1898,10 +2806,33 @@ def _resolve_manifest_path(
     return path
 
 
+def _resolve_manifest_sandbox_backend(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SimulateError(f"manifest {field} must be a non-empty string")
+    try:
+        get_sandbox_backend_class(value)
+    except ValueError as exc:
+        raise SimulateError(f"manifest {field} is invalid: {exc}") from exc
+    return value
+
+
+def _resolve_manifest_checkpoint_backend(value: Any, *, field: str) -> str:
+    if value is None:
+        return "walk"
+    if not isinstance(value, str) or not value:
+        raise SimulateError(f"manifest {field} must be a non-empty string")
+    try:
+        return validate_checkpoint_backend(value)
+    except ValueError as exc:
+        raise SimulateError(f"manifest {field} is invalid: {exc}") from exc
+
+
 def _load_simulate_manifest(
     manifest: Path,
     *,
     default_task_source: Path,
+    default_sandbox_backend: str = "docker",
+    default_checkpoint_backend: str | None = None,
 ) -> list[TraceManifestEntry]:
     try:
         raw = yaml.safe_load(manifest.read_text(encoding="utf-8"))
@@ -1910,6 +2841,14 @@ def _load_simulate_manifest(
 
     base_dir = manifest.parent
     manifest_default_task_source: Path | None = None
+    manifest_default_sandbox_backend = _resolve_manifest_sandbox_backend(
+        default_sandbox_backend,
+        field="sandbox_backend",
+    )
+    manifest_default_checkpoint_backend = _resolve_manifest_checkpoint_backend(
+        default_checkpoint_backend,
+        field="checkpoint_backend",
+    )
     raw_traces: Any
 
     if isinstance(raw, list):
@@ -1926,7 +2865,11 @@ def _load_simulate_manifest(
         defaults = raw.get("defaults") or {}
         if not isinstance(defaults, dict):
             raise SimulateError("simulate manifest defaults must be an object")
-        unknown_default_keys = set(defaults) - {"task_source"}
+        unknown_default_keys = set(defaults) - {
+            "task_source",
+            "sandbox_backend",
+            "checkpoint_backend",
+        }
         if unknown_default_keys:
             keys = ", ".join(sorted(str(key) for key in unknown_default_keys))
             raise SimulateError(f"simulate manifest defaults has unsupported keys: {keys}")
@@ -1935,6 +2878,16 @@ def _load_simulate_manifest(
                 defaults["task_source"],
                 base_dir=base_dir,
                 field="defaults.task_source",
+            )
+        if "sandbox_backend" in defaults:
+            manifest_default_sandbox_backend = _resolve_manifest_sandbox_backend(
+                defaults["sandbox_backend"],
+                field="defaults.sandbox_backend",
+            )
+        if "checkpoint_backend" in defaults:
+            manifest_default_checkpoint_backend = _resolve_manifest_checkpoint_backend(
+                defaults["checkpoint_backend"],
+                field="defaults.checkpoint_backend",
             )
         raw_traces = raw.get("traces")
     else:
@@ -1949,11 +2902,20 @@ def _load_simulate_manifest(
         task_value: Any | None = None
         docker_image: str | None = None
         label: str | None = None
+        sandbox_backend = manifest_default_sandbox_backend
+        checkpoint_backend = manifest_default_checkpoint_backend
 
         if isinstance(entry, str):
             trace_value = entry
         elif isinstance(entry, dict):
-            allowed_entry_keys = {"trace", "task_source", "docker_image", "label"}
+            allowed_entry_keys = {
+                "trace",
+                "task_source",
+                "docker_image",
+                "label",
+                "sandbox_backend",
+                "checkpoint_backend",
+            }
             unknown_entry_keys = set(entry) - allowed_entry_keys
             if unknown_entry_keys:
                 keys = ", ".join(sorted(str(key) for key in unknown_entry_keys))
@@ -1966,6 +2928,8 @@ def _load_simulate_manifest(
             task_value = entry.get("task_source")
             docker_value = entry.get("docker_image")
             label_value = entry.get("label")
+            sandbox_backend_value = entry.get("sandbox_backend")
+            checkpoint_backend_value = entry.get("checkpoint_backend")
             if docker_value is not None:
                 if not isinstance(docker_value, str) or not docker_value:
                     raise SimulateError(
@@ -1978,6 +2942,16 @@ def _load_simulate_manifest(
                         f"simulate manifest trace entry {index} label must be a non-empty string"
                     )
                 label = label_value
+            if sandbox_backend_value is not None:
+                sandbox_backend = _resolve_manifest_sandbox_backend(
+                    sandbox_backend_value,
+                    field=f"traces[{index}].sandbox_backend",
+                )
+            if checkpoint_backend_value is not None:
+                checkpoint_backend = _resolve_manifest_checkpoint_backend(
+                    checkpoint_backend_value,
+                    field=f"traces[{index}].checkpoint_backend",
+                )
         else:
             raise SimulateError(
                 f"simulate manifest trace entry {index} must be a string or object"
@@ -2011,6 +2985,8 @@ def _load_simulate_manifest(
                 task_source=task_path,
                 docker_image=docker_image,
                 label=label,
+                sandbox_backend=sandbox_backend,
+                checkpoint_backend=checkpoint_backend,
             )
         )
     return entries
@@ -2065,7 +3041,11 @@ def _validate_loaded_sessions(
         raise SimulateError("No trace sessions were loaded")
     _validate_llm_timing_config(llm_timing)
     for session in sessions:
+        get_sandbox_backend_class(session.sandbox_backend)
+        validate_checkpoint_backend(session.checkpoint_backend)
         if _is_host_mode(session):
+            continue
+        if session.sandbox_backend == "fake":
             continue
         docker_image = _resolve_docker_image(session)
         if not docker_image:
@@ -2097,7 +3077,11 @@ def _validate_container_runtime(
     *,
     container_executable: str | None,
 ) -> None:
-    container_sessions = [session.agent_id for session in sessions if not _is_host_mode(session)]
+    container_sessions = [
+        session.agent_id
+        for session in sessions
+        if not _is_host_mode(session) and session.sandbox_backend != "fake"
+    ]
     if container_sessions and container_executable is None:
         sample = ", ".join(container_sessions[:3])
         suffix = "..." if len(container_sessions) > 3 else ""
@@ -2110,7 +3094,7 @@ def _validate_container_runtime(
 def _container_source_images(sessions: list[LoadedTraceSession]) -> list[str]:
     images: set[str] = set()
     for session in sessions:
-        if _is_host_mode(session):
+        if _is_host_mode(session) or session.sandbox_backend == "fake":
             continue
         docker_image = _resolve_docker_image(session)
         if docker_image is None:
@@ -2120,7 +3104,10 @@ def _container_source_images(sessions: list[LoadedTraceSession]) -> list[str]:
 
 
 def _has_container_mode_sessions(sessions: list[LoadedTraceSession]) -> bool:
-    return any(not _is_host_mode(session) for session in sessions)
+    return any(
+        not _is_host_mode(session) and session.sandbox_backend != "fake"
+        for session in sessions
+    )
 
 
 async def _prefetch_container_images(
@@ -2222,12 +3209,48 @@ async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
     task_output_dir: Path,
-    container_executable: str,
+    container_executable: str | None,
     network_mode: str = "host",
     fixed_images_by_source: dict[str, str] | None = None,
 ) -> PreparedTraceSession:
-    """Prepare a Docker/Podman container and start a persistent replay agent."""
-    from trace_collect.openclaw_tools import ContainerAgent
+    """Prepare a sandbox backend and start its persistent replay transport."""
+    container_exec_env = _source_container_exec_env(loaded.metadata)
+    agent_env_kwargs = _container_agent_env_kwargs(container_exec_env)
+    replay_exec_env_parity = (
+        "source_env" if container_exec_env is not None else "default_env"
+    )
+    replay_task_env_parity = replay_exec_env_parity
+    bootstrap_mount_args, bootstrap_env_status = _bootstrap_cache_mount_args(
+        container_exec_env,
+    )
+    if bootstrap_env_status is not None:
+        replay_task_env_parity = bootstrap_env_status
+
+    backend_name = loaded.sandbox_backend or "docker"
+    backend_cls = get_sandbox_backend_class(backend_name)
+    if backend_name == "fake":
+        backend = backend_cls()
+        await backend.start()
+        container = PreparedContainer(
+            container_id=f"fake-{loaded.agent_id}",
+            container_executable=container_executable or "fake",
+            docker_image="fake",
+            agent=backend,
+            fixed_image=None,
+            cleanup_fixed_image=False,
+            backend=backend,
+        )
+        return PreparedTraceSession(
+            loaded=loaded,
+            container=container,
+            replay_exec_env_parity=replay_exec_env_parity,
+            replay_task_env_parity=replay_task_env_parity,
+        )
+
+    if backend_cls is not DockerBackend:
+        raise SimulateError(f"unsupported sandbox backend for simulator: {backend_name}")
+    if container_executable is None:
+        raise ValueError("container_executable is required for docker sandbox backend")
 
     docker_image = _resolve_docker_image(loaded)
     if not docker_image:
@@ -2242,175 +3265,49 @@ async def _prepare_container_session(
         network_mode=network_mode,
         source_image=normalized,
     )
-    container_id: str | None = None
-    agent: Any | None = None
-    cleanup_fixed_image = True
-    try:
-        phase = recorder.start_phase("ensure_fixed_image")
-        try:
-            fixed_name = (
-                fixed_images_by_source or {}
-            ).get(normalized)
-            if fixed_name is not None:
-                cleanup_fixed_image = False
-                fixed_elapsed_s = 0.0
-                extra = {
-                    "fixed_image": fixed_name,
-                    "reported_elapsed_s": fixed_elapsed_s,
-                    "prebuilt": True,
-                }
-            else:
-                fixed_image_name = _replay_fixed_image_name(
-                    source_image=normalized,
-                    agent_id=loaded.agent_id,
-                    task_output_dir=task_output_dir,
-                )
-                fixed_name, fixed_elapsed_s = await asyncio.to_thread(
-                    ensure_fixed_image,
-                    normalized,
-                    container_executable=container_executable,
-                    fixed_image_name=fixed_image_name,
-                    rebuild=True,
-                )
-                extra = {
-                    "fixed_image": fixed_name,
-                    "reported_elapsed_s": fixed_elapsed_s,
-                    "prebuilt": False,
-                }
-            recorder.fixed_image = fixed_name
-            recorder.finish_phase(
-                phase,
-                extra=extra,
-            )
-        except (Exception, asyncio.CancelledError) as exc:
-            recorder.finish_phase(phase, status="failed", error=exc)
-            raise
-
-        phase = recorder.start_phase("start_task_container")
-        try:
-            extra_args = [
-                "--label",
-                "agent-sched-bench.component=simulate-replay",
-                "--label",
-                f"agent-sched-bench.run_instance_id={loaded.agent_id}",
-                "--label",
-                f"agent-sched-bench.source_agent_id={loaded.source_agent_id}",
-                "--label",
-                f"agent-sched-bench.manifest_index={loaded.manifest_index}",
-                "--label",
-                f"agent-sched-bench.output_dir={task_output_dir}",
-                "-v",
-                f"{_CHECKPOINT_CAS_ROOT}:{_CHECKPOINT_CAS_ROOT}",
-            ]
-            container_id = await asyncio.to_thread(
-                start_task_container,
-                fixed_name,
-                executable=container_executable,
-                extra_args=extra_args,
-                network_mode=network_mode,
-            )
-            recorder.container_id = container_id
-            recorder.finish_phase(
-                phase,
-                extra={
-                    "container_id": container_id,
-                },
-            )
-        except (Exception, asyncio.CancelledError) as exc:
-            recorder.finish_phase(phase, status="failed", error=exc)
-            raise
-
-        phase = recorder.start_phase("configure_apt_mirror")
-        try:
-            mirror_info = await asyncio.to_thread(
-                configure_task_container_apt_mirror,
-                container_id,
-                executable=container_executable,
-            )
-            mirror_status = (
-                "skipped"
-                if mirror_info is None or mirror_info.get("configured") == "false"
-                else "success"
-            )
-            recorder.finish_phase(
-                phase,
-                status=mirror_status,
-                extra=mirror_info or {"reason": "TASK_CONTAINER_APT_MIRROR unset"},
-            )
-        except (Exception, asyncio.CancelledError) as exc:
-            recorder.finish_phase(phase, status="failed", error=exc)
-            raise
-
-        agent = ContainerAgent(
-            container_id,
-            container_executable,
-        )
-        phase = recorder.start_phase("container_agent_start")
-        try:
-            await agent.start()
-            recorder.finish_phase(phase)
-        except (Exception, asyncio.CancelledError) as exc:
-            recorder.finish_phase(phase, status="failed", error=exc)
-            raise
-
-        recorder.write(status="success")
-    except (Exception, asyncio.CancelledError) as exc:
-        cleanup_errors: list[BaseException] = []
-        try:
-            recorder.write(status="failed", error=exc)
-        except (Exception, asyncio.CancelledError):
-            logger.exception("Failed to write container startup failure artifact for %s", loaded.agent_id)
-        if agent is not None:
-            try:
-                await agent.stop()
-            except (Exception, asyncio.CancelledError):
-                logger.exception("Failed to stop container agent for %s", loaded.agent_id)
-        container_stopped = False
-        if container_id is not None:
-            try:
-                await asyncio.to_thread(
-                    stop_task_container,
-                    container_id,
-                    executable=container_executable,
-                )
-                container_stopped = True
-            except (Exception, asyncio.CancelledError) as cleanup_exc:
-                cleanup_errors.append(cleanup_exc)
-                logger.exception("Failed to stop startup container for %s", loaded.agent_id)
-        if cleanup_fixed_image and recorder.fixed_image is not None and (
-            container_id is None or container_stopped
-        ):
-            try:
-                await asyncio.to_thread(
-                    remove_image,
-                    recorder.fixed_image,
-                    container_executable=container_executable,
-                )
-            except (Exception, asyncio.CancelledError) as cleanup_exc:
-                cleanup_errors.append(cleanup_exc)
-                logger.exception(
-                    "Failed to remove startup fixed image for %s",
-                    loaded.agent_id,
-                )
-        if cleanup_errors:
-            cleanup_error = cleanup_errors[0]
-            if cleanup_error is not exc:
-                cleanup_error.__context__ = exc
-            raise cleanup_error
-        raise
-
-    assert container_id is not None
-    assert agent is not None
+    backend = DockerBackend(
+        source_image=normalized,
+        fixed_image_name=_replay_fixed_image_name(
+            source_image=normalized,
+            agent_id=loaded.agent_id,
+            task_output_dir=task_output_dir,
+        ),
+        agent_id=loaded.agent_id,
+        source_agent_id=loaded.source_agent_id,
+        manifest_index=loaded.manifest_index,
+        task_output_dir=task_output_dir,
+        container_executable=container_executable,
+        network_mode=network_mode,
+        fixed_images_by_source=fixed_images_by_source,
+        bootstrap_mount_args=bootstrap_mount_args,
+        agent_env_kwargs=agent_env_kwargs,
+        startup_recorder=recorder,
+        ensure_fixed_image_fn=ensure_fixed_image,
+        start_task_container_fn=start_task_container,
+        configure_apt_mirror_fn=configure_task_container_apt_mirror,
+        stop_task_container_fn=stop_task_container,
+        remove_image_fn=remove_image,
+        copy_checkpoint_archive_to_container_fn=_copy_checkpoint_archive_to_container,
+        restore_cas_manifest_in_container_fn=_restore_cas_manifest_in_container,
+        checkpoint_backend=loaded.checkpoint_backend,
+    )
+    await backend.start()
 
     container = PreparedContainer(
-        container_id=container_id,
+        container_id=backend.container_id,
         container_executable=container_executable,
         docker_image=normalized,
-        agent=agent,
-        fixed_image=recorder.fixed_image,
-        cleanup_fixed_image=cleanup_fixed_image,
+        agent=backend.agent,
+        fixed_image=backend.fixed_image,
+        cleanup_fixed_image=backend.cleanup_fixed_image,
+        backend=backend,
     )
-    return PreparedTraceSession(loaded=loaded, container=container)
+    return PreparedTraceSession(
+        loaded=loaded,
+        container=container,
+        replay_exec_env_parity=replay_exec_env_parity,
+        replay_task_env_parity=replay_task_env_parity,
+    )
 
 
 def _log_trace_metadata(
@@ -2429,6 +3326,8 @@ def _log_trace_metadata(
     extra: dict[str, Any] | None = None,
 ) -> None:
     scaffolds = {session.scaffold for session in sessions}
+    sandbox_backends = {session.sandbox_backend for session in sessions}
+    checkpoint_backends = {session.checkpoint_backend for session in sessions}
     source_models = [
         (session.summary or {}).get("model", "unknown") for session in sessions
     ]
@@ -2441,6 +3340,16 @@ def _log_trace_metadata(
         ),
         "mode": "simulate",
         "simulate_mode": mode,
+        "sandbox_backend": (
+            sessions[0].sandbox_backend
+            if len(sandbox_backends) == 1
+            else "mixed"
+        ),
+        "checkpoint_backend": (
+            sessions[0].checkpoint_backend
+            if len(checkpoint_backends) == 1
+            else "mixed"
+        ),
         "replay_speed": replay_speed,
         "llm_timing_mode": llm_timing.mode,
         "source_trace_count": len(sessions),
@@ -2452,6 +3361,7 @@ def _log_trace_metadata(
                 "source_agent_id": session.source_agent_id,
                 "run_instance_id": session.run_instance_id,
                 "label": session.label,
+                "checkpoint_backend": session.checkpoint_backend,
             }
             for session in sessions
         ],
@@ -2539,6 +3449,8 @@ def _make_task_stats(
     success: bool,
     elapsed_s: float,
     failed_action_count: int = 0,
+    replay_env_parity: str = "default_env",
+    prep_error: str | None = None,
 ) -> ReplayTaskStats:
     llm_call_count = sum(1 for action in loaded.actions if action.get("action_type") == "llm_call")
     tool_exec_count = sum(1 for action in loaded.actions if action.get("action_type") == "tool_exec")
@@ -2555,6 +3467,68 @@ def _make_task_stats(
         llm_call_count=llm_call_count,
         tool_exec_count=tool_exec_count,
         failed_action_count=failed_action_count,
+        replay_env_parity=replay_env_parity,
+        prep_error=prep_error,
+    )
+
+
+def _prep_error_text(error: BaseException) -> str:
+    if isinstance(error, ReplayPreparationError):
+        error = error.original
+    text = f"{type(error).__name__}: {error}"
+    return text[:_PREP_ERROR_MAX_CHARS]
+
+
+def _prepared_session_for_prep_error(
+    *,
+    loaded: LoadedTraceSession,
+    error: BaseException,
+    output_path: Path,
+) -> PreparedTraceSession:
+    if isinstance(error, ReplayPreparationError) and error.prepared is not None:
+        prepared = error.prepared
+    else:
+        prepared = PreparedTraceSession(loaded=loaded)
+    if prepared.task_output_dir is None:
+        _assign_task_output_dir(prepared, output_path)
+    return prepared
+
+
+def _record_prep_failure(
+    *,
+    trace_logger: TraceLogger,
+    loaded: LoadedTraceSession,
+    error: BaseException,
+    elapsed_s: float,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
+) -> ReplayTaskStats:
+    prep_error = _prep_error_text(error)
+    source_model = (loaded.summary or {}).get("model", "unknown")
+    trace_logger.log_summary(
+        loaded.agent_id,
+        _make_trace_summary(
+            loaded=loaded,
+            success=False,
+            elapsed_s=elapsed_s,
+            source_model=source_model,
+            extra={
+                "replay_mode": "cloud_model",
+                "replay_speed": replay_speed,
+                "llm_timing_mode": llm_timing.mode,
+                "prep_error": prep_error,
+                "error": prep_error,
+                "failed_actions": 0,
+                "fatal_replay_errors": 0,
+                "replay_action_errors": 0,
+            },
+        ),
+    )
+    return _make_task_stats(
+        loaded=loaded,
+        success=False,
+        elapsed_s=elapsed_s,
+        prep_error=prep_error,
     )
 
 
@@ -2723,27 +3697,39 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
     container_stop_error: BaseException | None = None
     fixed_image_cleanup_error: BaseException | None = None
     container_stopped = False
-    try:
-        if ctr.agent is not None:
-            await ctr.agent.stop()
-    except (Exception, asyncio.CancelledError) as exc:
-        agent_stop_error = exc
+    if ctr.backend is not None:
+        try:
+            await ctr.backend.stop()
+            container_stopped = True
+        except (Exception, asyncio.CancelledError) as exc:
+            container_stop_error = exc
+    else:
+        try:
+            if ctr.agent is not None:
+                await ctr.agent.stop()
+        except (Exception, asyncio.CancelledError) as exc:
+            agent_stop_error = exc
 
-    try:
-        await asyncio.to_thread(
-            stop_task_container,
-            ctr.container_id,
-            executable=ctr.container_executable,
-        )
-        container_stopped = True
-    except (Exception, asyncio.CancelledError) as exc:
-        container_stop_error = exc
+        try:
+            await asyncio.to_thread(
+                stop_task_container,
+                ctr.container_id,
+                executable=ctr.container_executable,
+            )
+            container_stopped = True
+        except (Exception, asyncio.CancelledError) as exc:
+            container_stop_error = exc
 
     if container_stopped and prepared.container_resource_recorder is not None:
         prepared.container_resource_recorder.unregister_container(ctr.container_id)
         prepared.container_resource_recorder = None
 
-    if container_stopped and ctr.fixed_image and ctr.cleanup_fixed_image:
+    if (
+        ctr.backend is None
+        and container_stopped
+        and ctr.fixed_image
+        and ctr.cleanup_fixed_image
+    ):
         try:
             removed_fixed = await asyncio.to_thread(
                 remove_image,
@@ -2932,7 +3918,7 @@ async def _prepare_replay_session(
                 reason="host_execution_environment",
             )
         else:
-            if container_executable is None:
+            if loaded.sandbox_backend != "fake" and container_executable is None:
                 raise ValueError("container_executable is required for container-mode traces")
             prepare_kwargs: dict[str, Any] = {}
             if fixed_images_by_source:
@@ -2945,17 +3931,24 @@ async def _prepare_replay_session(
                 **prepare_kwargs,
             )
             prepared.task_output_dir = task_output_dir
-            await _restore_source_runtime_artifacts(prepared)
+            if loaded.sandbox_backend != "fake":
+                await _restore_source_runtime_artifacts(prepared)
         if prepared.container is not None:
-            prepared.resource_monitoring_enabled = session_resource_monitoring_enabled
+            sandbox_monitoring_enabled = (
+                session_resource_monitoring_enabled
+                and loaded.sandbox_backend != "fake"
+            )
+            prepared.resource_monitoring_enabled = sandbox_monitoring_enabled
             prepared.memory_bandwidth_enabled = memory_bandwidth_enabled
             prepared.monitoring_policy = monitoring_policy
-            prepared.container_resource_recorder = container_resource_recorder
-            if container_resource_recorder is not None:
+            prepared.container_resource_recorder = (
+                container_resource_recorder if sandbox_monitoring_enabled else None
+            )
+            if container_resource_recorder is not None and sandbox_monitoring_enabled:
                 container_resource_recorder.register_container(
                     prepared.container.container_id
                 )
-            if session_resource_monitoring_enabled:
+            if sandbox_monitoring_enabled:
                 sampler = ContainerStatsSampler(
                     container_id=prepared.container.container_id,
                     interval_s=1.0,
@@ -2965,10 +3958,16 @@ async def _prepare_replay_session(
                 sampler.start()
                 prepared.sampler = sampler
         return prepared
-    except (Exception, asyncio.CancelledError):
+    except (Exception, asyncio.CancelledError) as exc:
         if prepared is not None:
             await _finalize_prepared_session(prepared)
-        raise
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        raise ReplayPreparationError(
+            loaded=loaded,
+            original=exc,
+            prepared=prepared,
+        ) from exc
 
 
 async def _run_cloud_model_queue(
@@ -3015,23 +4014,43 @@ async def _run_cloud_model_queue(
             prepared: PreparedTraceSession | None = None
             stats: ReplayTaskStats | None = None
             try:
+                task_started = time.monotonic()
                 logger.info(
                     "Worker %d replaying %s (%d queued)",
                     worker_index,
                     loaded.agent_id,
                     queue.qsize(),
                 )
-                prepared = await _prepare_replay_session(
-                    loaded,
-                    output_path=output_path,
-                    container_executable=container_executable,
-                    network_mode=network_mode,
-                    container_resource_recorder=container_resource_recorder,
-                    fixed_images_by_source=fixed_images_by_source,
-                    resource_monitoring_enabled=resource_monitoring_enabled,
-                    memory_bandwidth_enabled=memory_bandwidth_enabled,
-                    monitoring_policy=monitoring_policy,
-                )
+                try:
+                    prepared = await _prepare_replay_session(
+                        loaded,
+                        output_path=output_path,
+                        container_executable=container_executable,
+                        network_mode=network_mode,
+                        container_resource_recorder=container_resource_recorder,
+                        fixed_images_by_source=fixed_images_by_source,
+                        resource_monitoring_enabled=resource_monitoring_enabled,
+                        memory_bandwidth_enabled=memory_bandwidth_enabled,
+                        monitoring_policy=monitoring_policy,
+                    )
+                except Exception as exc:
+                    failed_prepared = _prepared_session_for_prep_error(
+                        loaded=loaded,
+                        error=exc,
+                        output_path=output_path,
+                    )
+                    stats = _record_prep_failure(
+                        trace_logger=trace_logger,
+                        loaded=loaded,
+                        error=exc,
+                        elapsed_s=time.monotonic() - task_started,
+                        replay_speed=replay_speed,
+                        llm_timing=llm_timing,
+                    )
+                    async with result_lock:
+                        prepared_sessions.append(failed_prepared)
+                        task_stats.append(stats)
+                    continue
                 stats = await _replay_cloud_model_session(
                     prepared,
                     trace_logger=trace_logger,
@@ -3064,6 +4083,13 @@ async def _run_cloud_model_queue(
             first_error = result
     if first_error is not None:
         raise first_error
+    prep_failure_count = sum(1 for stat in task_stats if stat.prep_error is not None)
+    if prep_failure_count:
+        logger.warning(
+            "Simulate continued after %d/%d preparation failure(s)",
+            prep_failure_count,
+            len(loaded_sessions),
+        )
     return prepared_sessions, task_stats
 
 
@@ -3168,9 +4194,13 @@ async def _run_worker_wave_async(
             wave_index,
             len(loaded_sessions),
         )
-        prep_results = await asyncio.gather(
-            *(
-                _prepare_replay_session_with_shared_limit(
+
+        async def prepare_one(
+            loaded: LoadedTraceSession,
+        ) -> PreparedTraceSession | FailedPreparedTraceSession:
+            started = time.monotonic()
+            try:
+                return await _prepare_replay_session_with_shared_limit(
                     loaded,
                     output_path=output_path,
                     container_executable=container_executable,
@@ -3181,20 +4211,39 @@ async def _run_worker_wave_async(
                     memory_bandwidth_enabled=memory_bandwidth_enabled,
                     monitoring_policy=monitoring_policy,
                 )
-                for loaded in loaded_sessions
-            ),
+            except Exception as exc:
+                return FailedPreparedTraceSession(
+                    loaded=loaded,
+                    prepared=_prepared_session_for_prep_error(
+                        loaded=loaded,
+                        error=exc,
+                        output_path=output_path,
+                    ),
+                    error=exc,
+                    elapsed_s=time.monotonic() - started,
+                )
+
+        prep_results = await asyncio.gather(
+            *(prepare_one(loaded) for loaded in loaded_sessions),
             return_exceptions=True,
         )
-        prep_errors: list[BaseException] = []
+        prep_failures: list[FailedPreparedTraceSession] = []
         for result in prep_results:
             if isinstance(result, BaseException):
-                prep_errors.append(result)
+                raise result
+            if isinstance(result, FailedPreparedTraceSession):
+                prep_failures.append(result)
             else:
                 prepared_sessions.append(result)
-        if prep_errors:
-            raise SimulateError(
-                f"{len(prep_errors)}/{len(prep_results)} worker preparations failed"
-            ) from prep_errors[0]
+        if prep_failures:
+            logger.warning(
+                "Worker %d/%d wave %d continuing after %d/%d preparation failure(s)",
+                worker_index + 1,
+                worker_count,
+                wave_index,
+                len(prep_failures),
+                len(prep_results),
+            )
         worker_trace_path = output_path / f"{worker_run_id}.jsonl"
         if worker_trace_path.exists():
             worker_trace_path.unlink()
@@ -3222,6 +4271,17 @@ async def _run_worker_wave_async(
                 "monitoring": monitoring_policy or {},
             },
         )
+        task_stats = [
+            _record_prep_failure(
+                trace_logger=trace_logger,
+                loaded=failure.loaded,
+                error=failure.error,
+                elapsed_s=failure.elapsed_s,
+                replay_speed=replay_speed,
+                llm_timing=llm_timing,
+            )
+            for failure in prep_failures
+        ]
         replay_zero_monotonic = await _wait_for_global_replay_start(
             replay_start_barrier,
             replay_start_event,
@@ -3229,25 +4289,32 @@ async def _run_worker_wave_async(
             coordinator=worker_index == 0,
         )
         replay_started = True
-        task_stats = await _run_prepared_cloud_model_sessions(
-            prepared_sessions,
-            trace_logger=trace_logger,
-            replay_zero_monotonic=replay_zero_monotonic,
-            replay_speed=replay_speed,
-            llm_timing=llm_timing,
-            command_timeout_s=command_timeout_s,
-            warmup_skip_iterations=warmup_skip_iterations,
+        task_stats.extend(
+            await _run_prepared_cloud_model_sessions(
+                prepared_sessions,
+                trace_logger=trace_logger,
+                replay_zero_monotonic=replay_zero_monotonic,
+                replay_speed=replay_speed,
+                llm_timing=llm_timing,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
         )
+        task_stats.sort(key=lambda stat: stat.manifest_index)
         trace_logger.close()
+        task_output_sessions = [
+            *prepared_sessions,
+            *(failure.prepared for failure in prep_failures),
+        ]
         return WorkerReplayResult(
             wave_index=wave_index,
             worker_index=worker_index,
             trace_file=str(trace_logger.path),
             task_stats=task_stats,
             task_output_dirs={
-                prepared.loaded.run_instance_id: str(prepared.task_output_dir)
-                for prepared in prepared_sessions
-                if prepared.task_output_dir is not None
+                session.loaded.run_instance_id: str(session.task_output_dir)
+                for session in task_output_sessions
+                if session.task_output_dir is not None
             },
         )
     except BaseException:
@@ -3403,6 +4470,13 @@ async def _run_cloud_model_worker_waves(
                 task_stats.extend(result.task_stats)
     task_stats.sort(key=lambda stat: stat.manifest_index)
     replay_results.sort(key=lambda item: (item.wave_index, item.worker_index))
+    prep_failure_count = sum(1 for stat in task_stats if stat.prep_error is not None)
+    if prep_failure_count:
+        logger.warning(
+            "Simulate worker waves continued after %d/%d preparation failure(s)",
+            prep_failure_count,
+            len(worker_inputs),
+        )
     return replay_results, task_stats
 
 
@@ -3451,14 +4525,22 @@ async def _replay_cloud_model_session(
             sleep_drifts.append(start_drift)
 
     # Per-session CAS tracking state
-    prev_cas_manifest: dict[str, str] | None = None
-    folded_source_entries: dict[str, str] = {}
+    prev_cas_manifest: CasManifestEntries | None = None
+    folded_source_entries: CasManifestEntries = {}
+    lane_active_since_last_boundary = False
 
     for action_index, action in enumerate(loaded.actions):
         action_id = str(action.get("action_id", ""))
         action_type = str(action.get("action_type", ""))
         iteration = int(action.get("iteration", 0))
         data = action.get("data", {})
+        source_action_agent_id = _source_action_agent_id(action)
+        source_is_subagent_lane = _is_subagent_lane_action(
+            action,
+            source_agent_id=loaded.source_agent_id,
+        )
+        if source_is_subagent_lane:
+            lane_active_since_last_boundary = True
         action_ts_start, action_ts_end = _coerce_action_bounds(action, source_trace=loaded.source_trace)
         source_duration_s = max(0.0, action_ts_end - action_ts_start)
 
@@ -3497,12 +4579,16 @@ async def _replay_cloud_model_session(
                 record = _make_trace_action(
                     loaded=loaded,
                     action_type="llm_call",
-                    action_id=action_id or f"llm_{iteration}",
+                    action_id=_replay_action_id(
+                        action,
+                        source_agent_id=loaded.source_agent_id,
+                        fallback=f"llm_{iteration}",
+                    ),
                     iteration=iteration,
                     ts_start=record_ts_start,
                     ts_end=record_ts_end,
                     data={
-                        "messages_in": data.get("messages_in"),
+                        **_source_llm_message_payload(data),
                         "raw_response": data.get("raw_response", {}),
                         "prompt_tokens": data.get("prompt_tokens", 0),
                         "completion_tokens": data.get("completion_tokens", 0),
@@ -3512,6 +4598,14 @@ async def _replay_cloud_model_session(
                         "replay_mode": "cloud_model",
                         "replay_speed": replay_speed,
                         **llm_timing_fields,
+                        **(
+                            {
+                                "replay_source": "subagent_lane_replay",
+                                "source_lane_agent_id": source_action_agent_id,
+                            }
+                            if source_is_subagent_lane
+                            else {}
+                        ),
                         "sim_metrics": {
                             "warmup": iteration < warmup_skip_iterations,
                             **_sleep_drift_metrics(
@@ -3553,6 +4647,11 @@ async def _replay_cloud_model_session(
                 source_duration_ms=source_duration_ms,
                 source_success=source_success,
                 source_tool_result=source_tool_result,
+                source_timed_out=data.get("timed_out"),
+            )
+            replay_exec_timeout = _effective_source_exec_timeout_s(
+                source_exec_timeout_s=source_exec_timeout,
+                replay_speed=replay_speed,
             )
             source_resource_timeline = valid_resource_timeline(
                 data.get("resource_timeline")
@@ -3563,7 +4662,18 @@ async def _replay_cloud_model_session(
             tool_exec_metadata: dict[str, Any] = {}
             if not source_success:
                 source_failed_actions += 1
-            if ctr is None:
+            if source_is_subagent_lane:
+                action_sleep = await _sleep_and_measure(
+                    source_duration_ms / 1000 / replay_speed,
+                    phase="tool_trace_replay",
+                )
+                if action_sleep is not None:
+                    sleep_drifts.append(action_sleep)
+                tool_result = data.get("tool_result", data.get("result", ""))
+                tool_success = source_success
+                duration_ms = (time.time() - record_ts_start) * 1000
+                replay_source = "subagent_lane_replay"
+            elif ctr is None:
                 logger.info(
                     "Skipping host-mode tool action for %s action=%s tool=%s",
                     loaded.agent_id,
@@ -3593,7 +4703,7 @@ async def _replay_cloud_model_session(
                 tool_success = source_success
                 duration_ms = (time.time() - record_ts_start) * 1000
                 replay_source = "message_noop"
-            elif tool_name.startswith("mcp_"):
+            elif tool_name.startswith("mcp_") or tool_name in _TRACE_REPLAY_TOOL_NAMES:
                 action_sleep = await _sleep_and_measure(
                     source_duration_ms / 1000 / replay_speed,
                     phase="tool_trace_replay",
@@ -3605,115 +4715,81 @@ async def _replay_cloud_model_session(
                 duration_ms = (time.time() - record_ts_start) * 1000
                 replay_source = "replayed_from_trace"
             else:
-                mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
-                    _remap_runtime_artifact_tool_args(
-                        tool_name=tool_name,
-                        tool_args_json=tool_args,
-                        runtime_root_map=prepared_session.runtime_artifact_root_map,
-                    )
+                denied_command = _denied_exec_command(
+                    tool_name=tool_name,
+                    tool_args_json=tool_args,
                 )
-                if original_artifact_path is None and isinstance(tool_args, str):
-                    from trace_collect.openclaw_tools import (
-                        source_runtime_artifact_path_from_tool_call,
-                    )
-
-                    original_artifact_path = source_runtime_artifact_path_from_tool_call(
-                        tool_name=tool_name,
-                        tool_args_json=tool_args,
-                    )
-                if original_artifact_path is not None and not mapped_exists:
+                if denied_command is not None:
                     action_sleep = await _sleep_and_measure(
                         source_duration_ms / 1000 / replay_speed,
                         phase="tool_trace_replay",
                     )
                     if action_sleep is not None:
                         sleep_drifts.append(action_sleep)
-                    tool_result = _artifact_unavailable_result(original_artifact_path)
-                    tool_success = False
                     duration_ms = (time.time() - record_ts_start) * 1000
-                    replay_source = "source_artifact_unavailable"
+                    tool_result = source_tool_result
+                    tool_success = source_success
+                    replay_source = "denied_command_replayed_from_trace"
+                    tool_exec_metadata = _source_tool_exec_metadata(data)
+                    tool_exec_metadata["replay_denied_command"] = denied_command
                 else:
-                    exec_resource_timeline = (
-                        source_resource_timeline
-                        if _tool_uses_single_exec_command_semantics(
-                            tool_name,
-                            mapped_tool_args,
-                        )
-                        else None
+                    (
+                        mapped_tool_args,
+                        original_artifact_path,
+                        mapped_artifact_path,
+                        mapped_exists,
+                    ) = _container_tool_runtime_args(
+                        tool_name=tool_name,
+                        tool_args_json=tool_args,
+                        runtime_root_map=prepared_session.runtime_artifact_root_map,
                     )
-                    if exec_resource_timeline is None:
-                        if mapped_artifact_path is not None:
-                            (
-                                tool_result,
-                                duration_ms,
-                                tool_success,
-                                tool_exec_metadata,
-                            ) = _unpack_exec_tool_result(
-                                await _exec_tool(
-                                    ctr.agent,
-                                    tool_name,
-                                    mapped_tool_args,
-                                    command_timeout_s,
-                                    source_exec_timeout,
-                                    True,
-                                )
-                            )
-                        else:
-                            (
-                                tool_result,
-                                duration_ms,
-                                tool_success,
-                                tool_exec_metadata,
-                            ) = _unpack_exec_tool_result(
-                                await _exec_tool(
-                                    ctr.agent,
-                                    tool_name,
-                                    mapped_tool_args,
-                                    command_timeout_s,
-                                    source_exec_timeout,
-                                )
-                            )
-                    elif mapped_artifact_path is not None:
-                        (
-                            tool_result,
-                            duration_ms,
-                            tool_success,
-                            tool_exec_metadata,
-                        ) = _unpack_exec_tool_result(
-                            await _exec_tool(
-                                ctr.agent,
-                                tool_name,
-                                mapped_tool_args,
-                                command_timeout_s,
-                                source_exec_timeout,
-                                True,
-                                exec_resource_timeline,
-                            )
+                    if original_artifact_path is not None and not mapped_exists:
+                        action_sleep = await _sleep_and_measure(
+                            source_duration_ms / 1000 / replay_speed,
+                            phase="tool_trace_replay",
                         )
+                        if action_sleep is not None:
+                            sleep_drifts.append(action_sleep)
+                        tool_result = _artifact_unavailable_result(
+                            original_artifact_path
+                        )
+                        tool_success = False
+                        duration_ms = (time.time() - record_ts_start) * 1000
+                        replay_source = "source_artifact_unavailable"
                     else:
+                        exec_resource_timeline = (
+                            source_resource_timeline
+                            if _tool_uses_single_exec_command_semantics(
+                                tool_name,
+                                mapped_tool_args,
+                            )
+                            else None
+                        )
                         (
                             tool_result,
                             duration_ms,
                             tool_success,
                             tool_exec_metadata,
-                        ) = _unpack_exec_tool_result(
-                            await _exec_tool(
-                                ctr.agent,
-                                tool_name,
-                                mapped_tool_args,
-                                command_timeout_s,
-                                source_exec_timeout,
-                                False,
-                                exec_resource_timeline,
-                            )
+                        ) = await _execute_container_tool_call(
+                            agent=ctr.backend or ctr.agent,
+                            tool_name=tool_name,
+                            mapped_tool_args=mapped_tool_args,
+                            command_timeout_s=command_timeout_s,
+                            source_exec_timeout=replay_exec_timeout,
+                            mapped_artifact_path=mapped_artifact_path,
+                            exec_resource_timeline=exec_resource_timeline,
                         )
-                    replay_source = (
-                        "restored_runtime_artifact"
-                        if mapped_artifact_path is not None
-                        else "executed_in_container"
-                    )
+                        replay_source = (
+                            "restored_runtime_artifact"
+                            if mapped_artifact_path is not None
+                            else "executed_in_container"
+                        )
             if not tool_success:
                 replay_failed_actions += 1
+            source_returncode = data.get("returncode")
+            replay_returncode = tool_exec_metadata.get("returncode")
+            source_timed_out = data.get("timed_out")
+            replay_timed_out = tool_exec_metadata.get("timed_out")
             mismatch_reason = _tool_mismatch_reason(
                 source_success=source_success,
                 tool_success=tool_success,
@@ -3722,10 +4798,18 @@ async def _replay_cloud_model_session(
                 replay_tool_result=tool_result,
                 tool_name=tool_name,
                 tool_args_json=tool_args,
+                source_returncode=source_returncode,
+                replay_returncode=replay_returncode,
+                source_timed_out=source_timed_out,
+                replay_timed_out=replay_timed_out,
             )
-            replay_outcome_match = mismatch_reason is None
-            if (not tool_success) and replay_outcome_match:
-                matched_failed_actions += 1
+            effective_mismatch_reason = mismatch_reason
+            normalized_output_match = _exec_normalized_output_match(
+                tool_name=tool_name,
+                tool_args_json=tool_args,
+                source_tool_result=source_tool_result,
+                replay_tool_result=tool_result,
+            )
             record_ts_end = time.time()
             # === CAS manifest comparison at checkpoint boundaries ===
             cas_manifest_fields: dict[str, Any] = {}
@@ -3733,17 +4817,24 @@ async def _replay_cloud_model_session(
                 action_data=data,
                 source_trace=loaded.source_trace,
             )
-            if cas_spec is not None and ctr is not None:
+            lane_induced_mismatch_candidate = False
+            if (
+                cas_spec is not None
+                and ctr is not None
+                and not source_is_subagent_lane
+            ):
+                lane_active_at_parent_boundary = lane_active_since_last_boundary
+                lane_active_since_last_boundary = False
                 folded_source_entries = _fold_source_checkpoint_entries(
                     checkpoint_spec=cas_spec,
                     prev_folded=folded_source_entries,
                 )
                 source_entries = folded_source_entries
-                replay_entries = _capture_snapshot_manifest(
-                    container_id=ctr.container_id,
-                    container_executable=ctr.container_executable,
+                replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
+                    container=ctr,
                     root=cas_spec.get("root", "/testbed"),
                     previous_manifest=prev_cas_manifest,
+                    context="checkpoint_boundary",
                 )
                 # Only compare if capture succeeded (None = failure)
                 if replay_entries is not None:
@@ -3751,12 +4842,50 @@ async def _replay_cloud_model_session(
                         source_entries=source_entries,
                         replay_entries=replay_entries,
                     )
+                    if (
+                        effective_mismatch_reason is None
+                        and not cas_manifest_fields["cas_manifest_match"]
+                    ):
+                        effective_mismatch_reason = "cas_state_mismatch"
+                        lane_induced_mismatch_candidate = (
+                            lane_active_at_parent_boundary
+                        )
                 # Store for incremental next snapshot (update even on {} —
                 # next incremental starts from a known empty state)
                 if replay_entries is not None:
                     prev_cas_manifest = replay_entries
+            replay_outcome_match = mismatch_reason is None
+            output_diff_snippet: str | None = None
+            if effective_mismatch_reason is not None or normalized_output_match is False:
+                source_raw = (
+                    "" if source_tool_result is None else str(source_tool_result)
+                )
+                replay_raw = "" if tool_result is None else str(tool_result)
+                output_diff_snippet = _compute_output_diff_snippet(
+                    source_raw,
+                    replay_raw,
+                )
+            oracle_verdict = _MISMATCH_ORACLE.verdict(
+                source_returncode=source_returncode,
+                replay_returncode=replay_returncode,
+                source_timed_out=source_timed_out,
+                replay_timed_out=replay_timed_out,
+                normalized_output_match=normalized_output_match,
+                output_diff_snippet=output_diff_snippet,
+                cas_manifest_match=cas_manifest_fields.get("cas_manifest_match"),
+                cas_modified_count=cas_manifest_fields.get("cas_modified_count"),
+                cas_removed_count=cas_manifest_fields.get("cas_removed_count"),
+                cas_added_count=cas_manifest_fields.get("cas_added_count"),
+                mismatch_reason=effective_mismatch_reason,
+            )
+            if (not tool_success) and replay_outcome_match:
+                matched_failed_actions += 1
             forced_sync_fields: dict[str, Any] = {}
-            if mismatch_reason is not None and ctr is not None:
+            if (
+                effective_mismatch_reason is not None
+                and ctr is not None
+                and not source_is_subagent_lane
+            ):
                 checkpoint_spec = _checkpoint_after_spec(
                     action_data=data,
                     source_trace=loaded.source_trace,
@@ -3764,6 +4893,7 @@ async def _replay_cloud_model_session(
                 checkpoint_action_index: int | None = (
                     action_index if checkpoint_spec is not None else None
                 )
+                fallback_reapply_start_index: int | None = None
                 if checkpoint_spec is None:
                     fallback_spec: dict[str, Any] | None = None
                     fallback_action_index: int | None = None
@@ -3785,7 +4915,7 @@ async def _replay_cloud_model_session(
                             "forced_sync_success": False,
                             "forced_sync_resolved": False,
                             "forced_sync_continued": False,
-                            "forced_sync_reason": mismatch_reason,
+                            "forced_sync_reason": effective_mismatch_reason,
                             "forced_sync_status": "checkpoint_missing",
                             "forced_sync_error": (
                                 "no checkpoint available (searched entire trace history)"
@@ -3795,9 +4925,10 @@ async def _replay_cloud_model_session(
                         assert fallback_action_index is not None
                         checkpoint_spec = fallback_spec
                         checkpoint_action_index = fallback_action_index
+                        fallback_reapply_start_index = fallback_action_index + 1
                         forced_sync_fields = {
                             "forced_sync_attempted": True,
-                            "forced_sync_reason": mismatch_reason,
+                            "forced_sync_reason": effective_mismatch_reason,
                             "forced_sync_overhead_excluded": True,
                             "forced_sync_fallback": True,
                             "forced_sync_fallback_from_action_index": (
@@ -3813,12 +4944,15 @@ async def _replay_cloud_model_session(
                 else:
                     forced_sync_fields = {
                         "forced_sync_attempted": True,
-                        "forced_sync_reason": mismatch_reason,
+                        "forced_sync_reason": effective_mismatch_reason,
                         "forced_sync_overhead_excluded": True,
                     }
+                if lane_induced_mismatch_candidate:
+                    forced_sync_fields["lane_induced_mismatch_candidate"] = True
 
                 if checkpoint_spec is not None:
                     assert checkpoint_action_index is not None
+                    forced_sync_started = time.monotonic()
                     checkpoint_chain = _checkpoint_chain_specs_for_action(
                         actions=loaded.actions,
                         target_index=checkpoint_action_index,
@@ -3852,6 +4986,147 @@ async def _replay_cloud_model_session(
                                 container=ctr,
                             )
                         forced_sync_fields.update(restore_result)
+                        if forced_sync_fields.get("forced_sync_success") is True:
+                            prev_cas_manifest = None
+                        skip_post_restore_verification = False
+                        if (
+                            forced_sync_fields.get("forced_sync_success") is True
+                            and fallback_reapply_start_index is not None
+                        ):
+                            restore_source_entries = (
+                                _fold_source_checkpoint_entries_through_action(
+                                    actions=loaded.actions,
+                                    target_index=checkpoint_action_index,
+                                    source_trace=loaded.source_trace,
+                                )
+                            )
+                            restore_verification_fields, _ = (
+                                await _verify_forced_sync_restore_state(
+                                    container=ctr,
+                                    checkpoint_spec=checkpoint_spec,
+                                    source_entries=restore_source_entries,
+                                    context="forced_sync_restore_pre_reapply",
+                                )
+                            )
+                            forced_sync_fields.update(
+                                {
+                                    "forced_sync_restore_verified": (
+                                        restore_verification_fields[
+                                            "forced_sync_verified"
+                                        ]
+                                    ),
+                                    "forced_sync_restore_verification": (
+                                        restore_verification_fields[
+                                            "forced_sync_verification"
+                                        ]
+                                    ),
+                                }
+                            )
+                            reapply_fields = await _reapply_forced_sync_actions(
+                                prepared_session=prepared_session,
+                                start_index=fallback_reapply_start_index,
+                                end_index=action_index,
+                                replay_speed=replay_speed,
+                                command_timeout_s=command_timeout_s,
+                            )
+                            forced_sync_fields.update(reapply_fields)
+                            skip_post_restore_verification = (
+                                reapply_fields["forced_sync_reapplied_action_count"]
+                                > 0
+                            )
+                            if reapply_fields["forced_sync_reapply_errors"]:
+                                forced_sync_fields.update(
+                                    {
+                                        "forced_sync_success": False,
+                                        "forced_sync_resolved": False,
+                                        "forced_sync_continued": False,
+                                        "forced_sync_status": "reapply_failed",
+                                        "forced_sync_error": "; ".join(
+                                            reapply_fields[
+                                                "forced_sync_reapply_errors"
+                                            ]
+                                        ),
+                                    }
+                                )
+                            elif skip_post_restore_verification:
+                                prev_cas_manifest = None
+                                forced_sync_fields.update(
+                                    {
+                                        "forced_sync_verified": None,
+                                        "forced_sync_verify_reason": (
+                                            "reapplied_actions_unverifiable"
+                                        ),
+                                        "forced_sync_verification": {
+                                            "restore_verified": (
+                                                restore_verification_fields[
+                                                    "forced_sync_verified"
+                                                ]
+                                            ),
+                                            "restore_verification": (
+                                                restore_verification_fields[
+                                                    "forced_sync_verification"
+                                                ]
+                                            ),
+                                            "reason": (
+                                                "reapplied_actions_unverifiable"
+                                            ),
+                                        },
+                                    }
+                                )
+                            else:
+                                forced_sync_fields.update(restore_verification_fields)
+                        if (
+                            forced_sync_fields.get("forced_sync_success") is True
+                            and not skip_post_restore_verification
+                        ):
+                            try:
+                                source_entries = (
+                                    _fold_source_checkpoint_entries_through_action(
+                                        actions=loaded.actions,
+                                        target_index=action_index,
+                                        source_trace=loaded.source_trace,
+                                    )
+                                )
+                                verification_fields, replay_entries = (
+                                    await _verify_forced_sync_restore_state(
+                                        container=ctr,
+                                        checkpoint_spec=checkpoint_spec,
+                                        source_entries=source_entries,
+                                        context="forced_sync_verification",
+                                    )
+                                )
+                                if replay_entries is None:
+                                    prev_cas_manifest = None
+                                    forced_sync_fields.update(verification_fields)
+                                else:
+                                    prev_cas_manifest = replay_entries
+                                    forced_sync_fields.update(verification_fields)
+                                    if not verification_fields[
+                                        "forced_sync_verification"
+                                    ]["cas_manifest_match"]:
+                                        forced_sync_fields.update(
+                                            {
+                                                "forced_sync_success": False,
+                                                "forced_sync_continued": False,
+                                                "forced_sync_status": (
+                                                    "verification_failed"
+                                                ),
+                                            }
+                                        )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Forced sync verification failed for %s "
+                                    "action=%s: %s",
+                                    loaded.agent_id,
+                                    action_id,
+                                    exc,
+                                )
+                                prev_cas_manifest = None
+                                forced_sync_fields.update(
+                                    _forced_sync_verification_unavailable_fields(
+                                        f"{type(exc).__name__}: {exc}",
+                                    )
+                                )
                     except Exception as exc:
                         logger.exception(
                             "Forced sync failed for %s action=%s",
@@ -3870,10 +5145,6 @@ async def _replay_cloud_model_session(
                     forced_sync_success = (
                         forced_sync_fields.get("forced_sync_success") is True
                     )
-                    # Container has been restored to source state;
-                    # previous replay manifest entries are stale.
-                    if forced_sync_success:
-                        prev_cas_manifest = None
                     forced_sync_fields.setdefault("forced_sync_success", False)
                     forced_sync_fields["forced_sync_resolved"] = False
                     forced_sync_fields.setdefault(
@@ -3888,29 +5159,64 @@ async def _replay_cloud_model_session(
                         and forced_sync_fields.get("forced_sync_status")
                         == "checkpoint_restored_continuation",
                     )
-            if mismatch_reason is not None:
-                source_raw = "" if source_tool_result is None else str(source_tool_result)
-                replay_raw = "" if tool_result is None else str(tool_result)
-                diff_snippet = _compute_output_diff_snippet(source_raw, replay_raw)
-                if diff_snippet is not None:
-                    forced_sync_fields["output_diff_snippet"] = diff_snippet
+                    forced_sync_fields["forced_sync_elapsed_ms"] = round(
+                        (time.monotonic() - forced_sync_started) * 1000,
+                        3,
+                    )
             extra_tool_fields = _command_metadata(
                 tool_name=tool_name,
                 tool_args_json=tool_args,
                 tool_result=str(tool_result),
                 tool_success=tool_success,
+                returncode=tool_exec_metadata.get("returncode"),
             )
+            extra_tool_fields["source_action_id"] = action_id
+            if isinstance(source_returncode, int) and not isinstance(
+                source_returncode,
+                bool,
+            ):
+                extra_tool_fields["source_returncode"] = source_returncode
+            if isinstance(replay_returncode, int) and not isinstance(
+                replay_returncode,
+                bool,
+            ):
+                extra_tool_fields["replay_returncode"] = replay_returncode
+            if isinstance(source_timed_out, bool):
+                extra_tool_fields["source_timed_out"] = source_timed_out
+            if isinstance(replay_timed_out, bool):
+                extra_tool_fields["replay_timed_out"] = replay_timed_out
+            if oracle_verdict is not None:
+                extra_tool_fields["oracle_semantic_match"] = (
+                    oracle_verdict.semantic_match
+                )
+                extra_tool_fields["oracle_tier"] = oracle_verdict.tier
+                extra_tool_fields["oracle_category"] = oracle_verdict.category
+                extra_tool_fields["mismatch_oracle"] = {
+                    "tier": oracle_verdict.tier,
+                    "category": oracle_verdict.category,
+                    "semantic_match": oracle_verdict.semantic_match,
+                    "evidence": oracle_verdict.evidence,
+                }
+            if output_diff_snippet is not None:
+                extra_tool_fields["output_diff_snippet"] = output_diff_snippet
+            if _tool_uses_exec_semantics(tool_name, tool_args):
+                extra_tool_fields["replay_env_parity"] = (
+                    prepared_session.replay_exec_env_parity
+                )
+                assert normalized_output_match is not None
+                extra_tool_fields["normalized_output_match"] = normalized_output_match
             if original_artifact_path is not None:
                 extra_tool_fields["source_artifact_path"] = original_artifact_path
             if mapped_artifact_path is not None:
                 extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
-            if mismatch_reason is not None:
-                extra_tool_fields["mismatch_reason"] = mismatch_reason
+            if effective_mismatch_reason is not None:
+                extra_tool_fields["mismatch_reason"] = effective_mismatch_reason
             extra_tool_fields.update(tool_exec_metadata)
             extra_tool_fields.update(cas_manifest_fields)
             extra_tool_fields.update(forced_sync_fields)
             if source_exec_timeout is not None:
                 extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
+                extra_tool_fields["replay_exec_timeout_s"] = replay_exec_timeout
             if source_resource_timeline is not None:
                 extra_tool_fields["source_resource_timeline"] = source_resource_timeline
                 extra_tool_fields["resource_timeout_policy"] = (
@@ -3918,10 +5224,38 @@ async def _replay_cloud_model_session(
                     if exec_resource_timeline is not None
                     else "wall_clock"
                 )
+            if source_is_subagent_lane:
+                extra_tool_fields["source_lane_agent_id"] = source_action_agent_id
+            sim_metrics: dict[str, Any] = {
+                "warmup": iteration < warmup_skip_iterations,
+                "source": replay_source,
+                "sim_tool_format": replay_source
+                if replay_source
+                in {
+                    "skipped_host_mode",
+                    "message_noop",
+                    "replayed_from_trace",
+                    "denied_command_replayed_from_trace",
+                    "source_artifact_unavailable",
+                    "restored_runtime_artifact",
+                    "subagent_lane_replay",
+                }
+                else "container_exec",
+                **_sleep_drift_metrics(
+                    source_gap=source_gap_sleep,
+                    action_sleep=action_sleep,
+                ),
+            }
+            if data.get("source_concurrent_execs") is True:
+                sim_metrics["concurrent_source_execs"] = True
             tool_record = _make_trace_action(
                 loaded=loaded,
                 action_type="tool_exec",
-                action_id=action_id or f"tool_{iteration}_{tool_name}",
+                action_id=_replay_action_id(
+                    action,
+                    source_agent_id=loaded.source_agent_id,
+                    fallback=f"tool_{iteration}_{tool_name}",
+                ),
                 iteration=iteration,
                 ts_start=record_ts_start,
                 ts_end=record_ts_end,
@@ -3939,24 +5273,7 @@ async def _replay_cloud_model_session(
                     "replay_mode": "cloud_model",
                     "replay_speed": replay_speed,
                     "replay_source": replay_source,
-                    "sim_metrics": {
-                        "warmup": iteration < warmup_skip_iterations,
-                        "source": replay_source,
-                        "sim_tool_format": replay_source
-                        if replay_source
-                        in {
-                            "skipped_host_mode",
-                            "message_noop",
-                            "replayed_from_trace",
-                            "source_artifact_unavailable",
-                            "restored_runtime_artifact",
-                        }
-                        else "container_exec",
-                        **_sleep_drift_metrics(
-                            source_gap=source_gap_sleep,
-                            action_sleep=action_sleep,
-                        ),
-                    },
+                    "sim_metrics": sim_metrics,
                 },
             )
             trace_logger.log_trace_action(loaded.agent_id, tool_record)
@@ -3995,7 +5312,7 @@ async def _replay_cloud_model_session(
                         loaded.agent_id,
                         action_id,
                         tool_name,
-                        mismatch_reason,
+                        effective_mismatch_reason,
                         forced_sync_fields.get("forced_sync_status"),
                     )
                 else:
@@ -4034,6 +5351,7 @@ async def _replay_cloud_model_session(
                 "replay_mode": "cloud_model",
                 "replay_speed": replay_speed,
                 "llm_timing_mode": llm_timing.mode,
+                "replay_env_parity": prepared_session.replay_task_env_parity,
                 "succeeded_actions": succeeded_actions,
                 "failed_actions": failed_actions,
                 "source_failed_actions": source_failed_actions,
@@ -4056,6 +5374,7 @@ async def _replay_cloud_model_session(
         success=success,
         elapsed_s=wall_end - wall_start,
         failed_action_count=failed_actions,
+        replay_env_parity=prepared_session.replay_task_env_parity,
     )
 
 
@@ -4253,6 +5572,8 @@ async def simulate(
     concurrency: int = 1,
     workers: int = 1,
     prep_concurrency: int = 0,
+    sandbox_backend: str = "docker",
+    checkpoint_backend: str | None = None,
     container_executable: str | None = None,
     network_mode: str = "host",
     api_base: str | None = None,
@@ -4287,6 +5608,8 @@ async def simulate(
     manifest_entries = _load_simulate_manifest(
         manifest,
         default_task_source=task_source.resolve(),
+        default_sandbox_backend=sandbox_backend,
+        default_checkpoint_backend=checkpoint_backend,
     )
 
     loaded_sessions = [
@@ -4296,6 +5619,8 @@ async def simulate(
             manifest_index=entry.index,
             docker_image_override=entry.docker_image,
             label=entry.label,
+            sandbox_backend=entry.sandbox_backend,
+            checkpoint_backend=entry.checkpoint_backend,
         )
         for entry in manifest_entries
     ]

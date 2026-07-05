@@ -139,6 +139,21 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Resume an interrupted run by passing its existing run directory path.",
     )
     parser.add_argument(
+        "--checkpoint-scheduling",
+        choices=["sync", "deferred"],
+        default="sync",
+        help="Checkpoint scheduling mode for collection traces (default: sync).",
+    )
+    parser.add_argument(
+        "--checkpoint-backend",
+        choices=["walk", "overlay"],
+        default="walk",
+        help=(
+            "Checkpoint backend for deferred collection captures. "
+            "Defaults to walk; overlay requires Docker overlay2."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -230,6 +245,21 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         choices=["docker", "podman"],
         help="Container executable for container-mode trace replay.",
+    )
+    parser.add_argument(
+        "--sandbox-backend",
+        choices=["docker", "fake"],
+        default="docker",
+        help="Sandbox runtime backend for container-mode replay (default: docker).",
+    )
+    parser.add_argument(
+        "--checkpoint-backend",
+        choices=["walk", "overlay", "verify"],
+        default=None,
+        help=(
+            "Checkpoint backend for replay snapshots. Defaults to walk; "
+            "overlay and verify require Docker overlay2."
+        ),
     )
     parser.add_argument(
         "--network-mode",
@@ -386,6 +416,8 @@ def _run_collect(args: argparse.Namespace) -> None:
             mcp_config=args.mcp_config,
             prompt_template=args.prompt_template,
             min_free_disk_gb=args.min_free_disk_gb,
+            checkpoint_scheduling=args.checkpoint_scheduling,
+            checkpoint_backend=args.checkpoint_backend,
         )
     )
     print(f"Traces written to: {run_dir}/")
@@ -437,6 +469,8 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "output_dir": Path(args.output_dir),
         "mode": args.mode,
         "container_executable": args.container,
+        "sandbox_backend": args.sandbox_backend,
+        "checkpoint_backend": args.checkpoint_backend,
         "network_mode": args.network_mode,
         "workers": args.workers,
         "prep_concurrency": args.prep_concurrency,

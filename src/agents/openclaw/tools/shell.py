@@ -13,6 +13,17 @@ from agents.openclaw.tools.base import Tool
 
 
 MAX_EXEC_TOOL_TIMEOUT_SEC = 600
+EXEC_TOOL_DENY_PATTERNS: tuple[str, ...] = (
+    r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
+    r"\bdel\s+/[fq]\b",  # del /f, del /q
+    r"\brmdir\s+/s\b",  # rmdir /s
+    r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
+    r"\b(mkfs|diskpart)\b",  # disk operations
+    r"\bdd\s+if=",  # dd
+    r">\s*/dev/sd",  # write to disk
+    r"\b(shutdown|reboot|poweroff)\b",  # system power
+    r":\(\)\s*\{.*\};\s*:",  # fork bomb
+)
 _CONTAINER_TIMEOUT_MARKER_PREFIX = "__OPENCLAW_EXEC_WRAPPER_TIMEOUT__"
 _CONTAINER_EXEC_WRAPPER = """
 import os
@@ -97,25 +108,22 @@ class ExecTool(Tool):
         self.timeout = timeout
         self.working_dir = working_dir
         self.container_default_cwd = container_default_cwd
-        self.deny_patterns = deny_patterns or [
-            r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
-            r"\bdel\s+/[fq]\b",  # del /f, del /q
-            r"\brmdir\s+/s\b",  # rmdir /s
-            r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
-            r"\b(mkfs|diskpart)\b",  # disk operations
-            r"\bdd\s+if=",  # dd
-            r">\s*/dev/sd",  # write to disk
-            r"\b(shutdown|reboot|poweroff)\b",  # system power
-            r":\(\)\s*\{.*\};\s*:",  # fork bomb
-        ]
+        self.deny_patterns = deny_patterns or list(EXEC_TOOL_DENY_PATTERNS)
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
         self._container_id = container_id
         self._container_executable = container_executable
+        self._structured_result: dict[str, Any] | None = None
 
     @property
     def name(self) -> str:
         return "exec"
+
+    @property
+    def structured_result(self) -> dict[str, Any] | None:
+        if self._structured_result is None:
+            return None
+        return dict(self._structured_result)
 
     _MAX_TIMEOUT = MAX_EXEC_TOOL_TIMEOUT_SEC
     _MAX_OUTPUT = 10_000
@@ -161,6 +169,7 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str:
+        self._structured_result = None
         in_container = bool(self._container_id and self._container_executable)
         # Guard must evaluate paths in the namespace the command runs in.
         cwd = (
@@ -228,6 +237,7 @@ class ExecTool(Tool):
                     await asyncio.wait_for(proc.wait(), timeout=5.0)
                 except (asyncio.TimeoutError, ProcessLookupError, OSError):
                     pass
+                self._record_structured_result(returncode=124, timed_out=True)
                 return f"Error: Command timed out after {effective_timeout} seconds"
 
             output_parts = []
@@ -239,9 +249,16 @@ class ExecTool(Tool):
                     proc.returncode == 124
                     and timeout_marker in stderr_text.splitlines()
                 ):
+                    self._record_structured_result(returncode=124, timed_out=True)
                     return f"Error: Command timed out after {effective_timeout} seconds"
                 if stderr_text.strip():
                     output_parts.append(f"STDERR:\n{stderr_text}")
+            if proc.returncode is None:
+                raise RuntimeError("container exec completed without returncode")
+            self._record_structured_result(
+                returncode=proc.returncode,
+                timed_out=False,
+            )
             output_parts.append(f"\nExit code: {proc.returncode}")
             result = "\n".join(output_parts) if output_parts else "(no output)"
 
@@ -303,6 +320,7 @@ class ExecTool(Tool):
                             os.waitpid(process.pid, os.WNOHANG)
                         except (ProcessLookupError, ChildProcessError) as e:
                             logger.debug("Process already reaped or not found: {}", e)
+                self._record_structured_result(returncode=124, timed_out=True)
                 return f"Error: Command timed out after {effective_timeout} seconds"
 
             output_parts = []
@@ -315,6 +333,12 @@ class ExecTool(Tool):
                 if stderr_text.strip():
                     output_parts.append(f"STDERR:\n{stderr_text}")
 
+            if process.returncode is None:
+                raise RuntimeError("subprocess completed without returncode")
+            self._record_structured_result(
+                returncode=process.returncode,
+                timed_out=False,
+            )
             output_parts.append(f"\nExit code: {process.returncode}")
 
             result = "\n".join(output_parts) if output_parts else "(no output)"
@@ -368,6 +392,12 @@ class ExecTool(Tool):
                     return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
+
+    def _record_structured_result(self, *, returncode: int, timed_out: bool) -> None:
+        self._structured_result = {
+            "returncode": returncode,
+            "timed_out": timed_out,
+        }
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:

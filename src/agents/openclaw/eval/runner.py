@@ -59,6 +59,8 @@ class SWEBenchRunner:
         exec_path_append: str = "",
         generation_config: dict[str, Any] | None = None,
         container_runtime: dict | None = None,
+        checkpoint_scheduling: str = "sync",
+        checkpoint_backend: str = "walk",
     ) -> None:
         del generation_config
         self.provider = provider
@@ -81,6 +83,8 @@ class SWEBenchRunner:
             mcp_servers=self.mcp_servers,
             exec_config=ExecToolConfig(path_append=self.exec_path_append),
             container_runtime=self.container_runtime,
+            checkpoint_scheduling=checkpoint_scheduling,
+            checkpoint_backend=checkpoint_backend,
         )
 
     @staticmethod

@@ -6,12 +6,17 @@ import asyncio
 import json
 import logging
 import textwrap
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from trace_collect.resource_timeline import valid_resource_timeline
 from agents.openclaw._checkpoint_container import _CONTAINER_PYTHON_CANDIDATES
 
 logger = logging.getLogger(__name__)
+TraceToolRequestExecutor = Callable[
+    [dict[str, Any], float | None],
+    Awaitable[dict[str, Any]],
+]
 
 _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S = 300.0
 _OPENCLAW_EXEC_MAX_TIMEOUT_S = 600.0
@@ -399,6 +404,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                 "ok": True,
                 "result": _truncate_output(output),
                 "returncode": process.returncode,
+                "timed_out": False,
                 "resource_timeout_policy": "resource_integrated",
                 "resource_virtual_time_s": round(virtual_time_s, 6),
             }
@@ -428,6 +434,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                     "ok": False,
                     "result": _truncate_output(output),
                     "returncode": 124,
+                    "timed_out": True,
                     "resource_timeout_policy": "resource_integrated",
                     "resource_virtual_time_s": round(virtual_time_s, 6),
                 }
@@ -447,6 +454,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
                     "ok": False,
                     "result": _truncate_output(output),
                     "returncode": 124,
+                    "timed_out": True,
                     "resource_timeout_policy": "resource_integrated",
                     "resource_virtual_time_s": round(virtual_time_s, 6),
                     "resource_stall_s": round(stalled_s, 6),
@@ -470,9 +478,9 @@ def handle_exec(args):
         r = subprocess.run(cmd, shell=True, cwd="/testbed",
                            capture_output=True, text=True, timeout=timeout, env=env)
         output = _format_exec_result(r.stdout or "", r.stderr or "", r.returncode)
-        return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
+        return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode, "timed_out": False}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "result": _format_command_timeout(timeout), "returncode": 124}
+        return {"ok": False, "result": _format_command_timeout(timeout), "returncode": 124, "timed_out": True}
 
 def handle_commands(args):
     cmds = args.get("commands", [])
@@ -499,7 +507,7 @@ def handle_commands(args):
     else:
         combined = all_output[0] if all_output else ""
     returncode = 124 if any_timeout else (first_failed_rc or last_rc)
-    return {"ok": not any_timeout, "result": combined, "returncode": returncode}
+    return {"ok": not any_timeout, "result": combined, "returncode": returncode, "timed_out": any_timeout}
 
 _READ_MAX_CHARS = 128_000
 _READ_DEFAULT_LIMIT = 2000
@@ -1028,6 +1036,22 @@ def _resolve_tool_request(
 
 def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
+    returncode = resp.get("returncode")
+    if isinstance(returncode, bool):
+        returncode = None
+    if isinstance(returncode, int):
+        metadata["returncode"] = returncode
+
+    timed_out = resp.get("timed_out")
+    if isinstance(timed_out, bool):
+        metadata["timed_out"] = timed_out
+    elif isinstance(returncode, int):
+        metadata["timed_out"] = (
+            returncode == 124
+            and resp.get("ok") is False
+            and _response_result_indicates_timeout(resp.get("result"))
+        )
+
     for key in (
         "resource_timeout_policy",
         "resource_virtual_time_s",
@@ -1036,6 +1060,19 @@ def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
         if key in resp:
             metadata[key] = resp[key]
     return metadata
+
+
+def _response_result_indicates_timeout(result: object) -> bool:
+    if _is_collect_command_timeout_result(result):
+        return True
+    if not isinstance(result, str):
+        return False
+    timeout_markers = {
+        "[timeout]",
+        "[resource_timeout]",
+        "[resource_stall_timeout]",
+    }
+    return any(line.strip() in timeout_markers for line in result.splitlines())
 
 
 def _final_exit_code(result: object) -> int | None:
@@ -1057,7 +1094,8 @@ def _is_collect_command_timeout_result(result: object) -> bool:
 
 async def execute_trace_tool_detailed(
     *,
-    agent: ContainerAgent,
+    agent: ContainerAgent | None = None,
+    request_executor: TraceToolRequestExecutor | None = None,
     tool_name: str | None,
     tool_args_json: str,
     command_timeout_s: float,
@@ -1066,6 +1104,15 @@ async def execute_trace_tool_detailed(
     source_resource_timeline: dict[str, Any] | None = None,
 ) -> tuple[str, bool, float | None, dict[str, Any]]:
     """Execute one trace tool call and return replay metadata."""
+    if request_executor is None:
+        if agent is None:
+            raise ValueError("agent or request_executor is required")
+
+        async def request_executor(
+            request: dict[str, Any],
+            timeout_s: float | None,
+        ) -> dict[str, Any]:
+            return await agent.execute(request, timeout_s=timeout_s)
 
     resolved_name, params = _unwrap_tool_args(
         tool_name=tool_name,
@@ -1099,7 +1146,7 @@ async def execute_trace_tool_detailed(
     if request is None:
         return f"Error: Unsupported replay tool {resolved_name!r}", False, None, {}
 
-    resp = await agent.execute(request, timeout_s=request_timeout_s)
+    resp = await request_executor(request, request_timeout_s)
     result = resp.get("result", "")
     ok = resp.get("ok", False)
     inner_duration_ms = resp.get("inner_duration_ms")

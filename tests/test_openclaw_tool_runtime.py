@@ -376,6 +376,8 @@ def test_execute_trace_tool_detailed_preserves_resource_metadata() -> None:
     assert success is False
     assert "Exit code: 124" in result
     assert metadata == {
+        "returncode": 124,
+        "timed_out": True,
         "resource_timeout_policy": "resource_integrated",
         "resource_virtual_time_s": 12.5,
     }
@@ -759,6 +761,7 @@ def test_replay_agent_command_timeout_matches_collect_format(monkeypatch) -> Non
         "ok": False,
         "result": "Error: Command timed out after 7 seconds",
         "returncode": 124,
+        "timed_out": True,
     }
 
 
@@ -850,6 +853,7 @@ def test_commands_timeout_is_preserved_across_later_success(monkeypatch) -> None
     assert calls == 2
     assert response["ok"] is False
     assert response["returncode"] == 124
+    assert response["timed_out"] is True
     assert "Error: Command timed out after 1 seconds" in response["result"]
     assert "ok" in response["result"]
 
@@ -879,6 +883,7 @@ def test_commands_nonzero_returncode_is_preserved_across_later_success(
     assert calls == 2
     assert response["ok"] is True
     assert response["returncode"] == 100
+    assert response["timed_out"] is False
     assert "apt failed" in response["result"]
     assert "ok" in response["result"]
 

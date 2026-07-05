@@ -259,14 +259,15 @@ def start_task_container(
         "-w",
         "/testbed",
     ]
-    _TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    cmd.extend(
-        [
-            "-v",
-            f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}:"
-            f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}",
-        ]
-    )
+    if not _extra_args_mount_bootstrap_cache(extra_args):
+        _TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+        cmd.extend(
+            [
+                "-v",
+                f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}:"
+                f"{_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT}",
+            ]
+        )
     cmd.extend(
         [
             "-e",
@@ -311,6 +312,25 @@ def _validate_task_container_bootstrap_userbase(bootstrap_userbase_bin: str) -> 
     raise ValueError(
         f"bootstrap_userbase_bin must be inside {cache_root}"
     )
+
+
+def _extra_args_mount_bootstrap_cache(extra_args: list[str] | None) -> bool:
+    """Return true when caller supplies an explicit bootstrap-cache mount."""
+    if not extra_args:
+        return False
+    cache_root = str(_TASK_CONTAINER_BOOTSTRAP_CACHE_ROOT.expanduser().resolve())
+    for index, arg in enumerate(extra_args):
+        spec: str | None = None
+        if arg in {"-v", "--volume"} and index + 1 < len(extra_args):
+            spec = extra_args[index + 1]
+        elif arg.startswith("--volume="):
+            spec = arg.split("=", 1)[1]
+        if spec is None:
+            continue
+        parts = spec.split(":")
+        if len(parts) >= 2 and str(Path(parts[1]).expanduser().resolve()) == cache_root:
+            return True
+    return False
 
 
 def _validate_task_container_extra_args(extra_args: list[str] | None) -> None:

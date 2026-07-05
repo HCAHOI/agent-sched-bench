@@ -60,6 +60,10 @@ class Tool(ABC):
     def exclusive(self) -> bool:
         return False
 
+    @property
+    def structured_result(self) -> dict[str, Any] | None:
+        return None
+
     @abstractmethod
     async def execute(self, **kwargs: Any) -> Any:
         """

@@ -8,6 +8,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tarfile
 import time
 from pathlib import Path
@@ -17,7 +18,6 @@ import pytest
 
 import agents.openclaw._checkpoint_container as ccp
 from agents.openclaw._checkpoint_container import (
-    _CHECKPOINT_CAS_ROOT,
     _CONTAINER_PYTHON_CANDIDATES,
     _compute_deleted_paths,
     _probe_container_python,
@@ -31,7 +31,7 @@ _FAKE_CONTAINER = {"id": "test-cid", "executable": "docker"}
 
 def _build_snapshot_json(
     *,
-    entries: dict[str, str],
+    entries: dict[str, Any],
     changed: dict[str, dict[str, Any]] | None = None,
     symlinks: list[str] | None = None,
     changed_during_walk: bool = False,
@@ -92,6 +92,56 @@ def _fake_run_sequence(responses: list) -> Any:
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     return fake_run
+
+
+class _FakePopen:
+    def __init__(
+        self,
+        *,
+        stdout: bytes,
+        stderr: bytes = b"",
+        returncode: int = 0,
+    ) -> None:
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO(stdout)
+        self.stderr = io.BytesIO(stderr)
+        self.returncode: int | None = None
+        self._final_returncode = returncode
+
+    def wait(self) -> int:
+        self.returncode = self._final_returncode
+        return self.returncode
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+def _fake_popen_sequence(responses: list) -> Any:
+    """Build a fake Popen constructor that returns each response in sequence."""
+    call_idx = [0]
+
+    def fake_popen(cmd, **kwargs):  # noqa: ANN001
+        idx = call_idx[0]
+        call_idx[0] += 1
+        if idx >= len(responses):
+            raise RuntimeError(f"unexpected Popen call #{idx}: {cmd[:5]}")
+        resp = responses[idx]
+        if isinstance(resp, Exception):
+            raise resp
+        if isinstance(resp, dict):
+            return _FakePopen(
+                stdout=resp.get("stdout", b""),
+                stderr=resp.get("stderr", b""),
+                returncode=resp.get("rc", 0),
+            )
+        if isinstance(resp, bytes):
+            return _FakePopen(stdout=resp)
+        return _FakePopen(stdout=b"")
+
+    return fake_popen
 
 
 def _probe_response(python_path: str = "/usr/bin/python3\n") -> subprocess.CompletedProcess:
@@ -179,6 +229,59 @@ def test_run_snapshot_without_since_ns_no_env(monkeypatch: pytest.MonkeyPatch) -
     assert has_since_env is False
 
 
+def test_container_snapshot_script_detects_backdated_size_change(
+    tmp_path: Path,
+) -> None:
+    testbed = tmp_path / "testbed"
+    testbed.mkdir()
+    changed_file = testbed / "changed.txt"
+    unchanged_file = testbed / "unchanged.txt"
+    changed_file.write_bytes(b"old")
+    unchanged_file.write_bytes(b"same")
+    old_mtime_ns = time.time_ns() - 1_000_000_000
+    os.utime(changed_file, ns=(old_mtime_ns, old_mtime_ns))
+    os.utime(unchanged_file, ns=(old_mtime_ns, old_mtime_ns))
+    prev_entries = {
+        "changed.txt": ["file", len(b"old"), old_mtime_ns],
+        "unchanged.txt": ["file", len(b"same"), old_mtime_ns],
+    }
+
+    changed_content = b"changed with different size"
+    changed_file.write_bytes(changed_content)
+    os.utime(changed_file, ns=(old_mtime_ns, old_mtime_ns))
+
+    script = ccp._CONTAINER_SNAPSHOT_SCRIPT.replace(
+        'root = "/testbed"',
+        f"root = {json.dumps(str(testbed))}",
+        1,
+    )
+    env = dict(os.environ)
+    env["CHECKPOINT_SINCE_NS"] = str(old_mtime_ns + 1)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=json.dumps(prev_entries),
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    snapshot = json.loads(result.stdout)
+
+    assert set(snapshot["changed"]) == {"changed.txt"}
+    assert snapshot["changed"]["changed.txt"]["size"] == len(changed_content)
+    assert snapshot["changed"]["changed.txt"]["mtime_ns"] == old_mtime_ns
+    assert snapshot["entries"]["changed.txt"] == [
+        "file",
+        len(changed_content),
+        old_mtime_ns,
+    ]
+    assert snapshot["entries"]["unchanged.txt"] == [
+        "file",
+        len(b"same"),
+        old_mtime_ns,
+    ]
+
+
 def test_run_snapshot_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ccp.subprocess, "run",
                         _fake_run_sequence([{"stdout": "", "stderr": "walk error", "rc": 1}]))
@@ -206,7 +309,7 @@ def test_fetch_blobs_empty_paths(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_fetch_blobs_returns_file_contents(monkeypatch: pytest.MonkeyPatch) -> None:
     tar_bytes = _make_tar_bytes({"src/main.py": b"hello", "README.md": b"world"})
-    monkeypatch.setattr(ccp.subprocess, "run", _fake_run_sequence([tar_bytes]))
+    monkeypatch.setattr(ccp.subprocess, "Popen", _fake_popen_sequence([tar_bytes]))
     result = _fetch_blobs(_FAKE_CONTAINER, "/usr/bin/python3", ["src/main.py", "README.md"])
     assert result == {"src/main.py": b"hello", "README.md": b"world"}
 
@@ -223,7 +326,7 @@ def test_fetch_blobs_skips_directories_in_tar(monkeypatch: pytest.MonkeyPatch) -
         file_info.type = tarfile.REGTYPE
         tf.addfile(file_info, io.BytesIO(content))
     tar_bytes = buf.getvalue()
-    monkeypatch.setattr(ccp.subprocess, "run", _fake_run_sequence([tar_bytes]))
+    monkeypatch.setattr(ccp.subprocess, "Popen", _fake_popen_sequence([tar_bytes]))
     result = _fetch_blobs(_FAKE_CONTAINER, "/usr/bin/python3", ["src", "src/main.py"])
     assert list(result.keys()) == ["src/main.py"]
 
@@ -252,6 +355,24 @@ def test_compute_deleted_paths_file_added_not_in_deleted() -> None:
     prev = {"a": "file"}
     curr = {"a": "file", "b": "file"}
     assert _compute_deleted_paths(prev, curr) == []
+
+
+def test_compute_deleted_paths_ignores_file_size_mtime_changes() -> None:
+    prev = {"a": ("file", 10, 100)}
+    curr = {"a": ("file", 20, 100)}
+    assert _compute_deleted_paths(prev, curr) == []
+
+
+def test_compute_deleted_paths_symlink_target_change() -> None:
+    prev = {"link": {"type": "symlink", "target": "a"}}
+    curr = {"link": {"type": "symlink", "target": "b"}}
+    assert _compute_deleted_paths(prev, curr) == ["link"]
+
+
+def test_compute_deleted_paths_skips_git() -> None:
+    prev = {".git": "dir", ".git/config": "file", "a": "file"}
+    curr: dict[str, str] = {}
+    assert _compute_deleted_paths(prev, curr) == ["a"]
 
 
 def _clear_probe_cache() -> None:
@@ -285,8 +406,12 @@ def test_first_checkpoint_produces_manifest(tmp_path: Path, monkeypatch: pytest.
         _fake_run_sequence([
             _probe_response(),
             _build_snapshot_json(entries=entries, changed=changed, now_ns=now_ns),
-            _make_tar_bytes({"src/main.py": content}),
         ]),
+    )
+    monkeypatch.setattr(
+        ccp.subprocess,
+        "Popen",
+        _fake_popen_sequence([_make_tar_bytes({"src/main.py": content})]),
     )
 
     manifest_path = tmp_path / "manifest.json"
@@ -376,8 +501,12 @@ def test_container_manifest_matches_host_manifest_structure(
         _fake_run_sequence([
             _probe_response(),
             _build_snapshot_json(entries=entries, changed=changed),
-            _make_tar_bytes(tar_files),
         ]),
+    )
+    monkeypatch.setattr(
+        ccp.subprocess,
+        "Popen",
+        _fake_popen_sequence([_make_tar_bytes(tar_files)]),
     )
 
     container_manifest_path = tmp_path / "container_manifest.json"
@@ -402,6 +531,68 @@ def test_container_manifest_matches_host_manifest_structure(
         assert ce["mtime_ns"] == he["mtime_ns"], f"mtime_ns mismatch for {rel}"
 
 
+def test_source_checkpoint_walk_skips_git(tmp_path: Path) -> None:
+    import agents.openclaw._session_runner as session_runner
+
+    testbed = tmp_path / "testbed"
+    testbed.mkdir()
+    (testbed / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    git_dir = testbed / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\n", encoding="utf-8")
+
+    entries = session_runner._snapshot_checkpoint_entries(testbed)
+    assert set(entries) == {"tracked.txt"}
+    assert entries["tracked.txt"][0] == "file"
+
+    marker_mtime_ns = time.time_ns()
+    old_mtime_ns = marker_mtime_ns - 1_000_000_000
+    new_mtime_ns = marker_mtime_ns + 1_000_000_000
+    os.utime(testbed / "tracked.txt", ns=(old_mtime_ns, old_mtime_ns))
+    os.utime(git_dir / "config", ns=(new_mtime_ns, new_mtime_ns))
+    os.utime(git_dir, ns=(new_mtime_ns, new_mtime_ns))
+    os.utime(testbed, ns=(old_mtime_ns, old_mtime_ns))
+
+    assert session_runner._any_file_newer_than(testbed, marker_mtime_ns) is False
+
+
+def test_source_checkpoint_manifest_records_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agents.openclaw._session_runner as session_runner
+
+    testbed = tmp_path / "testbed"
+    testbed.mkdir()
+    (testbed / "target.txt").write_text("target\n", encoding="utf-8")
+    (testbed / "link.txt").symlink_to("target.txt")
+    (testbed / "real-dir").mkdir()
+    (testbed / "dir-link").symlink_to("real-dir", target_is_directory=True)
+
+    snapshot = session_runner._snapshot_checkpoint_entries(testbed)
+    assert snapshot["link.txt"][0] == {"type": "symlink", "target": "target.txt"}
+    assert snapshot["dir-link"][0] == {"type": "symlink", "target": "real-dir"}
+
+    monkeypatch.setattr(session_runner, "_CHECKPOINT_CAS_ROOT", tmp_path / "cas")
+    manifest_path = tmp_path / "manifest.json"
+    chain_bytes = session_runner._write_cas_manifest(
+        root=testbed,
+        manifest_path=manifest_path,
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["entries"]["link.txt"] == {
+        "type": "symlink",
+        "target": "target.txt",
+    }
+    assert manifest["entries"]["dir-link"] == {
+        "type": "symlink",
+        "target": "real-dir",
+    }
+    assert manifest["entries"]["target.txt"]["size"] == len("target\n")
+    assert chain_bytes == len("target\n")
+
+
 # ---------------------------------------------------------------------------
 # run_container_checkpoint — incremental
 # ---------------------------------------------------------------------------
@@ -422,8 +613,12 @@ def test_incremental_checkpoint_only_contains_changed(
         _fake_run_sequence([
             _probe_response(),
             _build_snapshot_json(entries=prev_entries, changed=changed, now_ns=now_ns),
-            _make_tar_bytes({"src/main.py": b"updated"}),
         ]),
+    )
+    monkeypatch.setattr(
+        ccp.subprocess,
+        "Popen",
+        _fake_popen_sequence([_make_tar_bytes({"src/main.py": b"updated"})]),
     )
 
     manifest_path = tmp_path / "inc_manifest.json"
@@ -495,7 +690,7 @@ def test_incremental_detects_type_change_as_delete(
     )
 
     manifest_path = tmp_path / "type_manifest.json"
-    result = run_container_checkpoint(
+    run_container_checkpoint(
         container_runtime={"id": "test-cid-t", "executable": "docker"},
         manifest_path=manifest_path,
         incremental_since_ns=1000,
@@ -592,8 +787,12 @@ def test_blob_hash_mismatch_returns_error(
         _fake_run_sequence([
             _probe_response(),
             _build_snapshot_json(entries=entries, changed=changed),
-            _make_tar_bytes({"f.txt": wrong_content}),
         ]),
+    )
+    monkeypatch.setattr(
+        ccp.subprocess,
+        "Popen",
+        _fake_popen_sequence([_make_tar_bytes({"f.txt": wrong_content})]),
     )
 
     manifest_path = tmp_path / "mismatch.json"
@@ -662,15 +861,17 @@ def test_changed_during_walk_returns_error(
     assert not manifest_path.exists()
 
 
-def test_symlinks_in_snapshot_return_error(
+def test_symlinks_in_snapshot_are_manifested(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    entries = {"link.txt": {"type": "symlink", "target": "target.txt"}}
+    changed = {"link.txt": {"type": "symlink", "target": "target.txt"}}
     _clear_probe_cache()
     monkeypatch.setattr(
         ccp.subprocess, "run",
         _fake_run_sequence([
             _probe_response(),
-            _build_snapshot_json(entries={"a": "file"}, symlinks=["link.txt"]),
+            _build_snapshot_json(entries=entries, changed=changed, symlinks=["link.txt"]),
         ]),
     )
 
@@ -682,9 +883,15 @@ def test_symlinks_in_snapshot_return_error(
         prev_snapshot_entries=None,
     )
 
-    assert "error" in result
-    assert "_state" not in result
-    assert "symlinks" in result["error"]
+    assert "error" not in result
+    assert result["kind"] == "cas_manifest_full"
+    assert result["chain_bytes"] == 0
+    assert result["_state"]["current_snapshot"] == entries
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["entries"] == {
+        "link.txt": {"type": "symlink", "target": "target.txt"}
+    }
+    assert manifest["deleted_paths"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -718,8 +925,12 @@ def test_rebaseline_when_chain_bytes_exceeds_threshold(
             _fake_run_sequence([
                 _probe_response(),
                 _build_snapshot_json(entries=entries, changed=changed, now_ns=now_ns),
-                _make_tar_bytes({"a.txt": content}),
             ]),
+        )
+        monkeypatch.setattr(
+            ccp.subprocess,
+            "Popen",
+            _fake_popen_sequence([_make_tar_bytes({"a.txt": content})]),
         )
 
     hook = session_runner.TraceCollectorHook(
@@ -756,8 +967,12 @@ def test_rebaseline_when_chain_bytes_exceeds_threshold(
         _fake_run_sequence([
             _probe_response(),
             _build_snapshot_json(entries=entries2, changed=changed2, now_ns=now_ns2),
-            _make_tar_bytes({"b.txt": b"yy"}),
         ]),
+    )
+    monkeypatch.setattr(
+        ccp.subprocess,
+        "Popen",
+        _fake_popen_sequence([_make_tar_bytes({"b.txt": b"yy"})]),
     )
     hook._last_full_checkpoint_ns = 1000
     hook._last_incremental_checkpoint_ns = 1000
@@ -804,8 +1019,6 @@ def _docker_available() -> bool:
 @pytest.mark.skipif(not _docker_available(), reason="docker not available")
 def test_container_checkpoint_end_to_end_docker(tmp_path: Path) -> None:
     """Full -> incremental -> delete chain using a real python:3.11-alpine container."""
-    import tempfile
-
     cas_root = tmp_path / "cas"
     original_cas = ccp._CHECKPOINT_CAS_ROOT
 

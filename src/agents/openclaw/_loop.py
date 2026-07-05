@@ -178,6 +178,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
+        subagent_trace_hook_factory: Callable[[str], AgentHook] | None = None,
         container_runtime: dict | None = None,
     ):
         from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
@@ -249,6 +250,7 @@ class AgentLoop:
             malformed_retry_budget=self.malformed_retry_budget,
             skills_dir=skills_dir,
             container_runtime=self.container_runtime,
+            trace_hook_factory=subagent_trace_hook_factory,
         )
 
         self._running = False

@@ -689,6 +689,26 @@ def test_start_task_container_rejects_extra_args_that_override_user(
         )
 
 
+def test_start_task_container_respects_explicit_bootstrap_cache_mount() -> None:
+    seen: dict[str, object] = {}
+    bootstrap_root = Path.home() / ".cache" / "task-container-bootstrap"
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="cid-1\n", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        start_task_container(
+            "docker.io/swerebench/example:latest",
+            executable="docker",
+            extra_args=["-v", f"{bootstrap_root}:{bootstrap_root}:ro"],
+        )
+
+    cmd = seen["cmd"]
+    assert f"{bootstrap_root}:{bootstrap_root}:ro" in cmd
+    assert f"{bootstrap_root}:{bootstrap_root}" not in cmd
+
+
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
 def test_start_task_container_prepends_bootstrap_userbase_bin(
     container_executable: str,
