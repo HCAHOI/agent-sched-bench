@@ -17,8 +17,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from agents.sandbox_runtime import AgentTransportRequest, FCBackend, _checked_run
-from harness.fc_rootfs_builder import build_fc_rootfs
+from agents.sandbox_runtime import AgentTransportRequest, FCBackend  # noqa: E402
+from harness.fc_rootfs_builder import build_fc_rootfs  # noqa: E402
 
 
 def log(msg: str) -> None:
@@ -71,8 +71,8 @@ async def main() -> bool:
         api_sock=str(tmpdir / "fc.sock"),
         vsock_sock=str(tmpdir / "fc-vsock.sock"),
         tap_dev="fc-smoke-tap",
-        host_ip="172.210.0.1",
-        guest_ip="172.210.0.2",
+        host_ip="192.168.241.1",
+        guest_ip="192.168.241.2",
         container_executable="docker",
     )
     await fc0.start()
@@ -111,9 +111,15 @@ async def main() -> bool:
     log(f"      f1: {f1_ok} ({r1.result.strip()!r})")
     log(f"      f2: {f2_gone} ({r2.result.strip()!r})")
     assert f1_ok, f"f1.txt missing: {r1}"
-    # Note: f2 might exist if restore didn't happen (e.g. no mem snapshot to load)
-    if not f2_gone:
-        log(f"      WARNING: f2.txt survived restore (disk-only restore, cold boot)")
+    # Rollback is the core semantic under test: a paired (memory) snapshot
+    # restore MUST roll back post-snapshot writes.  Only a disk-only
+    # cold-boot cadence (process_state is None) may legitimately differ.
+    if snap0.process_state is not None:
+        assert f2_gone, (
+            f"f2.txt survived a paired-snapshot restore — rollback failed: {r2}"
+        )
+    elif not f2_gone:
+        log("      NOTE: disk-only cadence — rollback not asserted")
 
     # --- 8. Capture snapshot after restore (regression: _rootfs_path=None) ---
     log("[8/8] capture_snapshot after restore (regression test) ...")
@@ -124,7 +130,7 @@ async def main() -> bool:
         log(f"      FAIL: {e}")
         return False
 
-    log(f"\n=== PASS ===")
+    log("\n=== PASS ===")
     await fc0.stop()
     return True
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import os
 import posixpath
 import socket
@@ -33,6 +35,8 @@ from agents.openclaw._session_runner import (
     _snapshot_checkpoint_entries,
     _write_cas_manifest,
 )
+
+logger = logging.getLogger(__name__)
 
 _CHECKPOINT_SKIP_DIRS = frozenset({".git"})
 
@@ -1493,6 +1497,12 @@ def _checkpoint_cas_root() -> Path:
     return Path.home() / ".cache" / "agent-checkpoint-cas"
 
 
+# Number of host network slots for auto-allocated FC instances.  Each slot
+# is a /24 inside 172.16.0.0/12 (172.16.x.y .. 172.31.x.y), giving 4096
+# concurrent VMs per host before allocation fails loudly.
+_FC_NET_SLOTS = 4096
+
+
 class FCBackend(SandboxBackend):
     """Firecracker microVM sandbox with vsock agent transport.
 
@@ -1502,8 +1512,18 @@ class FCBackend(SandboxBackend):
     with NAT, launches a Firecracker process, configures the VM via the
     FC API socket, and polls the vsock agent until it is ready.
 
-    ``stop`` sends ``InstanceHalt``, waits for the process to exit, and
-    tears down the TAP device and iptables rules.
+    ``stop`` kills the Firecracker process, tears down the TAP device
+    and iptables rules, and removes the per-instance working rootfs.
+    The guest serial console is kept in a per-instance log file
+    (``/tmp/fc-<id>-console.log``) for post-mortem debugging.
+
+    Networking
+    ----------
+    When ``tap_dev``/``host_ip``/``guest_ip`` are omitted, ``start``
+    claims a collision-free host network slot (a /24 inside
+    172.16.0.0/12) using TAP-device creation as the atomic host-wide
+    lock, supporting up to 4096 concurrent VMs per host.  The slot stays
+    claimed across snapshot restores and is released by ``stop``.
 
     Agent transport
     ---------------
@@ -1517,9 +1537,13 @@ class FCBackend(SandboxBackend):
     ---------
     Atomic paired (memory, disk) snapshots capture VM state at the same
     pause point.  Memory is captured via the Firecracker snapshot API
-    (Diff after first Full); disk is a CoW copy of the backing rootfs
-    file (``cp --reflink=always``).  The guest is quiesced with ``sync``
-    before pause to flush journals and page cache.
+    (always ``Full``; Diff+rebase via snapshot-editor is future work, so
+    every memory snapshot currently costs the full guest memory size on
+    disk).  Disk is a copy of the backing rootfs file — copy-on-write via
+    ``cp --reflink=always`` on XFS/btrfs, with a logged fallback to a
+    full sparse copy on filesystems without reflink support (e.g. ext4).
+    The guest is quiesced with ``sync`` before pause to flush journals
+    and page cache.
 
     Cadence
     -------
@@ -1533,7 +1557,8 @@ class FCBackend(SandboxBackend):
     -------
     Recovery is VM re-instantiation: a new FC process is launched with
     the paired disk snapshot as its root drive loaded via the FC snapshot
-    API.  Restore latency is ~100 ms – 1 s.
+    API.  Measured end-to-end restore latency is ~1 s for a 1 GiB-memory
+    VM on local NVMe (dominated by the disk copy and memory-file load).
 
     Probe
     -----
@@ -1576,21 +1601,33 @@ class FCBackend(SandboxBackend):
         self._kernel_path = kernel_path
         self._checkpoint_dir = checkpoint_dir or Path("/tmp/fc-checkpoints")
 
-        # Per-instance uniqueness derived from instance_id (Bug 6).
+        # Per-instance uniqueness derived from instance_id.
         self._instance_id = instance_id or uuid.uuid4().hex[:8]
-        subnet_id = int(self._instance_id[:8], 16) % 256
         hex_id = self._instance_id[:8]
 
         self._api_sock = api_sock or f"/tmp/fc-{self._instance_id}.sock"
         self._vsock_sock = vsock_sock or f"/tmp/fc-{self._instance_id}-vsock.sock"
         self._metrics_path = f"/tmp/fc-{self._instance_id}-metrics.json"
+        self._console_log_path = f"/tmp/fc-{self._instance_id}-console.log"
         self._vsock_port = vsock_port
         self._vcpu_count = vcpu_count
         self._mem_size_mib = mem_size_mib
-        self._tap_dev = tap_dev or f"fc-tap{subnet_id}"
-        self._host_ip = host_ip or f"172.16.{subnet_id}.1"
-        self._guest_ip = guest_ip or f"172.16.{subnet_id}.2"
-        self._guest_cid = 3 + (int(self._instance_id[:8], 16) % 65533)
+        # Networking: explicit values pin the tap/subnet (caller owns
+        # uniqueness); otherwise a collision-free slot is claimed in
+        # _setup_tap_and_nat using tap-device creation as the lock.  The
+        # hash of the instance id only seeds the probe order.
+        if (tap_dev is None) != (host_ip is None) or (host_ip is None) != (
+            guest_ip is None
+        ):
+            raise ValueError(
+                "tap_dev, host_ip, and guest_ip must be given together "
+                "(or all omitted for automatic allocation)"
+            )
+        self._tap_dev = tap_dev
+        self._host_ip = host_ip
+        self._guest_ip = guest_ip
+        self._net_index_hint = int(hex_id, 16) % _FC_NET_SLOTS
+        self._guest_cid = 3 + (int(hex_id, 16) % 65533)
         self._guest_mac = (
             f"AA:FC:{hex_id[0:2]}:{hex_id[2:4]}:{hex_id[4:6]}:{hex_id[6:8]}"
         )
@@ -1601,7 +1638,7 @@ class FCBackend(SandboxBackend):
         self._checkpoint_cadence = checkpoint_cadence
         self._memory_snapshot_interval = max(1, memory_snapshot_interval)
 
-        self._process: subprocess.Popen[str] | None = None
+        self._process: subprocess.Popen[bytes] | None = None
         self._rootfs_path: Path | None = None
         self._snapshot_counter: int = 0
         self._mem_version: int = 0
@@ -1631,28 +1668,34 @@ class FCBackend(SandboxBackend):
         # Per-instance working copy — the cache is read-only source material.
         self._rootfs_path = Path(f"/tmp/fc-rootfs-{self._instance_id}.ext4")
         await asyncio.to_thread(
-            _checked_run,
-            [
-                "cp", "--sparse=always", "--reflink=auto",
-                str(rootfs_cache), str(self._rootfs_path),
-            ],
-            check=True,
-            timeout=60,
+            _cow_copy,
+            str(rootfs_cache),
+            str(self._rootfs_path),
         )
 
-        await asyncio.to_thread(self._setup_tap_and_nat)
-        await asyncio.to_thread(self._launch_fc)
-        await asyncio.to_thread(self._configure_vm)
+        try:
+            await asyncio.to_thread(self._setup_tap_and_nat)
+            await asyncio.to_thread(self._launch_fc)
+            await asyncio.to_thread(self._configure_vm)
 
-        await asyncio.to_thread(self._api_put, "/actions", {"action_type": "InstanceStart"})
+            await asyncio.to_thread(
+                self._api_put, "/actions", {"action_type": "InstanceStart"},
+            )
 
-        ready = await asyncio.to_thread(
-            self._poll_vsock_ready,
-            timeout_s=60.0,
-        )
-        if not ready:
-            await self.stop()
-            raise RuntimeError("FCBackend: vsock agent did not become ready within 60s")
+            ready = await asyncio.to_thread(
+                self._poll_vsock_ready,
+                timeout_s=60.0,
+            )
+            if not ready:
+                raise RuntimeError(
+                    "FCBackend: vsock agent did not become ready within 60s"
+                )
+        except BaseException:
+            # Release the VM process, sockets, TAP, and NAT rules so a
+            # failed start never leaks host resources.
+            with contextlib.suppress(OSError, RuntimeError):
+                await self.stop()
+            raise
 
         self._last_write_bytes = await asyncio.to_thread(self._read_write_bytes)
 
@@ -1682,6 +1725,12 @@ class FCBackend(SandboxBackend):
             if error is None:
                 error = exc
 
+        # 4. Remove the per-instance working rootfs copy — restore
+        # recreates it from the snapshot disk, and a final stop must not
+        # leave multi-GB images behind.
+        if self._rootfs_path is not None:
+            with contextlib.suppress(OSError):
+                self._rootfs_path.unlink()
         self._rootfs_path = None
         self._last_write_bytes = None
 
@@ -1770,22 +1819,17 @@ class FCBackend(SandboxBackend):
                 )
                 self._mem_version += 1
 
-            # 4. Disk snapshot — CoW copy of the backing rootfs file.
+            # 4. Disk snapshot — CoW copy of the backing rootfs file
+            # (full sparse copy with a logged warning on non-reflink
+            # filesystems; see _cow_copy).
             assert self._rootfs_path is not None
             disk_snap_path = str(
                 self._checkpoint_dir / f"snap-{snap_index:04d}-disk.img"
             )
             await asyncio.to_thread(
-                _checked_run,
-                [
-                    "cp",
-                    "--reflink=auto",
-                    "--sparse=always",
-                    str(self._rootfs_path),
-                    disk_snap_path,
-                ],
-                check=True,
-                timeout=60,
+                _cow_copy,
+                str(self._rootfs_path),
+                disk_snap_path,
             )
             self._disk_version += 1
 
@@ -1827,10 +1871,10 @@ class FCBackend(SandboxBackend):
     async def restore_snapshot(self, snapshot: SandboxSnapshot) -> bool:
         """Restore from an atomic paired snapshot.
 
-        Design (see Bug 4 in feat/firecracker commit history):
+        Design:
 
         **With memory snapshot**:
-        1. Stop the current VM.
+        1. Halt the current VM process (the TAP/NAT slot stays claimed).
         2. Copy snapshot disk OVER the working rootfs (so the vmstate's
            drive backing path resolves).
         3. Launch a fresh FC process.
@@ -1839,7 +1883,7 @@ class FCBackend(SandboxBackend):
         5. Poll vsock, fix clock, configure metrics.
 
         **Without memory (cold boot from disk snapshot)**:
-        1. Stop the current VM.
+        1. Halt the current VM process (the TAP/NAT slot stays claimed).
         2. Copy snapshot disk over the working rootfs.
         3. Launch fresh FC process.
         4. Full ``_configure_vm`` + ``InstanceStart`` (cold boot).
@@ -1869,61 +1913,73 @@ class FCBackend(SandboxBackend):
             if isinstance(maybe_vmstate, str) and maybe_vmstate and Path(maybe_vmstate).exists():
                 vmstate_path = maybe_vmstate
 
-        # 1. Stop the current VM.
-        await self.stop()
+        # 1. Halt the current VM only — the TAP/NAT slot stays claimed by
+        # this instance, so no other instance can steal it mid-restore.
+        process = self._process
+        if process is not None and process.poll() is None:
+            await asyncio.to_thread(self._stop_vm)
+        self._process = None
+        if os.path.exists(self._api_sock):
+            with contextlib.suppress(OSError):
+                os.unlink(self._api_sock)
 
         # 2. Ensure working rootfs exists, then overwrite with snapshot disk.
         if self._rootfs_path is None:
             self._rootfs_path = Path(f"/tmp/fc-rootfs-{self._instance_id}.ext4")
         await asyncio.to_thread(
-            _checked_run,
-            [
-                "cp", "--reflink=auto", "--sparse=always",
-                disk_path, str(self._rootfs_path),
-            ],
-            check=True,
-            timeout=60,
+            _cow_copy,
+            disk_path,
+            str(self._rootfs_path),
         )
 
-        # 3. Set up networking and launch fresh FC.
-        await asyncio.to_thread(self._setup_tap_and_nat)
-        await asyncio.to_thread(self._launch_fc)
+        try:
+            # 3. Set up networking (idempotent for a held slot) and launch
+            # a fresh FC process.
+            await asyncio.to_thread(self._setup_tap_and_nat)
+            await asyncio.to_thread(self._launch_fc)
 
-        if mem_path is not None and vmstate_path is not None:
-            # Restore with memory — configure metrics before load
-            # (FC forbids /metrics after the VM starts).
-            Path(self._metrics_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(self._metrics_path).touch()
-            await asyncio.to_thread(
-                self._api_put,
-                "/metrics",
-                {"metrics_path": self._metrics_path},
-            )
-            await asyncio.to_thread(
-                self._api_put,
-                "/snapshot/load",
-                {
-                    "snapshot_path": vmstate_path,
-                    "mem_file_path": mem_path,
-                    "resume_vm": True,
-                },
-            )
-        else:
-            # Cold boot — configure VM and start fresh.
-            await asyncio.to_thread(self._configure_vm)
-            await asyncio.to_thread(
-                self._api_put, "/actions", {"action_type": "InstanceStart"},
-            )
+            if mem_path is not None and vmstate_path is not None:
+                # Restore with memory — configure metrics before load
+                # (FC forbids /metrics after the VM starts).
+                Path(self._metrics_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(self._metrics_path).touch()
+                await asyncio.to_thread(
+                    self._api_put,
+                    "/metrics",
+                    {"metrics_path": self._metrics_path},
+                )
+                await asyncio.to_thread(
+                    self._api_put,
+                    "/snapshot/load",
+                    {
+                        "snapshot_path": vmstate_path,
+                        "mem_file_path": mem_path,
+                        "resume_vm": True,
+                    },
+                )
+            else:
+                # Cold boot — configure VM and start fresh.
+                await asyncio.to_thread(self._configure_vm)
+                await asyncio.to_thread(
+                    self._api_put, "/actions", {"action_type": "InstanceStart"},
+                )
 
-        # 5. Wait for vsock agent.
-        ready = await asyncio.to_thread(
-            self._poll_vsock_ready,
-            timeout_s=60.0,
-        )
-        if not ready:
-            raise RuntimeError(
-                "FCBackend: vsock agent did not become ready after snapshot restore"
+            # 5. Wait for vsock agent.
+            ready = await asyncio.to_thread(
+                self._poll_vsock_ready,
+                timeout_s=60.0,
             )
+            if not ready:
+                raise RuntimeError(
+                    "FCBackend: vsock agent did not become ready after "
+                    "snapshot restore"
+                )
+        except BaseException:
+            # A half-restored VM is unusable — release everything rather
+            # than leak the FC process, sockets, and network slot.
+            with contextlib.suppress(OSError, RuntimeError):
+                await self.stop()
+            raise
 
         # 6. Fix guest clock.
         await self._fix_guest_clock()
@@ -1947,10 +2003,67 @@ class FCBackend(SandboxBackend):
     # Internal — TAP and networking
     # ------------------------------------------------------------------
 
+    def _allocate_net_slot(self) -> None:
+        """Claim a collision-free tap/subnet slot for this instance.
+
+        Uses TAP-device creation as the host-wide lock: ``ip tuntap add``
+        fails when the device already exists, so a successful add claims
+        the slot atomically.  The instance-id hash only seeds the probe
+        order; slots are probed linearly from there.
+        """
+        for offset in range(_FC_NET_SLOTS):
+            idx = (self._net_index_hint + offset) % _FC_NET_SLOTS
+            tap_name = f"fc-tap{idx}"
+            result = _checked_run(
+                ["sudo", "ip", "tuntap", "add", tap_name, "mode", "tap"],
+                check=False,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                self._tap_dev = tap_name
+                self._host_ip = f"172.{16 + idx // 256}.{idx % 256}.1"
+                self._guest_ip = f"172.{16 + idx // 256}.{idx % 256}.2"
+                return
+            # `ip link show` needs no privileges, so a non-zero exit here
+            # means the device genuinely does not exist — the add failed
+            # for a non-collision reason (permissions, kernel limits).
+            exists = _checked_run(
+                ["ip", "link", "show", tap_name],
+                check=False,
+                timeout=30,
+            )
+            if exists.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise RuntimeError(
+                    f"failed to create TAP device {tap_name}: {detail}"
+                )
+            # Device exists (another instance owns the slot) — probe on.
+        raise RuntimeError(
+            f"no free FC network slot among {_FC_NET_SLOTS} candidates"
+        )
+
     def _setup_tap_and_nat(self) -> None:
         """Create TAP device, enable NAT + forwarding."""
+        if self._tap_dev is None:
+            self._allocate_net_slot()
+        else:
+            # Explicit or previously-allocated slot: (re)create the TAP.
+            # check=False keeps re-entry idempotent when the device is
+            # still present (e.g. explicit tap reused across runs).
+            _checked_run(
+                ["sudo", "ip", "tuntap", "add", self._tap_dev, "mode", "tap"],
+                check=False,
+                timeout=30,
+            )
+        # Delete-then-add makes the address assignment idempotent for a
+        # held slot (restore path) while still failing fast on real
+        # errors (missing device, permission loss).
         _checked_run(
-            ["sudo", "ip", "tuntap", "add", self._tap_dev, "mode", "tap"],
+            [
+                "sudo", "ip", "addr", "del",
+                f"{self._host_ip}/{self._netmask}",
+                "dev", self._tap_dev,
+            ],
             check=False,
             timeout=30,
         )
@@ -1960,12 +2073,12 @@ class FCBackend(SandboxBackend):
                 f"{self._host_ip}/{self._netmask}",
                 "dev", self._tap_dev,
             ],
-            check=False,
+            check=True,
             timeout=30,
         )
         _checked_run(
             ["sudo", "ip", "link", "set", self._tap_dev, "up"],
-            check=False,
+            check=True,
             timeout=30,
         )
         _checked_run(
@@ -1992,7 +2105,9 @@ class FCBackend(SandboxBackend):
         )
 
     def _teardown_tap_and_nat(self) -> None:
-        """Remove NAT rules and TAP device."""
+        """Remove NAT rules and TAP device (releases the network slot)."""
+        if self._tap_dev is None:
+            return
         _checked_run(
             [
                 "sudo", "iptables", "-t", "nat", "-D", "POSTROUTING",
@@ -2022,12 +2137,20 @@ class FCBackend(SandboxBackend):
         # Truncate stale metrics from prior VM instance.
         Path(self._metrics_path).write_text("")
 
-        self._process = subprocess.Popen(
-            [self._fc_binary, "--api-sock", self._api_sock],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
+        # FC stdout carries the guest serial console (console=ttyS0) —
+        # keep it in a per-instance log for post-mortem debugging.  The
+        # child inherits its own duplicated fd, so closing the parent's
+        # handle immediately is safe as long as nothing ever calls
+        # communicate() on this process (only poll/kill/wait are used).
+        console_log = open(self._console_log_path, "ab")
+        try:
+            self._process = subprocess.Popen(
+                [self._fc_binary, "--api-sock", self._api_sock],
+                stdout=console_log,
+                stderr=console_log,
+            )
+        finally:
+            console_log.close()
 
         deadline = time.monotonic() + 10.0
         while not os.path.exists(self._api_sock):
@@ -2104,23 +2227,17 @@ class FCBackend(SandboxBackend):
         )
 
     def _stop_vm(self) -> None:
-        """Send Ctrl+Alt+Del to the guest, then wait/force-kill.
+        """Kill the Firecracker process.
 
-        The custom init script does not handle Cad, so after the signal
-        the process is killed.  The 3s wait before force-kill is the
-        minimum to allow the guest kernel to flush console output."""
+        The custom init script has no Ctrl+Alt+Del handler, so a
+        graceful-shutdown signal can never work — the VMM is killed
+        directly.  Disk consistency does not depend on this path:
+        snapshots quiesce + pause before capture, and the working rootfs
+        is discarded (stop) or overwritten from a snapshot (restore)."""
         if self._process is None or self._process.poll() is not None:
             return
-        try:
-            self._api_put("/actions", {"action_type": "SendCtrlAltDel"})
-        except RuntimeError:
-            pass
-
-        try:
-            self._process.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait(timeout=5.0)
+        self._process.kill()
+        self._process.wait(timeout=5.0)
 
     # ------------------------------------------------------------------
     # Internal — snapshot helpers
@@ -2183,6 +2300,12 @@ class FCBackend(SandboxBackend):
         """Send an HTTP request over the FC API socket.
 
         Returns ``(status_code, response_body)``.
+
+        The FC API server keeps connections alive and ignores
+        ``Connection: close``, so the response end is determined from the
+        status line and ``Content-Length`` header — never by waiting for
+        the server to close the socket (which would block until the
+        socket timeout on every call).
         """
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(10)
@@ -2197,29 +2320,61 @@ class FCBackend(SandboxBackend):
                 )
             else:
                 body_bytes = b""
-            headers += "Connection: close\r\n\r\n"
+            headers += "\r\n"
             sock.sendall(headers.encode("utf-8") + body_bytes)
 
-            chunks: list[bytes] = []
-            while True:
-                try:
-                    chunk = sock.recv(65536)
-                except socket.timeout:
-                    break
+            raw = b""
+            while b"\r\n\r\n" not in raw:
+                chunk = sock.recv(65536)
                 if not chunk:
                     break
-                chunks.append(chunk)
-            response = b"".join(chunks).decode("utf-8", errors="replace")
+                raw += chunk
+            header_bytes, _, body_rest = raw.partition(b"\r\n\r\n")
+
+            content_length: int | None = None
+            for header_line in header_bytes.split(b"\r\n")[1:]:
+                name, _, value = header_line.partition(b":")
+                if name.strip().lower() == b"content-length":
+                    try:
+                        content_length = int(value.strip())
+                    except ValueError:
+                        content_length = None
+                    break
+
+            status_line = header_bytes.split(b"\r\n")[0].decode(
+                "utf-8", errors="replace",
+            )
+            try:
+                status_code = int(status_line.split(" ")[1])
+            except (IndexError, ValueError):
+                status_code = 0
+
+            # The FC API contract: every response carries Content-Length
+            # except bodyless statuses.  Fail fast on anything else
+            # rather than guessing the body length.
+            if content_length is None:
+                if status_code in (204, 304):
+                    content_length = 0
+                else:
+                    raise RuntimeError(
+                        f"FC API {method} {path}: response status "
+                        f"{status_code} without Content-Length header"
+                    )
+
+            while len(body_rest) < content_length:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                body_rest += chunk
+            if len(body_rest) < content_length:
+                raise RuntimeError(
+                    f"FC API {method} {path}: truncated response body "
+                    f"({len(body_rest)}/{content_length} bytes)"
+                )
         finally:
             sock.close()
 
-        header_section, _, resp_body = response.partition("\r\n\r\n")
-        status_line = header_section.split("\r\n")[0]
-        try:
-            status_code = int(status_line.split(" ")[1])
-        except (IndexError, ValueError):
-            status_code = 0
-        return status_code, resp_body
+        return status_code, body_rest.decode("utf-8", errors="replace")
 
     def _api_put(self, path: str, data: dict[str, Any]) -> None:
         body = json.dumps(data)
@@ -2321,6 +2476,50 @@ class FCBackend(SandboxBackend):
                 return int(write_bytes)
             # Found JSON but no rootfs drive — try the next line.
         return 0  # No write_bytes found in any line.
+
+
+# One-shot warning flag for the reflink fallback.  The check-then-set is
+# not thread-safe; a concurrent race only yields a duplicate log line, so
+# no lock is taken.  Nothing may branch on this flag besides the warning.
+_reflink_fallback_warned = False
+
+
+def _cow_copy(src: str, dst: str, *, timeout: int = 60) -> None:
+    """Copy *src* to *dst*, copy-on-write when the filesystem supports it.
+
+    Tries ``cp --reflink=always`` first (O(1) CoW clone on XFS/btrfs).
+    On filesystems without reflink support (e.g. ext4) it falls back to a
+    sparse byte copy and logs a one-time warning, because the fallback
+    turns every snapshot into a full-data copy — a real cost that must
+    not be silent.
+    """
+    global _reflink_fallback_warned
+    # No --sparse flag with reflink: coreutils rejects the combination
+    # (--reflink requires --sparse=auto), and a reflink clone shares
+    # extents with the source, preserving sparseness by construction.
+    result = _checked_run(
+        ["cp", "--reflink=always", src, dst],
+        check=False,
+        timeout=timeout,
+    )
+    if result.returncode == 0:
+        return
+    if not _reflink_fallback_warned:
+        _reflink_fallback_warned = True
+        logger.warning(
+            "cp --reflink=always failed for %s (%s); falling back to full "
+            "sparse copies. Disk snapshots on this filesystem are full-data "
+            "copies — use XFS/btrfs storage for CoW snapshot costs.",
+            dst,
+            (result.stderr or result.stdout).strip().splitlines()[0]
+            if (result.stderr or result.stdout).strip()
+            else "no error output",
+        )
+    _checked_run(
+        ["cp", "--sparse=always", src, dst],
+        check=True,
+        timeout=timeout,
+    )
 
 
 def _checked_run(
