@@ -218,6 +218,8 @@ class PreparedContainer:
     fixed_image: str | None = None
     cleanup_fixed_image: bool = True
     backend: SandboxBackend | None = None
+    # FCBackend paired snapshots indexed by action_index for forced-sync restore.
+    replay_snapshots: dict[int, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -4892,30 +4894,40 @@ async def _replay_cloud_model_session(
                     prev_folded=folded_source_entries,
                 )
                 source_entries = folded_source_entries
-                replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
-                    container=ctr,
-                    root=cas_spec.get("root", "/testbed"),
-                    previous_manifest=prev_cas_manifest,
-                    context="checkpoint_boundary",
-                )
-                # Only compare if capture succeeded (None = failure)
-                if replay_entries is not None:
-                    cas_manifest_fields = _cas_manifest_comparison_fields(
-                        source_entries=source_entries,
-                        replay_entries=replay_entries,
+                # FCBackend captures paired snapshots instead of CAS manifests.
+                if isinstance(ctr.backend, FCBackend):
+                    try:
+                        fc_snapshot = await ctr.backend.capture_snapshot()
+                        ctr.replay_snapshots[action_index] = fc_snapshot
+                    except Exception:
+                        # Snapshot capture is best-effort for forced-sync;
+                        # the absence is handled when restoring.
+                        pass
+                else:
+                    replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
+                        container=ctr,
+                        root=cas_spec.get("root", "/testbed"),
+                        previous_manifest=prev_cas_manifest,
+                        context="checkpoint_boundary",
                     )
-                    if (
-                        effective_mismatch_reason is None
-                        and not cas_manifest_fields["cas_manifest_match"]
-                    ):
-                        effective_mismatch_reason = "cas_state_mismatch"
-                        lane_induced_mismatch_candidate = (
-                            lane_active_at_parent_boundary
+                    # Only compare if capture succeeded (None = failure)
+                    if replay_entries is not None:
+                        cas_manifest_fields = _cas_manifest_comparison_fields(
+                            source_entries=source_entries,
+                            replay_entries=replay_entries,
                         )
-                # Store for incremental next snapshot (update even on {} —
-                # next incremental starts from a known empty state)
-                if replay_entries is not None:
-                    prev_cas_manifest = replay_entries
+                        if (
+                            effective_mismatch_reason is None
+                            and not cas_manifest_fields["cas_manifest_match"]
+                        ):
+                            effective_mismatch_reason = "cas_state_mismatch"
+                            lane_induced_mismatch_candidate = (
+                                lane_active_at_parent_boundary
+                            )
+                    # Store for incremental next snapshot (update even on {} —
+                    # next incremental starts from a known empty state)
+                    if replay_entries is not None:
+                        prev_cas_manifest = replay_entries
             replay_outcome_match = mismatch_reason is None
             output_diff_snippet: str | None = None
             if effective_mismatch_reason is not None or normalized_output_match is False:
@@ -5015,94 +5027,105 @@ async def _replay_cloud_model_session(
                 if checkpoint_spec is not None:
                     assert checkpoint_action_index is not None
                     forced_sync_started = time.monotonic()
-                    checkpoint_chain = _checkpoint_chain_specs_for_action(
-                        actions=loaded.actions,
-                        target_index=checkpoint_action_index,
-                        source_trace=loaded.source_trace,
-                    )
-                    try:
-                        if checkpoint_chain is None:
-                            restore_result = _checkpoint_restore_failed_fields(
-                                checkpoint_path=Path(str(checkpoint_spec["path"])),
-                                kind=str(
-                                    checkpoint_spec.get("kind")
-                                    or "cas_manifest_incremental"
-                                ),
-                                restore_root=str(
-                                    checkpoint_spec.get("root") or "/testbed"
-                                ),
-                                status="checkpoint_full_missing",
-                                error=(
-                                    "incremental checkpoint has no preceding full "
-                                    "checkpoint"
-                                ),
-                                started=time.monotonic(),
-                                archive_exists=Path(
-                                    str(checkpoint_spec["path"])
-                                ).is_file(),
-                            )
-                        else:
-                            restore_result = await asyncio.to_thread(
-                                _restore_checkpoint_chain_to_container,
-                                checkpoint_specs=checkpoint_chain,
-                                container=ctr,
-                            )
-                        forced_sync_fields.update(restore_result)
-                        if forced_sync_fields.get("forced_sync_success") is True:
-                            prev_cas_manifest = None
-                        skip_post_restore_verification = False
-                        if (
-                            forced_sync_fields.get("forced_sync_success") is True
-                            and fallback_reapply_start_index is not None
-                        ):
-                            restore_source_entries = (
-                                _fold_source_checkpoint_entries_through_action(
-                                    actions=loaded.actions,
-                                    target_index=checkpoint_action_index,
-                                    source_trace=loaded.source_trace,
+
+                    if isinstance(ctr.backend, FCBackend):
+                        # FC forced-sync: restore from the most recent paired
+                        # snapshot captured during replay at or before the
+                        # checkpoint action index.
+                        fc_restore_snapshot_index: int | None = None
+                        available = sorted(
+                            idx for idx in ctr.replay_snapshots
+                            if idx <= checkpoint_action_index
+                        )
+                        if available:
+                            fc_restore_snapshot_index = available[-1]
+                            fc_snapshot = ctr.replay_snapshots[
+                                fc_restore_snapshot_index
+                            ]
+                        if fc_restore_snapshot_index is not None:
+                            try:
+                                restored = await ctr.backend.restore_snapshot(
+                                    fc_snapshot,
                                 )
-                            )
-                            restore_verification_fields, _ = (
-                                await _verify_forced_sync_restore_state(
-                                    container=ctr,
-                                    checkpoint_spec=checkpoint_spec,
-                                    source_entries=restore_source_entries,
-                                    context="forced_sync_restore_pre_reapply",
-                                )
-                            )
-                            forced_sync_fields.update(
-                                {
-                                    "forced_sync_restore_verified": (
-                                        restore_verification_fields[
-                                            "forced_sync_verified"
-                                        ]
+                                prev_cas_manifest = None
+                                restore_result = {
+                                    "forced_sync_success": restored,
+                                    "forced_sync_status": (
+                                        "fc_paired_restored_continuation"
+                                        if restored
+                                        else "fc_paired_restore_failed"
                                     ),
-                                    "forced_sync_restore_verification": (
-                                        restore_verification_fields[
-                                            "forced_sync_verification"
-                                        ]
+                                    "forced_sync_resolved": False,
+                                    "forced_sync_continued": restored,
+                                    "forced_sync_overhead_excluded": True,
+                                    "forced_sync_fc_snapshot_index": (
+                                        fc_restore_snapshot_index
+                                    ),
+                                    "forced_sync_fc_mem_version": (
+                                        fc_snapshot.process_state.get(
+                                            "mem_version"
+                                        )
+                                        if fc_snapshot.process_state
+                                        else None
+                                    ),
+                                    "forced_sync_fc_disk_version": (
+                                        fc_snapshot.disk_state.get(
+                                            "disk_version"
+                                        )
+                                    ),
+                                    "restore_root_exists": True,
+                                }
+                            except Exception as exc:
+                                restore_result = {
+                                    "forced_sync_success": False,
+                                    "forced_sync_status": "fc_paired_restore_failed",
+                                    "forced_sync_resolved": False,
+                                    "forced_sync_continued": False,
+                                    "forced_sync_error": (
+                                        f"{type(exc).__name__}: {exc}"
                                     ),
                                 }
-                            )
+                        else:
+                            restore_result = {
+                                "forced_sync_success": False,
+                                "forced_sync_status": "fc_no_paired_snapshot",
+                                "forced_sync_resolved": False,
+                                "forced_sync_continued": False,
+                                "forced_sync_error": (
+                                    "no FC paired snapshot available "
+                                    "for checkpoint_action_index="
+                                    f"{checkpoint_action_index}"
+                                ),
+                            }
+                        forced_sync_fields.update(restore_result)
+                        skip_post_restore_verification = True
+                        # Reapply actions from the snapshot index to the
+                        # mismatch point when snapshot was from an earlier action.
+                        fc_reapply_start = (
+                            fc_restore_snapshot_index + 1
+                            if fc_restore_snapshot_index is not None
+                            and fc_restore_snapshot_index < action_index
+                            else None
+                        )
+                        if (
+                            restore_result.get("forced_sync_success") is True
+                            and fc_reapply_start is not None
+                        ):
                             reapply_fields = await _reapply_forced_sync_actions(
                                 prepared_session=prepared_session,
-                                start_index=fallback_reapply_start_index,
+                                start_index=fc_reapply_start,
                                 end_index=action_index,
                                 replay_speed=replay_speed,
                                 command_timeout_s=command_timeout_s,
                             )
                             forced_sync_fields.update(reapply_fields)
-                            skip_post_restore_verification = (
-                                reapply_fields["forced_sync_reapplied_action_count"]
-                                > 0
-                            )
                             if reapply_fields["forced_sync_reapply_errors"]:
                                 forced_sync_fields.update(
                                     {
                                         "forced_sync_success": False,
                                         "forced_sync_resolved": False,
                                         "forced_sync_continued": False,
-                                        "forced_sync_status": "reapply_failed",
+                                        "forced_sync_status": "fc_reapply_failed",
                                         "forced_sync_error": "; ".join(
                                             reapply_fields[
                                                 "forced_sync_reapply_errors"
@@ -5110,100 +5133,200 @@ async def _replay_cloud_model_session(
                                         ),
                                     }
                                 )
-                            elif skip_post_restore_verification:
-                                prev_cas_manifest = None
-                                forced_sync_fields.update(
-                                    {
-                                        "forced_sync_verified": None,
-                                        "forced_sync_verify_reason": (
-                                            "reapplied_actions_unverifiable"
-                                        ),
-                                        "forced_sync_verification": {
-                                            "restore_verified": (
-                                                restore_verification_fields[
-                                                    "forced_sync_verified"
-                                                ]
-                                            ),
-                                            "restore_verification": (
-                                                restore_verification_fields[
-                                                    "forced_sync_verification"
-                                                ]
-                                            ),
-                                            "reason": (
-                                                "reapplied_actions_unverifiable"
-                                            ),
-                                        },
-                                    }
+                    else:
+                        checkpoint_chain = _checkpoint_chain_specs_for_action(
+                            actions=loaded.actions,
+                            target_index=checkpoint_action_index,
+                            source_trace=loaded.source_trace,
+                        )
+                        try:
+                            if checkpoint_chain is None:
+                                restore_result = _checkpoint_restore_failed_fields(
+                                    checkpoint_path=Path(str(checkpoint_spec["path"])),
+                                    kind=str(
+                                        checkpoint_spec.get("kind")
+                                        or "cas_manifest_incremental"
+                                    ),
+                                    restore_root=str(
+                                        checkpoint_spec.get("root") or "/testbed"
+                                    ),
+                                    status="checkpoint_full_missing",
+                                    error=(
+                                        "incremental checkpoint has no preceding full "
+                                        "checkpoint"
+                                    ),
+                                    started=time.monotonic(),
+                                    archive_exists=Path(
+                                        str(checkpoint_spec["path"])
+                                    ).is_file(),
                                 )
                             else:
-                                forced_sync_fields.update(restore_verification_fields)
-                        if (
-                            forced_sync_fields.get("forced_sync_success") is True
-                            and not skip_post_restore_verification
-                        ):
-                            try:
-                                source_entries = (
+                                restore_result = await asyncio.to_thread(
+                                    _restore_checkpoint_chain_to_container,
+                                    checkpoint_specs=checkpoint_chain,
+                                    container=ctr,
+                                )
+                            forced_sync_fields.update(restore_result)
+                            if forced_sync_fields.get("forced_sync_success") is True:
+                                prev_cas_manifest = None
+                            skip_post_restore_verification = False
+                            if (
+                                forced_sync_fields.get("forced_sync_success") is True
+                                and fallback_reapply_start_index is not None
+                            ):
+                                restore_source_entries = (
                                     _fold_source_checkpoint_entries_through_action(
                                         actions=loaded.actions,
-                                        target_index=action_index,
+                                        target_index=checkpoint_action_index,
                                         source_trace=loaded.source_trace,
                                     )
                                 )
-                                verification_fields, replay_entries = (
+                                restore_verification_fields, _ = (
                                     await _verify_forced_sync_restore_state(
                                         container=ctr,
                                         checkpoint_spec=checkpoint_spec,
-                                        source_entries=source_entries,
-                                        context="forced_sync_verification",
+                                        source_entries=restore_source_entries,
+                                        context="forced_sync_restore_pre_reapply",
                                     )
                                 )
-                                if replay_entries is None:
-                                    prev_cas_manifest = None
-                                    forced_sync_fields.update(verification_fields)
-                                else:
-                                    prev_cas_manifest = replay_entries
-                                    forced_sync_fields.update(verification_fields)
-                                    if not verification_fields[
-                                        "forced_sync_verification"
-                                    ]["cas_manifest_match"]:
-                                        forced_sync_fields.update(
-                                            {
-                                                "forced_sync_success": False,
-                                                "forced_sync_continued": False,
-                                                "forced_sync_status": (
-                                                    "verification_failed"
-                                                ),
-                                            }
-                                        )
-                            except Exception as exc:
-                                logger.warning(
-                                    "Forced sync verification failed for %s "
-                                    "action=%s: %s",
-                                    loaded.agent_id,
-                                    action_id,
-                                    exc,
-                                )
-                                prev_cas_manifest = None
                                 forced_sync_fields.update(
-                                    _forced_sync_verification_unavailable_fields(
-                                        f"{type(exc).__name__}: {exc}",
-                                    )
+                                    {
+                                        "forced_sync_restore_verified": (
+                                            restore_verification_fields[
+                                                "forced_sync_verified"
+                                            ]
+                                        ),
+                                        "forced_sync_restore_verification": (
+                                            restore_verification_fields[
+                                                "forced_sync_verification"
+                                            ]
+                                        ),
+                                    }
                                 )
-                    except Exception as exc:
-                        logger.exception(
-                            "Forced sync failed for %s action=%s",
-                            loaded.agent_id,
-                            action_id,
-                        )
-                        forced_sync_fields.update(
-                            {
-                                "forced_sync_success": False,
-                                "forced_sync_resolved": False,
-                                "forced_sync_continued": False,
-                                "forced_sync_status": "checkpoint_restore_failed",
-                                "forced_sync_error": f"{type(exc).__name__}: {exc}",
-                            }
-                        )
+                                reapply_fields = await _reapply_forced_sync_actions(
+                                    prepared_session=prepared_session,
+                                    start_index=fallback_reapply_start_index,
+                                    end_index=action_index,
+                                    replay_speed=replay_speed,
+                                    command_timeout_s=command_timeout_s,
+                                )
+                                forced_sync_fields.update(reapply_fields)
+                                skip_post_restore_verification = (
+                                    reapply_fields[
+                                        "forced_sync_reapplied_action_count"
+                                    ]
+                                    > 0
+                                )
+                                if reapply_fields["forced_sync_reapply_errors"]:
+                                    forced_sync_fields.update(
+                                        {
+                                            "forced_sync_success": False,
+                                            "forced_sync_resolved": False,
+                                            "forced_sync_continued": False,
+                                            "forced_sync_status": "reapply_failed",
+                                            "forced_sync_error": "; ".join(
+                                                reapply_fields[
+                                                    "forced_sync_reapply_errors"
+                                                ]
+                                            ),
+                                        }
+                                    )
+                                elif skip_post_restore_verification:
+                                    prev_cas_manifest = None
+                                    forced_sync_fields.update(
+                                        {
+                                            "forced_sync_verified": None,
+                                            "forced_sync_verify_reason": (
+                                                "reapplied_actions_unverifiable"
+                                            ),
+                                            "forced_sync_verification": {
+                                                "restore_verified": (
+                                                    restore_verification_fields[
+                                                        "forced_sync_verified"
+                                                    ]
+                                                ),
+                                                "restore_verification": (
+                                                    restore_verification_fields[
+                                                        "forced_sync_verification"
+                                                    ]
+                                                ),
+                                                "reason": (
+                                                    "reapplied_actions_unverifiable"
+                                                ),
+                                            },
+                                        }
+                                    )
+                                else:
+                                    forced_sync_fields.update(
+                                        restore_verification_fields
+                                    )
+                            if (
+                                forced_sync_fields.get("forced_sync_success") is True
+                                and not skip_post_restore_verification
+                            ):
+                                try:
+                                    source_entries = (
+                                        _fold_source_checkpoint_entries_through_action(
+                                            actions=loaded.actions,
+                                            target_index=action_index,
+                                            source_trace=loaded.source_trace,
+                                        )
+                                    )
+                                    verification_fields, replay_entries = (
+                                        await _verify_forced_sync_restore_state(
+                                            container=ctr,
+                                            checkpoint_spec=checkpoint_spec,
+                                            source_entries=source_entries,
+                                            context="forced_sync_verification",
+                                        )
+                                    )
+                                    if replay_entries is None:
+                                        prev_cas_manifest = None
+                                        forced_sync_fields.update(verification_fields)
+                                    else:
+                                        prev_cas_manifest = replay_entries
+                                        forced_sync_fields.update(verification_fields)
+                                        if not verification_fields[
+                                            "forced_sync_verification"
+                                        ]["cas_manifest_match"]:
+                                            forced_sync_fields.update(
+                                                {
+                                                    "forced_sync_success": False,
+                                                    "forced_sync_continued": False,
+                                                    "forced_sync_status": (
+                                                        "verification_failed"
+                                                    ),
+                                                }
+                                            )
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Forced sync verification failed for %s "
+                                        "action=%s: %s",
+                                        loaded.agent_id,
+                                        action_id,
+                                        exc,
+                                    )
+                                    prev_cas_manifest = None
+                                    forced_sync_fields.update(
+                                        _forced_sync_verification_unavailable_fields(
+                                            f"{type(exc).__name__}: {exc}",
+                                        )
+                                    )
+                        except Exception as exc:
+                            logger.exception(
+                                "Forced sync failed for %s action=%s",
+                                loaded.agent_id,
+                                action_id,
+                            )
+                            forced_sync_fields.update(
+                                {
+                                    "forced_sync_success": False,
+                                    "forced_sync_resolved": False,
+                                    "forced_sync_continued": False,
+                                    "forced_sync_status": "checkpoint_restore_failed",
+                                    "forced_sync_error": f"{type(exc).__name__}: {exc}",
+                                }
+                            )
                     forced_sync_success = (
                         forced_sync_fields.get("forced_sync_success") is True
                     )

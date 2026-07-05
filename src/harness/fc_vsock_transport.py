@@ -142,3 +142,62 @@ def poll_vsock_ready(
             except OSError:
                 pass
     return False
+
+
+def quiesce_vsock(
+    port: int = _DEFAULT_VSOCK_PORT,
+    timeout_s: float = 10.0,
+) -> bool:
+    """Send a ``sync`` command to the guest agent to flush journals and
+    page cache before a snapshot pause.
+
+    Opens a short-lived vsock connection, sends an ``exec`` tool request
+    for ``sync``, and reads the response.  Returns ``True`` on success.
+    """
+    sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    sock.settimeout(min(timeout_s, 5.0))
+    try:
+        sock.connect((_GUEST_CID, port))
+    except (OSError, TimeoutError) as exc:
+        sock.close()
+        raise ConnectionError(
+            f"quiesce vsock connect to guest CID {_GUEST_CID} port {port} failed"
+        ) from exc
+
+    sock.settimeout(timeout_s)
+    try:
+        request = json.dumps(
+            {"tool": "exec", "args": {"command": "sync"}},
+            ensure_ascii=False,
+        ) + "\n"
+        sock.sendall(request.encode())
+
+        chunks: list[bytes] = []
+        while True:
+            try:
+                chunk = sock.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b"\n" in chunk:
+                break
+        raw = b"".join(chunks).decode("utf-8", errors="replace")
+    finally:
+        sock.close()
+
+    for i in range(len(raw)):
+        if raw[i] == "{":
+            raw = raw[i:]
+            break
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("{"):
+            try:
+                response = json.loads(stripped)
+                return bool(response.get("ok", False))
+            except json.JSONDecodeError:
+                pass
+    return False

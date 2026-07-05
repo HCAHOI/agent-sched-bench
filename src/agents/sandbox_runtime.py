@@ -1514,9 +1514,25 @@ class FCBackend(SandboxBackend):
 
     Snapshots
     ---------
-    Snapshots use the Firecracker snapshot API (pause → PUT /snapshot/create →
-    resume).  In Phase F1 they are disk-only: only write-count deltas are
-    tracked; memory-diff snapshots arrive in Phase F2.
+    Atomic paired (memory, disk) snapshots capture VM state at the same
+    pause point.  Memory is captured via the Firecracker snapshot API
+    (Diff after first Full); disk is a CoW copy of the backing rootfs
+    file (``cp --reflink=always``).  The guest is quiesced with ``sync``
+    before pause to flush journals and page cache.
+
+    Cadence
+    -------
+    ``paired`` captures both memory and disk on every checkpoint.
+    ``disk_always`` skips the memory snapshot (much faster, but restore
+    is a cold boot from the disk snapshot).  ``disk_memory_mixed``
+    captures memory every *memory_snapshot_interval* checkpoints and disk
+    on every checkpoint.
+
+    Restore
+    -------
+    Recovery is VM re-instantiation: a new FC process is launched with
+    the paired disk snapshot as its root drive loaded via the FC snapshot
+    API.  Restore latency is ~100 ms – 1 s.
 
     Probe
     -----
@@ -1543,7 +1559,16 @@ class FCBackend(SandboxBackend):
         root: str = "/testbed",
         fc_binary: str = "firecracker",
         container_executable: str = "docker",
+        checkpoint_cadence: str = "paired",
+        memory_snapshot_interval: int = 10,
     ) -> None:
+        _VALID_CADENCES = frozenset({"paired", "disk_always", "disk_memory_mixed"})
+        if checkpoint_cadence not in _VALID_CADENCES:
+            raise ValueError(
+                f"checkpoint_cadence must be one of {sorted(_VALID_CADENCES)}, "
+                f"got {checkpoint_cadence!r}"
+            )
+
         self._source_image = source_image
         self._kernel_path = kernel_path
         self._checkpoint_dir = checkpoint_dir or Path("/tmp/fc-checkpoints")
@@ -1558,10 +1583,15 @@ class FCBackend(SandboxBackend):
         self.root = root
         self._fc_binary = fc_binary
         self._container_executable = container_executable
+        self._checkpoint_cadence = checkpoint_cadence
+        self._memory_snapshot_interval = max(1, memory_snapshot_interval)
 
         self._process: subprocess.Popen[str] | None = None
         self._rootfs_path: Path | None = None
         self._snapshot_counter: int = 0
+        self._mem_version: int = 0
+        self._disk_version: int = 0
+        self._has_full_mem_snapshot: bool = False
         self._last_write_bytes: int | None = None
 
     # ------------------------------------------------------------------
@@ -1654,7 +1684,7 @@ class FCBackend(SandboxBackend):
         return transport_response_from_agent_dict(raw_response)
 
     # ------------------------------------------------------------------
-    # Snapshots (disk-only for Phase F1)
+    # Snapshots — atomic paired (memory, disk) capture / restore
     # ------------------------------------------------------------------
 
     async def capture_snapshot(
@@ -1662,83 +1692,204 @@ class FCBackend(SandboxBackend):
         *,
         incremental_since: SandboxSnapshot | None = None,
     ) -> SandboxSnapshot:
-        del incremental_since  # not used for full snapshots in F1
+        """Atomic paired snapshot at a single VM pause point.
+
+        1. Quiesce guest (``sync`` via vsock).
+        2. Pause the VM.
+        3. If cadence calls for memory: capture via FC snapshot API
+           (Full for first, Diff thereafter).
+        4. Disk: CoW copy of the backing rootfs file.
+        5. Resume the VM.
+
+        Returns a ``SandboxSnapshot`` with ``process_state`` holding the
+        memory-snapshot metadata (or ``None`` for disk-only cadences) and
+        ``disk_state`` holding the disk-snapshot path and version counters.
+        """
+        del incremental_since  # FC paired snapshots are always full-state
         timestamp_ns = time.time_ns()
         snap_index = self._snapshot_counter
         self._snapshot_counter += 1
 
-        mem_path = str(
-            self._checkpoint_dir / f"snap-{snap_index:04d}-mem.snap"
-        )
-        state_path = str(
-            self._checkpoint_dir / f"snap-{snap_index:04d}-vmstate.snap"
-        )
+        should_capture_mem = self._mem_cadence_enabled(snap_index)
 
         self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+        # 1. Quiesce guest — flush journals and page cache.
+        await self._quiesce_guest()
+
+        # 2. Pause the VM so memory and disk are captured at the same point.
         await asyncio.to_thread(self._api_patch, "/vm", {"state": "Paused"})
+
         try:
-            await asyncio.to_thread(
-                self._api_put,
-                "/snapshot/create",
-                {
-                    "snapshot_type": "Full",
-                    "snapshot_path": mem_path,
-                    "mem_file_path": mem_path,
-                    "version": "1.1.0",
-                },
+            mem_path: str | None = None
+            snapshot_type: str | None = None
+
+            # 3. Memory snapshot.
+            if should_capture_mem:
+                mem_path = str(
+                    self._checkpoint_dir / f"snap-{snap_index:04d}-mem.snap"
+                )
+                snapshot_type = "Diff" if self._has_full_mem_snapshot else "Full"
+                await asyncio.to_thread(
+                    self._api_put,
+                    "/snapshot/create",
+                    {
+                        "snapshot_type": snapshot_type,
+                        "snapshot_path": mem_path,
+                        "mem_file_path": mem_path,
+                        "version": "1.1.0",
+                    },
+                )
+                self._has_full_mem_snapshot = True
+                self._mem_version += 1
+
+            # 4. Disk snapshot — CoW copy of the backing rootfs file.
+            assert self._rootfs_path is not None
+            disk_snap_path = str(
+                self._checkpoint_dir / f"snap-{snap_index:04d}-disk.img"
             )
+            await asyncio.to_thread(
+                _checked_run,
+                [
+                    "cp",
+                    "--reflink=always",
+                    str(self._rootfs_path),
+                    disk_snap_path,
+                ],
+                check=True,
+                timeout=60,
+            )
+            self._disk_version += 1
+
         finally:
+            # 5. Resume.
             await asyncio.to_thread(
                 self._api_patch, "/vm", {"state": "Resumed"},
             )
 
         write_bytes = await asyncio.to_thread(self._read_write_bytes)
+        self._last_write_bytes = write_bytes
+
+        process_state: dict[str, Any] | None = None
+        if mem_path is not None:
+            process_state = {
+                "mem_path": mem_path,
+                "snapshot_type": snapshot_type,
+                "mem_version": self._mem_version,
+            }
+
         return SandboxSnapshot(
-            process_state=None,
+            process_state=process_state,
             disk_state={
-                "snapshot_mem_path": mem_path,
-                "snapshot_state_path": state_path,
+                "disk_path": disk_snap_path,
+                "backing_path": str(self._rootfs_path),
                 "write_bytes": write_bytes,
-                "kind": "fc_full_snapshot",
-                "rootfs_path": str(self._rootfs_path)
-                if self._rootfs_path is not None
-                else None,
+                "kind": "fc_paired_snapshot",
+                "disk_version": self._disk_version,
+                "mem_version": (
+                    self._mem_version if mem_path is not None else None
+                ),
+                "checkpoint_cadence": self._checkpoint_cadence,
             },
             root=self.root,
             timestamp_ns=timestamp_ns,
         )
 
-    async def restore_snapshot(self, snapshot: SandboxSnapshot) -> None:
-        mem_path = snapshot.disk_state.get("snapshot_mem_path")
-        state_path = snapshot.disk_state.get("snapshot_state_path")
-        if not isinstance(mem_path, str) or not mem_path:
-            raise ValueError(
-                "FC snapshot disk_state.snapshot_mem_path must be set"
-            )
-        if isinstance(state_path, str) and state_path and Path(state_path).exists():
-            pass  # snapshot state path present on disk
+    async def restore_snapshot(self, snapshot: SandboxSnapshot) -> bool:
+        """Restore from an atomic paired snapshot.
 
-        # Stop the current VM.
+        1. Stop the current VM.
+        2. Set up TAP/NAT and launch a fresh FC process.
+        3. Configure the VM with the paired disk snapshot as root drive.
+        4. Load memory state via the FC snapshot API (if present).
+        5. Start (or resume) the VM.
+        6. Poll the vsock agent until it is ready.
+        7. Fix the guest clock (VM pause skips time).
+
+        Returns ``True`` on successful restore.
+        """
+        disk_path = snapshot.disk_state.get("disk_path")
+        if not isinstance(disk_path, str) or not disk_path:
+            raise ValueError(
+                "FC snapshot disk_state.disk_path must be a non-empty string"
+            )
+        if not Path(disk_path).exists():
+            raise FileNotFoundError(
+                f"FC snapshot disk image not found: {disk_path}"
+            )
+
+        mem_path: str | None = None
+        if snapshot.process_state is not None:
+            maybe_mem = snapshot.process_state.get("mem_path")
+            if isinstance(maybe_mem, str) and maybe_mem and Path(maybe_mem).exists():
+                mem_path = maybe_mem
+
+        # 1. Stop the current VM.
         await self.stop()
 
-        # Launch a fresh FC instance to load the snapshot.
+        # 2. Set up networking and launch new FC process.
         await asyncio.to_thread(self._setup_tap_and_nat)
         await asyncio.to_thread(self._launch_fc)
 
-        await asyncio.to_thread(
-            self._api_put,
-            "/snapshot/load",
+        # 3. Configure VM with snapshot disk as root drive.
+        self._api_put(
+            "/machine-config",
             {
-                "snapshot_path": mem_path,
-                "mem_file_path": mem_path,
-                "enable_diff_snapshots": True,
+                "vcpu_count": self._vcpu_count,
+                "mem_size_mib": self._mem_size_mib,
+                "track_dirty_pages": True,
             },
         )
-        await asyncio.to_thread(
-            self._api_patch, "/vm", {"state": "Resumed"},
+        self._api_put(
+            "/boot-source",
+            {
+                "kernel_image_path": str(self._kernel_path),
+                "boot_args": (
+                    "console=ttyS0 reboot=k panic=1 pci=off "
+                    "root=/dev/vda rw quiet"
+                ),
+            },
+        )
+        self._api_put(
+            "/drives/rootfs",
+            {
+                "drive_id": "rootfs",
+                "path_on_host": disk_path,
+                "is_root_device": True,
+                "is_read_only": False,
+            },
+        )
+        self._api_put(
+            "/network-interfaces/eth0",
+            {
+                "iface_id": "eth0",
+                "guest_mac": "AA:FC:00:00:00:01",
+                "host_dev_name": self._tap_dev,
+            },
         )
 
+        # 4. Load memory snapshot if available.
+        if mem_path is not None:
+            await asyncio.to_thread(
+                self._api_put,
+                "/snapshot/load",
+                {
+                    "snapshot_path": mem_path,
+                    "mem_file_path": mem_path,
+                    "enable_diff_snapshots": True,
+                },
+            )
+            # Resume from the loaded snapshot.
+            await asyncio.to_thread(
+                self._api_patch, "/vm", {"state": "Resumed"},
+            )
+        else:
+            # Cold boot — no memory snapshot to load.
+            await asyncio.to_thread(
+                self._api_put, "/actions", {"action_type": "InstanceStart"},
+            )
+
+        # 6. Wait for vsock agent.
         ready = await asyncio.to_thread(
             self._poll_vsock_ready,
             timeout_s=60.0,
@@ -1748,7 +1899,11 @@ class FCBackend(SandboxBackend):
                 "FCBackend: vsock agent did not become ready after snapshot restore"
             )
 
+        # 7. Fix guest clock.
+        await self._fix_guest_clock()
+
         self._last_write_bytes = await asyncio.to_thread(self._read_write_bytes)
+        return True
 
     # ------------------------------------------------------------------
     # Change probe
@@ -1914,6 +2069,57 @@ class FCBackend(SandboxBackend):
         except subprocess.TimeoutExpired:
             self._process.kill()
             self._process.wait(timeout=5.0)
+
+    # ------------------------------------------------------------------
+    # Internal — snapshot helpers
+    # ------------------------------------------------------------------
+
+    def _mem_cadence_enabled(self, snap_index: int) -> bool:
+        """Return ``True`` when a memory snapshot should be taken at
+        *snap_index*."""
+        cadence = self._checkpoint_cadence
+        if cadence == "paired":
+            return True
+        if cadence == "disk_always":
+            return False
+        # disk_memory_mixed — memory every N turns.
+        return snap_index % self._memory_snapshot_interval == 0
+
+    async def _quiesce_guest(self) -> None:
+        """Send ``sync`` to the guest via vsock before pausing the VM."""
+        try:
+            await asyncio.to_thread(
+                self._execute_vsock,
+                {"tool": "exec", "args": {"command": "sync"}},
+                10.0,
+            )
+        except (ConnectionError, RuntimeError):
+            # Best-effort — the guest may not have /bin/sync, or the
+            # vsock agent may not support exec.  The snapshot is still
+            # consistent because the VM is paused; we just lose the
+            # journal/page-cache flush.
+            pass
+
+    async def _fix_guest_clock(self) -> None:
+        """Advance the guest clock after a snapshot restore.
+
+        When a VM is paused and later resumed, the guest clock is behind
+        by the pause duration.  We set it to the current host time via
+        ``date -s``.
+        """
+        current_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        try:
+            await asyncio.to_thread(
+                self._execute_vsock,
+                {
+                    "tool": "exec",
+                    "args": {"command": f"date -s '{current_utc}'"},
+                },
+                10.0,
+            )
+        except (ConnectionError, RuntimeError):
+            # Best-effort — clock skew is tolerable for most workloads.
+            pass
 
     # ------------------------------------------------------------------
     # Internal — FC API over Unix socket
