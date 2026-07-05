@@ -1549,14 +1549,15 @@ class FCBackend(SandboxBackend):
         source_image: str,
         kernel_path: Path,
         checkpoint_dir: Path | None = None,
-        api_sock: str = "/tmp/fc-agent.sock",
+        instance_id: str | None = None,
+        api_sock: str | None = None,
         vsock_sock: str | None = None,
         vsock_port: int = 5678,
         vcpu_count: int = 2,
         mem_size_mib: int = 1024,
-        tap_dev: str = "fc-tap0",
-        host_ip: str = "172.16.0.1",
-        guest_ip: str = "172.16.0.2",
+        tap_dev: str | None = None,
+        host_ip: str | None = None,
+        guest_ip: str | None = None,
         netmask: int = 24,
         root: str = "/testbed",
         fc_binary: str = "firecracker",
@@ -1574,14 +1575,25 @@ class FCBackend(SandboxBackend):
         self._source_image = source_image
         self._kernel_path = kernel_path
         self._checkpoint_dir = checkpoint_dir or Path("/tmp/fc-checkpoints")
-        self._api_sock = api_sock
-        self._vsock_sock = vsock_sock or f"{api_sock}-vsock.sock"
+
+        # Per-instance uniqueness derived from instance_id (Bug 6).
+        self._instance_id = instance_id or uuid.uuid4().hex[:8]
+        subnet_id = int(self._instance_id[:8], 16) % 256
+        hex_id = self._instance_id[:8]
+
+        self._api_sock = api_sock or f"/tmp/fc-{self._instance_id}.sock"
+        self._vsock_sock = vsock_sock or f"/tmp/fc-{self._instance_id}-vsock.sock"
+        self._metrics_path = f"/tmp/fc-{self._instance_id}-metrics.json"
         self._vsock_port = vsock_port
         self._vcpu_count = vcpu_count
         self._mem_size_mib = mem_size_mib
-        self._tap_dev = tap_dev
-        self._host_ip = host_ip
-        self._guest_ip = guest_ip
+        self._tap_dev = tap_dev or f"fc-tap{subnet_id}"
+        self._host_ip = host_ip or f"172.16.{subnet_id}.1"
+        self._guest_ip = guest_ip or f"172.16.{subnet_id}.2"
+        self._guest_cid = 3 + (int(self._instance_id[:8], 16) % 65533)
+        self._guest_mac = (
+            f"AA:FC:{hex_id[0:2]}:{hex_id[2:4]}:{hex_id[4:6]}:{hex_id[6:8]}"
+        )
         self._netmask = netmask
         self.root = root
         self._fc_binary = fc_binary
@@ -1594,7 +1606,6 @@ class FCBackend(SandboxBackend):
         self._snapshot_counter: int = 0
         self._mem_version: int = 0
         self._disk_version: int = 0
-        self._has_full_mem_snapshot: bool = False
         self._last_write_bytes: int | None = None
 
     # ------------------------------------------------------------------
@@ -1611,10 +1622,22 @@ class FCBackend(SandboxBackend):
 
         from harness.fc_rootfs_builder import build_fc_rootfs
 
-        self._rootfs_path = await asyncio.to_thread(
+        rootfs_cache = await asyncio.to_thread(
             build_fc_rootfs,
             docker_image=self._source_image,
             container_executable=self._container_executable,
+        )
+
+        # Per-instance working copy — the cache is read-only source material.
+        self._rootfs_path = Path(f"/tmp/fc-rootfs-{self._instance_id}.ext4")
+        await asyncio.to_thread(
+            _checked_run,
+            [
+                "cp", "--sparse=always", "--reflink=auto",
+                str(rootfs_cache), str(self._rootfs_path),
+            ],
+            check=True,
+            timeout=60,
         )
 
         await asyncio.to_thread(self._setup_tap_and_nat)
@@ -1700,7 +1723,7 @@ class FCBackend(SandboxBackend):
         1. Quiesce guest (``sync`` via vsock).
         2. Pause the VM.
         3. If cadence calls for memory: capture via FC snapshot API
-           (Full for first, Diff thereafter).
+           (Full only — Diff+rebase is future work via snapshot-editor).
         4. Disk: CoW copy of the backing rootfs file.
         5. Resume the VM.
 
@@ -1724,26 +1747,27 @@ class FCBackend(SandboxBackend):
         await asyncio.to_thread(self._api_patch, "/vm", {"state": "Paused"})
 
         try:
+            vmstate_path: str | None = None
             mem_path: str | None = None
-            snapshot_type: str | None = None
+            disk_snap_path: str | None = None
 
-            # 3. Memory snapshot.
+            # 3. Memory snapshot (always Full; Diff+rebase is future work).
             if should_capture_mem:
+                vmstate_path = str(
+                    self._checkpoint_dir / f"snap-{snap_index:04d}-vmstate.snap"
+                )
                 mem_path = str(
                     self._checkpoint_dir / f"snap-{snap_index:04d}-mem.snap"
                 )
-                snapshot_type = "Diff" if self._has_full_mem_snapshot else "Full"
                 await asyncio.to_thread(
                     self._api_put,
                     "/snapshot/create",
                     {
-                        "snapshot_type": snapshot_type,
-                        "snapshot_path": mem_path,
+                        "snapshot_type": "Full",
+                        "snapshot_path": vmstate_path,
                         "mem_file_path": mem_path,
-                        "version": "1.1.0",
                     },
                 )
-                self._has_full_mem_snapshot = True
                 self._mem_version += 1
 
             # 4. Disk snapshot — CoW copy of the backing rootfs file.
@@ -1755,7 +1779,8 @@ class FCBackend(SandboxBackend):
                 _checked_run,
                 [
                     "cp",
-                    "--reflink=always",
+                    "--reflink=auto",
+                    "--sparse=always",
                     str(self._rootfs_path),
                     disk_snap_path,
                 ],
@@ -1774,10 +1799,11 @@ class FCBackend(SandboxBackend):
         self._last_write_bytes = write_bytes
 
         process_state: dict[str, Any] | None = None
-        if mem_path is not None:
+        if mem_path is not None and vmstate_path is not None:
             process_state = {
+                "vmstate_path": vmstate_path,
                 "mem_path": mem_path,
-                "snapshot_type": snapshot_type,
+                "snapshot_type": "Full",
                 "mem_version": self._mem_version,
             }
 
@@ -1790,7 +1816,7 @@ class FCBackend(SandboxBackend):
                 "kind": "fc_paired_snapshot",
                 "disk_version": self._disk_version,
                 "mem_version": (
-                    self._mem_version if mem_path is not None else None
+                    self._mem_version if should_capture_mem else None
                 ),
                 "checkpoint_cadence": self._checkpoint_cadence,
             },
@@ -1801,15 +1827,27 @@ class FCBackend(SandboxBackend):
     async def restore_snapshot(self, snapshot: SandboxSnapshot) -> bool:
         """Restore from an atomic paired snapshot.
 
-        1. Stop the current VM.
-        2. Set up TAP/NAT and launch a fresh FC process.
-        3. Configure the VM with the paired disk snapshot as root drive.
-        4. Load memory state via the FC snapshot API (if present).
-        5. Start (or resume) the VM.
-        6. Poll the vsock agent until it is ready.
-        7. Fix the guest clock (VM pause skips time).
+        Design (see Bug 4 in feat/firecracker commit history):
 
-        Returns ``True`` on successful restore.
+        **With memory snapshot**:
+        1. Stop the current VM.
+        2. Copy snapshot disk OVER the working rootfs (so the vmstate's
+           drive backing path resolves).
+        3. Launch a fresh FC process.
+        4. ``PUT /snapshot/load`` immediately — NO other config calls
+           (FC forbids configure-then-load).
+        5. Poll vsock, fix clock, configure metrics.
+
+        **Without memory (cold boot from disk snapshot)**:
+        1. Stop the current VM.
+        2. Copy snapshot disk over the working rootfs.
+        3. Launch fresh FC process.
+        4. Full ``_configure_vm`` + ``InstanceStart`` (cold boot).
+        5. Poll vsock, fix clock.
+
+        After restore ``self._rootfs_path`` still points to the working
+        copy (now overwritten with snapshot content), so a subsequent
+        ``capture_snapshot`` will work.
         """
         disk_path = snapshot.disk_state.get("disk_path")
         if not isinstance(disk_path, str) or not disk_path:
@@ -1822,85 +1860,62 @@ class FCBackend(SandboxBackend):
             )
 
         mem_path: str | None = None
+        vmstate_path: str | None = None
         if snapshot.process_state is not None:
             maybe_mem = snapshot.process_state.get("mem_path")
             if isinstance(maybe_mem, str) and maybe_mem and Path(maybe_mem).exists():
                 mem_path = maybe_mem
+            maybe_vmstate = snapshot.process_state.get("vmstate_path")
+            if isinstance(maybe_vmstate, str) and maybe_vmstate and Path(maybe_vmstate).exists():
+                vmstate_path = maybe_vmstate
 
         # 1. Stop the current VM.
         await self.stop()
 
-        # 2. Set up networking and launch new FC process.
+        # 2. Ensure working rootfs exists, then overwrite with snapshot disk.
+        if self._rootfs_path is None:
+            self._rootfs_path = Path(f"/tmp/fc-rootfs-{self._instance_id}.ext4")
+        await asyncio.to_thread(
+            _checked_run,
+            [
+                "cp", "--reflink=auto", "--sparse=always",
+                disk_path, str(self._rootfs_path),
+            ],
+            check=True,
+            timeout=60,
+        )
+
+        # 3. Set up networking and launch fresh FC.
         await asyncio.to_thread(self._setup_tap_and_nat)
         await asyncio.to_thread(self._launch_fc)
 
-        # 3. Configure VM with snapshot disk as root drive.
-        self._api_put(
-            "/machine-config",
-            {
-                "vcpu_count": self._vcpu_count,
-                "mem_size_mib": self._mem_size_mib,
-                "track_dirty_pages": True,
-            },
-        )
-        self._api_put(
-            "/boot-source",
-            {
-                "kernel_image_path": str(self._kernel_path),
-                "boot_args": (
-                    "console=ttyS0 reboot=k panic=1 pci=off "
-                    "root=/dev/vda rw quiet"
-                ),
-            },
-        )
-        self._api_put(
-            "/drives/rootfs",
-            {
-                "drive_id": "rootfs",
-                "path_on_host": disk_path,
-                "is_root_device": True,
-                "is_read_only": False,
-            },
-        )
-        self._api_put(
-            "/network-interfaces/eth0",
-            {
-                "iface_id": "eth0",
-                "guest_mac": "AA:FC:00:00:00:01",
-                "host_dev_name": self._tap_dev,
-            },
-        )
-        self._api_put(
-            "/vsock",
-            {
-                "vsock_id": "vsock0",
-                "guest_cid": 3,
-                "uds_path": self._vsock_sock,
-            },
-        )
-
-        # 4. Load memory snapshot if available.
-        if mem_path is not None:
+        if mem_path is not None and vmstate_path is not None:
+            # Restore with memory — configure metrics before load
+            # (FC forbids /metrics after the VM starts).
+            Path(self._metrics_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(self._metrics_path).touch()
+            await asyncio.to_thread(
+                self._api_put,
+                "/metrics",
+                {"metrics_path": self._metrics_path},
+            )
             await asyncio.to_thread(
                 self._api_put,
                 "/snapshot/load",
                 {
-                    "snapshot_path": mem_path,
+                    "snapshot_path": vmstate_path,
                     "mem_file_path": mem_path,
-                    "enable_diff_snapshots": True,
+                    "resume_vm": True,
                 },
             )
-            # Resume from the loaded snapshot.
-            await asyncio.to_thread(
-                self._api_patch, "/vm", {"state": "Resumed"},
-            )
         else:
-            # Cold boot — no memory snapshot to load.
+            # Cold boot — configure VM and start fresh.
+            await asyncio.to_thread(self._configure_vm)
             await asyncio.to_thread(
                 self._api_put, "/actions", {"action_type": "InstanceStart"},
             )
 
-        # 6. Wait for vsock agent.
+        # 5. Wait for vsock agent.
         ready = await asyncio.to_thread(
             self._poll_vsock_ready,
             timeout_s=60.0,
@@ -1910,9 +1925,10 @@ class FCBackend(SandboxBackend):
                 "FCBackend: vsock agent did not become ready after snapshot restore"
             )
 
-        # 7. Fix guest clock.
+        # 6. Fix guest clock.
         await self._fix_guest_clock()
 
+        # 7. Record baseline write bytes for change detection.
         self._last_write_bytes = await asyncio.to_thread(self._read_write_bytes)
         return True
 
@@ -1999,6 +2015,12 @@ class FCBackend(SandboxBackend):
         """Start the firecracker binary and wait for the API socket."""
         if os.path.exists(self._api_sock):
             os.unlink(self._api_sock)
+        # Clean up stale vsock UDS from a prior VM instance to avoid
+        # FC snapshot-load errors ("Error binding to …").
+        if os.path.exists(self._vsock_sock):
+            os.unlink(self._vsock_sock)
+        # Truncate stale metrics from prior VM instance.
+        Path(self._metrics_path).write_text("")
 
         self._process = subprocess.Popen(
             [self._fc_binary, "--api-sock", self._api_sock],
@@ -2025,7 +2047,7 @@ class FCBackend(SandboxBackend):
             time.sleep(0.1)
 
     def _configure_vm(self) -> None:
-        """Push machine-config, boot-source, root drive, net iface, and vsock."""
+        """Push machine-config, boot-source, root drive, net iface, vsock, and metrics."""
         assert self._rootfs_path is not None
         self._api_put(
             "/machine-config",
@@ -2041,7 +2063,10 @@ class FCBackend(SandboxBackend):
                 "kernel_image_path": str(self._kernel_path),
                 "boot_args": (
                     "console=ttyS0 reboot=k panic=1 pci=off "
-                    "root=/dev/vda rw quiet"
+                    "root=/dev/vda rw quiet "
+                    f"guest_ip={self._guest_ip} "
+                    f"host_ip={self._host_ip} "
+                    f"netmask_len={self._netmask}"
                 ),
             },
         )
@@ -2058,7 +2083,7 @@ class FCBackend(SandboxBackend):
             "/network-interfaces/eth0",
             {
                 "iface_id": "eth0",
-                "guest_mac": "AA:FC:00:00:00:01",
+                "guest_mac": self._guest_mac,
                 "host_dev_name": self._tap_dev,
             },
         )
@@ -2066,25 +2091,33 @@ class FCBackend(SandboxBackend):
             "/vsock",
             {
                 "vsock_id": "vsock0",
-                "guest_cid": 3,
+                "guest_cid": self._guest_cid,
                 "uds_path": self._vsock_sock,
             },
         )
+        # Firecracker requires the metrics file to exist before PUT /metrics.
+        Path(self._metrics_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self._metrics_path).touch()
+        self._api_put(
+            "/metrics",
+            {"metrics_path": self._metrics_path},
+        )
 
     def _stop_vm(self) -> None:
-        """Send halt to the VM and wait for process exit."""
+        """Send Ctrl+Alt+Del to the guest, then wait/force-kill.
+
+        The custom init script does not handle Cad, so after the signal
+        the process is killed.  The 3s wait before force-kill is the
+        minimum to allow the guest kernel to flush console output."""
         if self._process is None or self._process.poll() is not None:
             return
         try:
             self._api_put("/actions", {"action_type": "SendCtrlAltDel"})
         except RuntimeError:
-            try:
-                self._api_put("/actions", {"action_type": "InstanceHalt"})
-            except RuntimeError:
-                pass
+            pass
 
         try:
-            self._process.wait(timeout=10.0)
+            self._process.wait(timeout=3.0)
         except subprocess.TimeoutExpired:
             self._process.kill()
             self._process.wait(timeout=5.0)
@@ -2253,26 +2286,41 @@ class FCBackend(SandboxBackend):
     # ------------------------------------------------------------------
 
     def _read_write_bytes(self) -> int:
-        """Parse total write bytes from the FC Prometheus-style metrics."""
-        status, body = self._api_request("GET", "/metrics")
-        if status != 200:
+        """Parse total write bytes from the FC JSON metrics file.
+
+        Triggers a FlushMetrics action so FC appends one JSON object to
+        the per-instance metrics file, then parses the last JSON line for
+        the ``block.<drive_id>.write_bytes`` counter.
+        """
+        self._api_put("/actions", {"action_type": "FlushMetrics"})
+
+        try:
+            content = Path(self._metrics_path).read_text()
+        except FileNotFoundError:
             raise RuntimeError(
-                f"FC API GET /metrics returned {status}: {body[:200]}"
+                f"FC metrics file not found: {self._metrics_path}"
             )
-        total = 0
-        for line in body.splitlines():
-            line = line.strip()
-            if line.startswith("#") or not line:
+
+        lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+        if not lines:
+            return 0  # No metrics flushed yet — no writes have happened.
+
+        # FC appends one JSON object per flush — parse from the END
+        # backward to find the last complete JSON object.  Fragmented
+        # lines (partial writes from concurrent flushes) are skipped.
+        for line in reversed(lines):
+            try:
+                metrics = json.loads(line)
+            except json.JSONDecodeError:
                 continue
-            if "block_drive_write_bytes" in line and (
-                'drive_id="rootfs"' in line
-            ):
-                try:
-                    _, val = line.rsplit(None, 1)
-                    total += int(float(val))
-                except (ValueError, IndexError):
-                    pass
-        return total
+            # FC >=1.10 nests per-drive metrics under "block_<drive_id>".
+            # "block" alone holds aggregate virtio-blk counters.
+            rootfs_metrics = metrics.get("block_rootfs", {})
+            write_bytes = rootfs_metrics.get("write_bytes")
+            if write_bytes is not None:
+                return int(write_bytes)
+            # Found JSON but no rootfs drive — try the next line.
+        return 0  # No write_bytes found in any line.
 
 
 def _checked_run(

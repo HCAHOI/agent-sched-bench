@@ -25,241 +25,22 @@ _DEFAULT_ROOTFS_SIZE_MB = 4096  # 4 GiB — generous for full dev toolchains
 _DEFAULT_VSOCK_PORT = 5678
 # Working directory inside the VM (mirrors DockerBackend.root).
 _GUEST_WORKDIR = "/testbed"
+# Bump this when the builder logic (init script, agent, packages) changes
+# to invalidate stale cached rootfs images.
+_ROOTFS_BUILDER_VERSION = 3
 
-# ---------------------------------------------------------------------------
-# In-VM agent script (Python 3, listens on vsock, same JSON-lines protocol
-# as the ContainerAgent used by DockerBackend).
-# ---------------------------------------------------------------------------
+# _FC_AGENT_SCRIPT is composed from the shared tool-handler module
+# plus the vsock transport wrapper (read from file at module load time).
+_AGENT_HANDLERS_SRC = (
+    Path(__file__).resolve().parent.parent / "agents" / "_agent_handlers.py"
+).read_text()
 
-_FC_AGENT_SCRIPT = textwrap.dedent(r"""
-import json, os, sys, subprocess, difflib, signal, time, socket
+_FC_VSOCK_TRANSPORT = textwrap.dedent(r"""
+import signal as _signal
+import socket as _socket
+import time as _time
 
 VSOCK_PORT = int(os.environ.get("AGENT_VSOCK_PORT", "5678"))
-_LIST_IGNORE = {".git", "node_modules", "__pycache__", ".venv", ".tox",
-                ".mypy_cache", ".pytest_cache"}
-
-
-# --------------- agent handlers (copied from _REPLAY_AGENT_SCRIPT) ----------
-
-def _find_match(content, old_text):
-    if old_text in content:
-        return old_text, content.count(old_text)
-    old_lines = old_text.splitlines()
-    if not old_lines:
-        return None, 0
-    stripped_old = [line.strip() for line in old_lines]
-    content_lines = content.splitlines()
-    candidates = []
-    for i in range(len(content_lines) - len(stripped_old) + 1):
-        window = content_lines[i:i + len(stripped_old)]
-        if [line.strip() for line in window] == stripped_old:
-            candidates.append("\n".join(window))
-    if candidates:
-        return candidates[0], len(candidates)
-    return None, 0
-
-
-def _not_found_msg(old_text, content, path):
-    lines = content.splitlines(keepends=True)
-    old_lines = old_text.splitlines(keepends=True)
-    window = len(old_lines)
-    best_ratio, best_start = 0.0, 0
-    for i in range(max(1, len(lines) - window + 1)):
-        ratio = difflib.SequenceMatcher(
-            None, old_lines, lines[i:i + window]).ratio()
-        if ratio > best_ratio:
-            best_ratio, best_start = ratio, i
-    if best_ratio > 0.5:
-        diff = "\n".join(difflib.unified_diff(
-            old_lines, lines[best_start:best_start + window],
-            fromfile="old_text (provided)",
-            tofile=f"{path} (actual, line {best_start + 1})", lineterm=""))
-        return (
-            f"Error: old_text not found in {path}.\n"
-            f"Best match ({best_ratio:.0%}) at line {best_start + 1}:\n{diff}"
-        )
-    return f"Error: old_text not found in {path}. No similar text found."
-
-
-_MAX_OUTPUT = 10_000
-
-
-def _truncate_output(text, limit=_MAX_OUTPUT):
-    if len(text) <= limit:
-        return text
-    half = limit // 2
-    return (
-        text[:half] + f"\n\n... ({len(text) - limit:,} chars truncated) ..."
-        + "\n\n" + text[-half:]
-    )
-
-
-def _format_exec_result(stdout, stderr, returncode):
-    output_parts = []
-    if stdout:
-        output_parts.append(stdout)
-    if stderr and stderr.strip():
-        output_parts.append(f"STDERR:\n{stderr}")
-    output_parts.append(f"\nExit code: {returncode}")
-    return "\n".join(output_parts)
-
-
-def _format_command_timeout(timeout):
-    return f"Error: Command timed out after {timeout} seconds"
-
-
-# --------------- tool handlers ---------------
-
-def handle_exec(args):
-    cmd = args.get("command", "")
-    timeout = args.get("timeout", 600)
-    env = {**os.environ}
-    try:
-        r = subprocess.run(
-            cmd, shell=True, cwd="/testbed",
-            capture_output=True, text=True, timeout=timeout, env=env,
-        )
-        output = _format_exec_result(
-            r.stdout or "", r.stderr or "", r.returncode,
-        )
-        return {
-            "ok": True, "result": _truncate_output(output),
-            "returncode": r.returncode, "timed_out": False,
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "result": _format_command_timeout(timeout),
-            "returncode": 124, "timed_out": True,
-        }
-
-
-def handle_commands(args):
-    cmds = args.get("commands", [])
-    timeout = args.get("timeout", 600)
-    env = {**os.environ}
-    all_output = []
-    last_rc = 0
-    first_failed_rc = 0
-    any_timeout = False
-    for i, cmd in enumerate(cmds):
-        try:
-            r = subprocess.run(
-                cmd, shell=True, cwd="/testbed",
-                capture_output=True, text=True, timeout=timeout, env=env,
-            )
-            all_output.append(_format_exec_result(
-                r.stdout or "", r.stderr or "", r.returncode,
-            ))
-            last_rc = r.returncode
-            if r.returncode != 0 and first_failed_rc == 0:
-                first_failed_rc = r.returncode
-        except subprocess.TimeoutExpired:
-            all_output.append(_format_command_timeout(timeout))
-            last_rc = 124
-            any_timeout = True
-    if len(cmds) > 1:
-        combined = "\n".join(
-            f"[call {k}]\n{out}" for k, out in enumerate(all_output))
-    else:
-        combined = all_output[0] if all_output else ""
-    returncode = 124 if any_timeout else (first_failed_rc or last_rc)
-    return {
-        "ok": not any_timeout, "result": combined,
-        "returncode": returncode, "timed_out": any_timeout,
-    }
-
-
-_READ_MAX_CHARS = 128_000
-_READ_DEFAULT_LIMIT = 2000
-
-
-def handle_read_file(args):
-    path = args.get("path", "")
-    offset = int(args.get("offset", 0))
-    limit = int(args.get("limit", _READ_DEFAULT_LIMIT))
-    try:
-        content = open(path).read()
-        if not content:
-            return {"ok": True, "result": f"(Empty file: {path})"}
-        lines = content.splitlines()
-        selected = lines[offset:offset + limit]
-        numbered = "\n".join(
-            f"{offset + i + 1}| {ln}" for i, ln in enumerate(selected))
-        if len(numbered) > _READ_MAX_CHARS:
-            numbered = (
-                numbered[:_READ_MAX_CHARS]
-                + f"\n\n... (truncated at {_READ_MAX_CHARS} chars)"
-            )
-        return {"ok": True, "result": numbered}
-    except Exception as e:
-        return {"ok": False, "result": f"Error: {e}"}
-
-
-def handle_write_file(args):
-    path = args.get("path", "")
-    content = args.get("content", "")
-    try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-        return {"ok": True, "result": f"Successfully wrote {path}"}
-    except Exception as e:
-        return {"ok": False, "result": f"Error: {e}"}
-
-
-def handle_edit_file(args):
-    path = args.get("path", "")
-    old_text = args.get("old_text", "")
-    new_text = args.get("new_text", "")
-    replace_all = args.get("replace_all", False)
-    try:
-        raw = open(path, "rb").read()
-        uses_crlf = b"\r\n" in raw
-        content = raw.decode("utf-8").replace("\r\n", "\n")
-        match, count = _find_match(content, old_text.replace("\r\n", "\n"))
-        if match is None:
-            return {
-                "ok": False,
-                "result": _not_found_msg(old_text, content, path),
-            }
-        if count > 1 and not replace_all:
-            return {
-                "ok": False,
-                "result": (
-                    f"Warning: old_text appears {count} times. "
-                    "Provide more context or set replace_all=true."
-                ),
-            }
-        norm_new = new_text.replace("\r\n", "\n")
-        new_content = (
-            content.replace(match, norm_new) if replace_all
-            else content.replace(match, norm_new, 1)
-        )
-        if uses_crlf:
-            new_content = new_content.replace("\n", "\r\n")
-        open(path, "wb").write(new_content.encode("utf-8"))
-        return {"ok": True, "result": f"Successfully edited {path}"}
-    except Exception as e:
-        return {"ok": False, "result": f"Error editing file: {e}"}
-
-
-_LIST_MAX = 200
-
-
-def handle_list_dir(args):
-    path = args.get("path", ".")
-    try:
-        entries = sorted(
-            e for e in os.listdir(path) if e not in _LIST_IGNORE)
-        if len(entries) > _LIST_MAX:
-            entries = entries[:_LIST_MAX]
-            entries.append(
-                f"... ({len(os.listdir(path)) - _LIST_MAX} more entries)")
-        return {"ok": True, "result": "\n".join(entries)}
-    except Exception as e:
-        return {"ok": False, "result": f"Error: {e}"}
-
 
 HANDLERS = {
     "exec": handle_exec,
@@ -271,9 +52,7 @@ HANDLERS = {
 }
 
 
-# --------------- main loop ---------------
-
-def handle_connection(conn):
+def _handle_connection(conn):
     reader = conn.makefile("r", buffering=1, errors="replace")
     writer = conn.makefile("w", buffering=1)
     for line in reader:
@@ -286,10 +65,10 @@ def handle_connection(conn):
             args = req.get("args", {})
             handler = HANDLERS.get(tool)
             if handler:
-                t0 = time.monotonic()
+                t0 = _time.monotonic()
                 resp = handler(args)
                 resp["inner_duration_ms"] = (
-                    (time.monotonic() - t0) * 1000.0
+                    (_time.monotonic() - t0) * 1000.0
                 )
             else:
                 resp = {
@@ -303,16 +82,16 @@ def handle_connection(conn):
 
 
 def main():
-    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+    _signal.signal(_signal.SIGTERM, lambda *_: os._exit(0))
     os.makedirs("/testbed", exist_ok=True)
-    sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((socket.VMADDR_CID_ANY, VSOCK_PORT))
+    sock = _socket.socket(_socket.AF_VSOCK, _socket.SOCK_STREAM)
+    sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    sock.bind((_socket.VMADDR_CID_ANY, VSOCK_PORT))
     sock.listen(5)
     while True:
         conn, addr = sock.accept()
         try:
-            handle_connection(conn)
+            _handle_connection(conn)
         finally:
             conn.close()
 
@@ -320,6 +99,8 @@ def main():
 if __name__ == "__main__":
     main()
 """).strip()
+
+_FC_AGENT_SCRIPT = _AGENT_HANDLERS_SRC + "\n\n" + _FC_VSOCK_TRANSPORT
 
 
 # ---------------------------------------------------------------------------
@@ -338,25 +119,55 @@ mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 
-# Set up loopback (vsock does not need it, but tools may).
+# Rootfs /dev/console from docker export is a regular file, not a device
+# node.  After devtmpfs, /dev/ttyS0 is the real serial console.  Redirect
+# there so debug/error messages appear on the host.  Guard with test so
+# set -e doesn't abort on non-Firecracker kernels without ttyS0.
+if [ -e /dev/ttyS0 ]; then exec >/dev/ttyS0 2>&1; fi
+
+# Set up loopback.
 ip link set lo up 2>/dev/null || true
 
-# Configure eth0 if tap networking is available.
-ip addr add 172.16.0.2/24 dev eth0 2>/dev/null || true
+# Parse guest networking from kernel cmdline (set in boot_args by FCBackend).
+for _arg in $(cat /proc/cmdline); do
+    case "$_arg" in
+        guest_ip=*) GUEST_IP="${{_arg#guest_ip=}}" ;;
+        host_ip=*) HOST_IP="${{_arg#host_ip=}}" ;;
+        netmask_len=*) NETMASK_LEN="${{_arg#netmask_len=}}" ;;
+    esac
+done
+: "${{GUEST_IP:=172.16.0.2}}"
+: "${{HOST_IP:=172.16.0.1}}"
+: "${{NETMASK_LEN:=24}}"
+
+# Configure eth0 from parsed values.
+ip addr add "${{GUEST_IP}}/${{NETMASK_LEN}}" dev eth0 2>/dev/null || true
 ip link set eth0 up 2>/dev/null || true
-ip route add default via 172.16.0.1 2>/dev/null || true
+ip route add default via "${{HOST_IP}}" 2>/dev/null || true
 
 # Ensure /testbed exists.
 mkdir -p /testbed
 
 # Start dropbear SSH server for diagnostics.
 dropbear -F -E -p 22 2>/dev/null &
-# give it a moment to bind
 sleep 0.5
 
-# Start the vsock agent (runs forever).
+# Start the vsock agent in background, NOT as PID 1 (PID 1 is the shell).
 echo "Starting vsock agent on port ${{AGENT_VSOCK_PORT}}"
-exec python3 -u -c {json.dumps(_FC_AGENT_SCRIPT)}
+
+# Write agent script to /agent.py (avoid shell quoting issues with -c).
+cat > /agent.py << 'AGENTSCRIPT'
+{_FC_AGENT_SCRIPT}
+AGENTSCRIPT
+# stdout/stderr already redirected to serial console via exec above.
+python3 -u /agent.py &
+
+# PID 1 must reap orphaned child processes. The reap loop ensures
+# grandchildren from subprocess double-forks are collected.
+trap : CHLD
+while true; do
+    wait
+done
 """)
 
 
@@ -378,6 +189,12 @@ def build_fc_rootfs(
     The rootfs contains the Docker image's filesystem plus the vsock
     agent and dropbear.  Results are cached by image digest, so
     repeated calls for the same image are free.
+
+    **IMPORTANT**: The returned path points to the **read-only cache
+    image**.  Callers **must not** mount or modify it in-place.  Create
+    a per-instance working copy (e.g. ``cp --sparse=always --reflink=auto
+    <cache> <working>``) and use the working copy as the VM's root block
+    device.
 
     Args:
         docker_image: Docker image reference (e.g. ``"python:3.12"``).
@@ -453,10 +270,68 @@ def _image_digest(docker_image: str, executable: str = "docker") -> str:
 
 
 def _cache_key(docker_image: str, digest: str) -> str:
-    """Produce a filesystem-safe cache directory name."""
+    """Produce a filesystem-safe cache directory name (includes builder version
+    to invalidate when builder logic changes)."""
     safe_image = docker_image.replace("/", "_").replace(":", "_")
     short_digest = digest.split(":")[-1][:16]
-    return f"{safe_image}-{short_digest}.ext4"
+    return f"{safe_image}-{short_digest}-v{_ROOTFS_BUILDER_VERSION}.ext4"
+
+
+def _capture_image_env(
+    mnt: Path,
+    docker_image: str,
+    container_executable: str,
+) -> None:
+    """Capture Docker image ``ENV`` and ``WorkingDir`` as ``/etc/agent-env.json``.
+
+    ``docker export`` (used to extract the filesystem) strips image
+    configuration, so ENV and WORKDIR are lost. We read them via
+    ``docker image inspect`` and materialize them in the rootfs so the
+    agent can apply them to executed commands.
+    """
+    result = subprocess.run(
+        [
+            container_executable,
+            "image", "inspect",
+            docker_image,
+            "--format", "{{json .Config}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        return  # best-effort
+
+    try:
+        config = json.loads(result.stdout.strip())
+    except (json.JSONDecodeError, ValueError):
+        return
+
+    env_vars = config.get("Env")
+    working_dir = config.get("WorkingDir")
+    payload: dict[str, object] = {}
+    if isinstance(env_vars, list):
+        payload["env"] = [str(e) for e in env_vars]
+    if isinstance(working_dir, str) and working_dir:
+        payload["working_dir"] = working_dir
+    if payload:
+        subprocess.run(
+            ["sudo", "mkdir", "-p", str(mnt / "etc")],
+            capture_output=True, check=True, timeout=30,
+        )
+        # Use a temp file and sudo mv to avoid Python path permissions.
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", prefix="fc-agent-env-",
+            dir="/tmp", delete=False,
+        ) as tf:
+            tf.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            tmp = Path(tf.name)
+        subprocess.run(
+            ["sudo", "mv", str(tmp), str(mnt / "etc" / "agent-env.json")],
+            capture_output=True, check=True, timeout=30,
+        )
 
 
 def _build_and_inject(
@@ -485,18 +360,17 @@ def _build_and_inject(
             capture_output=True, check=False, timeout=30,
         )
 
-        # 2. Create blank ext4 image.
+        # 2. Create sparse ext4 image (sparse to avoid allocating 4 GiB zeros).
         subprocess.run(
-            ["dd", "if=/dev/zero", f"of={dest}", "bs=1M",
-             f"count={size_mb}"],
-            capture_output=True, check=True, timeout=300,
+            ["truncate", "-s", f"{size_mb}M", str(dest)],
+            capture_output=True, check=True, timeout=30,
         )
         subprocess.run(
             ["mkfs.ext4", "-F", str(dest)],
             capture_output=True, check=True, timeout=60,
         )
 
-        # 3. Mount, extract tar, inject agent/init.
+        # 3. Mount, extract tar, inject agent/init, capture image env.
         mnt = tmpdir / "mnt"
         mnt.mkdir()
         subprocess.run(
@@ -510,15 +384,34 @@ def _build_and_inject(
                 capture_output=True, check=True, timeout=300,
             )
 
-            # Ensure /testbed exists.
-            testbed = mnt / "testbed"
-            if not testbed.exists():
-                testbed.mkdir(mode=0o755, exist_ok=True)
+            # Ensure /testbed exists — run as root (mount is root-owned).
+            subprocess.run(
+                ["sudo", "mkdir", "-p", str(mnt / "testbed")],
+                capture_output=True, check=True, timeout=30,
+            )
 
-            # Inject init script as /init (PID 1).
-            init_path = mnt / "init"
-            init_path.write_text(_INIT_SCRIPT)
-            init_path.chmod(0o755)
+            # Capture Docker image ENV and WORKDIR for agent env injection.
+            _capture_image_env(mnt, docker_image, container_executable)
+
+            # Inject init script as /sbin/init (FC kernel init search order
+            # is /sbin/init → /etc/init → /bin/init → /bin/sh; /init is NOT
+            # checked by the v5.10 FC kernel).
+            init_src = tmpdir / "init.sh"
+            init_src.write_text(_INIT_SCRIPT)
+            init_src.chmod(0o755)
+            init_dest = mnt / "sbin" / "init"
+            subprocess.run(
+                ["sudo", "mkdir", "-p", str(mnt / "sbin")],
+                capture_output=True, check=True, timeout=30,
+            )
+            subprocess.run(
+                ["sudo", "cp", str(init_src), str(init_dest)],
+                capture_output=True, check=True, timeout=30,
+            )
+            subprocess.run(
+                ["sudo", "chmod", "755", str(init_dest)],
+                capture_output=True, check=True, timeout=30,
+            )
 
             # Attempt to install additional packages inside the rootfs.
             # We do this via chroot if the rootfs has apt-get or apk.
@@ -636,9 +529,12 @@ def _try_install_python_chroot(mnt: Path) -> None:
 
 def _verify_agent(mnt: Path) -> None:
     """Check that the agent script was written correctly."""
-    init_path = mnt / "init"
+    # FC kernel searches /sbin/init first; fall back to /init for older caches.
+    init_path = mnt / "sbin" / "init"
     if not init_path.exists():
-        raise RuntimeError("init script not found in rootfs")
+        init_path = mnt / "init"
+    if not init_path.exists():
+        raise RuntimeError("init script not found in rootfs (/sbin/init or /init)")
     # The agent is embedded in the init script — verify it exists by
     # grepping for a distinctive string.
     init_text = init_path.read_text()
