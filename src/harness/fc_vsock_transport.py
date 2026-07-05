@@ -1,9 +1,10 @@
 """Vsock transport for Firecracker guest agent communication.
 
-Host (CID 2) connects to guest (CID 3) on a configured port.  The
-guest agent speaks the same JSON-lines protocol as the container-based
-``ContainerAgent`` (one JSON request per line, one JSON response per
-line), so the host just sends and receives serialised dicts.
+Firecracker does NOT support host-side AF_VSOCK.  Instead, it exposes a
+host-side Unix socket at the UDS path configured via ``PUT /vsock``.
+The host communicates by sending ``CONNECT <port>\\n`` over that UDS,
+then using the resulting connection for the JSON-lines request/response
+protocol (same as the container-based ``ContainerAgent``).
 """
 
 from __future__ import annotations
@@ -13,22 +14,28 @@ import socket
 import time
 from typing import Any
 
-# Guest CID is always 3 in Firecracker; the host is VMADDR_CID_HOST (2).
-_GUEST_CID = 3
 _DEFAULT_VSOCK_PORT = 5678
 _DEFAULT_CONNECT_TIMEOUT_S = 5.0
 
 
 class VsockTransport:
-    """Host-side vsock client for the Firecracker guest agent."""
+    """Host-side UDS client for the Firecracker guest vsock agent.
+
+    Firecracker creates a host-side Unix socket at *vsock_sock_path*
+    after ``PUT /vsock`` + ``InstanceStart``.  The transport connects to
+    that socket and performs a ``CONNECT <port>`` handshake to reach the
+    guest agent listening on *port* inside the VM.
+    """
 
     def __init__(
         self,
         *,
+        vsock_sock_path: str,
         port: int = _DEFAULT_VSOCK_PORT,
         connect_timeout_s: float = _DEFAULT_CONNECT_TIMEOUT_S,
         response_timeout_s: float = 600.0,
     ) -> None:
+        self._vsock_sock_path = vsock_sock_path
         self._port = port
         self._connect_timeout_s = connect_timeout_s
         self._response_timeout_s = response_timeout_s
@@ -41,26 +48,61 @@ class VsockTransport:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
-        """Open a vsock connection to the guest agent.
+        """Open a UDS connection to the FC vsock socket and perform the
+        ``CONNECT <port>`` handshake.
 
-        Raises ``ConnectionError`` when the agent is not listening yet.
+        Raises ``ConnectionError`` when the UDS socket does not exist or
+        the guest agent is not listening yet.
         """
-        sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(self._connect_timeout_s)
         try:
-            sock.connect((_GUEST_CID, self._port))
+            sock.connect(self._vsock_sock_path)
         except (OSError, TimeoutError) as exc:
             sock.close()
             raise ConnectionError(
-                f"vsock connect to guest CID {_GUEST_CID} port {self._port} failed"
+                f"UDS connect to FC vsock socket {self._vsock_sock_path} failed"
             ) from exc
+
+        try:
+            # Firecracker vsock UDS handshake: CONNECT <port>\n
+            handshake = f"CONNECT {self._port}\n".encode()
+            sock.sendall(handshake)
+
+            # Read the response line (OK <port> or error message).
+            resp_chunks: list[bytes] = []
+            while True:
+                try:
+                    chunk = sock.recv(1024)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                resp_chunks.append(chunk)
+                if b"\n" in chunk:
+                    break
+
+            response = (
+                b"".join(resp_chunks).decode("utf-8", errors="replace").strip()
+            )
+            if not response.startswith("OK"):
+                sock.close()
+                raise ConnectionError(
+                    f"FC vsock CONNECT {self._port} handshake failed: {response}"
+                )
+        except (OSError, TimeoutError):
+            sock.close()
+            raise ConnectionError(
+                f"FC vsock CONNECT {self._port} handshake I/O error"
+            )
+
         sock.settimeout(self._response_timeout_s)
         self._sock = sock
         self._reader = sock.makefile("r", buffering=1, errors="replace")
         self._writer = sock.makefile("w", buffering=1)
 
     def close(self) -> None:
-        """Close the vsock connection (idempotent)."""
+        """Close the UDS connection (idempotent)."""
         sock = self._sock
         self._sock = None
         self._reader = None
@@ -105,12 +147,16 @@ class VsockTransport:
         raise RuntimeError("vsock agent emitted no JSON response")
 
     def try_connect(self) -> bool:
-        """Test whether the guest agent is listening (does not keep the connection)."""
-        sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+        """Test whether the guest agent is listening (does not keep the
+        connection)."""
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(self._connect_timeout_s)
         try:
-            sock.connect((_GUEST_CID, self._port))
-            return True
+            sock.connect(self._vsock_sock_path)
+            handshake = f"CONNECT {self._port}\n".encode()
+            sock.sendall(handshake)
+            resp = sock.recv(1024)
+            return resp.startswith(b"OK")
         except (OSError, TimeoutError):
             return False
         finally:
@@ -118,22 +164,29 @@ class VsockTransport:
 
 
 def poll_vsock_ready(
+    *,
+    vsock_sock_path: str,
     port: int = _DEFAULT_VSOCK_PORT,
     timeout_s: float = 60.0,
     interval_s: float = 0.2,
 ) -> bool:
-    """Block until the vsock agent accepts a connection or *timeout_s* expires.
+    """Block until the vsock UDS socket appears and the guest agent accepts
+    a ``CONNECT <port>`` handshake, or *timeout_s* expires.
 
     Returns ``True`` when the agent is ready.
     """
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(min(interval_s, 1.0))
         try:
-            sock.connect((_GUEST_CID, port))
-            sock.close()
-            return True
+            sock.connect(vsock_sock_path)
+            handshake = f"CONNECT {port}\n".encode()
+            sock.sendall(handshake)
+            resp = sock.recv(1024)
+            if resp.startswith(b"OK"):
+                sock.close()
+                return True
         except (OSError, TimeoutError):
             pass
         finally:
@@ -141,27 +194,58 @@ def poll_vsock_ready(
                 sock.close()
             except OSError:
                 pass
+        time.sleep(interval_s)
     return False
 
 
 def quiesce_vsock(
+    *,
+    vsock_sock_path: str,
     port: int = _DEFAULT_VSOCK_PORT,
     timeout_s: float = 10.0,
 ) -> bool:
     """Send a ``sync`` command to the guest agent to flush journals and
     page cache before a snapshot pause.
 
-    Opens a short-lived vsock connection, sends an ``exec`` tool request
-    for ``sync``, and reads the response.  Returns ``True`` on success.
+    Opens a short-lived UDS connection, performs the ``CONNECT <port>``
+    handshake, sends an ``exec`` tool request for ``sync``, and reads the
+    response.  Returns ``True`` on success.
     """
-    sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(min(timeout_s, 5.0))
     try:
-        sock.connect((_GUEST_CID, port))
+        sock.connect(vsock_sock_path)
     except (OSError, TimeoutError) as exc:
         sock.close()
         raise ConnectionError(
-            f"quiesce vsock connect to guest CID {_GUEST_CID} port {port} failed"
+            f"quiesce UDS connect to {vsock_sock_path} failed"
+        ) from exc
+
+    try:
+        handshake = f"CONNECT {port}\n".encode()
+        sock.sendall(handshake)
+        resp = b""
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                chunk = sock.recv(1024)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            resp += chunk
+            if b"\n" in chunk:
+                break
+        if not resp.startswith(b"OK"):
+            sock.close()
+            raise ConnectionError(
+                f"quiesce CONNECT {port} handshake failed: "
+                f"{resp.decode('utf-8', errors='replace')!r}"
+            )
+    except (OSError, TimeoutError) as exc:
+        sock.close()
+        raise ConnectionError(
+            f"quiesce CONNECT {port} handshake I/O error"
         ) from exc
 
     sock.settimeout(timeout_s)

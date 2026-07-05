@@ -1507,9 +1507,10 @@ class FCBackend(SandboxBackend):
 
     Agent transport
     ---------------
-    Every ``execute`` call opens a vsock connection to the guest (CID 3),
-    sends one JSON-line request, and reads one JSON-line response.  The
-    guest agent speaks the same protocol as the container-based
+    Every ``execute`` call opens a UDS connection to the Firecracker
+    vsock host socket, performs the ``CONNECT <port>`` handshake, sends
+    one JSON-line request, and reads one JSON-line response.  The guest
+    agent speaks the same protocol as the container-based
     ``ContainerAgent`` used by ``DockerBackend``.
 
     Snapshots
@@ -1549,6 +1550,7 @@ class FCBackend(SandboxBackend):
         kernel_path: Path,
         checkpoint_dir: Path | None = None,
         api_sock: str = "/tmp/fc-agent.sock",
+        vsock_sock: str | None = None,
         vsock_port: int = 5678,
         vcpu_count: int = 2,
         mem_size_mib: int = 1024,
@@ -1573,6 +1575,7 @@ class FCBackend(SandboxBackend):
         self._kernel_path = kernel_path
         self._checkpoint_dir = checkpoint_dir or Path("/tmp/fc-checkpoints")
         self._api_sock = api_sock
+        self._vsock_sock = vsock_sock or f"{api_sock}-vsock.sock"
         self._vsock_port = vsock_port
         self._vcpu_count = vcpu_count
         self._mem_size_mib = mem_size_mib
@@ -1867,6 +1870,14 @@ class FCBackend(SandboxBackend):
                 "host_dev_name": self._tap_dev,
             },
         )
+        self._api_put(
+            "/vsock",
+            {
+                "vsock_id": "vsock0",
+                "guest_cid": 3,
+                "uds_path": self._vsock_sock,
+            },
+        )
 
         # 4. Load memory snapshot if available.
         if mem_path is not None:
@@ -2014,7 +2025,7 @@ class FCBackend(SandboxBackend):
             time.sleep(0.1)
 
     def _configure_vm(self) -> None:
-        """Push machine-config, boot-source, root drive, and net iface."""
+        """Push machine-config, boot-source, root drive, net iface, and vsock."""
         assert self._rootfs_path is not None
         self._api_put(
             "/machine-config",
@@ -2049,6 +2060,14 @@ class FCBackend(SandboxBackend):
                 "iface_id": "eth0",
                 "guest_mac": "AA:FC:00:00:00:01",
                 "host_dev_name": self._tap_dev,
+            },
+        )
+        self._api_put(
+            "/vsock",
+            {
+                "vsock_id": "vsock0",
+                "guest_cid": 3,
+                "uds_path": self._vsock_sock,
             },
         )
 
@@ -2194,55 +2213,23 @@ class FCBackend(SandboxBackend):
         request: dict[str, Any],
         timeout_s: float | None,
     ) -> dict[str, Any]:
-        """Send one JSON-line request via vsock and return the response."""
-        effective_timeout = timeout_s if timeout_s is not None else 600.0
+        """Send one JSON-line request via the FC vsock UDS and return the
+        response."""
+        from harness.fc_vsock_transport import VsockTransport
 
-        sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
-        sock.settimeout(5.0)  # connect timeout
-        try:
-            sock.connect((3, self._vsock_port))
-        except (OSError, TimeoutError) as exc:
-            sock.close()
-            raise ConnectionError(
-                f"vsock connect to guest CID 3 port {self._vsock_port} failed"
-            ) from exc
-
-        sock.settimeout(effective_timeout)
-        try:
-            payload = json.dumps(request, ensure_ascii=False) + "\n"
-            sock.sendall(payload.encode())
-
-            chunks: list[bytes] = []
-            while True:
-                try:
-                    chunk = sock.recv(65536)
-                except socket.timeout:
-                    break
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                if b"\n" in chunk:
-                    # Got at least one full line — agent sends exactly one
-                    # JSON-line response per request.
-                    break
-            raw = b"".join(chunks).decode("utf-8", errors="replace")
-        finally:
-            sock.close()
-
-        # Skip stray non-JSON prefix (e.g. init messages).
-        for i in range(len(raw)):
-            if raw[i] == "{":
-                raw = raw[i:]
-                break
-
-        for line in raw.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("{"):
-                return json.loads(stripped)  # type: ignore[no-any-return]
-
-        raise RuntimeError(
-            f"FC agent returned no valid JSON: {raw[:200]!r}"
+        transport = VsockTransport(
+            vsock_sock_path=self._vsock_sock,
+            port=self._vsock_port,
+            connect_timeout_s=5.0,
+            response_timeout_s=(
+                timeout_s if timeout_s is not None else 600.0
+            ),
         )
+        try:
+            transport.connect()
+            return transport.send_request(request)
+        finally:
+            transport.close()
 
     # ------------------------------------------------------------------
     # Internal — readiness
@@ -2255,6 +2242,7 @@ class FCBackend(SandboxBackend):
         from harness.fc_vsock_transport import poll_vsock_ready
 
         return poll_vsock_ready(
+            vsock_sock_path=self._vsock_sock,
             port=self._vsock_port,
             timeout_s=timeout_s,
             interval_s=interval_s,
