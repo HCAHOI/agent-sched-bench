@@ -10,6 +10,7 @@ from scripts.validate_predictive_policy import build_report, main
 from trace_collect.predictive_policy import (
     CheckpointSchedule,
     CommandFamily,
+    _has_output_redirect,
     _has_tar_extract_option,
     classify_tool_result,
     get_checkpoint_schedule,
@@ -302,6 +303,92 @@ def test_classify_tool_result_tar_no_extract_false_positives() -> None:
     ) == CommandFamily.UNKNOWN
 
 
+# ── shell redirect classification ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        # Output redirects upgrade READ_ONLY → MUTATING
+        ("echo foo > /etc/passwd", CommandFamily.MUTATING),
+        ("ls > /tmp/out.txt", CommandFamily.MUTATING),
+        ("echo hello >> /var/log/app.log", CommandFamily.MUTATING),
+        ("cat /dev/null 2> /dev/null", CommandFamily.MUTATING),
+        ("grep pattern file &> /dev/null", CommandFamily.MUTATING),
+        # Input-only redirect keeps READ_ONLY
+        ("echo foo < input.txt", CommandFamily.READ_ONLY),
+        ("grep foo < /etc/passwd", CommandFamily.READ_ONLY),
+        ("cat < /dev/stdin", CommandFamily.READ_ONLY),
+        # Redirect inside quotes does NOT trigger the detector
+        ("echo 'a > b'", CommandFamily.READ_ONLY),
+        ('echo "redirect > here"', CommandFamily.READ_ONLY),
+        # Multiple redirects
+        ("grep pattern < input.txt > output.txt", CommandFamily.MUTATING),
+        ("sed 's/foo/bar/' < in.txt > out.txt", CommandFamily.MUTATING),
+        # Pipes alone should not affect classification
+        ("ls | grep foo", CommandFamily.READ_ONLY),
+        ("cat file | head", CommandFamily.READ_ONLY),
+        # Already-mutating commands stay mutating regardless of redirects
+        ("pip install pytest 2> /dev/null", CommandFamily.MUTATING),
+        ("rm -rf build > /dev/null", CommandFamily.MUTATING),
+    ],
+)
+def test_classify_tool_result_shell_redirects(
+    command: str,
+    expected: CommandFamily,
+) -> None:
+    assert classify_tool_result("exec", json.dumps({"command": command})) == expected
+
+
+# ── _has_output_redirect unit tests ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("> /etc/passwd", True),
+        (">> /tmp/log", True),
+        ("2> /dev/null", True),
+        ("&> /dev/null", True),
+        ("1> output.txt", True),
+        ("echo hello", False),
+        ("grep foo", False),
+        ("cat file", False),
+        ("< input.txt", False),
+        ("echo '>' ", False),
+        ('echo ">" ', False),
+        ("echo '2> file'", False),
+        ("", False),
+    ],
+)
+def test_has_output_redirect(command: str, expected: bool) -> None:
+    assert _has_output_redirect(command) == expected
+
+
+# ── pre-execution decision flow ──────────────────────────────────────
+
+
+def test_pre_execution_classifier_skips_read_only_without_probe() -> None:
+    """READ_ONLY and FLAKY_READ actions skip the probe entirely.
+
+    The classifier runs BEFORE the filesystem probe.  When it returns
+    READ_ONLY or FLAKY_READ, the probe is never invoked and the result
+    carries ``checkpoint_decision: predicted_read_only``.
+    """
+    # The session-runner test _drive_deferred_predictive_skip_records_verified_decision
+    # in test_session_runner_actions.py exercises the real hook.  This test
+    # validates the policy-level contract.
+    for family, skip in (
+        (CommandFamily.READ_ONLY, True),
+        (CommandFamily.FLAKY_READ, True),
+        (CommandFamily.MUTATING, False),
+        (CommandFamily.UNKNOWN, False),
+    ):
+        assert needs_checkpoint(family) == (not skip), (
+            f"needs_checkpoint({family}) should return {not skip}"
+        )
+
+
 # ── build_report tests ───────────────────────────────────────────────
 
 
@@ -461,6 +548,141 @@ def _tool_without_ground_truth(
             "tool_args": json.dumps(tool_args),
         },
     }
+
+
+# ── cross-benchmark validation ────────────────────────────────────────
+
+
+def test_build_report_with_validate_adds_cross_benchmark_section(
+    tmp_path: Path,
+) -> None:
+    trace_dir = tmp_path / "simulate"
+    for bench, gt in (("bench-a", "skipped"), ("bench-b", "created")):
+        trace_path = trace_dir / bench / "attempt_1" / "trace.jsonl"
+        trace_path.parent.mkdir(parents=True)
+        _write_jsonl(
+            trace_path,
+            [
+                {"type": "trace_metadata", "benchmark": bench},
+                _tool(
+                    f"tn-{bench}",
+                    "exec",
+                    {"command": "ls"},
+                    {"skipped": "no changes"} if gt == "skipped" else {"path": "cp.json"},
+                ),
+                _tool(
+                    f"tp-{bench}",
+                    "exec",
+                    {"command": "pip install x"},
+                    {"skipped": "no changes"} if gt == "skipped" else {"path": "cp2.json"},
+                ),
+            ],
+        )
+
+    report = build_report(trace_dir, validate=True)
+
+    assert "cross_benchmark" in report
+    cross = report["cross_benchmark"]
+    assert "benchmark_family_rates" in cross
+    assert "overfitting_flags" in cross
+
+    bf_rates = cross["benchmark_family_rates"]
+    assert "bench-a" in bf_rates
+    assert "bench-b" in bf_rates
+
+    for family_rates in bf_rates.values():
+        assert "read_only" in family_rates
+        assert "mutating" in family_rates
+
+
+def test_build_report_custom_benchmark_key(tmp_path: Path) -> None:
+    trace_dir = tmp_path / "simulate"
+    trace_path = trace_dir / "task-a" / "attempt_1" / "trace.jsonl"
+    trace_path.parent.mkdir(parents=True)
+    _write_jsonl(
+        trace_path,
+        [
+            {"type": "trace_metadata", "dataset": "custom-bench"},
+            _tool("tn-read", "exec", {"command": "pwd"}, {"skipped": "no changes"}),
+        ],
+    )
+
+    report = build_report(trace_dir, validate=True, benchmark_key="dataset")
+
+    cross = report["cross_benchmark"]
+    assert "custom-bench" in cross["benchmark_family_rates"]
+    assert "custom-bench" in report["benchmarks"]
+
+
+def test_overfitting_detection_triggers_on_outlier(
+    tmp_path: Path,
+) -> None:
+    """When one benchmark has much higher misprediction, it is flagged."""
+    trace_dir = tmp_path / "simulate"
+
+    # bench-normal: perfect predictions (READ_ONLY → skipped × 10)
+    for i in range(10):
+        trace_path = trace_dir / "normal" / f"attempt_{i}" / "trace.jsonl"
+        trace_path.parent.mkdir(parents=True)
+        _write_jsonl(
+            trace_path,
+            [
+                {"type": "trace_metadata", "benchmark": "normal"},
+                _tool(f"tn-{i}", "exec", {"command": "ls"}, {"skipped": "no changes"}),
+            ],
+        )
+
+    # bench-overfit: half predictions wrong (READ_ONLY → checkpoint created × 5)
+    for i in range(5):
+        trace_path = trace_dir / "overfit" / f"attempt_{i}" / "trace.jsonl"
+        trace_path.parent.mkdir(parents=True)
+        _write_jsonl(
+            trace_path,
+            [
+                {"type": "trace_metadata", "benchmark": "overfit"},
+                _tool(f"fn-{i}", "exec", {"command": "ls"}, {"path": f"cp{i}.json"}),
+            ],
+        )
+
+    report = build_report(trace_dir, validate=True)
+    flags = report["cross_benchmark"]["overfitting_flags"]
+    assert len(flags) == 1
+    assert flags[0]["benchmark"] == "overfit"
+    assert flags[0]["max_family_misprediction_rate"] == 1.0
+
+
+def test_main_validate_flag_triggers_cross_benchmark_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    trace_dir = tmp_path / "simulate"
+    trace_path = trace_dir / "task-a" / "attempt_1" / "trace.jsonl"
+    trace_path.parent.mkdir(parents=True)
+    _write_jsonl(
+        trace_path,
+        [
+            {"type": "trace_metadata", "benchmark": "bench-a"},
+            _tool("tn-read", "exec", {"command": "pwd"}, {"skipped": "no changes"}),
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_predictive_policy.py",
+            "--trace-dir",
+            str(trace_dir),
+            "--validate",
+        ],
+    )
+
+    main()
+
+    output = capsys.readouterr().out
+    assert "CROSS-BENCHMARK VALIDATION" in output
+    assert "bench-a" in output
 
 
 def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:

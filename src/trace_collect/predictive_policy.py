@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from enum import Enum
 from typing import Any
@@ -168,6 +169,21 @@ def _classify_command(command: str) -> CommandFamily:
         return CommandFamily.UNKNOWN
 
     first = tokens[0]
+    family = _classify_tokens(first, tokens)
+
+    # Output redirect check: commands that use shell output redirects
+    # (>, >>, 2>, &>) are modifying files, so upgrade to MUTATING.
+    # This applies to READ_ONLY and UNKNOWN classifications alike —
+    # only MUTATING is already correct.
+    # Input redirect (<) alone does NOT trigger this — reading from a
+    # file doesn't modify anything.
+    if family != CommandFamily.MUTATING and _has_output_redirect(command):
+        return CommandFamily.MUTATING
+
+    return family
+
+
+def _classify_tokens(first: str, tokens: list[str]) -> CommandFamily:
     if first in _READ_ONLY_COMMANDS:
         return CommandFamily.READ_ONLY
     if first == "git":
@@ -183,6 +199,63 @@ def _classify_command(command: str) -> CommandFamily:
     if first == "ln" and _has_short_option(tokens[1:], "s"):
         return CommandFamily.MUTATING
     return CommandFamily.UNKNOWN
+
+
+_OUTPUT_REDIRECT_RE = re.compile(r">>|[12&]?>")
+
+
+def _has_output_redirect(command: str) -> bool:
+    """Return True if *command* contains shell output-redirect operators.
+
+    Only output redirects count: ``>``, ``>>``, ``2>``, ``&>``.
+    Input redirect (``<``) alone does NOT make a command mutating.
+    Quoted regions are stripped before matching so ``echo "a > b"``
+    does not falsely trigger the redirect detector.
+    """
+    cleaned = _strip_shell_quoted(command)
+    return bool(_OUTPUT_REDIRECT_RE.search(cleaned))
+
+
+def _strip_shell_quoted(text: str) -> str:
+    """Replace single- and double-quoted regions with spaces.
+
+    This neutralises redirect-like substrings that appear inside string
+    literals (e.g. ``echo "a > b"``) so the redirect regex only sees
+    the unquoted metacharacters.
+    """
+    result: list[str] = []
+    i = 0
+    in_single = False
+    in_double = False
+    while i < len(text):
+        ch = text[i]
+        if in_single:
+            if ch == "'":
+                in_single = False
+            else:
+                result.append(" ")
+            i += 1
+        elif in_double:
+            if ch == '"':
+                in_double = False
+            elif ch == "\\" and i + 1 < len(text):
+                result.append("  ")
+                i += 2
+                continue
+            else:
+                result.append(" ")
+            i += 1
+        else:
+            if ch == "'":
+                in_single = True
+                result.append(" ")
+            elif ch == '"':
+                in_double = True
+                result.append(" ")
+            else:
+                result.append(ch)
+            i += 1
+    return "".join(result)
 
 
 def _split_command(command: str) -> list[str]:

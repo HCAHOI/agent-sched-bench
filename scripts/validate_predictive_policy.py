@@ -17,6 +17,14 @@ from trace_collect.predictive_policy import (
     needs_checkpoint,
 )
 
+# ── overfitting detection thresholds ──────────────────────────────────
+# A benchmark is flagged when its misprediction rate exceeds the
+# cross-benchmark median by more than OVERFITTING_THRESHOLD.
+_OVERFITTING_THRESHOLD = 0.10
+# Minimum number of actions with ground truth needed before a benchmark
+# is considered for overfitting detection.
+_MIN_ACTIONS_FOR_OVERFITTING_CHECK = 5
+
 
 class CheckpointOutcome(Enum):
     CREATED = "created"
@@ -120,19 +128,30 @@ def discover_trace_paths(trace_dir: Path) -> list[Path]:
     return sorted(path for path in trace_dir.rglob("*.jsonl") if path.is_file())
 
 
-def build_report(trace_dir: Path) -> dict[str, Any]:
-    """Build a predictive-policy validation report from trace JSONL files."""
+def build_report(
+    trace_dir: Path,
+    *,
+    validate: bool = False,
+    benchmark_key: str = "benchmark",
+) -> dict[str, Any]:
+    """Build a predictive-policy validation report from trace JSONL files.
+
+    When *validate* is True, per-benchmark per-family misprediction rates
+    are computed and a cross-benchmark overfitting check is appended.
+    """
     input_trace_paths = discover_trace_paths(trace_dir)
     trace_paths = _validation_trace_paths(input_trace_paths)
     overall = PredictionStats()
     by_family: dict[CommandFamily, PredictionStats] = {}
     by_benchmark: dict[str, PredictionStats] = {}
+    by_benchmark_family: dict[str, dict[CommandFamily, PredictionStats]] = {}
     status_counts: Counter[str] = Counter()
 
     for trace_path in trace_paths:
         metadata, actions = _load_tool_actions(trace_path)
-        benchmark = _benchmark_from_metadata(metadata)
+        benchmark = _benchmark_from_metadata(metadata, benchmark_key)
         benchmark_stats = by_benchmark.setdefault(benchmark, PredictionStats())
+        bf_stats = by_benchmark_family.setdefault(benchmark, {})
 
         for action in actions:
             data = _tool_data(action, trace_path)
@@ -157,9 +176,13 @@ def build_report(trace_dir: Path) -> dict[str, Any]:
                 predicted_checkpoint=predicted_checkpoint,
                 actual=actual,
             )
+            bf_stats.setdefault(family, PredictionStats()).record(
+                predicted_checkpoint=predicted_checkpoint,
+                actual=actual,
+            )
 
     overall_dict = overall.to_dict()
-    return {
+    report: dict[str, Any] = {
         "trace_dir": str(trace_dir),
         "input_trace_count": len(input_trace_paths),
         "trace_count": len(trace_paths),
@@ -189,6 +212,13 @@ def build_report(trace_dir: Path) -> dict[str, Any]:
             for benchmark, stats in sorted(by_benchmark.items())
         },
     }
+
+    if validate:
+        report["cross_benchmark"] = _build_cross_benchmark_report(
+            by_benchmark, by_benchmark_family
+        )
+
+    return report
 
 
 def print_report(report: dict[str, Any]) -> None:
@@ -223,6 +253,12 @@ def print_report(report: dict[str, Any]) -> None:
     _print_stats_table("By command family", report["families"])
     print()
     _print_stats_table("By benchmark", report["benchmarks"])
+
+    cross = report.get("cross_benchmark")
+    if cross is not None:
+        print()
+        _print_cross_benchmark_report(cross)
+
     print()
     print("JSON report:")
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -244,11 +280,34 @@ def main() -> None:
             "trace JSONL file."
         ),
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Enable cross-benchmark validation: split traces by benchmark "
+            "family, report per-family misprediction rates, and flag "
+            "benchmarks with anomalously high rates (overfitting detection)."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-key",
+        default="benchmark",
+        help=(
+            "Field name in trace metadata that identifies the benchmark "
+            "(default: 'benchmark')."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.trace_dir.exists():
         raise SystemExit(f"trace dir does not exist: {args.trace_dir}")
-    print_report(build_report(args.trace_dir))
+    print_report(
+        build_report(
+            args.trace_dir,
+            validate=args.validate,
+            benchmark_key=args.benchmark_key,
+        )
+    )
 
 
 def _load_tool_actions(trace_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -382,16 +441,116 @@ def _checkpoint_outcome(data: dict[str, Any]) -> CheckpointOutcome | None:
     return None
 
 
-def _benchmark_from_metadata(metadata: dict[str, Any]) -> str:
-    benchmark = metadata.get("benchmark") or metadata.get("benchmark_slug")
+def _benchmark_from_metadata(
+    metadata: dict[str, Any],
+    benchmark_key: str = "benchmark",
+) -> str:
+    benchmark = metadata.get(benchmark_key)
     if isinstance(benchmark, str) and benchmark:
         return benchmark
+    # Fall back to common aliases when the primary key isn't found.
+    for fallback in ("benchmark", "benchmark_slug"):
+        if fallback == benchmark_key:
+            continue
+        val = metadata.get(fallback)
+        if isinstance(val, str) and val:
+            return val
     run_config = metadata.get("run_config")
     if isinstance(run_config, dict):
-        configured = run_config.get("benchmark") or run_config.get("benchmark_slug")
+        configured = run_config.get(benchmark_key) or run_config.get("benchmark")
         if isinstance(configured, str) and configured:
             return configured
     return "unknown"
+
+
+def _build_cross_benchmark_report(
+    by_benchmark: dict[str, PredictionStats],
+    by_benchmark_family: dict[str, dict[CommandFamily, PredictionStats]],
+) -> dict[str, Any]:
+    """Produce per-benchmark per-family stats and overfitting flags."""
+    benchmark_family_rates: dict[str, dict[str, Any]] = {}
+    misprediction_rates: list[float] = []
+
+    for benchmark in sorted(by_benchmark):
+        bf_stats = by_benchmark_family.get(benchmark, {})
+        family_rates: dict[str, Any] = {}
+        for family in CommandFamily:
+            stats = bf_stats.get(family)
+            if stats is None or stats.ground_truth_available == 0:
+                continue
+            family_rates[family.value] = {
+                "ground_truth_available": stats.ground_truth_available,
+                "misprediction_rate": _rate(
+                    stats.false_negative + stats.false_positive,
+                    stats.ground_truth_available,
+                ),
+                "fn_rate": _rate(stats.false_negative, stats.actual_checkpointed),
+                "bias": _prediction_bias(
+                    stats.false_positive, stats.false_negative
+                ),
+            }
+        bench_stats = by_benchmark.get(benchmark)
+        if bench_stats is not None and bench_stats.ground_truth_available > 0:
+            rate = _rate(
+                bench_stats.false_negative + bench_stats.false_positive,
+                bench_stats.ground_truth_available,
+            )
+            if rate is not None:
+                misprediction_rates.append(rate)
+        benchmark_family_rates[benchmark] = family_rates
+
+    overfitting_flags = _detect_overfitting(
+        benchmark_family_rates,
+        misprediction_rates,
+    )
+
+    return {
+        "benchmark_family_rates": benchmark_family_rates,
+        "overfitting_flags": overfitting_flags,
+    }
+
+
+def _detect_overfitting(
+    benchmark_family_rates: dict[str, dict[str, Any]],
+    misprediction_rates: list[float],
+) -> list[dict[str, Any]]:
+    """Flag benchmarks whose misprediction rate is anomalously high."""
+    if not misprediction_rates or len(misprediction_rates) < 2:
+        return []
+
+    sorted_rates = sorted(misprediction_rates)
+    # Use lower-quartile as baseline to avoid one bad benchmark
+    # inflating the median and hiding real outliers.
+    n = len(sorted_rates)
+    if n % 2 == 0:
+        median = (sorted_rates[n // 2 - 1] + sorted_rates[n // 2]) / 2
+    else:
+        median = sorted_rates[n // 2]
+
+    flags: list[dict[str, Any]] = []
+    for benchmark, family_rates in sorted(benchmark_family_rates.items()):
+        # Collect per-family rates for this benchmark.
+        bench_rates = [
+            fr.get("misprediction_rate")
+            for fr in family_rates.values()
+            if fr.get("misprediction_rate") is not None
+        ]
+        if not bench_rates:
+            continue
+        max_family_rate = max(bench_rates)
+        if max_family_rate - median > _OVERFITTING_THRESHOLD:
+            flags.append(
+                {
+                    "benchmark": benchmark,
+                    "max_family_misprediction_rate": max_family_rate,
+                    "cross_benchmark_median_misprediction_rate": median,
+                    "gap": max_family_rate - median,
+                    "threshold": _OVERFITTING_THRESHOLD,
+                    "detail": family_rates,
+                }
+            )
+
+    return flags
 
 
 def _optional_str(value: Any) -> str | None:
@@ -444,6 +603,53 @@ def _print_stats_table(title: str, stats_by_key: dict[str, dict[str, Any]]) -> N
             f"{_format_rate(stats['fn_rate']):>8} "
             f"{stats['bias']:>22}"
         )
+
+
+def _print_cross_benchmark_report(cross: dict[str, Any]) -> None:
+    """Print per-benchmark per-family breakdown and overfitting flags."""
+    print("=" * 72)
+    print("CROSS-BENCHMARK VALIDATION")
+    print("=" * 72)
+
+    bf_rates = cross.get("benchmark_family_rates", {})
+    for benchmark in sorted(bf_rates):
+        family_rates = bf_rates[benchmark]
+        if not family_rates:
+            continue
+        print(f"\n{benchmark}")
+        family_header = (
+            f"  {'Family':<14} {'GT':>6} {'Mis%':>8} {'FN%':>8} {'Bias':>22}"
+        )
+        print(family_header)
+        print("  " + "-" * (len(family_header) - 2))
+        for family in sorted(family_rates):
+            fr = family_rates[family]
+            print(
+                f"  {family:<14} "
+                f"{fr['ground_truth_available']:>6} "
+                f"{_format_rate(fr['misprediction_rate']):>8} "
+                f"{_format_rate(fr['fn_rate']):>8} "
+                f"{fr['bias']:>22}"
+            )
+
+    flags = cross.get("overfitting_flags", [])
+    if flags:
+        print()
+        print("=" * 72)
+        print("OVERFITTING WARNINGS")
+        print("=" * 72)
+        for flag in flags:
+            print(
+                f"  {flag['benchmark']}: "
+                f"max family misprediction rate = "
+                f"{_format_rate(flag['max_family_misprediction_rate'])}, "
+                f"cross-benchmark median = "
+                f"{_format_rate(flag['cross_benchmark_median_misprediction_rate'])}, "
+                f"gap = {_format_rate(flag['gap'])}"
+            )
+    else:
+        print()
+        print("No overfitting flags detected.")
 
 
 if __name__ == "__main__":
