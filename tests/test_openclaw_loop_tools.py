@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agents.openclaw._loop import AgentLoop
+from agents.openclaw._subagent import SubagentManager
 from agents.openclaw.bus.events import InboundMessage
 from agents.openclaw.bus.queue import MessageBus
 
@@ -27,6 +28,50 @@ def test_agent_loop_keeps_spawn_for_local_tools(tmp_path: Path) -> None:
     )
 
     assert loop.tools.has("spawn") is True
+
+
+def test_agent_loop_registers_sessions_yield_for_local_tools(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_fake_provider(),
+        workspace=tmp_path / "state",
+        tool_workspace=Path("/testbed"),
+        model="qwen-plus-latest",
+    )
+
+    assert loop.tools.has("sessions_yield") is True
+
+
+def test_subagent_announcement_preserves_parent_session_key(tmp_path: Path) -> None:
+    bus = MessageBus()
+    manager = SubagentManager(
+        provider=_fake_provider(),
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=1024,
+    )
+
+    async def run_test() -> None:
+        await manager._announce_result(
+            task_id="task-1",
+            label="review",
+            task="inspect code",
+            result="done",
+            origin={
+                "channel": "eval",
+                "chat_id": "case-1",
+                "session_key": "eval:case-1",
+            },
+            status="ok",
+        )
+        msg = await bus.consume_inbound()
+        assert msg.channel == "system"
+        assert msg.chat_id == "eval:case-1"
+        assert msg.session_key == "eval:case-1"
+
+    import asyncio
+
+    asyncio.run(run_test())
 
 
 def test_agent_loop_records_error_outcome_when_dispatch_crashes(tmp_path: Path, monkeypatch) -> None:

@@ -144,6 +144,18 @@ class SWEBenchRunner:
             problem_statement,
         )
 
+    @staticmethod
+    def _tool_call_name(tool_call: Any) -> str:
+        if not isinstance(tool_call, dict):
+            return ""
+        name = tool_call.get("name")
+        if isinstance(name, str):
+            return name
+        function = tool_call.get("function")
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            return function["name"]
+        return ""
+
     async def run_task(
         self,
         task: EvalTask,
@@ -191,11 +203,14 @@ class SWEBenchRunner:
         n_iterations = _count_trace_iterations(effective_trace_file)
 
         if result.session_manager is not None:
-            session = result.session_manager.get_or_create(session_key)
+            result_session_key = (
+                getattr(result, "runtime_session_key", None) or result.session_key
+            )
+            session = result.session_manager.get_or_create(result_session_key)
             for m in session.messages:
                 if m.get("role") == "assistant" and m.get("tool_calls"):
                     for tc in m["tool_calls"]:
-                        tools_used.append(tc.get("name", ""))
+                        tools_used.append(self._tool_call_name(tc))
                 if m.get("role") == "tool":
                     tool_events.append(
                         {

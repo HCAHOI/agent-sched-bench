@@ -587,6 +587,11 @@ for line in sys.stdin:
 
 # Idempotent tools safe to retry after agent restart.
 _IDEMPOTENT_TOOLS = frozenset({"read_file", "list_dir"})
+_CONTROL_PLANE_NOOP_RESULTS = {
+    "message": "Message replayed as no-op",
+    "spawn": "Subagent spawn replayed as no-op",
+    "sessions_yield": "Session yield replayed as no-op",
+}
 
 
 async def _readline_with_timeout(
@@ -1031,8 +1036,8 @@ async def execute_trace_tool_detailed(
         source_resource_timeline,
     )
 
-    if resolved_name == "message":
-        return "Message replayed as no-op", True, 0.0, {}
+    if resolved_name in _CONTROL_PLANE_NOOP_RESULTS:
+        return _CONTROL_PLANE_NOOP_RESULTS[resolved_name], True, 0.0, {}
 
     artifact_path = source_runtime_artifact_path_from_tool_call(
         tool_name=resolved_name,

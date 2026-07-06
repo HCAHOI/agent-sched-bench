@@ -65,6 +65,7 @@ class _StubContext:
         usage: dict[str, int] | None = None,
         response: _StubResponse | None = None,
         tool_resource_timelines: dict[str, dict[str, Any]] | None = None,
+        tool_timings: dict[str, dict[str, float]] | None = None,
     ) -> None:
         self.iteration = iteration
         self.messages = messages
@@ -72,6 +73,7 @@ class _StubContext:
         self.usage = usage or {}
         self.response = response
         self.tool_resource_timelines = tool_resource_timelines or {}
+        self.tool_timings = tool_timings or {}
         self.malformed_retry_count = 0
 
 
@@ -242,6 +244,130 @@ async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
     records = [json.loads(line) for line in trace_file.read_text().splitlines()]
     tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
     assert tool_exec["data"]["resource_timeline"] == resource_timeline
+
+
+def test_trace_collector_uses_runner_tool_timings(tmp_path: Path) -> None:
+    asyncio.run(_drive_uses_runner_tool_timings(tmp_path))
+
+
+async def _drive_uses_runner_tool_timings(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-timing")
+
+    msgs_in = [{"role": "user", "content": "Run two tools."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    first = _StubToolCall("read_file", {"path": "a.py"})
+    second = _StubToolCall("list_dir", {"path": "."})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": first.id,
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"a.py"}'},
+                },
+                {
+                    "id": second.id,
+                    "type": "function",
+                    "function": {"name": "list_dir", "arguments": '{"path":"."}'},
+                },
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_llm,
+            tool_calls=[first, second],
+        )
+    )
+    msgs_after_tool = msgs_after_llm + [
+        {
+            "role": "tool",
+            "tool_call_id": first.id,
+            "name": "read_file",
+            "content": "file",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": second.id,
+            "name": "list_dir",
+            "content": "dir",
+        },
+    ]
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_tool,
+            tool_calls=[first, second],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+            tool_timings={
+                first.id: {"ts_start": 1000.0, "ts_end": 1000.2, "duration_ms": 200.0},
+                second.id: {"ts_start": 1000.0, "ts_end": 1000.3, "duration_ms": 300.0},
+            },
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    tools = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    by_name = {record["data"]["tool_name"]: record for record in tools}
+
+    assert by_name["read_file"]["ts_start"] == 1000.0
+    assert by_name["read_file"]["ts_end"] == 1000.2
+    assert by_name["read_file"]["data"]["duration_ms"] == 200.0
+    assert by_name["list_dir"]["ts_start"] == 1000.0
+    assert by_name["list_dir"]["ts_end"] == 1000.3
+    assert by_name["list_dir"]["data"]["duration_ms"] == 300.0
+
+
+def test_trace_collector_subagent_hooks_share_trace_file(tmp_path: Path) -> None:
+    asyncio.run(_drive_subagent_hooks_share_trace_file(tmp_path))
+
+
+async def _drive_subagent_hooks_share_trace_file(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    parent_hook = TraceCollectorHook(trace_file, instance_id="parent")
+    child_hook = parent_hook.for_subagent("child-task")
+
+    parent_messages = [{"role": "user", "content": "spawn"}]
+    await parent_hook.before_iteration(
+        _StubContext(iteration=0, messages=parent_messages)
+    )
+    await parent_hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=parent_messages + [{"role": "assistant", "content": "parent"}],
+            response=_StubResponse(content="parent", finish_reason="stop"),
+        )
+    )
+
+    child_messages = [{"role": "user", "content": "child work"}]
+    await child_hook.before_iteration(_StubContext(iteration=0, messages=child_messages))
+    await child_hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=child_messages + [{"role": "assistant", "content": "child"}],
+            response=_StubResponse(content="child", finish_reason="stop"),
+        )
+    )
+    parent_hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    action_agent_ids = {
+        record["agent_id"]
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    }
+
+    assert "parent" in action_agent_ids
+    assert "parent:subagent:child-task" in action_agent_ids
 
 
 def test_trace_collector_llm_only_iteration(tmp_path: Path) -> None:

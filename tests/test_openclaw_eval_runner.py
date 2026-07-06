@@ -304,3 +304,90 @@ def test_swebench_runner_passes_tool_workspace_as_project_workspace(
 
     assert captured["tool_workspace"] == tool_workspace
     assert captured["project_workspace"] == tool_workspace
+
+
+def test_swebench_runner_reads_runtime_session_for_tool_events(
+    tmp_path: Path,
+) -> None:
+    provider = SimpleNamespace(get_default_model=lambda: "qwen-plus-latest")
+    runner = SWEBenchRunner(
+        provider=provider,
+        workspace_base=tmp_path / "ws",
+        benchmark_slug="swe-rebench",
+    )
+    runtime_session_key = "cli:encode__httpx-2701"
+    requested_sessions: list[str] = []
+
+    class _SessionManager:
+        def get_or_create(self, key: str):
+            requested_sessions.append(key)
+            return SimpleNamespace(
+                messages=[
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "name": "read_file",
+                        "content": "ok",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "final answer",
+                    },
+                ]
+            )
+
+    async def fake_run(**kwargs):
+        return SimpleNamespace(
+            content=None,
+            elapsed_s=0.1,
+            trace_file=kwargs["trace_file"],
+            session_key=kwargs["session_key"],
+            runtime_session_key=runtime_session_key,
+            session_manager=_SessionManager(),
+            stop_reason="completed",
+            error=None,
+        )
+
+    runner._session_runner.run = fake_run  # type: ignore[method-assign]
+
+    task = EvalTask(
+        instance_id="encode__httpx-2701",
+        problem_statement="fix bug",
+        workspace_dir=tmp_path / "runner-ws",
+        repo="encode/httpx",
+        base_commit="HEAD",
+        image_name="swerebench/example",
+    )
+
+    result = asyncio.run(
+        runner.run_task(
+            task,
+            prompt_template="cc_aligned",
+            trace_file=tmp_path / "trace.jsonl",
+        )
+    )
+
+    assert requested_sessions == [runtime_session_key]
+    assert result.content == "final answer"
+    assert result.tools_used == ["read_file"]
+    assert result.tool_events == [
+        {
+            "name": "read_file",
+            "status": "ok",
+            "detail": "ok",
+        }
+    ]

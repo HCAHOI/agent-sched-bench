@@ -24,6 +24,7 @@ from agents.openclaw.tools.filesystem import (
 )
 from agents.openclaw.tools.message import MessageTool
 from agents.openclaw.tools.registry import ToolRegistry
+from agents.openclaw.tools.session import SessionsYieldTool
 from agents.openclaw.tools.shell import ExecTool
 from agents.openclaw.tools.spawn import SpawnTool
 from agents.openclaw.tools.web import WebFetchTool, WebSearchTool
@@ -253,6 +254,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
             malformed_retry_budget=self.malformed_retry_budget,
             skills_dir=skills_dir,
+            hooks=self._extra_hooks,
         )
 
         self._running = False
@@ -310,6 +312,7 @@ class AgentLoop:
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
+        self.tools.register(SessionsYieldTool(manager=self.subagents))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -340,7 +343,7 @@ class AgentLoop:
         self, channel: str, chat_id: str, message_id: str | None = None
     ) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn"):
+        for name in ("message", "spawn", "sessions_yield"):
             if tool := self.tools.get(name):
                 tool.set_context(
                     channel, chat_id, *([message_id] if name == "message" else [])
@@ -532,7 +535,13 @@ class AgentLoop:
                 )
                 if response is not None:
                     await self.bus.publish_outbound(response)
-                elif msg.channel == "cli":
+                elif (
+                    msg.channel == "cli"
+                    and self._last_run_outcomes.get(msg.session_key, {}).get(
+                        "stop_reason"
+                    )
+                    != "yielded"
+                ):
                     await self.bus.publish_outbound(
                         OutboundMessage(
                             channel=msg.channel,
@@ -575,6 +584,23 @@ class AgentLoop:
         task = asyncio.create_task(coro)
         self._background_tasks.append(task)
         task.add_done_callback(self._background_tasks.remove)
+
+    def has_active_session_tasks(self, session_key: str) -> bool:
+        return any(not task.done() for task in self._active_tasks.get(session_key, []))
+
+    async def wait_for_session_idle(self, session_key: str) -> None:
+        """Wait for queued dispatch work for one session to finish."""
+
+        while True:
+            await asyncio.sleep(0)
+            tasks = [
+                task
+                for task in self._active_tasks.get(session_key, [])
+                if not task.done()
+            ]
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def stop(self) -> None:
         """Stop the agent loop."""
@@ -632,6 +658,10 @@ class AgentLoop:
                 chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
             )
+            yielded = (
+                self._last_run_outcomes.get(session.key, {}).get("stop_reason")
+                == "yielded"
+            )
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             self._emit_event(
@@ -645,6 +675,8 @@ class AgentLoop:
             self._schedule_background(
                 self.memory_consolidator.maybe_consolidate_by_tokens(session)
             )
+            if yielded:
+                return None
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
@@ -714,6 +746,9 @@ class AgentLoop:
             message_id=msg.metadata.get("message_id"),
         )
 
+        yielded = (
+            self._last_run_outcomes.get(session.key, {}).get("stop_reason") == "yielded"
+        )
         if final_content is None or not final_content.strip():
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
@@ -730,6 +765,8 @@ class AgentLoop:
         self._schedule_background(
             self.memory_consolidator.maybe_consolidate_by_tokens(session)
         )
+        if yielded:
+            return None
 
         if (
             (mt := self.tools.get("message"))

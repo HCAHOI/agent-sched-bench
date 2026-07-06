@@ -31,19 +31,36 @@ class _FakeCollector:
 
 class _FakeAgentLoop:
     last_init: dict[str, object] | None = None
+    waited_sessions: list[str] = []
+    idle_waits: list[str] = []
 
     def __init__(self, **kwargs) -> None:
         type(self).last_init = kwargs
+        type(self).waited_sessions = []
+        type(self).idle_waits = []
         self.memory_consolidator = SimpleNamespace(_event_callback=None)
         self.context = SimpleNamespace(
             skills=SimpleNamespace(_event_callback=None),
         )
         self.sessions = SimpleNamespace(_event_callback=None)
+        self.subagents = SimpleNamespace(
+            has_active=lambda _session_key: False,
+            wait_for_session=self._wait_for_session,
+        )
         self._mcp_event_callback = None
         self._event_callback = None
 
     async def run(self) -> None:
         return None
+
+    async def _wait_for_session(self, session_key: str) -> None:
+        type(self).waited_sessions.append(session_key)
+
+    def has_active_session_tasks(self, _session_key: str) -> bool:
+        return False
+
+    async def wait_for_session_idle(self, session_key: str) -> None:
+        type(self).idle_waits.append(session_key)
 
     def stop(self) -> None:
         return None
@@ -85,3 +102,5 @@ def test_session_runner_forwards_project_workspace(
     assert _FakeAgentLoop.last_init["workspace"] == state_workspace
     assert _FakeAgentLoop.last_init["tool_workspace"] == tool_workspace
     assert _FakeAgentLoop.last_init["project_workspace"] == project_workspace
+    assert _FakeAgentLoop.waited_sessions == ["cli:test"]
+    assert _FakeAgentLoop.idle_waits == ["cli:test"]

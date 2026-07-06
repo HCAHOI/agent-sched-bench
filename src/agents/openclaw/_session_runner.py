@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +62,20 @@ def _resolve_run_outcome(
     return stop_reason, error
 
 
+@dataclass
+class _TraceCollectorShared:
+    trace_file: Path
+    records: list[dict[str, Any]]
+    actions: list[dict[str, Any]]
+    pending_llm_records: list[dict[str, Any]]
+    fh: Any
+    total_tokens: int = 0
+    n_iterations: int = 0
+    tool_times: dict[str, float] = field(default_factory=dict)
+    tool_timeouts: dict[str, int] = field(default_factory=dict)
+    flushed: bool = False
+
+
 class TraceCollectorHook(AgentHook):
     """Collect per-iteration actions, events, and summaries as JSONL."""
 
@@ -72,48 +86,58 @@ class TraceCollectorHook(AgentHook):
         *,
         agent_id: str | None = None,
         task_id: str | None = None,
+        _shared: _TraceCollectorShared | None = None,
     ) -> None:
         self.trace_file = trace_file
         self.instance_id = instance_id
         self.agent_id = agent_id or instance_id
         self.program_id = self.agent_id
         self.task_id = task_id or instance_id
-        self.trace_file.parent.mkdir(parents=True, exist_ok=True)
         self._wall_start = time.monotonic()
-        self._total_tokens = 0
-        self._n_iterations = 0
-        self._tool_times: dict[str, float] = {}
-        self._tool_timeouts: dict[str, int] = {}
         self._tool_start_ts: dict[str, float] = {}
         self._iter_start_wall: float = 0.0
         self._iter_messages_snapshot: list[dict[str, Any]] | None = None
         self._before_exec_wall: float = 0.0
-        self._records: list[dict[str, Any]] = []
-        self._actions: list[dict[str, Any]] = []
-        self._pending_llm_records: list[dict[str, Any]] = []
-        self._flushed = False
-        self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
+        if _shared is None:
+            self.trace_file.parent.mkdir(parents=True, exist_ok=True)
+            _shared = _TraceCollectorShared(
+                trace_file=trace_file,
+                records=[],
+                actions=[],
+                pending_llm_records=[],
+                fh=open(trace_file, "w", encoding="utf-8"),  # noqa: SIM115
+            )
+        self._shared = _shared
+
+    def for_subagent(self, task_id: str) -> "TraceCollectorHook":
+        return TraceCollectorHook(
+            self.trace_file,
+            self.instance_id,
+            agent_id=f"{self.agent_id}:subagent:{task_id}",
+            task_id=self.task_id,
+            _shared=self._shared,
+        )
 
     def close(self) -> None:
-        if self._flushed:
+        if self._shared.flushed:
             return
-        if not self._fh.closed:
-            self._fh.close()
+        if not self._shared.fh.closed:
+            self._shared.fh.close()
         tmp_trace_file = self.trace_file.with_suffix(f"{self.trace_file.suffix}.tmp")
         tmp_trace_file.write_text(
             "".join(
                 json.dumps(record, ensure_ascii=False) + "\n"
-                for record in self._records
+                for record in self._shared.records
             ),
             encoding="utf-8",
         )
         tmp_trace_file.replace(self.trace_file)
-        self._flushed = True
+        self._shared.flushed = True
 
     def add_record(self, record: dict[str, Any]) -> None:
-        self._records.append(record)
-        self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-        self._fh.flush()
+        self._shared.records.append(record)
+        self._shared.fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._shared.fh.flush()
 
     def emit_event(
         self,
@@ -165,12 +189,12 @@ class TraceCollectorHook(AgentHook):
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         ts_now = time.time()
-        self._n_iterations += 1
+        self._shared.n_iterations += 1
 
         usage = context.usage or {}
         prompt_tokens = usage.get("prompt_tokens", 0)
         completion_tokens = usage.get("completion_tokens", 0)
-        self._total_tokens += prompt_tokens + completion_tokens
+        self._shared.total_tokens += prompt_tokens + completion_tokens
 
         llm_ts_end = (
             self._resolve_llm_ts_end(context.response)
@@ -242,7 +266,7 @@ class TraceCollectorHook(AgentHook):
         self._write_action(llm_action)
         if context.response and getattr(context.response, "extra", None):
             if context.response.extra.get("_openrouter_metadata_task") is not None:
-                self._pending_llm_records.append(
+                self._shared.pending_llm_records.append(
                     {
                         "response": context.response,
                         "event_data": llm_event_data,
@@ -272,17 +296,24 @@ class TraceCollectorHook(AgentHook):
             ]
             for tc_id, tool_name, tool_content, tool_ok in traceable_tool_results:
                 tool_start_mono = self._tool_start_ts.pop(tc_id, None)
+                tool_timings = getattr(context, "tool_timings", {}) or {}
+                timing = tool_timings.get(tc_id) or {}
+                timing_duration = timing.get("duration_ms")
                 duration_ms = (
-                    (time.monotonic() - tool_start_mono) * 1000
-                    if tool_start_mono
-                    else 0.0
+                    float(timing_duration)
+                    if isinstance(timing_duration, int | float)
+                    else (
+                        (time.monotonic() - tool_start_mono) * 1000
+                        if tool_start_mono
+                        else 0.0
+                    )
                 )
-                self._tool_times[tool_name] = (
-                    self._tool_times.get(tool_name, 0.0) + duration_ms
+                self._shared.tool_times[tool_name] = (
+                    self._shared.tool_times.get(tool_name, 0.0) + duration_ms
                 )
                 if not tool_ok:
-                    self._tool_timeouts[tool_name] = (
-                        self._tool_timeouts.get(tool_name, 0) + 1
+                    self._shared.tool_timeouts[tool_name] = (
+                        self._shared.tool_timeouts.get(tool_name, 0) + 1
                     )
 
                 is_mcp = tool_name.startswith("mcp_")
@@ -305,9 +336,21 @@ class TraceCollectorHook(AgentHook):
                         iteration=context.iteration,
                     )
 
-                tool_ts_end = time.time()
+                timing_ts_start = timing.get("ts_start")
+                timing_ts_end = timing.get("ts_end")
+                tool_ts_end = (
+                    float(timing_ts_end)
+                    if isinstance(timing_ts_end, int | float)
+                    else time.time()
+                )
                 tool_ts_start = (
-                    tool_ts_end - duration_ms / 1000 if duration_ms else tool_ts_end
+                    float(timing_ts_start)
+                    if isinstance(timing_ts_start, int | float)
+                    else (
+                        tool_ts_end - duration_ms / 1000
+                        if duration_ms
+                        else tool_ts_end
+                    )
                 )
                 action_id_suffix = tc_id if tc_id else tool_name
                 tool_action_data: dict[str, Any] = {
@@ -364,7 +407,7 @@ class TraceCollectorHook(AgentHook):
                 self.emit_event(
                     LLM,
                     "max_iterations",
-                    {"total_tokens": self._total_tokens},
+                    {"total_tokens": self._shared.total_tokens},
                     iteration=context.iteration,
                 )
 
@@ -388,11 +431,11 @@ class TraceCollectorHook(AgentHook):
 
     def _write_action(self, action: TraceAction) -> None:
         d = action.to_dict()
-        self._actions.append(d)
+        self._shared.actions.append(d)
         self.add_record(d)
 
     async def _resolve_pending_llm_records(self) -> None:
-        for pending in self._pending_llm_records:
+        for pending in self._shared.pending_llm_records:
             response = pending["response"]
             if response is None or not getattr(response, "extra", None):
                 continue
@@ -434,7 +477,7 @@ class TraceCollectorHook(AgentHook):
             generation_id = response.extra.get("openrouter_generation_id")
             if generation_id is not None:
                 raw_response["openrouter_generation_id"] = generation_id
-        self._pending_llm_records.clear()
+        self._shared.pending_llm_records.clear()
 
     @staticmethod
     async def _refresh_unavailable_openrouter_metadata(response: Any) -> None:
@@ -614,23 +657,25 @@ class TraceCollectorHook(AgentHook):
     ) -> None:
         await self._resolve_pending_llm_records()
         llm_summary = summarize_llm_latencies(
-            a.get("data") for a in self._actions if a.get("action_type") == "llm_call"
+            a.get("data")
+            for a in self._shared.actions
+            if a.get("action_type") == "llm_call"
         )
         summary = EvalTraceSummary(
             agent_id=self.agent_id,
             program_id=self.program_id,
             task_id=self.task_id,
             instance_id=self.instance_id,
-            n_iterations=self._n_iterations,
+            n_iterations=self._shared.n_iterations,
             total_llm_ms=float(llm_summary["total_llm_ms"]),
             total_llm_wall_ms=float(llm_summary["total_llm_wall_ms"]),
             total_llm_call_time_ms=float(llm_summary["total_llm_call_time_ms"]),
             llm_call_time_count=int(llm_summary["llm_call_time_count"]),
             llm_timing_source=str(llm_summary["llm_timing_source"]),
-            total_tool_ms=sum(self._tool_times.values()),
-            total_tokens=self._total_tokens,
-            tool_ms_by_name=self._tool_times,
-            tool_timeouts=self._tool_timeouts,
+            total_tool_ms=sum(self._shared.tool_times.values()),
+            total_tokens=self._shared.total_tokens,
+            tool_ms_by_name=self._shared.tool_times,
+            tool_timeouts=self._shared.tool_timeouts,
             success=success,
             elapsed_s=elapsed_s,
             prepare_ms=prepare_ms,
@@ -659,6 +704,7 @@ class SessionRunResult:
     elapsed_s: float
     trace_file: Path | None = None
     session_key: str = ""
+    runtime_session_key: str = ""
     session_manager: SessionManager | None = None
     stop_reason: str = "completed"
     error: str | None = None
@@ -700,6 +746,7 @@ class SessionRunner:
             "web_fetch",
             "message",
             "spawn",
+            "sessions_yield",
         ]
 
     async def run(
@@ -796,6 +843,7 @@ class SessionRunner:
 
         chat_id = session_key.split(":", 1)[-1] if ":" in session_key else session_key
         result_key = f"{channel}:{chat_id}"
+        runtime_session_key = result_key
 
         async with AsyncExitStack() as stack:
             await collector.start()
@@ -814,6 +862,13 @@ class SessionRunner:
             await bus.publish_inbound(msg)
 
             content = await collector.wait_for_result(result_key)
+            while True:
+                await agent.subagents.wait_for_session(runtime_session_key)
+                await agent.wait_for_session_idle(runtime_session_key)
+                if not agent.subagents.has_active(
+                    runtime_session_key
+                ) and not agent.has_active_session_tasks(runtime_session_key):
+                    break
 
         elapsed_s = time.monotonic() - wall_start
 
@@ -823,7 +878,7 @@ class SessionRunner:
             pass
 
         outcomes = getattr(agent, "_last_run_outcomes", {})
-        outcome = outcomes.get(session_key, {})
+        outcome = outcomes.get(runtime_session_key) or outcomes.get(session_key, {})
         stop_reason, error = _resolve_run_outcome(
             outcome=outcome,
             content=content,
@@ -841,6 +896,7 @@ class SessionRunner:
             elapsed_s=elapsed_s,
             trace_file=trace_file,
             session_key=session_key,
+            runtime_session_key=runtime_session_key,
             session_manager=session_manager,
             stop_reason=stop_reason,
             error=error,

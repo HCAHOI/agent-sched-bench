@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import multiprocessing
-import os
 import subprocess
 import shutil
 import time
@@ -173,6 +172,7 @@ class PreparedContainer:
     agent: Any  # ContainerAgent
     fixed_image: str | None = None
     cleanup_fixed_image: bool = True
+    extra_agents: list[Any] = dataclasses.field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -361,6 +361,25 @@ _REPLAY_EXECUTION_FAILURE_KINDS = frozenset(
         "unsupported_replay_tool",
     }
 )
+_CONTROL_PLANE_NOOP_TOOLS = frozenset({"message", "spawn", "sessions_yield"})
+_CONTROL_PLANE_NOOP_RESULTS = {
+    "message": "Message replayed as no-op",
+    "spawn": "Subagent spawn replayed as no-op",
+    "sessions_yield": "Session yield replayed as no-op",
+}
+
+
+@dataclass(slots=True)
+class _ReplayActionOutcome:
+    action_id: str
+    succeeded_actions: int = 0
+    replay_action_errors: int = 0
+    fatal_replay_errors: int = 0
+    source_failed_actions: int = 0
+    replay_failed_actions: int = 0
+    replay_execution_errors: int = 0
+    unexpected_replay_failed_actions: int = 0
+    sleep_drifts: list[SleepDrift] = dataclasses.field(default_factory=list)
 
 
 def _replay_failure_kind(metadata: dict[str, Any]) -> str | None:
@@ -667,11 +686,11 @@ async def _restore_source_runtime_artifacts(
 def _parse_trace_session_file(
     trace_path: Path,
 ) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
-    """Read one canonical trace once and extract the primary replay lane."""
+    """Read one canonical trace once and extract task-owned replay actions."""
 
     metadata: dict[str, Any] | None = None
     first_agent_id: str | None = None
-    actions: list[dict[str, Any]] = []
+    all_actions: list[dict[str, Any]] = []
     summaries: dict[str, dict[str, Any]] = {}
 
     with open(trace_path, encoding="utf-8") as f:
@@ -690,15 +709,33 @@ def _parse_trace_session_file(
             if record_type == "action" and agent_id:
                 if first_agent_id is None:
                     first_agent_id = agent_id
-                if agent_id == first_agent_id:
-                    actions.append(record)
+                all_actions.append(record)
                 continue
 
             if record_type == "summary" and agent_id:
                 summaries[agent_id] = record
 
-    if first_agent_id is None or not actions:
+    if first_agent_id is None or not all_actions:
         raise SimulateError(f"No action records with agent_id found in {trace_path}")
+
+    source_agent_id = first_agent_id
+    metadata_agent_id = (metadata or {}).get("instance_id")
+    if isinstance(metadata_agent_id, str) and metadata_agent_id:
+        source_agent_id = metadata_agent_id
+    elif first_agent_id not in summaries and len(summaries) == 1:
+        source_agent_id = next(iter(summaries))
+
+    source_subagent_prefix = f"{source_agent_id}:subagent:"
+    actions = [
+        action
+        for action in all_actions
+        if action.get("agent_id") == source_agent_id
+        or str(action.get("agent_id", "")).startswith(source_subagent_prefix)
+    ]
+    if not actions:
+        raise SimulateError(
+            f"No action records for task {source_agent_id!r} found in {trace_path}"
+        )
 
     actions.sort(
         key=lambda action: (
@@ -708,7 +745,7 @@ def _parse_trace_session_file(
             str(action.get("action_id", "")),
         )
     )
-    return first_agent_id, metadata, actions, summaries.get(first_agent_id)
+    return source_agent_id, metadata, actions, summaries.get(source_agent_id)
 
 
 def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
@@ -1695,7 +1732,9 @@ def _make_trace_action(
     ts_start: float,
     ts_end: float,
     data: dict[str, Any],
+    agent_id: str | None = None,
 ) -> TraceAction:
+    replay_agent_id = agent_id or loaded.run_instance_id
     action_data = {
         **data,
         "run_instance_id": loaded.run_instance_id,
@@ -1707,14 +1746,31 @@ def _make_trace_action(
     return TraceAction(
         action_type=action_type,
         action_id=action_id,
-        agent_id=loaded.run_instance_id,
-        program_id=loaded.run_instance_id,
+        agent_id=replay_agent_id,
+        program_id=replay_agent_id,
         instance_id=loaded.run_instance_id,
         iteration=iteration,
         ts_start=ts_start,
         ts_end=ts_end,
         data=action_data,
     )
+
+
+def _replay_agent_id_for_action(
+    loaded: LoadedTraceSession,
+    source_action_agent_id: Any,
+) -> str:
+    if not isinstance(source_action_agent_id, str) or not source_action_agent_id:
+        return loaded.run_instance_id
+    subagent_prefix = f"{loaded.source_agent_id}:subagent:"
+    if source_action_agent_id == loaded.source_agent_id:
+        return loaded.run_instance_id
+    if source_action_agent_id.startswith(subagent_prefix):
+        return (
+            f"{loaded.run_instance_id}:subagent:"
+            f"{source_action_agent_id[len(subagent_prefix):]}"
+        )
+    return loaded.run_instance_id
 
 
 def _make_trace_summary(
@@ -1934,8 +1990,21 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
     fixed_image_cleanup_error: BaseException | None = None
     container_stopped = False
     try:
+        agents = [*ctr.extra_agents]
         if ctr.agent is not None:
-            await ctr.agent.stop()
+            agents.append(ctr.agent)
+        for agent in agents:
+            try:
+                await agent.stop()
+            except (Exception, asyncio.CancelledError) as exc:
+                if agent_stop_error is None:
+                    agent_stop_error = exc
+                else:
+                    logger.exception(
+                        "Failed to stop additional container agent for %s",
+                        prepared.loaded.agent_id,
+                    )
+        ctr.extra_agents.clear()
     except (Exception, asyncio.CancelledError) as exc:
         agent_stop_error = exc
 
@@ -2035,6 +2104,96 @@ async def _sleep_source_gap(
         return None
     gap_s = max(0.0, action_source_start - previous_source_end)
     return await _sleep_and_measure(gap_s / replay_speed, phase="source_gap")
+
+
+def _replay_action_bounds_key(
+    action: dict[str, Any],
+    *,
+    source_trace: Path,
+) -> tuple[float, float, str]:
+    start, end = _coerce_action_bounds(action, source_trace=source_trace)
+    return start, end, str(action.get("action_id", ""))
+
+
+def _replay_action_batches(
+    actions: list[dict[str, Any]],
+    *,
+    source_trace: Path,
+) -> list[list[dict[str, Any]]]:
+    """Group source-overlapping actions for concurrent replay."""
+
+    sorted_actions = sorted(
+        actions,
+        key=lambda action: _replay_action_bounds_key(
+            action,
+            source_trace=source_trace,
+        ),
+    )
+    batches: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_end: float | None = None
+    for action in sorted_actions:
+        start, end = _coerce_action_bounds(action, source_trace=source_trace)
+        if not current:
+            current = [action]
+            current_end = end
+            continue
+        assert current_end is not None
+        if start < current_end:
+            current.append(action)
+            current_end = max(current_end, end)
+            continue
+        batches.append(current)
+        current = [action]
+        current_end = end
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _action_may_use_container_agent(action: dict[str, Any]) -> bool:
+    if action.get("action_type") != "tool_exec":
+        return False
+    data = action.get("data") or {}
+    tool_name = data.get("tool_name")
+    if not isinstance(tool_name, str) or not tool_name:
+        return False
+    return tool_name not in _CONTROL_PLANE_NOOP_TOOLS and not tool_name.startswith(
+        "mcp_"
+    )
+
+
+async def _prewarm_replay_agents_for_batch(
+    prepared_session: PreparedTraceSession,
+    ordered_batch: list[dict[str, Any]],
+) -> dict[int, Any]:
+    ctr = prepared_session.container
+    if ctr is None:
+        return {}
+
+    runnable_actions = [
+        action for action in ordered_batch if _action_may_use_container_agent(action)
+    ]
+    if not runnable_actions:
+        return {}
+
+    from trace_collect.openclaw_tools import ContainerAgent
+
+    assignments: dict[int, Any] = {id(runnable_actions[0]): ctr.agent}
+    extra_agents = [
+        ContainerAgent(ctr.container_id, ctr.container_executable)
+        for _ in runnable_actions[1:]
+    ]
+    if extra_agents:
+        ctr.extra_agents.extend(extra_agents)
+        await asyncio.gather(*(agent.start() for agent in extra_agents))
+        assignments.update(
+            {
+                id(action): agent
+                for action, agent in zip(runnable_actions[1:], extra_agents)
+            }
+        )
+    return assignments
 
 
 def _coerce_completion_tokens(value: Any) -> int:
@@ -2600,6 +2759,380 @@ async def _run_cloud_model_worker_waves(
     return replay_results, task_stats
 
 
+async def _replay_cloud_model_action(
+    prepared_session: PreparedTraceSession,
+    action: dict[str, Any],
+    *,
+    trace_logger: TraceLogger,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
+    command_timeout_s: float,
+    warmup_skip_iterations: int,
+    source_start_offset_s: float,
+    source_gap_sleep: SleepDrift | None,
+    replay_agent: Any | None,
+) -> _ReplayActionOutcome:
+    loaded = prepared_session.loaded
+    ctr = prepared_session.container
+    action_id = str(action.get("action_id", ""))
+    action_type = str(action.get("action_type", ""))
+    iteration = int(action.get("iteration", 0))
+    data = action.get("data", {})
+    action_ts_start, action_ts_end = _coerce_action_bounds(
+        action,
+        source_trace=loaded.source_trace,
+    )
+    source_duration_s = max(0.0, action_ts_end - action_ts_start)
+    outcome = _ReplayActionOutcome(action_id=action_id)
+    action_start_sleep = source_gap_sleep
+    if source_gap_sleep is not None:
+        outcome.sleep_drifts.append(source_gap_sleep)
+    if source_start_offset_s > 0:
+        action_start_sleep = await _sleep_and_measure(
+            source_start_offset_s / replay_speed,
+            phase="source_gap",
+        )
+        if action_start_sleep is not None:
+            outcome.sleep_drifts.append(action_start_sleep)
+
+    try:
+        if action_type == "llm_call":
+            record_ts_start = time.time()
+            sleep_s, llm_timing_fields = _llm_replay_duration_s(
+                data=data,
+                source_duration_s=source_duration_s,
+                replay_speed=replay_speed,
+                timing=llm_timing,
+            )
+            action_sleep = await _sleep_and_measure(
+                sleep_s,
+                phase="llm_replay",
+            )
+            if action_sleep is not None:
+                outcome.sleep_drifts.append(action_sleep)
+            record_ts_end = time.time()
+            record = _make_trace_action(
+                loaded=loaded,
+                action_type="llm_call",
+                action_id=action_id or f"llm_{iteration}",
+                iteration=iteration,
+                ts_start=record_ts_start,
+                ts_end=record_ts_end,
+                agent_id=_replay_agent_id_for_action(
+                    loaded,
+                    action.get("agent_id"),
+                ),
+                data={
+                    "messages_in": data.get("messages_in"),
+                    "raw_response": data.get("raw_response", {}),
+                    "prompt_tokens": data.get("prompt_tokens", 0),
+                    "completion_tokens": data.get("completion_tokens", 0),
+                    "llm_latency_ms": (record_ts_end - record_ts_start) * 1000,
+                    "simulate_source": str(loaded.source_trace),
+                    "source_action_agent_id": action.get("agent_id"),
+                    "source_llm_latency_ms": data.get("llm_latency_ms"),
+                    "replay_mode": "cloud_model",
+                    "replay_speed": replay_speed,
+                    **llm_timing_fields,
+                    "sim_metrics": {
+                        "warmup": iteration < warmup_skip_iterations,
+                        **_sleep_drift_metrics(
+                            source_gap=action_start_sleep,
+                            action_sleep=action_sleep,
+                        ),
+                    },
+                },
+            )
+            trace_logger.log_trace_action(loaded.agent_id, record)
+            outcome.succeeded_actions += 1
+            return outcome
+
+        if action_type != "tool_exec":
+            logger.warning(
+                "Skipping unsupported action_type=%s in %s",
+                action_type,
+                loaded.source_trace,
+            )
+            return outcome
+
+        tool_name = data.get("tool_name")
+        tool_args = data.get("tool_args", "{}")
+        if not tool_name:
+            logger.warning(
+                "Skipping tool action without tool_name in %s",
+                loaded.source_trace,
+            )
+            return outcome
+
+        record_ts_start = time.time()
+        source_duration_ms = float(data.get("duration_ms") or 0.0)
+        action_sleep: SleepDrift | None = None
+        source_success = _source_tool_success(data)
+        source_tool_result = data.get("tool_result", data.get("result", ""))
+        source_exec_timeout = _source_exec_timeout_s(
+            tool_name=tool_name,
+            tool_args_json=tool_args,
+            source_duration_ms=source_duration_ms,
+            source_success=source_success,
+            source_tool_result=source_tool_result,
+        )
+        source_resource_timeline = valid_resource_timeline(
+            data.get("resource_timeline")
+        )
+        original_artifact_path: str | None = None
+        mapped_artifact_path: str | None = None
+        exec_resource_timeline: dict[str, Any] | None = None
+        tool_exec_metadata: dict[str, Any] = {}
+        if not source_success:
+            outcome.source_failed_actions += 1
+        if ctr is None:
+            logger.info(
+                "Skipping host-mode tool action for %s action=%s tool=%s",
+                loaded.agent_id,
+                action_id,
+                tool_name,
+            )
+            replay_source = "skipped_host_mode"
+            tool_result = data.get("tool_result", data.get("result", ""))
+            tool_success = source_success
+            action_sleep = await _sleep_and_measure(
+                source_duration_ms / 1000 / replay_speed,
+                phase="tool_trace_replay",
+            )
+            if action_sleep is not None:
+                outcome.sleep_drifts.append(action_sleep)
+            duration_ms = (time.time() - record_ts_start) * 1000
+        elif tool_name in _CONTROL_PLANE_NOOP_TOOLS:
+            action_sleep = await _sleep_and_measure(
+                source_duration_ms / 1000 / replay_speed,
+                phase="tool_trace_replay",
+            )
+            if action_sleep is not None:
+                outcome.sleep_drifts.append(action_sleep)
+            tool_result = data.get("tool_result", data.get("result", ""))
+            if not tool_result:
+                tool_result = _CONTROL_PLANE_NOOP_RESULTS[tool_name]
+            tool_success = source_success
+            duration_ms = (time.time() - record_ts_start) * 1000
+            replay_source = (
+                "message_noop" if tool_name == "message" else "control_noop"
+            )
+        elif tool_name.startswith("mcp_"):
+            action_sleep = await _sleep_and_measure(
+                source_duration_ms / 1000 / replay_speed,
+                phase="tool_trace_replay",
+            )
+            if action_sleep is not None:
+                outcome.sleep_drifts.append(action_sleep)
+            tool_result = data.get("tool_result", "")
+            tool_success = source_success
+            duration_ms = (time.time() - record_ts_start) * 1000
+            replay_source = "replayed_from_trace"
+        else:
+            mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
+                _remap_runtime_artifact_tool_args(
+                    tool_name=tool_name,
+                    tool_args_json=tool_args,
+                    runtime_root_map=prepared_session.runtime_artifact_root_map,
+                )
+            )
+            if original_artifact_path is None and isinstance(tool_args, str):
+                from trace_collect.openclaw_tools import (
+                    source_runtime_artifact_path_from_tool_call,
+                )
+
+                original_artifact_path = source_runtime_artifact_path_from_tool_call(
+                    tool_name=tool_name,
+                    tool_args_json=tool_args,
+                )
+            if original_artifact_path is not None and not mapped_exists:
+                action_sleep = await _sleep_and_measure(
+                    source_duration_ms / 1000 / replay_speed,
+                    phase="tool_trace_replay",
+                )
+                if action_sleep is not None:
+                    outcome.sleep_drifts.append(action_sleep)
+                tool_result = _artifact_unavailable_result(original_artifact_path)
+                tool_success = False
+                duration_ms = (time.time() - record_ts_start) * 1000
+                replay_source = "source_artifact_unavailable"
+            else:
+                if replay_agent is None:
+                    raise RuntimeError(
+                        f"No replay agent assigned for tool action {action_id!r}"
+                    )
+                agent = replay_agent
+                exec_resource_timeline = (
+                    source_resource_timeline
+                    if _tool_uses_single_exec_command_semantics(
+                        tool_name,
+                        mapped_tool_args,
+                    )
+                    else None
+                )
+                if exec_resource_timeline is None:
+                    if mapped_artifact_path is not None:
+                        (
+                            tool_result,
+                            duration_ms,
+                            tool_success,
+                            tool_exec_metadata,
+                        ) = _unpack_exec_tool_result(
+                            await _exec_tool(
+                                agent,
+                                tool_name,
+                                mapped_tool_args,
+                                command_timeout_s,
+                                source_exec_timeout,
+                                True,
+                            )
+                        )
+                    else:
+                        (
+                            tool_result,
+                            duration_ms,
+                            tool_success,
+                            tool_exec_metadata,
+                        ) = _unpack_exec_tool_result(
+                            await _exec_tool(
+                                agent,
+                                tool_name,
+                                mapped_tool_args,
+                                command_timeout_s,
+                                source_exec_timeout,
+                            )
+                        )
+                elif mapped_artifact_path is not None:
+                    (
+                        tool_result,
+                        duration_ms,
+                        tool_success,
+                        tool_exec_metadata,
+                    ) = _unpack_exec_tool_result(
+                        await _exec_tool(
+                            agent,
+                            tool_name,
+                            mapped_tool_args,
+                            command_timeout_s,
+                            source_exec_timeout,
+                            True,
+                            exec_resource_timeline,
+                        )
+                    )
+                else:
+                    (
+                        tool_result,
+                        duration_ms,
+                        tool_success,
+                        tool_exec_metadata,
+                    ) = _unpack_exec_tool_result(
+                        await _exec_tool(
+                            agent,
+                            tool_name,
+                            mapped_tool_args,
+                            command_timeout_s,
+                            source_exec_timeout,
+                            False,
+                            exec_resource_timeline,
+                        )
+                    )
+                replay_source = (
+                    "restored_runtime_artifact"
+                    if mapped_artifact_path is not None
+                    else "executed_in_container"
+                )
+        replay_failure_kind = _replay_failure_kind(tool_exec_metadata)
+        source_artifact_unavailable = replay_source == "source_artifact_unavailable"
+        if not tool_success:
+            outcome.replay_failed_actions += 1
+            if not source_artifact_unavailable:
+                if replay_failure_kind in _REPLAY_EXECUTION_FAILURE_KINDS:
+                    outcome.replay_execution_errors += 1
+                elif source_success:
+                    outcome.unexpected_replay_failed_actions += 1
+        if source_artifact_unavailable:
+            outcome.fatal_replay_errors += 1
+        record_ts_end = time.time()
+        extra_tool_fields = _command_metadata(
+            tool_name=tool_name,
+            tool_args_json=tool_args,
+            tool_result=str(tool_result),
+            tool_success=tool_success,
+        )
+        if original_artifact_path is not None:
+            extra_tool_fields["source_artifact_path"] = original_artifact_path
+        if mapped_artifact_path is not None:
+            extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
+        extra_tool_fields.update(tool_exec_metadata)
+        if source_exec_timeout is not None:
+            extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
+        if source_resource_timeline is not None:
+            extra_tool_fields["source_resource_timeline"] = source_resource_timeline
+            extra_tool_fields["resource_timeout_policy"] = (
+                "resource_integrated"
+                if exec_resource_timeline is not None
+                else "wall_clock"
+            )
+        tool_record = _make_trace_action(
+            loaded=loaded,
+            action_type="tool_exec",
+            action_id=action_id or f"tool_{iteration}_{tool_name}",
+            iteration=iteration,
+            ts_start=record_ts_start,
+            ts_end=record_ts_end,
+            agent_id=_replay_agent_id_for_action(
+                loaded,
+                action.get("agent_id"),
+            ),
+            data={
+                "tool_name": tool_name,
+                "tool_args": tool_args,
+                "tool_result": tool_result,
+                "duration_ms": duration_ms,
+                "success": tool_success,
+                "source_success": source_success,
+                **extra_tool_fields,
+                "simulate_source": str(loaded.source_trace),
+                "source_action_agent_id": action.get("agent_id"),
+                "source_duration_ms": source_duration_ms,
+                "replay_mode": "cloud_model",
+                "replay_speed": replay_speed,
+                "replay_source": replay_source,
+                "sim_metrics": {
+                    "warmup": iteration < warmup_skip_iterations,
+                    "source": replay_source,
+                    "sim_tool_format": replay_source
+                    if replay_source
+                    in {
+                        "skipped_host_mode",
+                        "message_noop",
+                        "control_noop",
+                        "replayed_from_trace",
+                        "source_artifact_unavailable",
+                        "restored_runtime_artifact",
+                    }
+                    else "container_exec",
+                    **_sleep_drift_metrics(
+                        source_gap=action_start_sleep,
+                        action_sleep=action_sleep,
+                    ),
+                },
+            },
+        )
+        trace_logger.log_trace_action(loaded.agent_id, tool_record)
+        if tool_success:
+            outcome.succeeded_actions += 1
+    except Exception as exc:
+        logger.error(
+            "Replay action failed for %s action=%s: %s",
+            loaded.agent_id,
+            action_id,
+            exc,
+        )
+        outcome.replay_action_errors += 1
+    return outcome
+
+
 async def _replay_cloud_model_session(
     prepared_session: PreparedTraceSession,
     *,
@@ -2611,7 +3144,6 @@ async def _replay_cloud_model_session(
     warmup_skip_iterations: int,
 ) -> ReplayTaskStats:
     loaded = prepared_session.loaded
-    ctr = prepared_session.container
     source_model = (loaded.summary or {}).get("model", "unknown")
     logger.info(
         "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx (llm_timing=%s)",
@@ -2639,343 +3171,72 @@ async def _replay_cloud_model_session(
         if start_drift is not None:
             sleep_drifts.append(start_drift)
 
-    for action in loaded.actions:
-        action_id = str(action.get("action_id", ""))
-        action_type = str(action.get("action_type", ""))
-        iteration = int(action.get("iteration", 0))
-        data = action.get("data", {})
-        action_ts_start, action_ts_end = _coerce_action_bounds(action, source_trace=loaded.source_trace)
-        source_duration_s = max(0.0, action_ts_end - action_ts_start)
+    for batch in _replay_action_batches(
+        loaded.actions,
+        source_trace=loaded.source_trace,
+    ):
+        bounds = [
+            _coerce_action_bounds(action, source_trace=loaded.source_trace)
+            for action in batch
+        ]
+        batch_start = min(start for start, _ in bounds)
+        batch_end = max(end for _, end in bounds)
 
+        ordered_batch = sorted(
+            batch,
+            key=lambda action: _replay_action_bounds_key(
+                action,
+                source_trace=loaded.source_trace,
+            ),
+        )
+        replay_agents = await _prewarm_replay_agents_for_batch(
+            prepared_session,
+            ordered_batch,
+        )
         source_gap_sleep = await _sleep_source_gap(
             previous_source_end=previous_source_end,
-            action_source_start=action_ts_start,
+            action_source_start=batch_start,
             replay_speed=replay_speed,
         )
-        if source_gap_sleep is not None:
-            sleep_drifts.append(source_gap_sleep)
         previous_source_end = max(
-            action_ts_end,
-            previous_source_end if previous_source_end is not None else action_ts_end,
+            batch_end,
+            previous_source_end if previous_source_end is not None else batch_end,
         )
-
-        try:
-            if action_type == "llm_call":
-                record_ts_start = time.time()
-                sleep_s, llm_timing_fields = _llm_replay_duration_s(
-                    data=data,
-                    source_duration_s=source_duration_s,
+        outcomes = await asyncio.gather(
+            *(
+                _replay_cloud_model_action(
+                    prepared_session,
+                    action,
+                    trace_logger=trace_logger,
                     replay_speed=replay_speed,
-                    timing=llm_timing,
+                    llm_timing=llm_timing,
+                    command_timeout_s=command_timeout_s,
+                    warmup_skip_iterations=warmup_skip_iterations,
+                    source_start_offset_s=max(
+                        0.0,
+                        _coerce_action_bounds(
+                            action,
+                            source_trace=loaded.source_trace,
+                        )[0]
+                        - batch_start,
+                    ),
+                    source_gap_sleep=source_gap_sleep if index == 0 else None,
+                    replay_agent=replay_agents.get(id(action)),
                 )
-                action_sleep = await _sleep_and_measure(
-                    sleep_s,
-                    phase="llm_replay",
-                )
-                if action_sleep is not None:
-                    sleep_drifts.append(action_sleep)
-                record_ts_end = time.time()
-                record = _make_trace_action(
-                    loaded=loaded,
-                    action_type="llm_call",
-                    action_id=action_id or f"llm_{iteration}",
-                    iteration=iteration,
-                    ts_start=record_ts_start,
-                    ts_end=record_ts_end,
-                    data={
-                        "messages_in": data.get("messages_in"),
-                        "raw_response": data.get("raw_response", {}),
-                        "prompt_tokens": data.get("prompt_tokens", 0),
-                        "completion_tokens": data.get("completion_tokens", 0),
-                        "llm_latency_ms": (record_ts_end - record_ts_start) * 1000,
-                        "simulate_source": str(loaded.source_trace),
-                        "source_llm_latency_ms": data.get("llm_latency_ms"),
-                        "replay_mode": "cloud_model",
-                        "replay_speed": replay_speed,
-                        **llm_timing_fields,
-                        "sim_metrics": {
-                            "warmup": iteration < warmup_skip_iterations,
-                            **_sleep_drift_metrics(
-                                source_gap=source_gap_sleep,
-                                action_sleep=action_sleep,
-                            ),
-                        },
-                    },
-                )
-                trace_logger.log_trace_action(loaded.agent_id, record)
-                succeeded_actions += 1
-                continue
-
-            if action_type != "tool_exec":
-                logger.warning(
-                    "Skipping unsupported action_type=%s in %s",
-                    action_type,
-                    loaded.source_trace,
-                )
-                continue
-
-            tool_name = data.get("tool_name")
-            tool_args = data.get("tool_args", "{}")
-            if not tool_name:
-                logger.warning(
-                    "Skipping tool action without tool_name in %s",
-                    loaded.source_trace,
-                )
-                continue
-
-            record_ts_start = time.time()
-            source_duration_ms = float(data.get("duration_ms") or 0.0)
-            action_sleep: SleepDrift | None = None
-            source_success = _source_tool_success(data)
-            source_tool_result = data.get("tool_result", data.get("result", ""))
-            source_exec_timeout = _source_exec_timeout_s(
-                tool_name=tool_name,
-                tool_args_json=tool_args,
-                source_duration_ms=source_duration_ms,
-                source_success=source_success,
-                source_tool_result=source_tool_result,
+                for index, action in enumerate(ordered_batch)
             )
-            source_resource_timeline = valid_resource_timeline(
-                data.get("resource_timeline")
+        )
+        for outcome in outcomes:
+            succeeded_actions += outcome.succeeded_actions
+            replay_action_errors += outcome.replay_action_errors
+            fatal_replay_errors += outcome.fatal_replay_errors
+            source_failed_actions += outcome.source_failed_actions
+            replay_failed_actions += outcome.replay_failed_actions
+            replay_execution_errors += outcome.replay_execution_errors
+            unexpected_replay_failed_actions += (
+                outcome.unexpected_replay_failed_actions
             )
-            original_artifact_path: str | None = None
-            mapped_artifact_path: str | None = None
-            exec_resource_timeline: dict[str, Any] | None = None
-            tool_exec_metadata: dict[str, Any] = {}
-            if not source_success:
-                source_failed_actions += 1
-            if ctr is None:
-                logger.info(
-                    "Skipping host-mode tool action for %s action=%s tool=%s",
-                    loaded.agent_id,
-                    action_id,
-                    tool_name,
-                )
-                replay_source = "skipped_host_mode"
-                tool_result = data.get("tool_result", data.get("result", ""))
-                tool_success = source_success
-                action_sleep = await _sleep_and_measure(
-                    source_duration_ms / 1000 / replay_speed,
-                    phase="tool_trace_replay",
-                )
-                if action_sleep is not None:
-                    sleep_drifts.append(action_sleep)
-                duration_ms = (time.time() - record_ts_start) * 1000
-            elif tool_name == "message":
-                action_sleep = await _sleep_and_measure(
-                    source_duration_ms / 1000 / replay_speed,
-                    phase="tool_trace_replay",
-                )
-                if action_sleep is not None:
-                    sleep_drifts.append(action_sleep)
-                tool_result = data.get("tool_result", data.get("result", ""))
-                if not tool_result:
-                    tool_result = "Message replayed as no-op"
-                tool_success = source_success
-                duration_ms = (time.time() - record_ts_start) * 1000
-                replay_source = "message_noop"
-            elif tool_name.startswith("mcp_"):
-                action_sleep = await _sleep_and_measure(
-                    source_duration_ms / 1000 / replay_speed,
-                    phase="tool_trace_replay",
-                )
-                if action_sleep is not None:
-                    sleep_drifts.append(action_sleep)
-                tool_result = data.get("tool_result", "")
-                tool_success = source_success
-                duration_ms = (time.time() - record_ts_start) * 1000
-                replay_source = "replayed_from_trace"
-            else:
-                mapped_tool_args, original_artifact_path, mapped_artifact_path, mapped_exists = (
-                    _remap_runtime_artifact_tool_args(
-                        tool_name=tool_name,
-                        tool_args_json=tool_args,
-                        runtime_root_map=prepared_session.runtime_artifact_root_map,
-                    )
-                )
-                if original_artifact_path is None and isinstance(tool_args, str):
-                    from trace_collect.openclaw_tools import (
-                        source_runtime_artifact_path_from_tool_call,
-                    )
-
-                    original_artifact_path = source_runtime_artifact_path_from_tool_call(
-                        tool_name=tool_name,
-                        tool_args_json=tool_args,
-                    )
-                if original_artifact_path is not None and not mapped_exists:
-                    action_sleep = await _sleep_and_measure(
-                        source_duration_ms / 1000 / replay_speed,
-                        phase="tool_trace_replay",
-                    )
-                    if action_sleep is not None:
-                        sleep_drifts.append(action_sleep)
-                    tool_result = _artifact_unavailable_result(original_artifact_path)
-                    tool_success = False
-                    duration_ms = (time.time() - record_ts_start) * 1000
-                    replay_source = "source_artifact_unavailable"
-                else:
-                    exec_resource_timeline = (
-                        source_resource_timeline
-                        if _tool_uses_single_exec_command_semantics(
-                            tool_name,
-                            mapped_tool_args,
-                        )
-                        else None
-                    )
-                    if exec_resource_timeline is None:
-                        if mapped_artifact_path is not None:
-                            (
-                                tool_result,
-                                duration_ms,
-                                tool_success,
-                                tool_exec_metadata,
-                            ) = _unpack_exec_tool_result(
-                                await _exec_tool(
-                                    ctr.agent,
-                                    tool_name,
-                                    mapped_tool_args,
-                                    command_timeout_s,
-                                    source_exec_timeout,
-                                    True,
-                                )
-                            )
-                        else:
-                            (
-                                tool_result,
-                                duration_ms,
-                                tool_success,
-                                tool_exec_metadata,
-                            ) = _unpack_exec_tool_result(
-                                await _exec_tool(
-                                    ctr.agent,
-                                    tool_name,
-                                    mapped_tool_args,
-                                    command_timeout_s,
-                                    source_exec_timeout,
-                                )
-                            )
-                    elif mapped_artifact_path is not None:
-                        (
-                            tool_result,
-                            duration_ms,
-                            tool_success,
-                            tool_exec_metadata,
-                        ) = _unpack_exec_tool_result(
-                            await _exec_tool(
-                                ctr.agent,
-                                tool_name,
-                                mapped_tool_args,
-                                command_timeout_s,
-                                source_exec_timeout,
-                                True,
-                                exec_resource_timeline,
-                            )
-                        )
-                    else:
-                        (
-                            tool_result,
-                            duration_ms,
-                            tool_success,
-                            tool_exec_metadata,
-                        ) = _unpack_exec_tool_result(
-                            await _exec_tool(
-                                ctr.agent,
-                                tool_name,
-                                mapped_tool_args,
-                                command_timeout_s,
-                                source_exec_timeout,
-                                False,
-                                exec_resource_timeline,
-                            )
-                        )
-                    replay_source = (
-                        "restored_runtime_artifact"
-                        if mapped_artifact_path is not None
-                        else "executed_in_container"
-                    )
-            replay_failure_kind = _replay_failure_kind(tool_exec_metadata)
-            source_artifact_unavailable = replay_source == "source_artifact_unavailable"
-            if not tool_success:
-                replay_failed_actions += 1
-                if not source_artifact_unavailable:
-                    if replay_failure_kind in _REPLAY_EXECUTION_FAILURE_KINDS:
-                        replay_execution_errors += 1
-                    elif source_success:
-                        unexpected_replay_failed_actions += 1
-            if source_artifact_unavailable:
-                fatal_replay_errors += 1
-            record_ts_end = time.time()
-            extra_tool_fields = _command_metadata(
-                tool_name=tool_name,
-                tool_args_json=tool_args,
-                tool_result=str(tool_result),
-                tool_success=tool_success,
-            )
-            if original_artifact_path is not None:
-                extra_tool_fields["source_artifact_path"] = original_artifact_path
-            if mapped_artifact_path is not None:
-                extra_tool_fields["simulator_artifact_path"] = mapped_artifact_path
-            extra_tool_fields.update(tool_exec_metadata)
-            if source_exec_timeout is not None:
-                extra_tool_fields["source_exec_timeout_s"] = source_exec_timeout
-            if source_resource_timeline is not None:
-                extra_tool_fields["source_resource_timeline"] = source_resource_timeline
-                extra_tool_fields["resource_timeout_policy"] = (
-                    "resource_integrated"
-                    if exec_resource_timeline is not None
-                    else "wall_clock"
-                )
-            tool_record = _make_trace_action(
-                loaded=loaded,
-                action_type="tool_exec",
-                action_id=action_id or f"tool_{iteration}_{tool_name}",
-                iteration=iteration,
-                ts_start=record_ts_start,
-                ts_end=record_ts_end,
-                data={
-                    "tool_name": tool_name,
-                    "tool_args": tool_args,
-                    "tool_result": tool_result,
-                    "duration_ms": duration_ms,
-                    "success": tool_success,
-                    "source_success": source_success,
-                    **extra_tool_fields,
-                    "simulate_source": str(loaded.source_trace),
-                    "source_duration_ms": source_duration_ms,
-                    "replay_mode": "cloud_model",
-                    "replay_speed": replay_speed,
-                    "replay_source": replay_source,
-                    "sim_metrics": {
-                        "warmup": iteration < warmup_skip_iterations,
-                        "source": replay_source,
-                        "sim_tool_format": replay_source
-                        if replay_source
-                        in {
-                            "skipped_host_mode",
-                            "message_noop",
-                            "replayed_from_trace",
-                            "source_artifact_unavailable",
-                            "restored_runtime_artifact",
-                        }
-                        else "container_exec",
-                        **_sleep_drift_metrics(
-                            source_gap=source_gap_sleep,
-                            action_sleep=action_sleep,
-                        ),
-                    },
-                },
-            )
-            trace_logger.log_trace_action(loaded.agent_id, tool_record)
-            if tool_success:
-                succeeded_actions += 1
-        except Exception as exc:
-            logger.error(
-                "Replay action failed for %s action=%s: %s",
-                loaded.agent_id,
-                action_id,
-                exc,
-            )
-            replay_action_errors += 1
+            sleep_drifts.extend(outcome.sleep_drifts)
 
     wall_end = time.time()
     failed_actions = (
@@ -3033,6 +3294,16 @@ def _split_trace_by_agent(
     per_agent: dict[str, list[str]] = {aid: [] for aid in agent_dirs}
     metadata_line: str | None = None
 
+    def owning_agent_id(agent_id: Any) -> str | None:
+        if not isinstance(agent_id, str) or not agent_id:
+            return None
+        if agent_id in per_agent:
+            return agent_id
+        for run_instance_id in per_agent:
+            if agent_id.startswith(f"{run_instance_id}:subagent:"):
+                return run_instance_id
+        return None
+
     with combined_path.open(encoding="utf-8") as fh:
         for line in fh:
             stripped = line.strip()
@@ -3043,9 +3314,9 @@ def _split_trace_by_agent(
             if rtype == "trace_metadata":
                 metadata_line = stripped
                 continue
-            agent_id = record.get("agent_id")
-            if agent_id in per_agent:
-                per_agent[agent_id].append(stripped)
+            owner = owning_agent_id(record.get("agent_id"))
+            if owner is not None:
+                per_agent[owner].append(stripped)
 
     for agent_id, lines in per_agent.items():
         out_dir = agent_dirs[agent_id]

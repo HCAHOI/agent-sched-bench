@@ -31,6 +31,7 @@ _ALLOWED_MSG_KEYS = frozenset(
     {
         "role",
         "content",
+        "reasoning_content",
         "tool_calls",
         "tool_call_id",
         "name",
@@ -674,6 +675,7 @@ class UnifiedProvider(LLMProvider):
     @classmethod
     def _parse_chunks(cls, chunks: list[Any]) -> LLMResponse:
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tc_bufs: dict[int, dict[str, Any]] = {}
         finish_reason = "stop"
         usage: dict[str, int] = {}
@@ -734,6 +736,9 @@ class UnifiedProvider(LLMProvider):
             text = cls._extract_text_content(delta.get("content"))
             if text:
                 content_parts.append(text)
+            reasoning_text = cls._extract_text_content(delta.get("reasoning_content"))
+            if reasoning_text:
+                reasoning_parts.append(reasoning_text)
             for idx, tc in enumerate(delta.get("tool_calls") or []):
                 _accum_tc(tc, idx)
             usage = cls._extract_usage(chunk_map) or usage
@@ -755,6 +760,7 @@ class UnifiedProvider(LLMProvider):
             ],
             finish_reason=finish_reason,
             usage=usage,
+            reasoning_content="".join(reasoning_parts) or None,
         )
 
     @staticmethod

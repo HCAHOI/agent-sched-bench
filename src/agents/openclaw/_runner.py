@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -220,6 +221,7 @@ class AgentRunner:
                     new_events,
                     fatal_error,
                     tool_resource_timelines,
+                    tool_timings,
                 ) = await self._execute_tools(
                     spec,
                     response.tool_calls,
@@ -228,6 +230,7 @@ class AgentRunner:
                 tool_events.extend(new_events)
                 context.tool_events = list(new_events)
                 context.tool_resource_timelines = tool_resource_timelines
+                context.tool_timings = tool_timings
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
@@ -239,6 +242,9 @@ class AgentRunner:
                     self._refresh_hook_context_messages(context, messages)
                     await hook.after_iteration(context)
                     break
+                should_yield = any(
+                    bool(getattr(result, "should_yield", False)) for result in results
+                )
                 for tool_call, result in zip(response.tool_calls, results):
                     tool_message = {
                         "role": "tool",
@@ -253,6 +259,13 @@ class AgentRunner:
                     }
                     messages.append(tool_message)
                 self._refresh_hook_context_messages(context, messages)
+                if should_yield:
+                    stop_reason = "yielded"
+                    final_content = None
+                    context.final_content = None
+                    context.stop_reason = stop_reason
+                    await hook.after_iteration(context)
+                    break
                 await hook.after_iteration(context)
                 continue
 
@@ -501,10 +514,18 @@ class AgentRunner:
         list[dict[str, str]],
         BaseException | None,
         dict[str, dict[str, Any]],
+        dict[str, dict[str, float]],
     ]:
         batches = self._partition_tool_batches(spec, tool_calls)
         tool_results: list[
-            tuple[Any, dict[str, str], BaseException | None, str, dict[str, Any] | None]
+            tuple[
+                Any,
+                dict[str, str],
+                BaseException | None,
+                str,
+                dict[str, Any] | None,
+                dict[str, float],
+            ]
         ] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
@@ -525,22 +546,67 @@ class AgentRunner:
         results: list[Any] = []
         events: list[dict[str, str]] = []
         resource_timelines: dict[str, dict[str, Any]] = {}
+        tool_timings: dict[str, dict[str, float]] = {}
         fatal_error: BaseException | None = None
-        for result, event, error, tool_call_id, resource_timeline in tool_results:
+        for (
+            result,
+            event,
+            error,
+            tool_call_id,
+            resource_timeline,
+            timing,
+        ) in tool_results:
             results.append(result)
             events.append(event)
+            tool_timings[tool_call_id] = timing
             if resource_timeline is not None:
                 resource_timelines[tool_call_id] = resource_timeline
             if error is not None and fatal_error is None:
                 fatal_error = error
-        return results, events, fatal_error, resource_timelines
+        return results, events, fatal_error, resource_timelines, tool_timings
 
     async def _run_tool(
         self,
         spec: AgentRunSpec,
         tool_call: ToolCallRequest,
         external_lookup_counts: dict[str, int],
-    ) -> tuple[Any, dict[str, str], BaseException | None, str, dict[str, Any] | None]:
+    ) -> tuple[
+        Any,
+        dict[str, str],
+        BaseException | None,
+        str,
+        dict[str, Any] | None,
+        dict[str, float],
+    ]:
+        started_wall = time.time()
+
+        def finish(
+            result: Any,
+            event: dict[str, str],
+            error: BaseException | None,
+            resource_timeline: dict[str, Any] | None,
+        ) -> tuple[
+            Any,
+            dict[str, str],
+            BaseException | None,
+            str,
+            dict[str, Any] | None,
+            dict[str, float],
+        ]:
+            ended_wall = time.time()
+            return (
+                result,
+                event,
+                error,
+                tool_call.id,
+                resource_timeline,
+                {
+                    "ts_start": started_wall,
+                    "ts_end": ended_wall,
+                    "duration_ms": max(0.0, (ended_wall - started_wall) * 1000),
+                },
+            )
+
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
         lookup_error = repeated_external_lookup_error(
             tool_call.name,
@@ -554,7 +620,7 @@ class AgentRunner:
                 "detail": "repeated external lookup blocked",
             }
             error = RuntimeError(lookup_error) if spec.fail_on_tool_error else None
-            return lookup_error + _HINT, event, error, tool_call.id, None
+            return finish(lookup_error + _HINT, event, error, None)
         tool, params, prep_error = spec.tools.prepare_call(
             tool_call.name, tool_call.arguments
         )
@@ -565,7 +631,7 @@ class AgentRunner:
                 "detail": prep_error.split(": ", 1)[-1][:120],
             }
             error = RuntimeError(prep_error) if spec.fail_on_tool_error else None
-            return prep_error + _HINT, event, error, tool_call.id, None
+            return finish(prep_error + _HINT, event, error, None)
 
         resource_recorder: ResourceTimelineRecorder | None = None
         resource_timeline: dict[str, Any] | None = None
@@ -593,11 +659,10 @@ class AgentRunner:
                 "detail": str(exc),
             }
             error = exc if spec.fail_on_tool_error else None
-            return (
+            return finish(
                 f"Error: {type(exc).__name__}: {exc}",
                 event,
                 error,
-                tool_call.id,
                 resource_timeline,
             )
 
@@ -608,7 +673,7 @@ class AgentRunner:
                 "detail": result.replace("\n", " ").strip()[:120],
             }
             error = RuntimeError(result) if spec.fail_on_tool_error else None
-            return result + _HINT, event, error, tool_call.id, resource_timeline
+            return finish(result + _HINT, event, error, resource_timeline)
 
         detail = "" if result is None else str(result)
         detail = detail.replace("\n", " ").strip()
@@ -616,11 +681,10 @@ class AgentRunner:
             detail = "(empty)"
         elif len(detail) > 120:
             detail = detail[:120] + "..."
-        return (
+        return finish(
             result,
             {"name": tool_call.name, "status": "ok", "detail": detail},
             None,
-            tool_call.id,
             resource_timeline,
         )
 
@@ -682,6 +746,9 @@ class AgentRunner:
         result: Any,
     ) -> Any:
         result = ensure_nonempty_tool_result(tool_name, result)
+        yield_content = getattr(result, "content", None)
+        if isinstance(yield_content, str):
+            return yield_content
         try:
             content = maybe_persist_tool_result(
                 tool_results_dir=spec.tool_results_dir,

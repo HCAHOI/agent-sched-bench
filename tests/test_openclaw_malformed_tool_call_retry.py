@@ -8,6 +8,7 @@ from agents.openclaw._runner import AgentRunner, AgentRunSpec
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.registry import ToolRegistry
+from agents.openclaw.tools.session import SessionsYieldTool
 
 
 class _FakeProvider(LLMProvider):
@@ -70,6 +71,11 @@ class _MessageSnapshotHook(AgentHook):
         self.snapshots.append([dict(message) for message in context.messages])
 
 
+class _ActiveSubagentManager:
+    def has_active(self, session_key: str) -> bool:
+        return session_key == "cli:test"
+
+
 def test_runner_reprompts_after_malformed_tool_call_text() -> None:
     asyncio.run(_run_malformed_tool_call_case())
 
@@ -80,6 +86,52 @@ def test_runner_preserves_inline_tool_markup_in_final_answer() -> None:
 
 def test_runner_hides_internal_message_ids_from_hooks_and_result() -> None:
     asyncio.run(_run_internal_message_id_surface_case())
+
+
+def test_runner_yields_after_sessions_yield_tool_call() -> None:
+    asyncio.run(_run_sessions_yield_case())
+
+
+async def _run_sessions_yield_case() -> None:
+    provider = _FakeProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_yield",
+                        name="sessions_yield",
+                        arguments={},
+                    )
+                ],
+                finish_reason="tool_calls",
+                usage={"prompt_tokens": 10, "completion_tokens": 2},
+            ),
+            LLMResponse(content="should not be requested"),
+        ]
+    )
+    registry = ToolRegistry()
+    yield_tool = SessionsYieldTool(manager=_ActiveSubagentManager())
+    yield_tool.set_context("cli", "test")
+    registry.register(yield_tool)
+
+    result = await AgentRunner(provider).run(
+        AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "wait for subagent"}],
+            tools=registry,
+            model="fake-model",
+            max_iterations=4,
+            max_tool_result_chars=1000,
+            session_key="cli:test",
+        )
+    )
+
+    assert result.stop_reason == "yielded"
+    assert result.final_content is None
+    assert len(provider.seen_messages) == 1
+    assert result.messages[-1]["role"] == "tool"
+    assert result.messages[-1]["name"] == "sessions_yield"
+    assert "Yielded this turn" in result.messages[-1]["content"]
 
 
 async def _run_malformed_tool_call_case() -> None:

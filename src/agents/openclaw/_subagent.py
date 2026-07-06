@@ -7,7 +7,7 @@ from typing import Any
 
 from loguru import logger
 
-from agents.openclaw._hook import AgentHook, AgentHookContext
+from agents.openclaw._hook import AgentHook, AgentHookContext, CompositeHook
 from agents.openclaw._runner import AgentRunSpec, AgentRunner
 from agents.openclaw._skills import BUILTIN_SKILLS_DIR
 from agents.openclaw.tools.filesystem import (
@@ -54,6 +54,7 @@ class SubagentManager:
         restrict_to_workspace: bool = False,
         malformed_retry_budget: int | None = None,
         skills_dir: Path | None = None,
+        hooks: list[AgentHook] | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -69,6 +70,7 @@ class SubagentManager:
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        self._hooks = hooks or []
 
     async def spawn(
         self,
@@ -81,6 +83,8 @@ class SubagentManager:
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
+        if session_key:
+            origin["session_key"] = session_key
 
         bg_task = asyncio.create_task(
             self._run_subagent(task_id, task, display_label, origin)
@@ -100,6 +104,36 @@ class SubagentManager:
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+
+    def has_active(self, session_key: str) -> bool:
+        return bool(self._session_tasks.get(session_key))
+
+    async def wait_for_session(self, session_key: str) -> None:
+        """Wait for all subagents currently associated with a session."""
+
+        while ids := self._session_tasks.get(session_key):
+            tasks: list[asyncio.Task[None]] = []
+            for task_id in list(ids):
+                task = self._running_tasks.get(task_id)
+                if task is None or task.done():
+                    ids.discard(task_id)
+                    continue
+                tasks.append(task)
+            if not ids:
+                self._session_tasks.pop(session_key, None)
+                return
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _build_hooks(self, task_id: str) -> list[AgentHook]:
+        hooks: list[AgentHook] = []
+        for hook in self._hooks:
+            child_factory = getattr(hook, "for_subagent", None)
+            if callable(child_factory):
+                hooks.append(child_factory(task_id))
+        hooks.append(_SubagentHook(task_id))
+        return hooks
 
     async def _run_subagent(
         self,
@@ -157,7 +191,7 @@ class SubagentManager:
                 model=self.model,
                 max_iterations=15,
                 max_tool_result_chars=self.max_tool_result_chars,
-                hook=_SubagentHook(task_id),
+                hook=CompositeHook(self._build_hooks(task_id)),
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,
                 fail_on_tool_error=True,
@@ -226,6 +260,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             sender_id="subagent",
             chat_id=f"{origin['channel']}:{origin['chat_id']}",
             content=announce_content,
+            session_key_override=origin.get("session_key"),
         )
 
         await self.bus.publish_inbound(msg)

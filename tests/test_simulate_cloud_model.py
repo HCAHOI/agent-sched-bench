@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import time
 from pathlib import Path
@@ -11,12 +10,14 @@ import pytest
 from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.simulator import (
     LLMTimingConfig,
-    PreparedContainer,
     PreparedTraceSession,
     SimulateError,
     WorkerTraceInput,
     _chunk_worker_inputs_by_concurrency,
+    _make_trace_action,
     _partition_worker_inputs,
+    _parse_trace_session_file,
+    _replay_agent_id_for_action,
     _resolve_prep_concurrency,
     _run_worker_wave_async,
     _source_exec_timeout_s,
@@ -942,6 +943,377 @@ def test_simulate_ignores_invalid_resource_timeline_for_timeout_policy(
     )
     assert "source_resource_timeline" not in tool_record["data"]
     assert "resource_timeout_policy" not in tool_record["data"]
+
+
+def test_parse_trace_session_file_includes_subagent_actions(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in [
+                {
+                    "type": "trace_metadata",
+                    "scaffold": "openclaw",
+                    "instance_id": "task-a",
+                    "execution_environment": "container",
+                },
+                {
+                    "type": "action",
+                    "action_type": "llm_call",
+                    "action_id": "primary-llm",
+                    "agent_id": "task-a",
+                    "iteration": 0,
+                    "ts_start": 100.2,
+                    "ts_end": 100.3,
+                    "data": {"messages_in": [], "raw_response": {}},
+                },
+                {
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "action_id": "child-tool",
+                    "agent_id": "task-a:subagent:child",
+                    "iteration": 0,
+                    "ts_start": 100.0,
+                    "ts_end": 100.1,
+                    "data": {
+                        "tool_name": "list_dir",
+                        "tool_args": '{"path":"/testbed"}',
+                        "tool_result": "child-result",
+                        "duration_ms": 100.0,
+                        "success": True,
+                    },
+                },
+                {
+                    "type": "summary",
+                    "agent_id": "task-a",
+                    "success": True,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    source_agent_id, _metadata, actions, _summary = _parse_trace_session_file(
+        trace_path
+    )
+
+    assert source_agent_id == "task-a"
+    assert [action["action_id"] for action in actions] == [
+        "child-tool",
+        "primary-llm",
+    ]
+
+
+def test_parse_trace_session_file_excludes_other_top_level_agents(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in [
+                {
+                    "type": "trace_metadata",
+                    "scaffold": "openclaw",
+                    "instance_id": "task-a",
+                    "execution_environment": "container",
+                },
+                {
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "action_id": "task-a-tool",
+                    "agent_id": "task-a",
+                    "iteration": 0,
+                    "ts_start": 100.0,
+                    "ts_end": 100.1,
+                    "data": {"tool_name": "list_dir", "success": True},
+                },
+                {
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "action_id": "task-a-child-tool",
+                    "agent_id": "task-a:subagent:child",
+                    "iteration": 0,
+                    "ts_start": 100.2,
+                    "ts_end": 100.3,
+                    "data": {"tool_name": "read_file", "success": True},
+                },
+                {
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "action_id": "task-b-tool",
+                    "agent_id": "task-b",
+                    "iteration": 0,
+                    "ts_start": 100.4,
+                    "ts_end": 100.5,
+                    "data": {"tool_name": "exec", "success": True},
+                },
+                {
+                    "type": "summary",
+                    "agent_id": "task-a",
+                    "success": True,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    source_agent_id, _metadata, actions, _summary = _parse_trace_session_file(
+        trace_path
+    )
+
+    assert source_agent_id == "task-a"
+    assert [action["action_id"] for action in actions] == [
+        "task-a-tool",
+        "task-a-child-tool",
+    ]
+
+
+def test_simulate_replays_spawn_and_sessions_yield_as_control_noops(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    records = [
+        {
+            "type": "trace_metadata",
+            "trace_format_version": 5,
+            "scaffold": "openclaw",
+            "instance_id": "task-a",
+            "model": "claude-haiku",
+            "mode": "collect",
+            "execution_environment": "container",
+        },
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "spawn-tool",
+            "agent_id": "task-a",
+            "iteration": 0,
+            "ts_start": 100.0,
+            "ts_end": 100.1,
+            "data": {
+                "tool_name": "spawn",
+                "tool_args": '{"task":"inspect"}',
+                "tool_result": "",
+                "duration_ms": 100.0,
+                "success": True,
+            },
+        },
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "yield-tool",
+            "agent_id": "task-a",
+            "iteration": 0,
+            "ts_start": 100.2,
+            "ts_end": 100.3,
+            "data": {
+                "tool_name": "sessions_yield",
+                "tool_args": "{}",
+                "tool_result": "",
+                "duration_ms": 100.0,
+                "success": True,
+            },
+        },
+        {
+            "type": "summary",
+            "agent_id": "task-a",
+            "model": "claude-haiku",
+            "success": True,
+            "n_iterations": 1,
+            "elapsed_s": 0.3,
+        },
+    ]
+    trace_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    tool_records = [
+        record
+        for record in _read_jsonl(trace_file)
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    by_name = {record["data"]["tool_name"]: record for record in tool_records}
+
+    assert by_name["spawn"]["data"]["replay_source"] == "control_noop"
+    assert by_name["spawn"]["data"]["tool_result"] == "Subagent spawn replayed as no-op"
+    assert by_name["sessions_yield"]["data"]["replay_source"] == "control_noop"
+    assert (
+        by_name["sessions_yield"]["data"]["tool_result"]
+        == "Session yield replayed as no-op"
+    )
+
+
+def test_simulate_replays_overlapping_tools_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    trace_path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in [
+                {
+                    "type": "trace_metadata",
+                    "trace_format_version": 5,
+                    "scaffold": "openclaw",
+                    "instance_id": "task-a",
+                    "model": "claude-haiku",
+                    "mode": "collect",
+                    "execution_environment": "container",
+                },
+                {
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "action_id": "tool-a",
+                    "agent_id": "task-a",
+                    "iteration": 0,
+                    "ts_start": 100.0,
+                    "ts_end": 100.5,
+                    "data": {
+                        "tool_name": "list_dir",
+                        "tool_args": '{"path":"/testbed"}',
+                        "tool_result": "source-a",
+                        "duration_ms": 500.0,
+                        "success": True,
+                    },
+                },
+                {
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "action_id": "tool-b",
+                    "agent_id": "task-a:subagent:child",
+                    "iteration": 0,
+                    "ts_start": 100.0,
+                    "ts_end": 100.5,
+                    "data": {
+                        "tool_name": "read_file",
+                        "tool_args": '{"path":"/testbed/file.py"}',
+                        "tool_result": "source-b",
+                        "duration_ms": 500.0,
+                        "success": True,
+                    },
+                },
+                {
+                    "type": "summary",
+                    "agent_id": "task-a",
+                    "model": "claude-haiku",
+                    "success": True,
+                    "n_iterations": 1,
+                    "elapsed_s": 0.5,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    extra_agent_starts = 0
+    extra_agent_stops = 0
+
+    class _ExtraAgent:
+        def __init__(self, container_id: str, container_executable: str) -> None:
+            self.container_id = container_id
+            self.container_executable = container_executable
+
+        async def start(self) -> None:
+            nonlocal extra_agent_starts
+            extra_agent_starts += 1
+            await asyncio.sleep(0.05)
+
+        async def stop(self) -> None:
+            nonlocal extra_agent_stops
+            extra_agent_stops += 1
+
+    exec_starts: list[tuple[str, float, int]] = []
+
+    async def fake_exec_tool(
+        agent,
+        tool_name,
+        tool_args_json,
+        command_timeout_s,
+        source_exec_timeout_s=None,
+        allow_source_runtime_artifacts=False,
+        source_resource_timeline=None,
+    ):
+        del (
+            tool_args_json,
+            command_timeout_s,
+            source_exec_timeout_s,
+            allow_source_runtime_artifacts,
+            source_resource_timeline,
+        )
+        exec_starts.append((tool_name, time.perf_counter(), id(agent)))
+        await asyncio.sleep(0.05)
+        return f"executed-{tool_name}", 50.0, True
+
+    monkeypatch.setattr("trace_collect.openclaw_tools.ContainerAgent", _ExtraAgent)
+    monkeypatch.setattr("trace_collect.simulator._exec_tool", fake_exec_tool)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+        )
+    )
+
+    assert len(exec_starts) == 2
+    assert len({agent_id for _tool, _started, agent_id in exec_starts}) == 2
+    assert max(started for _tool, started, _agent in exec_starts) - min(
+        started for _tool, started, _agent in exec_starts
+    ) < 0.04
+    assert extra_agent_starts == 1
+    assert extra_agent_stops == 1
+
+    tool_records = [
+        record
+        for record in _read_jsonl(trace_file)
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    assert len(tool_records) == 2
+    assert {record["data"]["replay_source"] for record in tool_records} == {
+        "executed_in_container"
+    }
+    provenance = {
+        record["data"]["tool_name"]: record["data"]["source_action_agent_id"]
+        for record in tool_records
+    }
+    assert provenance == {
+        "list_dir": "task-a",
+        "read_file": "task-a:subagent:child",
+    }
+    replay_agent_ids = {
+        record["data"]["tool_name"]: record["agent_id"] for record in tool_records
+    }
+    assert replay_agent_ids == {
+        "list_dir": "task-a",
+        "read_file": "task-a:subagent:child",
+    }
 
 
 def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:
@@ -2542,6 +2914,41 @@ def _loaded_for_finalize(tmp_path: Path) -> object:
         actions=[],
         iterations={},
     )
+
+
+def test_replay_subagent_actions_keep_distinct_agent_id(tmp_path: Path) -> None:
+    loaded = _loaded_for_finalize(tmp_path)
+    parent = _make_trace_action(
+        loaded=loaded,
+        action_type="llm_call",
+        action_id="llm_0",
+        iteration=0,
+        ts_start=1.0,
+        ts_end=2.0,
+        agent_id=_replay_agent_id_for_action(loaded, "task-a"),
+        data={},
+    )
+    child = _make_trace_action(
+        loaded=loaded,
+        action_type="llm_call",
+        action_id="llm_0",
+        iteration=0,
+        ts_start=1.1,
+        ts_end=2.1,
+        agent_id=_replay_agent_id_for_action(loaded, "task-a:subagent:child"),
+        data={},
+    )
+
+    assert parent.action_id == child.action_id
+    assert parent.agent_id == "task-a"
+    assert child.agent_id == "task-a:subagent:child"
+    assert {
+        (parent.agent_id, parent.action_id),
+        (child.agent_id, child.action_id),
+    } == {
+        ("task-a", "llm_0"),
+        ("task-a:subagent:child", "llm_0"),
+    }
 
 
 def test_finalize_prepared_session_stops_container_when_agent_stop_fails(

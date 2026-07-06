@@ -22,6 +22,7 @@ class AgentHookContext:
     tool_results: list[Any] = field(default_factory=list)
     tool_events: list[dict[str, str]] = field(default_factory=list)
     tool_resource_timelines: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tool_timings: dict[str, dict[str, float]] = field(default_factory=dict)
     final_content: str | None = None
     stop_reason: str | None = None
     error: str | None = None

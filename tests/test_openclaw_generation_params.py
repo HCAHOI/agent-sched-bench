@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from agents.openclaw.session.manager import Session
 from agents.terminal_bench.runner import TerminalBenchRunner
 from llm_call.openclaw import UnifiedProvider
 
@@ -35,6 +36,77 @@ def test_unified_provider_includes_optional_generation_params() -> None:
         "top_k": 20,
         "repetition_penalty": 1.05,
     }
+
+
+def test_unified_provider_preserves_reasoning_content_in_messages() -> None:
+    provider = UnifiedProvider(
+        api_key="test",
+        api_base="http://127.0.0.1:1/v1",
+        default_model="test-model",
+    )
+
+    kwargs = provider._build_kwargs(
+        messages=[
+            {"role": "user", "content": "solve"},
+            {
+                "role": "assistant",
+                "content": "I should inspect the repo.",
+                "reasoning_content": "internal chain",
+            },
+        ],
+        tools=None,
+        model=None,
+        max_tokens=16,
+        temperature=None,
+        reasoning_effort=None,
+        tool_choice=None,
+    )
+
+    assert kwargs["messages"][1]["reasoning_content"] == "internal chain"
+
+
+def test_unified_provider_stream_accumulates_reasoning_content() -> None:
+    response = UnifiedProvider._parse_chunks(
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_content": "think ",
+                            "content": "",
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_content": "more",
+                            "content": "answer",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        ]
+    )
+
+    assert response.reasoning_content == "think more"
+    assert response.content == "answer"
+
+
+def test_session_history_preserves_reasoning_content() -> None:
+    session = Session(key="cli:test")
+    session.messages.append(
+        {
+            "role": "assistant",
+            "content": "I will call a tool.",
+            "reasoning_content": "private reasoning",
+        }
+    )
+
+    assert session.get_history()[0]["reasoning_content"] == "private reasoning"
 
 
 def test_terminal_bench_runner_passes_generation_agent_kwargs(tmp_path: Path) -> None:

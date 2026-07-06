@@ -298,6 +298,34 @@ def test_exec_command_simulate_timeout_fallback_is_capped() -> None:
     assert agent.timeouts == [600.0]
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "expected"),
+    [
+        ("spawn", "Subagent spawn replayed as no-op"),
+        ("sessions_yield", "Session yield replayed as no-op"),
+    ],
+)
+def test_control_plane_tools_replay_as_noops(
+    tool_name: str,
+    expected: str,
+) -> None:
+    agent = FakeAgent()
+    result, success, duration_ms, metadata = asyncio.run(
+        execute_trace_tool_detailed(
+            agent=agent,
+            tool_name=tool_name,
+            tool_args_json="{}",
+            command_timeout_s=10.0,
+        )
+    )
+
+    assert result == expected
+    assert success is True
+    assert duration_ms == 0.0
+    assert metadata == {}
+    assert agent.requests == []
+
+
 def test_exec_command_source_timeout_fallback_preserves_source_timeout() -> None:
     agent = FakeAgent({"exec": {"ok": False, "result": "[timeout]", "returncode": 124}})
     result, success, _ = asyncio.run(
