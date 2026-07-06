@@ -35,7 +35,6 @@ from agents.openclaw.eval.types import (
 from llm_call.provider_base import LLMProvider
 from agents.openclaw.session.manager import SessionManager
 from trace_collect.latency_metrics import summarize_llm_latencies
-from trace_collect.predictive_policy import CommandFamily, classify_tool_result
 from agents.openclaw._checkpoint_container import run_container_checkpoint
 
 _MESSAGE_RECORDING_MODES = frozenset({"full", "delta"})
@@ -782,21 +781,9 @@ class TraceCollectorHook(AgentHook):
             )
             return None
 
-        # Classify BEFORE running the expensive filesystem probe.
-        # READ_ONLY / FLAKY_READ commands skip the probe entirely — the
-        # classifier is the decision maker, not an after-the-fact annotator.
-        family = classify_tool_result(tool_name, tool_args_json)
-        if family in (CommandFamily.READ_ONLY, CommandFamily.FLAKY_READ):
-            return {
-                "skipped": "predicted_read_only",
-                "overhead_excluded": True,
-                "elapsed_ms": 0,
-                "probe_result": "skipped",
-                "checkpoint_decision": "predicted_read_only",
-                "predicted_family": family.value,
-            }
-
-        # For MUTATING and UNKNOWN, run the probe as verification.
+        # Run the filesystem probe (formerly gated by a syntatic command
+        # classifier — removed per ADR: the probe dominates the signal,
+        # and the classifier was unreliable for unbounded CLI commands).
         probe_started = time.monotonic()
         try:
             backend = await self._ensure_checkpoint_backend()
@@ -812,14 +799,12 @@ class TraceCollectorHook(AgentHook):
 
         probe_elapsed_ms = round((time.monotonic() - probe_started) * 1000, 3)
         if not probe_changed:
-            decision = f"predicted_{family.value}_probe_verified"
             return {
                 "skipped": "no filesystem changes since last checkpoint",
                 "overhead_excluded": True,
                 "elapsed_ms": probe_elapsed_ms,
                 "probe_result": "unchanged",
-                "checkpoint_decision": decision,
-                "predicted_family": family.value,
+                "checkpoint_decision": "probe_unchanged",
             }
 
         self._schedule_checkpoint_capture(

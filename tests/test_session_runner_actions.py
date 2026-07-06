@@ -719,10 +719,9 @@ async def _drive_deferred_predictive_skip_records_verified_decision(
         source_concurrent_execs=False,
     )
     assert read_only is not None
-    assert read_only["skipped"] == "predicted_read_only"
-    assert read_only["probe_result"] == "skipped"
-    assert read_only["checkpoint_decision"] == "predicted_read_only"
-    assert read_only["predicted_family"] == "read_only"
+    assert read_only["skipped"] == "no filesystem changes since last checkpoint"
+    assert read_only["probe_result"] == "unchanged"
+    assert read_only["checkpoint_decision"] == "probe_unchanged"
 
     unknown_action_data: dict[str, Any] = {}
     unknown = await hook._checkpoint_after_tool_deferred(
@@ -735,8 +734,7 @@ async def _drive_deferred_predictive_skip_records_verified_decision(
     assert unknown is not None
     assert unknown["skipped"] == "no filesystem changes since last checkpoint"
     assert unknown["probe_result"] == "unchanged"
-    assert unknown["checkpoint_decision"] == "predicted_unknown_probe_verified"
-    assert unknown["predicted_family"] == "unknown"
+    assert unknown["checkpoint_decision"] == "probe_unchanged"
     hook.close()
 
 

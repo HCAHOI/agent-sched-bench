@@ -7217,7 +7217,6 @@ class TestBugCRestoreChainCorrectness:
 
 def _make_scheduler(
     scheduling: str = "sync",
-    predictive_skip: str = "off",
 ) -> tuple[ReplayCheckpointScheduler, list[dict[str, Any]]]:
     """Create a scheduler with a recording log_action callback."""
     logged: list[dict[str, Any]] = []
@@ -7227,7 +7226,6 @@ def _make_scheduler(
 
     config = ReplaySchedulerConfig(
         checkpoint_scheduling=scheduling,
-        predictive_skip=predictive_skip,
     )
     scheduler = ReplayCheckpointScheduler(
         config=config,
@@ -7627,22 +7625,11 @@ class TestReplayCheckpointSchedulerConfig:
     def test_default_config_is_sync_off(self) -> None:
         config = ReplaySchedulerConfig()
         assert config.checkpoint_scheduling == "sync"
-        assert config.predictive_skip == "off"
-        assert config.rebaseline_bytes is None
-
-    def test_sync_gate_is_valid(self) -> None:
-        """sync + gate is valid (skip-only ablation)."""
-        config = ReplaySchedulerConfig(
-            checkpoint_scheduling="sync",
-            predictive_skip="gate",
-        )
-        assert config.checkpoint_scheduling == "sync"
-        assert config.predictive_skip == "gate"
 
     def test_deferred_off_is_valid(self) -> None:
+        """deferred is a valid scheduling mode."""
         config = ReplaySchedulerConfig(
             checkpoint_scheduling="deferred",
-            predictive_skip="off",
         )
         assert config.checkpoint_scheduling == "deferred"
 
@@ -7653,23 +7640,10 @@ class TestReplayCheckpointSchedulerConfig:
         d = {config: "test"}
         assert d[config] == "test"
 
-    def test_speculative_rejected(self) -> None:
-        """predictive_skip='speculative' raises ValueError."""
-        with pytest.raises(ValueError, match="speculative"):
-            ReplaySchedulerConfig(
-                checkpoint_scheduling="sync",
-                predictive_skip="speculative",
-            )
-
     def test_unknown_scheduling_rejected(self) -> None:
         """Unknown checkpoint_scheduling value raises ValueError."""
         with pytest.raises(ValueError, match="checkpoint_scheduling"):
             ReplaySchedulerConfig(checkpoint_scheduling="unknown")
-
-    def test_unknown_predictive_skip_rejected(self) -> None:
-        """Unknown predictive_skip value raises ValueError."""
-        with pytest.raises(ValueError, match="predictive_skip"):
-            ReplaySchedulerConfig(predictive_skip="unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -7695,10 +7669,9 @@ _SCHEDULER_METRIC_KEYS: frozenset[str] = frozenset({
     "cas_removed_count",
     "cas_mode_mismatch_count",
     "cas_mode_mismatch_examples",
-    # Predictive skip / gate annotations
+    # Gate annotations
     "checkpoint_pending_forced_sync",
     "checkpoint_decision",
-    "predicted_family",
 })
 
 
@@ -7914,7 +7887,6 @@ def test_pr1_ab_happy_path(
             container_executable="docker",
             replay_speed=100.0,
             checkpoint_scheduling="sync",
-            predictive_skip="off",
         )
     )
     deferred_trace = asyncio.run(
@@ -7926,7 +7898,6 @@ def test_pr1_ab_happy_path(
             container_executable="docker",
             replay_speed=100.0,
             checkpoint_scheduling="deferred",
-            predictive_skip="off",
         )
     )
 
@@ -8021,7 +7992,6 @@ def test_pr1_ab_mismatch_parity(
             container_executable="docker",
             replay_speed=100.0,
             checkpoint_scheduling="sync",
-            predictive_skip="off",
         )
     )
     deferred_trace = asyncio.run(
@@ -8033,7 +8003,6 @@ def test_pr1_ab_mismatch_parity(
             container_executable="docker",
             replay_speed=100.0,
             checkpoint_scheduling="deferred",
-            predictive_skip="off",
         )
     )
 
@@ -8149,7 +8118,7 @@ def test_output_content_mismatch_skipped_for_flaky_read(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """FLAKY_READ tools (web_search) avoid output_content_mismatch."""
+    """Non-exec tools (web_search) avoid output_content_mismatch."""
     from harness.trace_logger import TraceLogger
     from trace_collect.simulator import (
         _load_trace_session,
@@ -8158,8 +8127,8 @@ def test_output_content_mismatch_skipped_for_flaky_read(
 
     trace_path = tmp_path / "trace.jsonl"
     task_source = tmp_path / "tasks.json"
-    # web_search is a non-exec tool that uses exec-like semantics check path
-    # but is classified as FLAKY_READ by predictive_policy.
+    # web_search content varies legitimately, so it's excluded from
+    # output_content_mismatch by an inline tool_name check.
     _write_trace(
         trace_path,
         agent_id="task-a",
@@ -8211,7 +8180,7 @@ def test_output_content_mismatch_skipped_for_flaky_read(
     assert "normalized_output_match" not in tool_record["data"]
     # Replay succeeded, no transport-level mismatch
     assert tool_record["data"]["replay_outcome_match"] is True
-    # No output_content_mismatch (FLAKY_READ excluded by guard)
+    # No output_content_mismatch (web_search excluded by inline guard)
     assert "mismatch_reason" not in tool_record["data"]
 
 

@@ -323,28 +323,6 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Simulated TPOT in milliseconds when --llm-timing ttft-tpot.",
     )
     parser.add_argument(
-        "--predictive-skip",
-        choices=["off", "gate"],
-        default="off",
-        help=(
-            "Predictive skip mode for replay checkpoint captures. "
-            "'off' captures at every boundary (today's behavior). "
-            "'gate' uses classifier-first prediction to skip captures "
-            "for read-only / flaky-read tool families. "
-            "(default: off)"
-        ),
-    )
-    parser.add_argument(
-        "--rebaseline-bytes",
-        type=positive_int_arg,
-        default=None,
-        help=(
-            "Reserved for future use (PR2): re-baseline threshold in bytes "
-            "for incremental checkpoint manifests. Currently a no-op; the "
-            "value is recorded in trace_metadata for forward compatibility."
-        ),
-    )
-    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -512,8 +490,6 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,
         "checkpoint_scheduling": args.checkpoint_scheduling,
-        "predictive_skip": args.predictive_skip,
-        "rebaseline_bytes": args.rebaseline_bytes,
         "structured_output": args.output_dir == "traces/simulate",
     }
 

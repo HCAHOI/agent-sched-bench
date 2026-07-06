@@ -132,7 +132,6 @@ class ReplayTaskStats:
     captures_fully_absorbed: int = 0
     boundaries_total: int = 0
     overlap_fraction_avg: float = 0.0
-    predictive_skip: str = "off"
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,34 +147,26 @@ class LLMTimingConfig:
 class ReplaySchedulerConfig:
     """Replay-side checkpoint scheduler configuration.
 
-    Two orthogonal experimental factors (scheduling x skip matrix):
+    Two scheduling modes:
 
-    |                          | predictive_skip=off | gate            | speculative |
-    |--------------------------|---------------------|-----------------|-------------|
-    | checkpoint_scheduling=sync | Today's behavior   | Skip-only ablat | Invalid     |
-    | deferred                 | Pure-overlap arm    | Headline config | PR3 (CAS)   |
+    | checkpoint_scheduling | Behavior                         |
+    |-----------------------|----------------------------------|
+    | sync                  | Inline blocking (today's mode)   |
+    | deferred              | Probe-scheduled overlap behind LLM sleep |
 
-    Not configurable: gate placement, lane depth (1), restore chunking,
-    speculation eligibility (CAS backends only). Each is a correctness
-    or no-unjustified-complexity consequence.
+    Probe-only decision: after every tool execution the scheduler runs
+    ``probe_changes_since`` on the backend.  ``changed`` triggers a
+    checkpoint capture; ``unchanged`` (or no backend) skips.  The
+    ``gate`` / ``speculative`` skip modes (formerly controlled by
+    ``predictive_skip``) are removed — the whitelist-based command
+    classifier was unreliable (CRAB §4 fig.4) and the probe dominates
+    the signal.
     """
 
     checkpoint_scheduling: str = "sync"   # {"sync", "deferred"}
-    predictive_skip: str = "off"          # {"off", "gate"}
-    rebaseline_bytes: int | None = None
 
     def __post_init__(self) -> None:
         """Validate config values."""
-        if self.predictive_skip == "speculative":
-            raise ValueError(
-                "predictive_skip='speculative' is reserved for PR3 (CAS "
-                "speculation) and is not yet implemented."
-            )
-        if self.predictive_skip not in ("off", "gate"):
-            raise ValueError(
-                f"predictive_skip must be 'off' or 'gate', "
-                f"got {self.predictive_skip!r}"
-            )
         if self.checkpoint_scheduling not in ("sync", "deferred"):
             raise ValueError(
                 f"checkpoint_scheduling must be 'sync' or 'deferred', "
@@ -3771,7 +3762,6 @@ def _make_task_stats(
     replay_env_parity: str = "default_env",
     prep_error: str | None = None,
     scheduler_metrics: dict[str, Any] | None = None,
-    predictive_skip: str = "off",
 ) -> ReplayTaskStats:
     llm_call_count = sum(1 for action in loaded.actions if action.get("action_type") == "llm_call")
     tool_exec_count = sum(1 for action in loaded.actions if action.get("action_type") == "tool_exec")
@@ -3808,7 +3798,6 @@ def _make_task_stats(
         captures_fully_absorbed=sm.get("captures_fully_absorbed", 0),
         boundaries_total=boundaries_total,
         overlap_fraction_avg=overlap_fraction_avg,
-        predictive_skip=predictive_skip,
     )
 
 
@@ -4621,8 +4610,6 @@ async def _run_worker_wave_async(
                 "replay_start_delay_s": _REPLAY_START_DELAY_S,
                 "monitoring": monitoring_policy or {},
                 "checkpoint_scheduling": replay_scheduler_config.checkpoint_scheduling,
-                "predictive_skip": replay_scheduler_config.predictive_skip,
-                "rebaseline_bytes": replay_scheduler_config.rebaseline_bytes,
             },
         )
         task_stats = [
@@ -5107,10 +5094,6 @@ class ReplayCheckpointScheduler:
     def _scheduling(self) -> str:
         return self._config.checkpoint_scheduling
 
-    @property
-    def _predictive_skip(self) -> str:
-        return self._config.predictive_skip
-
     # ------------------------------------------------------------------
     # Internal: drain
     # ------------------------------------------------------------------
@@ -5138,46 +5121,15 @@ class ReplayCheckpointScheduler:
     ) -> None:
         """Run capture + compare synchronously (sync mode path).
 
-        When predictive_skip is "gate", runs classifier-first: READ_ONLY
-        and FLAKY_READ tools skip the probe/capture entirely (ADR-12:
-        oracle compare against prev_cas_manifest). MUTATING and UNKNOWN
-        tools fall through to the normal inline capture path with
-        classifier annotations on the record.
+        The decision is probe-only: ``backend.probe_changes_since`` runs
+        after each tool execution and determines whether a checkpoint
+        capture is needed.  No whitelist-based command classifier is
+        consulted (removed per ADR: unreliable syntactic classification
+        that the probe already dominates).
         """
         if self._container is None or cas_spec is None:
             record_slot.setdefault("cas_compare_source", "skip_audit")
             return
-
-        # --- classifier-first decision (gate mode) ---
-        if self._predictive_skip == "gate" and tool_name is not None:
-            from trace_collect.predictive_policy import (
-                classify_tool_result,
-                needs_checkpoint,
-            )
-            family = classify_tool_result(tool_name, tool_args_json or "{}")
-            record_slot["predicted_family"] = family.value
-
-            if not needs_checkpoint(family):
-                # READ_ONLY or FLAKY_READ: skip probe AND capture entirely.
-                record_slot["checkpoint_decision"] = f"predicted_{family.value}"
-                # ADR-12: oracle compare against prev manifest on skip
-                if self._folded_source_entries and self._prev_cas_manifest is not None:
-                    fields = _cas_manifest_comparison_fields(
-                        source_entries=self._folded_source_entries,
-                        replay_entries=self._prev_cas_manifest,
-                    )
-                    record_slot.update(fields)
-                    if not fields.get("cas_manifest_match", True):
-                        record_slot["checkpoint_pending_forced_sync"] = True
-                else:
-                    record_slot.setdefault("cas_manifest_match", True)
-                record_slot.setdefault("cas_compare_source", "skip_audit")
-                return
-
-            # MUTATING or UNKNOWN: flag and fall through to inline capture.
-            record_slot["checkpoint_decision"] = (
-                f"predicted_{family.value}_probe_verified"
-            )
 
         # FCBackend captures paired snapshots
         if isinstance(self._container.backend, FCBackend):
@@ -5247,104 +5199,59 @@ class ReplayCheckpointScheduler:
             self._state = "IDLE"
             return
 
-        probe_t0 = _time.monotonic()
+        self._state = "CAPTURING"
+        self._boundary_probe_elapsed_ms = 0.0
+        cap_t0 = _time.monotonic()
 
-        # Step 1: classifier-first decision
-        should_capture = True
-        checkpoint_decision = None
-        probe_result = None
-        predicted_family = None
-
-        if self._predictive_skip != "off" and tool_name is not None:
-            from trace_collect.predictive_policy import (
-                classify_tool_result,
-                needs_checkpoint,
-            )
-            family = classify_tool_result(tool_name, tool_args_json or "{}")
-            predicted_family = family.value
-            if not needs_checkpoint(family):
-                # READ_ONLY / FLAKY_READ: skip probe AND capture
-                should_capture = False
-                checkpoint_decision = f"predicted_{family.value}"
-                probe_result = "skipped"
-                record_slot["checkpoint_decision"] = checkpoint_decision
-                record_slot["predicted_family"] = predicted_family
-                record_slot["probe_result"] = probe_result
-
-        self._boundary_probe_elapsed_ms = (_time.monotonic() - probe_t0) * 1000
-
-        if should_capture:
-            self._state = "CAPTURING"
-            cap_t0 = _time.monotonic()
-
-            try:
-                # FCBackend captures paired snapshots
-                if isinstance(self._container.backend, FCBackend):
-                    try:
-                        fc_snapshot = await self._container.backend.capture_snapshot()
-                        self._container.replay_snapshots[action_index] = fc_snapshot
-                        self._prev_timestamp_ns = getattr(fc_snapshot, "timestamp_ns", time.time_ns())
-                    except Exception:
-                        pass
-                    self._boundary_capture_elapsed_ms = (_time.monotonic() - cap_t0) * 1000
-                    self._boundary_cas_compare_source = "skip_audit"
-                else:
-                    # CAS backend: use the diagnostic capture (handles to_thread internally)
-                    replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
-                        container=self._container,
-                        root=cas_spec.get("root", "/testbed"),
-                        previous_manifest=self._prev_cas_manifest,
-                        context="checkpoint_boundary",
-                    )
-                    self._boundary_capture_elapsed_ms = (_time.monotonic() - cap_t0) * 1000
-
-                    # Step 2: oracle compare
-                    self._state = "COMPARING"
-                    comp_t0 = _time.monotonic()
-                    if replay_entries is not None and self._folded_source_entries:
-                        fields = _cas_manifest_comparison_fields(
-                            source_entries=self._folded_source_entries,
-                            replay_entries=replay_entries,
-                        )
-                        record_slot.update(fields)
-                        record_slot["cas_compare_source"] = "normal"
-                        if not fields.get("cas_manifest_match", True):
-                            record_slot["checkpoint_pending_forced_sync"] = True
-                    elif replay_entries is not None:
-                        record_slot["cas_compare_source"] = "normal"
-                    else:
-                        record_slot["cas_compare_source"] = "skip_audit"
-                    if replay_entries is not None:
-                        self._prev_cas_manifest = replay_entries
-                        # Set prev_timestamp_ns from capture time for future probe baseline
-                        self._prev_timestamp_ns = time.time_ns()
-                    self._boundary_compare_elapsed_ms = (_time.monotonic() - comp_t0) * 1000
-                    self._boundary_cas_compare_source = record_slot.get("cas_compare_source", "")
-            except Exception as exc:
-                record_slot["checkpoint_after_error"] = {"error": str(exc)}
-                record_slot.setdefault("cas_compare_source", "skip_audit")
+        try:
+            # FCBackend captures paired snapshots
+            if isinstance(self._container.backend, FCBackend):
+                try:
+                    fc_snapshot = await self._container.backend.capture_snapshot()
+                    self._container.replay_snapshots[action_index] = fc_snapshot
+                    self._prev_timestamp_ns = getattr(fc_snapshot, "timestamp_ns", time.time_ns())
+                except Exception:
+                    pass
+                self._boundary_capture_elapsed_ms = (_time.monotonic() - cap_t0) * 1000
                 self._boundary_cas_compare_source = "skip_audit"
-                self._state = "IDLE"
-                return
-        else:
-            # Skip capture but still run oracle compare against prev manifest
-            # (ADR-12: oracle coverage is identical across all skip modes)
-            self._state = "COMPARING"
-            comp_t0 = _time.monotonic()
-            record_slot["cas_compare_source"] = "prev_manifest_unchanged"
-            if self._prev_cas_manifest is not None and self._folded_source_entries:
-                fields = _cas_manifest_comparison_fields(
-                    source_entries=self._folded_source_entries,
-                    replay_entries=self._prev_cas_manifest,
-                )
-                record_slot.update(fields)
-                if not fields.get("cas_manifest_match", True):
-                    record_slot["checkpoint_pending_forced_sync"] = True
             else:
-                # First boundary: no prev manifest, optimistic match
-                record_slot["cas_manifest_match"] = True
-            self._boundary_compare_elapsed_ms = (_time.monotonic() - comp_t0) * 1000
-            self._boundary_cas_compare_source = record_slot["cas_compare_source"]
+                # CAS backend: use the diagnostic capture (handles to_thread internally)
+                replay_entries, _ = await _capture_replay_snapshot_manifest_diagnostic(
+                    container=self._container,
+                    root=cas_spec.get("root", "/testbed"),
+                    previous_manifest=self._prev_cas_manifest,
+                    context="checkpoint_boundary",
+                )
+                self._boundary_capture_elapsed_ms = (_time.monotonic() - cap_t0) * 1000
+
+                # Step 2: oracle compare
+                self._state = "COMPARING"
+                comp_t0 = _time.monotonic()
+                if replay_entries is not None and self._folded_source_entries:
+                    fields = _cas_manifest_comparison_fields(
+                        source_entries=self._folded_source_entries,
+                        replay_entries=replay_entries,
+                    )
+                    record_slot.update(fields)
+                    record_slot["cas_compare_source"] = "normal"
+                    if not fields.get("cas_manifest_match", True):
+                        record_slot["checkpoint_pending_forced_sync"] = True
+                elif replay_entries is not None:
+                    record_slot["cas_compare_source"] = "normal"
+                else:
+                    record_slot["cas_compare_source"] = "skip_audit"
+                if replay_entries is not None:
+                    self._prev_cas_manifest = replay_entries
+                    # Set prev_timestamp_ns from capture time for future probe baseline
+                    self._prev_timestamp_ns = time.time_ns()
+                self._boundary_compare_elapsed_ms = (_time.monotonic() - comp_t0) * 1000
+                self._boundary_cas_compare_source = record_slot.get("cas_compare_source", "")
+        except Exception as exc:
+            record_slot["checkpoint_after_error"] = {"error": str(exc)}
+            record_slot.setdefault("cas_compare_source", "skip_audit")
+            self._boundary_cas_compare_source = "skip_audit"
+            self._state = "IDLE"
+            return
 
         # Task complete — record stays pending.  drain() / close() will call
         # _finalize_boundary_record after charging exposed_ms, then flush.
@@ -5929,16 +5836,11 @@ async def _replay_cloud_model_session(
                         )
             # Output content mismatch: transport tiers matched (same timeout,
             # success, exit code) but normalized output differs.  Exclude
-            # FLAKY_READ tools (web_search, web_fetch) whose content
-            # legitimately varies across runs.  Checked after CAS mismatch so
-            # cas_state_mismatch (root cause) takes priority over
-            # output_content_mismatch (symptom).
+            # web_search and web_fetch whose content legitimately varies.
+            # Checked after CAS mismatch so cas_state_mismatch (root cause)
+            # takes priority over output_content_mismatch (symptom).
             if effective_mismatch_reason is None and normalized_output_match is False:
-                from trace_collect.predictive_policy import (
-                    CommandFamily,
-                    classify_tool_result,
-                )
-                if classify_tool_result(tool_name, tool_args) != CommandFamily.FLAKY_READ:
+                if tool_name not in ("web_search", "web_fetch"):
                     effective_mismatch_reason = "output_content_mismatch"
             replay_outcome_match = mismatch_reason is None
             output_diff_snippet: str | None = None
@@ -6586,8 +6488,6 @@ async def _replay_cloud_model_session(
                 "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
                 "checkpoint_scheduling": {
                     "mode": replay_scheduler_config.checkpoint_scheduling,
-                    "predictive_skip": replay_scheduler_config.predictive_skip,
-                    "rebaseline_bytes": replay_scheduler_config.rebaseline_bytes,
                 },
                 "scheduler_metrics": scheduler_aggregates,
             },
@@ -6600,7 +6500,6 @@ async def _replay_cloud_model_session(
         failed_action_count=failed_actions,
         replay_env_parity=prepared_session.replay_task_env_parity,
         scheduler_metrics=scheduler_aggregates,
-        predictive_skip=replay_scheduler_config.predictive_skip,
     )
 
 
@@ -6815,8 +6714,6 @@ async def simulate(
     llm_ttft_ms: float | None = None,
     llm_tpot_ms: float | None = None,
     checkpoint_scheduling: str = "sync",
-    predictive_skip: str = "off",
-    rebaseline_bytes: int | None = None,
     structured_output: bool = False,
 ) -> Path:
     if mode != "cloud_model":
@@ -6828,21 +6725,12 @@ async def simulate(
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
     if checkpoint_scheduling not in ("sync", "deferred"):
-        raise ValueError(f"checkpoint_scheduling must be sync or deferred, got {checkpoint_scheduling!r}")
-    if predictive_skip == "speculative":
-        raise ValueError("reserved for PR3")
-    if predictive_skip not in ("off", "gate"):
-        raise ValueError(f"predictive_skip must be off or gate, got {predictive_skip!r}")
-    if predictive_skip == "gate" and checkpoint_scheduling == "sync":
-        # sync+gate is valid (skip-only ablation), but warn
-        logger.warning(
-            "sync+gate measures skip-only ablation; captures are inline, "
-            "only skip applied."
+        raise ValueError(
+            f"checkpoint_scheduling must be sync or deferred, "
+            f"got {checkpoint_scheduling!r}"
         )
     replay_scheduler_config = ReplaySchedulerConfig(
         checkpoint_scheduling=checkpoint_scheduling,
-        predictive_skip=predictive_skip,
-        rebaseline_bytes=rebaseline_bytes,
     )
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
