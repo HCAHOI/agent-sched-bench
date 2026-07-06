@@ -186,6 +186,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
+        tool_overrides: list[Any] | None = None,
     ):
         from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -226,6 +227,7 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
         self._last_run_outcomes: dict[str, dict[str, str | None]] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
+        self._tool_overrides = list(tool_overrides or [])
         self._event_callback = None
 
         self.context = ContextBuilder(
@@ -255,6 +257,7 @@ class AgentLoop:
             malformed_retry_budget=self.malformed_retry_budget,
             skills_dir=skills_dir,
             hooks=self._extra_hooks,
+            tool_overrides=self._tool_overrides,
         )
 
         self._running = False
@@ -313,6 +316,8 @@ class AgentLoop:
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         self.tools.register(SessionsYieldTool(manager=self.subagents))
+        for tool in self._tool_overrides:
+            self.tools.register(tool)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""

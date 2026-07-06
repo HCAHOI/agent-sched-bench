@@ -723,6 +723,7 @@ class SessionRunner:
         extra_hooks: list[AgentHook] | None = None,
         exec_config: ExecToolConfig | None = None,
         malformed_retry_budget: int | None = None,
+        tool_overrides: list[Any] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
@@ -732,6 +733,7 @@ class SessionRunner:
         self.mcp_servers = mcp_servers or {}
         self.extra_hooks = extra_hooks or []
         self.exec_config = exec_config or ExecToolConfig()
+        self.tool_overrides = list(tool_overrides or [])
         self.malformed_retry_budget = malformed_retry_budget
 
     @staticmethod
@@ -835,6 +837,7 @@ class SessionRunner:
             tool_results_dir=effective_tool_results_dir,
             hooks=all_hooks,
             malformed_retry_budget=self.malformed_retry_budget,
+            tool_overrides=self.tool_overrides,
         )
 
         inject_event_callbacks(agent, trace_hook)

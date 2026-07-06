@@ -10,13 +10,12 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from llm_call import UnifiedProvider
-from agents.openclaw.runtime_deps import OPENCLAW_MCP_RUNTIME_REQUIREMENTS
 
 from harness.container_image_prep import (
     drop_cached_fixed_image,
@@ -37,11 +36,8 @@ from trace_collect.attempt_pipeline import (
     stop_task_container,
 )
 from trace_collect.runtime.task_container import (
-    bootstrap_task_container_python,
-    preflight_task_container_runtime,
     resolve_task_container_exec_config,
-    resolve_running_container_exec_config,
-    run_task_container_agent,
+    run_task_container_agent,  # noqa: F401 - kept for regression-test monkeypatches
 )
 
 if TYPE_CHECKING:
@@ -956,6 +952,26 @@ def _stamp_trace_run_config(trace_path: Path, values: dict[str, Any]) -> None:
     trace_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
+def _trace_summary_totals(
+    trace_file: Path,
+) -> tuple[float | None, float | None, int | None]:
+    total_llm_ms: float | None = None
+    total_tool_ms: float | None = None
+    total_tokens: int | None = None
+    if not trace_file.exists():
+        return total_llm_ms, total_tool_ms, total_tokens
+    for line in trace_file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if record.get("type") != "summary":
+            continue
+        total_llm_ms = record.get("total_llm_ms")
+        total_tool_ms = record.get("total_tool_ms")
+        total_tokens = record.get("total_tokens")
+    return total_llm_ms, total_tool_ms, total_tokens
+
+
 async def _run_openclaw_in_task_container(
     *,
     ctx: AttemptContext,
@@ -979,25 +995,26 @@ async def _run_openclaw_in_task_container(
     runtime_dir = ctx.attempt_dir.resolve() / "_task_container_runtime" / "openclaw"
     stdout_path = runtime_dir / "stdout.txt"
     stderr_path = runtime_dir / "stderr.txt"
-    proof = None
-    runtime = None
+    runtime_result = None
     runtime_proof = None
+    total_llm_ms: float | None = None
+    total_tool_ms: float | None = None
+    total_tokens: int | None = None
     exec_config = resolve_task_container_exec_config(
         attempt_dir=ctx.attempt_dir,
         image=fixed_image,
         container_executable=container_executable,
     )
-    bootstrap_userbase_bin: str | None = None
-    if exec_config.bootstrap_site_dir is not None:
-        userbase_bin = exec_config.bootstrap_site_dir.parent / ".pyuserbase" / "bin"
-        bootstrap_userbase_bin = str(userbase_bin)
     container_id = start_task_container(
         fixed_image,
         executable=container_executable,
         extra_args=list(exec_config.start_extra_args),
-        bootstrap_userbase_bin=bootstrap_userbase_bin,
+        run_as_host_user=False,
+        mount_host_home=False,
+        container_home="/root",
     )
     ctx.mark_container_ready(container_id)
+    agent = None
     try:
         apt_mirror = configure_task_container_apt_mirror(
             container_id,
@@ -1005,98 +1022,80 @@ async def _run_openclaw_in_task_container(
         )
         if apt_mirror is not None:
             logger.info("task-container apt mirror: %s", apt_mirror["stdout"])
-        exec_config = resolve_running_container_exec_config(
-            container_id=container_id,
-            exec_config=exec_config,
-            container_executable=container_executable,
+
+        from agents.openclaw.eval.types import EvalTask
+        from trace_collect.openclaw_host_runtime import (
+            build_container_tools_for_agent,
+            container_runtime_proof,
+            extract_container_patch,
         )
-        preflight_imports = [
-            "trace_collect.runtime.entrypoint",
-            "agents.openclaw.eval.runner",
-            "harness.trace_logger",
-        ]
-        bootstrap_requirements: tuple[str, ...] = ()
-        if mcp_config not in {None, "none"}:
-            preflight_imports.append("agents.openclaw.tools.mcp")
-            bootstrap_requirements = OPENCLAW_MCP_RUNTIME_REQUIREMENTS
-        exec_config = bootstrap_task_container_python(
-            container_id=container_id,
-            exec_config=exec_config,
-            extra_requirements=bootstrap_requirements,
-            container_executable=container_executable,
-        )
-        proof = preflight_task_container_runtime(
-            container_id=container_id,
-            attempt_dir=ctx.attempt_dir,
-            imports=preflight_imports,
-            runtime=exec_config.runtime,
-            pythonpath=exec_config.pythonpath,
-            container_executable=container_executable,
-        )
+        from trace_collect.openclaw_tools import ContainerAgent
+
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        exec_path_append = ""
-        if exec_config.bootstrap_site_dir is not None:
-            exec_path_append = ":".join(
-                [
-                    str(exec_config.bootstrap_site_dir.parent / ".pyuserbase" / "bin"),
-                    str(exec_config.bootstrap_site_dir / "bin"),
-                ]
-            )
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        agent = ContainerAgent(container_id, container_executable)
+        await agent.start()
+
+        async def _patch_extractor(
+            _diff_cwd: str,
+            base_commit: str | None,
+        ) -> str | None:
+            assert agent is not None
+            return await extract_container_patch(agent, base_commit=base_commit)
+
+        provider = UnifiedProvider(
+            api_key=api_key,
+            api_base=api_base,
+            default_model=model,
+            **dict(generation_config or {}),
+        )
+        runner = benchmark.build_runner(
+            scaffold="openclaw",
+            provider=provider,
+            workspace_base=runtime_dir / "workspace_base",
+            max_iterations=max_iterations,
+            context_window_tokens=max_context_tokens,
+            model=model,
+            mcp_servers=load_mcp_servers(mcp_config),
+            exec_path_append="",
+            generation_config=generation_config or {},
+            tool_overrides=build_container_tools_for_agent(
+                agent,
+                exec_timeout=300,
+                exec_path_append="",
+            ),
+            container_patch_extractor=_patch_extractor,
+        )
+        task_raw = dict(task)
+        eval_task = EvalTask(
+            instance_id=task_raw["instance_id"],
+            problem_statement=task_raw.get("problem_statement", ""),
+            workspace_dir=runtime_dir / "workspace_base" / ctx.instance_id,
+            repo=task_raw.get("repo"),
+            base_commit=task_raw.get("base_commit"),
+            image_name=task_raw.get("image_name"),
+        )
         ctx.agent_start_time = datetime.now(tz=timezone.utc)
         try:
-            runtime = run_task_container_agent(
-                container_id=container_id,
-                timeout=(max_iterations * 120) + 300,
-                runtime=exec_config.runtime,
-                pythonpath=exec_config.pythonpath,
-                request={
-                    "kind": "run_openclaw",
-                    "scaffold": "openclaw",
-                    "result_path": str(runtime_dir / "run.result.json"),
-                    "container_id": container_id,
-                    "benchmark": benchmark.config.slug,
-                    "provider_name": provider_name,
-                    "api_base": api_base,
-                    "api_key": api_key,
-                    "model": model,
-                    "max_iterations": max_iterations,
-                    "generation_config": generation_config or {},
-                    "max_context_tokens": max_context_tokens,
-                    "prompt_template": ctx.prompt_template,
-                    "agent_runtime_mode": ctx.agent_runtime_mode,
-                    "mcp_config": (
-                        str(Path(mcp_config).resolve())
-                        if mcp_config not in {None, "none"}
-                        else mcp_config
-                    ),
-                    "task": task,
-                    "workspace_base": str(runtime_dir / "workspace_base"),
-                    "workspace_dir": str(
-                        runtime_dir / "workspace_base" / ctx.instance_id
-                    ),
-                    "tool_workspace": "/testbed",
-                    "exec_path_append": exec_path_append,
-                    "bootstrap_userbase": (
-                        str(exec_config.bootstrap_site_dir.parent / ".pyuserbase")
-                        if exec_config.bootstrap_site_dir is not None
-                        else None
-                    ),
-                    "exec_working_dir": "/testbed",
-                    "trace_file": str((ctx.attempt_dir / "trace.jsonl").resolve()),
-                    "raw_stdout_path": str(stdout_path),
-                    "raw_stderr_path": str(stderr_path),
-                    "container_executable": container_executable,
-                },
-                container_executable=container_executable,
+            runtime_result = await runner.run_task(
+                eval_task,
+                prompt_template=ctx.prompt_template,
+                tool_workspace=Path("/testbed"),
+                exec_working_dir="/testbed",
+                trace_file=(ctx.attempt_dir / "trace.jsonl").resolve(),
             )
         finally:
             ctx.agent_end_time = datetime.now(tz=timezone.utc)
-        runtime_proof = {
-            **asdict(proof),
-            **runtime.runtime_proof,
-        }
+        total_llm_ms, total_tool_ms, total_tokens = _trace_summary_totals(
+            ctx.attempt_dir / "trace.jsonl"
+        )
+        runtime_proof = container_runtime_proof(
+            container_id=container_id,
+            mode="collect",
+        )
         _normalize_openclaw_trace(
-            src=runtime.trace_path,
+            src=ctx.attempt_dir / "trace.jsonl",
             dst=ctx.attempt_dir / "trace.jsonl",
             benchmark=benchmark,
             model=model,
@@ -1110,7 +1109,15 @@ async def _run_openclaw_in_task_container(
             run_config_overrides=run_config_overrides,
             generation_config=generation_config,
         )
+        runtime_result.usage["total_llm_ms"] = total_llm_ms or 0.0
+        runtime_result.usage["total_tool_ms"] = total_tool_ms or 0.0
+        runtime_result.usage["total_tokens"] = total_tokens or 0
     finally:
+        if agent is not None:
+            try:
+                await agent.stop()
+            except Exception:
+                logger.exception("Failed to stop OpenClaw container tool agent")
         container_logs = stop_task_container(
             container_id,
             executable=container_executable,
@@ -1124,17 +1131,17 @@ async def _run_openclaw_in_task_container(
             ]
             if part
         )
-    assert runtime is not None
+    assert runtime_result is not None
     assert runtime_proof is not None
     return AttemptResult(
-        success=runtime.success,
-        exit_status=runtime.exit_status,
+        success=bool(runtime_result.model_patch),
+        exit_status=runtime_result.stop_reason,
         trace_path=ctx.attempt_dir / "trace.jsonl",
-        model_patch=runtime.model_patch,
-        n_iterations=runtime.n_iterations,
-        total_llm_ms=runtime.total_llm_ms,
-        total_tool_ms=runtime.total_tool_ms,
-        total_tokens=runtime.total_tokens,
-        error=runtime.error,
+        model_patch=runtime_result.model_patch,
+        n_iterations=runtime_result.n_iterations,
+        total_llm_ms=total_llm_ms,
+        total_tool_ms=total_tool_ms,
+        total_tokens=total_tokens,
+        error=runtime_result.error,
         runtime_proof=runtime_proof,
     )

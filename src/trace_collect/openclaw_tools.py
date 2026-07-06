@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _OPENCLAW_EXEC_DEFAULT_TIMEOUT_S = 300.0
 _OPENCLAW_EXEC_MAX_TIMEOUT_S = 600.0
+_CONTAINER_LIST_DEFAULT_MAX = 200
 # Outer guard for resource-aware exec requests. The in-container watchdog owns
 # the modeled deadline; this only prevents an agent protocol deadlock from
 # blocking simulate forever.
@@ -543,14 +544,85 @@ _LIST_MAX = 200
 
 def handle_list_dir(args):
     path = args.get("path", ".")
+    recursive = bool(args.get("recursive", False))
+    max_entries = int(args.get("max_entries") or _LIST_MAX)
     try:
-        entries = sorted(e for e in os.listdir(path) if e not in _LIST_IGNORE)
-        if len(entries) > _LIST_MAX:
-            entries = entries[:_LIST_MAX]
-            entries.append(f"... ({len(os.listdir(path)) - _LIST_MAX} more entries)")
-        return {"ok": True, "result": "\n".join(entries)}
+        if not os.path.exists(path):
+            return {"ok": False, "result": f"Error: Directory not found: {path}"}
+        if not os.path.isdir(path):
+            return {"ok": False, "result": f"Error: Not a directory: {path}"}
+        items = []
+        total = 0
+        if recursive:
+            for root, dirs, files in os.walk(path):
+                dirs[:] = sorted(d for d in dirs if d not in _LIST_IGNORE)
+                for name in sorted(dirs) + sorted(files):
+                    if name in _LIST_IGNORE:
+                        continue
+                    full_path = os.path.join(root, name)
+                    total += 1
+                    if len(items) < max_entries:
+                        rel = os.path.relpath(full_path, path)
+                        items.append(f"{rel}/" if os.path.isdir(full_path) else rel)
+        else:
+            for name in sorted(e for e in os.listdir(path) if e not in _LIST_IGNORE):
+                full_path = os.path.join(path, name)
+                total += 1
+                if len(items) < max_entries:
+                    prefix = "📁 " if os.path.isdir(full_path) else "📄 "
+                    items.append(f"{prefix}{name}")
+        if not items and total == 0:
+            return {"ok": True, "result": f"Directory {path} is empty"}
+        result = "\n".join(items)
+        if total > max_entries:
+            result += f"\n\n(truncated, showing first {max_entries} of {total} entries)"
+        return {"ok": True, "result": result}
     except Exception as e:
         return {"ok": False, "result": f"Error: {e}"}
+
+def handle_extract_patch(args):
+    base_commit = args.get("base_commit") or "HEAD"
+    exclude_pathspecs = args.get("exclude_pathspecs") or []
+    if not isinstance(exclude_pathspecs, list):
+        return {"ok": False, "result": "Error: exclude_pathspecs must be a list", "returncode": 2}
+    patch_path = "patch.txt"
+    try:
+        if os.path.exists(patch_path):
+            with open(patch_path, encoding="utf-8") as fh:
+                text = fh.read().strip()
+            if text.lstrip().startswith("diff --git"):
+                return {"ok": True, "result": text, "returncode": 0}
+        subprocess.run(
+            ["git", "config", "--add", "safe.directory", "/testbed"],
+            cwd="/testbed",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        subprocess.run(
+            ["git", "add", "-A", "--", ".", *[str(spec) for spec in exclude_pathspecs]],
+            cwd="/testbed",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        result = subprocess.run(
+            ["git", "diff", str(base_commit), "--", ".", *[str(spec) for spec in exclude_pathspecs]],
+            cwd="/testbed",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        return {
+            "ok": result.returncode == 0,
+            "result": output.strip(),
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"ok": False, "result": f"Error extracting patch: {e}", "returncode": 1}
+
+
 
 HANDLERS = {
     "exec": handle_exec,
@@ -559,6 +631,7 @@ HANDLERS = {
     "write_file": handle_write_file,
     "edit_file": handle_edit_file,
     "list_dir": handle_list_dir,
+    "extract_patch": handle_extract_patch,
 }
 
 signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
@@ -661,6 +734,7 @@ class ContainerAgent:
         self._process: asyncio.subprocess.Process | None = None
         self._python_runtime: str = "python3"  # fallback, overwritten in start()
         self._pythonpath: str | None = pythonpath
+        self._lock = asyncio.Lock()
 
     async def _probe_python(self) -> str:
         """Find a working Python >=3.11 interpreter inside the container."""
@@ -834,12 +908,13 @@ class ContainerAgent:
 
             line = json.dumps(request, ensure_ascii=False) + "\n"
             try:
-                proc.stdin.write(line.encode())
-                await proc.stdin.drain()
-                raw = await _readline_with_timeout(
-                    proc.stdout,
-                    timeout_s,
-                )
+                async with self._lock:
+                    proc.stdin.write(line.encode())
+                    await proc.stdin.drain()
+                    raw = await _readline_with_timeout(
+                        proc.stdout,
+                        timeout_s,
+                    )
             except (asyncio.TimeoutError, BrokenPipeError, ConnectionResetError):
                 await self._restart()
                 if tool_name in _IDEMPOTENT_TOOLS:
@@ -993,7 +1068,11 @@ def _resolve_tool_request(
     if tool_name == "list_dir":
         return {
             "tool": "list_dir",
-            "args": {"path": params.get("path", ".")},
+            "args": {
+                "path": params.get("path", "."),
+                "recursive": bool(params.get("recursive", False)),
+                "max_entries": int(params.get("max_entries") or _CONTAINER_LIST_DEFAULT_MAX),
+            },
         }, command_timeout_s
 
     return None, command_timeout_s  # unsupported tool

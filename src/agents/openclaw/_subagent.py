@@ -55,6 +55,7 @@ class SubagentManager:
         malformed_retry_budget: int | None = None,
         skills_dir: Path | None = None,
         hooks: list[AgentHook] | None = None,
+        tool_overrides: list[Any] | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -71,6 +72,7 @@ class SubagentManager:
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
         self._hooks = hooks or []
+        self._tool_overrides = list(tool_overrides or [])
 
     async def spawn(
         self,
@@ -178,6 +180,8 @@ class SubagentManager:
                 WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
             )
             tools.register(WebFetchTool(proxy=self.web_proxy))
+            for tool in self._tool_overrides:
+                tools.register(tool)
 
             system_prompt = self._build_subagent_prompt()
             messages: list[dict[str, Any]] = [

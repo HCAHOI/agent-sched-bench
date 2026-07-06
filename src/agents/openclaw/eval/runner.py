@@ -58,6 +58,8 @@ class SWEBenchRunner:
         model: str | None = None,
         exec_path_append: str = "",
         generation_config: dict[str, Any] | None = None,
+        tool_overrides: list[Any] | None = None,
+        container_patch_extractor: Any | None = None,
     ) -> None:
         del generation_config
         self.provider = provider
@@ -69,6 +71,7 @@ class SWEBenchRunner:
         self.max_tool_result_chars = max_tool_result_chars
         self.model = model or provider.get_default_model()
         self.exec_path_append = exec_path_append
+        self.container_patch_extractor = container_patch_extractor
 
         self._session_runner = SessionRunner(
             provider,
@@ -78,6 +81,7 @@ class SWEBenchRunner:
             max_tool_result_chars=self.max_tool_result_chars,
             mcp_servers=self.mcp_servers,
             exec_config=ExecToolConfig(path_append=self.exec_path_append),
+            tool_overrides=tool_overrides,
         )
 
     @staticmethod
@@ -231,10 +235,16 @@ class SWEBenchRunner:
         container_patch: str | None = None
         diff_cwd = exec_working_dir or "/testbed"
         if exec_working_dir is not None:
-            container_patch = self._extract_container_patch(
-                diff_cwd,
-                base_commit=task.base_commit,
-            )
+            if self.container_patch_extractor is not None:
+                container_patch = await self.container_patch_extractor(
+                    diff_cwd,
+                    task.base_commit,
+                )
+            else:
+                container_patch = self._extract_container_patch(
+                    diff_cwd,
+                    base_commit=task.base_commit,
+                )
 
         return EvalResult(
             instance_id=task.instance_id,

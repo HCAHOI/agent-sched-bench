@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -33,6 +34,164 @@ class FakeAgent:
         self.timeouts.append(timeout_s)
         tool = request.get("tool", "")
         return self._responses.get(tool, self._default)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"ok": False, "result": "diff --git a/app.py b/app.py\n"},
+        {"ok": True, "result": "not a patch"},
+    ],
+)
+def test_extract_container_patch_rejects_failed_or_non_diff_responses(
+    response: dict[str, object],
+) -> None:
+    from trace_collect.openclaw_host_runtime import extract_container_patch
+
+    agent = FakeAgent({"extract_patch": response})
+
+    result = asyncio.run(extract_container_patch(agent, base_commit="abc123"))
+
+    assert result is None
+    assert len(agent.requests) == 1
+    request = agent.requests[0]
+    assert request["tool"] == "extract_patch"
+    assert request["args"]["base_commit"] == "abc123"
+    assert "command" not in request["args"]
+
+
+def _container_override_tools_by_name(agent: FakeAgent) -> dict[str, object]:
+    from agents.openclaw.tools.container import build_container_tool_overrides
+
+    tools = build_container_tool_overrides(
+        agent=agent,
+        exec_timeout=33,
+    )
+    if isinstance(tools, dict):
+        return dict(tools)
+    if hasattr(tools, "tool_names") and hasattr(tools, "get"):
+        return {name: tools.get(name) for name in tools.tool_names}
+    return {tool.name: tool for tool in tools}
+
+
+def test_container_tool_overrides_serialize_filesystem_and_exec_requests() -> None:
+    agent = FakeAgent(
+        {
+            "read_file": {"ok": True, "result": "5| alpha"},
+            "write_file": {"ok": True, "result": "Successfully wrote /testbed/out.txt"},
+            "edit_file": {"ok": True, "result": "Successfully edited /testbed/app.py"},
+            "list_dir": {"ok": True, "result": "app.py\nout.txt"},
+            "exec": {"ok": True, "result": "tests passed", "returncode": 0},
+        }
+    )
+    tools = _container_override_tools_by_name(agent)
+
+    read_result = asyncio.run(
+        tools["read_file"].execute(path="app.py", offset=5, limit=7)
+    )
+    write_result = asyncio.run(
+        tools["write_file"].execute(path="out.txt", content="payload")
+    )
+    edit_result = asyncio.run(
+        tools["edit_file"].execute(
+            path="app.py",
+            old_text="before",
+            new_text="after",
+            replace_all=True,
+        )
+    )
+    list_result = asyncio.run(
+        tools["list_dir"].execute(path=".", recursive=True, max_entries=12)
+    )
+    exec_result = asyncio.run(
+        tools["exec"].execute(command="pytest tests/test_app.py -q", timeout=12)
+    )
+
+    assert read_result == "5| alpha"
+    assert write_result == "Successfully wrote /testbed/out.txt"
+    assert edit_result == "Successfully edited /testbed/app.py"
+    assert list_result == "app.py\nout.txt"
+    assert "tests passed" in exec_result
+    assert agent.requests == [
+        {
+            "tool": "read_file",
+            "args": {"path": "app.py", "offset": 4, "limit": 7},
+        },
+        {
+            "tool": "write_file",
+            "args": {"path": "out.txt", "content": "payload"},
+        },
+        {
+            "tool": "edit_file",
+            "args": {
+                "path": "app.py",
+                "old_text": "before",
+                "new_text": "after",
+                "replace_all": True,
+            },
+        },
+        {
+            "tool": "list_dir",
+            "args": {"path": ".", "recursive": True, "max_entries": 12},
+        },
+        {
+            "tool": "exec",
+            "args": {"command": "pytest tests/test_app.py -q", "timeout": 12},
+        },
+    ]
+    assert agent.timeouts == [600.0, 600.0, 600.0, 600.0, 12.0]
+
+
+def test_container_exec_preserves_working_dir_in_container_command() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "/testbed/pkg\n", "returncode": 0}})
+    tools = _container_override_tools_by_name(agent)
+
+    result = asyncio.run(
+        tools["exec"].execute(command="pwd", working_dir="/testbed/pkg", timeout=12)
+    )
+
+    assert "/testbed/pkg" in result
+    assert agent.requests == [
+        {
+            "tool": "exec",
+            "args": {"command": "cd /testbed/pkg && pwd", "timeout": 12},
+        }
+    ]
+    assert agent.timeouts == [12.0]
+
+
+def test_container_list_dir_recursive_max_entries_match_replay_shim(
+    tmp_path: Path,
+) -> None:
+    agent = FakeAgent({"list_dir": {"ok": True, "result": "pkg/\npkg/sub/\npkg/app.py"}})
+    tools = _container_override_tools_by_name(agent)
+
+    result = asyncio.run(
+        tools["list_dir"].execute(path="/testbed", recursive=True, max_entries=3)
+    )
+
+    assert result == "pkg/\npkg/sub/\npkg/app.py"
+    assert agent.requests == [
+        {
+            "tool": "list_dir",
+            "args": {"path": "/testbed", "recursive": True, "max_entries": 3},
+        }
+    ]
+
+    (tmp_path / "pkg" / "sub").mkdir(parents=True)
+    (tmp_path / "pkg" / "app.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "sub" / "leaf.py").write_text("", encoding="utf-8")
+    namespace: dict[str, object] = {}
+    exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
+
+    response = namespace["handle_list_dir"](
+        {"path": str(tmp_path), "recursive": True, "max_entries": 3}
+    )
+
+    assert response == {
+        "ok": True,
+        "result": "pkg/\npkg/sub/\npkg/app.py\n\n(truncated, showing first 3 of 4 entries)",
+    }
 
 
 class _FakeStdin:

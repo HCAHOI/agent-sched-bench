@@ -3133,6 +3133,192 @@ async def _replay_cloud_model_action(
     return outcome
 
 
+def _append_replay_record(trace_logger: TraceLogger, record: dict[str, Any]) -> None:
+    handle = getattr(trace_logger, "_handle")
+    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    handle.flush()
+
+async def _run_openclaw_replay_session(
+    prepared_session: PreparedTraceSession,
+    *,
+    trace_logger: TraceLogger,
+    replay_speed: float,
+    llm_timing: LLMTimingConfig,
+    command_timeout_s: float,
+    warmup_skip_iterations: int = 0,
+) -> ReplayTaskStats:
+    """Replay an OpenClaw trace by running the OpenClaw loop on the host.
+
+    LLM timing is owned by ``OpenClawReplayProvider.chat`` inside the OpenClaw
+    loop. The simulator prepares/cleans the root task container and aggregates
+    the emitted trace records; it does not sleep llm_call actions itself.
+    """
+    del warmup_skip_iterations
+
+
+    loaded = prepared_session.loaded
+    ctr = prepared_session.container
+    if ctr is None:
+        raise RuntimeError("OpenClaw host replay requires a prepared task container")
+    if prepared_session.task_output_dir is None:
+        raise RuntimeError("OpenClaw host replay requires task_output_dir")
+
+    from agents.openclaw._session_runner import SessionRunner
+    from trace_collect.openclaw_host_runtime import (
+        OpenClawReplayProvider,
+        build_container_tools_for_agent,
+    )
+
+    llm_actions = [
+        action for action in loaded.actions if action.get("action_type") == "llm_call"
+    ]
+    provider = OpenClawReplayProvider(
+        llm_actions=llm_actions,
+        replay_speed=replay_speed,
+        timing_mode=llm_timing.mode,
+        llm_ttft_ms=llm_timing.ttft_ms,
+        llm_tpot_ms=llm_timing.tpot_ms,
+        model=str((loaded.summary or {}).get("model") or "replay-openclaw"),
+    )
+    runner = SessionRunner(
+        provider,
+        model=provider.get_default_model(),
+        max_iterations=max(1, len(llm_actions)),
+        context_window_tokens=65536,
+        tool_overrides=build_container_tools_for_agent(
+            ctr.agent,
+            exec_timeout=int(command_timeout_s),
+        ),
+    )
+    trace_file = prepared_session.task_output_dir / "openclaw_host_replay.jsonl"
+    runtime_dir = prepared_session.task_output_dir / "openclaw-runtime"
+    workspace = prepared_session.task_output_dir / "host-workspace"
+    prompt = str(loaded.task.get("problem_statement") or "Replay source OpenClaw trace.")
+
+    wall_start = time.time()
+    result = await runner.run(
+        prompt=prompt,
+        workspace=workspace,
+        tool_workspace=Path("/testbed"),
+        project_workspace=Path("/testbed"),
+        session_key=f"simulate:{loaded.run_instance_id}",
+        trace_file=trace_file,
+        runtime_dir=runtime_dir,
+        instance_id=loaded.run_instance_id,
+        channel="simulate",
+        prepare_ms=None,
+    )
+    wall_end = time.time()
+
+    emitted_records: list[dict[str, Any]] = []
+    emitted_actions = 0
+    failed_actions = 0
+    if trace_file.exists():
+        for line in trace_file.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            rtype = record.get("type")
+            if rtype == "trace_metadata" or rtype == "event":
+                continue
+            if rtype == "action":
+                data = dict(record.get("data") or {})
+                data.setdefault("run_instance_id", loaded.run_instance_id)
+                data.setdefault("source_agent_id", loaded.source_agent_id)
+                data.setdefault("manifest_index", loaded.manifest_index)
+                data.setdefault("simulate_source", str(loaded.source_trace))
+                data.setdefault("replay_mode", "openclaw_host_process")
+                data.setdefault("replay_speed", replay_speed)
+                record["data"] = data
+                emitted_actions += 1
+                if data.get("success") is False:
+                    failed_actions += 1
+            emitted_records.append(record)
+
+    expected_actions = sum(
+        1
+        for action in loaded.actions
+        if action.get("action_type") in {"llm_call", "tool_exec"}
+    )
+    if emitted_actions < expected_actions:
+        failed_actions += expected_actions - emitted_actions
+    if result.stop_reason != "completed" or result.error is not None:
+        failed_actions = max(1, failed_actions)
+
+    sleep_drifts = [
+        SleepDrift(
+            phase=item.phase,
+            expected_s=item.expected_s,
+            actual_s=item.actual_s,
+        )
+        for item in provider.sleep_records
+    ]
+    for record in emitted_records:
+        if record.get("type") == "summary":
+            record.update(
+                {
+                    "agent_id": loaded.run_instance_id,
+                    "run_instance_id": loaded.run_instance_id,
+                    "source_agent_id": loaded.source_agent_id,
+                    "task_id": loaded.source_agent_id,
+                    "manifest_index": loaded.manifest_index,
+                    "label": loaded.label,
+                    "success": result.stop_reason == "completed"
+                    and result.error is None
+                    and failed_actions == 0,
+                    "source_success": (loaded.summary or {}).get("success"),
+                    "elapsed_s": wall_end - wall_start,
+                    "source_trace": str(loaded.source_trace),
+                    "source_model": (loaded.summary or {}).get("model", "unknown"),
+                    "replay_mode": "openclaw_host_process",
+                    "replay_speed": replay_speed,
+                    "llm_timing_mode": llm_timing.mode,
+                    "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
+                    "failed_actions": failed_actions,
+                }
+            )
+        _append_replay_record(trace_logger, record)
+    return _make_task_stats(
+        loaded=loaded,
+        success=failed_actions == 0,
+        elapsed_s=wall_end - wall_start,
+        failed_action_count=failed_actions,
+    )
+
+
+def _openclaw_trace_can_host_replay(loaded: LoadedTraceSession) -> bool:
+    if loaded.scaffold != "openclaw":
+        return False
+    llm_actions = [
+        action for action in loaded.actions if action.get("action_type") == "llm_call"
+    ]
+    if not llm_actions:
+        return False
+    if any(
+        str(action.get("agent_id", "")) != loaded.source_agent_id
+        for action in loaded.actions
+        if action.get("action_type") in {"llm_call", "tool_exec"}
+    ):
+        return False
+    if not any(action.get("action_type") == "tool_exec" for action in loaded.actions):
+        return True
+    for action in llm_actions:
+        data = action.get("data") or {}
+        raw_response = data.get("raw_response")
+        if not isinstance(raw_response, dict):
+            continue
+        choices = raw_response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            continue
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict) and message.get("tool_calls"):
+            return True
+    return False
+
+
 async def _replay_cloud_model_session(
     prepared_session: PreparedTraceSession,
     *,
@@ -3144,6 +3330,17 @@ async def _replay_cloud_model_session(
     warmup_skip_iterations: int,
 ) -> ReplayTaskStats:
     loaded = prepared_session.loaded
+    if _openclaw_trace_can_host_replay(loaded) and prepared_session.container is not None:
+        if replay_zero_monotonic is not None:
+            await _sleep_until_monotonic(replay_zero_monotonic)
+        return await _run_openclaw_replay_session(
+            prepared_session,
+            trace_logger=trace_logger,
+            replay_speed=replay_speed,
+            llm_timing=llm_timing,
+            command_timeout_s=command_timeout_s,
+            warmup_skip_iterations=warmup_skip_iterations,
+        )
     source_model = (loaded.summary or {}).get("model", "unknown")
     logger.info(
         "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx (llm_timing=%s)",
