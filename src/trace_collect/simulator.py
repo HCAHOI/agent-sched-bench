@@ -6315,7 +6315,7 @@ async def _replay_cloud_model_session(
                 }
             # Disk-hash comparison: diagnostic signal for FC backends.
             # Stores the replay-side disk hash for post-hoc analysis.
-            # Source comparision is future work once collection-side
+            # Source comparison is future work once collection-side
             # disk_hash recording is implemented.
             if (
                 ctr is not None
@@ -6331,7 +6331,7 @@ async def _replay_cloud_model_session(
                     )
                     if replay_hash is not None:
                         extra_tool_fields["replay_disk_hash"] = replay_hash[:16]
-                except Exception:
+                except (KeyError, TypeError, AttributeError, LookupError):
                     pass
             if output_diff_snippet is not None:
                 extra_tool_fields["output_diff_snippet"] = output_diff_snippet

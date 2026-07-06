@@ -1876,11 +1876,12 @@ class FCBackend(SandboxBackend):
         write_bytes = await asyncio.to_thread(self._read_write_bytes)
         self._last_write_bytes = write_bytes
 
-        # 6. Compute disk hash for diagnostic mismatch detection.
-        disk_hash = await self._compute_disk_hash()
-
         process_state: dict[str, Any] | None = None
         if mem_path is not None and vmstate_path is not None:
+            # Compute disk hash for diagnostic mismatch detection
+            # (only when a memory snapshot exists — disk-only cadences
+            # don't produce useful process_state metadata).
+            disk_hash = await self._compute_disk_hash()
             process_state = {
                 "diff_chain": list(self._diff_chain),
                 "head_index": len(self._diff_chain) - 1,
@@ -2408,7 +2409,8 @@ class FCBackend(SandboxBackend):
                     "tool": "exec",
                     "args": {
                         "command": (
-                            "find /testbed -type f -exec sha256sum {} \\; "
+                            "find /testbed -not -path '*/.git/*' -type f -print0 "
+                            "| xargs -0 sha256sum "
                             "| sort -k2 | sha256sum"
                         ),
                     },
@@ -2417,10 +2419,13 @@ class FCBackend(SandboxBackend):
             )
             if isinstance(resp, dict) and resp.get("ok"):
                 result = (resp.get("result") or "").strip()
-                # Result is "hex  -" from sha256sum; extract the hex part.
-                return result.split()[0] if result and " " in result else result[:64]
+                # Canonical output: "hex  -" from each sha256sum piped to
+                # a final sha256sum producing "full_hex  -".
+                candidate = result.split()[0] if result and " " in result else result[:64]
+                if len(candidate) == 64 and all(c in "0123456789abcdef" for c in candidate):
+                    return candidate
             return None
-        except (ConnectionError, RuntimeError, OSError):
+        except (ConnectionError, RuntimeError, OSError, ValueError):
             return None
 
     @staticmethod
