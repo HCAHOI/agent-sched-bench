@@ -271,9 +271,12 @@ class TestDiffChain:
 
     def test_subsequent_are_diff_until_max(self) -> None:
         bk = _make_backend(Path("/tmp"))
-        # Simulate: one Full already taken
+        # Simulate the actual capture_snapshot flow:
+        # 1. First capture: chain empty → Full. Post-capture state.
+        assert bk._choose_memory_snap_type() == "Full"
         bk._diff_chain = [{"type": "Full", "mem_path": "/a", "vmstate_path": "/b"}]
         bk._mem_snapshots_since_full = 0
+        # 2..N: chain non-empty, counter < max → Diff
         for i in range(1, 10):
             bk._mem_snapshots_since_full = i
             result = bk._choose_memory_snap_type()
@@ -349,3 +352,41 @@ class TestDiffChain:
             ])
         assert result is None
         assert any("snapshot-editor not found" in rec.message for rec in caplog.records)
+
+
+    def test_seek_last_full_in_chain(self) -> None:
+        """restore_snapshot fallback must scan for the last Full in reverse,
+        not blindly use the head entry (which could be a Diff)."""
+        chain = [
+            {"type": "Full", "mem_path": "/base", "vmstate_path": "/basev"},
+            {"type": "Diff", "mem_path": "/d1", "vmstate_path": "/d1v"},
+            {"type": "Diff", "mem_path": "/d2", "vmstate_path": "/d2v"},
+        ]
+        last_full = None
+        for entry in reversed(chain):
+            if entry.get("type") == "Full":
+                last_full = entry
+                break
+        assert last_full is not None
+        assert last_full["mem_path"] == "/base"
+
+    def test_backward_compat_flat_process_state(self) -> None:
+        """restore_snapshot must handle flat mem_path/vmstate_path format
+        from snapshots captured before the diff_chain change."""
+        from agents.sandbox_runtime import SandboxSnapshot
+
+        snap = SandboxSnapshot(
+            process_state={
+                "vmstate_path": "/tmp/legacy-vmstate.snap",
+                "mem_path": "/tmp/legacy-mem.snap",
+                "snapshot_type": "Full",
+                "mem_version": 1,
+            },
+            disk_state={"disk_path": "/tmp/legacy-disk.img", "kind": "fc_paired_snapshot"},
+            root="/testbed",
+            timestamp_ns=0,
+        )
+        assert snap.process_state is not None
+        assert snap.process_state.get("mem_path") == "/tmp/legacy-mem.snap"
+        assert snap.process_state.get("vmstate_path") == "/tmp/legacy-vmstate.snap"
+        assert "diff_chain" not in snap.process_state

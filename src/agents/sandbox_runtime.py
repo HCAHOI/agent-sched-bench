@@ -1957,18 +1957,18 @@ class FCBackend(SandboxBackend):
                         vmstate_path = compacted["vmstate_path"]
                         mem_path = compacted["mem_path"]
                 if vmstate_path is None:
-                    # No compaction (editor missing or chain too short) —
-                    # use the chain head.
-                    head_index = snapshot.process_state.get(
-                        "head_index", len(diff_chain) - 1
-                    )
-                    head = diff_chain[head_index]
-                    maybe_mem = head.get("mem_path")
-                    if isinstance(maybe_mem, str) and maybe_mem and Path(maybe_mem).exists():
-                        mem_path = maybe_mem
-                    maybe_vmstate = head.get("vmstate_path")
-                    if isinstance(maybe_vmstate, str) and maybe_vmstate and Path(maybe_vmstate).exists():
-                        vmstate_path = maybe_vmstate
+                    # No compaction (editor missing or chain too short).
+                    # Fall back to the last Full in the chain — a bare Diff
+                    # cannot be loaded by FC without its base.
+                    for entry in reversed(diff_chain):
+                        if entry.get("type") == "Full":
+                            maybe_mem = entry.get("mem_path")
+                            if isinstance(maybe_mem, str) and maybe_mem and Path(maybe_mem).exists():
+                                mem_path = maybe_mem
+                            maybe_vmstate = entry.get("vmstate_path")
+                            if isinstance(maybe_vmstate, str) and maybe_vmstate and Path(maybe_vmstate).exists():
+                                vmstate_path = maybe_vmstate
+                            break
             else:
                 # Backward compat: flat mem_path / vmstate_path.
                 maybe_mem = snapshot.process_state.get("mem_path")
@@ -2326,13 +2326,18 @@ class FCBackend(SandboxBackend):
     def _choose_memory_snap_type(self) -> str:
         """Return ``"Full"`` or ``"Diff"`` for the next memory snapshot.
 
-        The first memory snapshot is always Full (no base to diff
-        against).  Subsequent captures produce Diff (dirty pages only),
-        leveraging ``track_dirty_pages=True`` in the FC machine config.
-        Every ``_diff_chain_max`` diff a Full rebaselines the chain so
-        restore compaction does not grow unbounded.
+        The first memory snapshot is always Full (empty chain — no base
+        to diff against).  Subsequent captures produce Diff (dirty pages
+        only), leveraging ``track_dirty_pages=True`` in the FC machine
+        config.  Every ``_diff_chain_max`` diff a Full rebaselines the
+        chain so restore compaction does not grow unbounded.
+
+        The key state distinguisher is ``len(self._diff_chain)``:
+        ``0`` means never captured (→ Full), ``>0`` means we have a
+        base to diff against and the counter tracks how many diffs
+        have accumulated since the last Full.
         """
-        if self._mem_snapshots_since_full == 0:
+        if len(self._diff_chain) == 0:
             return "Full"
         if self._mem_snapshots_since_full >= self._diff_chain_max:
             return "Full"
@@ -2533,8 +2538,17 @@ class FCBackend(SandboxBackend):
                         f"{status_code} without Content-Length header"
                     )
 
+            body_deadline = time.monotonic() + 15.0
             while len(body_rest) < content_length:
+                remaining = body_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(
+                        f"FC API {method} {path}: timeout reading body "
+                        f"({len(body_rest)}/{content_length} bytes after 15s)"
+                    )
+                sock.settimeout(remaining)
                 chunk = sock.recv(65536)
+                sock.settimeout(10)
                 if not chunk:
                     break
                 body_rest += chunk
