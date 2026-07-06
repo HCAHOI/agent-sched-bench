@@ -704,6 +704,22 @@ def test_exec_missing_returncode_fails_closed() -> None:
     assert "Exit code: <missing>" in result
 
 
+def test_exec_missing_returncode_marks_replay_failure_kind() -> None:
+    agent = FakeAgent({"exec": {"ok": True, "result": "missing rc"}})
+    result, success, _duration, metadata = asyncio.run(
+        execute_trace_tool_detailed(
+            agent=agent,
+            tool_name="exec",
+            tool_args_json=_nested("exec", {"command": "echo ok"}),
+            command_timeout_s=10.0,
+        )
+    )
+
+    assert success is False
+    assert "Exit code: <missing>" in result
+    assert metadata["replay_failure_kind"] == "malformed_replay_exec_response"
+
+
 def test_commands_timeout_is_preserved_across_later_success(monkeypatch) -> None:
     namespace: dict[str, object] = {}
     exec(_REPLAY_AGENT_SCRIPT.split("\nHANDLERS = ", 1)[0], namespace)
@@ -770,6 +786,22 @@ def test_unsupported_tool_returns_error() -> None:
     )
     assert success is False
     assert "Unsupported replay tool" in result
+
+
+def test_unsupported_tool_marks_replay_failure_kind() -> None:
+    agent = FakeAgent()
+    result, success, _duration, metadata = asyncio.run(
+        execute_trace_tool_detailed(
+            agent=agent,
+            tool_name="nope_tool",
+            tool_args_json="{}",
+            command_timeout_s=5.0,
+        )
+    )
+
+    assert success is False
+    assert "Unsupported replay tool" in result
+    assert metadata["replay_failure_kind"] == "unsupported_replay_tool"
 
 
 def test_commands_sends_list() -> None:

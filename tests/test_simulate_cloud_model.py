@@ -967,7 +967,7 @@ def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:
         )
 
 
-def test_cloud_model_tool_success_false_is_recorded_without_failing_trace(
+def test_cloud_model_tool_success_false_fails_trace_when_source_succeeded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1004,13 +1004,15 @@ def test_cloud_model_tool_success_false_is_recorded_without_failing_trace(
     throughput = json.loads((output_dir / "throughput_summary.json").read_text())
 
     assert tool_record["data"]["success"] is False
-    assert summary["success"] is True
-    assert summary["failed_actions"] == 0
+    assert summary["success"] is False
+    assert summary["failed_actions"] == 1
     assert summary["replay_failed_actions"] == 1
-    assert throughput["completed_traces"] == 1
-    assert throughput["failed_traces"] == 0
-    assert throughput["tasks"][0]["success"] is True
-    assert throughput["tasks"][0]["failed_action_count"] == 0
+    assert summary["unexpected_replay_failed_actions"] == 1
+    assert summary["replay_execution_errors"] == 0
+    assert throughput["completed_traces"] == 0
+    assert throughput["failed_traces"] == 1
+    assert throughput["tasks"][0]["success"] is False
+    assert throughput["tasks"][0]["failed_action_count"] == 1
 
 
 def test_cloud_model_source_failed_tool_match_does_not_fail_trace(
@@ -1064,6 +1066,8 @@ def test_cloud_model_source_failed_tool_match_does_not_fail_trace(
     assert summary["failed_actions"] == 0
     assert summary["source_failed_actions"] == 1
     assert summary["replay_failed_actions"] == 1
+    assert summary["unexpected_replay_failed_actions"] == 0
+    assert summary["replay_execution_errors"] == 0
     assert throughput["completed_traces"] == 1
     assert throughput["failed_traces"] == 0
 
@@ -1181,6 +1185,8 @@ def test_cloud_model_preserves_source_exec_timeout_for_replay(
     assert tool_record["data"]["success"] is False
     assert summary["success"] is True
     assert summary["failed_actions"] == 0
+    assert summary["unexpected_replay_failed_actions"] == 0
+    assert summary["replay_execution_errors"] == 0
 
 
 def test_cloud_model_source_runtime_artifact_path_fails_trace(

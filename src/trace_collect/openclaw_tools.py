@@ -1044,11 +1044,16 @@ async def execute_trace_tool_detailed(
             f"that is unavailable in a fresh replay container: {artifact_path}",
             False,
             0.0,
-            {},
+            {"replay_failure_kind": "source_runtime_artifact_unavailable"},
         )
 
     if request is None:
-        return f"Error: Unsupported replay tool {resolved_name!r}", False, None, {}
+        return (
+            f"Error: Unsupported replay tool {resolved_name!r}",
+            False,
+            None,
+            {"replay_failure_kind": "unsupported_replay_tool"},
+        )
 
     resp = await agent.execute(request, timeout_s=request_timeout_s)
     result = resp.get("result", "")
@@ -1061,6 +1066,10 @@ async def execute_trace_tool_detailed(
         rc = resp.get("returncode")
         if not isinstance(rc, int) or isinstance(rc, bool):
             result = f"{result}\n\nExit code: <missing>".strip()
+            metadata = {
+                **metadata,
+                "replay_failure_kind": "malformed_replay_exec_response",
+            }
             return result, False, inner_duration_ms, metadata
         result = f"{result}\n\nExit code: {rc}".strip()
         ok = bool(ok)

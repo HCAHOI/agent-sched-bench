@@ -354,6 +354,22 @@ def _unpack_exec_tool_result(
     raise ValueError(f"unexpected _exec_tool result shape: {len(result)}")
 
 
+_REPLAY_EXECUTION_FAILURE_KINDS = frozenset(
+    {
+        "malformed_replay_exec_response",
+        "source_runtime_artifact_unavailable",
+        "unsupported_replay_tool",
+    }
+)
+
+
+def _replay_failure_kind(metadata: dict[str, Any]) -> str | None:
+    value = metadata.get("replay_failure_kind")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 def _group_actions_by_iteration(
     actions: list[dict[str, Any]],
 ) -> dict[int, dict[str, Any]]:
@@ -2613,6 +2629,8 @@ async def _replay_cloud_model_session(
     fatal_replay_errors = 0
     source_failed_actions = 0
     replay_failed_actions = 0
+    replay_execution_errors = 0
+    unexpected_replay_failed_actions = 0
     previous_source_end: float | None = None
     sleep_drifts: list[SleepDrift] = []
 
@@ -2875,9 +2893,16 @@ async def _replay_cloud_model_session(
                         if mapped_artifact_path is not None
                         else "executed_in_container"
                     )
+            replay_failure_kind = _replay_failure_kind(tool_exec_metadata)
+            source_artifact_unavailable = replay_source == "source_artifact_unavailable"
             if not tool_success:
                 replay_failed_actions += 1
-            if replay_source == "source_artifact_unavailable":
+                if not source_artifact_unavailable:
+                    if replay_failure_kind in _REPLAY_EXECUTION_FAILURE_KINDS:
+                        replay_execution_errors += 1
+                    elif source_success:
+                        unexpected_replay_failed_actions += 1
+            if source_artifact_unavailable:
                 fatal_replay_errors += 1
             record_ts_end = time.time()
             extra_tool_fields = _command_metadata(
@@ -2953,7 +2978,12 @@ async def _replay_cloud_model_session(
             replay_action_errors += 1
 
     wall_end = time.time()
-    failed_actions = replay_action_errors + fatal_replay_errors
+    failed_actions = (
+        replay_action_errors
+        + fatal_replay_errors
+        + replay_execution_errors
+        + unexpected_replay_failed_actions
+    )
     success = failed_actions == 0
     trace_logger.log_summary(
         loaded.agent_id,
@@ -2970,6 +3000,8 @@ async def _replay_cloud_model_session(
                 "failed_actions": failed_actions,
                 "source_failed_actions": source_failed_actions,
                 "replay_failed_actions": replay_failed_actions,
+                "replay_execution_errors": replay_execution_errors,
+                "unexpected_replay_failed_actions": unexpected_replay_failed_actions,
                 "fatal_replay_errors": fatal_replay_errors,
                 "replay_action_errors": replay_action_errors,
                 "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
