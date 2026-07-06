@@ -166,7 +166,7 @@ class AttemptContext:
     end_time: datetime | None = None
     container_stdout: str = ""
     permission_fix_time_s: float = 0.0
-    # Timing checkpoints for wall-clock breakdown.
+    # Timing markers for wall-clock breakdown.
     image_ready_time: datetime | None = None
     agent_start_time: datetime | None = None
     agent_end_time: datetime | None = None

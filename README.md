@@ -74,7 +74,7 @@ Replay collected traces with bounded concurrency using source action timing. Thi
 branch supports cloud replay only; there is no local model/vLLM mode.
 
 ```bash
-PYTHONPATH=src python -m trace_collect.cli simulate \
+PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
     --manifest /abs/path/to/simulate-manifest.yaml \
     --concurrency 1,2,4,8 \
     --workers 8 \

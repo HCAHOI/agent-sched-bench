@@ -147,7 +147,7 @@ def test_classify_existing_traces_rejects_wrong_existing_order(tmp_path: Path) -
         )
 
 
-def test_verify_trace_order_rejects_api_order_mismatch(tmp_path: Path) -> None:
+def test_verify_trace_order_rejects_inconsistent_api_order(tmp_path: Path) -> None:
     spec = ExperimentSpec(
         slot="a", label_suffix="claude-code-haiku", root=tmp_path / "exp-a"
     )

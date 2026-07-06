@@ -2,11 +2,11 @@
 """Generate simulate inputs from a collect run directory.
 
 Usage:
-  .venv/bin/python scripts/gen_simulate_manifest.py <collect_run_dir>
+  uv run python scripts/gen_simulate_manifest.py <collect_run_dir>
 
 Outputs:
-  <collect_run_dir>/simulate_manifest.yaml   — manifest for simulate
-  <collect_run_dir>/tasks.json               — task source for simulate
+  <collect_run_dir>/simulate_manifest.yaml   - manifest for simulate
+  <collect_run_dir>/tasks.json               - task source for simulate
 
 The script discovers trace.jsonl files under each instance/attempt_*/ dir
 and extracts the task data from run_manifest.json (written by the collector).
@@ -62,7 +62,7 @@ def main() -> None:
     # Write tasks.json
     tasks_path = run_dir / "tasks.json"
     tasks_path.write_text(json.dumps(tasks, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {len(tasks)} tasks → {tasks_path}")
+    print(f"Wrote {len(tasks)} tasks -> {tasks_path}")
 
     # Write manifest
     manifest_path = run_dir / "simulate_manifest.yaml"
@@ -72,12 +72,12 @@ def main() -> None:
         "traces": trace_paths,
     }
     manifest_path.write_text(yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8")
-    print(f"Wrote manifest ({len(trace_paths)} traces) → {manifest_path}")
+    print(f"Wrote manifest ({len(trace_paths)} traces) -> {manifest_path}")
 
     # Print next steps
     print()
     print("=== Next: run simulate ===")
-    print(f".venv/bin/python -m trace_collect.cli simulate \\")
+    print(f"uv run python -m trace_collect.cli simulate \\")
     print(f"  --manifest {manifest_path} \\")
     print(f"  --task-source {tasks_path} \\")
     print(f"  --container docker \\")

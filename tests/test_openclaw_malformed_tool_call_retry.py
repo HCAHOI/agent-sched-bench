@@ -10,45 +10,6 @@ from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.registry import ToolRegistry
 
 
-def test_checkpoint_scrub_preserves_nested_payload_keys() -> None:
-    payload = {
-        "assistant_message": {
-            "role": "assistant",
-            "_openclaw_message_id": "msg_1",
-            "content": {"_openclaw_message_id": "payload_value"},
-        },
-        "completed_tool_results": [
-            {
-                "role": "tool",
-                "_openclaw_message_id": "msg_2",
-                "content": {"_openclaw_message_id": "tool_payload"},
-            }
-        ],
-        "pending_tool_calls": [
-            {
-                "id": "call_1",
-                "function": {
-                    "arguments": {"_openclaw_message_id": "arg_payload"}
-                },
-            }
-        ],
-    }
-
-    clean = AgentRunner._strip_internal_ids_from_checkpoint_payload(payload)
-
-    assert "_openclaw_message_id" not in clean["assistant_message"]
-    assert "_openclaw_message_id" not in clean["completed_tool_results"][0]
-    assert clean["assistant_message"]["content"] == {
-        "_openclaw_message_id": "payload_value"
-    }
-    assert clean["completed_tool_results"][0]["content"] == {
-        "_openclaw_message_id": "tool_payload"
-    }
-    assert clean["pending_tool_calls"][0]["function"]["arguments"] == {
-        "_openclaw_message_id": "arg_payload"
-    }
-
-
 class _FakeProvider(LLMProvider):
     def __init__(self, responses: list[LLMResponse]) -> None:
         super().__init__(api_key="test", api_base="http://test")

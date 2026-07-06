@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from trace_collect.cli import parse_collect_args
+from trace_collect.cli import parse_collect_args, parse_simulate_args
 
 
 def test_parse_collect_args_accepts_skip_and_concurrency() -> None:
@@ -57,3 +57,23 @@ def test_parse_collect_args_rejects_zero_concurrency() -> None:
             "--concurrency",
             "0",
         ])
+
+
+def test_parse_simulate_args_does_not_default_task_source() -> None:
+    args = parse_simulate_args([
+        "--manifest",
+        "/abs/path/to/manifest.yaml",
+    ])
+
+    assert args.task_source is None
+
+
+def test_parse_simulate_args_accepts_explicit_task_source() -> None:
+    args = parse_simulate_args([
+        "--manifest",
+        "/abs/path/to/manifest.yaml",
+        "--task-source",
+        "/abs/path/to/tasks.json",
+    ])
+
+    assert args.task_source == "/abs/path/to/tasks.json"

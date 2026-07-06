@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import os
-import stat
 import time
-from collections.abc import Iterator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,223 +62,6 @@ def _resolve_run_outcome(
     return stop_reason, error
 
 
-def _sanitize_checkpoint_name(value: str) -> str:
-    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value)
-    return safe[:96] or "tool"
-
-
-def _single_exec_command_args(tool_name: str, args_json: str) -> dict[str, Any] | None:
-    if tool_name != "exec":
-        return None
-    try:
-        parsed = json.loads(args_json or "{}")
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    payload = parsed.get("exec") if isinstance(parsed.get("exec"), dict) else parsed
-    if not isinstance(payload, dict):
-        return None
-    if "command" not in payload or "commands" in payload:
-        return None
-    return payload
-
-
-def _iter_checkpoint_entries(root: Path) -> Iterator[str]:
-    walk_errors: list[OSError] = []
-
-    def record_walk_error(exc: OSError) -> None:
-        walk_errors.append(exc)
-
-    for dirpath, dirnames, filenames in os.walk(
-        root,
-        topdown=True,
-        onerror=record_walk_error,
-        followlinks=False,
-    ):
-        dirnames.sort()
-        filenames.sort()
-        if Path(dirpath) != root:
-            yield str(dirpath)
-        for fname in filenames:
-            yield os.path.join(dirpath, fname)
-
-    if walk_errors:
-        raise OSError(f"failed to walk checkpoint root {root}: {walk_errors[0]}")
-
-
-def _checkpoint_entry_type(mode: int) -> str:
-    if stat.S_ISDIR(mode):
-        return "dir"
-    if stat.S_ISREG(mode):
-        return "file"
-    if stat.S_ISLNK(mode):
-        return "symlink"
-    return f"other:{stat.S_IFMT(mode)}"
-
-
-def _checkpoint_relpath(path: str, root: Path) -> str:
-    return Path(os.path.relpath(path, root)).as_posix()
-
-
-def _any_file_newer_than(root: Path, marker_mtime_ns: int) -> bool:
-    """Return True if any filesystem entry has mtime_ns > marker_mtime_ns.
-
-    Uses os.walk + lstat (stat-only, no content reads). A file or directory
-    modified after the marker timestamp indicates a write event occurred and a
-    checkpoint is needed.
-    """
-    root = root.resolve()
-    walk_errors: list[OSError] = []
-
-    def record_walk_error(exc: OSError) -> None:
-        walk_errors.append(exc)
-
-    def entry_is_newer(path: str | Path) -> bool:
-        try:
-            return os.lstat(path).st_mtime_ns > marker_mtime_ns
-        except OSError:
-            return True
-
-    if entry_is_newer(root):
-        return True
-
-    for dirpath, dirnames, filenames in os.walk(
-        root,
-        onerror=record_walk_error,
-        followlinks=False,
-    ):
-        for name in (*dirnames, *filenames):
-            if entry_is_newer(os.path.join(dirpath, name)):
-                return True
-    return bool(walk_errors)
-
-
-def _snapshot_checkpoint_entries(root: Path) -> dict[str, str]:
-    root = root.resolve()
-    entries: dict[str, str] = {}
-    for fpath in _iter_checkpoint_entries(root):
-        try:
-            st = os.lstat(fpath)
-        except OSError as exc:
-            raise OSError(f"failed to stat checkpoint entry {fpath}: {exc}") from exc
-        entry_type = _checkpoint_entry_type(st.st_mode)
-        if entry_type not in {"dir", "file"}:
-            raise OSError(f"unsupported checkpoint entry type: {fpath}")
-        entries[_checkpoint_relpath(fpath, root)] = entry_type
-    return entries
-
-
-def _tree_contains_symlink(root: Path) -> bool:
-    for path in root.rglob("*"):
-        if path.is_symlink():
-            return True
-    return False
-
-
-def _relative_to_or_absolute(path: Path, base: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(base.resolve()))
-    except ValueError:
-        return str(path.resolve())
-
-
-_CHECKPOINT_CAS_ROOT = Path.home() / ".cache" / "agent-checkpoint-cas"
-
-
-def _write_cas_manifest(
-    *,
-    root: Path,
-    manifest_path: Path,
-    incremental_since_ns: int | None = None,
-    deleted_paths: list[str] | None = None,
-    hash_cache: dict[str, tuple[int, str]] | None = None,
-) -> int:
-    """Walk /testbed, write content-addressed blobs to CAS, emit a JSON manifest.
-
-    Args:
-        root: The directory to snapshot (always /testbed).
-        manifest_path: Where to write the manifest JSON.
-        incremental_since_ns: If set, skip files whose mtime_ns <= this.
-        deleted_paths: Paths to record as deleted (incremental).
-        hash_cache: Optional path-to-(mtime_ns, hexdigest) cache. Updated in place.
-            Files whose path and mtime match the cache entry skip re-hashing.
-
-    Returns:
-        Total size in bytes of all unique blobs written for this manifest.
-
-    Raises:
-        OSError: on stat/read/write failure.
-    """
-    root = root.resolve()
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    cas_root = _CHECKPOINT_CAS_ROOT
-    entries: dict[str, dict[str, Any]] = {}
-    total_unique_bytes = 0
-
-    for fpath in _iter_checkpoint_entries(root):
-        try:
-            st = os.lstat(fpath)
-        except OSError as exc:
-            raise OSError(f"failed to stat checkpoint entry {fpath}: {exc}") from exc
-
-        entry_type = _checkpoint_entry_type(st.st_mode)
-        if entry_type not in {"dir", "file"}:
-            raise OSError(f"unsupported checkpoint entry type: {fpath}")
-        rel = _checkpoint_relpath(fpath, root)
-
-        if entry_type == "dir":
-            continue
-
-        if incremental_since_ns is not None and st.st_mtime_ns <= incremental_since_ns:
-            continue
-
-        cached = hash_cache.get(rel) if hash_cache else None
-        file_bytes: bytes | None = None
-        if cached is not None and cached[0] == st.st_mtime_ns:
-            digest = cached[1]
-        else:
-            try:
-                with open(fpath, "rb") as fh:
-                    file_bytes = fh.read()
-            except OSError as exc:
-                raise OSError(f"failed to read checkpoint entry {fpath}: {exc}") from exc
-            digest = hashlib.sha256(file_bytes).hexdigest()
-            if hash_cache is not None:
-                hash_cache[rel] = (st.st_mtime_ns, digest)
-
-        blob_path = cas_root / "blobs" / digest[:2] / digest[2:]
-        if not blob_path.exists():
-            blob_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = blob_path.with_suffix(".tmp")
-            try:
-                if file_bytes is None:
-                    with open(fpath, "rb") as fh:
-                        file_bytes = fh.read()
-                tmp.write_bytes(file_bytes)
-                tmp.rename(blob_path)
-            except OSError as exc:
-                raise OSError(f"failed to write blob {blob_path}: {exc}") from exc
-            total_unique_bytes += st.st_size
-
-        entries[rel] = {
-            "hash": digest,
-            "mode": stat.S_IMODE(st.st_mode),
-            "size": st.st_size,
-            "mtime_ns": st.st_mtime_ns,
-        }
-
-    manifest: dict[str, Any] = {
-        "entries": entries,
-        "deleted_paths": sorted(deleted_paths) if deleted_paths else [],
-    }
-
-    tmp = manifest_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.rename(manifest_path)
-    return total_unique_bytes
-
-
 class TraceCollectorHook(AgentHook):
     """Collect per-iteration actions, events, and summaries as JSONL."""
 
@@ -293,10 +72,6 @@ class TraceCollectorHook(AgentHook):
         *,
         agent_id: str | None = None,
         task_id: str | None = None,
-        checkpoint_root: Path | None = None,
-        checkpoint_dir: Path | None = None,
-        checkpoint_root_label: str = "/testbed",
-        checkpoint_rebaseline_bytes: int | None = None,
     ) -> None:
         self.trace_file = trace_file
         self.instance_id = instance_id
@@ -316,158 +91,8 @@ class TraceCollectorHook(AgentHook):
         self._records: list[dict[str, Any]] = []
         self._actions: list[dict[str, Any]] = []
         self._pending_llm_records: list[dict[str, Any]] = []
-        self._checkpoint_root = Path(checkpoint_root) if checkpoint_root else None
-        self._checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
-        self._checkpoint_root_label = checkpoint_root_label
-        self._last_full_checkpoint_ns: int | None = None
-        self._last_incremental_checkpoint_ns: int | None = None
-        self._checkpoint_snapshot_entries: dict[str, str] | None = None
-        self._rebaseline_bytes = checkpoint_rebaseline_bytes
-        self._checkpoint_chain_bytes_since_full: int = 0
-        self._checkpoint_hash_cache: dict[str, tuple[int, str]] = {}
         self._flushed = False
         self._fh = open(trace_file, "w", encoding="utf-8")  # noqa: SIM115
-
-    def _checkpoint_after_tool(
-        self,
-        *,
-        tool_call_id: str,
-        tool_name: str,
-        tool_args_json: str,
-    ) -> dict[str, Any] | None:
-        if self._checkpoint_root is None or self._checkpoint_dir is None:
-            return None
-        if _single_exec_command_args(tool_name, tool_args_json) is None:
-            return None
-        started = time.monotonic()
-        root = self._checkpoint_root.resolve()
-        if not root.is_dir():
-            return {
-                "error": f"checkpoint root is unavailable: {root}",
-                "overhead_excluded": True,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-            }
-        if self._checkpoint_root_label != "/testbed":
-            return {
-                "error": f"unsupported checkpoint root: {self._checkpoint_root_label}",
-                "overhead_excluded": True,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-            }
-        if _tree_contains_symlink(root):
-            return {
-                "error": "checkpoint skipped: symlinks under /testbed are unsupported",
-                "overhead_excluded": True,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-            }
-
-        if self._last_incremental_checkpoint_ns is not None:
-            try:
-                has_changes = _any_file_newer_than(
-                    root,
-                    self._last_incremental_checkpoint_ns,
-                )
-            except OSError as exc:
-                return {
-                    "error": f"checkpoint change detection failed: {exc}",
-                    "overhead_excluded": True,
-                    "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-                }
-            if not has_changes:
-                return {
-                    "skipped": "no filesystem changes since last checkpoint",
-                    "overhead_excluded": True,
-                    "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-                }
-
-        marker_before_ns = time.time_ns()
-        try:
-            current_snapshot = _snapshot_checkpoint_entries(root)
-        except OSError as exc:
-            return {
-                "error": f"checkpoint failed: {exc}",
-                "overhead_excluded": True,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-            }
-
-        is_first = self._last_full_checkpoint_ns is None
-
-        # Re-baseline: if the incremental CAS chain exceeds the threshold,
-        # promote this manifest to full regardless of is_first.
-        force_full = (
-            not is_first
-            and self._rebaseline_bytes is not None
-            and self._checkpoint_chain_bytes_since_full >= self._rebaseline_bytes
-        )
-
-        incremental_since = None if is_first or force_full else self._last_incremental_checkpoint_ns
-        deleted_paths: list[str] = []
-        if not is_first and self._checkpoint_snapshot_entries is not None:
-            deleted_paths = sorted(
-                path
-                for path, entry_type in self._checkpoint_snapshot_entries.items()
-                if current_snapshot.get(path) != entry_type
-            )
-
-        manifest_path = (
-            self._checkpoint_dir
-            / f"{_sanitize_checkpoint_name(tool_call_id)}-manifest.json"
-        )
-        try:
-            chain_bytes = _write_cas_manifest(
-                root=root,
-                manifest_path=manifest_path,
-                incremental_since_ns=incremental_since,
-                deleted_paths=deleted_paths,
-                hash_cache=self._checkpoint_hash_cache,
-            )
-        except OSError as exc:
-            return {
-                "error": f"checkpoint failed: {exc}",
-                "overhead_excluded": True,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-            }
-
-        try:
-            changed_during_write = _any_file_newer_than(root, marker_before_ns)
-        except OSError:
-            changed_during_write = True
-        if changed_during_write:
-            try:
-                manifest_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            # Blobs are content-addressed, so tmp+rename prevents ghost reads.
-            # Only the manifest is rolled back on concurrent-write detection.
-            return {
-                "error": "checkpoint failed: filesystem changed during checkpoint",
-                "overhead_excluded": True,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
-            }
-
-        elapsed_ms = (time.monotonic() - started) * 1000
-        size_bytes = manifest_path.stat().st_size
-        is_full = is_first or force_full
-        if is_full:
-            self._last_full_checkpoint_ns = marker_before_ns
-            self._checkpoint_chain_bytes_since_full = 0
-        else:
-            self._checkpoint_chain_bytes_since_full += chain_bytes
-        self._last_incremental_checkpoint_ns = marker_before_ns
-        self._checkpoint_snapshot_entries = current_snapshot
-        return {
-            "path": _relative_to_or_absolute(manifest_path, self.trace_file.parent),
-            "kind": (
-                "cas_manifest_full" if is_full else "cas_manifest_incremental"
-            ),
-            "root": self._checkpoint_root_label,
-            "incremental": not is_full,
-            "incremental_since_ns": incremental_since,
-            "elapsed_ms": round(elapsed_ms, 3),
-            "size_bytes": size_bytes,
-            "overhead_excluded": True,
-            "rebaseline": force_full or None,
-            "chain_bytes": chain_bytes,
-        }
 
     def close(self) -> None:
         if self._flushed:
@@ -697,16 +322,6 @@ class TraceCollectorHook(AgentHook):
                 resource_timeline = resource_timelines.get(tc_id)
                 if resource_timeline is not None:
                     tool_action_data["resource_timeline"] = resource_timeline
-                checkpoint_after = self._checkpoint_after_tool(
-                    tool_call_id=tc_id or action_id_suffix,
-                    tool_name=tool_name,
-                    tool_args_json=tool_action_data["tool_args"],
-                )
-                if checkpoint_after is not None:
-                    if "error" in checkpoint_after:
-                        tool_action_data["checkpoint_after_error"] = checkpoint_after
-                    else:
-                        tool_action_data["checkpoint_after"] = checkpoint_after
                 tool_action = TraceAction(
                     action_type="tool_exec",
                     action_id=f"tool_{context.iteration}_{action_id_suffix}",
@@ -1119,20 +734,11 @@ class SessionRunner:
         effective_project_workspace = project_workspace or effective_tool_workspace
         iid = instance_id or session_key
 
-        checkpoint_root = (
-            effective_tool_workspace
-            if effective_tool_workspace.resolve() == Path("/testbed")
-            else None
-        )
         trace_hook = TraceCollectorHook(
             trace_file,
             iid,
             agent_id=iid,
             task_id=iid,
-            checkpoint_root=checkpoint_root,
-            checkpoint_dir=effective_runtime_dir / "checkpoints"
-            if checkpoint_root is not None
-            else None,
         )
 
         metadata = {

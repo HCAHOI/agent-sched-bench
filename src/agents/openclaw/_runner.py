@@ -130,7 +130,6 @@ class AgentRunSpec:
     provider_retry_mode: str = "standard"
     malformed_retry_budget: int = 3
     progress_callback: Any | None = None
-    checkpoint_callback: Any | None = None
 
 
 @dataclass(slots=True)
@@ -212,19 +211,6 @@ class AgentRunner:
                 )
                 messages.append(assistant_message)
                 tools_used.extend(tc.name for tc in response.tool_calls)
-                await self._emit_checkpoint(
-                    spec,
-                    {
-                        "phase": "awaiting_tools",
-                        "iteration": iteration,
-                        "model": spec.model,
-                        "assistant_message": assistant_message,
-                        "completed_tool_results": [],
-                        "pending_tool_calls": [
-                            tc.to_openai_tool_call() for tc in response.tool_calls
-                        ],
-                    },
-                )
 
                 self._refresh_hook_context_messages(context, messages)
                 await hook.before_execute_tools(context)
@@ -253,7 +239,6 @@ class AgentRunner:
                     self._refresh_hook_context_messages(context, messages)
                     await hook.after_iteration(context)
                     break
-                completed_tool_results: list[dict[str, Any]] = []
                 for tool_call, result in zip(response.tool_calls, results):
                     tool_message = {
                         "role": "tool",
@@ -267,18 +252,6 @@ class AgentRunner:
                         ),
                     }
                     messages.append(tool_message)
-                    completed_tool_results.append(tool_message)
-                await self._emit_checkpoint(
-                    spec,
-                    {
-                        "phase": "tools_completed",
-                        "iteration": iteration,
-                        "model": spec.model,
-                        "assistant_message": assistant_message,
-                        "completed_tool_results": completed_tool_results,
-                        "pending_tool_calls": [],
-                    },
-                )
                 self._refresh_hook_context_messages(context, messages)
                 await hook.after_iteration(context)
                 continue
@@ -415,17 +388,6 @@ class AgentRunner:
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
-            )
-            await self._emit_checkpoint(
-                spec,
-                {
-                    "phase": "final_response",
-                    "iteration": iteration,
-                    "model": spec.model,
-                    "assistant_message": messages[-1],
-                    "completed_tool_results": [],
-                    "pending_tool_calls": [],
-                },
             )
             final_content = clean
             context.final_content = final_content
@@ -608,8 +570,7 @@ class AgentRunner:
         resource_recorder: ResourceTimelineRecorder | None = None
         resource_timeline: dict[str, Any] | None = None
         try:
-            # The current replay-time timeout mismatch is caused by shell commands;
-            # keep telemetry scoped to OpenClaw exec intervals until other tool
+            # Keep telemetry scoped to OpenClaw exec intervals until other tool
             # runtimes have per-action resource isolation.
             resource_recorder = ResourceTimelineRecorder(
                 enabled=tool_call.name == "exec",
@@ -663,15 +624,6 @@ class AgentRunner:
             resource_timeline,
         )
 
-    async def _emit_checkpoint(
-        self,
-        spec: AgentRunSpec,
-        payload: dict[str, Any],
-    ) -> None:
-        callback = spec.checkpoint_callback
-        if callback is not None:
-            await callback(self._strip_internal_ids_from_checkpoint_payload(payload))
-
     @staticmethod
     def _ensure_message_ids(messages: list[dict[str, Any]], *, start: int) -> int:
         next_id = int(start)
@@ -704,26 +656,6 @@ class AgentRunner:
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         return [AgentRunner._strip_internal_message_id(message) for message in messages]
-
-    @staticmethod
-    def _strip_internal_ids_from_checkpoint_payload(
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        clean = dict(payload)
-        assistant_message = clean.get("assistant_message")
-        if isinstance(assistant_message, dict):
-            clean["assistant_message"] = AgentRunner._strip_internal_message_id(
-                assistant_message
-            )
-        completed = clean.get("completed_tool_results")
-        if isinstance(completed, list):
-            clean["completed_tool_results"] = [
-                AgentRunner._strip_internal_message_id(item)
-                if isinstance(item, dict)
-                else item
-                for item in completed
-            ]
-        return clean
 
     @staticmethod
     def _append_final_message(

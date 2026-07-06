@@ -121,7 +121,7 @@ During task-container agent runs, stdout is streamed live to the operator termin
 Cloud replay only. No LLM requests are issued during replay.
 
 ```bash
-PYTHONPATH=src python -m trace_collect.cli simulate \
+PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
     --manifest /abs/path/to/simulate-manifest.yaml \
     --concurrency 1,2,4,8 \
     --workers 8 \
@@ -193,13 +193,6 @@ fixed v1 model:
 
 Host/no-op replay and multi-command exec preserve `resource_timeline` as source
 metadata only.
-
-### Checkpoint forced sync
-
-Collect emits `checkpoint_after` archives for checkpointed `exec` actions.
-Simulate can force-sync these checkpoints to verify replay reproduces source
-state. A forced-sync smoke helper is available at
-`scripts/smoke_checkpoint_forced_sync.py`.
 
 ### Manifest format
 

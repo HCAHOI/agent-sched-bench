@@ -159,8 +159,6 @@ class _LoopHookChain(AgentHook):
 class AgentLoop:
     """Coordinate session state, model calls, and tool execution."""
 
-    _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
-
     def __init__(
         self,
         bus: MessageBus,
@@ -402,11 +400,6 @@ class AgentLoop:
             else loop_hook
         )
 
-        async def _checkpoint(payload: dict[str, Any]) -> None:
-            if session is None:
-                return
-            self._set_runtime_checkpoint(session, payload)
-
         result = await self.runner.run(
             AgentRunSpec(
                 initial_messages=initial_messages,
@@ -425,7 +418,6 @@ class AgentLoop:
                 provider_retry_mode=self.provider_retry_mode,
                 malformed_retry_budget=self.malformed_retry_budget,
                 progress_callback=on_progress,
-                checkpoint_callback=_checkpoint,
             )
         )
         self._last_usage = result.usage
@@ -614,8 +606,6 @@ class AgentLoop:
                 },
             )
             session = self.sessions.get_or_create(key)
-            if self._restore_runtime_checkpoint(session):
-                self.sessions.save(session)
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
@@ -643,7 +633,6 @@ class AgentLoop:
                 message_id=msg.metadata.get("message_id"),
             )
             self._save_turn(session, all_msgs, 1 + len(history))
-            self._clear_runtime_checkpoint(session)
             self.sessions.save(session)
             self._emit_event(
                 "SESSION",
@@ -676,8 +665,6 @@ class AgentLoop:
             },
         )
         session = self.sessions.get_or_create(key)
-        if self._restore_runtime_checkpoint(session):
-            self.sessions.save(session)
 
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
@@ -731,7 +718,6 @@ class AgentLoop:
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
         self._save_turn(session, all_msgs, 1 + len(history))
-        self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
         self._emit_event(
             "SESSION",
@@ -850,80 +836,3 @@ class AgentLoop:
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
         session.updated_at = datetime.now()
-
-    def _set_runtime_checkpoint(
-        self, session: Session, payload: dict[str, Any]
-    ) -> None:
-        """Persist the latest in-flight turn state into session metadata."""
-        session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
-        self.sessions.save(session)
-
-    def _clear_runtime_checkpoint(self, session: Session) -> None:
-        if self._RUNTIME_CHECKPOINT_KEY in session.metadata:
-            session.metadata.pop(self._RUNTIME_CHECKPOINT_KEY, None)
-
-    @staticmethod
-    def _checkpoint_message_key(message: dict[str, Any]) -> tuple[Any, ...]:
-        return (
-            message.get("role"),
-            message.get("content"),
-            message.get("tool_call_id"),
-            message.get("name"),
-            message.get("tool_calls"),
-            message.get("reasoning_content"),
-            message.get("thinking_blocks"),
-        )
-
-    def _restore_runtime_checkpoint(self, session: Session) -> bool:
-        """Materialize an unfinished turn into session history before a new request."""
-        from datetime import datetime
-
-        checkpoint = session.metadata.get(self._RUNTIME_CHECKPOINT_KEY)
-        if not isinstance(checkpoint, dict):
-            return False
-
-        assistant_message = checkpoint.get("assistant_message")
-        completed_tool_results = checkpoint.get("completed_tool_results") or []
-        pending_tool_calls = checkpoint.get("pending_tool_calls") or []
-
-        restored_messages: list[dict[str, Any]] = []
-        if isinstance(assistant_message, dict):
-            restored = dict(assistant_message)
-            restored.setdefault("timestamp", datetime.now().isoformat())
-            restored_messages.append(restored)
-        for message in completed_tool_results:
-            if isinstance(message, dict):
-                restored = dict(message)
-                restored.setdefault("timestamp", datetime.now().isoformat())
-                restored_messages.append(restored)
-        for tool_call in pending_tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-            tool_id = tool_call.get("id")
-            name = ((tool_call.get("function") or {}).get("name")) or "tool"
-            restored_messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_id,
-                    "name": name,
-                    "content": "Error: Task interrupted before this tool finished.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-
-        overlap = 0
-        max_overlap = min(len(session.messages), len(restored_messages))
-        for size in range(max_overlap, 0, -1):
-            existing = session.messages[-size:]
-            restored = restored_messages[:size]
-            if all(
-                self._checkpoint_message_key(left)
-                == self._checkpoint_message_key(right)
-                for left, right in zip(existing, restored)
-            ):
-                overlap = size
-                break
-        session.messages.extend(restored_messages[overlap:])
-
-        self._clear_runtime_checkpoint(session)
-        return True

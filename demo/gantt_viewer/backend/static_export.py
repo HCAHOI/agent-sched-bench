@@ -18,7 +18,6 @@ from trace_collect.trace_data import CURRENT_TRACE_FORMAT_VERSION, TraceData
 
 PRESET_SWE_REBENCH_GLM_OPENCLAW_100 = "swe-rebench-glm-openclaw-100"
 
-MANIFEST_PATH = REPO_ROOT / "configs" / "simulate" / "openclaw-glm-19-manifest.json"
 SIM_SWEEP_ROOT = (
     REPO_ROOT
     / "traces"
@@ -40,7 +39,6 @@ EXPECTED_TASK_SOURCE = (REPO_ROOT / "data" / "swe-rebench" / "tasks.json").resol
 EXPECTED_SIM_MODE = "simulate"
 EXPECTED_SIMULATE_MODE = "cloud_model"
 EXPECTED_SIM_REPLAY_TARGET = "cloud_replay"
-EXPECTED_SIM_TRACE_MANIFEST = "configs/simulate/openclaw-glm-19-manifest.json"
 EXPECTED_SOURCE_TRACE_REF_FRAGMENT = "/traces/swe-rebench/z-ai-glm-5.1/"
 
 GROUP_ALL = "all"
@@ -101,8 +99,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--group",
         choices=[GROUP_ALL, *EXPORT_GROUPS],
-        default=GROUP_ALL,
+        default=GROUP_RAW,
         help="Export one group or all groups from the preset.",
+    )
+    parser.add_argument(
+        "--manifest",
+        required=True,
+        help=(
+            "JSON source manifest for the curated raw traces. Entries must define "
+            "source_trace and task_source."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -125,6 +131,7 @@ def export_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if args.preset != PRESET_SWE_REBENCH_GLM_OPENCLAW_100:
         raise ValueError(f"unsupported Gantt export preset: {args.preset}")
     return export_swe_rebench_glm_openclaw_100(
+        manifest_path=Path(args.manifest),
         output_dir=Path(args.output_dir),
         group=args.group,
         max_resource_samples_per_trace=args.max_resource_samples_per_trace,
@@ -133,8 +140,9 @@ def export_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 def export_swe_rebench_glm_openclaw_100(
     *,
+    manifest_path: Path,
     output_dir: Path,
-    group: str = GROUP_ALL,
+    group: str = GROUP_RAW,
     max_resource_samples_per_trace: int | None = None,
 ) -> dict[str, Any]:
     """Export the verified GLM/OpenClaw/100-iteration Gantt cohort."""
@@ -143,8 +151,13 @@ def export_swe_rebench_glm_openclaw_100(
     if max_resource_samples_per_trace is not None and max_resource_samples_per_trace < 2:
         raise ValueError("--max-resource-samples-per-trace must be at least 2")
 
-    manifest_traces = _load_and_validate_manifest_traces(MANIFEST_PATH)
-    groups = _build_export_groups(manifest_traces, group=group)
+    manifest_path = manifest_path.expanduser().resolve()
+    manifest_traces = _load_and_validate_manifest_traces(manifest_path)
+    groups = _build_export_groups(
+        manifest_traces,
+        group=group,
+        manifest_path=manifest_path,
+    )
 
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -186,7 +199,7 @@ def export_swe_rebench_glm_openclaw_100(
 
     manifest_payload = {
         "preset": PRESET_SWE_REBENCH_GLM_OPENCLAW_100,
-        "source_manifest": str(MANIFEST_PATH),
+        "source_manifest": str(manifest_path),
         "source_trace_count": len(manifest_traces),
         "expected": {
             "benchmark": EXPECTED_BENCHMARK,
@@ -305,6 +318,7 @@ def _validate_sim_trace(
     *,
     source: ExportTrace,
     manifest_source_refs: tuple[str, ...],
+    expected_trace_manifest: str,
 ) -> None:
     metadata = _read_trace_metadata(path)
     expected = {
@@ -314,7 +328,7 @@ def _validate_sim_trace(
         "mode": EXPECTED_SIM_MODE,
         "simulate_mode": EXPECTED_SIMULATE_MODE,
         "source_trace_count": EXPECTED_TRACE_COUNT,
-        "trace_manifest": EXPECTED_SIM_TRACE_MANIFEST,
+        "trace_manifest": expected_trace_manifest,
         "replay_target": EXPECTED_SIM_REPLAY_TARGET,
         "instance_id": source.task_id,
     }
@@ -354,15 +368,15 @@ def _validate_expected_metadata(
     metadata: dict[str, Any],
     expected: dict[str, Any],
 ) -> None:
-    mismatches = {
+    inconsistencies = {
         key: (metadata.get(key), value)
         for key, value in expected.items()
         if metadata.get(key) != value
     }
-    if mismatches:
+    if inconsistencies:
         rendered = ", ".join(
             f"{key}={actual!r} expected {expected!r}"
-            for key, (actual, expected) in mismatches.items()
+            for key, (actual, expected) in inconsistencies.items()
         )
         raise ValueError(f"{path} does not match export preset: {rendered}")
 
@@ -416,6 +430,7 @@ def _build_export_groups(
     manifest_traces: tuple[ExportTrace, ...],
     *,
     group: str,
+    manifest_path: Path,
 ) -> list[ExportGroup]:
     requested = EXPORT_GROUPS if group == GROUP_ALL else (group,)
     groups: list[ExportGroup] = []
@@ -436,7 +451,11 @@ def _build_export_groups(
                     name=GROUP_CLOSED_LOOP,
                     title="Closed Loop GLM OpenClaw 100-iters SWE-rebench 19",
                     output_name="sim-closed-loop-glm-openclaw-100-19.html",
-                    traces=_sim_group_traces(GROUP_CLOSED_LOOP, manifest_traces),
+                    traces=_sim_group_traces(
+                        GROUP_CLOSED_LOOP,
+                        manifest_traces,
+                        manifest_path=manifest_path,
+                    ),
                     time_mode="sync",
                 )
             )
@@ -450,7 +469,11 @@ def _build_export_groups(
                         "SWE-rebench 19"
                     ),
                     output_name=f"sim-{_slugify(name)}-glm-openclaw-100-19.html",
-                    traces=_sim_group_traces(name, manifest_traces),
+                    traces=_sim_group_traces(
+                        name,
+                        manifest_traces,
+                        manifest_path=manifest_path,
+                    ),
                     time_mode="abs",
                 )
             )
@@ -462,9 +485,12 @@ def _build_export_groups(
 def _sim_group_traces(
     group: str,
     manifest_traces: Iterable[ExportTrace],
+    *,
+    manifest_path: Path,
 ) -> tuple[ExportTrace, ...]:
     manifest_trace_tuple = tuple(manifest_traces)
     manifest_source_refs = tuple(trace.source_ref for trace in manifest_trace_tuple)
+    expected_trace_manifest = _display_path(manifest_path)
     if len(set(manifest_source_refs)) != len(manifest_source_refs):
         raise ValueError("manifest source trace references must be unique")
     traces: list[ExportTrace] = []
@@ -476,9 +502,17 @@ def _sim_group_traces(
             path,
             source=source,
             manifest_source_refs=manifest_source_refs,
+            expected_trace_manifest=expected_trace_manifest,
         )
         traces.append(ExportTrace(task_id=source.task_id, path=path, source_ref=source.source_ref))
     return tuple(traces)
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path.resolve())
 
 
 def _build_group_payload(

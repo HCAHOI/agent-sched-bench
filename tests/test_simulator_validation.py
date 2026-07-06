@@ -75,8 +75,6 @@ def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
                 model="dummy",
             )
         )
-
-
 def test_simulator_accepts_task_with_image_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -312,3 +310,18 @@ def test_simulator_rejects_relative_trace_paths_in_manifest(tmp_path: Path) -> N
         )
 
 
+def test_simulator_requires_task_source_when_manifest_lacks_one(tmp_path: Path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    manifest = tmp_path / "manifest.yaml"
+    trace_path.write_text("", encoding="utf-8")
+    _write_manifest(manifest, [str(trace_path)])
+
+    with pytest.raises(SimulateError, match="needs task_source"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=None,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+            )
+        )

@@ -24,9 +24,9 @@ benchmark plugin layer under `src/agents/benchmarks/`.
 
 ## Simulate contract
 
-`python -m trace_collect.cli simulate` performs cloud replay only. It does not
-issue LLM requests; it replays source trace timing with `--replay-speed` and a
-bounded queue controlled by `--concurrency`.
+`uv run python -m trace_collect.cli simulate` performs cloud replay only. It
+does not issue LLM requests; it replays source trace timing with
+`--replay-speed` and a bounded queue controlled by `--concurrency`.
 
 ## Trace integrity
 

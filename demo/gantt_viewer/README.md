@@ -84,16 +84,16 @@ HTML snapshots:
 make gantt-viewer-build
 PYTHONPATH=src:. python -m trace_collect.cli gantt-export \
   --preset swe-rebench-glm-openclaw-100 \
-  --group all \
+  --manifest /abs/path/to/openclaw-glm-19-source-manifest.json \
+  --group raw \
   --output-dir results/gantt-viewer
 ```
 
-The preset is intentionally narrow: it validates the 19 source traces in
-`configs/simulate/openclaw-glm-19-manifest.json` as `scaffold=openclaw`,
-`model=z-ai/glm-5.1`, and `max_iterations=100`. It exports the raw traces,
-closed-loop simulation traces, and the five Poisson sweep groups. Resource
-timelines are loaded from each trace directory's adjacent `resources.json`;
-missing resource samples are reported in `manifest.json` rather than filled in.
+The preset is intentionally narrow: it validates the source manifest's 19 raw
+traces as `scaffold=openclaw`, `model=z-ai/glm-5.1`, and `max_iterations=100`.
+Resource timelines are loaded from each trace directory's adjacent
+`resources.json`; missing resource samples are reported in `manifest.json`
+rather than filled in.
 
 Use the example discovery config explicitly if you want the acceptance layout:
 

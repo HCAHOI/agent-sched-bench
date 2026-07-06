@@ -1,15 +1,14 @@
-# Context7 MCP server config for openclaw simulate runs.
+# Context7 MCP server config for OpenClaw collect runs.
 #
-# Phase 4 of trace-sim-vastai-pipeline plan: this YAML is loaded by
-# `trace_collect.collector.load_mcp_servers` and instantiated as a
-# dict[str, MCPServerConfig] (per Phase 0 schema audit section (a)).
+# This YAML is loaded by `trace_collect.collector.load_mcp_servers` and
+# instantiated as a dict[str, MCPServerConfig].
 #
 # Required env var: CONTEXT7_API_KEY (your Upstash Context7 API key).
 # See https://github.com/upstash/context7 for the documentation MCP
 # server that this config talks to.
 #
 # Usage:
-#   python -m trace_collect.cli collect \
+#   uv run python -m trace_collect.cli \
 #     --benchmark swe-rebench \
 #     --scaffold openclaw \
 #     --mcp-config configs/mcp/context7.yaml

@@ -137,7 +137,7 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     assert manifest["model"]["name"] == "qwen-plus-latest"
     assert manifest["result_summary"]["exit_code"] == 0
     assert manifest["result_summary"]["total_time"] >= 0.0
-    # Wall-clock breakdown checkpoints must be recorded and add up.
+    # Wall-clock breakdown markers must be recorded and add up.
     timing = manifest["timing"]
     assert set(timing) == {
         "wall_total_s",

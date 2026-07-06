@@ -149,6 +149,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
+
 def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Replay cloud-model traces using source-trace timing.",
@@ -220,8 +221,12 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--task-source",
-        default="data/swe-rebench/tasks.json",
-        help="Path to tasks JSON file.",
+        default=None,
+        help=(
+            "Default tasks JSON file for manifest entries that do not specify "
+            "task_source. Required only when the manifest lacks "
+            "defaults.task_source and per-entry task_source values."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -397,6 +402,7 @@ def _run_collect(args: argparse.Namespace) -> None:
     if results_path.exists():
         print(f"Results written to: {results_path}")
 
+
 def _parse_concurrency_values(value: str) -> list[int]:
     parts = [part.strip() for part in value.split(",")]
     if not parts or any(not part for part in parts):
@@ -437,7 +443,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
 
     simulate_kwargs = {
         "manifest": Path(args.manifest),
-        "task_source": Path(args.task_source),
+        "task_source": Path(args.task_source) if args.task_source else None,
         "output_dir": Path(args.output_dir),
         "mode": args.mode,
         "container_executable": args.container,

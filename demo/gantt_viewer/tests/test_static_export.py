@@ -76,6 +76,7 @@ def _write_cohort(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     task_source.write_text("[]\n", encoding="utf-8")
     manifest = []
     task_ids = ("task-a", "task-b")
+    trace_manifest = str(manifest_path.resolve())
     source_refs = [
         f"/root/agent-sched-bench/traces/swe-rebench/z-ai-glm-5.1/run/{task_id}/attempt_1/trace.jsonl"
         for task_id in task_ids
@@ -115,7 +116,7 @@ def _write_cohort(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
                 "source_trace": source_ref,
                 "source_trace_count": len(task_ids),
                 "source_traces": source_refs,
-                "trace_manifest": "configs/simulate/openclaw-glm-19-manifest.json",
+                "trace_manifest": trace_manifest,
             },
         )
         _write_resources(sim_trace.parent)
@@ -142,12 +143,12 @@ def test_export_closed_loop_static_html(
     manifest_path, sim_root, raw_root, task_source = _write_cohort(tmp_path)
     dist = tmp_path / "dist"
     _write_frontend_dist(dist)
-    monkeypatch.setattr(static_export, "MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(static_export, "SIM_SWEEP_ROOT", sim_root)
     monkeypatch.setattr(static_export, "FRONTEND_DIST_PATH", dist)
     _patch_expected_cohort(monkeypatch, raw_root=raw_root, task_source=task_source)
 
     result = static_export.export_swe_rebench_glm_openclaw_100(
+        manifest_path=manifest_path,
         output_dir=tmp_path / "out",
         group="closed_loop",
     )
@@ -213,14 +214,14 @@ def test_export_rejects_manifest_count_drift(
         static_export._load_and_validate_manifest_traces(manifest_path)
 
 
-def test_export_rejects_mismatched_sim_metadata(
+def test_export_rejects_inconsistent_sim_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest_path, sim_root, raw_root, task_source = _write_cohort(tmp_path)
     _patch_expected_cohort(monkeypatch, raw_root=raw_root, task_source=task_source)
-    monkeypatch.setattr(static_export, "MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(static_export, "SIM_SWEEP_ROOT", sim_root)
+    trace_manifest = str(manifest_path.resolve())
 
     write_trace(
         sim_root / "closed_loop" / "task-a" / "attempt_1" / "trace.jsonl",
@@ -244,12 +245,13 @@ def test_export_rejects_mismatched_sim_metadata(
                 "/root/agent-sched-bench/traces/swe-rebench/z-ai-glm-5.1/"
                 "run/task-b/attempt_1/trace.jsonl",
             ],
-            "trace_manifest": "configs/simulate/openclaw-glm-19-manifest.json",
+            "trace_manifest": trace_manifest,
         },
     )
 
     with pytest.raises(ValueError, match="simulate_mode='unsupported_mode' expected 'cloud_model'"):
         static_export.export_swe_rebench_glm_openclaw_100(
+            manifest_path=manifest_path,
             output_dir=tmp_path / "out",
             group="closed_loop",
         )
@@ -261,8 +263,8 @@ def test_export_rejects_sim_source_trace_set_drift(
 ) -> None:
     manifest_path, sim_root, raw_root, task_source = _write_cohort(tmp_path)
     _patch_expected_cohort(monkeypatch, raw_root=raw_root, task_source=task_source)
-    monkeypatch.setattr(static_export, "MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(static_export, "SIM_SWEEP_ROOT", sim_root)
+    trace_manifest = str(manifest_path.resolve())
 
     write_trace(
         sim_root / "closed_loop" / "task-a" / "attempt_1" / "trace.jsonl",
@@ -286,12 +288,13 @@ def test_export_rejects_sim_source_trace_set_drift(
                 "/root/agent-sched-bench/traces/swe-rebench/z-ai-glm-5.1/"
                 "other/task-b/attempt_1/trace.jsonl",
             ],
-            "trace_manifest": "configs/simulate/openclaw-glm-19-manifest.json",
+            "trace_manifest": trace_manifest,
         },
     )
 
     with pytest.raises(ValueError, match="source_traces do not match curated manifest"):
         static_export.export_swe_rebench_glm_openclaw_100(
+            manifest_path=manifest_path,
             output_dir=tmp_path / "out",
             group="closed_loop",
         )
