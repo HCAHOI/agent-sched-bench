@@ -1876,12 +1876,16 @@ class FCBackend(SandboxBackend):
         write_bytes = await asyncio.to_thread(self._read_write_bytes)
         self._last_write_bytes = write_bytes
 
+        # 6. Compute disk hash for diagnostic mismatch detection.
+        disk_hash = await self._compute_disk_hash()
+
         process_state: dict[str, Any] | None = None
         if mem_path is not None and vmstate_path is not None:
             process_state = {
                 "diff_chain": list(self._diff_chain),
                 "head_index": len(self._diff_chain) - 1,
                 "mem_version": self._mem_version,
+                "disk_hash": disk_hash,
             }
 
         return SandboxSnapshot(
@@ -2382,6 +2386,42 @@ class FCBackend(SandboxBackend):
     # ------------------------------------------------------------------
     # Internal — snapshot-editor for diff chain compaction
     # ------------------------------------------------------------------
+
+    async def _compute_disk_hash(self) -> str | None:
+        """Compute a Merkle-tree hash of the entire guest filesystem
+        (``/testbed``) by running ``sha256sum`` on every file via vsock.
+
+        Returns a single hex string representing the filesystem state, or
+        ``None`` on failure (e.g. the vsock agent does not support exec).
+        This is a diagnostic signal — never a forced-sync trigger.
+
+        The command is:
+        ``find /testbed -type f -exec sha256sum {} \; | sort -k2 | sha256sum``
+
+        ``sort -k2`` sorts by filename so the hash is deterministic even
+        when ``find`` traversal order varies across filesystem versions.
+        """
+        try:
+            resp = await asyncio.to_thread(
+                self._execute_vsock,
+                {
+                    "tool": "exec",
+                    "args": {
+                        "command": (
+                            "find /testbed -type f -exec sha256sum {} \\; "
+                            "| sort -k2 | sha256sum"
+                        ),
+                    },
+                },
+                30.0,
+            )
+            if isinstance(resp, dict) and resp.get("ok"):
+                result = (resp.get("result") or "").strip()
+                # Result is "hex  -" from sha256sum; extract the hex part.
+                return result.split()[0] if result and " " in result else result[:64]
+            return None
+        except (ConnectionError, RuntimeError, OSError):
+            return None
 
     @staticmethod
     def _find_snapshot_editor() -> str | None:

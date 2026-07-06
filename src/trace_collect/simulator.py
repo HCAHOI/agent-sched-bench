@@ -6313,6 +6313,26 @@ async def _replay_cloud_model_session(
                     "semantic_match": oracle_verdict.semantic_match,
                     "evidence": oracle_verdict.evidence,
                 }
+            # Disk-hash comparison: diagnostic signal for FC backends.
+            # Stores the replay-side disk hash for post-hoc analysis.
+            # Source comparision is future work once collection-side
+            # disk_hash recording is implemented.
+            if (
+                ctr is not None
+                and isinstance(ctr.backend, FCBackend)
+                and action_index in ctr.replay_snapshots
+            ):
+                try:
+                    replay_snap = ctr.replay_snapshots[action_index]
+                    replay_hash = (
+                        replay_snap.process_state.get("disk_hash")
+                        if replay_snap.process_state
+                        else None
+                    )
+                    if replay_hash is not None:
+                        extra_tool_fields["replay_disk_hash"] = replay_hash[:16]
+                except Exception:
+                    pass
             if output_diff_snippet is not None:
                 extra_tool_fields["output_diff_snippet"] = output_diff_snippet
             if _tool_uses_exec_semantics(tool_name, tool_args):
