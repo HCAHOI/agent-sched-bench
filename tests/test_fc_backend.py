@@ -258,3 +258,94 @@ class TestNetSlotAllocation:
         assert backend._tap_dev == "fc-x"
         assert backend._host_ip == "172.31.255.1"
         assert backend._guest_ip == "172.31.255.2"
+
+
+class TestDiffChain:
+    """Memory diff-snapshot chain selection (no KVM needed)."""
+
+    def test_first_memory_snapshot_is_full(self) -> None:
+        bk = _make_backend(Path("/tmp"))
+        assert bk._choose_memory_snap_type() == "Full", (
+            "first memory snapshot must be Full (no base to diff against)"
+        )
+
+    def test_subsequent_are_diff_until_max(self) -> None:
+        bk = _make_backend(Path("/tmp"))
+        # Simulate: one Full already taken
+        bk._diff_chain = [{"type": "Full", "mem_path": "/a", "vmstate_path": "/b"}]
+        bk._mem_snapshots_since_full = 0
+        for i in range(1, 10):
+            bk._mem_snapshots_since_full = i
+            result = bk._choose_memory_snap_type()
+            assert result == "Diff", f"snapshot {i+1} should be Diff, got {result}"
+
+    def test_diff_chain_rebaselines_at_max(self) -> None:
+        bk = _make_backend(Path("/tmp"))
+        bk._diff_chain = [{"type": "Full", "mem_path": "/a", "vmstate_path": "/b"}]
+        # After _diff_chain_max diffs, the next should be Full
+        bk._mem_snapshots_since_full = bk._diff_chain_max
+        assert bk._choose_memory_snap_type() == "Full"
+
+    def test_chain_updated_on_full(self) -> None:
+        bk = _make_backend(Path("/tmp"))
+        bk._diff_chain = [{"type": "Full", "mem_path": "/old", "vmstate_path": "/ov"}]
+        bk._mem_snapshots_since_full = 0
+        entry = {"type": "Full", "mem_path": "/new", "vmstate_path": "/nv"}
+        bk._diff_chain = [entry]
+        bk._mem_snapshots_since_full = 0
+        assert len(bk._diff_chain) == 1
+        assert bk._diff_chain[0]["mem_path"] == "/new"
+        assert bk._mem_snapshots_since_full == 0
+
+    def test_chain_appended_on_diff(self) -> None:
+        bk = _make_backend(Path("/tmp"))
+        bk._diff_chain = [{"type": "Full", "mem_path": "/b", "vmstate_path": "/v"}]
+        bk._mem_snapshots_since_full = 1
+        entry = {"type": "Diff", "mem_path": "/d1", "vmstate_path": "/v1"}
+        bk._diff_chain.append(entry)
+        bk._mem_snapshots_since_full = 2
+        assert len(bk._diff_chain) == 2
+        assert bk._diff_chain[1]["mem_path"] == "/d1"
+
+    def test_restore_resets_chain(self) -> None:
+        bk = _make_backend(Path("/tmp"))
+        bk._diff_chain = [{"type": "Full", "mem_path": "/b", "vmstate_path": "/v"}]
+        bk._diff_chain.append({"type": "Diff", "mem_path": "/d", "vmstate_path": "/dv"})
+        bk._mem_snapshots_since_full = 3
+        # Simulate what restore does
+        bk._diff_chain = []
+        bk._mem_snapshots_since_full = 0
+        assert len(bk._diff_chain) == 0
+        assert bk._mem_snapshots_since_full == 0
+
+    def test_snapshot_editor_not_found_returns_none(self) -> None:
+        """When snapshot-editor is not on PATH, _find_snapshot_editor
+        returns None (the test env won't have it)."""
+        bk = _make_backend(Path("/tmp"))
+        found = bk._find_snapshot_editor()
+        assert found is None, (
+            f"expected snapshot-editor to be absent in test env, "
+            f"but found at {found}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_compact_short_chain_returns_none(self) -> None:
+        bk = _make_backend(Path("/tmp"))
+        result = await bk._compact_diff_chain(
+            [{"type": "Full", "mem_path": "/a", "vmstate_path": "/b"}]
+        )
+        assert result is None, "single-entry chain should skip compaction"
+
+    @pytest.mark.asyncio
+    async def test_compact_chain_no_editor_logs_warning(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bk = _make_backend(Path("/tmp"))
+        monkeypatch.setattr(bk, "_snapshot_editor_warned", False)
+        with caplog.at_level("WARNING", logger="agents.sandbox_runtime"):
+            result = await bk._compact_diff_chain([
+                {"type": "Full", "mem_path": "/b", "vmstate_path": "/v"},
+                {"type": "Diff", "mem_path": "/d", "vmstate_path": "/dv"},
+            ])
+        assert result is None
+        assert any("snapshot-editor not found" in rec.message for rec in caplog.records)

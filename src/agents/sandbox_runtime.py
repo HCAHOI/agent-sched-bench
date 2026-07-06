@@ -1536,10 +1536,16 @@ class FCBackend(SandboxBackend):
     Snapshots
     ---------
     Atomic paired (memory, disk) snapshots capture VM state at the same
-    pause point.  Memory is captured via the Firecracker snapshot API
-    (always ``Full``; Diff+rebase via snapshot-editor is future work, so
-    every memory snapshot currently costs the full guest memory size on
-    disk).  Disk is a copy of the backing rootfs file — copy-on-write via
+    pause point.  Memory is captured via the FC snapshot API: the first
+    memory snapshot is always ``Full``; subsequent snapshots produce
+    ``Diff`` (dirty pages only, using ``track_dirty_pages=True`` set at
+    VM configure time).  Every 10th capture is ``Full`` to rebaseline
+    the diff chain (configurable via ``_diff_chain_max``).  Restore
+    compacts the chain via the ``snapshot-editor`` tool shipped with
+    Firecracker; if the tool is unavailable, restore falls back to the
+    last ``Full`` in the chain.
+
+    Disk is a copy of the backing rootfs file — copy-on-write via
     ``cp --reflink=always`` on XFS/btrfs, with a logged fallback to a
     full sparse copy on filesystems without reflink support (e.g. ext4).
     The guest is quiesced with ``sync`` before pause to flush journals
@@ -1644,6 +1650,14 @@ class FCBackend(SandboxBackend):
         self._mem_version: int = 0
         self._disk_version: int = 0
         self._last_write_bytes: int | None = None
+
+        # Diff memory snapshot chain.  Each entry: {type, mem_path, vmstate_path}.
+        # After the first Full, subsequent captures use Diff (dirty pages only)
+        # until _diff_chain_max is reached, then a Full rebaselines the chain.
+        self._diff_chain: list[dict[str, Any]] = []
+        self._mem_snapshots_since_full: int = 0
+        self._diff_chain_max: int = 10
+        self._snapshot_editor_warned: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1771,14 +1785,17 @@ class FCBackend(SandboxBackend):
 
         1. Quiesce guest (``sync`` via vsock).
         2. Pause the VM.
-        3. If cadence calls for memory: capture via FC snapshot API
-           (Full only — Diff+rebase is future work via snapshot-editor).
+        3. If cadence calls for memory: capture via FC snapshot API —
+           ``Full`` on the first capture and every ``_diff_chain_max``
+           captures thereafter (rebaseline); ``Diff`` in between, using
+           the kernel's dirty-page tracking (``track_dirty_pages=True``
+           set at VM configure time).
         4. Disk: CoW copy of the backing rootfs file.
         5. Resume the VM.
 
         Returns a ``SandboxSnapshot`` with ``process_state`` holding the
-        memory-snapshot metadata (or ``None`` for disk-only cadences) and
-        ``disk_state`` holding the disk-snapshot path and version counters.
+        memory-snapshot diff chain (or ``None`` for disk-only cadences)
+        and ``disk_state`` holding the disk-snapshot path and counters.
         """
         del incremental_since  # FC paired snapshots are always full-state
         timestamp_ns = time.time_ns()
@@ -1800,24 +1817,41 @@ class FCBackend(SandboxBackend):
             mem_path: str | None = None
             disk_snap_path: str | None = None
 
-            # 3. Memory snapshot (always Full; Diff+rebase is future work).
+            # 3. Memory snapshot — Full/Diff alternating for dirty-page efficiency.
             if should_capture_mem:
+                snap_type = self._choose_memory_snap_type()
+                if snap_type == "Diff":
+                    vmstate_prefix = f"snap-{snap_index:04d}-diff"
+                else:
+                    vmstate_prefix = f"snap-{snap_index:04d}"
                 vmstate_path = str(
-                    self._checkpoint_dir / f"snap-{snap_index:04d}-vmstate.snap"
+                    self._checkpoint_dir / f"{vmstate_prefix}-vmstate.snap"
                 )
                 mem_path = str(
-                    self._checkpoint_dir / f"snap-{snap_index:04d}-mem.snap"
+                    self._checkpoint_dir / f"{vmstate_prefix}-mem.snap"
                 )
                 await asyncio.to_thread(
                     self._api_put,
                     "/snapshot/create",
                     {
-                        "snapshot_type": "Full",
+                        "snapshot_type": snap_type,
                         "snapshot_path": vmstate_path,
                         "mem_file_path": mem_path,
                     },
                 )
                 self._mem_version += 1
+                # Update diff chain state
+                chain_entry: dict[str, Any] = {
+                    "type": snap_type,
+                    "mem_path": mem_path,
+                    "vmstate_path": vmstate_path,
+                }
+                if snap_type == "Full":
+                    self._diff_chain = [chain_entry]
+                    self._mem_snapshots_since_full = 0
+                else:
+                    self._diff_chain.append(chain_entry)
+                    self._mem_snapshots_since_full += 1
 
             # 4. Disk snapshot — CoW copy of the backing rootfs file
             # (full sparse copy with a logged warning on non-reflink
@@ -1845,9 +1879,8 @@ class FCBackend(SandboxBackend):
         process_state: dict[str, Any] | None = None
         if mem_path is not None and vmstate_path is not None:
             process_state = {
-                "vmstate_path": vmstate_path,
-                "mem_path": mem_path,
-                "snapshot_type": "Full",
+                "diff_chain": list(self._diff_chain),
+                "head_index": len(self._diff_chain) - 1,
                 "mem_version": self._mem_version,
             }
 
@@ -1871,27 +1904,26 @@ class FCBackend(SandboxBackend):
     async def restore_snapshot(self, snapshot: SandboxSnapshot) -> bool:
         """Restore from an atomic paired snapshot.
 
-        Design:
+        With a memory snapshot the restore path depends on the chain:
 
-        **With memory snapshot**:
-        1. Halt the current VM process (the TAP/NAT slot stays claimed).
-        2. Copy snapshot disk OVER the working rootfs (so the vmstate's
-           drive backing path resolves).
-        3. Launch a fresh FC process.
-        4. ``PUT /snapshot/load`` immediately — NO other config calls
-           (FC forbids configure-then-load).
-        5. Poll vsock, fix clock, configure metrics.
+        **Single Full snapshot** (chain length 1 or flat ``process_state``):
+        Stops the current VM, copies the snapshot disk over the working
+        rootfs, launches a fresh FC process, and loads the image directly.
+
+        **Diff chain** (multiple entries, length > 1):
+        Compacts the chain via ``snapshot-editor`` into a single base
+        snapshot, then loads the compacted pair.  If the editor is not
+        available, falls back to loading only the most recent Full in
+        the chain and logs a warning.
 
         **Without memory (cold boot from disk snapshot)**:
-        1. Halt the current VM process (the TAP/NAT slot stays claimed).
-        2. Copy snapshot disk over the working rootfs.
-        3. Launch fresh FC process.
-        4. Full ``_configure_vm`` + ``InstanceStart`` (cold boot).
-        5. Poll vsock, fix clock.
+        Stops the current VM, copies the snapshot disk over working
+        rootfs, launches fresh FC, full ``_configure_vm`` + boot.
 
         After restore ``self._rootfs_path`` still points to the working
         copy (now overwritten with snapshot content), so a subsequent
-        ``capture_snapshot`` will work.
+        ``capture_snapshot`` will work.  The diff chain is reset so the
+        next capture starts with a Full.
         """
         disk_path = snapshot.disk_state.get("disk_path")
         if not isinstance(disk_path, str) or not disk_path:
@@ -1903,15 +1935,52 @@ class FCBackend(SandboxBackend):
                 f"FC snapshot disk image not found: {disk_path}"
             )
 
+        # Resolve memory snapshot from process_state.
+        # Supports both:
+        #   a) new ``diff_chain`` list + ``head_index``
+        #   b) flat ``mem_path`` / ``vmstate_path`` (backward compat)
         mem_path: str | None = None
         vmstate_path: str | None = None
         if snapshot.process_state is not None:
-            maybe_mem = snapshot.process_state.get("mem_path")
-            if isinstance(maybe_mem, str) and maybe_mem and Path(maybe_mem).exists():
-                mem_path = maybe_mem
-            maybe_vmstate = snapshot.process_state.get("vmstate_path")
-            if isinstance(maybe_vmstate, str) and maybe_vmstate and Path(maybe_vmstate).exists():
-                vmstate_path = maybe_vmstate
+            diff_chain: list[dict[str, Any]] | None = snapshot.process_state.get(
+                "diff_chain"
+            )
+            if isinstance(diff_chain, list) and len(diff_chain) > 0:
+                # New format: try to compact if chain has diffs, otherwise
+                # use the head directly.
+                has_diffs = any(
+                    entry.get("type") == "Diff" for entry in diff_chain
+                )
+                if has_diffs and len(diff_chain) > 1:
+                    compacted = await self._compact_diff_chain(diff_chain)
+                    if compacted is not None:
+                        vmstate_path = compacted["vmstate_path"]
+                        mem_path = compacted["mem_path"]
+                if vmstate_path is None:
+                    # No compaction (editor missing or chain too short) —
+                    # use the chain head.
+                    head_index = snapshot.process_state.get(
+                        "head_index", len(diff_chain) - 1
+                    )
+                    head = diff_chain[head_index]
+                    maybe_mem = head.get("mem_path")
+                    if isinstance(maybe_mem, str) and maybe_mem and Path(maybe_mem).exists():
+                        mem_path = maybe_mem
+                    maybe_vmstate = head.get("vmstate_path")
+                    if isinstance(maybe_vmstate, str) and maybe_vmstate and Path(maybe_vmstate).exists():
+                        vmstate_path = maybe_vmstate
+            else:
+                # Backward compat: flat mem_path / vmstate_path.
+                maybe_mem = snapshot.process_state.get("mem_path")
+                if isinstance(maybe_mem, str) and maybe_mem and Path(maybe_mem).exists():
+                    mem_path = maybe_mem
+                maybe_vmstate = snapshot.process_state.get("vmstate_path")
+                if isinstance(maybe_vmstate, str) and maybe_vmstate and Path(maybe_vmstate).exists():
+                    vmstate_path = maybe_vmstate
+
+        # Reset diff chain — next capture starts fresh.
+        self._diff_chain = []
+        self._mem_snapshots_since_full = 0
 
         # 1. Halt the current VM only — the TAP/NAT slot stays claimed by
         # this instance, so no other instance can steal it mid-restore.
@@ -2254,6 +2323,21 @@ class FCBackend(SandboxBackend):
         # disk_memory_mixed — memory every N turns.
         return snap_index % self._memory_snapshot_interval == 0
 
+    def _choose_memory_snap_type(self) -> str:
+        """Return ``"Full"`` or ``"Diff"`` for the next memory snapshot.
+
+        The first memory snapshot is always Full (no base to diff
+        against).  Subsequent captures produce Diff (dirty pages only),
+        leveraging ``track_dirty_pages=True`` in the FC machine config.
+        Every ``_diff_chain_max`` diff a Full rebaselines the chain so
+        restore compaction does not grow unbounded.
+        """
+        if self._mem_snapshots_since_full == 0:
+            return "Full"
+        if self._mem_snapshots_since_full >= self._diff_chain_max:
+            return "Full"
+        return "Diff"
+
     async def _quiesce_guest(self) -> None:
         """Send ``sync`` to the guest via vsock before pausing the VM."""
         try:
@@ -2289,6 +2373,94 @@ class FCBackend(SandboxBackend):
         except (ConnectionError, RuntimeError):
             # Best-effort — clock skew is tolerable for most workloads.
             pass
+
+    # ------------------------------------------------------------------
+    # Internal — snapshot-editor for diff chain compaction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_snapshot_editor() -> str | None:
+        """Locate the FC ``snapshot-editor`` binary on PATH or in common
+        install locations.  Returns the binary path or ``None``."""
+        import shutil
+
+        editor = shutil.which("snapshot-editor")
+        if editor is not None:
+            return editor
+        # Common locations when installed from Firecracker releases
+        for candidate in (
+            "/usr/local/bin/snapshot-editor",
+            "/usr/bin/snapshot-editor",
+            "/opt/firecracker/bin/snapshot-editor",
+        ):
+            if Path(candidate).exists():
+                return candidate
+        return None
+
+    async def _compact_diff_chain(
+        self,
+        chain: list[dict[str, Any]],
+    ) -> dict[str, str] | None:
+        """Compact a diff chain into a single Full snapshot via
+        ``snapshot-editor``.
+
+        Returns ``{"vmstate_path": ..., "mem_path": ...}`` for the
+        compacted snapshot, or ``None`` if compaction is not possible
+        (editor missing or chain too short).
+
+        The compacted files are written to ``self._checkpoint_dir`` with
+        a ``rebuilt-`` prefix so they do not collide with the chain
+        files.
+        """
+        if len(chain) <= 1:
+            return None
+        editor = self._find_snapshot_editor()
+        if editor is None:
+            if not self._snapshot_editor_warned:
+                self._snapshot_editor_warned = True
+                logger.warning(
+                    "snapshot-editor not found — cannot compact diff chain. "
+                    "Install it from the Firecracker release or use only Full "
+                    "snapshots.  Restoring will attempt a fallback."
+                )
+            return None
+
+        self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        rebuilt_vmstate = str(self._checkpoint_dir / "rebuilt-vmstate.snap")
+        rebuilt_mem = str(self._checkpoint_dir / "rebuilt-mem.snap")
+
+        # Build the CLI args: base first, then each subsequent diff.
+        cmd = [editor]
+        for i, entry in enumerate(chain):
+            prefix = "--base" if i == 0 else "--diff"
+            cmd.extend(
+                [
+                    f"{prefix}-vmstate",
+                    str(entry["vmstate_path"]),
+                    f"{prefix}-mem",
+                    str(entry["mem_path"]),
+                ]
+            )
+        cmd.extend(
+            [
+                "--out-vmstate", rebuilt_vmstate,
+                "--out-mem", rebuilt_mem,
+            ]
+        )
+
+        try:
+            await asyncio.to_thread(
+                _checked_run, cmd, check=True, timeout=120,
+            )
+        except (RuntimeError, OSError) as exc:
+            logger.warning(
+                "snapshot-editor compaction failed: %s.  "
+                "Falling back to last Full in chain.",
+                exc,
+            )
+            return None
+
+        return {"vmstate_path": rebuilt_vmstate, "mem_path": rebuilt_mem}
 
     # ------------------------------------------------------------------
     # Internal — FC API over Unix socket
