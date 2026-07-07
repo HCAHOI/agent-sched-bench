@@ -148,6 +148,10 @@ class CollectedTaskResult:
     error: str | None = None
     elapsed_s: float | None = None
     n_iterations: int | None = None
+    correct: bool | None = None
+    score: float | int | None = None
+    grader_status: str | None = None
+    answer_parse_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -160,7 +164,21 @@ class CollectedTaskResult:
             "error": self.error,
             "elapsed_s": self.elapsed_s,
             "n_iterations": self.n_iterations,
+            "correct": self.correct,
+            "score": self.score,
+            "grader_status": self.grader_status,
+            "answer_parse_error": self.answer_parse_error,
         }
+
+def _correctness_fields(result: AttemptResult) -> dict[str, Any]:
+    summary = result.summary or {}
+    return {
+        "correct": summary.get("correct"),
+        "score": summary.get("score"),
+        "grader_status": summary.get("grader_status"),
+        "answer_parse_error": summary.get("answer_parse_error"),
+    }
+
 
 
 def build_run_dir(benchmark: "Benchmark", model: str) -> Path:
@@ -210,11 +228,90 @@ def next_attempt_number(run_dir: Path, instance_id: str) -> int:
     return next_attempt_number_in(run_dir / instance_id)
 
 
-def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) -> None:
+def write_results_jsonl(results: list[dict[str, Any]], results_path: Path) -> None:
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with open(results_path, "w", encoding="utf-8") as f:
         for result in results:
-            f.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
+            f.write(json.dumps(result, ensure_ascii=False) + "\n")
+
+
+def _load_existing_result_rows(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """Load prior run-level result rows without normalizing their schema."""
+    results_path = run_dir / "results.jsonl"
+    rows: dict[str, dict[str, Any]] = {}
+    if not results_path.exists():
+        return rows
+    for line_number, line in enumerate(
+        results_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line.strip():
+            raise ValueError(f"{results_path} line {line_number} is blank")
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{results_path} line {line_number} is not valid JSON"
+            ) from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"{results_path} line {line_number} is not a JSON object")
+        instance_id = row.get("instance_id")
+        if not isinstance(instance_id, str) or not instance_id:
+            raise ValueError(
+                f"{results_path} line {line_number} is missing string instance_id"
+            )
+        rows[instance_id] = row
+    return rows
+
+
+def _load_terminal_result_row(
+    run_dir: Path, instance_id: str
+) -> dict[str, Any] | None:
+    """Best-effort row reconstruction for a terminal attempt missing results.jsonl."""
+    instance_dir = run_dir / instance_id
+    if not instance_dir.exists():
+        return None
+    for attempt_dir in sorted(instance_dir.glob("attempt_*"), reverse=True):
+        manifest_path = attempt_dir / "run_manifest.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict) or not _is_resume_terminal_manifest(manifest):
+            continue
+        row = _read_json_object(attempt_dir / "results.json")
+        result_summary = manifest.get("result_summary")
+        if not isinstance(result_summary, dict):
+            result_summary = {}
+        scaffold_summary = row.get("scaffold_summary")
+        if not isinstance(scaffold_summary, dict):
+            scaffold_summary = {}
+        row.setdefault("instance_id", instance_id)
+        row.setdefault("attempt_dir", str(attempt_dir))
+        row.setdefault("trace_file", str(attempt_dir / "trace.jsonl"))
+        row.setdefault("success", manifest.get("status") == "completed")
+        row.setdefault("model_patch", "")
+        row.setdefault("exit_status", result_summary.get("exit_status"))
+        row.setdefault("error", result_summary.get("error"))
+        row.setdefault("elapsed_s", result_summary.get("total_time"))
+        row.setdefault("n_iterations", scaffold_summary.get("n_iterations"))
+        row.setdefault("correct", scaffold_summary.get("correct"))
+        row.setdefault("score", scaffold_summary.get("score"))
+        row.setdefault("grader_status", scaffold_summary.get("grader_status"))
+        row.setdefault("answer_parse_error", scaffold_summary.get("answer_parse_error"))
+        return row
+    return None
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _select_tasks(
@@ -439,7 +536,14 @@ async def _run_scaffold_tasks(
     if completed:
         logger.info("Resuming: %d tasks already terminal", len(completed))
 
-    results: list[CollectedTaskResult] = []
+    result_rows = _load_existing_result_rows(run_dir)
+
+    def preserve_terminal_result(instance_id: str) -> None:
+        if instance_id in result_rows:
+            return
+        terminal_row = _load_terminal_result_row(run_dir, instance_id)
+        if terminal_row is not None:
+            result_rows[instance_id] = terminal_row
     total = len(tasks)
     prefetched_source_image: str | None = None
     prefetch_future: Future[None] | None = None
@@ -457,6 +561,7 @@ async def _run_scaffold_tasks(
                 logger.info(
                     "[%d/%d] SKIP %s (already terminal)", i + 1, total, instance_id
                 )
+                preserve_terminal_result(instance_id)
                 continue
             attempt = next_attempt_by_instance.get(instance_id)
             if attempt is None:
@@ -531,6 +636,7 @@ async def _run_scaffold_tasks(
                         error=result.error,
                         elapsed_s=time.monotonic() - t0,
                         n_iterations=result.n_iterations,
+                        **_correctness_fields(result),
                     )
                     logger.info(
                         "[%d/%d] DONE %s success=%s elapsed=%.1fs",
@@ -546,7 +652,7 @@ async def _run_scaffold_tasks(
             *(run_scheduled(index, task, attempt) for index, task, attempt in scheduled)
         )
         for _, collected, _, _ in sorted(task_results, key=lambda item: item[0]):
-            results.append(collected)
+            result_rows[collected.instance_id] = collected.to_dict()
         for _, collected, source_image, fixed_image in task_results:
             _cleanup_task_images(
                 instance_id=collected.instance_id,
@@ -556,7 +662,7 @@ async def _run_scaffold_tasks(
                 container_executable=container_executable,
                 run_dir=run_dir,
             )
-        write_results_jsonl(results, run_dir / "results.jsonl")
+        write_results_jsonl(list(result_rows.values()), run_dir / "results.jsonl")
         logger.info("Results written to %s", run_dir / "results.jsonl")
         return run_dir
 
@@ -569,6 +675,7 @@ async def _run_scaffold_tasks(
                 logger.info(
                     "[%d/%d] SKIP %s (already terminal)", i + 1, total, instance_id
                 )
+                preserve_terminal_result(instance_id)
                 continue
 
             logger.info("[%d/%d] START %s (%s)", i + 1, total, instance_id, scaffold)
@@ -632,37 +739,36 @@ async def _run_scaffold_tasks(
                 result = await run_attempt(attempt_ctx, **run_attempt_kwargs)
             except Exception as exc:
                 logger.exception("FAILED %s", instance_id)
-                results.append(
-                    CollectedTaskResult(
-                        instance_id=instance_id,
-                        attempt_dir=attempt_ctx.attempt_dir,
-                        success=False,
-                        model_patch="",
-                        exit_status="error",
-                        error=f"{type(exc).__name__}: {exc}",
-                        elapsed_s=time.monotonic() - t0,
-                    )
+                collected = CollectedTaskResult(
+                    instance_id=instance_id,
+                    attempt_dir=attempt_ctx.attempt_dir,
+                    success=False,
+                    model_patch="",
+                    exit_status="error",
+                    error=f"{type(exc).__name__}: {exc}",
+                    elapsed_s=time.monotonic() - t0,
                 )
+                result_rows[instance_id] = collected.to_dict()
             else:
-                results.append(
-                    CollectedTaskResult(
-                        instance_id=instance_id,
-                        attempt_dir=attempt_ctx.attempt_dir,
-                        success=result.success,
-                        model_patch=result.model_patch,
-                        exit_status=result.exit_status,
-                        error=result.error,
-                        elapsed_s=time.monotonic() - t0,
-                        n_iterations=result.n_iterations,
-                    )
+                collected = CollectedTaskResult(
+                    instance_id=instance_id,
+                    attempt_dir=attempt_ctx.attempt_dir,
+                    success=result.success,
+                    model_patch=result.model_patch,
+                    exit_status=result.exit_status,
+                    error=result.error,
+                    elapsed_s=time.monotonic() - t0,
+                    n_iterations=result.n_iterations,
+                    **_correctness_fields(result),
                 )
+                result_rows[instance_id] = collected.to_dict()
                 logger.info(
                     "[%d/%d] DONE %s success=%s elapsed=%.1fs",
                     i + 1,
                     total,
                     instance_id,
-                    results[-1].success,
-                    results[-1].elapsed_s,
+                    collected.success,
+                    collected.elapsed_s,
                 )
             finally:
                 _cleanup_task_images(
@@ -674,7 +780,7 @@ async def _run_scaffold_tasks(
                     run_dir=run_dir,
                 )
 
-    write_results_jsonl(results, run_dir / "results.jsonl")
+    write_results_jsonl(list(result_rows.values()), run_dir / "results.jsonl")
     logger.info("Results written to %s", run_dir / "results.jsonl")
     return run_dir
 

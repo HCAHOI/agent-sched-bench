@@ -98,7 +98,7 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--scaffold",
-        choices=["openclaw"],
+        choices=["openclaw", "deep-research"],
         default="openclaw",
         help="Agent scaffold to use.",
     )
@@ -338,9 +338,10 @@ def _run_collect(args: argparse.Namespace) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # --mcp-config is MANDATORY for openclaw runs: a forgotten flag would
-    # silently produce an MCP-less trace. Opt-out is the literal "none".
-    if args.mcp_config is None:
+    # --mcp-config is mandatory for openclaw runs: a forgotten flag would
+    # silently produce an MCP-less trace. Deep-research has no MCP tools and
+    # normalizes an omitted value to the explicit "none" label.
+    if args.scaffold == "openclaw" and args.mcp_config is None:
         print(
             "ERROR: MCP config is required for openclaw; pass "
             "--mcp-config configs/mcp/context7.yaml or --mcp-config none "
@@ -348,6 +349,8 @@ def _run_collect(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    if args.scaffold == "deep-research" and args.mcp_config is None:
+        args.mcp_config = "none"
 
     try:
         provider_config = resolve_llm_config(

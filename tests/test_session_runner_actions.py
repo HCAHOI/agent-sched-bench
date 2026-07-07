@@ -1,15 +1,10 @@
-"""Regression test for the OpenClaw TraceCollectorHook v4 emission bug.
+"""Regression tests for OpenClaw TraceCollectorHook action emission.
 
-US-010: Earlier the hook defined ``after_llm_response`` to emit the
-``llm_call`` action, but ``AgentLoop``'s CompositeHook never invokes
-that method — it only calls ``before_iteration``, ``before_execute_tools``
-and ``after_iteration``. The result was traces with ``tool_exec`` actions
-but ZERO ``llm_call`` actions, which broke Gantt rendering and the
-simulator's iteration grouping.
-
-This test drives ``TraceCollectorHook`` with synthetic ``AgentHookContext``
-inputs through the realistic hook order and asserts that the JSONL trace
-contains BOTH action types after a single iteration.
+The hook emits one ``llm_call`` action from ``after_llm_response`` for each
+model response and emits only iteration totals/tool actions from
+``after_iteration``.  These tests drive synthetic ``AgentHookContext`` inputs
+through the same hook order as the runner so regressions show up in the JSONL
+trace rather than in hook internals.
 """
 
 from __future__ import annotations
@@ -24,10 +19,14 @@ import pytest
 # Skip the entire module if OpenClaw deps are unavailable.
 pytest.importorskip("agents.openclaw._session_runner")
 
+from agents.openclaw._hook import AgentHook, AgentHookContext
+from agents.openclaw._loop import AgentLoop
 from agents.openclaw._session_runner import (
     TraceCollectorHook,
     _resolve_run_outcome,
 )
+from agents.openclaw.bus.queue import MessageBus
+from llm_call.provider_base import LLMProvider, LLMResponse
 
 
 class _StubResponse:
@@ -66,9 +65,13 @@ class _StubContext:
         response: _StubResponse | None = None,
         tool_resource_timelines: dict[str, dict[str, Any]] | None = None,
         tool_timings: dict[str, dict[str, float]] | None = None,
+        model_messages: list[dict[str, Any]] | None = None,
+        llm_call_start_ts: float | None = None,
     ) -> None:
         self.iteration = iteration
         self.messages = messages
+        self.model_messages = messages if model_messages is None else model_messages
+        self.llm_call_start_ts = llm_call_start_ts
         self.tool_calls = tool_calls or []
         self.usage = usage or {}
         self.response = response
@@ -76,6 +79,107 @@ class _StubContext:
         self.tool_timings = tool_timings or {}
         self.malformed_retry_count = 0
 
+
+class _LoopPathProvider(LLMProvider):
+    def __init__(self, responses: list[LLMResponse]) -> None:
+        super().__init__(api_key="test", api_base="http://test")
+        self.responses = responses
+        self.requests: list[list[dict[str, Any]]] = []
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> LLMResponse:
+        del tools, model, max_tokens, temperature, reasoning_effort, tool_choice
+        self.requests.append([dict(message) for message in messages])
+        return self.responses.pop(0)
+
+    def get_default_model(self) -> str:
+        return "fake-model"
+
+
+class _CountingAfterLLMHook(AgentHook):
+    def __init__(self) -> None:
+        self.calls = 0
+        self.contents: list[str | None] = []
+        self.usages: list[dict[str, int]] = []
+
+    async def after_llm_response(self, context: AgentHookContext) -> None:
+        self.calls += 1
+        self.contents.append(context.response.content if context.response else None)
+        self.usages.append(dict(context.usage))
+
+
+def test_agent_loop_extra_hooks_receive_after_llm_response_from_runner(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_agent_loop_extra_hooks_receive_after_llm_response(tmp_path))
+
+
+async def _drive_agent_loop_extra_hooks_receive_after_llm_response(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    trace_hook = TraceCollectorHook(trace_file, instance_id="loop-extra")
+    counter_hook = _CountingAfterLLMHook()
+    provider = _LoopPathProvider(
+        [
+            LLMResponse(
+                content="normal path final",
+                usage={"prompt_tokens": 9, "completion_tokens": 4},
+            )
+        ]
+    )
+    prompt = {"role": "user", "content": "Say hi through the normal loop."}
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path / "state",
+        tool_workspace=tmp_path / "worktree",
+        model="fake-model",
+        max_iterations=1,
+        max_tool_result_chars=1000,
+        hooks=[trace_hook, counter_hook],
+    )
+
+    final_content, tools_used, _messages = await loop._run_agent_loop(
+        [prompt],
+        channel="cli",
+        chat_id="trace-test",
+    )
+    trace_hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    llm_calls = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    ]
+
+    assert final_content == "normal path final"
+    assert tools_used == []
+    assert provider.requests == [[prompt]]
+    assert counter_hook.calls == 1
+    assert counter_hook.contents == ["normal path final"]
+    assert counter_hook.usages == [{"prompt_tokens": 9, "completion_tokens": 4}]
+    assert len(llm_calls) == 1
+    assert llm_calls[0]["agent_id"] == "loop-extra"
+    assert llm_calls[0]["iteration"] == 0
+    assert llm_calls[0]["data"]["messages_in"] == [prompt]
+    assert llm_calls[0]["data"]["raw_response"]["choices"][0]["message"] == {
+        "role": "assistant",
+        "content": "normal path final",
+    }
+    assert llm_calls[0]["data"]["raw_response"]["usage"] == {
+        "prompt_tokens": 9,
+        "completion_tokens": 4,
+    }
 
 def test_trace_collector_emits_llm_call_action(tmp_path: Path) -> None:
     import asyncio
@@ -112,12 +216,21 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
         }
     ]
     stub_tc = _StubToolCall("write_file", {"path": "a.py"})
+    response = _StubResponse(
+        content="",
+        finish_reason="tool_calls",
+        extra={"llm_wall_ts_end": 1000.25},
+    )
     ctx_before_tools = _StubContext(
         iteration=0,
         messages=msgs_after_llm,
+        model_messages=msgs_in,
+        llm_call_start_ts=1000.0,
         tool_calls=[stub_tc],
         usage={"prompt_tokens": 100, "completion_tokens": 20},
+        response=response,
     )
+    await hook.after_llm_response(ctx_before_tools)
     await hook.before_execute_tools(ctx_before_tools)
 
     # Simulate tool result appended to messages
@@ -127,9 +240,11 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
     ctx_after = _StubContext(
         iteration=0,
         messages=msgs_after_tool,
+        model_messages=msgs_in,
+        llm_call_start_ts=1000.0,
         tool_calls=[stub_tc],
         usage={"prompt_tokens": 100, "completion_tokens": 20},
-        response=_StubResponse(content="", finish_reason="tool_calls"),
+        response=response,
     )
     await hook.after_iteration(ctx_after)
     hook.close()
@@ -168,7 +283,186 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
     assert llm["data"]["prompt_tokens"] == 100
     assert llm["data"]["completion_tokens"] == 20
     assert llm["iteration"] == 0
-    assert llm["ts_start"] <= llm["ts_end"]
+    assert llm["ts_start"] == 1000.0
+    assert llm["ts_end"] == 1000.25
+
+
+def test_trace_collector_records_model_visible_messages_not_full_context(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_records_model_visible_messages_not_full_context(tmp_path))
+
+
+async def _drive_records_model_visible_messages_not_full_context(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-snipped-messages")
+
+    model_messages = [
+        {"role": "system", "content": "visible system instruction"},
+        {"role": "user", "content": "VISIBLE_QUESTION_SENTINEL"},
+    ]
+    full_context_messages = [
+        {
+            "role": "system",
+            "content": "full context with SECRET_SYSTEM_SENTINEL",
+        },
+        {"role": "user", "content": "VISIBLE_QUESTION_SENTINEL"},
+        {"role": "user", "content": "SECRET_REFERENCE_SENTINEL"},
+    ]
+    await hook.before_iteration(
+        _StubContext(
+            iteration=0,
+            messages=full_context_messages,
+            model_messages=model_messages,
+        )
+    )
+
+    response = _StubResponse(
+        content="answer",
+        finish_reason="stop",
+        extra={"llm_wall_ts_end": 2000.25},
+    )
+    ctx_after_llm = _StubContext(
+        iteration=0,
+        messages=full_context_messages + [{"role": "assistant", "content": "answer"}],
+        model_messages=model_messages,
+        llm_call_start_ts=2000.0,
+        usage={"prompt_tokens": 7, "completion_tokens": 1},
+        response=response,
+    )
+    await hook.after_llm_response(ctx_after_llm)
+    await hook.after_iteration(ctx_after_llm)
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    llm_call = next(
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    )
+
+    assert llm_call["data"]["messages_in"] == model_messages
+    serialized_messages = json.dumps(llm_call["data"]["messages_in"])
+    assert "VISIBLE_QUESTION_SENTINEL" in serialized_messages
+    assert "SECRET_SYSTEM_SENTINEL" not in serialized_messages
+    assert "SECRET_REFERENCE_SENTINEL" not in serialized_messages
+
+
+def test_trace_collector_records_empty_final_retry_as_distinct_llm_calls(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_records_empty_final_retry_as_distinct_llm_calls(tmp_path))
+
+
+async def _drive_records_empty_final_retry_as_distinct_llm_calls(
+    tmp_path: Path,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-empty-final-retry")
+
+    first_model_messages = [{"role": "user", "content": "first final attempt"}]
+    await hook.before_iteration(
+        _StubContext(iteration=0, messages=first_model_messages)
+    )
+    first_response = _StubResponse(
+        content="",
+        finish_reason="stop",
+        extra={"llm_wall_ts_end": 3000.1},
+    )
+    first_context = _StubContext(
+        iteration=0,
+        messages=first_model_messages + [{"role": "assistant", "content": ""}],
+        model_messages=first_model_messages,
+        llm_call_start_ts=3000.0,
+        usage={"prompt_tokens": 3, "completion_tokens": 0},
+        response=first_response,
+    )
+    await hook.after_llm_response(first_context)
+
+    second_model_messages = [
+        {"role": "user", "content": "first final attempt"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "retry because final answer was empty"},
+    ]
+    second_response = _StubResponse(
+        content="retry succeeded",
+        finish_reason="stop",
+        extra={"llm_wall_ts_end": 3001.2},
+    )
+    second_context = _StubContext(
+        iteration=0,
+        messages=second_model_messages
+        + [{"role": "assistant", "content": "retry succeeded"}],
+        model_messages=second_model_messages,
+        llm_call_start_ts=3001.0,
+        usage={"prompt_tokens": 9, "completion_tokens": 2},
+        response=second_response,
+    )
+    await hook.after_llm_response(second_context)
+    await hook.after_iteration(second_context)
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    llm_calls = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    ]
+
+    assert [record["action_id"] for record in llm_calls] == ["llm_0", "llm_1"]
+    assert [record["iteration"] for record in llm_calls] == [0, 0]
+    assert [record["ts_start"] for record in llm_calls] == [3000.0, 3001.0]
+    assert [record["ts_end"] for record in llm_calls] == [3000.1, 3001.2]
+    assert llm_calls[0]["data"]["messages_in"] == first_model_messages
+    assert llm_calls[1]["data"]["messages_in"] == second_model_messages
+    assert llm_calls[0]["data"]["raw_response"]["choices"][0]["message"]["content"] == ""
+    assert (
+        llm_calls[1]["data"]["raw_response"]["choices"][0]["message"]["content"]
+        == "retry succeeded"
+    )
+
+
+def test_trace_collector_after_iteration_does_not_duplicate_llm_call(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_after_iteration_does_not_duplicate_llm_call(tmp_path))
+
+
+async def _drive_after_iteration_does_not_duplicate_llm_call(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-no-duplicate")
+
+    model_messages = [{"role": "user", "content": "single call"}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=model_messages))
+    response = _StubResponse(
+        content="done",
+        finish_reason="stop",
+        extra={"llm_wall_ts_end": 4000.25},
+    )
+    ctx_after_llm = _StubContext(
+        iteration=0,
+        messages=model_messages + [{"role": "assistant", "content": "done"}],
+        model_messages=model_messages,
+        llm_call_start_ts=4000.0,
+        usage={"prompt_tokens": 2, "completion_tokens": 1},
+        response=response,
+    )
+    await hook.after_llm_response(ctx_after_llm)
+    await hook.after_iteration(ctx_after_llm)
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    llm_calls = [
+        record
+        for record in records
+        if record.get("type") == "action" and record.get("action_type") == "llm_call"
+    ]
+
+    assert len(llm_calls) == 1
+    assert llm_calls[0]["action_id"] == "llm_0"
+    assert llm_calls[0]["data"]["messages_in"] == model_messages
 
 
 def test_trace_collector_emits_tool_resource_timeline(tmp_path: Path) -> None:
@@ -198,9 +492,21 @@ async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
             ],
         }
     ]
-    await hook.before_execute_tools(
-        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    response = _StubResponse(
+        content="",
+        finish_reason="tool_calls",
+        extra={"llm_wall_ts_end": 1100.25},
     )
+    ctx_before_tools = _StubContext(
+        iteration=0,
+        messages=msgs_after_llm,
+        model_messages=msgs_in,
+        llm_call_start_ts=1100.0,
+        tool_calls=[stub_tc],
+        response=response,
+    )
+    await hook.after_llm_response(ctx_before_tools)
+    await hook.before_execute_tools(ctx_before_tools)
     resource_timeline = {
         "version": 1,
         "source": "cgroup_cpu_proc_net",
@@ -234,8 +540,10 @@ async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
         _StubContext(
             iteration=0,
             messages=msgs_after_tool,
+            model_messages=msgs_in,
+            llm_call_start_ts=1100.0,
             tool_calls=[stub_tc],
-            response=_StubResponse(content="", finish_reason="tool_calls"),
+            response=response,
             tool_resource_timelines={stub_tc.id: resource_timeline},
         )
     )
@@ -276,13 +584,21 @@ async def _drive_uses_runner_tool_timings(tmp_path: Path) -> None:
             ],
         }
     ]
-    await hook.before_execute_tools(
-        _StubContext(
-            iteration=0,
-            messages=msgs_after_llm,
-            tool_calls=[first, second],
-        )
+    response = _StubResponse(
+        content="",
+        finish_reason="tool_calls",
+        extra={"llm_wall_ts_end": 1200.25},
     )
+    ctx_before_tools = _StubContext(
+        iteration=0,
+        messages=msgs_after_llm,
+        model_messages=msgs_in,
+        llm_call_start_ts=1200.0,
+        tool_calls=[first, second],
+        response=response,
+    )
+    await hook.after_llm_response(ctx_before_tools)
+    await hook.before_execute_tools(ctx_before_tools)
     msgs_after_tool = msgs_after_llm + [
         {
             "role": "tool",
@@ -301,8 +617,10 @@ async def _drive_uses_runner_tool_timings(tmp_path: Path) -> None:
         _StubContext(
             iteration=0,
             messages=msgs_after_tool,
+            model_messages=msgs_in,
+            llm_call_start_ts=1200.0,
             tool_calls=[first, second],
-            response=_StubResponse(content="", finish_reason="tool_calls"),
+            response=response,
             tool_timings={
                 first.id: {"ts_start": 1000.0, "ts_end": 1000.2, "duration_ms": 200.0},
                 second.id: {"ts_start": 1000.0, "ts_end": 1000.3, "duration_ms": 300.0},
@@ -340,21 +658,53 @@ async def _drive_subagent_hooks_share_trace_file(tmp_path: Path) -> None:
     await parent_hook.before_iteration(
         _StubContext(iteration=0, messages=parent_messages)
     )
+    parent_response = _StubResponse(
+        content="parent",
+        finish_reason="stop",
+        extra={"llm_wall_ts_end": 1300.25},
+    )
+    await parent_hook.after_llm_response(
+        _StubContext(
+            iteration=0,
+            messages=parent_messages + [{"role": "assistant", "content": "parent"}],
+            model_messages=parent_messages,
+            llm_call_start_ts=1300.0,
+            response=parent_response,
+        )
+    )
     await parent_hook.after_iteration(
         _StubContext(
             iteration=0,
             messages=parent_messages + [{"role": "assistant", "content": "parent"}],
-            response=_StubResponse(content="parent", finish_reason="stop"),
+            model_messages=parent_messages,
+            llm_call_start_ts=1300.0,
+            response=parent_response,
         )
     )
 
     child_messages = [{"role": "user", "content": "child work"}]
     await child_hook.before_iteration(_StubContext(iteration=0, messages=child_messages))
+    child_response = _StubResponse(
+        content="child",
+        finish_reason="stop",
+        extra={"llm_wall_ts_end": 1400.25},
+    )
+    await child_hook.after_llm_response(
+        _StubContext(
+            iteration=0,
+            messages=child_messages + [{"role": "assistant", "content": "child"}],
+            model_messages=child_messages,
+            llm_call_start_ts=1400.0,
+            response=child_response,
+        )
+    )
     await child_hook.after_iteration(
         _StubContext(
             iteration=0,
             messages=child_messages + [{"role": "assistant", "content": "child"}],
-            response=_StubResponse(content="child", finish_reason="stop"),
+            model_messages=child_messages,
+            llm_call_start_ts=1400.0,
+            response=child_response,
         )
     )
     parent_hook.close()
@@ -385,15 +735,22 @@ async def _drive_llm_only_iteration(tmp_path: Path) -> None:
     await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
     # Note: before_execute_tools is NOT called when there are no tool calls
     msgs_after_llm = msgs_in + [{"role": "assistant", "content": "hi"}]
-    await hook.after_iteration(
-        _StubContext(
-            iteration=0,
-            messages=msgs_after_llm,
-            tool_calls=[],
-            usage={"prompt_tokens": 5, "completion_tokens": 1},
-            response=_StubResponse(content="hi", finish_reason="stop"),
-        )
+    response = _StubResponse(
+        content="hi",
+        finish_reason="stop",
+        extra={"llm_wall_ts_end": 1500.25},
     )
+    ctx_after_llm = _StubContext(
+        iteration=0,
+        messages=msgs_after_llm,
+        model_messages=msgs_in,
+        llm_call_start_ts=1500.0,
+        tool_calls=[],
+        usage={"prompt_tokens": 5, "completion_tokens": 1},
+        response=response,
+    )
+    await hook.after_llm_response(ctx_after_llm)
+    await hook.after_iteration(ctx_after_llm)
     hook.close()
 
     records = [json.loads(line) for line in trace_file.read_text().strip().splitlines()]
@@ -410,8 +767,8 @@ async def _drive_llm_only_iteration(tmp_path: Path) -> None:
 
     assert len(llm_calls) == 1
     assert len(tool_execs) == 0
-    # ts_end falls back to "now" when before_execute_tools was never called
-    assert llm_calls[0]["ts_end"] >= llm_calls[0]["ts_start"]
+    assert llm_calls[0]["ts_start"] == 1500.0
+    assert llm_calls[0]["ts_end"] == 1500.25
 
 
 def test_trace_collector_records_openrouter_latency_fields(tmp_path: Path) -> None:
@@ -424,9 +781,8 @@ async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
     trace_file = tmp_path / "trace.jsonl"
     hook = TraceCollectorHook(trace_file, instance_id="test-openrouter")
 
-    await hook.before_iteration(
-        _StubContext(iteration=0, messages=[{"role": "user", "content": "Ping"}])
-    )
+    model_messages = [{"role": "user", "content": "Ping"}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=model_messages))
     hook._iter_start_wall = 100.0
     hook._before_exec_wall = 0.0
 
@@ -459,17 +815,19 @@ async def _drive_openrouter_latency_fields(tmp_path: Path) -> None:
             "openrouter_metadata": openrouter_metadata,
         },
     )
-    await hook.after_iteration(
-        _StubContext(
-            iteration=0,
-            messages=[
-                {"role": "user", "content": "Ping"},
-                {"role": "assistant", "content": "pong"},
-            ],
-            usage={"prompt_tokens": 12, "completion_tokens": 3},
-            response=response,
-        )
+    ctx_after_llm = _StubContext(
+        iteration=0,
+        messages=[
+            {"role": "user", "content": "Ping"},
+            {"role": "assistant", "content": "pong"},
+        ],
+        model_messages=model_messages,
+        llm_call_start_ts=100.0,
+        usage={"prompt_tokens": 12, "completion_tokens": 3},
+        response=response,
     )
+    await hook.after_llm_response(ctx_after_llm)
+    await hook.after_iteration(ctx_after_llm)
     await hook.write_summary(success=True, elapsed_s=15.0)
 
     records = [json.loads(line) for line in trace_file.read_text().strip().splitlines()]
@@ -516,9 +874,8 @@ async def _drive_refetches_late_openrouter_metadata(tmp_path: Path) -> None:
     trace_file = tmp_path / "trace.jsonl"
     hook = TraceCollectorHook(trace_file, instance_id="test-openrouter-late")
 
-    await hook.before_iteration(
-        _StubContext(iteration=0, messages=[{"role": "user", "content": "Ping"}])
-    )
+    model_messages = [{"role": "user", "content": "Ping"}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=model_messages))
     hook._iter_start_wall = 100.0
     hook._before_exec_wall = 115.0
 
@@ -561,18 +918,20 @@ async def _drive_refetches_late_openrouter_metadata(tmp_path: Path) -> None:
     extra["_openrouter_metadata_task"] = asyncio.create_task(initial_fetch())
     extra["_openrouter_metadata_refetcher"] = refetch
     response = _StubResponse(content="pong", finish_reason="stop", extra=extra)
-
-    await hook.after_iteration(
-        _StubContext(
-            iteration=0,
-            messages=[
-                {"role": "user", "content": "Ping"},
-                {"role": "assistant", "content": "pong"},
-            ],
-            usage={"prompt_tokens": 12, "completion_tokens": 3},
-            response=response,
-        )
+    ctx_after_llm = _StubContext(
+        iteration=0,
+        messages=[
+            {"role": "user", "content": "Ping"},
+            {"role": "assistant", "content": "pong"},
+        ],
+        model_messages=model_messages,
+        llm_call_start_ts=100.0,
+        usage={"prompt_tokens": 12, "completion_tokens": 3},
+        response=response,
     )
+
+    await hook.after_llm_response(ctx_after_llm)
+    await hook.after_iteration(ctx_after_llm)
     await hook.write_summary(success=True, elapsed_s=15.0)
 
     records = [json.loads(line) for line in trace_file.read_text().strip().splitlines()]

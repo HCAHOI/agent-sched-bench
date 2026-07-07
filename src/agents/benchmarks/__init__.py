@@ -12,6 +12,7 @@ New benchmarks register here by adding an entry to :data:`REGISTRY`.
 from __future__ import annotations
 
 from agents.benchmarks.base import Benchmark, BenchmarkConfig
+from agents.benchmarks.browsecomp import BrowseCompBenchmark
 from agents.benchmarks.swe_bench_verified import SWEBenchVerified
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
 from agents.benchmarks.terminal_bench import TerminalBenchBenchmark
@@ -21,6 +22,7 @@ __all__ = [
     "get_benchmark_class",
     "Benchmark",
     "BenchmarkConfig",
+    "BrowseCompBenchmark",
     "SWEBenchVerified",
     "SWERebenchBenchmark",
     "TerminalBenchBenchmark",
@@ -28,6 +30,7 @@ __all__ = [
 
 #: Maps benchmark slug → concrete :class:`~agents.benchmarks.base.Benchmark` subclass.
 REGISTRY: dict[str, type[Benchmark]] = {
+    "browsecomp": BrowseCompBenchmark,
     "swe-bench-verified": SWEBenchVerified,
     "swe-rebench": SWERebenchBenchmark,
     "terminal-bench": TerminalBenchBenchmark,

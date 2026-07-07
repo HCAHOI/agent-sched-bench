@@ -185,8 +185,12 @@ class AgentRunner:
             context = AgentHookContext(
                 iteration=iteration,
                 messages=self._strip_internal_message_ids_from_messages(messages),
+                model_messages=self._strip_internal_message_ids_from_messages(
+                    messages_for_model
+                ),
             )
             await hook.before_iteration(context)
+            context.llm_call_start_ts = time.time()
             response = await self._request_model(
                 spec, messages_for_model, hook, context
             )
@@ -358,6 +362,13 @@ class AgentRunner:
                 )
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=False)
+                retry_messages_for_model = self._finalization_retry_messages(
+                    messages_for_model
+                )
+                context.model_messages = self._strip_internal_message_ids_from_messages(
+                    retry_messages_for_model
+                )
+                context.llm_call_start_ts = time.time()
                 response = await self._request_finalization_retry(
                     spec, messages_for_model
                 )
@@ -365,8 +376,10 @@ class AgentRunner:
                 self._accumulate_usage(usage, retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
                 context.response = response
-                context.usage = dict(raw_usage)
+                context.usage = dict(retry_usage)
                 context.tool_calls = list(response.tool_calls)
+                await hook.after_llm_response(context)
+                context.usage = dict(raw_usage)
                 clean = hook.finalize_content(context, response.content)
 
             if hook.wants_streaming():
@@ -475,10 +488,17 @@ class AgentRunner:
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
     ):
-        retry_messages = list(messages)
-        retry_messages.append(build_finalization_retry_message())
+        retry_messages = self._finalization_retry_messages(messages)
         kwargs = self._build_request_kwargs(spec, retry_messages, tools=None)
         return await self.provider.chat_with_retry(**kwargs)
+
+    @staticmethod
+    def _finalization_retry_messages(
+        messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        retry_messages = list(messages)
+        retry_messages.append(build_finalization_retry_message())
+        return retry_messages
 
     @staticmethod
     def _usage_dict(usage: dict[str, Any] | None) -> dict[str, int]:

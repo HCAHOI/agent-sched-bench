@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import asyncio
 from concurrent.futures import Future
 from pathlib import Path
@@ -16,6 +17,8 @@ from trace_collect.collector import (
     _ensure_task_source_ready,
     _run_scaffold_tasks,
     _select_tasks,
+    collect_traces,
+    load_completed_ids,
 )
 
 
@@ -1099,3 +1102,348 @@ def test_run_scaffold_tasks_propagates_container_executable(
         ("remove_image", container_executable),
         ("prune_dangling_images", container_executable),
     ]
+
+
+def test_collect_traces_delegates_host_controller_tasks_to_benchmark_runner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_path = tmp_path / "runner-trace" / "trace.jsonl"
+    seen: dict[str, object] = {}
+
+    class FakeRunner:
+        async def run_task(self, task, *, attempt_ctx, prompt_template) -> AttemptResult:
+            seen["task"] = task
+            seen["attempt_runtime_mode"] = attempt_ctx.agent_runtime_mode
+            seen["execution_environment"] = attempt_ctx.execution_environment
+            seen["prompt_template"] = prompt_template
+            _write_trace(trace_path)
+            return AttemptResult(
+                success=True,
+                exit_status="completed",
+                trace_path=trace_path,
+                summary={
+                    "correct": True,
+                    "score": 1,
+                    "grader_status": "completed",
+                    "answer_parse_error": None,
+                },
+            )
+
+    def build_runner(**kwargs):
+        seen["build_runner_kwargs"] = kwargs
+        return FakeRunner()
+
+    benchmark = SimpleNamespace(
+        execution_environment="host",
+        config=SimpleNamespace(
+            slug="browsecomp",
+            harness_split=None,
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        validate_scaffold_support=lambda scaffold: None,
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: None,
+        build_runner=build_runner,
+        load_tasks=lambda: [
+            {
+                "instance_id": "browsecomp-0",
+                "problem_statement": "question",
+                "reference_answer": "answer",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        "trace_collect.collector._prepare_collect_model_backend",
+        lambda **kwargs: SimpleNamespace(
+            provider=SimpleNamespace(api_base="https://eval.example/v1", api_key="key"),
+            provider_name="openrouter",
+            api_base="https://eval.example/v1",
+            api_key="key",
+            trace_run_config={},
+        ),
+    )
+
+    run_dir = asyncio.run(
+        collect_traces(
+            scaffold="deep-research",
+            api_base="https://eval.example/v1",
+            api_key="key",
+            model="openai/gpt-4.1",
+            benchmark=benchmark,
+            provider_name="openrouter",
+            env_key="OPENROUTER_API_KEY",
+            max_iterations=3,
+            sample=None,
+            run_id=str(tmp_path / "run"),
+            container_executable=None,
+            mcp_config="none",
+            min_free_disk_gb=0.001,
+        )
+    )
+
+    build_kwargs = seen["build_runner_kwargs"]
+    assert build_kwargs["scaffold"] == "deep-research"
+    assert build_kwargs["mcp_config"] == "none"
+    assert build_kwargs["mcp_servers"] == {}
+    assert seen["task"] == {
+        "instance_id": "browsecomp-0",
+        "problem_statement": "question",
+        "reference_answer": "answer",
+    }
+    assert seen["attempt_runtime_mode"] == "host_controller"
+    assert seen["execution_environment"] == "host"
+    assert seen["prompt_template"] == "default"
+    results = [json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()]
+    assert results[0]["correct"] is True
+    assert results[0]["score"] == 1
+    assert results[0]["grader_status"] == "completed"
+
+
+def test_run_scaffold_tasks_copies_correctness_fields_from_attempt_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: None,
+    )
+    benchmark = SimpleNamespace(
+        execution_environment="host",
+        config=SimpleNamespace(
+            slug="browsecomp",
+            harness_split=None,
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: None,
+    )
+
+    def make_inner(task: dict):
+        async def inner(ctx) -> AttemptResult:
+            return AttemptResult(
+                success=True,
+                exit_status="completed",
+                trace_path=trace_path,
+                summary={
+                    "correct": False,
+                    "score": 0,
+                    "grader_status": "completed",
+                    "answer_parse_error": None,
+                },
+            )
+
+        return inner
+
+    run_dir = asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "browsecomp-incorrect"}],
+            run_dir=tmp_path / "run",
+            model="openai/gpt-4.1",
+            scaffold="deep-research",
+            container_executable=None,
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=make_inner,
+        )
+    )
+
+    [result] = [
+        json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()
+    ]
+    assert result["success"] is True
+    assert result["correct"] is False
+    assert result["score"] == 0
+    assert result["grader_status"] == "completed"
+    assert result["answer_parse_error"] is None
+
+
+
+def test_resume_preserves_prior_result_rows_and_overwrites_rerun_by_instance_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    terminal_attempt = run_dir / "browsecomp-terminal-wrong" / "attempt_1"
+    terminal_attempt.mkdir(parents=True)
+    (terminal_attempt / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "result_summary": {"exit_code": 0, "exit_status": "completed"},
+                "correct": False,
+                "score": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    prior_terminal_row = {
+        "instance_id": "browsecomp-terminal-wrong",
+        "success": True,
+        "exit_status": "completed",
+        "correct": False,
+        "score": 0,
+        "future_extra_key": {"schema": "preserved"},
+    }
+    prior_rerun_row = {
+        "instance_id": "browsecomp-rerun",
+        "success": True,
+        "exit_status": "completed",
+        "correct": False,
+        "score": 0,
+        "future_extra_key": "old row must be replaced",
+    }
+    (run_dir / "results.jsonl").write_text(
+        "\n".join(
+            json.dumps(row, ensure_ascii=False)
+            for row in (prior_terminal_row, prior_rerun_row)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    trace_path = tmp_path / "trace-source" / "trace.jsonl"
+    _write_trace(trace_path)
+    ran: list[str] = []
+
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: None,
+    )
+
+    async def fake_run_attempt(
+        ctx,
+        *,
+        inner,
+        min_free_disk_gb,
+        container_executable,
+    ) -> AttemptResult:
+        del inner, min_free_disk_gb, container_executable
+        ran.append(ctx.instance_id)
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_path,
+            summary={
+                "correct": True,
+                "score": 1,
+                "grader_status": "completed",
+                "answer_parse_error": None,
+            },
+        )
+
+    monkeypatch.setattr("trace_collect.collector.run_attempt", fake_run_attempt)
+    benchmark = SimpleNamespace(
+        execution_environment="host",
+        config=SimpleNamespace(
+            slug="browsecomp",
+            harness_split=None,
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: None,
+    )
+
+    completed_run_dir = asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[
+                {"instance_id": "browsecomp-terminal-wrong"},
+                {"instance_id": "browsecomp-rerun"},
+            ],
+            run_dir=run_dir,
+            model="openai/gpt-4.1",
+            scaffold="deep-research",
+            container_executable=None,
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=lambda task: lambda ctx: None,
+        )
+    )
+
+    rows = [
+        json.loads(line)
+        for line in (completed_run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    rows_by_id = {row["instance_id"]: row for row in rows}
+    assert ran == ["browsecomp-rerun"]
+    assert rows_by_id["browsecomp-terminal-wrong"] == prior_terminal_row
+    assert rows_by_id["browsecomp-rerun"]["success"] is True
+    assert rows_by_id["browsecomp-rerun"]["correct"] is True
+    assert rows_by_id["browsecomp-rerun"]["score"] == 1
+    assert "future_extra_key" not in rows_by_id["browsecomp-rerun"]
+    assert [row["instance_id"] for row in rows] == [
+        "browsecomp-terminal-wrong",
+        "browsecomp-rerun",
+    ]
+def test_resume_terminal_includes_completed_incorrect_and_budget_exhausted(
+    tmp_path: Path,
+) -> None:
+    completed_incorrect = tmp_path / "run" / "browsecomp-wrong" / "attempt_1"
+    completed_incorrect.mkdir(parents=True)
+    (completed_incorrect / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "result_summary": {"exit_code": 0},
+                "correct": False,
+                "score": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    exhausted = tmp_path / "run" / "browsecomp-budget" / "attempt_1"
+    exhausted.mkdir(parents=True)
+    (exhausted / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "exhausted",
+                "result_summary": {
+                    "exit_code": 1,
+                    "exit_status": "tool_budget_exhausted",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    nonterminal_error = tmp_path / "run" / "browsecomp-error" / "attempt_1"
+    nonterminal_error.mkdir(parents=True)
+    (nonterminal_error / "run_manifest.json").write_text(
+        json.dumps({"status": "error", "result_summary": {"exit_code": 1}}),
+        encoding="utf-8",
+    )
+
+    assert load_completed_ids(tmp_path / "run") == {
+        "browsecomp-wrong",
+        "browsecomp-budget",
+    }

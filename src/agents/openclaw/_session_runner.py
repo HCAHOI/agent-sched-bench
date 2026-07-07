@@ -71,6 +71,7 @@ class _TraceCollectorShared:
     fh: Any
     total_tokens: int = 0
     n_iterations: int = 0
+    llm_call_index: int = 0
     tool_times: dict[str, float] = field(default_factory=dict)
     tool_timeouts: dict[str, int] = field(default_factory=dict)
     flushed: bool = False
@@ -161,47 +162,21 @@ class TraceCollectorHook(AgentHook):
 
     async def before_iteration(self, context: AgentHookContext) -> None:
         self._iter_start_wall = time.time()
-        self._iter_messages_snapshot = self._clone_messages(context.messages)
-        self.emit_event(
-            LLM,
-            "llm_call_start",
-            {"messages_in": self._iter_messages_snapshot},
-            iteration=context.iteration,
+        self._iter_messages_snapshot = self._clone_messages(
+            context.model_messages or context.messages
         )
 
-    async def before_execute_tools(self, context: AgentHookContext) -> None:
-        self._before_exec_wall = time.time()
-        if context.tool_calls:
-            for tc in context.tool_calls:
-                self._tool_start_ts[tc.id] = time.monotonic()
-                is_mcp = tc.name.startswith("mcp_")
-                self.emit_event(
-                    MCP if is_mcp else TOOL,
-                    "tool_exec_start",
-                    {
-                        "tool_name": tc.name,
-                        "args_preview": json.dumps(tc.arguments, ensure_ascii=False)[
-                            :200
-                        ],
-                    },
-                    iteration=context.iteration,
-                )
-
-    async def after_iteration(self, context: AgentHookContext) -> None:
+    async def after_llm_response(self, context: AgentHookContext) -> None:
+        if context.response is None:
+            return
         ts_now = time.time()
-        self._shared.n_iterations += 1
-
         usage = context.usage or {}
         prompt_tokens = usage.get("prompt_tokens", 0)
         completion_tokens = usage.get("completion_tokens", 0)
-        self._shared.total_tokens += prompt_tokens + completion_tokens
-
-        llm_ts_end = (
-            self._resolve_llm_ts_end(context.response)
-            or self._before_exec_wall
-            or ts_now
-        )
-        llm_wall_latency_ms = max(0.0, (llm_ts_end - self._iter_start_wall) * 1000)
+        messages_in = self._clone_messages(context.model_messages or context.messages)
+        llm_ts_start = context.llm_call_start_ts or self._iter_start_wall or ts_now
+        llm_ts_end = self._resolve_llm_ts_end(context.response) or ts_now
+        llm_wall_latency_ms = max(0.0, (llm_ts_end - llm_ts_start) * 1000)
         llm_call_time_ms = self._resolve_llm_call_time_ms(
             context.response,
             llm_wall_latency_ms,
@@ -213,19 +188,19 @@ class TraceCollectorHook(AgentHook):
             completion_tokens=completion_tokens,
         )
         llm_event_data = {
+            "messages_in": messages_in,
+            "ts_start": llm_ts_start,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "llm_latency_ms": round(llm_call_time_ms, 2),
             "llm_call_time_ms": round(llm_call_time_ms, 2),
             "llm_wall_latency_ms": round(llm_wall_latency_ms, 2),
             "llm_timing_source": llm_timing_source,
-            "finish_reason": context.response.finish_reason
-            if context.response
-            else None,
+            "finish_reason": context.response.finish_reason,
             "is_malformed_retry": context.malformed_retry_count > 0,
         }
         llm_action_data: dict[str, Any] = {
-            "messages_in": self._iter_messages_snapshot,
+            "messages_in": messages_in,
             "raw_response": resp_dict,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -248,23 +223,31 @@ class TraceCollectorHook(AgentHook):
             llm_action_data.update(trace_llm_fields)
         self.emit_event(
             LLM,
+            "llm_call_start",
+            {"messages_in": messages_in, "ts_start": llm_ts_start},
+            iteration=context.iteration,
+        )
+        self.emit_event(
+            LLM,
             "llm_call_end",
             llm_event_data,
             iteration=context.iteration,
         )
+        action_id = f"llm_{self._shared.llm_call_index}"
+        self._shared.llm_call_index += 1
         llm_action = TraceAction(
             action_type="llm_call",
-            action_id=f"llm_{context.iteration}",
+            action_id=action_id,
             agent_id=self.agent_id,
             program_id=self.program_id,
             instance_id=self.instance_id,
             iteration=context.iteration,
-            ts_start=self._iter_start_wall,
+            ts_start=llm_ts_start,
             ts_end=llm_ts_end,
             data=llm_action_data,
         )
         self._write_action(llm_action)
-        if context.response and getattr(context.response, "extra", None):
+        if getattr(context.response, "extra", None):
             if context.response.extra.get("_openrouter_metadata_task") is not None:
                 self._shared.pending_llm_records.append(
                     {
@@ -274,6 +257,33 @@ class TraceCollectorHook(AgentHook):
                         "raw_response": resp_dict,
                     }
                 )
+
+    async def before_execute_tools(self, context: AgentHookContext) -> None:
+        self._before_exec_wall = time.time()
+        if context.tool_calls:
+            for tc in context.tool_calls:
+                self._tool_start_ts[tc.id] = time.monotonic()
+                is_mcp = tc.name.startswith("mcp_")
+                self.emit_event(
+                    MCP if is_mcp else TOOL,
+                    "tool_exec_start",
+                    {
+                        "tool_name": tc.name,
+                        "args_preview": json.dumps(tc.arguments, ensure_ascii=False)[
+                            :200
+                        ],
+                    },
+                    iteration=context.iteration,
+                )
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        self._shared.n_iterations += 1
+
+        usage = context.usage or {}
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        self._shared.total_tokens += prompt_tokens + completion_tokens
+
         self._before_exec_wall = 0.0
         self._iter_messages_snapshot = None
 

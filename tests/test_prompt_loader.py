@@ -57,7 +57,7 @@ def test_template_without_placeholder_raises_value_error(
     (fake_root / "demo" / "default.md").write_text("no placeholder here", encoding="utf-8")
     monkeypatch.setattr("trace_collect.prompt_loader._PROMPTS_ROOT", fake_root)
 
-    with pytest.raises(ValueError, match="missing the required"):
+    with pytest.raises(ValueError, match=r"missing required placeholder"):
         load_prompt_template("default", "demo")
 
 
@@ -66,9 +66,69 @@ def test_render_substitutes_placeholder() -> None:
     assert rendered == "before the task after"
 
 
+def test_load_prompt_template_default_requires_task_placeholder(
+    tmp_path, monkeypatch
+) -> None:
+    fake_root = tmp_path / "prompts"
+    (fake_root / "browsecomp").mkdir(parents=True)
+    (fake_root / "browsecomp" / "grader.md").write_text(
+        "{{question}} {{model_response}} {{reference_answer}}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("trace_collect.prompt_loader._PROMPTS_ROOT", fake_root)
+
+    with pytest.raises(ValueError, match=r"\{\{task\}\}"):
+        load_prompt_template("grader", "browsecomp")
+
+
+def test_load_prompt_template_accepts_grader_placeholder_contract(
+    tmp_path, monkeypatch
+) -> None:
+    fake_root = tmp_path / "prompts"
+    (fake_root / "browsecomp").mkdir(parents=True)
+    (fake_root / "browsecomp" / "grader.md").write_text(
+        "{{question}} {{model_response}} {{reference_answer}}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("trace_collect.prompt_loader._PROMPTS_ROOT", fake_root)
+
+    assert load_prompt_template(
+        "grader",
+        "browsecomp",
+        required_placeholders=(
+            "{{question}}",
+            "{{model_response}}",
+            "{{reference_answer}}",
+        ),
+    ) == "{{question}} {{model_response}} {{reference_answer}}"
+
+
+def test_load_prompt_template_reports_missing_grader_placeholders(
+    tmp_path, monkeypatch
+) -> None:
+    fake_root = tmp_path / "prompts"
+    (fake_root / "browsecomp").mkdir(parents=True)
+    (fake_root / "browsecomp" / "grader.md").write_text(
+        "{{question}} {{model_response}}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("trace_collect.prompt_loader._PROMPTS_ROOT", fake_root)
+
+    with pytest.raises(ValueError, match=r"\{\{reference_answer\}\}"):
+        load_prompt_template(
+            "grader",
+            "browsecomp",
+            required_placeholders=(
+                "{{question}}",
+                "{{model_response}}",
+                "{{reference_answer}}",
+            ),
+        )
+
+
 def test_real_prompt_dirs_match_committed_layout() -> None:
     # Regression guard: if any per-benchmark dir disappears or is renamed,
     # the corresponding benchmark plugin's runtime load will break. Pin the
     # required dirs explicitly so the failure surfaces here, not in a run.
-    for slug in ("swe_rebench", "swe_bench_verified", "terminal_bench"):
+    for slug in ("browsecomp", "swe_rebench", "swe_bench_verified", "terminal_bench"):
         assert (_PROMPTS_ROOT / slug).is_dir(), f"missing prompt dir: {slug}"

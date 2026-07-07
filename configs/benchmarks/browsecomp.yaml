@@ -1,0 +1,37 @@
+slug: browsecomp
+display_name: "BrowseComp"
+trace_root: traces/browsecomp
+default_max_iterations: 100
+selection_n: 32
+selection_seed: 42
+default_prompt_template: default
+exclude_lite: false
+extras:
+  task_source_kind: browsecomp_official_csv
+  csv_url: https://openaipublic.blob.core.windows.net/simple-evals/browse_comp_test_set.csv
+  csv_sha256: 7b24471cd5b3eb2a46830a14802b5c029ea62f488ff75a0f88af7923d1454abf
+  expected_schema: ["problem", "answer", "problem_topic", "canary"]
+  expected_row_count: 1266
+  csv_cache_dir: data/browsecomp
+  encrypted: true
+  id_field: _row_index
+  question_field: problem
+  answer_field: answer
+  topic_field: problem_topic
+  canary_field: canary
+  scorer_template: grader
+  scorer_provider: openrouter
+  scorer_model: openai/gpt-4.1
+  scorer_temperature: 0.0
+  web_search_provider: brave
+  web_search_api_key_env: BRAVE_API_KEY
+  web_search_fallback_provider: duckduckgo
+  web_fetch_provider: jina
+  web_fetch_api_key_env: JINA_API_KEY
+  web_fetch_fallback_provider: readability
+  max_search_calls: 20
+  max_fetch_calls: 20
+  max_concurrent_research_units: 1
+  tool_result_storage: required_spill_artifacts
+  tool_result_preview_chars: 1200
+  sensitive_artifacts: true

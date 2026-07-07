@@ -792,7 +792,14 @@ async def run_attempt(
         "repo": ctx.task.get("repo"),
         "docker_image": ctx.source_image,
     }
-    for key in ("task_source_kind", "task_source_id", "task_source_path"):
+    for key in (
+        "task_source_kind",
+        "task_source_id",
+        "task_source_path",
+        "task_source_sha256",
+        "task_source_schema",
+        "task_source_row_count",
+    ):
         if key in ctx.task:
             task_payload[key] = ctx.task.get(key)
 

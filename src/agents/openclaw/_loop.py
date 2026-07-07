@@ -142,6 +142,10 @@ class _LoopHookChain(AgentHook):
         await self._primary.on_stream_end(context, resuming=resuming)
         await self._extras.on_stream_end(context, resuming=resuming)
 
+    async def after_llm_response(self, context: AgentHookContext) -> None:
+        await self._primary.after_llm_response(context)
+        await self._extras.after_llm_response(context)
+
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         await self._primary.before_execute_tools(context)
         await self._extras.before_execute_tools(context)

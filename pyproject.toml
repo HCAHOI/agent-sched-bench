@@ -21,6 +21,8 @@ dependencies = [
   "json-repair>=0.30,<1.0",
   "tiktoken>=0.7,<1.0",
   "terminal-bench>=0.2.18; python_version >= '3.12'",
+  "ddgs>=9.14.4,<10.0",
+  "readability-lxml>=0.8.4.1,<1.0",
 ]
 
 [project.optional-dependencies]
