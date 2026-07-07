@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from harness.container_image_prep import clear_image_cache  # noqa: E402
 from harness.disk_preflight import DiskSpaceError  # noqa: E402
 from trace_collect.attempt_pipeline import (  # noqa: E402
+    AttemptArtifact,
     AttemptContext,
     AttemptResult,
     configure_task_container_apt_mirror,
@@ -201,6 +202,226 @@ def test_run_attempt_success_writes_all_six_files(tmp_path: Path) -> None:
     trace = (ctx.attempt_dir / "trace.jsonl").read_text()
     assert "trace_metadata" in trace
 
+
+
+def test_run_attempt_copies_external_file_artifact(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    ctx.source_image = None
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    score_file = tmp_path / "external" / "score.json"
+    _write_trace(trace_source)
+    score_file.parent.mkdir(parents=True, exist_ok=True)
+    score_file.write_text('{"score": 1.0}\n', encoding="utf-8")
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+            artifacts=[AttemptArtifact("score_json", score_file)],
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable=None,
+            disable_resource_monitoring=True,
+        )
+    )
+
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    results = json.loads((ctx.attempt_dir / "results.json").read_text())
+    assert manifest["artifacts"]["score_json"] == "artifacts/score_json/score.json"
+    assert manifest["artifacts"]["trace_jsonl"] == "trace.jsonl"
+    assert results["artifacts"]["score_json"] == "artifacts/score_json/score.json"
+    assert (
+        ctx.attempt_dir / "artifacts" / "score_json" / "score.json"
+    ).read_text(encoding="utf-8") == '{"score": 1.0}\n'
+
+
+def test_run_attempt_copies_external_directory_and_references_attempt_directory_artifact(
+    tmp_path: Path,
+) -> None:
+    ctx = _make_ctx(tmp_path)
+    ctx.source_image = None
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    external_dir = tmp_path / "external" / "scores"
+    internal_dir = ctx.attempt_dir / "simulate" / "manifest"
+    _write_trace(trace_source)
+    external_dir.mkdir(parents=True)
+    (external_dir / "scores.json").write_text('{"pass": true}\n', encoding="utf-8")
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        internal_dir.mkdir(parents=True)
+        (internal_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+            artifacts=[
+                AttemptArtifact("score_dir", external_dir),
+                AttemptArtifact("simulate_manifest_dir", internal_dir),
+            ],
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable=None,
+            disable_resource_monitoring=True,
+        )
+    )
+
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    results = json.loads((ctx.attempt_dir / "results.json").read_text())
+    assert manifest["artifacts"]["score_dir"] == "artifacts/score_dir"
+    assert (
+        ctx.attempt_dir / "artifacts" / "score_dir" / "scores.json"
+    ).read_text(encoding="utf-8") == '{"pass": true}\n'
+    assert manifest["artifacts"]["simulate_manifest_dir"] == "simulate/manifest"
+    assert results["artifacts"] == {
+        "score_dir": "artifacts/score_dir",
+        "simulate_manifest_dir": "simulate/manifest",
+    }
+
+
+def test_run_attempt_fails_closed_for_missing_required_artifact(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    ctx.source_image = None
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    missing_score = tmp_path / "missing" / "score.json"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+            artifacts=[AttemptArtifact("score_json", missing_score)],
+        )
+
+    with pytest.raises(FileNotFoundError, match="required artifact missing: score_json"):
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=0.001,
+                container_executable=None,
+                disable_resource_monitoring=True,
+            )
+        )
+
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    results = json.loads((ctx.attempt_dir / "results.json").read_text())
+    assert manifest["status"] == "error"
+    assert manifest["result_summary"]["exit_code"] == 1
+    assert "required artifact missing: score_json" in manifest["result_summary"]["error"]
+    assert results["success"] is False
+
+
+def test_run_attempt_rejects_reserved_artifact_name(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    ctx.source_image = None
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    score_file = tmp_path / "external" / "score.json"
+    _write_trace(trace_source)
+    score_file.parent.mkdir(parents=True, exist_ok=True)
+    score_file.write_text('{"score": 1.0}\n', encoding="utf-8")
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+            artifacts=[AttemptArtifact("trace_jsonl", score_file)],
+        )
+
+    with pytest.raises(RuntimeError, match="artifact name is reserved: trace_jsonl"):
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=0.001,
+                container_executable=None,
+                disable_resource_monitoring=True,
+            )
+        )
+
+
+def test_run_attempt_rejects_artifact_storage_collision(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    ctx.source_image = None
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    first_score = tmp_path / "external" / "first" / "score.json"
+    second_score = tmp_path / "external" / "second" / "score.json"
+    _write_trace(trace_source)
+    first_score.parent.mkdir(parents=True, exist_ok=True)
+    second_score.parent.mkdir(parents=True, exist_ok=True)
+    first_score.write_text('{"score": 1.0}\n', encoding="utf-8")
+    second_score.write_text('{"score": 0.0}\n', encoding="utf-8")
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+            artifacts=[
+                AttemptArtifact("score/json", first_score),
+                AttemptArtifact("score-json", second_score),
+            ],
+        )
+
+    with pytest.raises(RuntimeError, match="artifact storage path collision"):
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=0.001,
+                container_executable=None,
+                disable_resource_monitoring=True,
+            )
+        )
+
+
+def test_run_attempt_rejects_internal_artifacts_storage_collision(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    ctx.source_image = None
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    internal_score = ctx.attempt_dir / "artifacts" / "score-json" / "old.json"
+    external_score = tmp_path / "external" / "score.json"
+    _write_trace(trace_source)
+    external_score.parent.mkdir(parents=True, exist_ok=True)
+    external_score.write_text('{"score": 0.0}\n', encoding="utf-8")
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        internal_score.parent.mkdir(parents=True, exist_ok=True)
+        internal_score.write_text('{"score": 1.0}\n', encoding="utf-8")
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+            artifacts=[
+                AttemptArtifact("existing_score", internal_score),
+                AttemptArtifact("score/json", external_score),
+            ],
+        )
+
+    with pytest.raises(RuntimeError, match="artifact storage path collision"):
+        asyncio.run(
+            run_attempt(
+                ctx,
+                inner=inner,
+                min_free_disk_gb=0.001,
+                container_executable=None,
+                disable_resource_monitoring=True,
+            )
+        )
+
+    assert internal_score.read_text(encoding="utf-8") == '{"score": 1.0}\n'
 
 def test_run_attempt_inner_exception_writes_error_manifest(tmp_path: Path) -> None:
     ctx = _make_ctx(tmp_path)

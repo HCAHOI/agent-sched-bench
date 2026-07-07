@@ -13,13 +13,16 @@ from trace_collect.simulate_outputs import _make_trace_action, _replay_agent_id_
 from trace_collect.simulate_types import (
     LLMTimingConfig,
     PreparedTraceSession,
+    LoadedTraceSession,
     SimulateError,
+    ReplayTaskStats,
     WorkerTraceInput,
 )
 from trace_collect.simulate_utils import _resolve_prep_concurrency
 from trace_collect.simulator import (
     _chunk_worker_inputs_by_concurrency,
     _partition_worker_inputs,
+    _run_cloud_model_queue,
     _run_worker_wave_async,
     _source_exec_timeout_s,
     simulate,
@@ -475,6 +478,91 @@ def test_worker_partition_helpers_preserve_order_and_limits() -> None:
         ["task-2"],
     ]
 
+
+
+def test_cloud_model_dependency_queue_releases_child_after_parent_finalizes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def loaded(task_id: str, *, manifest_index: int, depends_on: tuple[str, ...] = ()) -> LoadedTraceSession:
+        return LoadedTraceSession(
+            source_trace=tmp_path / f"{task_id}.jsonl",
+            task_source=tmp_path / "tasks.json",
+            task_instance_id=task_id,
+            source_action_agent_id=task_id,
+            run_instance_id=task_id,
+            manifest_index=manifest_index,
+            scaffold="generic",
+            metadata={"execution_environment": "host"},
+            summary=None,
+            task={"instance_id": task_id, "problem_statement": task_id},
+            actions=[],
+            iterations={},
+            depends_on=depends_on,
+        )
+
+    events: list[str] = []
+    parent = loaded("parent", manifest_index=1)
+    child = loaded("child", manifest_index=0, depends_on=("parent",))
+
+    async def fake_prepare(loaded_session: LoadedTraceSession, **_kwargs) -> PreparedTraceSession:
+        return PreparedTraceSession(loaded=loaded_session, container=None)
+
+    async def fake_replay(prepared: PreparedTraceSession, **_kwargs) -> ReplayTaskStats:
+        loaded_session = prepared.loaded
+        events.append(f"start:{loaded_session.task_instance_id}")
+        if loaded_session.task_instance_id == "parent":
+            await asyncio.sleep(0.01)
+        events.append(f"done:{loaded_session.task_instance_id}")
+        return ReplayTaskStats(
+            agent_id=loaded_session.agent_id,
+            run_instance_id=loaded_session.run_instance_id,
+            source_agent_id=loaded_session.source_action_agent_id,
+            manifest_index=loaded_session.manifest_index,
+            label=loaded_session.label,
+            source_trace=str(loaded_session.source_trace),
+            success=True,
+            elapsed_s=0.0,
+            action_count=0,
+            llm_call_count=0,
+            tool_exec_count=0,
+            depends_on=loaded_session.depends_on,
+        )
+
+    async def fake_finalize(prepared: PreparedTraceSession) -> None:
+        events.append(f"finalize:{prepared.loaded.task_instance_id}")
+
+    monkeypatch.setattr("trace_collect.simulator._prepare_replay_session", fake_prepare)
+    monkeypatch.setattr("trace_collect.simulator._replay_cloud_model_session", fake_replay)
+    monkeypatch.setattr("trace_collect.simulator._finalize_prepared_session", fake_finalize)
+
+    _prepared, task_stats = asyncio.run(
+        _run_cloud_model_queue(
+            [child, parent],
+            output_path=tmp_path / "out",
+            trace_logger=object(),
+            concurrency=2,
+            container_executable=None,
+            network_mode="host",
+            container_resource_recorder=None,
+            replay_speed=1.0,
+            llm_timing=LLMTimingConfig(),
+            command_timeout_s=1.0,
+            warmup_skip_iterations=0,
+        )
+    )
+
+    stats_by_task = {stat.agent_id: stat for stat in task_stats}
+    assert stats_by_task["child"].depends_on == ("parent",)
+
+    assert events == [
+        "start:parent",
+        "done:parent",
+        "finalize:parent",
+        "start:child",
+        "done:child",
+        "finalize:child",
+    ]
 
 def test_resolve_prep_concurrency_preserves_default_limit() -> None:
     assert _resolve_prep_concurrency(0, 640) == 20

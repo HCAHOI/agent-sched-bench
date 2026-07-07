@@ -25,6 +25,285 @@ def _write_manifest(path: Path, entries: list[str | dict[str, object]]) -> Path:
 def _single_trace_manifest(tmp_path: Path, trace_path: Path) -> Path:
     return _write_manifest(tmp_path / "manifest.yaml", [str(trace_path)])
 
+
+def _write_host_trace(path: Path, task_id: str) -> Path:
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "trace_format_version": 5,
+                        "scaffold": "generic",
+                        "execution_environment": "host",
+                        "instance_id": task_id,
+                        "model": "dummy",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "tool_exec",
+                        "action_id": f"tool-{task_id}",
+                        "agent_id": task_id,
+                        "iteration": 0,
+                        "ts_start": 1.0,
+                        "ts_end": 1.0,
+                        "data": {"tool_name": "message", "success": True, "duration_ms": 0.0},
+                    }
+                ),
+                json.dumps({"type": "summary", "agent_id": task_id, "success": True}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_tasks(path: Path, *tasks: dict[str, object]) -> Path:
+    path.write_text(json.dumps(list(tasks)) + "\n", encoding="utf-8")
+    return path
+
+
+def test_simulate_manifest_parses_depends_on(tmp_path: Path) -> None:
+    parent_trace = _write_host_trace(tmp_path / "parent.jsonl", "parent")
+    child_trace = _write_host_trace(tmp_path / "child.jsonl", "child")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "parent", "problem_statement": "parent"},
+        {"instance_id": "child", "problem_statement": "child"},
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "defaults:",
+                f"  task_source: {json.dumps(str(task_source))}",
+                "traces:",
+                f"  - trace: {json.dumps(str(parent_trace))}",
+                f"  - trace: {json.dumps(str(child_trace))}",
+                "    depends_on:",
+                "      - parent",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from trace_collect.simulate_manifest import _load_simulate_manifest
+
+    entries = _load_simulate_manifest(manifest, default_task_source=None)
+
+    assert entries[0].depends_on == ()
+    assert entries[1].depends_on == ("parent",)
+
+
+def test_simulate_manifest_rejects_invalid_depends_on(tmp_path: Path) -> None:
+    trace_path = _write_host_trace(tmp_path / "trace.jsonl", "task-a")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "task-a", "problem_statement": "task"},
+    )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "traces:",
+                "  -",
+                f"    trace: {json.dumps(str(trace_path))}",
+                f"    task_source: {json.dumps(str(task_source))}",
+                "    depends_on: task-b",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from trace_collect.simulate_manifest import _load_simulate_manifest
+
+    with pytest.raises(SimulateError, match="depends_on must be a list of strings"):
+        _load_simulate_manifest(manifest, default_task_source=None)
+
+
+def test_load_trace_session_combines_manifest_and_task_source_depends_on(
+    tmp_path: Path,
+) -> None:
+    trace_path = _write_host_trace(tmp_path / "child.jsonl", "child")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {
+            "instance_id": "child",
+            "problem_statement": "child",
+            "depends_on": ["task-parent"],
+        },
+    )
+
+    from trace_collect.simulate_manifest import _load_trace_session
+
+    loaded = _load_trace_session(
+        trace_path,
+        task_source,
+        manifest_index=0,
+        manifest_depends_on=("manifest-parent", "task-parent"),
+    )
+
+    assert loaded.depends_on == ("manifest-parent", "task-parent")
+
+
+def test_simulator_rejects_missing_depends_on_task(tmp_path: Path) -> None:
+    trace_path = _write_host_trace(tmp_path / "child.jsonl", "child")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "child", "problem_statement": "child", "depends_on": ["parent"]},
+    )
+
+    with pytest.raises(SimulateError, match="depends on missing task ids"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                model="dummy",
+            )
+        )
+
+
+def test_simulator_rejects_self_depends_on_task(tmp_path: Path) -> None:
+    trace_path = _write_host_trace(tmp_path / "task-a.jsonl", "task-a")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "task-a", "problem_statement": "task", "depends_on": ["task-a"]},
+    )
+
+    with pytest.raises(SimulateError, match="depends on itself"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                model="dummy",
+            )
+        )
+
+
+def test_simulator_rejects_cyclic_depends_on_tasks(tmp_path: Path) -> None:
+    trace_a = _write_host_trace(tmp_path / "task-a.jsonl", "task-a")
+    trace_b = _write_host_trace(tmp_path / "task-b.jsonl", "task-b")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "task-a", "problem_statement": "a", "depends_on": ["task-b"]},
+        {"instance_id": "task-b", "problem_statement": "b", "depends_on": ["task-a"]},
+    )
+    manifest = _write_manifest(tmp_path / "manifest.yaml", [str(trace_a), str(trace_b)])
+
+    with pytest.raises(SimulateError, match="Dependency cycle detected"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                model="dummy",
+            )
+        )
+
+def test_simulator_outputs_depends_on_metadata(tmp_path: Path) -> None:
+    trace_parent = _write_host_trace(tmp_path / "parent.jsonl", "parent")
+    trace_child = _write_host_trace(tmp_path / "child.jsonl", "child")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "parent", "problem_statement": "parent"},
+        {"instance_id": "child", "problem_statement": "child", "depends_on": ["parent"]},
+    )
+    manifest = _write_manifest(
+        tmp_path / "manifest.yaml",
+        [str(trace_parent), str(trace_child)],
+    )
+    output_dir = tmp_path / "out"
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=manifest,
+            task_source=task_source,
+            output_dir=output_dir,
+            model="dummy",
+            concurrency=2,
+        )
+    )
+
+    records = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    metadata = records[0]
+    child_entry = next(
+        entry
+        for entry in metadata["source_trace_entries"]
+        if entry["task_instance_id"] == "child"
+    )
+    throughput = json.loads((output_dir / "throughput_summary.json").read_text())
+    child_task = next(
+        task for task in throughput["tasks"] if task["agent_id"] == "child"
+    )
+
+    assert child_entry["depends_on"] == ["parent"]
+    assert child_task["depends_on"] == ["parent"]
+
+def test_simulator_rejects_depends_on_with_multiple_workers(tmp_path: Path) -> None:
+    trace_parent = _write_host_trace(tmp_path / "parent.jsonl", "parent")
+    trace_child = _write_host_trace(tmp_path / "child.jsonl", "child")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "parent", "problem_statement": "parent"},
+        {"instance_id": "child", "problem_statement": "child", "depends_on": ["parent"]},
+    )
+    manifest = _write_manifest(
+        tmp_path / "manifest.yaml",
+        [str(trace_parent), str(trace_child)],
+    )
+
+    with pytest.raises(SimulateError, match="requires workers=1"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                model="dummy",
+                concurrency=2,
+                workers=2,
+            )
+        )
+
+
+def test_simulator_rejects_duplicate_task_ids_when_depends_on_exists(
+    tmp_path: Path,
+) -> None:
+    trace_a = _write_host_trace(tmp_path / "task-a.jsonl", "task-a")
+    trace_b = _write_host_trace(tmp_path / "task-b.jsonl", "task-b")
+    task_source = _write_tasks(
+        tmp_path / "tasks.json",
+        {"instance_id": "task-a", "problem_statement": "a", "depends_on": ["task-b"]},
+        {"instance_id": "task-b", "problem_statement": "b"},
+    )
+    manifest = _write_manifest(
+        tmp_path / "manifest.yaml",
+        [str(trace_a), str(trace_a), str(trace_b)],
+    )
+
+    with pytest.raises(SimulateError, match="ambiguous with duplicate task ids"):
+        asyncio.run(
+            simulate(
+                manifest=manifest,
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                model="dummy",
+            )
+        )
+
+
 def test_terminal_bench_trace_identity_split_loads_action_owner_actions(
     tmp_path: Path,
 ) -> None:

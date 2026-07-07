@@ -701,6 +701,99 @@ async def _sleep_and_measure(expected_s: float, *, phase: str) -> SleepDrift | N
     return SleepDrift(phase=phase, expected_s=expected_s, actual_s=actual_s)
 
 
+def _has_session_dependencies(sessions: list[LoadedTraceSession]) -> bool:
+    return any(session.depends_on for session in sessions)
+
+
+def _validate_session_dependencies(sessions: list[LoadedTraceSession]) -> None:
+    if not _has_session_dependencies(sessions):
+        return
+
+    task_counts: dict[str, int] = {}
+    for session in sessions:
+        task_counts[session.task_instance_id] = (
+            task_counts.get(session.task_instance_id, 0) + 1
+        )
+    duplicate_task_ids = sorted(
+        task_id for task_id, count in task_counts.items() if count > 1
+    )
+    if duplicate_task_ids:
+        raise SimulateError(
+            "Dependency metadata is ambiguous with duplicate task ids: "
+            + ", ".join(repr(task_id) for task_id in duplicate_task_ids)
+        )
+
+    known_task_ids = set(task_counts)
+    graph: dict[str, tuple[str, ...]] = {}
+    for session in sessions:
+        missing = [dep for dep in session.depends_on if dep not in known_task_ids]
+        if missing:
+            raise SimulateError(
+                f"Task {session.task_instance_id!r} depends on missing task ids: "
+                + ", ".join(repr(dep) for dep in missing)
+            )
+        if session.task_instance_id in session.depends_on:
+            raise SimulateError(
+                f"Task {session.task_instance_id!r} depends on itself"
+            )
+        graph[session.task_instance_id] = session.depends_on
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    stack: list[str] = []
+
+    def visit(task_id: str) -> None:
+        if task_id in visited:
+            return
+        if task_id in visiting:
+            cycle_start = stack.index(task_id)
+            cycle = stack[cycle_start:] + [task_id]
+            raise SimulateError("Dependency cycle detected: " + " -> ".join(cycle))
+        visiting.add(task_id)
+        stack.append(task_id)
+        for dependency in graph[task_id]:
+            visit(dependency)
+        stack.pop()
+        visiting.remove(task_id)
+        visited.add(task_id)
+
+    for task_id in graph:
+        visit(task_id)
+
+
+def _ready_worker_input_batches(
+    worker_inputs: list[WorkerTraceInput],
+    *,
+    batch_size: int,
+) -> list[list[WorkerTraceInput]]:
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    if not any(entry.depends_on for entry in worker_inputs):
+        return [
+            worker_inputs[index : index + batch_size]
+            for index in range(0, len(worker_inputs), batch_size)
+        ]
+
+    remaining = list(worker_inputs)
+    completed: set[str] = set()
+    batches: list[list[WorkerTraceInput]] = []
+    while remaining:
+        ready = [
+            entry for entry in remaining if set(entry.depends_on).issubset(completed)
+        ]
+        if not ready:
+            raise SimulateError(
+                "No dependency-ready worker inputs remain; "
+                "dependency validation should have failed"
+            )
+        batch = ready[:batch_size]
+        batches.append(batch)
+        batch_ids = {id(entry) for entry in batch}
+        remaining = [entry for entry in remaining if id(entry) not in batch_ids]
+        completed.update(entry.task_instance_id for entry in batch)
+    return batches
+
+
 def _validate_loaded_sessions(
     sessions: list[LoadedTraceSession],
     *,
@@ -713,6 +806,7 @@ def _validate_loaded_sessions(
     if not sessions:
         raise SimulateError("No trace sessions were loaded")
     _validate_llm_timing_config(llm_timing, replay_speed=replay_speed)
+    _validate_session_dependencies(sessions)
     for session in sessions:
         if not _requires_task_container(session):
             continue
@@ -1863,9 +1957,17 @@ async def _run_cloud_model_queue(
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
 
-    queue: asyncio.Queue[LoadedTraceSession] = asyncio.Queue()
+    queue: asyncio.Queue[LoadedTraceSession | None] = asyncio.Queue()
+    released_session_ids: set[int] = set()
+    completed_task_ids: set[str] = set()
+    completed_session_count = 0
+    children_by_dependency: dict[str, list[LoadedTraceSession]] = {}
     for loaded in loaded_sessions:
-        queue.put_nowait(loaded)
+        for dependency in loaded.depends_on:
+            children_by_dependency.setdefault(dependency, []).append(loaded)
+        if not loaded.depends_on:
+            queue.put_nowait(loaded)
+            released_session_ids.add(id(loaded))
 
     prepared_sessions: list[PreparedTraceSession] = []
     task_stats: list[ReplayTaskStats] = []
@@ -1873,55 +1975,84 @@ async def _run_cloud_model_queue(
     worker_count = min(concurrency, len(loaded_sessions))
     first_error: BaseException | None = None
 
-    async def worker(worker_index: int) -> None:
-        nonlocal first_error
-        while True:
-            if first_error is not None:
-                return
-            try:
-                loaded = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return
+    def stop_workers() -> None:
+        for _ in range(worker_count):
+            queue.put_nowait(None)
 
-            prepared: PreparedTraceSession | None = None
-            stats: ReplayTaskStats | None = None
+    def release_ready_children(parent_task_id: str) -> None:
+        for child in children_by_dependency.get(parent_task_id, []):
+            if id(child) in released_session_ids:
+                continue
+            if all(dependency in completed_task_ids for dependency in child.depends_on):
+                queue.put_nowait(child)
+                released_session_ids.add(id(child))
+
+    async def worker(worker_index: int) -> None:
+        nonlocal completed_session_count, first_error
+        while True:
+            loaded = await queue.get()
             try:
-                logger.info(
-                    "Worker %d replaying %s (%d queued)",
-                    worker_index,
-                    loaded.agent_id,
-                    queue.qsize(),
-                )
-                prepared = await _prepare_replay_session(
-                    loaded,
-                    output_path=output_path,
-                    container_executable=container_executable,
-                    network_mode=network_mode,
-                    container_resource_recorder=container_resource_recorder,
-                    fixed_images_by_source=fixed_images_by_source,
-                    resource_monitoring_enabled=resource_monitoring_enabled,
-                    memory_bandwidth_enabled=memory_bandwidth_enabled,
-                    monitoring_policy=monitoring_policy,
-                )
-                stats = await _replay_cloud_model_session(
-                    prepared,
-                    trace_logger=trace_logger,
-                    replay_speed=replay_speed,
-                    llm_timing=llm_timing,
-                    command_timeout_s=command_timeout_s,
-                    warmup_skip_iterations=warmup_skip_iterations,
-                )
-            except Exception as exc:
+                if loaded is None:
+                    return
+                if first_error is not None:
+                    continue
+
+                prepared: PreparedTraceSession | None = None
+                stats: ReplayTaskStats | None = None
+                session_error: BaseException | None = None
+                try:
+                    logger.info(
+                        "Worker %d replaying %s (%d ready)",
+                        worker_index,
+                        loaded.agent_id,
+                        queue.qsize(),
+                    )
+                    prepared = await _prepare_replay_session(
+                        loaded,
+                        output_path=output_path,
+                        container_executable=container_executable,
+                        network_mode=network_mode,
+                        container_resource_recorder=container_resource_recorder,
+                        fixed_images_by_source=fixed_images_by_source,
+                        resource_monitoring_enabled=resource_monitoring_enabled,
+                        memory_bandwidth_enabled=memory_bandwidth_enabled,
+                        monitoring_policy=monitoring_policy,
+                    )
+                    stats = await _replay_cloud_model_session(
+                        prepared,
+                        trace_logger=trace_logger,
+                        replay_speed=replay_speed,
+                        llm_timing=llm_timing,
+                        command_timeout_s=command_timeout_s,
+                        warmup_skip_iterations=warmup_skip_iterations,
+                    )
+                except Exception as exc:
+                    session_error = exc
+                try:
+                    if prepared is not None:
+                        await _finalize_prepared_session(prepared)
+                except Exception as exc:
+                    if session_error is None:
+                        session_error = exc
+
                 async with result_lock:
-                    if first_error is None:
-                        first_error = exc
-            finally:
-                if prepared is not None:
-                    await _finalize_prepared_session(prepared)
-                    async with result_lock:
+                    if prepared is not None:
                         prepared_sessions.append(prepared)
                         if stats is not None:
                             task_stats.append(stats)
+                    if session_error is not None:
+                        if first_error is None:
+                            first_error = session_error
+                            stop_workers()
+                        continue
+                    if first_error is not None:
+                        continue
+                    completed_task_ids.add(loaded.task_instance_id)
+                    completed_session_count += 1
+                    release_ready_children(loaded.task_instance_id)
+                    if completed_session_count == len(loaded_sessions):
+                        stop_workers()
+            finally:
                 queue.task_done()
 
     worker_results = await asyncio.gather(
@@ -2212,8 +2343,14 @@ async def _run_cloud_model_worker_waves(
         raise ValueError("workers must be >= 1")
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
+    if any(entry.depends_on for entry in worker_inputs):
+        raise SimulateError(
+            "Dependency-aware simulation currently requires workers=1; "
+            "multi-process worker waves cannot release children immediately "
+            "after each parent finishes"
+        )
     prep_limit = _resolve_prep_concurrency(prep_concurrency, len(worker_inputs))
-    wave_inputs = _chunk_worker_inputs_by_concurrency(worker_inputs, concurrency)
+    wave_inputs = _ready_worker_input_batches(worker_inputs, batch_size=concurrency)
     replay_results: list[WorkerReplayResult] = []
     task_stats: list[ReplayTaskStats] = []
 
@@ -2868,6 +3005,7 @@ async def simulate(
             manifest_index=entry.index,
             docker_image_override=entry.docker_image,
             label=entry.label,
+            manifest_depends_on=entry.depends_on,
         )
         for entry in manifest_entries
     ]
@@ -2915,7 +3053,16 @@ async def simulate(
     run_wall_start: float | None = None
     run_wall_end: float | None = None
     output_path.mkdir(parents=True, exist_ok=True)
-    scheduler_mode = "bounded_queue" if workers == 1 else "multi_process_workers"
+    has_dependencies = _has_session_dependencies(loaded_sessions)
+    if has_dependencies and workers > 1:
+        raise SimulateError(
+            "Dependency-aware simulation currently requires workers=1; "
+            "multi-process worker waves cannot release children immediately "
+            "after each parent finishes"
+        )
+    scheduler_mode = "dependency_queue" if has_dependencies else (
+        "bounded_queue" if workers == 1 else "multi_process_workers"
+    )
 
     try:
         sweep_fixed_images = await _prebuild_sweep_fixed_images(

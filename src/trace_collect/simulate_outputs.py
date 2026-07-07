@@ -118,6 +118,7 @@ def _log_trace_metadata(
                 "run_instance_id": session.run_instance_id,
                 "label": session.label,
                 "source_model": _source_model(session),
+                "depends_on": list(session.depends_on),
             }
             for session in sessions
         ],
@@ -252,6 +253,7 @@ def _make_task_stats(
         llm_call_count=llm_call_count,
         tool_exec_count=tool_exec_count,
         failed_action_count=failed_action_count,
+        depends_on=loaded.depends_on,
     )
 
 

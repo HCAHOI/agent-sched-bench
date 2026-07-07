@@ -132,6 +132,31 @@ def _find_task(task_source: Path, task_instance_id: str) -> dict[str, Any]:
             return task
     raise SimulateError(f"Task {task_instance_id!r} not found in {task_source}")
 
+def _parse_depends_on(value: Any, *, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise SimulateError(f"{field} must be a list of strings")
+    depends_on: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            raise SimulateError(f"{field}[{index}] must be a non-empty string")
+        if item in seen:
+            raise SimulateError(f"{field} contains duplicate dependency {item!r}")
+        seen.add(item)
+        depends_on.append(item)
+    return tuple(depends_on)
+
+
+def _combine_depends_on(*values: tuple[str, ...]) -> tuple[str, ...]:
+    combined: list[str] = []
+    seen: set[str] = set()
+    for depends_on in values:
+        for dependency in depends_on:
+            if dependency not in seen:
+                seen.add(dependency)
+                combined.append(dependency)
+    return tuple(combined)
+
 
 def _load_trace_session(
     source_trace: Path,
@@ -139,6 +164,7 @@ def _load_trace_session(
     manifest_index: int,
     docker_image_override: str | None = None,
     label: str | None = None,
+    manifest_depends_on: tuple[str, ...] = (),
 ) -> LoadedTraceSession:
     (
         task_instance_id,
@@ -149,6 +175,14 @@ def _load_trace_session(
     ) = _parse_trace_session_file(source_trace)
     scaffold = metadata.get("scaffold", "unknown") if metadata else "unknown"
     task = _find_task(task_source, task_instance_id)
+    task_depends_on = (
+        _parse_depends_on(
+            task["depends_on"],
+            field=f"task {task_instance_id!r} depends_on",
+        )
+        if "depends_on" in task
+        else ()
+    )
     return LoadedTraceSession(
         source_trace=source_trace,
         task_source=task_source,
@@ -164,6 +198,7 @@ def _load_trace_session(
         iterations=_group_actions_by_iteration(actions),
         docker_image_override=docker_image_override,
         label=label,
+        depends_on=_combine_depends_on(manifest_depends_on, task_depends_on),
     )
 
 
@@ -210,6 +245,7 @@ def _worker_trace_input(session: LoadedTraceSession) -> WorkerTraceInput:
         run_instance_id=session.run_instance_id,
         task_instance_id=session.task_instance_id,
         source_action_agent_id=session.source_action_agent_id,
+        depends_on=session.depends_on,
     )
 
 
@@ -222,6 +258,7 @@ def _load_worker_trace_inputs(inputs: list[WorkerTraceInput]) -> list[LoadedTrac
             manifest_index=entry.manifest_index,
             docker_image_override=entry.docker_image_override,
             label=entry.label,
+            manifest_depends_on=entry.depends_on,
         )
         if session.task_instance_id != entry.task_instance_id:
             raise SimulateError(
@@ -232,6 +269,11 @@ def _load_worker_trace_inputs(inputs: list[WorkerTraceInput]) -> list[LoadedTrac
             raise SimulateError(
                 f"Worker action owner changed while reloading {entry.source_trace}: "
                 f"{session.source_action_agent_id!r} != {entry.source_action_agent_id!r}"
+            )
+        if session.depends_on != entry.depends_on:
+            raise SimulateError(
+                f"Worker dependency metadata changed while reloading {entry.source_trace}: "
+                f"{session.depends_on!r} != {entry.depends_on!r}"
             )
         session.run_instance_id = entry.run_instance_id
         sessions.append(session)
@@ -306,11 +348,18 @@ def _load_simulate_manifest(
         task_value: Any | None = None
         docker_image: str | None = None
         label: str | None = None
+        depends_on: tuple[str, ...] = ()
 
         if isinstance(entry, str):
             trace_value = entry
         elif isinstance(entry, dict):
-            allowed_entry_keys = {"trace", "task_source", "docker_image", "label"}
+            allowed_entry_keys = {
+                "trace",
+                "task_source",
+                "docker_image",
+                "label",
+                "depends_on",
+            }
             unknown_entry_keys = set(entry) - allowed_entry_keys
             if unknown_entry_keys:
                 keys = ", ".join(sorted(str(key) for key in unknown_entry_keys))
@@ -318,11 +367,14 @@ def _load_simulate_manifest(
                     f"simulate manifest trace entry {index} has unsupported keys: {keys}"
                 )
             if "trace" not in entry:
-                raise SimulateError(f"simulate manifest trace entry {index} is missing trace")
+                raise SimulateError(
+                    f"simulate manifest trace entry {index} is missing trace"
+                )
             trace_value = entry["trace"]
             task_value = entry.get("task_source")
             docker_value = entry.get("docker_image")
             label_value = entry.get("label")
+            depends_value = entry.get("depends_on")
             if docker_value is not None:
                 if not isinstance(docker_value, str) or not docker_value:
                     raise SimulateError(
@@ -335,6 +387,11 @@ def _load_simulate_manifest(
                         f"simulate manifest trace entry {index} label must be a non-empty string"
                     )
                 label = label_value
+            if "depends_on" in entry:
+                depends_on = _parse_depends_on(
+                    depends_value,
+                    field=f"simulate manifest trace entry {index} depends_on",
+                )
         else:
             raise SimulateError(
                 f"simulate manifest trace entry {index} must be a string or object"
@@ -374,6 +431,7 @@ def _load_simulate_manifest(
                 task_source=task_path,
                 docker_image=docker_image,
                 label=label,
+                depends_on=depends_on,
             )
         )
     return entries

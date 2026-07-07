@@ -22,6 +22,7 @@ class TraceManifestEntry:
     task_source: Path
     docker_image: str | None = None
     label: str | None = None
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,7 @@ class ReplayTaskStats:
     llm_call_count: int
     tool_exec_count: int
     failed_action_count: int = 0
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,7 @@ class LoadedTraceSession:
     iterations: dict[int, dict[str, Any]]
     docker_image_override: str | None = None
     label: str | None = None
+    depends_on: tuple[str, ...] = ()
 
     @property
     def agent_id(self) -> str:
@@ -109,6 +112,7 @@ class WorkerTraceInput:
     run_instance_id: str
     task_instance_id: str
     source_action_agent_id: str
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

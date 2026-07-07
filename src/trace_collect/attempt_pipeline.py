@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import subprocess
+import shutil
 import threading
 import time
 import urllib.parse
@@ -497,6 +498,20 @@ def stop_task_container(container_id: str, *, executable: str) -> str:
     return logs_text
 
 
+@dataclass(frozen=True)
+class AttemptArtifact:
+    """Extra artifact produced by a benchmark runner.
+
+    ``name`` is the stable key recorded in manifest/results artifact maps.
+    External files/directories are copied under ``attempt_dir/artifacts``;
+    paths already under ``attempt_dir`` are recorded by relative path.
+    """
+
+    name: str
+    path: Path
+    required: bool = True
+
+
 @dataclass
 class AttemptResult:
     """Result returned by the scaffold ``inner`` coroutine."""
@@ -513,6 +528,99 @@ class AttemptResult:
     total_tool_ms: float | None = None
     total_tokens: int | None = None
     runtime_proof: dict[str, Any] = field(default_factory=dict)
+    artifacts: list[AttemptArtifact] = field(default_factory=list)
+
+_RESERVED_ARTIFACT_NAMES = frozenset(
+    {*attempt_layout.DEFAULT_ARTIFACT_NAMES, "openclaw_tool_results_dir"}
+)
+
+
+
+def _artifact_storage_segment(name: str) -> str:
+    """Return a path-safe segment for storing an artifact by logical name."""
+    segment = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip(".-")
+    return segment or "artifact"
+
+
+def _relative_to_attempt(path: Path, attempt_dir: Path) -> Path | None:
+    """Return *path* relative to *attempt_dir*, or None when it is external."""
+    try:
+        return path.resolve().relative_to(attempt_dir.resolve())
+    except ValueError:
+        return None
+
+
+def _record_attempt_artifacts(
+    attempt_dir: Path,
+    artifacts: list[AttemptArtifact],
+) -> dict[str, str]:
+    """Preserve runner-provided artifacts and return manifest-ready paths."""
+    recorded: dict[str, str] = {}
+    storage_root = attempt_dir / "artifacts"
+    planned: list[tuple[AttemptArtifact, Path, Path | None, str | None]] = []
+    used_storage_segments: dict[str, str] = {}
+
+    for artifact in artifacts:
+        if artifact.name in _RESERVED_ARTIFACT_NAMES:
+            raise RuntimeError(f"artifact name is reserved: {artifact.name}")
+        if artifact.name in recorded:
+            raise RuntimeError(f"duplicate artifact name: {artifact.name}")
+        recorded[artifact.name] = ""
+        source = artifact.path
+        if not source.exists():
+            if artifact.required:
+                raise FileNotFoundError(
+                    f"required artifact missing: {artifact.name} at {source}"
+                )
+            continue
+
+        relative_source = _relative_to_attempt(source, attempt_dir)
+        storage_segment: str | None = None
+        if relative_source is None:
+            storage_segment = _artifact_storage_segment(artifact.name)
+        elif (
+            len(relative_source.parts) >= 2
+            and relative_source.parts[0] == "artifacts"
+        ):
+            storage_segment = relative_source.parts[1]
+
+        if storage_segment is not None:
+            prior_name = used_storage_segments.get(storage_segment)
+            if prior_name is not None:
+                raise RuntimeError(
+                    "artifact storage path collision: "
+                    f"{artifact.name!r} and {prior_name!r} both map to {storage_segment!r}"
+                )
+            used_storage_segments[storage_segment] = artifact.name
+
+        planned.append((artifact, source, relative_source, storage_segment))
+
+    recorded.clear()
+    for artifact, source, relative_source, storage_segment in planned:
+        if relative_source is not None:
+            recorded[artifact.name] = relative_source.as_posix()
+            continue
+
+        assert storage_segment is not None
+        target_base = storage_root / storage_segment
+        if source.is_dir():
+            target = target_base
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target)
+        elif source.is_file():
+            target = target_base / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.unlink()
+            shutil.copy2(source, target)
+        else:
+            raise RuntimeError(
+                f"artifact path is neither file nor directory: {artifact.name} at {source}"
+            )
+        recorded[artifact.name] = target.relative_to(attempt_dir).as_posix()
+    return recorded
+
 
 
 async def _watch_for_container_ready(
@@ -795,11 +903,26 @@ async def run_attempt(
         "status": monitoring_status,
     }
 
-    if result is not None and result.trace_path.exists():
-        attempt_layout.copy_trace_jsonl(
-            ctx.attempt_dir,
-            result.trace_path,
-        )
+    artifact_error: BaseException | None = None
+    artifact_paths: dict[str, str] = {}
+    try:
+        if result is not None and result.trace_path.exists():
+            attempt_layout.copy_trace_jsonl(
+                ctx.attempt_dir,
+                result.trace_path,
+            )
+        if result is not None and result.artifacts:
+            artifact_paths.update(
+                _record_attempt_artifacts(ctx.attempt_dir, result.artifacts)
+            )
+    except BaseException as exc:
+        artifact_error = exc
+        status = "error"
+        success = False
+        manifest["status"] = status
+        manifest["result_summary"]["exit_code"] = 1
+        manifest["result_summary"]["error"] = str(exc)
+        results_payload["success"] = False
 
     trace_file = ctx.attempt_dir / attempt_layout.TRACE_FILENAME
     if result is not None and result.tool_calls:
@@ -811,9 +934,12 @@ async def run_attempt(
 
     openclaw_tool_results_dir = ctx.attempt_dir / "openclaw-runtime" / "tool-results"
     if openclaw_tool_results_dir.exists():
-        manifest.setdefault("artifacts", {})["openclaw_tool_results_dir"] = str(
+        artifact_paths["openclaw_tool_results_dir"] = str(
             openclaw_tool_results_dir.relative_to(ctx.attempt_dir)
         )
+    if artifact_paths:
+        manifest.setdefault("artifacts", {}).update(artifact_paths)
+        results_payload["artifacts"] = artifact_paths
 
     attempt_layout.write_run_manifest(ctx.attempt_dir, manifest)
     attempt_layout.write_results_json(ctx.attempt_dir, results_payload)
@@ -823,10 +949,12 @@ async def run_attempt(
     attempt_layout.write_tool_calls_json(ctx.attempt_dir, tool_calls)
     attempt_layout.write_container_stdout(ctx.attempt_dir, ctx.container_stdout)
 
+    if artifact_error is not None:
+        raise artifact_error
     if inner_error is not None:
         raise inner_error
     assert result is not None
     return result
 
 
-__all__ = ["AttemptContext", "AttemptResult", "run_attempt"]
+__all__ = ["AttemptArtifact", "AttemptContext", "AttemptResult", "run_attempt"]

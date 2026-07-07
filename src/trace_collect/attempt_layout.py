@@ -30,6 +30,7 @@ _DEFAULT_ARTIFACTS = {
     "tool_calls_json": TOOL_CALLS_FILENAME,
     "container_stdout_txt": CONTAINER_STDOUT_FILENAME,
 }
+DEFAULT_ARTIFACT_NAMES = frozenset(_DEFAULT_ARTIFACTS)
 
 def ensure_attempt_dir(attempt_dir: Path) -> Path:
     attempt_dir.mkdir(parents=True, exist_ok=True)
