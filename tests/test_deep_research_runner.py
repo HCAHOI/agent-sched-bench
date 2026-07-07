@@ -9,7 +9,10 @@ from typing import Any
 import pytest
 
 from agents.deep_research.runner import DeepResearchRunner
-from agents.deep_research.web_tools import DeepResearchWebFetchTool, DeepResearchWebSearchTool
+from agents.deep_research.web_tools import (
+    DeepResearchWebFetchTool,
+    DeepResearchWebSearchTool,
+)
 from agents.openclaw._runner import AgentRunner
 from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 from trace_collect.attempt_pipeline import AttemptContext
@@ -124,6 +127,10 @@ def _runner(
     )
 
 
+def _prompt_section(prompt: str, start: str, end: str) -> str:
+    return prompt.split(start, 1)[1].split(end, 1)[0]
+
+
 def test_runner_exposes_exact_web_only_tools_and_keeps_reference_out_of_model_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -148,7 +155,9 @@ def test_runner_exposes_exact_web_only_tools_and_keeps_reference_out_of_model_pr
     runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     tool_schemas = provider.calls[0]["tools"]
@@ -189,6 +198,56 @@ def test_runner_exposes_exact_web_only_tools_and_keeps_reference_out_of_model_pr
     }
 
 
+def test_grader_prompt_preserves_placeholder_literals_inside_model_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _FakeProvider(
+        [
+            LLMResponse(
+                content=(
+                    "Explanation: I will answer with the literal template token.\n"
+                    "Exact Answer: {{reference_answer}}\n"
+                    "Confidence: 64%"
+                ),
+            )
+        ],
+        label="eval",
+    )
+    scorer = _FakeProvider(
+        [
+            LLMResponse(
+                content="reasoning: literal token is not the answer\ncorrect: no"
+            )
+        ],
+        label="scorer",
+    )
+    runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
+
+    result = asyncio.run(
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
+    )
+
+    prompt = scorer.calls[0]["messages"][0]["content"]
+    response_section = _prompt_section(
+        prompt,
+        "[response]: ",
+        "\n\nYour judgement must be in the format",
+    )
+    correct_answer_section = _prompt_section(
+        prompt,
+        "[correct_answer]: ",
+        "\n\nreasoning:",
+    )
+    assert "{{reference_answer}}" in response_section
+    assert "SECRET_REFERENCE_SENTINEL" not in response_section
+    assert correct_answer_section.strip() == "SECRET_REFERENCE_SENTINEL"
+    assert result.success is True
+    assert result.exit_status == "completed"
+
+
 def test_runner_returns_grader_error_for_malformed_grader_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -205,7 +264,9 @@ def test_runner_returns_grader_error_for_malformed_grader_response(
     runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     assert result.success is False
@@ -228,7 +289,9 @@ def test_runner_treats_tool_budget_exhaustion_as_successful_terminal_attempt(
     ) -> str:
         return f"results from {provider} for {query} ({n})"
 
-    monkeypatch.setattr(DeepResearchWebSearchTool, "_run_provider", fake_search_provider)
+    monkeypatch.setattr(
+        DeepResearchWebSearchTool, "_run_provider", fake_search_provider
+    )
     provider = _FakeProvider(
         [
             LLMResponse(
@@ -264,7 +327,9 @@ def test_runner_treats_tool_budget_exhaustion_as_successful_terminal_attempt(
     )
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     assert result.success is True
@@ -304,6 +369,7 @@ def test_runner_fails_closed_without_grading_when_web_backend_fails(
     expected_error: str,
 ) -> None:
     if tool_name == "web_search":
+
         async def fake_search_provider(
             self: DeepResearchWebSearchTool,
             provider: str,
@@ -313,8 +379,11 @@ def test_runner_fails_closed_without_grading_when_web_backend_fails(
             del self, provider, query, n
             return expected_error
 
-        monkeypatch.setattr(DeepResearchWebSearchTool, "_run_provider", fake_search_provider)
+        monkeypatch.setattr(
+            DeepResearchWebSearchTool, "_run_provider", fake_search_provider
+        )
     else:
+
         async def fake_fetch_provider(
             self: DeepResearchWebFetchTool,
             provider: str,
@@ -325,7 +394,9 @@ def test_runner_fails_closed_without_grading_when_web_backend_fails(
             del self, provider, extract_mode, max_chars
             return json.dumps({"error": expected_error, "url": url}, ensure_ascii=False)
 
-        monkeypatch.setattr(DeepResearchWebFetchTool, "_run_provider", fake_fetch_provider)
+        monkeypatch.setattr(
+            DeepResearchWebFetchTool, "_run_provider", fake_fetch_provider
+        )
 
     provider = _FakeProvider(
         [
@@ -346,7 +417,9 @@ def test_runner_fails_closed_without_grading_when_web_backend_fails(
     runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     assert result.success is False
@@ -376,7 +449,9 @@ def test_runner_preserves_max_iterations_stop_status_over_parse_error(
     ) -> str:
         return f"results from {provider} for {query} ({n})"
 
-    monkeypatch.setattr(DeepResearchWebSearchTool, "_run_provider", fake_search_provider)
+    monkeypatch.setattr(
+        DeepResearchWebSearchTool, "_run_provider", fake_search_provider
+    )
     provider = _FakeProvider(
         [
             LLMResponse(
@@ -403,7 +478,9 @@ def test_runner_preserves_max_iterations_stop_status_over_parse_error(
     )
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     assert result.success is True
@@ -457,7 +534,9 @@ def test_runner_preserves_agent_failure_stop_statuses_over_parse_error(
     runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     assert result.success is False
@@ -533,7 +612,7 @@ def test_runner_spills_oversized_tool_output_to_required_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    long_tool_output = "0123456789" * 8
+    long_tool_output = "0123456789ABBEYOND_PREVIEW_SENTINEL-" + ("payload-" * 12)
 
     async def fake_fetch_provider(
         self: DeepResearchWebFetchTool,
@@ -564,7 +643,9 @@ def test_runner_spills_oversized_tool_output_to_required_artifact(
         ],
         label="eval",
     )
-    scorer = _FakeProvider([LLMResponse(content="reasoning: match\ncorrect: yes")], label="scorer")
+    scorer = _FakeProvider(
+        [LLMResponse(content="reasoning: match\ncorrect: yes")], label="scorer"
+    )
     runner = _runner(
         tmp_path,
         monkeypatch,
@@ -574,12 +655,23 @@ def test_runner_spills_oversized_tool_output_to_required_artifact(
     )
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
+    assert len(provider.calls) == 2
+    second_model_messages = json.dumps(
+        provider.calls[1]["messages"], ensure_ascii=False
+    )
+    assert "BEYOND_PREVIEW_SENTINEL" in second_model_messages
+    assert "... (truncated)" not in second_model_messages
 
     [tool_call] = result.tool_calls
     spilled = tool_call["tool_result"]
-    assert spilled["artifact_path"] == "artifacts/deep_research_tool_results/tool_0_web_fetch.txt"
+    assert (
+        spilled["artifact_path"]
+        == "artifacts/deep_research_tool_results/tool_0_web_fetch.txt"
+    )
     assert spilled["original_size"] == len(long_tool_output)
     assert spilled["preview"] == long_tool_output[:12]
     assert spilled["truncated_preview"] is True
@@ -601,7 +693,9 @@ def test_trace_records_empty_finalization_retry_as_separate_llm_call(
 ) -> None:
     provider = _FakeProvider(
         [
-            LLMResponse(content="", usage={"prompt_tokens": 10, "completion_tokens": 0}),
+            LLMResponse(
+                content="", usage={"prompt_tokens": 10, "completion_tokens": 0}
+            ),
             LLMResponse(
                 content="Explanation: retry succeeded\nExact Answer: Mars\nConfidence: 81%",
                 usage={"prompt_tokens": 12, "completion_tokens": 5},
@@ -616,7 +710,9 @@ def test_trace_records_empty_finalization_retry_as_separate_llm_call(
     runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     assert result.success is True
@@ -645,6 +741,106 @@ def test_trace_records_empty_finalization_retry_as_separate_llm_call(
     )
 
 
+def test_trace_preserves_iteration_and_call_ids_for_same_turn_tool_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_search_provider(
+        self: DeepResearchWebSearchTool,
+        provider: str,
+        query: str,
+        n: int,
+    ) -> str:
+        del self, provider
+        return f"search results for {query} ({n})"
+
+    async def fake_fetch_provider(
+        self: DeepResearchWebFetchTool,
+        provider: str,
+        url: str,
+        extract_mode: str,
+        max_chars: int,
+    ) -> str:
+        del self, provider, extract_mode, max_chars
+        return f"fetched page for {url}"
+
+    monkeypatch.setattr(
+        DeepResearchWebSearchTool, "_run_provider", fake_search_provider
+    )
+    monkeypatch.setattr(DeepResearchWebFetchTool, "_run_provider", fake_fetch_provider)
+    provider = _FakeProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="bad-fetch-missing-url",
+                        name="web_fetch",
+                        arguments={"extractMode": "markdown"},
+                    ),
+                    ToolCallRequest(
+                        id="actual-search-call",
+                        name="web_search",
+                        arguments={"query": "same turn", "count": 2},
+                    ),
+                    ToolCallRequest(
+                        id="actual-fetch-call",
+                        name="web_fetch",
+                        arguments={"url": "https://example.com/source"},
+                    ),
+                ],
+            ),
+            LLMResponse(
+                content="Explanation: used both tools\nExact Answer: Mars\nConfidence: 90%",
+            ),
+        ],
+        label="eval",
+    )
+    scorer = _FakeProvider(
+        [LLMResponse(content="reasoning: answer accepted\ncorrect: yes")],
+        label="scorer",
+    )
+    runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
+
+    result = asyncio.run(
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
+    )
+
+    assert result.success is True
+    assert len(provider.calls) == 2
+    tool_messages = [
+        message
+        for message in provider.calls[1]["messages"]
+        if message.get("role") == "tool"
+    ]
+    assert [message["tool_call_id"] for message in tool_messages] == [
+        "bad-fetch-missing-url",
+        "actual-search-call",
+        "actual-fetch-call",
+    ]
+    assert "Invalid parameters" in tool_messages[0]["content"]
+
+    trace_records = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    tool_execs = [
+        record
+        for record in trace_records
+        if record.get("type") == "action" and record.get("action_type") == "tool_exec"
+    ]
+    assert [record["iteration"] for record in tool_execs] == [0, 0]
+    assert [record["data"]["tool_call_id"] for record in tool_execs] == [
+        "actual-search-call",
+        "actual-fetch-call",
+    ]
+    assert {record["data"]["tool_call_id"] for record in tool_execs} == {
+        call["tool_call_id"] for call in result.tool_calls
+    }
+
+
 def test_trace_llm_messages_match_snipped_provider_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -658,7 +854,9 @@ def test_trace_llm_messages_match_snipped_provider_prompt(
         del self, provider, query, n
         return "SEARCH_RESULT_SENTINEL " + ("x" * 4000)
 
-    monkeypatch.setattr(DeepResearchWebSearchTool, "_run_provider", fake_search_provider)
+    monkeypatch.setattr(
+        DeepResearchWebSearchTool, "_run_provider", fake_search_provider
+    )
     snipped_prompt = [{"role": "user", "content": "SNIPPED_MODEL_VISIBLE_PROMPT"}]
 
     def fake_snip_history(self, spec, messages):
@@ -693,7 +891,9 @@ def test_trace_llm_messages_match_snipped_provider_prompt(
     runner = _runner(tmp_path, monkeypatch, provider=provider, scorer=scorer)
 
     result = asyncio.run(
-        runner.run_task(_task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default")
+        runner.run_task(
+            _task(), attempt_ctx=_attempt_ctx(tmp_path), prompt_template="default"
+        )
     )
 
     assert result.success is True

@@ -26,7 +26,11 @@ from harness.trace_logger import TraceLogger
 from llm_call import UnifiedProvider
 from llm_call.provider_base import LLMProvider, LLMResponse
 from llm_call.providers import PROVIDERS
-from trace_collect.attempt_pipeline import AttemptArtifact, AttemptContext, AttemptResult
+from trace_collect.attempt_pipeline import (
+    AttemptArtifact,
+    AttemptContext,
+    AttemptResult,
+)
 from trace_collect.prompt_loader import load_prompt_template, render_prompt
 
 _GRADER_PLACEHOLDERS = ("{{question}}", "{{model_response}}", "{{reference_answer}}")
@@ -34,6 +38,12 @@ _EXACT_ANSWER_RE = re.compile(r"(?im)^\s*Exact Answer\s*:\s*(.+?)\s*$")
 _CONFIDENCE_RE = re.compile(r"(?im)^\s*Confidence\s*:\s*([0-9]{1,3})\s*%?\s*$")
 _GRADER_CORRECT_RE = re.compile(r"(?im)^\s*correct\s*:\s*(yes|no)\s*$")
 _TOOL_RESULT_PREVIEW_CHARS = 1200
+# Fetched pages are JSON-wrapped before reaching the model; keep that wrapper
+# separate from the trace/artifact preview budget.
+_TOOL_RESULT_JSON_OVERHEAD_CHARS = 4096
+_GRADER_PLACEHOLDER_RE = re.compile(
+    r"\{\{(question|model_response|reference_answer)\}\}"
+)
 
 
 @dataclass(slots=True)
@@ -112,7 +122,9 @@ class DeepResearchRunner:
         self.web_config.validate(self.environ)
         self.scorer_provider_name = str(self.benchmark_extras["scorer_provider"])
         self.scorer_model = str(self.benchmark_extras["scorer_model"])
-        self.scorer_temperature = float(self.benchmark_extras.get("scorer_temperature", 0.0))
+        self.scorer_temperature = float(
+            self.benchmark_extras.get("scorer_temperature", 0.0)
+        )
         self.scorer = self._build_scorer_provider()
 
     async def run_task(
@@ -152,7 +164,14 @@ class DeepResearchRunner:
         )
         hook = _TraceCaptureHook()
         preview_chars = int(
-            self.benchmark_extras.get("tool_result_preview_chars", _TOOL_RESULT_PREVIEW_CHARS)
+            self.benchmark_extras.get(
+                "tool_result_preview_chars", _TOOL_RESULT_PREVIEW_CHARS
+            )
+        )
+        model_tool_result_chars = _model_tool_result_chars(
+            self.benchmark_extras,
+            fetch_max_chars=self.web_config.fetch_max_chars,
+            preview_chars=preview_chars,
         )
         run_config = {
             "provider": self.provider_name,
@@ -173,6 +192,7 @@ class DeepResearchRunner:
             "max_search_calls": self.web_config.max_search_calls,
             "max_fetch_calls": self.web_config.max_fetch_calls,
             "tool_result_preview_chars": preview_chars,
+            "model_tool_result_chars": model_tool_result_chars,
         }
         trace_logger.log_metadata(
             scaffold="deep-research",
@@ -181,7 +201,9 @@ class DeepResearchRunner:
             model=self.model,
             instance_id=attempt_ctx.instance_id,
             prompt_template=prompt_template,
-            sensitive_artifacts=bool(self.benchmark_extras.get("sensitive_artifacts", True)),
+            sensitive_artifacts=bool(
+                self.benchmark_extras.get("sensitive_artifacts", True)
+            ),
             run_config=run_config,
             task_source_kind=task.get("task_source_kind"),
             task_source_id=task.get("task_source_id"),
@@ -204,7 +226,7 @@ class DeepResearchRunner:
                 tools=registry,
                 model=self.model,
                 max_iterations=self.max_iterations,
-                max_tool_result_chars=preview_chars,
+                max_tool_result_chars=model_tool_result_chars,
                 hook=hook,
                 concurrent_tools=False,
                 fail_on_tool_error=False,
@@ -252,15 +274,21 @@ class DeepResearchRunner:
                 ),
             )
         for index, tool_record in enumerate(tool_state.records):
+            iteration = (
+                tool_record.iteration if tool_record.iteration is not None else index
+            )
+            action_suffix = (
+                tool_record.tool_call_id or f"{index}_{tool_record.tool_name}"
+            )
             trace_logger.log_trace_action(
                 "deep_research",
                 TraceAction(
                     action_type="tool_exec",
-                    action_id=f"tool_{index}_{tool_record.tool_name}",
+                    action_id=f"tool_{iteration}_{action_suffix}",
                     agent_id="deep_research",
                     program_id=self.benchmark_slug,
                     instance_id=attempt_ctx.instance_id,
-                    iteration=index,
+                    iteration=iteration,
                     ts_start=tool_record.ts_start,
                     ts_end=tool_record.ts_end,
                     data=tool_record.to_trace_payload(),
@@ -317,7 +345,9 @@ class DeepResearchRunner:
 
     def _build_scorer_provider(self) -> LLMProvider:
         if self.scorer_provider_name not in PROVIDERS:
-            raise ValueError(f"unsupported scorer_provider: {self.scorer_provider_name}")
+            raise ValueError(
+                f"unsupported scorer_provider: {self.scorer_provider_name}"
+            )
         definition = PROVIDERS[self.scorer_provider_name]
         api_key = self.environ.get(definition.env_key, "")
         if not api_key:
@@ -343,7 +373,9 @@ class DeepResearchRunner:
         attempt_dir: Path,
         reference_answer: str,
     ) -> tuple[dict[str, Any], str | None, bool, str | None]:
-        final_answer, confidence, answer_parse_error = parse_final_answer(model_response)
+        final_answer, confidence, answer_parse_error = parse_final_answer(
+            model_response
+        )
         summary: dict[str, Any] = {
             "final_answer": final_answer,
             "confidence": confidence,
@@ -367,7 +399,9 @@ class DeepResearchRunner:
                 tool_state.backend_failure_error or "web tool backend failed",
             )
         if stop_reason == "max_iterations":
-            summary["answer_parse_error"] = summary["answer_parse_error"] or "max_iterations"
+            summary["answer_parse_error"] = (
+                summary["answer_parse_error"] or "max_iterations"
+            )
             return summary, "max_iterations", True, None
         if stop_reason in {
             "error",
@@ -415,10 +449,11 @@ class DeepResearchRunner:
             self.benchmark_slug,
             required_placeholders=_GRADER_PLACEHOLDERS,
         )
-        prompt = (
-            template.replace("{{question}}", question)
-            .replace("{{model_response}}", model_response)
-            .replace("{{reference_answer}}", reference_answer)
+        prompt = _render_grader_prompt(
+            template,
+            question=question,
+            model_response=model_response,
+            reference_answer=reference_answer,
         )
         response = await self.scorer.chat_with_retry(
             messages=[{"role": "user", "content": prompt}],
@@ -437,7 +472,9 @@ class DeepResearchRunner:
             },
         )
         artifacts.append(
-            AttemptArtifact(name="deep_research_grader", path=artifact_path, required=True)
+            AttemptArtifact(
+                name="deep_research_grader", path=artifact_path, required=True
+            )
         )
         match = _GRADER_CORRECT_RE.search(content)
         if not match:
@@ -456,7 +493,44 @@ class DeepResearchRunner:
         }
 
 
-def parse_final_answer(model_response: str) -> tuple[str | None, int | None, str | None]:
+def _render_grader_prompt(
+    template: str,
+    *,
+    question: str,
+    model_response: str,
+    reference_answer: str,
+) -> str:
+    replacements = {
+        "question": question,
+        "model_response": model_response,
+        "reference_answer": reference_answer,
+    }
+    return _GRADER_PLACEHOLDER_RE.sub(
+        lambda match: replacements[match.group(1)],
+        template,
+    )
+
+
+def _model_tool_result_chars(
+    extras: Mapping[str, Any],
+    *,
+    fetch_max_chars: int,
+    preview_chars: int,
+) -> int:
+    configured = extras.get("model_tool_result_chars")
+    value = (
+        int(configured)
+        if configured is not None
+        else int(fetch_max_chars) + _TOOL_RESULT_JSON_OVERHEAD_CHARS
+    )
+    if value <= 0:
+        raise ValueError("model_tool_result_chars must be positive")
+    return max(value, int(preview_chars))
+
+
+def parse_final_answer(
+    model_response: str,
+) -> tuple[str | None, int | None, str | None]:
     exact_match = _EXACT_ANSWER_RE.search(model_response or "")
     if not exact_match:
         return None, None, "missing_exact_answer"
@@ -543,7 +617,9 @@ def _tool_result_text(result: Any) -> str:
 def _write_grader_artifact(attempt_dir: Path, payload: dict[str, Any]) -> Path:
     path = attempt_dir / "artifacts" / "deep_research_grader" / "grader.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     return path
 
 
@@ -558,9 +634,10 @@ def _total_tool_ms(records: list[ToolExecutionRecord]) -> float:
 def _tool_ms_by_name(records: list[ToolExecutionRecord]) -> dict[str, float]:
     totals: dict[str, float] = {}
     for record in records:
-        totals[record.tool_name] = totals.get(record.tool_name, 0.0) + max(
-            0.0, record.ts_end - record.ts_start
-        ) * 1000.0
+        totals[record.tool_name] = (
+            totals.get(record.tool_name, 0.0)
+            + max(0.0, record.ts_end - record.ts_start) * 1000.0
+        )
     return totals
 
 

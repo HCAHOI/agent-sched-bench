@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import time
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -21,6 +22,30 @@ from agents.openclaw.config.schema import WebSearchConfig
 from agents.openclaw.security.network import validate_url_target
 from agents.openclaw.tools.base import Tool
 from agents.openclaw.tools.web import WebFetchTool, WebSearchTool, _UNTRUSTED_BANNER
+
+
+@dataclass(frozen=True, slots=True)
+class ToolExecutionContext:
+    """AgentRunner metadata for the tool call currently executing."""
+
+    iteration: int
+    tool_call_id: str
+
+
+_TOOL_EXECUTION_CONTEXT: ContextVar[ToolExecutionContext | None] = ContextVar(
+    "deep_research_tool_execution_context",
+    default=None,
+)
+
+
+class _ExecutionContextMixin:
+    def set_execution_context(self, *, iteration: int, tool_call_id: str) -> Token:
+        return _TOOL_EXECUTION_CONTEXT.set(
+            ToolExecutionContext(iteration=iteration, tool_call_id=tool_call_id)
+        )
+
+    def reset_execution_context(self, token: Token) -> None:
+        _TOOL_EXECUTION_CONTEXT.reset(token)
 
 
 @dataclass(slots=True)
@@ -37,6 +62,8 @@ class ToolExecutionRecord:
     budget_exhausted: bool
     ts_start: float
     ts_end: float
+    iteration: int | None = None
+    tool_call_id: str | None = None
     artifact_path: str | None = None
     artifact_sha256: str | None = None
     original_size: int | None = None
@@ -47,6 +74,8 @@ class ToolExecutionRecord:
         payload = {
             "tool_name": self.tool_name,
             "tool_args": self.tool_args,
+            "iteration": self.iteration,
+            "tool_call_id": self.tool_call_id,
             "tool_result": self.tool_result,
             "requested_provider": self.requested_provider,
             "actual_provider": self.actual_provider,
@@ -122,6 +151,7 @@ class BackendFailureResult:
     def __init__(self, content: str) -> None:
         self.content = content
 
+
 @dataclass(frozen=True, slots=True)
 class DeepResearchWebConfig:
     """Provider and budget settings for deep-research web tools."""
@@ -192,7 +222,7 @@ class DeepResearchWebConfig:
             )
 
 
-class DeepResearchWebSearchTool(Tool):
+class DeepResearchWebSearchTool(_ExecutionContextMixin, Tool):
     """Configured, budgeted web-search wrapper."""
 
     name = "web_search"
@@ -235,9 +265,13 @@ class DeepResearchWebSearchTool(Tool):
             )
             return BudgetExhaustedResult(content)
 
-        result, actual_provider, fallback_used, error, backend_failed = (
-            await self._run_with_fallback(query, n)
-        )
+        (
+            result,
+            actual_provider,
+            fallback_used,
+            error,
+            backend_failed,
+        ) = await self._run_with_fallback(query, n)
         self._record(
             args,
             result,
@@ -308,6 +342,7 @@ class DeepResearchWebSearchTool(Tool):
         budget_exhausted: bool,
         ts_start: float,
     ) -> None:
+        execution_context = _TOOL_EXECUTION_CONTEXT.get()
         self.state.records.append(
             ToolExecutionRecord(
                 tool_name=self.name,
@@ -320,11 +355,15 @@ class DeepResearchWebSearchTool(Tool):
                 budget_exhausted=budget_exhausted,
                 ts_start=ts_start,
                 ts_end=time.time(),
+                iteration=execution_context.iteration if execution_context else None,
+                tool_call_id=execution_context.tool_call_id
+                if execution_context
+                else None,
             )
         )
 
 
-class DeepResearchWebFetchTool(Tool):
+class DeepResearchWebFetchTool(_ExecutionContextMixin, Tool):
     """Configured, budgeted web-fetch wrapper."""
 
     name = "web_fetch"
@@ -373,9 +412,13 @@ class DeepResearchWebFetchTool(Tool):
             )
             return BudgetExhaustedResult(content)
 
-        result, actual_provider, fallback_used, error, backend_failed = (
-            await self._run_with_fallback(url, extractMode, max_chars)
-        )
+        (
+            result,
+            actual_provider,
+            fallback_used,
+            error,
+            backend_failed,
+        ) = await self._run_with_fallback(url, extractMode, max_chars)
         self._record(
             args,
             result,
@@ -394,12 +437,20 @@ class DeepResearchWebFetchTool(Tool):
     async def _run_with_fallback(
         self, url: str, extract_mode: str, max_chars: int
     ) -> tuple[Any, str | None, bool, str | None, bool]:
-        result = await self._run_provider(self.config.fetch_provider, url, extract_mode, max_chars)
+        result = await self._run_provider(
+            self.config.fetch_provider, url, extract_mode, max_chars
+        )
         if _fetch_ok(result):
             return result, self.config.fetch_provider, False, None, False
         error = _error_text(result)
         if self.config.fetch_fallback_provider is None:
-            return result, self.config.fetch_provider, False, error, _is_fetch_backend_failure(result)
+            return (
+                result,
+                self.config.fetch_provider,
+                False,
+                error,
+                _is_fetch_backend_failure(result),
+            )
         fallback_result = await self._run_provider(
             self.config.fetch_fallback_provider, url, extract_mode, max_chars
         )
@@ -447,6 +498,7 @@ class DeepResearchWebFetchTool(Tool):
         budget_exhausted: bool,
         ts_start: float,
     ) -> None:
+        execution_context = _TOOL_EXECUTION_CONTEXT.get()
         self.state.records.append(
             ToolExecutionRecord(
                 tool_name=self.name,
@@ -459,6 +511,10 @@ class DeepResearchWebFetchTool(Tool):
                 budget_exhausted=budget_exhausted,
                 ts_start=ts_start,
                 ts_end=time.time(),
+                iteration=execution_context.iteration if execution_context else None,
+                tool_call_id=execution_context.tool_call_id
+                if execution_context
+                else None,
             )
         )
 
@@ -520,7 +576,6 @@ async def _fetch_jina_reader(
     )
 
 
-
 def _optional_text(value: Any) -> str | None:
     text = "" if value is None else str(value).strip()
     return text or None
@@ -537,6 +592,7 @@ def _optional_provider(value: Any) -> str | None:
 
 def _api_key(env_name: str | None, environ: Mapping[str, str]) -> str:
     return environ.get(env_name, "") if env_name else ""
+
 
 def _result_content(result: Any) -> str:
     if isinstance(result, str):
@@ -571,7 +627,9 @@ def _validate_search_backend(
     if not api_key_env:
         raise ValueError(f"{role}={provider} requires an API-key env setting")
     if not environ.get(api_key_env):
-        raise ValueError(f"{role}={provider} requires environment variable {api_key_env}")
+        raise ValueError(
+            f"{role}={provider} requires environment variable {api_key_env}"
+        )
 
 
 def _validate_fetch_backend(
@@ -642,6 +700,7 @@ def _is_fetch_backend_failure(result: Any) -> bool:
         "malformed json",
     )
     return any(marker in lower for marker in backend_markers)
+
 
 def _error_text(result: Any) -> str | None:
     if isinstance(result, str):

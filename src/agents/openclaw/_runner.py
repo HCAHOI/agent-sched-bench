@@ -230,6 +230,7 @@ class AgentRunner:
                     spec,
                     response.tool_calls,
                     external_lookup_counts,
+                    iteration=iteration,
                 )
                 tool_events.extend(new_events)
                 context.tool_events = list(new_events)
@@ -494,7 +495,7 @@ class AgentRunner:
 
     @staticmethod
     def _finalization_retry_messages(
-        messages: list[dict[str, Any]]
+        messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         retry_messages = list(messages)
         retry_messages.append(build_finalization_retry_message())
@@ -529,6 +530,8 @@ class AgentRunner:
         spec: AgentRunSpec,
         tool_calls: list[ToolCallRequest],
         external_lookup_counts: dict[str, int],
+        *,
+        iteration: int,
     ) -> tuple[
         list[Any],
         list[dict[str, str]],
@@ -552,7 +555,12 @@ class AgentRunner:
                 tool_results.extend(
                     await asyncio.gather(
                         *(
-                            self._run_tool(spec, tool_call, external_lookup_counts)
+                            self._run_tool(
+                                spec,
+                                tool_call,
+                                external_lookup_counts,
+                                iteration=iteration,
+                            )
                             for tool_call in batch
                         )
                     )
@@ -560,7 +568,12 @@ class AgentRunner:
             else:
                 for tool_call in batch:
                     tool_results.append(
-                        await self._run_tool(spec, tool_call, external_lookup_counts)
+                        await self._run_tool(
+                            spec,
+                            tool_call,
+                            external_lookup_counts,
+                            iteration=iteration,
+                        )
                     )
 
         results: list[Any] = []
@@ -590,6 +603,8 @@ class AgentRunner:
         spec: AgentRunSpec,
         tool_call: ToolCallRequest,
         external_lookup_counts: dict[str, int],
+        *,
+        iteration: int,
     ) -> tuple[
         Any,
         dict[str, str],
@@ -664,7 +679,21 @@ class AgentRunner:
             )
             async with resource_recorder:
                 if tool is not None:
-                    result = await tool.execute(**params)
+                    bind_context = getattr(tool, "set_execution_context", None)
+                    reset_context = getattr(tool, "reset_execution_context", None)
+                    context_token: Any = None
+                    context_bound = False
+                    if callable(bind_context) and callable(reset_context):
+                        context_token = bind_context(
+                            iteration=iteration,
+                            tool_call_id=tool_call.id,
+                        )
+                        context_bound = True
+                    try:
+                        result = await tool.execute(**params)
+                    finally:
+                        if context_bound:
+                            reset_context(context_token)
                 else:
                     result = await spec.tools.execute(tool_call.name, params)
             resource_timeline = resource_recorder.to_trace_dict()
@@ -819,7 +848,9 @@ class AgentRunner:
             return messages
 
         provider_max_tokens = self.provider.generation.max_tokens
-        max_output = provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
+        max_output = (
+            provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
+        )
         budget = spec.context_block_limit or (
             spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
         )
