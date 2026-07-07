@@ -44,6 +44,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     TRACE_FILENAME = "openclaw-trace.jsonl"
     RUNTIME_DIRNAME = "openclaw-runtime"
     VENV_PATH = "/installed-agent/venv"
+    PYTHON_BOOTSTRAP_PATH = "/installed-agent/python/bin/python3"
     PROMPT_FILENAME = "openclaw-prompt.txt"
     CONTAINER_PROMPT_PATH = f"/installed-agent/{PROMPT_FILENAME}"
     CONTAINER_SECRET_FIFO_PATH = "/installed-agent/.openclaw-api-key.fifo"
@@ -138,13 +139,16 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         requirements = self._container_runtime_requirements()
         install_requirements = " ".join(shlex.quote(req) for req in requirements)
         script = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+        python_bin = shlex.quote(self.PYTHON_BOOTSTRAP_PATH)
+        venv_path = shlex.quote(self.VENV_PATH)
+        wheel_path = shlex.quote(f"/installed-agent/{self._wheel_path.name}")
         script.write(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
-            f"python3 -m venv {self.VENV_PATH}\n"
-            f"{self.VENV_PATH}/bin/python -m pip install --upgrade pip\n"
-            f"{self.VENV_PATH}/bin/python -m pip install {install_requirements}\n"
-            f"{self.VENV_PATH}/bin/python -m pip install --no-deps /installed-agent/{self._wheel_path.name}\n"
+            f"{python_bin} -m venv {venv_path}\n"
+            f"{venv_path}/bin/python -m pip install --upgrade pip\n"
+            f"{venv_path}/bin/python -m pip install {install_requirements}\n"
+            f"{venv_path}/bin/python -m pip install --no-deps {wheel_path}\n"
         )
         script.close()
         os.chmod(script.name, 0o755)
@@ -254,8 +258,8 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
         prompt_path.write_text(instruction, encoding="utf-8")
         return prompt_path
 
-    @staticmethod
-    def _bootstrap_dependencies_command() -> str:
+    @classmethod
+    def _bootstrap_dependencies_command(cls) -> str:
         # `container.exec_run(...)` does NOT inherit the tmux session's
         # setup-env.sh exports, so the mirror prefix must be embedded into
         # the script literally rather than read from an env var at runtime.
@@ -283,25 +287,70 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             "set -euo pipefail\n"
             "install_python_deps() {\n"
             f"{mirror_swap}"
-            "  apt-get update\n"
-            "  DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip python3-venv\n"
+            "  apt-get update >&2\n"
+            "  DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "python3 python3-pip python3-venv curl ca-certificates >&2\n"
             "}\n"
-            "if ! command -v python3 >/dev/null 2>&1; then\n"
-            "  install_python_deps\n"
-            "fi\n"
+            "python_modern() {\n"
+            "  \"$1\" - <<'PY'\n"
+            "import sys\n"
+            "raise SystemExit(0 if sys.version_info >= (3, 10) else 1)\n"
+            "PY\n"
+            "}\n"
             "probe_root=$(mktemp -d /tmp/openclaw-venv-check.XXXXXX)\n"
             'cleanup_probe() { rm -rf "$probe_root"; }\n'
             "trap cleanup_probe EXIT\n"
             "venv_ready() {\n"
             '  rm -rf "$probe_root/venv"\n'
-            "  python3 -m pip --version >/dev/null 2>&1 && "
-            'python3 -m venv "$probe_root/venv" >/dev/null 2>&1 && '
+            '  "$1" -m venv "$probe_root/venv" >/dev/null 2>&1 && '
             '"$probe_root/venv/bin/python" -m pip --version >/dev/null 2>&1\n'
             "}\n"
-            "if ! venv_ready; then\n"
+            "install_uv_python() {\n"
+            "  mkdir -p /installed-agent/uv /installed-agent/uv-python\n"
+            "  if [ ! -x /installed-agent/uv/uv ]; then\n"
+            "    tmp_uv_install=$(mktemp -d /tmp/openclaw-uv-install.XXXXXX)\n"
+            "    curl -LsSf https://astral.sh/uv/install.sh -o \"$tmp_uv_install/install.sh\"\n"
+            "    UV_INSTALL_DIR=/installed-agent/uv sh \"$tmp_uv_install/install.sh\" --no-modify-path >&2\n"
+            "  fi\n"
+            "  UV_PYTHON_INSTALL_DIR=/installed-agent/uv-python "
+            "/installed-agent/uv/uv python install 3.12 --quiet >&2\n"
+            "  UV_PYTHON_INSTALL_DIR=/installed-agent/uv-python "
+            "/installed-agent/uv/uv python find 3.12 --managed-python\n"
+            "}\n"
+            "find_modern_python() {\n"
+            "  for candidate in python3 python3.13 python3.12 python3.11 python3.10; do\n"
+            "    if command -v \"$candidate\" >/dev/null 2>&1; then\n"
+            "      candidate_path=$(command -v \"$candidate\")\n"
+            "      if python_modern \"$candidate_path\" && venv_ready \"$candidate_path\"; then\n"
+            "        printf '%s\\n' \"$candidate_path\"\n"
+            "        return 0\n"
+            "      fi\n"
+            "    fi\n"
+            "  done\n"
+            "  return 1\n"
+            "}\n"
+            "select_python() {\n"
+            "  if modern_python=$(find_modern_python); then\n"
+            "    printf '%s\\n' \"$modern_python\"\n"
+            "    return 0\n"
+            "  fi\n"
             "  install_python_deps\n"
-            "  venv_ready\n"
-            "fi\n"
+            "  if modern_python=$(find_modern_python); then\n"
+            "    printf '%s\\n' \"$modern_python\"\n"
+            "    return 0\n"
+            "  fi\n"
+            "  uv_python=$(install_uv_python)\n"
+            "  python_modern \"$uv_python\"\n"
+            "  venv_ready \"$uv_python\"\n"
+            "  printf '%s\\n' \"$uv_python\"\n"
+            "}\n"
+            "selected_python=$(select_python)\n"
+            f"mkdir -p {shlex.quote(str(Path(cls.PYTHON_BOOTSTRAP_PATH).parent))}\n"
+            f"ln -sf \"$selected_python\" {shlex.quote(cls.PYTHON_BOOTSTRAP_PATH)}\n"
+            f"{shlex.quote(cls.PYTHON_BOOTSTRAP_PATH)} - <<'PY'\n"
+            "import sys\n"
+            "assert sys.version_info >= (3, 10), sys.version\n"
+            "PY\n"
         )
 
     def _run_agent_commands(self) -> list[TerminalCommand]:

@@ -29,7 +29,7 @@ def test_install_script_uses_virtualenv() -> None:
     )
     script_path = agent._install_agent_script_path
     content = script_path.read_text(encoding="utf-8")
-    assert "python3 -m venv /installed-agent/venv" in content
+    assert "/installed-agent/python/bin/python3 -m venv /installed-agent/venv" in content
     for requirement in OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS:
         assert requirement in content
     assert (
@@ -152,9 +152,14 @@ def test_run_command_forwards_mcp_config_to_container() -> None:
 def test_bootstrap_checks_real_venv_creation() -> None:
     command = StubAgent._bootstrap_dependencies_command()
     assert "python3 -m venv --help" not in command
-    assert 'python3 -m venv "$probe_root/venv"' in command
+    assert '"$1" -m venv "$probe_root/venv"' in command
     assert '"$probe_root/venv/bin/python" -m pip --version' in command
-    assert "python3 python3-pip python3-venv" in command
+    assert "python3 python3-pip python3-venv curl ca-certificates" in command
+    assert "sys.version_info >= (3, 10)" in command
+    assert "for candidate in python3 python3.13 python3.12 python3.11 python3.10" in command
+    assert "modern_python=$(find_modern_python)" in command
+    assert "/installed-agent/uv/uv python install 3.12" in command
+    assert "/installed-agent/python/bin/python3" in command
 
 
 def test_build_wheel_uses_uv_without_pip_fallback(
