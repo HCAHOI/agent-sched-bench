@@ -217,13 +217,15 @@ def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) 
 
 
 def _select_tasks(
+    benchmark: "Benchmark",
     tasks: list[dict[str, Any]],
     *,
     instance_ids: list[str] | None,
     sample: int | None,
+    selection_seed: int | None = None,
     skip: int = 0,
 ) -> list[dict[str, Any]]:
-    """Filter tasks, then apply ``skip`` and ``sample`` in that order."""
+    """Filter tasks, then apply ``skip`` and benchmark-owned random sampling."""
     selected = list(tasks)
     if instance_ids is not None:
         by_id = {task["instance_id"]: task for task in tasks}
@@ -240,7 +242,10 @@ def _select_tasks(
     if sample is not None:
         if sample < 0:
             raise ValueError(f"sample must be non-negative, got {sample}")
-        selected = selected[:sample]
+        if instance_ids is None:
+            selected = benchmark.select_subset(selected, n=sample, seed=selection_seed)
+        else:
+            selected = selected[:sample]
     return selected
 
 
@@ -685,6 +690,7 @@ async def collect_traces(
     max_iterations: int = 100,
     temperature: float | None = None,
     top_p: float | None = None,
+    selection_seed: int | None = None,
     top_k: int | None = None,
     repetition_penalty: float | None = None,
     sample: int | None = None,
@@ -751,9 +757,11 @@ async def collect_traces(
         )
 
     tasks = _select_tasks(
+        benchmark,
         benchmark.load_tasks(),
         instance_ids=instance_ids,
         sample=sample,
+        selection_seed=selection_seed,
         skip=skip,
     )
 

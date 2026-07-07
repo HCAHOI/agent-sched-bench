@@ -71,7 +71,13 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sample",
         type=nonnegative_int_arg,
         default=None,
-        help="Only run the first N tasks after filtering and skipping (for testing).",
+        help="Randomly sample N tasks after filtering and skipping (for testing).",
+    )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        default=None,
+        help="Seed for --sample random task selection; defaults to benchmark YAML.",
     )
     parser.add_argument(
         "--skip",
@@ -389,6 +395,7 @@ def _run_collect(args: argparse.Namespace) -> None:
             top_k=args.top_k,
             repetition_penalty=args.repetition_penalty,
             sample=args.sample,
+            selection_seed=args.selection_seed,
             skip=args.skip,
             concurrency=args.concurrency,
             instance_ids=args.instance_ids.split(",") if args.instance_ids else None,

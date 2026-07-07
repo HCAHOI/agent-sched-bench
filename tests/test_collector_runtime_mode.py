@@ -545,6 +545,20 @@ def test_run_scaffold_tasks_allows_non_image_tasks_and_uses_attempt_success(
     assert '"success": true' in results_jsonl
 
 
+class _SelectionBenchmark:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], int | None, int | None]] = []
+
+    def select_subset(
+        self,
+        tasks: list[dict[str, str]],
+        n: int | None = None,
+        seed: int | None = None,
+    ) -> list[dict[str, str]]:
+        self.calls.append(([task["instance_id"] for task in tasks], n, seed))
+        return list(reversed(tasks))[:n]
+
+
 def test_select_tasks_preserves_explicit_instance_order() -> None:
     tasks = [
         {"instance_id": "mozilla__bleach-259"},
@@ -552,7 +566,9 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
         {"instance_id": "Kinto__kinto-http.py-384"},
     ]
 
+    benchmark = _SelectionBenchmark()
     selected = _select_tasks(
+        benchmark,
         tasks,
         instance_ids=[
             "encode__httpx-2701",
@@ -567,17 +583,26 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
     ]
 
 
-def test_select_tasks_applies_skip_before_sample() -> None:
+def test_select_tasks_applies_skip_before_random_sample() -> None:
     tasks = [
         {"instance_id": "task-1"},
         {"instance_id": "task-2"},
         {"instance_id": "task-3"},
         {"instance_id": "task-4"},
     ]
+    benchmark = _SelectionBenchmark()
 
-    selected = _select_tasks(tasks, instance_ids=None, sample=2, skip=1)
+    selected = _select_tasks(
+        benchmark,
+        tasks,
+        instance_ids=None,
+        sample=2,
+        selection_seed=43,
+        skip=1,
+    )
 
-    assert [task["instance_id"] for task in selected] == ["task-2", "task-3"]
+    assert benchmark.calls == [(["task-2", "task-3", "task-4"], 2, 43)]
+    assert [task["instance_id"] for task in selected] == ["task-4", "task-3"]
 
 
 def test_select_tasks_applies_skip_after_instance_filter() -> None:
@@ -588,6 +613,7 @@ def test_select_tasks_applies_skip_after_instance_filter() -> None:
     ]
 
     selected = _select_tasks(
+        _SelectionBenchmark(),
         tasks,
         instance_ids=["task-3", "task-1", "task-2"],
         sample=1,
@@ -600,6 +626,7 @@ def test_select_tasks_applies_skip_after_instance_filter() -> None:
 def test_select_tasks_rejects_negative_skip() -> None:
     with pytest.raises(ValueError, match="skip must be non-negative"):
         _select_tasks(
+            _SelectionBenchmark(),
             [{"instance_id": "task-1"}],
             instance_ids=None,
             sample=None,
@@ -610,6 +637,7 @@ def test_select_tasks_rejects_negative_skip() -> None:
 def test_select_tasks_rejects_negative_sample() -> None:
     with pytest.raises(ValueError, match="sample must be non-negative"):
         _select_tasks(
+            _SelectionBenchmark(),
             [{"instance_id": "task-1"}],
             instance_ids=None,
             sample=-1,

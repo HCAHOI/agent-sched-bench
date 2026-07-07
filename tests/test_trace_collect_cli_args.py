@@ -15,11 +15,14 @@ def test_parse_collect_args_accepts_skip_and_concurrency() -> None:
         "z-ai/glm-5.1",
         "--skip",
         "7",
+        "--selection-seed",
+        "43",
         "--concurrency",
         "3",
     ])
 
     assert args.skip == 7
+    assert args.selection_seed == 43
     assert args.concurrency == 3
 
 

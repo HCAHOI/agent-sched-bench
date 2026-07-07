@@ -121,6 +121,7 @@ def test_collect_traces_supports_host_controller_runner(
         validate_scaffold_support=lambda scaffold: None,
         runtime_mode_for=lambda scaffold: "host_controller",
         load_tasks=lambda: [{"instance_id": "tb-1"}],
+        select_subset=lambda tasks, n=None, seed=None: list(tasks)[:n],
         build_runner=lambda **kwargs: FakeRunner(),
         execution_environment="host",
         config=SimpleNamespace(

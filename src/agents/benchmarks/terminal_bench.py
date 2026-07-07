@@ -123,7 +123,11 @@ class TerminalBenchBenchmark(Benchmark):
         if extras.get("dataset_path"):
             dataset_root = Path(str(extras["dataset_path"])).expanduser().resolve()
             dataset = Dataset(path=dataset_root)
-            return dataset_root, [Path(p).resolve() for p in dataset]
+            task_paths = sorted(
+                (Path(p).resolve() for p in dataset),
+                key=lambda p: p.name,
+            )
+            return dataset_root, task_paths
 
         dataset = Dataset(
             name=str(extras["dataset_name"]),
@@ -136,4 +140,8 @@ class TerminalBenchBenchmark(Benchmark):
             ),
         )
         dataset_root = Path(dataset.config.path or dataset._path).resolve()
-        return dataset_root, [Path(p).resolve() for p in dataset]
+        task_paths = sorted(
+            (Path(p).resolve() for p in dataset),
+            key=lambda p: p.name,
+        )
+        return dataset_root, task_paths
