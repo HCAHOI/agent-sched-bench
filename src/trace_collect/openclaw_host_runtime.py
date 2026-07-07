@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -431,6 +432,60 @@ async def extract_container_patch(
         return None
     return result
 
+_RUNTIME_LABEL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.+-]{1,40}$")
+_RUNTIME_LABEL_PATH_RE = re.compile(r"^/[A-Za-z0-9_./:@+-]{0,159}$")
+_RUNTIME_LABEL_UID_RE = re.compile(r"^[0-9]{1,10}$")
+_PYTHON_VERSION_LABEL_RE = re.compile(
+    r"^Python [0-9]+(?:\.[0-9]+){1,3}[A-Za-z0-9.+_-]*$"
+)
+
+
+def _safe_runtime_label_token(value: object, *, default: str = "unknown") -> str:
+    text = ("" if value is None else str(value)).strip()
+    if _RUNTIME_LABEL_TOKEN_RE.fullmatch(text):
+        return text
+    return default
+
+
+def _safe_runtime_label_path(value: object, *, default: str = "unknown") -> str:
+    text = ("" if value is None else str(value)).strip()
+    if _RUNTIME_LABEL_PATH_RE.fullmatch(text):
+        return text
+    return default
+
+
+def _safe_runtime_label_uid(value: object, *, default: str = "unknown") -> str:
+    text = ("" if value is None else str(value)).strip()
+    if _RUNTIME_LABEL_UID_RE.fullmatch(text):
+        return text
+    return default
+
+
+def _safe_python_version_label(value: object) -> str:
+    text = ("" if value is None else str(value)).strip()
+    if "\n" in text or "\r" in text:
+        return "unknown"
+    if _PYTHON_VERSION_LABEL_RE.fullmatch(text):
+        return text
+    return "unknown"
+
+
+def container_runtime_label(proof: dict[str, Any]) -> str:
+    """Describe the tool execution environment shown to OpenClaw."""
+
+    workdir = _safe_runtime_label_path(proof.get("tool_container_workdir"))
+    user = _safe_runtime_label_token(proof.get("tool_container_user"))
+    uid = _safe_runtime_label_uid(proof.get("tool_container_user_id"))
+    os_name = _safe_runtime_label_token(proof.get("tool_container_os"))
+    arch = _safe_runtime_label_token(proof.get("tool_container_arch"))
+    python = _safe_python_version_label(proof.get("tool_container_python"))
+    return (
+        f"Shell/file tools runtime: {os_name} {arch}\n"
+        f"Shell/file tools workdir: {workdir}\n"
+        f"Shell/file tools user: {user} (uid {uid})\n"
+        f"Shell/file tools `python3`: {python}"
+    )
+
 
 async def container_runtime_proof(
     agent: ContainerAgent,
@@ -440,8 +495,15 @@ async def container_runtime_proof(
     expected_workdir: str,
     timeout_s: float = 30.0,
 ) -> dict[str, Any]:
+    probe_command = (
+        "id -u && pwd && "
+        "(uname -s 2>/dev/null || printf 'unknown\\n') && "
+        "(uname -m 2>/dev/null || printf 'unknown\\n') && "
+        "(if command -v python3 >/dev/null 2>&1; then "
+        "python3 --version 2>&1; else printf 'python3 unavailable\\n'; fi)"
+    )
     response = await agent.execute(
-        {"tool": "exec", "args": {"command": "id -u && pwd", "timeout": timeout_s}},
+        {"tool": "exec", "args": {"command": probe_command, "timeout": timeout_s}},
         timeout_s=timeout_s + 5.0,
     )
     if not response.get("ok", False):
@@ -452,10 +514,13 @@ async def container_runtime_proof(
             f"{response.get('returncode')}: {response.get('result', '')}"
         )
     lines = str(response.get("result", "")).strip().splitlines()
-    if len(lines) < 2:
+    if len(lines) < 5:
         raise RuntimeError(f"container root proof returned malformed output: {response!r}")
     uid_text = lines[0].strip()
-    observed_workdir = lines[-1].strip()
+    observed_workdir = lines[1].strip()
+    observed_os = lines[2].strip()
+    observed_arch = lines[3].strip()
+    observed_python = lines[4].strip()
     if uid_text != "0":
         raise RuntimeError(f"container tool bridge is not root: uid={uid_text!r}")
     if observed_workdir != expected_workdir:
@@ -470,6 +535,9 @@ async def container_runtime_proof(
         "tool_container_user": "root",
         "tool_container_user_id": 0,
         "tool_container_workdir": observed_workdir,
+        "tool_container_os": observed_os,
+        "tool_container_arch": observed_arch,
+        "tool_container_python": observed_python,
         "tool_runtime": "ContainerAgent",
         "openclaw_host_pid": os.getpid(),
         "mode": mode,
@@ -569,6 +637,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             mode="replay",
             expected_workdir=container_workdir,
         )
+        runtime_label = container_runtime_label(proof)
         provider = OpenClawReplayProvider(
             llm_actions=llm_actions,
             replay_speed=replay_speed,
@@ -607,6 +676,7 @@ async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str,
             instance_id=run_instance_id,
             channel="simulate",
             prepare_ms=None,
+            runtime_label=runtime_label,
         )
         _update_trace_metadata(output_trace, metadata_extra)
         sleep_records = [record.to_dict() for record in provider.sleep_records]

@@ -1,509 +1,428 @@
 from __future__ import annotations
 
-import pytest
+import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
-from agents.openclaw.runtime_deps import (
-    OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS,
-    OPENCLAW_MCP_RUNTIME_REQUIREMENTS,
-)
+import pytest
+
 from agents.terminal_bench.openclaw_agent import TerminalBenchOpenClawAgent
 from terminal_bench.agents.failure_mode import FailureMode
 
 
-class StubAgent(TerminalBenchOpenClawAgent):
-    @classmethod
-    def _build_wheel(cls) -> Path:
-        return Path("/tmp/agent_sched_bench-0.1.0-py3-none-any.whl")
+def make_agent(**overrides: Any) -> TerminalBenchOpenClawAgent:
+    config: dict[str, Any] = {
+        "model_name": "z-ai/glm-5.1",
+        "provider_name": "openrouter",
+        "api_base": "https://openrouter.ai/api/v1",
+        "api_key": "test-key",
+        "env_key": "OPENROUTER_API_KEY",
+        "max_iterations": 25,
+    }
+    config.update(overrides)
+    return TerminalBenchOpenClawAgent(**config)
 
 
-def test_install_script_uses_virtualenv() -> None:
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-    )
-    script_path = agent._install_agent_script_path
-    content = script_path.read_text(encoding="utf-8")
-    assert "/installed-agent/python/bin/python3 -m venv /installed-agent/venv" in content
-    for requirement in OPENCLAW_CONTAINER_RUNTIME_REQUIREMENTS:
-        assert requirement in content
-    assert (
-        "/installed-agent/venv/bin/python -m pip install --no-deps /installed-agent/agent_sched_bench-0.1.0-py3-none-any.whl"
-        in content
-    )
-    for heavy_dep in (
-        "datasets",
-        "terminal-bench",
-        "trafilatura",
-    ):
-        assert heavy_dep not in content
+def test_install_script_is_noop_for_host_controller() -> None:
+    agent = make_agent()
+
+    script = agent._install_agent_script_path.read_text(encoding="utf-8")
+
+    assert "OpenClaw runs on the host" in script
+    assert "pip install" not in script
+    assert "agent_sched_bench" not in script
+    assert "OPENROUTER_API_KEY" not in script
 
 
-def test_install_script_adds_mcp_only_when_configured() -> None:
-    plain_agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-    )
-    mcp_agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-        mcp_config_path="/tmp/context7.yaml",
-    )
+def test_run_agent_commands_are_empty_for_host_controller() -> None:
+    agent = make_agent()
 
-    plain_content = plain_agent._install_agent_script_path.read_text(encoding="utf-8")
-    mcp_content = mcp_agent._install_agent_script_path.read_text(encoding="utf-8")
-
-    for requirement in OPENCLAW_MCP_RUNTIME_REQUIREMENTS:
-        assert requirement not in plain_content
-        assert requirement in mcp_content
-
-
-def test_run_command_uses_venv_openclaw_and_iteration_limit() -> None:
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-    )
-    commands = agent._run_agent_commands()
-    assert len(commands) == 1
-    command = commands[0].command
-    assert command.startswith(
-        'OPENROUTER_API_KEY="$(cat /installed-agent/.openclaw-api-key.fifo)" '
-        "/installed-agent/venv/bin/openclaw "
-    )
-    assert "--max-iterations 25" in command
-    assert "--prompt-file /installed-agent/openclaw-prompt.txt" in command
-    assert "--prompt " not in command
-    assert commands[0].max_timeout_sec == float("inf")
-
-
-def test_run_command_does_not_embed_task_prompt() -> None:
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-    )
-
-    command = agent._run_agent_commands()[0].command
-
-    assert "sqlite" not in command
-    assert "hello task" not in command
-
-
-def test_run_command_uses_configured_agent_timeout() -> None:
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-        agent_timeout_sec=120,
-    )
-    commands = agent._run_agent_commands()
-    assert commands[0].max_timeout_sec == 120.0
+    assert agent._run_agent_commands("solve sqlite query") == []
+    assert agent._env == {}
 
 
 def test_agent_rejects_host_local_api_base() -> None:
     with pytest.raises(ValueError, match="local/private OpenAI-compatible"):
-        StubAgent(
+        make_agent(
             model_name="local-model",
             provider_name="openai",
             api_base="http://172.17.0.1:33895/v1",
             api_key="test-key",
             env_key="OPENAI_API_KEY",
-            max_iterations=25,
         )
 
 
-def test_run_command_forwards_mcp_config_to_container() -> None:
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="test-key",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-        mcp_config_path="/tmp/context7.yaml",
-    )
-    command = agent._run_agent_commands()[0].command
-    assert "--mcp-config /installed-agent/context7.yaml --workspace ." in command
+def test_bootstrap_checks_real_modern_venv_creation() -> None:
+    command = TerminalBenchOpenClawAgent._bootstrap_dependencies_command()
 
-
-def test_bootstrap_checks_real_venv_creation() -> None:
-    command = StubAgent._bootstrap_dependencies_command()
     assert "python3 -m venv --help" not in command
     assert '"$1" -m venv "$probe_root/venv"' in command
     assert '"$probe_root/venv/bin/python" -m pip --version' in command
     assert "python3 python3-pip python3-venv curl ca-certificates" in command
-    assert "sys.version_info >= (3, 10)" in command
-    assert "for candidate in python3 python3.13 python3.12 python3.11 python3.10" in command
-    assert "modern_python=$(find_modern_python)" in command
+    assert "sys.version_info >= (3, 11)" in command
+    assert "for candidate in python3 python3.13 python3.12 python3.11" in command
+    assert "supported_python=$(find_supported_python)" in command
+    assert "if install_python_deps; then" in command
     assert "/installed-agent/uv/uv python install 3.12" in command
     assert "/installed-agent/python/bin/python3" in command
 
 
-def test_build_wheel_uses_uv_without_pip_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    import subprocess
-    import agents.terminal_bench.openclaw_agent as openclaw_agent_module
+def test_bridge_bootstrap_selects_stdlib_python() -> None:
+    command = TerminalBenchOpenClawAgent._bootstrap_bridge_python_command()
 
-    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_WHEEL_CACHE", None)
-    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_repo_root", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(
-        openclaw_agent_module,
-        "shutil",
-        SimpleNamespace(which=lambda name: "/usr/bin/uv" if name == "uv" else None),
-        raising=False,
-    )
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(list(cmd))
-        if cmd[0] == "/usr/bin/uv":
-            wheel_dir = Path(cmd[cmd.index("--out-dir") + 1])
-            wheel_dir.mkdir(parents=True, exist_ok=True)
-            wheel = wheel_dir / "agent_sched_bench-0.1.0-py3-none-any.whl"
-            wheel.write_bytes(b"wheel")
-            return subprocess.CompletedProcess(cmd, 0, stdout="uv ok", stderr="")
-        raise AssertionError("pip fallback must not run after a successful uv build")
-
-    monkeypatch.setattr(openclaw_agent_module.subprocess, "run", fake_run)
-
-    wheel = TerminalBenchOpenClawAgent._build_wheel()
-
-    assert wheel.name == "agent_sched_bench-0.1.0-py3-none-any.whl"
-    assert wheel.read_bytes() == b"wheel"
-    assert calls == [
-        [
-            "/usr/bin/uv",
-            "build",
-            "--wheel",
-            "--out-dir",
-            str(wheel.parent),
-        ]
-    ]
+    assert "venv_ready" not in command
+    assert "pip --version" not in command
+    assert "python3 curl ca-certificates" in command
+    assert "sys.version_info >= (3, 6)" in command
+    assert "sys.version_info >= (3, 11)" not in command
+    assert "/installed-agent/uv/uv python install 3.12" not in command
+    assert "/installed-agent/python/bin/python3" in command
 
 
-def test_build_wheel_reports_combined_uv_and_pip_failures(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    import subprocess
-    import sys
-    import agents.terminal_bench.openclaw_agent as openclaw_agent_module
+def test_bridge_bootstrap_timeout_is_configurable() -> None:
+    agent = make_agent(bridge_bootstrap_timeout_sec="12.5")
 
-    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_WHEEL_CACHE", None)
-    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_repo_root", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(
-        openclaw_agent_module,
-        "shutil",
-        SimpleNamespace(which=lambda name: "/usr/bin/uv" if name == "uv" else None),
-        raising=False,
-    )
-
-    def fake_run(cmd, **kwargs):
-        if cmd[0] == "/usr/bin/uv":
-            return subprocess.CompletedProcess(
-                cmd,
-                3,
-                stdout="uv stdout",
-                stderr="uv stderr",
-            )
-        assert cmd[:4] == [sys.executable, "-m", "pip", "wheel"]
-        return subprocess.CompletedProcess(
-            cmd,
-            1,
-            stdout="pip stdout",
-            stderr="No module named pip",
-        )
-
-    monkeypatch.setattr(openclaw_agent_module.subprocess, "run", fake_run)
-
-    with pytest.raises(RuntimeError) as exc_info:
-        TerminalBenchOpenClawAgent._build_wheel()
-
-    message = str(exc_info.value)
-    assert "uv build failed (returncode=3)" in message
-    assert "uv stdout" in message
-    assert "uv stderr" in message
-    assert "pip wheel failed (returncode=1)" in message
-    assert "pip stdout" in message
-    assert "No module named pip" in message
+    assert agent._bridge_bootstrap_timeout_sec == 12.5
+    with pytest.raises(ValueError, match="bridge_bootstrap_timeout_sec"):
+        make_agent(bridge_bootstrap_timeout_sec=0)
 
 
 def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in TerminalBenchOpenClawAgent._ENV_PASSTHROUGH:
-        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key=None,
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-    )
+
+    agent = make_agent(api_key=None)
+
     assert agent._api_key == "env-key"
-    assert agent._secret_exec_environment() == {"OPENCLAW_SECRET_VALUE": "env-key"}
-    assert agent._env == {"OPENCLAW_API_BASE": "https://openrouter.ai/api/v1"}
-    assert "env-key" not in agent._create_env_setup_file()
+    assert agent._env == {}
+    assert "env-key" not in agent._install_agent_script_path.read_text(encoding="utf-8")
 
 
-def test_perform_task_does_not_embed_api_key_in_commands(
+def test_perform_task_runs_host_session_with_container_tools(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    secret = "fake-openrouter-secret"
-    agent = StubAgent(
-        model_name="qwen/qwen3.7-max",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key=secret,
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-        agent_timeout_sec=120,
-    )
-    calls: list[object] = []
+    calls: list[tuple[str, Any]] = []
 
     class FakeContainer:
-        id = "container-id"
+        id = "abcdef1234567890"
 
-        def exec_run(self, cmd, user=None, environment=None, detach=False):
-            calls.append(("exec_run", cmd, user, environment, detach))
-            return SimpleNamespace(exit_code=0, output=b"")
+        def exec_run(self, cmd: list[str], user: str | None = None) -> SimpleNamespace:
+            calls.append(("exec_run", {"cmd": cmd, "user": user}))
+            if cmd[:5] == ["tmux", "display-message", "-p", "-t", "agent"]:
+                return SimpleNamespace(exit_code=0, output=b"/workdir\n")
+            if cmd[:2] == ["bash", "-lc"]:
+                return SimpleNamespace(exit_code=0, output=b"bootstrapped")
+            raise AssertionError(f"unexpected container exec: {cmd!r}")
 
     class FakeSession:
-        def __init__(self) -> None:
-            self.container = FakeContainer()
-            self._session_name = "agent"
+        container = FakeContainer()
+        _session_name = "agent"
 
-        def copy_to_container(self, paths, container_dir=None):
-            calls.append(("copy_to_container", paths, container_dir))
+    class FakeContainerAgent:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            *,
+            workdir: str,
+        ) -> None:
+            calls.append(
+                (
+                    "container_agent_init",
+                    {
+                        "container_id": container_id,
+                        "container_executable": container_executable,
+                        "workdir": workdir,
+                    },
+                )
+            )
 
-        def send_keys(self, keys, **kwargs):
-            calls.append(("send_keys", keys, kwargs))
+        async def start(self) -> None:
+            calls.append(("container_agent_start", None))
 
-        def send_command(self, command):
-            calls.append(("send_command", command))
+        async def stop(self) -> None:
+            calls.append(("container_agent_stop", None))
 
-        def capture_pane(self, capture_entire=False):
-            calls.append(("capture_pane", capture_entire))
-            return "installation ok"
+    class FakeProvider:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(("provider_init", kwargs))
 
-    def fake_run(cmd, **kwargs):
-        calls.append(("subprocess.run", cmd, kwargs))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    class FakeSessionRunner:
+        def __init__(self, provider: FakeProvider, **kwargs: Any) -> None:
+            calls.append(("runner_init", kwargs))
 
+        async def run(self, **kwargs: Any) -> SimpleNamespace:
+            calls.append(("runner_run", kwargs))
+            trace_file = Path(kwargs["trace_file"])
+            trace_file.write_text(
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "status": "started",
+                        "prompt_runtime_label": kwargs["runtime_label"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(stop_reason="completed", error=None)
+
+    async def fake_runtime_proof(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(("runtime_proof", kwargs))
+        return {
+            "agent_execution_environment": "host",
+            "tool_execution_environment": "task_container",
+            "tool_container_id": "abcdef1234567890",
+            "tool_container_user": "root",
+            "tool_container_user_id": 0,
+            "tool_container_workdir": "/workdir",
+            "tool_container_os": "Linux",
+            "tool_container_arch": "x86_64",
+            "tool_container_python": "Python 3.6.9",
+            "tool_runtime": "ContainerAgent",
+        }
+
+    def fake_build_tools(*args: Any, **kwargs: Any) -> list[str]:
+        calls.append(("build_tools", kwargs))
+        return ["container-tool"]
+
+    monkeypatch.setattr("agents.terminal_bench.openclaw_agent.shutil.which", lambda _: "/usr/bin/docker")
     monkeypatch.setattr(
-        "agents.terminal_bench.openclaw_agent.subprocess.run",
-        fake_run,
+        "agents.terminal_bench.openclaw_agent.ContainerAgent",
+        FakeContainerAgent,
+    )
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.UnifiedProvider",
+        FakeProvider,
+    )
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.SessionRunner",
+        FakeSessionRunner,
+    )
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.container_runtime_proof",
+        fake_runtime_proof,
+    )
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.build_container_tools_for_agent",
+        fake_build_tools,
     )
 
-    result = agent.perform_task(
+    result = make_agent(api_key="secret-value").perform_task(
         "solve sqlite query",
-        FakeSession(),
+        FakeSession(),  # type: ignore[arg-type]
         logging_dir=tmp_path,
     )
 
     assert result.failure_mode == FailureMode.NONE
-    assert secret not in agent._create_env_setup_file()
-    command_texts = [
-        repr(call[1])
-        for call in calls
-        if call[0] in {"exec_run", "send_keys", "send_command", "subprocess.run"}
-    ]
-    assert command_texts
-    assert not any(secret in text for text in command_texts)
-    secret_exec_envs = [
-        call[3]
-        for call in calls
-        if call[0] == "exec_run"
-        and call[3] == {"OPENCLAW_SECRET_VALUE": secret}
-    ]
-    assert len(secret_exec_envs) == 1
-    send_commands = [call[1].command for call in calls if call[0] == "send_command"]
-    assert len(send_commands) == 1
-    assert 'OPENROUTER_API_KEY="$(cat /installed-agent/.openclaw-api-key.fifo)"' in (
-        send_commands[0]
+    assert (tmp_path / "openclaw-complete.marker").read_text(encoding="utf-8") == (
+        "completed\n"
     )
-    assert "--api-base https://openrouter.ai/api/v1" in send_commands[0]
+    trace_records = [
+        json.loads(line)
+        for line in (tmp_path / "openclaw-trace.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert trace_records[0]["openclaw_runtime"] == "host_session_runner"
+    assert trace_records[0]["terminal_bench_container_id"] == "abcdef1234567890"
+    assert trace_records[0]["terminal_bench_workdir"] == "/workdir"
+    assert trace_records[0]["tool_container_python"] == "Python 3.6.9"
+    assert "Shell/file tools `python3`: Python 3.6.9" in trace_records[0][
+        "prompt_runtime_label"
+    ]
+
+    provider_kwargs = next(value for name, value in calls if name == "provider_init")
+    assert provider_kwargs["api_key"] == "secret-value"
+    assert provider_kwargs["api_base"] == "https://openrouter.ai/api/v1"
+    assert provider_kwargs["default_model"] == "z-ai/glm-5.1"
+
+    runner_kwargs = next(value for name, value in calls if name == "runner_init")
+    assert runner_kwargs["model"] == "z-ai/glm-5.1"
+    assert runner_kwargs["max_iterations"] == 25
+    assert runner_kwargs["tool_overrides"] == ["container-tool"]
+
+    run_kwargs = next(value for name, value in calls if name == "runner_run")
+    assert run_kwargs["prompt"] == "solve sqlite query"
+    assert run_kwargs["tool_workspace"] == Path("/workdir")
+    assert run_kwargs["project_workspace"] == Path("/workdir")
+    assert run_kwargs["session_key"] == "terminal-bench:abcdef123456"
+    assert run_kwargs["channel"] == "terminal-bench"
+    assert "Shell/file tools runtime: Linux x86_64" in run_kwargs["runtime_label"]
+    assert "Shell/file tools `python3`: Python 3.6.9" in run_kwargs[
+        "runtime_label"
+    ]
+
+    assert ("container_agent_start", None) in calls
+    assert ("container_agent_stop", None) in calls
+    rendered_calls = repr(calls)
+    assert "secret-value" in repr(provider_kwargs)
+    assert "secret-value" not in rendered_calls.replace(repr(provider_kwargs), "")
+
+    container_execs = [value for name, value in calls if name == "exec_run"]
+    assert not any(
+        exec_call["cmd"][:2] == ["bash", "-lc"] for exec_call in container_execs
+    )
 
 
-def test_perform_task_cleans_tmux_session_on_agent_timeout(
+def test_bridge_python_bootstrap_retries_after_container_agent_probe_failure() -> None:
+    calls: list[list[str]] = []
+
+    class FakeContainer:
+        def exec_run(self, cmd: list[str], user: str | None = None) -> SimpleNamespace:
+            assert user == "root"
+            calls.append(cmd)
+            if cmd[:4] == ["timeout", "--kill-after=5s", "3600s", "bash"]:
+                return SimpleNamespace(exit_code=0, output=b"bootstrapped")
+            raise AssertionError(f"unexpected container exec: {cmd!r}")
+
+    class FakeSession:
+        container = FakeContainer()
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.starts = 0
+
+        async def start(self) -> None:
+            self.starts += 1
+            if self.starts == 1:
+                raise RuntimeError("ContainerAgent: no Python >=3.6 found")
+
+    fake_agent = FakeAgent()
+
+    asyncio.run(
+        make_agent()._start_container_agent(
+            fake_agent,  # type: ignore[arg-type]
+            session=FakeSession(),  # type: ignore[arg-type]
+            deadline=None,
+        )
+    )
+
+    assert fake_agent.starts == 2
+    assert calls[0][:4] == ["timeout", "--kill-after=5s", "3600s", "bash"]
+    assert "sys.version_info >= (3, 6)" in calls[0][-1]
+    assert "sys.version_info >= (3, 11)" not in calls[0][-1]
+
+
+def test_bridge_python_bootstrap_container_timeout_is_agent_timeout() -> None:
+    calls: list[list[str]] = []
+
+    class FakeContainer:
+        def exec_run(self, cmd: list[str], user: str | None = None) -> SimpleNamespace:
+            assert user == "root"
+            calls.append(cmd)
+            return SimpleNamespace(exit_code=124, output=b"timeout")
+
+    class FakeSession:
+        container = FakeContainer()
+
+    with pytest.raises(TimeoutError, match="host-controller deadline exceeded"):
+        make_agent()._bootstrap_container_bridge_python(
+            FakeSession(),  # type: ignore[arg-type]
+            timeout_s=3.2,
+        )
+
+    assert calls[0][:4] == ["timeout", "--kill-after=5s", "3.2s", "bash"]
+
+
+def test_bridge_bootstrap_timeout_caps_agent_deadline() -> None:
+    configured_timeout_s = 12.5
+    remaining_agent_deadline_s = 7200.0
+    calls: list[list[str]] = []
+
+    class FakeContainer:
+        def exec_run(self, cmd: list[str], user: str | None = None) -> SimpleNamespace:
+            assert user == "root"
+            calls.append(cmd)
+            return SimpleNamespace(exit_code=0, output=b"bootstrapped")
+
+    class FakeSession:
+        container = FakeContainer()
+
+    make_agent(
+        bridge_bootstrap_timeout_sec=configured_timeout_s
+    )._bootstrap_container_bridge_python(
+        FakeSession(),  # type: ignore[arg-type]
+        timeout_s=remaining_agent_deadline_s,
+    )
+
+    assert calls[0][:4] == [
+        "timeout",
+        "--kill-after=5s",
+        f"{configured_timeout_s:g}s",
+        "bash",
+    ]
+
+
+def test_bridge_bootstrap_timeout_format_never_rounds_up() -> None:
+    assert TerminalBenchOpenClawAgent._format_timeout_s(1.0000006) == "1s"
+
+
+def test_perform_task_reports_failed_host_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="dummy",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-        agent_timeout_sec=120,
-    )
-    calls: list[object] = []
-
     class FakeContainer:
         id = "container-id"
 
-        def exec_run(self, cmd, user=None, environment=None, detach=False):
-            calls.append(("exec_run", cmd, user, environment, detach))
-            return SimpleNamespace(exit_code=0, output=b"")
+        def exec_run(self, cmd: list[str], user: str | None = None) -> SimpleNamespace:
+            if cmd[:5] == ["tmux", "display-message", "-p", "-t", "agent"]:
+                return SimpleNamespace(exit_code=0, output=b"/workdir\n")
+            if cmd[:2] == ["bash", "-lc"]:
+                return SimpleNamespace(exit_code=0, output=b"bootstrapped")
+            raise AssertionError(f"unexpected container exec: {cmd!r}")
 
     class FakeSession:
-        def __init__(self) -> None:
-            self.container = FakeContainer()
-            self._session_name = "agent"
+        container = FakeContainer()
+        _session_name = "agent"
 
-        def copy_to_container(self, paths, container_dir=None):
-            calls.append(("copy_to_container", paths, container_dir))
+    class FakeContainerAgent:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
 
-        def send_keys(self, keys, **kwargs):
-            calls.append(("send_keys", keys, kwargs))
+        async def start(self) -> None:
+            pass
 
-        def send_command(self, command):
-            calls.append(("send_command", command))
-            raise TimeoutError("agent command timed out")
+        async def stop(self) -> None:
+            pass
 
-        def capture_pane(self, capture_entire=False):
-            calls.append(("capture_pane", capture_entire))
-            return "pane output"
+    class FakeSessionRunner:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
 
-    def fake_run(cmd, **kwargs):
-        calls.append(("subprocess.run", cmd, kwargs))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        async def run(self, **kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(stop_reason="max_iterations", error=None)
 
+    async def fake_runtime_proof(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr("agents.terminal_bench.openclaw_agent.shutil.which", lambda _: "/usr/bin/docker")
     monkeypatch.setattr(
-        "agents.terminal_bench.openclaw_agent.subprocess.run",
-        fake_run,
+        "agents.terminal_bench.openclaw_agent.ContainerAgent",
+        FakeContainerAgent,
+    )
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.SessionRunner",
+        FakeSessionRunner,
+    )
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.container_runtime_proof",
+        fake_runtime_proof,
+    )
+    monkeypatch.setattr(
+        "agents.terminal_bench.openclaw_agent.build_container_tools_for_agent",
+        lambda *args, **kwargs: [],
     )
 
-    result = agent.perform_task(
-        "solve sqlite query",
-        FakeSession(),
-        logging_dir=tmp_path,
-    )
-
-    assert result.failure_mode == FailureMode.AGENT_TIMEOUT
-    assert (tmp_path / "openclaw-timeout.marker").read_text(encoding="utf-8") == (
-        "timeout\n"
-    )
-    assert (tmp_path / "openclaw-timeout-pane.txt").read_text(
-        encoding="utf-8"
-    ) == "pane output"
-    assert any(call[0] == "send_keys" and call[1] == ["C-c"] for call in calls)
-    cleanup_commands = [
-        call[1]
-        for call in calls
-        if call[0] == "exec_run" and call[1][:2] == ["sh", "-lc"]
-    ]
-    assert cleanup_commands
-    assert "tmux kill-session -t agent" in cleanup_commands[-1][2]
-    assert (
-        "pkill -TERM -f '/installed-agent/venv/bin/openclaw'"
-        in (cleanup_commands[-1][2])
-    )
-    copied_paths = [
-        Path(call[1][2])
-        for call in calls
-        if call[0] == "subprocess.run" and call[1][:2] == ["docker", "cp"]
-    ]
-    prompt_paths = [
-        path for path in copied_paths if path.name == agent.PROMPT_FILENAME
-    ]
-    assert len(prompt_paths) == 1
-    assert prompt_paths[0].read_text(encoding="utf-8") == "solve sqlite query"
-    send_commands = [call[1].command for call in calls if call[0] == "send_command"]
-    assert send_commands
-    assert "--prompt-file /installed-agent/openclaw-prompt.txt" in send_commands[-1]
-    assert "sqlite" not in send_commands[-1]
-
-
-def test_perform_task_cleans_tmux_session_on_bootstrap_timeout(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(
-        model_name="z-ai/glm-5.1",
-        provider_name="openrouter",
-        api_base="https://openrouter.ai/api/v1",
-        api_key="dummy",
-        env_key="OPENROUTER_API_KEY",
-        max_iterations=25,
-        agent_timeout_sec=120,
-    )
-    calls: list[object] = []
-
-    class FakeContainer:
-        def exec_run(self, cmd, user=None):
-            calls.append(("exec_run", cmd, user))
-            if cmd[:1] == ["timeout"] and cmd[2:4] == ["bash", "-lc"]:
-                return SimpleNamespace(exit_code=124, output=b"")
-            return SimpleNamespace(exit_code=0, output=b"")
-
-    class FakeSession:
-        def __init__(self) -> None:
-            self.container = FakeContainer()
-            self._session_name = "agent"
-
-        def copy_to_container(self, paths, container_dir=None):
-            calls.append(("copy_to_container", paths, container_dir))
-
-        def send_keys(self, keys, **kwargs):
-            calls.append(("send_keys", keys, kwargs))
-
-        def send_command(self, command):
-            calls.append(("send_command", command))
-
-        def capture_pane(self, capture_entire=False):
-            calls.append(("capture_pane", capture_entire))
-            return "bootstrap pane"
-
-    result = agent.perform_task(
+    result = make_agent().perform_task(
         "solve it",
-        FakeSession(),
+        FakeSession(),  # type: ignore[arg-type]
         logging_dir=tmp_path,
     )
 
-    assert result.failure_mode == FailureMode.AGENT_TIMEOUT
-    assert (tmp_path / "openclaw-timeout.marker").read_text(encoding="utf-8") == (
-        "timeout\n"
-    )
-    assert (tmp_path / "openclaw-timeout-pane.txt").read_text(
+    assert result.failure_mode == FailureMode.UNKNOWN_AGENT_ERROR
+    assert "stop_reason='max_iterations'" in (tmp_path / "openclaw-error.txt").read_text(
         encoding="utf-8"
-    ) == "bootstrap pane"
-    assert not any(call[0] == "copy_to_container" for call in calls)
-    assert not any(
-        call[0] == "send_keys"
-        and call[1] == ["source /installed-agent/setup-env.sh", "Enter"]
-        for call in calls
     )
-    cleanup_commands = [
-        call[1]
-        for call in calls
-        if call[0] == "exec_run" and call[1][:2] == ["sh", "-lc"]
-    ]
-    assert cleanup_commands
-    assert "tmux kill-session -t agent" in cleanup_commands[-1][2]

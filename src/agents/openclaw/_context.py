@@ -23,10 +23,12 @@ class ContextBuilder:
         *,
         memory_dir: Path | None = None,
         skills_dir: Path | None = None,
+        runtime_label: str | None = None,
     ):
         self.workspace = workspace
         self.project_workspace = project_workspace or workspace
         self.timezone = timezone
+        self.runtime_label = runtime_label.strip() if runtime_label else None
         # Memory and skills must use the same runtime dirs the consolidator and
         # loop use, so prompt reads match runtime writes. Workspace-local
         # memory/skills are deprecated to avoid contaminating target repos.
@@ -45,8 +47,10 @@ class ContextBuilder:
     def _get_identity(self) -> str:
         workspace_path = str(self.project_workspace.expanduser().resolve())
         system = platform.system()
-        runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-
+        runtime = self.runtime_label or (
+            f"{'macOS' if system == 'Darwin' else system} "
+            f"{platform.machine()}, Python {platform.python_version()}"
+        )
         platform_policy = ""
         if system == "Windows":
             platform_policy = """## Platform Policy (Windows)

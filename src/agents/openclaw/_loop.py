@@ -185,6 +185,7 @@ class AgentLoop:
         tool_results_dir: Path | None = None,
         mcp_servers: dict | None = None,
         timezone: str | None = None,
+        runtime_label: str | None = None,
         hooks: list[AgentHook] | None = None,
         tool_overrides: list[Any] | None = None,
     ):
@@ -236,6 +237,7 @@ class AgentLoop:
             project_workspace=self.project_workspace,
             memory_dir=memory_dir,
             skills_dir=skills_dir,
+            runtime_label=runtime_label,
         )
         self.sessions = session_manager or SessionManager(
             workspace, storage_dir=session_dir

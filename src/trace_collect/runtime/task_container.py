@@ -46,6 +46,7 @@ _CONTAINER_PYTHON_CANDIDATES = (
     "/opt/miniconda3/bin/python",
     "/opt/conda/bin/python3",
     "/opt/conda/bin/python",
+    "/installed-agent/python/bin/python3",
     "python3",
     "python",
 )

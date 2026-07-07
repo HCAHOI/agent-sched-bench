@@ -1034,6 +1034,7 @@ async def _run_openclaw_in_task_container(
         from agents.openclaw.eval.types import EvalTask
         from trace_collect.openclaw_host_runtime import (
             build_container_tools_for_agent,
+            container_runtime_label,
             container_runtime_proof,
             extract_container_patch,
         )
@@ -1044,6 +1045,13 @@ async def _run_openclaw_in_task_container(
         stderr_path.write_text("", encoding="utf-8")
         agent = ContainerAgent(container_id, container_executable)
         await agent.start()
+        runtime_proof = await container_runtime_proof(
+            agent,
+            container_id=container_id,
+            mode="collect",
+            expected_workdir="/testbed",
+        )
+        runtime_label = container_runtime_label(runtime_proof)
 
         async def _patch_extractor(
             _diff_cwd: str,
@@ -1093,17 +1101,12 @@ async def _run_openclaw_in_task_container(
                 tool_workspace=Path("/testbed"),
                 exec_working_dir="/testbed",
                 trace_file=(ctx.attempt_dir / "trace.jsonl").resolve(),
+                runtime_label=runtime_label,
             )
         finally:
             ctx.agent_end_time = datetime.now(tz=timezone.utc)
         total_llm_ms, total_tool_ms, total_tokens = _trace_summary_totals(
             ctx.attempt_dir / "trace.jsonl"
-        )
-        runtime_proof = await container_runtime_proof(
-            agent,
-            container_id=container_id,
-            mode="collect",
-            expected_workdir="/testbed",
         )
         _normalize_openclaw_trace(
             src=ctx.attempt_dir / "trace.jsonl",

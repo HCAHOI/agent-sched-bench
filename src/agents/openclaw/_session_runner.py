@@ -764,6 +764,7 @@ class SessionRunner:
         instance_id: str | None = None,
         channel: str = "cli",
         prepare_ms: float | None = None,
+        runtime_label: str | None = None,
     ) -> SessionRunResult:
         workspace.mkdir(parents=True, exist_ok=True)
         trace_file = Path(trace_file)
@@ -811,6 +812,8 @@ class SessionRunner:
                 "file_ops": "structured",
             },
         }
+        if runtime_label is not None:
+            metadata["prompt_runtime_label"] = runtime_label
         trace_hook.add_record(metadata)
 
         bus = MessageBus()
@@ -837,6 +840,7 @@ class SessionRunner:
             tool_results_dir=effective_tool_results_dir,
             hooks=all_hooks,
             malformed_retry_budget=self.malformed_retry_budget,
+            runtime_label=runtime_label,
             tool_overrides=self.tool_overrides,
         )
 

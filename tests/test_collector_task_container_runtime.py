@@ -86,7 +86,11 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
 
         async def execute(self, request: dict, *, timeout_s: float = 600.0) -> dict:
             agent_seen.setdefault("requests", []).append((request, timeout_s))
-            return {"ok": True, "result": "0\n/testbed\n", "returncode": 0}
+            return {
+                "ok": True,
+                "result": "0\n/testbed\nLinux\nx86_64\nPython 3.11.0\n",
+                "returncode": 0,
+            }
 
     class FakeRunner:
         async def run_task(self, eval_task, **kwargs):
@@ -220,6 +224,8 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     assert run_seen["tool_workspace"] == Path("/testbed")
     assert run_seen["exec_working_dir"] == "/testbed"
     assert Path(run_seen["trace_file"]) == (ctx.attempt_dir / "trace.jsonl").resolve()
+    assert "Shell/file tools runtime: Linux x86_64" in run_seen["runtime_label"]
+    assert "Shell/file tools `python3`: Python 3.11.0" in run_seen["runtime_label"]
     assert Path(run_seen["eval_task"].workspace_dir) == runtime_dir / "workspace_base" / ctx.instance_id
     assert result.total_llm_ms == 12.0
     assert result.total_tool_ms == 6.0
@@ -247,7 +253,11 @@ def test_run_openclaw_in_task_container_completed_without_patch_is_not_success(
             return None
 
         async def execute(self, request: dict, *, timeout_s: float = 600.0) -> dict:
-            return {"ok": True, "result": "0\n/testbed\n", "returncode": 0}
+            return {
+                "ok": True,
+                "result": "0\n/testbed\nLinux\nx86_64\nPython 3.11.0\n",
+                "returncode": 0,
+            }
 
     class FakeRunner:
         async def run_task(self, eval_task, **kwargs):

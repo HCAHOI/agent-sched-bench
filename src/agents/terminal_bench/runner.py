@@ -95,6 +95,10 @@ class TerminalBenchRunner:
             self.benchmark_extras.get("llm_timeout_sec"),
             name="benchmark_extras.llm_timeout_sec",
         )
+        self.bridge_bootstrap_timeout_sec = _optional_positive_float(
+            self.benchmark_extras.get("bridge_bootstrap_timeout_sec"),
+            name="benchmark_extras.bridge_bootstrap_timeout_sec",
+        )
         self.tb_process_cleanup_grace_sec = (
             _optional_positive_float(
                 self.benchmark_extras.get("tb_process_cleanup_grace_sec"),
@@ -377,6 +381,13 @@ class TerminalBenchRunner:
                 [
                     "--agent-kwarg",
                     f"agent_timeout_sec={agent_timeout_sec}",
+                ]
+            )
+        if self.bridge_bootstrap_timeout_sec is not None:
+            command.extend(
+                [
+                    "--agent-kwarg",
+                    f"bridge_bootstrap_timeout_sec={self.bridge_bootstrap_timeout_sec}",
                 ]
             )
         if self.global_agent_timeout_sec is not None:
@@ -863,6 +874,10 @@ class TerminalBenchRunner:
             run_config["global_agent_timeout_sec"] = self.global_agent_timeout_sec
         if self.llm_timeout_sec is not None:
             run_config["llm_timeout_sec"] = self.llm_timeout_sec
+        if self.bridge_bootstrap_timeout_sec is not None:
+            run_config["bridge_bootstrap_timeout_sec"] = (
+                self.bridge_bootstrap_timeout_sec
+            )
         run_config["tb_process_cleanup_grace_sec"] = self.tb_process_cleanup_grace_sec
         if self.generation_config:
             run_config["generation"] = dict(self.generation_config)
@@ -890,6 +905,8 @@ class TerminalBenchRunner:
             summary["global_agent_timeout_sec"] = self.global_agent_timeout_sec
         if self.llm_timeout_sec is not None:
             summary["llm_timeout_sec"] = self.llm_timeout_sec
+        if self.bridge_bootstrap_timeout_sec is not None:
+            summary["bridge_bootstrap_timeout_sec"] = self.bridge_bootstrap_timeout_sec
         summary["tb_process_cleanup_grace_sec"] = self.tb_process_cleanup_grace_sec
         if self.mcp_config_label is not None:
             summary["mcp_config"] = self.mcp_config_label

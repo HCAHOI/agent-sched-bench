@@ -276,15 +276,10 @@ def test_tool_result_spill_none_dir_returns_raw(tmp_path: Path) -> None:
 # ── Suite 6: Terminal-Bench command construction ───────────────────
 
 
-def test_terminal_bench_command_includes_runtime_dir() -> None:
+def test_terminal_bench_host_adapter_has_no_in_container_agent_command() -> None:
     from agents.terminal_bench.openclaw_agent import TerminalBenchOpenClawAgent
 
-    class StubAgent(TerminalBenchOpenClawAgent):
-        @classmethod
-        def _build_wheel(cls) -> Path:
-            return Path("/tmp/agent_sched_bench-0.1.0-py3-none-any.whl")
-
-    agent = StubAgent(
+    agent = TerminalBenchOpenClawAgent(
         model_name="z-ai/glm-5.1",
         provider_name="openrouter",
         api_base="https://openrouter.ai/api/v1",
@@ -292,11 +287,12 @@ def test_terminal_bench_command_includes_runtime_dir() -> None:
         env_key="OPENROUTER_API_KEY",
         max_iterations=25,
     )
-    command = agent._run_agent_commands()[0].command
 
-    assert "--workspace ." in command
-    assert "--trace-output /agent-logs/openclaw-trace.jsonl" in command
-    assert "--runtime-dir /agent-logs/openclaw-runtime" in command
+    assert agent._run_agent_commands() == []
+    install_script = agent._install_agent_script_path.read_text(encoding="utf-8")
+    assert "OpenClaw runs on the host" in install_script
+    assert "--trace-output" not in install_script
+    assert "--runtime-dir" not in install_script
 
 
 # ── Suite 7: SWE/OpenClaw eval wiring ───────────────────────────────

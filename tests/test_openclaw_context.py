@@ -35,6 +35,23 @@ def test_context_builder_uses_project_workspace_for_prompt_identity(
     assert "project instructions" in prompt
 
 
+def test_context_builder_uses_runtime_label_override(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    prompt = ContextBuilder(
+        workspace,
+        runtime_label=(
+            "Shell/file tools runtime: Linux x86_64\n"
+            "Shell/file tools `python3`: Python 3.6.9"
+        ),
+    ).build_system_prompt()
+
+    assert "Shell/file tools runtime: Linux x86_64" in prompt
+    assert "Shell/file tools `python3`: Python 3.6.9" in prompt
+    assert "Python 3.12" not in prompt
+
+
 def test_context_builder_does_not_instruct_workspace_memory_creation(
     tmp_path: Path,
 ) -> None:

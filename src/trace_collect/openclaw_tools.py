@@ -134,8 +134,8 @@ def remap_source_runtime_artifact_tool_args(
     return json.dumps(remapped, ensure_ascii=False), path, mapped_path
 
 
-# Persistent python3 agent script injected into Docker container; reads JSON-line requests
-# from stdin, writes JSON-line responses to stdout (subprocess.run uses capture_output=True).
+# Persistent Python agent script injected into Docker containers; reads JSON-line
+# requests from stdin and writes JSON-line responses to stdout.
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
 import json, os, sys, subprocess, difflib, signal, time
 WORKDIR = os.environ.get("OPENCLAW_CONTAINER_WORKDIR", "/testbed") or "/testbed"
@@ -365,7 +365,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
         cwd=WORKDIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        universal_newlines=True,
         env=env,
         start_new_session=start_new_session,
     )
@@ -453,7 +453,8 @@ def handle_exec(args):
         return resource_response
     try:
         r = subprocess.run(cmd, shell=True, cwd=WORKDIR,
-                           capture_output=True, text=True, timeout=timeout, env=env)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True, timeout=timeout, env=env)
         output = (r.stdout or "") + (r.stderr or "")
         return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
     except subprocess.TimeoutExpired:
@@ -470,7 +471,8 @@ def handle_commands(args):
     for i, cmd in enumerate(cmds):
         try:
             r = subprocess.run(cmd, shell=True, cwd=WORKDIR,
-                               capture_output=True, text=True, timeout=timeout, env=env)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               universal_newlines=True, timeout=timeout, env=env)
             all_output.append((r.stdout or "") + (r.stderr or ""))
             last_rc = r.returncode
             if r.returncode != 0 and first_failed_rc == 0:
@@ -610,8 +612,9 @@ def handle_extract_patch(args):
         result = subprocess.run(
             ["git", "diff", str(base_commit), "--", ".", *[str(spec) for spec in exclude_pathspecs]],
             cwd=WORKDIR,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
             check=False,
         )
         output = (result.stdout or "") + (result.stderr or "")
@@ -717,10 +720,9 @@ async def _kill_and_drain_python_probe_process(
 
 
 class ContainerAgent:
-    # Container Python interpreter candidates — MUST match
-    # _CONTAINER_PYTHON_CANDIDATES in trace_collect.runtime.task_container
-    # so that collect (resolve_running_container_exec_config) and simulate
-    # (ContainerAgent) select the same interpreter for the same image.
+    # The container bridge only needs the stdlib replay script, so Python 3.6+
+    # is sufficient.  Full in-container project entrypoints still use
+    # trace_collect.runtime.task_container's stricter Python >=3.11 contract.
     _PYTHON_CANDIDATES: tuple[str, ...] = _CONTAINER_PYTHON_CANDIDATES
 
     def __init__(
@@ -742,9 +744,9 @@ class ContainerAgent:
         self._lock = asyncio.Lock()
 
     async def _probe_python(self) -> str:
-        """Find a working Python >=3.11 interpreter inside the container."""
+        """Find a working Python >=3.6 interpreter inside the container."""
         probe_script = (
-            "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
+            "import sys; raise SystemExit(0 if sys.version_info >= (3, 6) else 1)"
         )
         for cand in self._PYTHON_CANDIDATES:
             proc: asyncio.subprocess.Process | None = None
@@ -803,7 +805,7 @@ class ContainerAgent:
                     f"{self._executable!r} for container {self._container_id[:12]}"
                 ) from exc
         raise RuntimeError(
-            "ContainerAgent: no Python >=3.11 found in container "
+            "ContainerAgent: no Python >=3.6 found in container "
             f"{self._container_id[:12]}.  Tried: " + ", ".join(self._PYTHON_CANDIDATES)
         )
 

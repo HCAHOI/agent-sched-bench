@@ -114,6 +114,25 @@ def test_build_tb_command_forwards_llm_timeout_to_agent() -> None:
     assert "--agent-kwarg llm_timeout_sec=1800.0" in joined
 
 
+
+def test_build_tb_command_forwards_bridge_bootstrap_timeout_to_agent() -> None:
+    runner = _make_runner(
+        benchmark_extras={
+            "dataset_name": "terminal-bench-core",
+            "dataset_version": "head",
+            "bridge_bootstrap_timeout_sec": 60.0,
+        },
+    )
+
+    cmd = runner._build_tb_command(
+        task={"dataset_root": "/tmp/dataset", "task_id": "hello-world"},
+        run_root=Path("/tmp/out"),
+        run_id="hello-world",
+        prompt_template="default",
+    )
+
+    assert "--agent-kwarg bridge_bootstrap_timeout_sec=60.0" in " ".join(cmd)
+
 def test_build_tb_command_forwards_task_timeout_without_global() -> None:
     runner = _make_runner(
         benchmark_extras={
@@ -136,7 +155,7 @@ def test_build_tb_command_forwards_task_timeout_without_global() -> None:
     assert "--agent-kwarg agent_timeout_sec=600.0" in joined
 
 
-def test_terminal_bench_agent_exports_llm_timeout_env() -> None:
+def test_terminal_bench_agent_forwards_llm_timeout_to_provider_config() -> None:
     agent = TerminalBenchOpenClawAgent(
         model_name="gpt-4o-mini",
         provider_name="openai",
@@ -146,7 +165,8 @@ def test_terminal_bench_agent_exports_llm_timeout_env() -> None:
         llm_timeout_sec=1800.0,
     )
 
-    assert agent._env["OPENCLAW_LLM_TIMEOUT_S"] == "1800.0"
+    assert agent._env == {}
+    assert agent._generation_config()["timeout"] == 1800.0
 
 
 def test_global_agent_timeout_must_be_positive() -> None:
@@ -221,6 +241,7 @@ def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> 
             "dataset_name": "terminal-bench-core",
             "dataset_version": "head",
             "global_agent_timeout_sec": 7200.0,
+            "bridge_bootstrap_timeout_sec": 60.0,
         },
     )
     src = tmp_path / "src.jsonl"
@@ -254,7 +275,14 @@ def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> 
     assert metadata["task_source_kind"] == "terminal_bench_registry"
     assert metadata["run_config"]["mcp_config"] == "context7.yaml"
     assert metadata["run_config"]["global_agent_timeout_sec"] == 7200.0
+    assert metadata["run_config"]["bridge_bootstrap_timeout_sec"] == 60.0
     assert metadata["run_config"]["tb_process_cleanup_grace_sec"] == 300.0
+    summary = runner._summary(
+        tb_version="0.2.18",
+        task={"tb_dataset": "terminal-bench-core", "tb_registry_source": "registry.json"},
+        tb_run_path=tmp_path / "tb-run",
+    )
+    assert summary["bridge_bootstrap_timeout_sec"] == 60.0
 
 
 def test_run_openclaw_task_publishes_terminal_bench_container_name(

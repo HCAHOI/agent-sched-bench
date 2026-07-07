@@ -168,6 +168,7 @@ class SWEBenchRunner:
         tool_workspace: Path | None = None,
         exec_working_dir: str | None = None,
         trace_file: Path | None = None,
+        runtime_label: str | None = None,
     ) -> EvalResult:
         """Run a single evaluation task inside the prepared task container."""
         ws = task.workspace_dir
@@ -199,6 +200,7 @@ class SWEBenchRunner:
             instance_id=task.instance_id,
             channel="cli",
             prepare_ms=None,
+            runtime_label=runtime_label,
         )
 
         content = result.content
