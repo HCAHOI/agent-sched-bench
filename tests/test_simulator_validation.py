@@ -1228,6 +1228,7 @@ def test_terminal_bench_compose_preparation_uses_runner_env_and_cleanup(
             "/opt/miniconda3/bin/python",
             "/opt/conda/bin/python3",
             "/opt/conda/bin/python",
+            "/installed-agent/python/bin/python3",
             "python3",
             "python",
         ],

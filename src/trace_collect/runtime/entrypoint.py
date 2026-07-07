@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from llm_call import UnifiedProvider, resolve_llm_config
+from trace_collect.trace_data import trace_summary_totals
 
 
 class _TeeOutput:
@@ -90,24 +91,6 @@ def _write_result(result_path: str, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _trace_summary_totals(
-    trace_file: Path,
-) -> tuple[float | None, float | None, int | None]:
-    total_llm_ms: float | None = None
-    total_tool_ms: float | None = None
-    total_tokens: int | None = None
-    if not trace_file.exists():
-        return total_llm_ms, total_tool_ms, total_tokens
-    for line in trace_file.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        if record.get("type") != "summary":
-            continue
-        total_llm_ms = record.get("total_llm_ms")
-        total_tool_ms = record.get("total_tool_ms")
-        total_tokens = record.get("total_tokens")
-    return total_llm_ms, total_tool_ms, total_tokens
 
 
 def _run_preflight(request: dict[str, Any]) -> dict[str, Any]:
@@ -180,7 +163,7 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         exec_working_dir=request.get("exec_working_dir"),
         trace_file=Path(request["trace_file"]),
     )
-    total_llm_ms, total_tool_ms, total_tokens = _trace_summary_totals(
+    total_llm_ms, total_tool_ms, total_tokens = trace_summary_totals(
         Path(request["trace_file"])
     )
     payload = {

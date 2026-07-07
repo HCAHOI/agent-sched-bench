@@ -131,6 +131,60 @@ def _container_override_tools_by_name(agent: FakeAgent) -> dict[str, object]:
     return {tool.name: tool for tool in tools}
 
 
+def test_container_and_filesystem_share_file_tool_parameter_schemas() -> None:
+    from agents.openclaw.tools.filesystem import (
+        ListDirTool,
+        ReadFileTool,
+        WriteFileTool,
+    )
+
+    container_tools = _container_override_tools_by_name(FakeAgent())
+    cases = [
+        (
+            "read_file",
+            ReadFileTool(),
+            {
+                "path": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 1},
+                "limit": {"type": "integer", "minimum": 1},
+            },
+            {"path"},
+        ),
+        (
+            "write_file",
+            WriteFileTool(),
+            {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            {"path", "content"},
+        ),
+        (
+            "list_dir",
+            ListDirTool(),
+            {
+                "path": {"type": "string"},
+                "recursive": {"type": "boolean"},
+                "max_entries": {"type": "integer", "minimum": 1},
+            },
+            {"path"},
+        ),
+    ]
+
+    for tool_name, filesystem_tool, expected_properties, expected_required in cases:
+        schema = container_tools[tool_name].parameters
+
+        assert schema == filesystem_tool.parameters
+        assert schema["type"] == "object"
+        assert set(schema["required"]) == expected_required
+        assert set(schema["properties"]) == set(expected_properties)
+        for property_name, expected_schema in expected_properties.items():
+            property_schema = schema["properties"][property_name]
+            assert property_schema["type"] == expected_schema["type"]
+            if "minimum" in expected_schema:
+                assert property_schema["minimum"] == expected_schema["minimum"]
+
+
 def test_container_tool_overrides_serialize_filesystem_and_exec_requests() -> None:
     agent = FakeAgent(
         {

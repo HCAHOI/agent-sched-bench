@@ -5,7 +5,12 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from agents.openclaw.tools.base import Tool
+from agents.openclaw.tools.base import (
+    Tool,
+    _list_dir_parameters_schema,
+    _read_file_parameters_schema,
+    _write_file_parameters_schema,
+)
 from agents.openclaw.utils.helpers import build_image_content_blocks, detect_image_mime
 
 
@@ -84,23 +89,7 @@ class ReadFileTool(_FsTool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The file path to read"},
-                "offset": {
-                    "type": "integer",
-                    "description": "Line number to start reading from (1-indexed, default 1)",
-                    "minimum": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of lines to read (default 2000)",
-                    "minimum": 1,
-                },
-            },
-            "required": ["path"],
-        }
+        return _read_file_parameters_schema()
 
     async def execute(
         self,
@@ -188,14 +177,7 @@ class WriteFileTool(_FsTool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The file path to write to"},
-                "content": {"type": "string", "description": "The content to write"},
-            },
-            "required": ["path", "content"],
-        }
+        return _write_file_parameters_schema()
 
     async def execute(
         self, path: str | None = None, content: str | None = None, **kwargs: Any
@@ -403,22 +385,7 @@ class ListDirTool(_FsTool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The directory path to list"},
-                "recursive": {
-                    "type": "boolean",
-                    "description": "Recursively list all files (default false)",
-                },
-                "max_entries": {
-                    "type": "integer",
-                    "description": "Maximum entries to return (default 200)",
-                    "minimum": 1,
-                },
-            },
-            "required": ["path"],
-        }
+        return _list_dir_parameters_schema()
 
     async def execute(
         self,

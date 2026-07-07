@@ -39,6 +39,7 @@ from trace_collect.runtime.task_container import (
     resolve_task_container_exec_config,
     run_task_container_agent,  # noqa: F401 - kept for regression-test monkeypatches
 )
+from trace_collect.trace_data import trace_summary_totals
 
 if TYPE_CHECKING:
     from agents.benchmarks.base import Benchmark
@@ -960,24 +961,6 @@ def _stamp_trace_run_config(trace_path: Path, values: dict[str, Any]) -> None:
     trace_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def _trace_summary_totals(
-    trace_file: Path,
-) -> tuple[float | None, float | None, int | None]:
-    total_llm_ms: float | None = None
-    total_tool_ms: float | None = None
-    total_tokens: int | None = None
-    if not trace_file.exists():
-        return total_llm_ms, total_tool_ms, total_tokens
-    for line in trace_file.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        if record.get("type") != "summary":
-            continue
-        total_llm_ms = record.get("total_llm_ms")
-        total_tool_ms = record.get("total_tool_ms")
-        total_tokens = record.get("total_tokens")
-    return total_llm_ms, total_tool_ms, total_tokens
 
 
 async def _run_openclaw_in_task_container(
@@ -1105,7 +1088,7 @@ async def _run_openclaw_in_task_container(
             )
         finally:
             ctx.agent_end_time = datetime.now(tz=timezone.utc)
-        total_llm_ms, total_tool_ms, total_tokens = _trace_summary_totals(
+        total_llm_ms, total_tool_ms, total_tokens = trace_summary_totals(
             ctx.attempt_dir / "trace.jsonl"
         )
         _normalize_openclaw_trace(

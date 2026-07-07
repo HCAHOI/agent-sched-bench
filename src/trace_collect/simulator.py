@@ -396,12 +396,6 @@ def _is_replay_wrapper_timeout_result(tool_result: str) -> bool:
     return any(line.strip() in timeout_markers for line in tool_result.splitlines())
 
 
-def _tool_result_indicates_wrapper_timeout(tool_result: Any) -> bool:
-    text = str(tool_result or "")
-    return (
-        "Error: Command timed out after " in text
-        or _is_replay_wrapper_timeout_result(text)
-    )
 
 
 def _source_exec_timeout_s(

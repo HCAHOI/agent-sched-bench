@@ -7,6 +7,27 @@ from typing import Any
 
 CURRENT_TRACE_FORMAT_VERSION = 5
 
+def trace_summary_totals(
+    trace_file: Path,
+) -> tuple[float | None, float | None, int | None]:
+    """Return LLM/tool/token totals from the last summary record in a trace."""
+    total_llm_ms: float | None = None
+    total_tool_ms: float | None = None
+    total_tokens: int | None = None
+    if not trace_file.exists():
+        return total_llm_ms, total_tool_ms, total_tokens
+    for line in trace_file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if record.get("type") != "summary":
+            continue
+        total_llm_ms = record.get("total_llm_ms")
+        total_tool_ms = record.get("total_tool_ms")
+        total_tokens = record.get("total_tokens")
+    return total_llm_ms, total_tool_ms, total_tokens
+
+
 @dataclass
 class TraceData:
     path: Path

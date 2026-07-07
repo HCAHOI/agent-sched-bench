@@ -22,16 +22,14 @@ tmp/
 results/
 traces/
 output/
+/logs/
 build/
 .claude/
 
 # Generated visualization artifacts
 gantt_*.html
 
-/data/models/
 models/
-.omc/
-.trae/
 .kilo/
 .sisyphus/data/swe-rebench/tasks.json
 docs/

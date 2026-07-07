@@ -3,7 +3,12 @@ import shlex
 
 from typing import Any, Iterable
 
-from agents.openclaw.tools.base import Tool
+from agents.openclaw.tools.base import (
+    Tool,
+    _list_dir_parameters_schema,
+    _read_file_parameters_schema,
+    _write_file_parameters_schema,
+)
 from agents.openclaw.tools.shell import ExecTool, MAX_EXEC_TOOL_TIMEOUT_SEC
 from trace_collect.openclaw_tools import ContainerAgent
 
@@ -54,23 +59,7 @@ class ContainerReadFileTool(_ContainerTool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The file path to read"},
-                "offset": {
-                    "type": "integer",
-                    "description": "Line number to start reading from (1-indexed, default 1)",
-                    "minimum": 1,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of lines to read (default 2000)",
-                    "minimum": 1,
-                },
-            },
-            "required": ["path"],
-        }
+        return _read_file_parameters_schema()
 
     async def execute(
         self,
@@ -104,14 +93,7 @@ class ContainerWriteFileTool(_ContainerTool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The file path to write to"},
-                "content": {"type": "string", "description": "The content to write"},
-            },
-            "required": ["path", "content"],
-        }
+        return _write_file_parameters_schema()
 
     async def execute(
         self,
@@ -200,22 +182,7 @@ class ContainerListDirTool(_ContainerTool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The directory path to list"},
-                "recursive": {
-                    "type": "boolean",
-                    "description": "Recursively list all files (default false)",
-                },
-                "max_entries": {
-                    "type": "integer",
-                    "description": "Maximum entries to return (default 200)",
-                    "minimum": 1,
-                },
-            },
-            "required": ["path"],
-        }
+        return _list_dir_parameters_schema()
 
     async def execute(
         self,
