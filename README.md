@@ -99,8 +99,9 @@ default, replay sleeps source inter-action gaps and action durations scaled by
 `--replay-speed`. Replay traces include per-action and per-task `sleep_drift`
 metrics for expected-vs-actual sleep timing. To replace source LLM durations
 with a fixed model, pass `--llm-timing ttft-tpot --llm-ttft-ms <ms>
---llm-tpot-ms <ms>`; tool timing and inter-action gaps still use source timing
-scaled by `--replay-speed`.
+--llm-tpot-ms <ms>` with the default `--replay-speed 1.0`; fixed TTFT/TPOT
+mode is intentionally exclusive with replay acceleration because token-latency
+simulation is already an absolute wall-clock model.
 
 Manifest input is YAML. The simplest form is a list of absolute trace paths:
 

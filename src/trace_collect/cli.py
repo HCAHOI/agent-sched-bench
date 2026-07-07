@@ -268,8 +268,9 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         default=1.0,
         help=(
             "Wall-clock acceleration factor for source inter-action gaps and "
-            "source-scaled action durations. Example: --replay-speed 50 "
-            "replays source timing at 50x."
+            "source-scaled action durations. Fixed TTFT/TPOT LLM timing requires "
+            "the default --replay-speed 1.0. Example: --replay-speed 50 replays "
+            "source timing at 50x."
         ),
     )
     parser.add_argument(
@@ -279,7 +280,8 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "LLM replay duration model. source-scaled sleeps for source LLM "
             "duration divided by --replay-speed. ttft-tpot sleeps for "
-            "--llm-ttft-ms + (completion_tokens - 1) * --llm-tpot-ms."
+            "--llm-ttft-ms + (completion_tokens - 1) * --llm-tpot-ms and "
+            "requires --replay-speed 1.0."
         ),
     )
     parser.add_argument(

@@ -30,7 +30,7 @@ def _write_trace(
     path: Path,
     *,
     agent_id: str,
-    scaffold: str = "openclaw",
+    scaffold: str = "tongyi-deepresearch",
     llm_start: float = 100.0,
     llm_end: float = 100.2,
     tool_start: float = 100.4,
@@ -292,6 +292,7 @@ def _patch_simulator_runtime(
         task_output_dir=None,
         container_executable,
         network_mode="host",
+        **_kwargs,
     ):
         from trace_collect.simulator import PreparedContainer, PreparedTraceSession
         container = PreparedContainer(
@@ -300,7 +301,11 @@ def _patch_simulator_runtime(
             docker_image="fake-image",
             agent=_FakeAgent(),
         )
-        return PreparedTraceSession(loaded=loaded, container=container)
+        return PreparedTraceSession(
+            loaded=loaded,
+            container=container,
+            task_output_dir=task_output_dir,
+        )
 
     async def fake_exec_tool(
         agent,
@@ -501,8 +506,18 @@ def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(
     good_trace = tmp_path / "good.jsonl"
     bad_trace = tmp_path / "bad.jsonl"
     task_source = tmp_path / "tasks.json"
-    _write_trace(good_trace, agent_id="good", execution_environment="host")
-    _write_trace(bad_trace, agent_id="bad", execution_environment="host")
+    _write_trace(
+        good_trace,
+        agent_id="good",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
+    _write_trace(
+        bad_trace,
+        agent_id="bad",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
     _write_host_tasks(task_source, "good", "bad")
     inputs = [
         WorkerTraceInput(
@@ -694,6 +709,7 @@ def test_cloud_model_ttft_tpot_llm_timing_records_simulated_latency(
     _write_trace(
         trace_path,
         agent_id="host-task",
+        scaffold="tongyi-deepresearch",
         llm_start=100.0,
         llm_end=100.2,
         tool_start=100.4,
@@ -708,7 +724,7 @@ def test_cloud_model_ttft_tpot_llm_timing_records_simulated_latency(
             task_source=task_source,
             output_dir=output_dir,
             mode="cloud_model",
-            replay_speed=100.0,
+            replay_speed=1.0,
             llm_timing_mode="ttft_tpot",
             llm_ttft_ms=10.0,
             llm_tpot_ms=2.0,
@@ -763,6 +779,7 @@ def test_simulate_preserves_source_resource_timeline_as_metadata(tmp_path: Path)
     _write_trace(
         trace_path,
         agent_id="host-task",
+        scaffold="tongyi-deepresearch",
         tool_name="exec",
         execution_environment="host",
         resource_timeline=resource_timeline,
@@ -959,7 +976,7 @@ def test_parse_trace_session_file_includes_subagent_actions(tmp_path: Path) -> N
             for record in [
                 {
                     "type": "trace_metadata",
-                    "scaffold": "openclaw",
+                    "scaffold": "tongyi-deepresearch",
                     "instance_id": "task-a",
                     "execution_environment": "container",
                 },
@@ -1022,7 +1039,7 @@ def test_parse_trace_session_file_excludes_other_top_level_agents(
             for record in [
                 {
                     "type": "trace_metadata",
-                    "scaffold": "openclaw",
+                    "scaffold": "tongyi-deepresearch",
                     "instance_id": "task-a",
                     "execution_environment": "container",
                 },
@@ -1089,7 +1106,7 @@ def test_simulate_replays_spawn_and_sessions_yield_as_control_noops(
         {
             "type": "trace_metadata",
             "trace_format_version": 5,
-            "scaffold": "openclaw",
+            "scaffold": "tongyi-deepresearch",
             "instance_id": "task-a",
             "model": "claude-haiku",
             "mode": "collect",
@@ -1183,7 +1200,7 @@ def test_simulate_replays_overlapping_tools_concurrently(
                 {
                     "type": "trace_metadata",
                     "trace_format_version": 5,
-                    "scaffold": "openclaw",
+                    "scaffold": "tongyi-deepresearch",
                     "instance_id": "task-a",
                     "model": "claude-haiku",
                     "mode": "collect",
@@ -1241,7 +1258,12 @@ def test_simulate_replays_overlapping_tools_concurrently(
     extra_agent_stops = 0
 
     class _ExtraAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             self.container_id = container_id
             self.container_executable = container_executable
 
@@ -1330,6 +1352,7 @@ def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:
     _write_trace(
         trace_path,
         agent_id="host-task",
+        scaffold="tongyi-deepresearch",
         execution_environment="host",
     )
     _write_host_tasks(task_source, "host-task")
@@ -1343,6 +1366,60 @@ def test_cloud_model_ttft_tpot_requires_parameters(tmp_path: Path) -> None:
                 mode="cloud_model",
                 llm_timing_mode="ttft_tpot",
                 llm_tpot_ms=2.0,
+            )
+        )
+
+
+def test_cloud_model_ttft_tpot_rejects_replay_speed_acceleration(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    with pytest.raises(ValueError, match="exclusive with llm_timing_mode='ttft_tpot'"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+                replay_speed=2.0,
+                llm_timing_mode="ttft_tpot",
+                llm_ttft_ms=10.0,
+                llm_tpot_ms=2.0,
+            )
+        )
+
+
+def test_cloud_model_source_scaled_rejects_ttft_tpot_parameters(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(
+        trace_path,
+        agent_id="host-task",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
+    _write_host_tasks(task_source, "host-task")
+
+    with pytest.raises(ValueError, match="require llm_timing_mode='ttft_tpot'"):
+        asyncio.run(
+            simulate(
+                manifest=_single_trace_manifest(tmp_path, trace_path),
+                task_source=task_source,
+                output_dir=tmp_path / "out",
+                mode="cloud_model",
+                llm_timing_mode="source_scaled",
+                llm_ttft_ms=10.0,
             )
         )
 
@@ -2017,10 +2094,11 @@ def test_cloud_model_mixed_manifest_requires_container_before_replay(tmp_path: P
     task_source = tmp_path / "tasks.json"
     manifest = tmp_path / "manifest.yaml"
     output_dir = tmp_path / "out"
-    _write_trace(trace_container, agent_id="container-task")
+    _write_trace(trace_container, agent_id="container-task", scaffold="openclaw")
     _write_trace(
         trace_host,
         agent_id="host-task",
+        scaffold="tongyi-deepresearch",
         execution_environment="host",
     )
     _write_tasks(task_source, "container-task", "host-task")
@@ -2117,7 +2195,12 @@ def test_cloud_model_prefetches_images_before_container_prepare(
         return True
 
     class _FakeAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             self.container_id = container_id
             self.container_executable = container_executable
 
@@ -2419,7 +2502,12 @@ def test_cloud_model_container_startup_json_records_success_and_separates_resour
     _write_tasks(task_source, "task-a")
 
     class _FakeContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
 
@@ -2570,7 +2658,12 @@ def test_cloud_model_agent_start_failure_writes_failed_container_startup_json(
     stopped_containers: list[str] = []
 
     class _FailingContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
 
@@ -2696,7 +2789,12 @@ def test_cloud_model_agent_start_failure_keeps_fixed_image_when_stop_fails(
     _write_tasks(task_source, "task-a")
 
     class _FailingContainerAgent:
-        def __init__(self, container_id: str, container_executable: str) -> None:
+        def __init__(
+            self,
+            container_id: str,
+            container_executable: str,
+            **_kwargs,
+        ) -> None:
             assert container_id == "fake-cid"
             assert container_executable == "docker"
 
@@ -3260,6 +3358,7 @@ def test_cloud_model_multi_worker_host_smoke(tmp_path: Path) -> None:
         _write_trace(
             trace_path,
             agent_id=agent_id,
+            scaffold="tongyi-deepresearch",
             execution_environment="host",
         )
         trace_paths.append(trace_path)
@@ -3492,9 +3591,12 @@ def test_cloud_model_manifest_allows_duplicate_trace_entries(
             {
                 "manifest_index": per_task_records[0]["manifest_index"],
                 "source_trace": str(trace_path),
+                "task_instance_id": "task-a",
+                "source_action_agent_id": "task-a",
                 "source_agent_id": "task-a",
                 "run_instance_id": run_instance_id,
                 "label": None,
+                "source_model": "claude-haiku",
             }
         ]
         assert per_task_records[0]["source_agent_id"] == "task-a"
@@ -3507,10 +3609,16 @@ def test_cloud_model_duplicate_trace_run_ids_avoid_real_task_id_collision(
     trace_replica = tmp_path / "trace-replica.jsonl"
     task_source = tmp_path / "tasks.json"
     manifest = tmp_path / "manifest.yaml"
-    _write_trace(trace_a, agent_id="task-a", execution_environment="host")
+    _write_trace(
+        trace_a,
+        agent_id="task-a",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
     _write_trace(
         trace_replica,
         agent_id="task-a__replica-001",
+        scaffold="tongyi-deepresearch",
         execution_environment="host",
     )
     _write_host_tasks(task_source, "task-a", "task-a__replica-001")
@@ -3552,10 +3660,16 @@ def test_cloud_model_duplicate_trace_run_ids_avoid_repeated_real_replica_id_coll
     trace_replica = tmp_path / "trace-replica.jsonl"
     task_source = tmp_path / "tasks.json"
     manifest = tmp_path / "manifest.yaml"
-    _write_trace(trace_a, agent_id="task-a", execution_environment="host")
+    _write_trace(
+        trace_a,
+        agent_id="task-a",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
     _write_trace(
         trace_replica,
         agent_id="task-a__replica-001",
+        scaffold="tongyi-deepresearch",
         execution_environment="host",
     )
     _write_host_tasks(task_source, "task-a", "task-a__replica-001")
@@ -3711,8 +3825,18 @@ def test_cloud_model_structured_manifest_defaults_and_overrides(
     default_tasks = tmp_path / "default-tasks.json"
     override_tasks = tmp_path / "override-tasks.json"
     manifest = tmp_path / "manifest.yaml"
-    _write_trace(trace_a, agent_id="task-a", execution_environment="host")
-    _write_trace(trace_b, agent_id="task-b", execution_environment="host")
+    _write_trace(
+        trace_a,
+        agent_id="task-a",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
+    _write_trace(
+        trace_b,
+        agent_id="task-b",
+        scaffold="tongyi-deepresearch",
+        execution_environment="host",
+    )
     _write_host_tasks(default_tasks, "task-a")
     _write_host_tasks(override_tasks, "task-b")
     manifest.write_text(
@@ -3800,7 +3924,7 @@ def test_cloud_model_mixed_host_container_manifest_marks_environment_mixed(
     container_records = _read_jsonl(tmp_path / "out" / "task-a" / "attempt_1" / "trace.jsonl")
     host_records = _read_jsonl(tmp_path / "out" / "task-b" / "attempt_1" / "trace.jsonl")
     assert container_records[0]["execution_environment"] == "container"
-    assert container_records[0]["scaffold"] == "openclaw"
+    assert container_records[0]["scaffold"] == "tongyi-deepresearch"
     assert host_records[0]["execution_environment"] == "host"
     assert host_records[0]["scaffold"] == "tongyi-deepresearch"
 

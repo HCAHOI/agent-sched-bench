@@ -51,7 +51,11 @@ from trace_collect.runtime.task_container import (
     resolve_running_container_exec_config,
     resolve_task_container_exec_config,
 )
-from trace_collect.openclaw_host_runtime import replay_action_failure_counts
+from trace_collect.openclaw_host_runtime import (
+    llm_replay_duration_s,
+    replay_action_failure_counts,
+    validate_llm_replay_timing,
+)
 
 logger = logging.getLogger(__name__)
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
@@ -1399,7 +1403,7 @@ def _validate_loaded_sessions(
         raise ValueError("replay_speed must be > 0")
     if not sessions:
         raise SimulateError("No trace sessions were loaded")
-    _validate_llm_timing_config(llm_timing)
+    _validate_llm_timing_config(llm_timing, replay_speed=replay_speed)
     for session in sessions:
         if not _requires_task_container(session):
             continue
@@ -2160,7 +2164,11 @@ async def _prepare_container_session(
         fixed_image=recorder.fixed_image,
         cleanup_fixed_image=cleanup_fixed_image,
     )
-    return PreparedTraceSession(loaded=loaded, container=container)
+    return PreparedTraceSession(
+        loaded=loaded,
+        container=container,
+        task_output_dir=task_output_dir,
+    )
 
 
 def _log_trace_metadata(
@@ -2243,11 +2251,15 @@ def _make_trace_action(
     agent_id: str | None = None,
 ) -> TraceAction:
     replay_agent_id = agent_id or loaded.run_instance_id
+    per_action_source_agent_id = data.get(
+        "source_action_agent_id",
+        loaded.source_action_agent_id,
+    )
     action_data = {
         **data,
         "run_instance_id": loaded.run_instance_id,
         "task_instance_id": loaded.task_instance_id,
-        "source_action_agent_id": loaded.source_action_agent_id,
+        "source_action_agent_id": per_action_source_agent_id,
         "source_agent_id": loaded.source_action_agent_id,
         "manifest_index": loaded.manifest_index,
     }
@@ -2717,54 +2729,17 @@ async def _prewarm_replay_agents_for_batch(
     return assignments
 
 
-def _coerce_completion_tokens(value: Any) -> int:
-    if value is None or value == "":
-        return 0
-    tokens = int(value)
-    if tokens < 0:
-        raise ValueError(f"completion_tokens must be non-negative, got {value!r}")
-    return tokens
-
-
-def _validate_llm_timing_config(config: LLMTimingConfig) -> None:
-    if config.mode not in {"source_scaled", "ttft_tpot"}:
-        raise ValueError(f"Unsupported llm_timing_mode: {config.mode}")
-    if config.mode == "source_scaled":
-        return
-    if config.ttft_ms is None:
-        raise ValueError("llm_ttft_ms is required when llm_timing_mode='ttft_tpot'")
-    if config.tpot_ms is None:
-        raise ValueError("llm_tpot_ms is required when llm_timing_mode='ttft_tpot'")
-    if config.ttft_ms < 0:
-        raise ValueError("llm_ttft_ms must be non-negative")
-    if config.tpot_ms < 0:
-        raise ValueError("llm_tpot_ms must be non-negative")
-
-
-def _llm_replay_duration_s(
+def _validate_llm_timing_config(
+    config: LLMTimingConfig,
     *,
-    data: dict[str, Any],
-    source_duration_s: float,
     replay_speed: float,
-    timing: LLMTimingConfig,
-) -> tuple[float, dict[str, Any]]:
-    if timing.mode == "source_scaled":
-        return source_duration_s / replay_speed, {
-            "llm_timing_mode": "source_scaled",
-        }
-
-    completion_tokens = _coerce_completion_tokens(data.get("completion_tokens", 0))
-    assert timing.ttft_ms is not None
-    assert timing.tpot_ms is not None
-    simulated_ms = timing.ttft_ms + max(0, completion_tokens - 1) * timing.tpot_ms
-    return simulated_ms / 1000.0, {
-        "llm_timing_mode": "ttft_tpot",
-        "simulated_ttft_ms": timing.ttft_ms,
-        "simulated_tpot_ms": timing.tpot_ms,
-        "simulated_llm_latency_ms": simulated_ms,
-        "source_ttft_ms": data.get("ttft_ms"),
-        "source_tpot_ms": data.get("tpot_ms"),
-    }
+) -> None:
+    validate_llm_replay_timing(
+        replay_speed=replay_speed,
+        timing_mode=config.mode,
+        llm_ttft_ms=config.ttft_ms,
+        llm_tpot_ms=config.tpot_ms,
+    )
 
 
 async def _prepare_replay_session(
@@ -2816,7 +2791,7 @@ async def _prepare_replay_session(
                 )
             else:
                 prepare_kwargs: dict[str, Any] = {}
-                if _openclaw_trace_can_host_replay(loaded):
+                if loaded.scaffold == "openclaw":
                     prepare_kwargs["start_agent"] = False
                 if fixed_images_by_source:
                     prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
@@ -2827,6 +2802,7 @@ async def _prepare_replay_session(
                     network_mode=network_mode,
                     **prepare_kwargs,
                 )
+                prepared.task_output_dir = task_output_dir
                 await _restore_source_runtime_artifacts(prepared)
             prepared.task_output_dir = task_output_dir
         if prepared.container is not None:
@@ -3328,11 +3304,13 @@ async def _replay_cloud_model_action(
     try:
         if action_type == "llm_call":
             record_ts_start = time.time()
-            sleep_s, llm_timing_fields = _llm_replay_duration_s(
+            sleep_s, llm_timing_fields = llm_replay_duration_s(
                 data=data,
                 source_duration_s=source_duration_s,
                 replay_speed=replay_speed,
-                timing=llm_timing,
+                timing_mode=llm_timing.mode,
+                llm_ttft_ms=llm_timing.ttft_ms,
+                llm_tpot_ms=llm_timing.tpot_ms,
             )
             action_sleep = await _sleep_and_measure(
                 sleep_s,
@@ -3933,11 +3911,6 @@ async def _run_openclaw_replay_session(
     )
 
 
-def _openclaw_trace_can_host_replay(loaded: LoadedTraceSession) -> bool:
-    return loaded.scaffold == "openclaw" and any(
-        action.get("action_type") == "llm_call" for action in loaded.actions
-    )
-
 
 async def _replay_cloud_model_session(
     prepared_session: PreparedTraceSession,
@@ -3952,25 +3925,23 @@ async def _replay_cloud_model_session(
     loaded = prepared_session.loaded
     if loaded.scaffold == "openclaw":
         if prepared_session.container is None:
-            if _requires_task_container(loaded):
-                raise SimulateError(
-                    f"OpenClaw replay for {loaded.task_instance_id!r} requires a task container"
-                )
-        else:
-            if not _openclaw_trace_can_host_replay(loaded):
-                raise SimulateError(
-                    f"OpenClaw replay for {loaded.task_instance_id!r} has no source llm_call actions"
-                )
-            if replay_zero_monotonic is not None:
-                await _sleep_until_monotonic(replay_zero_monotonic)
-            return await _run_openclaw_replay_session(
-                prepared_session,
-                trace_logger=trace_logger,
-                replay_speed=replay_speed,
-                llm_timing=llm_timing,
-                command_timeout_s=command_timeout_s,
-                warmup_skip_iterations=warmup_skip_iterations,
+            raise SimulateError(
+                f"OpenClaw replay for {loaded.task_instance_id!r} requires a task container"
             )
+        if not any(action.get("action_type") == "llm_call" for action in loaded.actions):
+            raise SimulateError(
+                f"OpenClaw replay for {loaded.task_instance_id!r} has no source llm_call actions"
+            )
+        if replay_zero_monotonic is not None:
+            await _sleep_until_monotonic(replay_zero_monotonic)
+        return await _run_openclaw_replay_session(
+            prepared_session,
+            trace_logger=trace_logger,
+            replay_speed=replay_speed,
+            llm_timing=llm_timing,
+            command_timeout_s=command_timeout_s,
+            warmup_skip_iterations=warmup_skip_iterations,
+        )
     source_model = _source_model(loaded)
     logger.info(
         "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx (llm_timing=%s)",
@@ -4344,7 +4315,7 @@ async def simulate(
         ttft_ms=llm_ttft_ms,
         tpot_ms=llm_tpot_ms,
     )
-    _validate_llm_timing_config(llm_timing)
+    _validate_llm_timing_config(llm_timing, replay_speed=replay_speed)
 
     manifest_entries = _load_simulate_manifest(
         manifest,

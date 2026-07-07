@@ -124,6 +124,69 @@ def replay_action_failure_counts(
     )
 
 
+def validate_llm_replay_timing(
+    *,
+    replay_speed: float,
+    timing_mode: str,
+    llm_ttft_ms: float | None = None,
+    llm_tpot_ms: float | None = None,
+) -> None:
+    """Validate exclusive LLM replay duration modes."""
+    if replay_speed <= 0:
+        raise ValueError("replay_speed must be > 0")
+    if timing_mode == "source_scaled":
+        if llm_ttft_ms is not None or llm_tpot_ms is not None:
+            raise ValueError(
+                "llm_ttft_ms/llm_tpot_ms require llm_timing_mode='ttft_tpot'"
+            )
+        return
+    if timing_mode != "ttft_tpot":
+        raise ValueError(f"Unsupported llm_timing_mode: {timing_mode}")
+    if replay_speed != 1.0:
+        raise ValueError(
+            "replay_speed acceleration is exclusive with llm_timing_mode='ttft_tpot'"
+        )
+    if llm_ttft_ms is None:
+        raise ValueError("llm_ttft_ms is required when llm_timing_mode='ttft_tpot'")
+    if llm_tpot_ms is None:
+        raise ValueError("llm_tpot_ms is required when llm_timing_mode='ttft_tpot'")
+    if llm_ttft_ms < 0:
+        raise ValueError("llm_ttft_ms must be non-negative")
+    if llm_tpot_ms < 0:
+        raise ValueError("llm_tpot_ms must be non-negative")
+
+
+def llm_replay_duration_s(
+    *,
+    data: dict[str, Any],
+    source_duration_s: float,
+    replay_speed: float,
+    timing_mode: str,
+    llm_ttft_ms: float | None = None,
+    llm_tpot_ms: float | None = None,
+) -> tuple[float, dict[str, Any]]:
+    """Return one replay LLM sleep duration and timing audit fields."""
+    validate_llm_replay_timing(
+        replay_speed=replay_speed,
+        timing_mode=timing_mode,
+        llm_ttft_ms=llm_ttft_ms,
+        llm_tpot_ms=llm_tpot_ms,
+    )
+    if timing_mode == "source_scaled":
+        return source_duration_s / replay_speed, {"llm_timing_mode": "source_scaled"}
+    assert llm_ttft_ms is not None
+    assert llm_tpot_ms is not None
+    completion_tokens = _coerce_completion_tokens(data.get("completion_tokens", 0))
+    simulated_ms = llm_ttft_ms + max(0, completion_tokens - 1) * llm_tpot_ms
+    return simulated_ms / 1000.0, {
+        "llm_timing_mode": "ttft_tpot",
+        "simulated_ttft_ms": llm_ttft_ms,
+        "simulated_tpot_ms": llm_tpot_ms,
+        "simulated_llm_latency_ms": simulated_ms,
+        "source_ttft_ms": data.get("ttft_ms"),
+        "source_tpot_ms": data.get("tpot_ms"),
+    }
+
 
 class OpenClawReplayProvider(LLMProvider):
     """LLMProvider that replays source OpenClaw LLM responses and sleeps in-process."""
@@ -141,8 +204,12 @@ class OpenClawReplayProvider(LLMProvider):
         model: str = "replay-openclaw",
     ) -> None:
         super().__init__(api_key=None, api_base=None)
-        if replay_speed <= 0:
-            raise ValueError("replay_speed must be > 0")
+        validate_llm_replay_timing(
+            replay_speed=replay_speed,
+            timing_mode=timing_mode,
+            llm_ttft_ms=llm_ttft_ms,
+            llm_tpot_ms=llm_tpot_ms,
+        )
         self._llm_actions = list(llm_actions)
         self._replay_speed = replay_speed
         self._timing_mode = timing_mode
@@ -185,14 +252,18 @@ class OpenClawReplayProvider(LLMProvider):
         sleep_record = await self._sleep(sleep_s, phase="llm_replay")
         wall_end = time.time()
 
-        raw_response = data.get("raw_response") if isinstance(data.get("raw_response"), dict) else {}
+        raw_response = (
+            data.get("raw_response") if isinstance(data.get("raw_response"), dict) else {}
+        )
         message = self._raw_message(raw_response)
         tool_calls = self._tool_calls(message)
         content = message.get("content")
         if content is not None and not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
         usage = self._usage(raw_response, data)
-        finish_reason = self._finish_reason(raw_response, default="tool_calls" if tool_calls else "stop")
+        finish_reason = self._finish_reason(
+            raw_response, default="tool_calls" if tool_calls else "stop"
+        )
         extra: dict[str, Any] = {
             "llm_call_time_ms": round((wall_end - wall_start) * 1000, 3),
             "llm_latency_ms": round((wall_end - wall_start) * 1000, 3),
@@ -209,7 +280,11 @@ class OpenClawReplayProvider(LLMProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=usage,
-            reasoning_content=message.get("reasoning_content") if isinstance(message.get("reasoning_content"), str) else None,
+            reasoning_content=(
+                message.get("reasoning_content")
+                if isinstance(message.get("reasoning_content"), str)
+                else None
+            ),
             extra=extra,
         )
 
@@ -218,26 +293,14 @@ class OpenClawReplayProvider(LLMProvider):
         data: dict[str, Any],
         source_duration_s: float,
     ) -> tuple[float, dict[str, Any]]:
-        if self._timing_mode == "source_scaled":
-            return source_duration_s / self._replay_speed, {
-                "llm_timing_mode": "source_scaled",
-            }
-        if self._timing_mode != "ttft_tpot":
-            raise ValueError(f"Unsupported llm_timing_mode: {self._timing_mode}")
-        if self._llm_ttft_ms is None:
-            raise ValueError("llm_ttft_ms is required when llm_timing_mode='ttft_tpot'")
-        if self._llm_tpot_ms is None:
-            raise ValueError("llm_tpot_ms is required when llm_timing_mode='ttft_tpot'")
-        completion_tokens = _coerce_nonnegative_int(data.get("completion_tokens", 0))
-        simulated_ms = self._llm_ttft_ms + max(0, completion_tokens - 1) * self._llm_tpot_ms
-        return simulated_ms / 1000.0, {
-            "llm_timing_mode": "ttft_tpot",
-            "simulated_ttft_ms": self._llm_ttft_ms,
-            "simulated_tpot_ms": self._llm_tpot_ms,
-            "simulated_llm_latency_ms": simulated_ms,
-            "source_ttft_ms": data.get("ttft_ms"),
-            "source_tpot_ms": data.get("tpot_ms"),
-        }
+        return llm_replay_duration_s(
+            data=data,
+            source_duration_s=source_duration_s,
+            replay_speed=self._replay_speed,
+            timing_mode=self._timing_mode,
+            llm_ttft_ms=self._llm_ttft_ms,
+            llm_tpot_ms=self._llm_tpot_ms,
+        )
 
     async def _sleep(self, expected_s: float, *, phase: str) -> ReplaySleepRecord | None:
         if expected_s <= 0:
@@ -322,6 +385,15 @@ class OpenClawReplayProvider(LLMProvider):
                 usage.get("completion_tokens", data.get("completion_tokens", 0))
             ),
         }
+
+
+def _coerce_completion_tokens(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    tokens = int(value)
+    if tokens < 0:
+        raise ValueError(f"completion_tokens must be non-negative, got {value!r}")
+    return tokens
 
 
 def _coerce_nonnegative_int(value: Any) -> int:

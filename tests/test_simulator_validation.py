@@ -215,7 +215,7 @@ def test_simulator_accepts_task_with_image_name(
                     {
                         "type": "trace_metadata",
                         "trace_format_version": 5,
-                        "scaffold": "openclaw",
+                        "scaffold": "tongyi-deepresearch",
                         "instance_id": "fc_test_002",
                         "model": "dummy",
                         "mode": "collect",
@@ -273,6 +273,7 @@ def test_simulator_accepts_task_with_image_name(
                 docker_image="fake",
                 agent=_FakeAgent(),
             ),
+            task_output_dir=task_output_dir,
         )
 
     async def fake_prefetch(*_args, **_kwargs) -> None:
@@ -324,6 +325,48 @@ def test_openclaw_replay_provider_sleep_records_source_and_pid() -> None:
     assert sleep_record["phase"] == "llm_replay"
     assert sleep_record["source"] == "openclaw_replay_provider_sleep"
     assert sleep_record["pid"] == os.getpid()
+
+
+def test_openclaw_replay_provider_rejects_ttft_tpot_with_replay_speed() -> None:
+    from trace_collect.openclaw_host_runtime import OpenClawReplayProvider
+
+    with pytest.raises(ValueError, match="exclusive with llm_timing_mode='ttft_tpot'"):
+        OpenClawReplayProvider(
+            llm_actions=[],
+            replay_speed=2.0,
+            timing_mode="ttft_tpot",
+            llm_ttft_ms=10.0,
+            llm_tpot_ms=2.0,
+        )
+
+
+def test_llm_replay_duration_rejects_invalid_completion_tokens() -> None:
+    from trace_collect.openclaw_host_runtime import llm_replay_duration_s
+
+    with pytest.raises(ValueError):
+        llm_replay_duration_s(
+            data={"completion_tokens": "not-an-int"},
+            source_duration_s=1.0,
+            replay_speed=1.0,
+            timing_mode="ttft_tpot",
+            llm_ttft_ms=10.0,
+            llm_tpot_ms=2.0,
+        )
+
+
+def test_llm_replay_duration_rejects_negative_completion_tokens() -> None:
+    from trace_collect.openclaw_host_runtime import llm_replay_duration_s
+
+    with pytest.raises(ValueError, match="completion_tokens must be non-negative"):
+        llm_replay_duration_s(
+            data={"completion_tokens": -1},
+            source_duration_s=1.0,
+            replay_speed=1.0,
+            timing_mode="ttft_tpot",
+            llm_ttft_ms=10.0,
+            llm_tpot_ms=2.0,
+        )
+
 
 
 def test_source_model_prefers_summary_and_metadata_audit_fields() -> None:
@@ -465,6 +508,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         network_mode="host",
         **_kwargs,
     ):
+        assert _kwargs.get("start_agent") is False
         return PreparedTraceSession(
             loaded=loaded,
             container=PreparedContainer(
@@ -473,6 +517,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
                 docker_image="swebench/test-image",
                 agent=_FakeAgent(),
             ),
+            task_output_dir=task_output_dir,
         )
 
     async def fake_prefetch(*_args, **_kwargs) -> None:
