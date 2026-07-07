@@ -245,13 +245,15 @@ class ContainerExecTool(_ContainerTool):
         timeout: int = 300,
         path_append: str = "",
         restrict_to_workspace: bool = False,
+        workspace: str = "/testbed",
     ) -> None:
         super().__init__(agent)
         self.timeout = timeout
         self.path_append = path_append
+        self.workspace = workspace or "/testbed"
         self._guard = ExecTool(
             timeout=timeout,
-            working_dir="/testbed",
+            working_dir=self.workspace,
             restrict_to_workspace=restrict_to_workspace,
             path_append=path_append,
         )
@@ -279,13 +281,13 @@ class ContainerExecTool(_ContainerTool):
         timeout: int | None = None,
         **_: Any,
     ) -> str:
-        workdir = working_dir or "/testbed"
+        workdir = working_dir or self.workspace
         guard_error = self._guard._guard_command(command, workdir)
         if guard_error:
             return guard_error
         effective_timeout = min(int(timeout or self.timeout), self._MAX_TIMEOUT)
         effective_command = command
-        if workdir != "/testbed":
+        if workdir != self.workspace:
             effective_command = f"cd {shlex.quote(workdir)} && {command}"
         response = await self._request(
             "exec",
@@ -298,6 +300,46 @@ class ContainerExecTool(_ContainerTool):
             return f"{result}\n\nExit code: {returncode}".strip()
         return result
 
+class UnsupportedReplayTool(Tool):
+    """Fail-closed placeholder for OpenClaw tools without container-backed replay."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return (
+            f"{self._name} is unavailable during OpenClaw host replay because "
+            "it has no container-backed implementation."
+        )
+
+    def set_context(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **_: Any) -> str:
+        return (
+            f"Error: Tool '{self._name}' is unsupported during OpenClaw host replay; "
+            "only container-backed tools may execute."
+        )
+
+
+_UNSUPPORTED_REPLAY_TOOL_NAMES = (
+    "web_search",
+    "web_fetch",
+    "message",
+    "spawn",
+    "sessions_yield",
+)
+
+
 
 def build_container_tool_overrides(
     agent: ContainerAgent,
@@ -305,6 +347,7 @@ def build_container_tool_overrides(
     exec_timeout: int = 300,
     exec_path_append: str = "",
     restrict_to_workspace: bool = False,
+    workspace: str = "/testbed",
 ) -> list[Tool]:
     """Return OpenClaw tool replacements backed by a task-container agent."""
 
@@ -318,7 +361,9 @@ def build_container_tool_overrides(
             timeout=exec_timeout,
             path_append=exec_path_append,
             restrict_to_workspace=restrict_to_workspace,
+            workspace=workspace,
         ),
+        *[UnsupportedReplayTool(name) for name in _UNSUPPORTED_REPLAY_TOOL_NAMES],
     ]
 
 

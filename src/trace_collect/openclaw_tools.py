@@ -138,6 +138,7 @@ def remap_source_runtime_artifact_tool_args(
 # from stdin, writes JSON-line responses to stdout (subprocess.run uses capture_output=True).
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
 import json, os, sys, subprocess, difflib, signal, time
+WORKDIR = os.environ.get("OPENCLAW_CONTAINER_WORKDIR", "/testbed") or "/testbed"
 
 def _find_match(content, old_text):
     if old_text in content:
@@ -361,7 +362,7 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
     process = subprocess.Popen(
         cmd,
         shell=True,
-        cwd="/testbed",
+        cwd=WORKDIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -451,7 +452,7 @@ def handle_exec(args):
     if resource_response is not None:
         return resource_response
     try:
-        r = subprocess.run(cmd, shell=True, cwd="/testbed",
+        r = subprocess.run(cmd, shell=True, cwd=WORKDIR,
                            capture_output=True, text=True, timeout=timeout, env=env)
         output = (r.stdout or "") + (r.stderr or "")
         return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
@@ -468,7 +469,7 @@ def handle_commands(args):
     any_timeout = False
     for i, cmd in enumerate(cmds):
         try:
-            r = subprocess.run(cmd, shell=True, cwd="/testbed",
+            r = subprocess.run(cmd, shell=True, cwd=WORKDIR,
                                capture_output=True, text=True, timeout=timeout, env=env)
             all_output.append((r.stdout or "") + (r.stderr or ""))
             last_rc = r.returncode
@@ -593,22 +594,22 @@ def handle_extract_patch(args):
             if text.lstrip().startswith("diff --git"):
                 return {"ok": True, "result": text, "returncode": 0}
         subprocess.run(
-            ["git", "config", "--add", "safe.directory", "/testbed"],
-            cwd="/testbed",
+            ["git", "config", "--add", "safe.directory", WORKDIR],
+            cwd=WORKDIR,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
         )
         subprocess.run(
             ["git", "add", "-A", "--", ".", *[str(spec) for spec in exclude_pathspecs]],
-            cwd="/testbed",
+            cwd=WORKDIR,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
         )
         result = subprocess.run(
             ["git", "diff", str(base_commit), "--", ".", *[str(spec) for spec in exclude_pathspecs]],
-            cwd="/testbed",
+            cwd=WORKDIR,
             capture_output=True,
             text=True,
             check=False,
@@ -728,12 +729,16 @@ class ContainerAgent:
         container_executable: str,
         *,
         pythonpath: str | None = None,
+        python_runtime: str | None = None,
+        workdir: str = "/testbed",
     ) -> None:
         self._container_id = container_id
         self._executable = container_executable
         self._process: asyncio.subprocess.Process | None = None
-        self._python_runtime: str = "python3"  # fallback, overwritten in start()
+        self._explicit_python_runtime = python_runtime
+        self._python_runtime: str = python_runtime or "python3"
         self._pythonpath: str | None = pythonpath
+        self._workdir = workdir or "/testbed"
         self._lock = asyncio.Lock()
 
     async def _probe_python(self) -> str:
@@ -748,8 +753,10 @@ class ContainerAgent:
                     self._executable,
                     "exec",
                     "-i",
+                    "--user",
+                    "0",
                     "-w",
-                    "/testbed",
+                    self._workdir,
                     self._container_id,
                     cand,
                     "-c",
@@ -801,18 +808,24 @@ class ContainerAgent:
         )
 
     async def start(self) -> None:
-        self._python_runtime = await self._probe_python()
+        if self._explicit_python_runtime is not None:
+            self._python_runtime = self._explicit_python_runtime
+        else:
+            self._python_runtime = await self._probe_python()
         cmd: list[str] = [
             self._executable,
             "exec",
             "-i",
+            "--user",
+            "0",
             "-w",
-            "/testbed",
+            self._workdir,
         ]
         # Propagate PYTHONPATH so replayed subprocesses (e.g. pytest)
         # can find packages installed by bootstrap_task_container_python.
         if self._pythonpath:
             cmd.extend(["-e", f"PYTHONPATH={self._pythonpath}"])
+        cmd.extend(["-e", f"OPENCLAW_CONTAINER_WORKDIR={self._workdir}"])
         cmd.extend(
             [
                 self._container_id,

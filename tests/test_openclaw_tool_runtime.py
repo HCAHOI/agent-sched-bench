@@ -141,6 +141,17 @@ def test_container_tool_overrides_serialize_filesystem_and_exec_requests() -> No
     ]
     assert agent.timeouts == [600.0, 600.0, 600.0, 600.0, 12.0]
 
+def test_container_tool_overrides_fail_closed_for_non_container_tools() -> None:
+    tools = _container_override_tools_by_name(FakeAgent())
+
+    for name in ("web_search", "web_fetch", "message", "spawn", "sessions_yield"):
+        assert name in tools
+        tools[name].set_context("simulate", "trace", "message-id")
+        result = asyncio.run(tools[name].execute(query="host-only"))
+        assert "unsupported during OpenClaw host replay" in result
+        assert "container-backed tools" in result
+
+
 
 def test_container_exec_preserves_working_dir_in_container_command() -> None:
     agent = FakeAgent({"exec": {"ok": True, "result": "/testbed/pkg\n", "returncode": 0}})
@@ -297,9 +308,10 @@ def test_container_agent_probe_python_picks_first_ge_311(monkeypatch) -> None:
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         calls.append(list(cmd))
-        # Probe invocations look like: <exe> exec -i -w /testbed <cid> <cand> -c <script>
+        # Probe invocations look like:
+        # <exe> exec -i --user 0 -w /testbed <cid> <cand> -c <script>.
         # The replay-agent start invocation appends _REPLAY_AGENT_SCRIPT.
-        candidate = cmd[6] if len(cmd) > 6 else ""
+        candidate = cmd[cmd.index("cid") + 1] if "cid" in cmd else ""
         if cmd[-1] == _REPLAY_AGENT_SCRIPT:
             return _FakeProc(0)  # the actual agent start succeeds
         # First candidate ("/usr/bin/python3") reports 3.10 → fail,
@@ -315,9 +327,17 @@ def test_container_agent_probe_python_picks_first_ge_311(monkeypatch) -> None:
     agent = ContainerAgent("cid", "docker")
     asyncio.run(agent.start())
 
-    probe_candidates = [c[6] for c in calls if c[-1] != _REPLAY_AGENT_SCRIPT]
+    for call in calls:
+        user_idx = call.index("--user")
+        assert call[user_idx + 1] == "0"
+        assert user_idx < call.index("-w")
+    probe_candidates = [
+        c[c.index("cid") + 1] for c in calls if c[-1] != _REPLAY_AGENT_SCRIPT
+    ]
     assert probe_candidates[0] == "/usr/bin/python3"
     assert probe_candidates[1] == "/usr/bin/python"
+    start_call = next(c for c in calls if c[-1] == _REPLAY_AGENT_SCRIPT)
+    assert start_call[start_call.index("cid") + 1] == "/usr/bin/python"
     assert agent._python_runtime == "/usr/bin/python"
 
 
@@ -372,7 +392,7 @@ def test_container_agent_probe_python_kills_timed_out_probe(monkeypatch) -> None
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         calls.append(list(cmd))
-        candidate = cmd[6] if len(cmd) > 6 else ""
+        candidate = cmd[cmd.index("cid") + 1] if "cid" in cmd else ""
         proc = _FakeProc(hangs=candidate == "/usr/bin/python3")
         procs.append(proc)
         return proc
@@ -391,7 +411,11 @@ def test_container_agent_probe_python_kills_timed_out_probe(monkeypatch) -> None
     selected = asyncio.run(agent._probe_python())
 
     assert selected == "/usr/bin/python"
-    assert calls[0][6] == "/usr/bin/python3"
+    first_call = calls[0]
+    user_idx = first_call.index("--user")
+    assert first_call[user_idx + 1] == "0"
+    assert user_idx < first_call.index("-w")
+    assert first_call[first_call.index("cid") + 1] == "/usr/bin/python3"
     assert procs[0].kill_calls == 1
 
 

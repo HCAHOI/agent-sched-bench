@@ -157,6 +157,97 @@ def test_bootstrap_checks_real_venv_creation() -> None:
     assert "python3 python3-pip python3-venv" in command
 
 
+def test_build_wheel_uses_uv_without_pip_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import agents.terminal_bench.openclaw_agent as openclaw_agent_module
+
+    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_WHEEL_CACHE", None)
+    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_repo_root", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        openclaw_agent_module,
+        "shutil",
+        SimpleNamespace(which=lambda name: "/usr/bin/uv" if name == "uv" else None),
+        raising=False,
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if cmd[0] == "/usr/bin/uv":
+            wheel_dir = Path(cmd[cmd.index("--out-dir") + 1])
+            wheel_dir.mkdir(parents=True, exist_ok=True)
+            wheel = wheel_dir / "agent_sched_bench-0.1.0-py3-none-any.whl"
+            wheel.write_bytes(b"wheel")
+            return subprocess.CompletedProcess(cmd, 0, stdout="uv ok", stderr="")
+        raise AssertionError("pip fallback must not run after a successful uv build")
+
+    monkeypatch.setattr(openclaw_agent_module.subprocess, "run", fake_run)
+
+    wheel = TerminalBenchOpenClawAgent._build_wheel()
+
+    assert wheel.name == "agent_sched_bench-0.1.0-py3-none-any.whl"
+    assert wheel.read_bytes() == b"wheel"
+    assert calls == [
+        [
+            "/usr/bin/uv",
+            "build",
+            "--wheel",
+            "--out-dir",
+            str(wheel.parent),
+        ]
+    ]
+
+
+def test_build_wheel_reports_combined_uv_and_pip_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+    import agents.terminal_bench.openclaw_agent as openclaw_agent_module
+
+    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_WHEEL_CACHE", None)
+    monkeypatch.setattr(TerminalBenchOpenClawAgent, "_repo_root", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(
+        openclaw_agent_module,
+        "shutil",
+        SimpleNamespace(which=lambda name: "/usr/bin/uv" if name == "uv" else None),
+        raising=False,
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "/usr/bin/uv":
+            return subprocess.CompletedProcess(
+                cmd,
+                3,
+                stdout="uv stdout",
+                stderr="uv stderr",
+            )
+        assert cmd[:4] == [sys.executable, "-m", "pip", "wheel"]
+        return subprocess.CompletedProcess(
+            cmd,
+            1,
+            stdout="pip stdout",
+            stderr="No module named pip",
+        )
+
+    monkeypatch.setattr(openclaw_agent_module.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        TerminalBenchOpenClawAgent._build_wheel()
+
+    message = str(exc_info.value)
+    assert "uv build failed (returncode=3)" in message
+    assert "uv stdout" in message
+    assert "uv stderr" in message
+    assert "pip wheel failed (returncode=1)" in message
+    assert "pip stdout" in message
+    assert "No module named pip" in message
+
+
 def test_agent_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in TerminalBenchOpenClawAgent._ENV_PASSTHROUGH:
         monkeypatch.delenv(key, raising=False)

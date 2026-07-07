@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -161,13 +162,63 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
     def _repo_root(cls) -> Path:
         return Path(__file__).resolve().parents[3]
 
+    @staticmethod
+    def _wheel_from_dir(wheel_dir: Path) -> Path | None:
+        wheels = sorted(wheel_dir.glob("agent_sched_bench-*.whl"))
+        return wheels[0] if wheels else None
+
+    @staticmethod
+    def _wheel_attempt_summary(
+        name: str,
+        result: subprocess.CompletedProcess[str] | None,
+        *,
+        unavailable: str | None = None,
+    ) -> str:
+        if unavailable is not None:
+            return f"{name}: unavailable ({unavailable})"
+        assert result is not None
+        return (
+            f"{name} failed (returncode={result.returncode}). stdout tail:\n"
+            f"{result.stdout[-2000:]}\n--- stderr tail:\n{result.stderr[-2000:]}"
+        )
+
     @classmethod
     def _build_wheel(cls) -> Path:
         if cls._WHEEL_CACHE and cls._WHEEL_CACHE.exists():
             return cls._WHEEL_CACHE
         repo_root = cls._repo_root()
         wheel_dir = Path(tempfile.mkdtemp(prefix="agent_sched_bench_wheel_"))
-        result = subprocess.run(
+        failures: list[str] = []
+
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            failures.append(
+                cls._wheel_attempt_summary("uv build", None, unavailable="uv not found")
+            )
+        else:
+            uv_result = subprocess.run(
+                [
+                    uv_path,
+                    "build",
+                    "--wheel",
+                    "--out-dir",
+                    str(wheel_dir),
+                ],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            wheel = cls._wheel_from_dir(wheel_dir)
+            if uv_result.returncode == 0 and wheel is not None:
+                cls._WHEEL_CACHE = wheel
+                return cls._WHEEL_CACHE
+            if uv_result.returncode == 0:
+                failures.append("uv build succeeded but produced no agent_sched_bench wheel")
+            else:
+                failures.append(cls._wheel_attempt_summary("uv build", uv_result))
+
+        pip_result = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -182,18 +233,15 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
             capture_output=True,
             text=True,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                "pip wheel failed (returncode="
-                f"{result.returncode}). stdout tail:\n"
-                f"{result.stdout[-2000:]}\n--- stderr tail:\n"
-                f"{result.stderr[-2000:]}"
-            )
-        wheels = sorted(wheel_dir.glob("agent_sched_bench-*.whl"))
-        if not wheels:
-            raise RuntimeError("failed to build agent-sched-bench wheel")
-        cls._WHEEL_CACHE = wheels[0]
-        return cls._WHEEL_CACHE
+        wheel = cls._wheel_from_dir(wheel_dir)
+        if pip_result.returncode == 0 and wheel is not None:
+            cls._WHEEL_CACHE = wheel
+            return cls._WHEEL_CACHE
+        if pip_result.returncode == 0:
+            failures.append("pip wheel succeeded but produced no agent_sched_bench wheel")
+        else:
+            failures.append(cls._wheel_attempt_summary("pip wheel", pip_result))
+        raise RuntimeError("failed to build agent-sched-bench wheel:\n" + "\n\n".join(failures))
 
     @property
     def _wheel_path(self) -> Path:

@@ -69,6 +69,9 @@ def test_exec_task_container_entrypoint_uses_run_mode_for_scaffold_requests(
         timeout=10,
     )
 
+    user_idx = seen.index("--user")
+    assert seen[user_idx + 1] == "0"
+    assert user_idx < seen.index("-w")
     assert seen[-1] == "run"
 
 
@@ -104,6 +107,9 @@ def test_exec_task_container_entrypoint_uses_preflight_mode_for_preflight_reques
         timeout=10,
     )
 
+    user_idx = seen.index("--user")
+    assert seen[user_idx + 1] == "0"
+    assert user_idx < seen.index("-w")
     assert seen[-1] == "preflight"
 
 

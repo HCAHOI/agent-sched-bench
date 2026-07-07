@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from agents.openclaw.eval.types import EvalResult
@@ -16,18 +18,111 @@ class ReplaySleepRecord:
     phase: str
     expected_s: float
     actual_s: float
+    source: str
+    pid: int
 
     @property
     def drift_s(self) -> float:
         return self.actual_s - self.expected_s
 
-    def to_dict(self) -> dict[str, float | str]:
+    def to_dict(self) -> dict[str, float | int | str]:
         return {
             "phase": self.phase,
             "expected_s": round(self.expected_s, 6),
             "actual_s": round(self.actual_s, 6),
             "drift_s": round(self.drift_s, 6),
+            "source": self.source,
+            "pid": self.pid,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayActionFailureCounts:
+    emitted_actions: int
+    source_failed_actions: int
+    replay_failed_actions: int
+    unexpected_replay_failed_actions: int
+
+
+def _tool_name(record: dict[str, Any]) -> str | None:
+    data = record.get("data")
+    if isinstance(data, dict) and data.get("tool_name"):
+        return str(data["tool_name"])
+    return None
+
+
+def _replayable_source_actions(
+    source_actions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        action
+        for action in source_actions
+        if action.get("action_type") in {"llm_call", "tool_exec"}
+    ]
+
+
+def _action_matches_source(
+    replay_record: dict[str, Any],
+    source_action: dict[str, Any],
+) -> bool:
+    if replay_record.get("action_type") != source_action.get("action_type"):
+        return False
+    replay_tool = _tool_name(replay_record)
+    source_tool = _tool_name(source_action)
+    if replay_tool is not None and source_tool is not None:
+        return replay_tool == source_tool
+    return True
+
+
+def _action_failed(record: dict[str, Any]) -> bool:
+    data = record.get("data")
+    return isinstance(data, dict) and data.get("success") is False
+
+
+def replay_action_failure_counts(
+    source_actions: list[dict[str, Any]],
+    replay_records: list[dict[str, Any]],
+) -> ReplayActionFailureCounts:
+    """Compare replay failures against source actions aligned by replay order.
+
+    A replay failure is unexpected only when the corresponding source action
+    at the same replay position, action type, and tool name was not already a
+    recorded source failure.
+    """
+    source_replay_actions = _replayable_source_actions(source_actions)
+    source_failed_actions = sum(
+        1 for action in source_replay_actions if _action_failed(action)
+    )
+
+    emitted_actions = 0
+    replay_failed_actions = 0
+    unexpected_replay_failed_actions = 0
+    for record in replay_records:
+        if record.get("type") != "action":
+            continue
+        source_action = (
+            source_replay_actions[emitted_actions]
+            if emitted_actions < len(source_replay_actions)
+            else None
+        )
+        emitted_actions += 1
+        if not _action_failed(record):
+            continue
+        replay_failed_actions += 1
+        if (
+            source_action is None
+            or not _action_matches_source(record, source_action)
+            or not _action_failed(source_action)
+        ):
+            unexpected_replay_failed_actions += 1
+
+    return ReplayActionFailureCounts(
+        emitted_actions=emitted_actions,
+        source_failed_actions=source_failed_actions,
+        replay_failed_actions=replay_failed_actions,
+        unexpected_replay_failed_actions=unexpected_replay_failed_actions,
+    )
+
 
 
 class OpenClawReplayProvider(LLMProvider):
@@ -152,7 +247,13 @@ class OpenClawReplayProvider(LLMProvider):
         start = time.monotonic()
         await asyncio.sleep(expected_s)
         actual = time.monotonic() - start
-        record = ReplaySleepRecord(phase=phase, expected_s=expected_s, actual_s=actual)
+        record = ReplaySleepRecord(
+            phase=phase,
+            expected_s=expected_s,
+            actual_s=actual,
+            source="openclaw_replay_provider_sleep",
+            pid=os.getpid(),
+        )
         self.sleep_records.append(record)
         return record
 
@@ -259,14 +360,46 @@ async def extract_container_patch(
     return result
 
 
-def container_runtime_proof(*, container_id: str, mode: str) -> dict[str, Any]:
+async def container_runtime_proof(
+    agent: ContainerAgent,
+    *,
+    container_id: str,
+    mode: str,
+    expected_workdir: str,
+    timeout_s: float = 30.0,
+) -> dict[str, Any]:
+    response = await agent.execute(
+        {"tool": "exec", "args": {"command": "id -u && pwd", "timeout": timeout_s}},
+        timeout_s=timeout_s + 5.0,
+    )
+    if not response.get("ok", False):
+        raise RuntimeError(f"container root proof failed: {response.get('result', '')}")
+    if int(response.get("returncode", 1)) != 0:
+        raise RuntimeError(
+            "container root proof command failed with returncode "
+            f"{response.get('returncode')}: {response.get('result', '')}"
+        )
+    lines = str(response.get("result", "")).strip().splitlines()
+    if len(lines) < 2:
+        raise RuntimeError(f"container root proof returned malformed output: {response!r}")
+    uid_text = lines[0].strip()
+    observed_workdir = lines[-1].strip()
+    if uid_text != "0":
+        raise RuntimeError(f"container tool bridge is not root: uid={uid_text!r}")
+    if observed_workdir != expected_workdir:
+        raise RuntimeError(
+            "container tool bridge workdir mismatch: "
+            f"expected {expected_workdir!r}, observed {observed_workdir!r}"
+        )
     return {
         "agent_execution_environment": "host",
         "tool_execution_environment": "task_container",
         "tool_container_id": container_id,
-        "tool_container_user": "root_or_image_default",
+        "tool_container_user": "root",
+        "tool_container_user_id": 0,
+        "tool_container_workdir": observed_workdir,
         "tool_runtime": "ContainerAgent",
-        "openclaw_host_pid": __import__("os").getpid(),
+        "openclaw_host_pid": os.getpid(),
         "mode": mode,
     }
 
@@ -276,9 +409,190 @@ def build_container_tools_for_agent(
     *,
     exec_timeout: int,
     exec_path_append: str = "",
+    workspace: str = "/testbed",
 ) -> list[Any]:
     return build_container_tool_overrides(
         agent,
         exec_timeout=exec_timeout,
         exec_path_append=exec_path_append,
+        workspace=workspace,
     )
+
+
+def _update_trace_metadata(trace_path: Path, extra: dict[str, Any]) -> None:
+    if not trace_path.exists():
+        return
+    lines = trace_path.read_text(encoding="utf-8").splitlines()
+    updated: list[str] = []
+    replaced = False
+    for line in lines:
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if not replaced and record.get("type") == "trace_metadata":
+            record.update(extra)
+            replaced = True
+        updated.append(json.dumps(record, ensure_ascii=False))
+    if not replaced:
+        updated.insert(0, json.dumps({"type": "trace_metadata", **extra}, ensure_ascii=False))
+    trace_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+
+
+def _worker_trace_action_counts(
+    trace_path: Path,
+    source_actions: list[dict[str, Any]],
+) -> ReplayActionFailureCounts:
+    if not trace_path.exists():
+        return replay_action_failure_counts(source_actions, [])
+    records = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    return replay_action_failure_counts(source_actions, records)
+
+
+async def run_openclaw_host_replay_request(request: dict[str, Any]) -> dict[str, Any]:
+    """Run one OpenClaw replay in this host process and write structured status."""
+
+    from agents.openclaw._session_runner import SessionRunner
+
+    source_actions = list(request["source_actions"])
+    llm_actions = [
+        action for action in source_actions if action.get("action_type") == "llm_call"
+    ]
+    container_id = str(request["container_id"])
+    container_executable = str(request["container_executable"])
+    output_trace = Path(request["output_trace"])
+    runtime_dir = Path(request["runtime_dir"])
+    workspace = Path(request["workspace"])
+    status_path = Path(request["status_path"])
+    replay_speed = float(request["replay_speed"])
+    llm_timing = dict(request["llm_timing"])
+    command_timeout_s = float(request["command_timeout_s"])
+    run_instance_id = str(request["run_instance_id"])
+    prompt = str(request["prompt"])
+    container_workdir = str(request.get("container_workdir") or "/testbed")
+    container_python_runtime = request.get("container_python_runtime")
+    if container_python_runtime is not None:
+        container_python_runtime = str(container_python_runtime)
+    container_pythonpath = request.get("container_pythonpath")
+    if container_pythonpath is not None:
+        container_pythonpath = str(container_pythonpath)
+
+    agent = ContainerAgent(
+        container_id,
+        container_executable,
+        python_runtime=container_python_runtime,
+        pythonpath=container_pythonpath,
+        workdir=container_workdir,
+    )
+    status: dict[str, Any]
+    wall_start = time.time()
+    try:
+        await agent.start()
+        proof = await container_runtime_proof(
+            agent,
+            container_id=container_id,
+            mode="replay",
+            expected_workdir=container_workdir,
+        )
+        provider = OpenClawReplayProvider(
+            llm_actions=llm_actions,
+            replay_speed=replay_speed,
+            timing_mode=str(llm_timing["mode"]),
+            llm_ttft_ms=llm_timing.get("ttft_ms"),
+            llm_tpot_ms=llm_timing.get("tpot_ms"),
+            model=str(request.get("source_model") or "replay-openclaw"),
+        )
+        runner = SessionRunner(
+            provider,
+            model=provider.get_default_model(),
+            max_iterations=max(1, len(llm_actions)),
+            context_window_tokens=int(request.get("context_window_tokens") or 65536),
+            tool_overrides=build_container_tools_for_agent(
+                agent,
+                exec_timeout=int(command_timeout_s),
+                workspace=container_workdir,
+            ),
+        )
+        metadata_extra = {
+            **proof,
+            "task_instance_id": request["task_instance_id"],
+            "source_action_agent_id": request["source_action_agent_id"],
+            "source_agent_id": request["source_action_agent_id"],
+            "run_instance_id": run_instance_id,
+            "replay_mode": "openclaw_host_worker",
+        }
+        result = await runner.run(
+            prompt=prompt,
+            workspace=workspace,
+            tool_workspace=Path(container_workdir),
+            project_workspace=Path(container_workdir),
+            session_key=f"simulate:{run_instance_id}",
+            trace_file=output_trace,
+            runtime_dir=runtime_dir,
+            instance_id=run_instance_id,
+            channel="simulate",
+            prepare_ms=None,
+        )
+        _update_trace_metadata(output_trace, metadata_extra)
+        sleep_records = [record.to_dict() for record in provider.sleep_records]
+        action_counts = _worker_trace_action_counts(output_trace, source_actions)
+        expected_actions = int(request.get("expected_action_count") or 0)
+        missing_actions = max(0, expected_actions - action_counts.emitted_actions)
+        failed_actions = action_counts.unexpected_replay_failed_actions
+        success = (
+            result.stop_reason == "completed"
+            and result.error is None
+            and failed_actions == 0
+            and missing_actions == 0
+        )
+        wall_end = time.time()
+        status = {
+            "success": success,
+            "stop_reason": result.stop_reason,
+            "error": result.error,
+            "elapsed_s": wall_end - wall_start,
+            "output_trace": str(output_trace),
+            "sleep_records": sleep_records,
+            "emitted_actions": action_counts.emitted_actions,
+            "failed_actions": failed_actions,
+            "source_failed_actions": action_counts.source_failed_actions,
+            "replay_failed_actions": action_counts.replay_failed_actions,
+            "unexpected_replay_failed_actions": (
+                action_counts.unexpected_replay_failed_actions
+            ),
+            "expected_actions": expected_actions,
+            "missing_source_action_count": missing_actions,
+            **metadata_extra,
+        }
+    except BaseException as exc:
+        wall_end = time.time()
+        status = {
+            "success": False,
+            "stop_reason": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "elapsed_s": wall_end - wall_start,
+            "output_trace": str(output_trace),
+            "sleep_records": [],
+            "agent_execution_environment": "host",
+            "tool_execution_environment": "task_container",
+            "tool_container_id": container_id,
+            "tool_container_user": "unknown",
+            "openclaw_host_pid": os.getpid(),
+            "task_instance_id": request.get("task_instance_id"),
+            "source_action_agent_id": request.get("source_action_agent_id"),
+            "run_instance_id": run_instance_id,
+            "replay_mode": "openclaw_host_worker",
+        }
+    finally:
+        try:
+            await agent.stop()
+        finally:
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            status_path.write_text(
+                json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    return status

@@ -450,6 +450,8 @@ def test_worker_partition_helpers_preserve_order_and_limits() -> None:
             docker_image_override=None,
             label=None,
             run_instance_id=f"task-{index}",
+            task_instance_id=f"task-{index}",
+            source_action_agent_id=f"task-{index}",
         )
         for index in range(7)
     ]
@@ -510,6 +512,8 @@ def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(
             docker_image_override=None,
             label=None,
             run_instance_id="good",
+            task_instance_id="good",
+            source_action_agent_id="good",
         ),
         WorkerTraceInput(
             source_trace=str(bad_trace),
@@ -518,6 +522,8 @@ def test_worker_wave_finalizes_successful_preparations_after_prepare_failure(
             docker_image_override=None,
             label=None,
             run_instance_id="bad",
+            task_instance_id="bad",
+            source_action_agent_id="bad",
         ),
     ]
     finalized: list[str] = []
@@ -994,10 +1000,11 @@ def test_parse_trace_session_file_includes_subagent_actions(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    source_agent_id, _metadata, actions, _summary = _parse_trace_session_file(
-        trace_path
+    task_instance_id, source_agent_id, _metadata, actions, _summary = (
+        _parse_trace_session_file(trace_path)
     )
 
+    assert task_instance_id == "task-a"
     assert source_agent_id == "task-a"
     assert [action["action_id"] for action in actions] == [
         "child-tool",
@@ -1060,10 +1067,11 @@ def test_parse_trace_session_file_excludes_other_top_level_agents(
         encoding="utf-8",
     )
 
-    source_agent_id, _metadata, actions, _summary = _parse_trace_session_file(
-        trace_path
+    task_instance_id, source_agent_id, _metadata, actions, _summary = (
+        _parse_trace_session_file(trace_path)
     )
 
+    assert task_instance_id == "task-a"
     assert source_agent_id == "task-a"
     assert [action["action_id"] for action in actions] == [
         "task-a-tool",
@@ -2904,7 +2912,8 @@ def _loaded_for_finalize(tmp_path: Path) -> object:
     return LoadedTraceSession(
         source_trace=tmp_path / "trace.jsonl",
         task_source=tmp_path / "tasks.json",
-        source_agent_id="task-a",
+        task_instance_id="task-a",
+        source_action_agent_id="task-a",
         run_instance_id="task-a",
         manifest_index=0,
         scaffold="openclaw",

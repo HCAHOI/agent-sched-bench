@@ -1064,6 +1064,7 @@ async def _run_openclaw_in_task_container(
                 agent,
                 exec_timeout=300,
                 exec_path_append="",
+                workspace="/testbed",
             ),
             container_patch_extractor=_patch_extractor,
         )
@@ -1090,9 +1091,11 @@ async def _run_openclaw_in_task_container(
         total_llm_ms, total_tool_ms, total_tokens = _trace_summary_totals(
             ctx.attempt_dir / "trace.jsonl"
         )
-        runtime_proof = container_runtime_proof(
+        runtime_proof = await container_runtime_proof(
+            agent,
             container_id=container_id,
             mode="collect",
+            expected_workdir="/testbed",
         )
         _normalize_openclaw_trace(
             src=ctx.attempt_dir / "trace.jsonl",

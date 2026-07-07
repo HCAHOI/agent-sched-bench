@@ -7,10 +7,13 @@ import hashlib
 import json
 import logging
 import multiprocessing
-import subprocess
+import os
 import shutil
+import subprocess
+import sys
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,6 +47,11 @@ from trace_collect.attempt_pipeline import (
     start_task_container,
     stop_task_container,
 )
+from trace_collect.runtime.task_container import (
+    resolve_running_container_exec_config,
+    resolve_task_container_exec_config,
+)
+from trace_collect.openclaw_host_runtime import replay_action_failure_counts
 
 logger = logging.getLogger(__name__)
 GLOBAL_CONTAINER_RESOURCE_SAMPLE_INTERVAL_S = 1.0
@@ -122,7 +130,8 @@ class LoadedTraceSession:
 
     source_trace: Path
     task_source: Path
-    source_agent_id: str
+    task_instance_id: str
+    source_action_agent_id: str
     run_instance_id: str
     manifest_index: int
     scaffold: str
@@ -139,6 +148,20 @@ class LoadedTraceSession:
         return self.run_instance_id
 
 
+def _source_model(loaded: LoadedTraceSession) -> str:
+    summary = loaded.summary or {}
+    for key in ("model", "source_model"):
+        summary_model = summary.get(key)
+        if summary_model:
+            return str(summary_model)
+    metadata = loaded.metadata or {}
+    for key in ("model", "source_model"):
+        metadata_model = metadata.get(key)
+        if metadata_model:
+            return str(metadata_model)
+    return "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerTraceInput:
     """Picklable replay input for a subprocess worker."""
@@ -149,6 +172,8 @@ class WorkerTraceInput:
     docker_image_override: str | None
     label: str | None
     run_instance_id: str
+    task_instance_id: str
+    source_action_agent_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,9 +194,13 @@ class PreparedContainer:
     container_id: str
     container_executable: str
     docker_image: str
-    agent: Any  # ContainerAgent
+    agent: Any | None  # ContainerAgent
     fixed_image: str | None = None
+    python_runtime: str | None = None
+    pythonpath: str | None = None
+    workdir: str = "/testbed"
     cleanup_fixed_image: bool = True
+    cleanup_callback: Callable[[], None] | None = None
     extra_agents: list[Any] = dataclasses.field(default_factory=list)
 
 
@@ -264,8 +293,10 @@ class ContainerStartupRecorder:
             "status": status,
             "agent_id": self.loaded.agent_id,
             "run_instance_id": self.loaded.run_instance_id,
-            "source_agent_id": self.loaded.source_agent_id,
-            "task_id": self.loaded.source_agent_id,
+            "task_instance_id": self.loaded.task_instance_id,
+            "source_action_agent_id": self.loaded.source_action_agent_id,
+            "source_agent_id": self.loaded.source_action_agent_id,
+            "task_id": self.loaded.task_instance_id,
             "manifest_index": self.loaded.manifest_index,
             "label": self.loaded.label,
             "source_trace": str(self.loaded.source_trace),
@@ -685,11 +716,10 @@ async def _restore_source_runtime_artifacts(
 
 def _parse_trace_session_file(
     trace_path: Path,
-) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
-    """Read one canonical trace once and extract task-owned replay actions."""
+) -> tuple[str, str, dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
+    """Read one canonical trace and keep task id separate from action owner id."""
 
     metadata: dict[str, Any] | None = None
-    first_agent_id: str | None = None
     all_actions: list[dict[str, Any]] = []
     summaries: dict[str, dict[str, Any]] = {}
 
@@ -707,34 +737,58 @@ def _parse_trace_session_file(
 
             agent_id = record.get("agent_id")
             if record_type == "action" and agent_id:
-                if first_agent_id is None:
-                    first_agent_id = agent_id
                 all_actions.append(record)
                 continue
 
             if record_type == "summary" and agent_id:
-                summaries[agent_id] = record
+                summaries[str(agent_id)] = record
 
-    if first_agent_id is None or not all_actions:
+    if not all_actions:
         raise SimulateError(f"No action records with agent_id found in {trace_path}")
 
-    source_agent_id = first_agent_id
-    metadata_agent_id = (metadata or {}).get("instance_id")
-    if isinstance(metadata_agent_id, str) and metadata_agent_id:
-        source_agent_id = metadata_agent_id
-    elif first_agent_id not in summaries and len(summaries) == 1:
-        source_agent_id = next(iter(summaries))
+    metadata_task_id = (metadata or {}).get("instance_id")
+    if isinstance(metadata_task_id, str) and metadata_task_id:
+        task_instance_id = metadata_task_id
+    else:
+        first_task_id = all_actions[0].get("instance_id")
+        if isinstance(first_task_id, str) and first_task_id:
+            task_instance_id = first_task_id
+        else:
+            task_instance_id = str(all_actions[0]["agent_id"])
 
-    source_subagent_prefix = f"{source_agent_id}:subagent:"
+    action_owner_ids = {
+        str(action.get("agent_id"))
+        for action in all_actions
+        if action.get("agent_id")
+        and ":subagent:" not in str(action.get("agent_id"))
+    }
+    if len(summaries) == 1:
+        source_action_agent_id = next(iter(summaries))
+    elif len(action_owner_ids) == 1:
+        source_action_agent_id = next(iter(action_owner_ids))
+    elif task_instance_id in summaries:
+        source_action_agent_id = task_instance_id
+    elif task_instance_id in action_owner_ids:
+        source_action_agent_id = task_instance_id
+    else:
+        raise SimulateError(
+            "Ambiguous action owner for task "
+            f"{task_instance_id!r} in {trace_path}: "
+            f"owners={sorted(action_owner_ids)!r}, summaries={sorted(summaries)!r}"
+        )
+
+    source_subagent_prefix = f"{source_action_agent_id}:subagent:"
     actions = [
         action
         for action in all_actions
-        if action.get("agent_id") == source_agent_id
+        if action.get("agent_id") == source_action_agent_id
         or str(action.get("agent_id", "")).startswith(source_subagent_prefix)
     ]
     if not actions:
         raise SimulateError(
-            f"No action records for task {source_agent_id!r} found in {trace_path}"
+            "No action records for task "
+            f"{task_instance_id!r} and action owner {source_action_agent_id!r} "
+            f"found in {trace_path}"
         )
 
     actions.sort(
@@ -745,15 +799,21 @@ def _parse_trace_session_file(
             str(action.get("action_id", "")),
         )
     )
-    return source_agent_id, metadata, actions, summaries.get(source_agent_id)
+    return (
+        task_instance_id,
+        source_action_agent_id,
+        metadata,
+        actions,
+        summaries.get(source_action_agent_id),
+    )
 
 
-def _find_task(task_source: Path, agent_id: str) -> dict[str, Any]:
+def _find_task(task_source: Path, task_instance_id: str) -> dict[str, Any]:
     tasks = json.loads(task_source.read_text(encoding="utf-8"))
     for task in tasks:
-        if task["instance_id"] == agent_id:
+        if task["instance_id"] == task_instance_id:
             return task
-    raise SimulateError(f"Task {agent_id!r} not found in {task_source}")
+    raise SimulateError(f"Task {task_instance_id!r} not found in {task_source}")
 
 
 def _iteration_count(actions: list[dict[str, Any]]) -> int:
@@ -876,14 +936,21 @@ def _load_trace_session(
     docker_image_override: str | None = None,
     label: str | None = None,
 ) -> LoadedTraceSession:
-    source_agent_id, metadata, actions, summary = _parse_trace_session_file(source_trace)
+    (
+        task_instance_id,
+        source_action_agent_id,
+        metadata,
+        actions,
+        summary,
+    ) = _parse_trace_session_file(source_trace)
     scaffold = metadata.get("scaffold", "unknown") if metadata else "unknown"
-    task = _find_task(task_source, source_agent_id)
+    task = _find_task(task_source, task_instance_id)
     return LoadedTraceSession(
         source_trace=source_trace,
         task_source=task_source,
-        source_agent_id=source_agent_id,
-        run_instance_id=source_agent_id,
+        task_instance_id=task_instance_id,
+        source_action_agent_id=source_action_agent_id,
+        run_instance_id=source_action_agent_id,
         manifest_index=manifest_index,
         scaffold=scaffold,
         metadata=metadata,
@@ -899,8 +966,8 @@ def _load_trace_session(
 def _assign_replay_instance_ids(sessions: list[LoadedTraceSession]) -> None:
     source_counts: dict[str, int] = {}
     for session in sessions:
-        source_counts[session.source_agent_id] = (
-            source_counts.get(session.source_agent_id, 0) + 1
+        source_counts[session.task_instance_id] = (
+            source_counts.get(session.task_instance_id, 0) + 1
         )
 
     reserved_source_ids = set(source_counts)
@@ -908,13 +975,13 @@ def _assign_replay_instance_ids(sessions: list[LoadedTraceSession]) -> None:
     source_occurrences: dict[str, int] = {}
 
     for session in sessions:
-        source_agent_id = session.source_agent_id
-        if source_counts[source_agent_id] == 1:
-            candidate = source_agent_id
+        task_instance_id = session.task_instance_id
+        if source_counts[task_instance_id] == 1:
+            candidate = task_instance_id
         else:
-            occurrence = source_occurrences.get(source_agent_id, 0) + 1
-            source_occurrences[source_agent_id] = occurrence
-            base = f"{source_agent_id}__replica-{occurrence:03d}"
+            occurrence = source_occurrences.get(task_instance_id, 0) + 1
+            source_occurrences[task_instance_id] = occurrence
+            base = f"{task_instance_id}__replica-{occurrence:03d}"
             candidate = base
             if candidate in reserved_source_ids or candidate in used_ids:
                 candidate = f"{base}__entry-{session.manifest_index:04d}"
@@ -937,6 +1004,8 @@ def _worker_trace_input(session: LoadedTraceSession) -> WorkerTraceInput:
         docker_image_override=session.docker_image_override,
         label=session.label,
         run_instance_id=session.run_instance_id,
+        task_instance_id=session.task_instance_id,
+        source_action_agent_id=session.source_action_agent_id,
     )
 
 
@@ -950,6 +1019,16 @@ def _load_worker_trace_inputs(inputs: list[WorkerTraceInput]) -> list[LoadedTrac
             docker_image_override=entry.docker_image_override,
             label=entry.label,
         )
+        if session.task_instance_id != entry.task_instance_id:
+            raise SimulateError(
+                f"Worker task id changed while reloading {entry.source_trace}: "
+                f"{session.task_instance_id!r} != {entry.task_instance_id!r}"
+            )
+        if session.source_action_agent_id != entry.source_action_agent_id:
+            raise SimulateError(
+                f"Worker action owner changed while reloading {entry.source_trace}: "
+                f"{session.source_action_agent_id!r} != {entry.source_action_agent_id!r}"
+            )
         session.run_instance_id = entry.run_instance_id
         sessions.append(session)
     return sessions
@@ -1301,6 +1380,14 @@ def _is_host_mode(loaded: LoadedTraceSession) -> bool:
     return _execution_environment(loaded) == "host"
 
 
+def _is_terminal_bench_registry_task(loaded: LoadedTraceSession) -> bool:
+    return loaded.task.get("task_source_kind") == "terminal_bench_registry"
+
+
+def _requires_task_container(loaded: LoadedTraceSession) -> bool:
+    return not _is_host_mode(loaded) or _is_terminal_bench_registry_task(loaded)
+
+
 def _validate_loaded_sessions(
     sessions: list[LoadedTraceSession],
     *,
@@ -1314,12 +1401,18 @@ def _validate_loaded_sessions(
         raise SimulateError("No trace sessions were loaded")
     _validate_llm_timing_config(llm_timing)
     for session in sessions:
-        if _is_host_mode(session):
+        if not _requires_task_container(session):
+            continue
+        if _is_terminal_bench_registry_task(session):
+            if not session.task.get("task_source_path"):
+                raise SimulateError(
+                    f"Terminal-Bench task {session.task_instance_id!r} has no task_source_path"
+                )
             continue
         docker_image = _resolve_docker_image(session)
         if not docker_image:
             raise SimulateError(
-                f"Task {session.source_agent_id!r} has no resolvable docker_image "
+                f"Task {session.task_instance_id!r} has no resolvable docker_image "
                 "(set docker_image in manifest or ensure task has image_name)"
             )
 
@@ -1346,12 +1439,14 @@ def _validate_container_runtime(
     *,
     container_executable: str | None,
 ) -> None:
-    container_sessions = [session.agent_id for session in sessions if not _is_host_mode(session)]
+    container_sessions = [
+        session.agent_id for session in sessions if _requires_task_container(session)
+    ]
     if container_sessions and container_executable is None:
         sample = ", ".join(container_sessions[:3])
         suffix = "..." if len(container_sessions) > 3 else ""
         raise ValueError(
-            "container_executable is required for container-mode traces "
+            "container_executable is required for replay sessions with task containers "
             f"({sample}{suffix})"
         )
 
@@ -1359,7 +1454,9 @@ def _validate_container_runtime(
 def _container_source_images(sessions: list[LoadedTraceSession]) -> list[str]:
     images: set[str] = set()
     for session in sessions:
-        if _is_host_mode(session):
+        if not _requires_task_container(session):
+            continue
+        if _is_terminal_bench_registry_task(session):
             continue
         docker_image = _resolve_docker_image(session)
         if docker_image is None:
@@ -1369,7 +1466,7 @@ def _container_source_images(sessions: list[LoadedTraceSession]) -> list[str]:
 
 
 def _has_container_mode_sessions(sessions: list[LoadedTraceSession]) -> bool:
-    return any(not _is_host_mode(session) for session in sessions)
+    return any(_requires_task_container(session) for session in sessions)
 
 
 async def _prefetch_container_images(
@@ -1467,6 +1564,396 @@ async def _cleanup_sweep_fixed_images(
         raise cleanup_error
 
 
+def _terminal_bench_compose_file(task_dir: Path) -> Path:
+    for name in ("docker-compose.yaml", "docker-compose.yml"):
+        candidate = task_dir / name
+        if candidate.exists():
+            return candidate
+    raise SimulateError(f"Terminal-Bench task has no docker-compose.yaml/yml: {task_dir}")
+
+
+def _run_terminal_bench_compose(
+    *,
+    container_executable: str,
+    project: str,
+    compose_file: Path,
+    env: dict[str, str],
+    args: list[str],
+) -> str:
+    cmd = [
+        container_executable,
+        "compose",
+        "-p",
+        project,
+        "-f",
+        str(compose_file),
+        *args,
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=compose_file.parent,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Terminal-Bench compose {' '.join(args)} failed "
+            f"(returncode={result.returncode}). stdout tail:\n"
+            f"{result.stdout[-2000:]}\n--- stderr tail:\n{result.stderr[-2000:]}"
+        )
+    return result.stdout.strip()
+
+
+def _inspect_container_workdir(
+    *,
+    container_executable: str,
+    container_id: str,
+) -> str:
+    result = subprocess.run(
+        [
+            container_executable,
+            "inspect",
+            "--format",
+            "{{.Config.WorkingDir}}",
+            container_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"docker inspect failed for {container_id[:12]} "
+            f"(returncode={result.returncode}). stdout tail:\n"
+            f"{result.stdout[-2000:]}\n--- stderr tail:\n{result.stderr[-2000:]}"
+        )
+    return result.stdout.strip() or "/"
+
+
+def _validate_container_workdir(
+    *,
+    container_executable: str,
+    container_id: str,
+    workdir: str,
+) -> str:
+    result = subprocess.run(
+        [
+            container_executable,
+            "exec",
+            "-i",
+            "--user",
+            "0",
+            "-w",
+            workdir,
+            container_id,
+            "/bin/sh",
+            "-c",
+            "pwd",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"container workdir {workdir!r} is not executable in {container_id[:12]} "
+            f"(returncode={result.returncode}). stdout tail:\n"
+            f"{result.stdout[-2000:]}\n--- stderr tail:\n{result.stderr[-2000:]}"
+        )
+    resolved = result.stdout.strip()
+    if not resolved:
+        raise RuntimeError(f"container workdir probe returned no pwd for {container_id[:12]}")
+    return resolved
+
+
+def _install_terminal_bench_python_dependencies(
+    *,
+    container_executable: str,
+    container_id: str,
+    workdir: str,
+) -> dict[str, str | int]:
+    from agents.terminal_bench.openclaw_agent import TerminalBenchOpenClawAgent
+
+    result = subprocess.run(
+        [
+            container_executable,
+            "exec",
+            "-i",
+            "--user",
+            "0",
+            "-w",
+            workdir,
+            container_id,
+            "/bin/bash",
+            "-lc",
+            TerminalBenchOpenClawAgent._bootstrap_dependencies_command(),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=1800,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Terminal-Bench python dependency bootstrap failed "
+            f"(returncode={result.returncode}). stdout tail:\n"
+            f"{result.stdout[-2000:]}\n--- stderr tail:\n{result.stderr[-2000:]}"
+        )
+    return {
+        "returncode": result.returncode,
+        "stdout_tail": result.stdout[-2000:],
+        "stderr_tail": result.stderr[-2000:],
+    }
+
+
+async def _prepare_terminal_bench_container_session(
+    loaded: LoadedTraceSession,
+    *,
+    task_output_dir: Path,
+    container_executable: str,
+) -> PreparedTraceSession:
+    """Prepare a real Terminal-Bench client container for host OpenClaw replay."""
+
+    from agents.terminal_bench.runner import TerminalBenchRunner
+
+    source_raw = loaded.task.get("task_source_path")
+    if not isinstance(source_raw, str) or not source_raw:
+        raise SimulateError(
+            f"Terminal-Bench task {loaded.task_instance_id!r} has no task_source_path"
+        )
+    source_dir = Path(source_raw).expanduser().resolve()
+    if not source_dir.is_dir():
+        raise SimulateError(
+            f"Terminal-Bench task_source_path is not a directory: {source_dir}"
+        )
+    runtime_dir = task_output_dir / "terminal-bench-runtime"
+    task_runtime_dir = runtime_dir / "task"
+    run_root = runtime_dir / "tb-run"
+    task_id = str(loaded.task.get("task_id") or loaded.task_instance_id)
+    run_id = _sanitize_run_label(loaded.run_instance_id).lower()[:48]
+    if not run_id:
+        run_id = "openclaw-replay"
+    project = TerminalBenchRunner._expected_client_container_name(
+        task_id=task_id,
+        run_id=run_id,
+    )
+    env_values = TerminalBenchRunner._terminal_bench_compose_env(
+        task_id=task_id,
+        run_id=run_id,
+        run_root=run_root,
+    )
+    compose_env = os.environ.copy()
+    compose_env.update(env_values)
+    recorder = ContainerStartupRecorder(
+        loaded=loaded,
+        task_output_dir=task_output_dir,
+        container_executable=container_executable,
+        network_mode="terminal_bench_compose",
+        source_image=None,
+    )
+    cleanup_callback: Callable[[], None] | None = None
+    container_workdir = "/testbed"
+    container_python_runtime: str | None = None
+    container_pythonpath: str | None = None
+    try:
+        phase = recorder.start_phase("materialize_terminal_bench_task")
+        try:
+            if task_runtime_dir.exists():
+                shutil.rmtree(task_runtime_dir)
+            task_runtime_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source_dir, task_runtime_dir)
+            compose_file = _terminal_bench_compose_file(task_runtime_dir).resolve()
+            dockerfile = task_runtime_dir / "Dockerfile"
+            if not dockerfile.exists():
+                raise SimulateError(
+                    f"Terminal-Bench task has no Dockerfile: {task_runtime_dir}"
+                )
+            recorder.finish_phase(
+                phase,
+                extra={
+                    "source_dir": str(source_dir),
+                    "runtime_dir": str(task_runtime_dir),
+                    "compose_file": str(compose_file),
+                    "dockerfile": str(dockerfile),
+                    "compose_project": project,
+                    "compose_env": env_values,
+                },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        cleanup_callback = functools.partial(
+            _run_terminal_bench_compose,
+            container_executable=container_executable,
+            project=project,
+            compose_file=compose_file,
+            env=compose_env,
+            args=["down", "--volumes", "--remove-orphans"],
+        )
+        phase = recorder.start_phase("terminal_bench_compose_build")
+        try:
+            stdout = await asyncio.to_thread(
+                _run_terminal_bench_compose,
+                container_executable=container_executable,
+                project=project,
+                compose_file=compose_file,
+                env=compose_env,
+                args=["build"],
+            )
+            recorder.finish_phase(phase, extra={"stdout_tail": stdout[-2000:]})
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        phase = recorder.start_phase("terminal_bench_compose_up")
+        try:
+            stdout = await asyncio.to_thread(
+                _run_terminal_bench_compose,
+                container_executable=container_executable,
+                project=project,
+                compose_file=compose_file,
+                env=compose_env,
+                args=["up", "-d"],
+            )
+            recorder.finish_phase(phase, extra={"stdout_tail": stdout[-2000:]})
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        phase = recorder.start_phase("terminal_bench_resolve_client_container")
+        try:
+            container_id = await asyncio.to_thread(
+                _run_terminal_bench_compose,
+                container_executable=container_executable,
+                project=project,
+                compose_file=compose_file,
+                env=compose_env,
+                args=["ps", "-q", "client"],
+            )
+            if not container_id:
+                raise RuntimeError("docker compose ps -q client returned no container id")
+            recorder.container_id = container_id
+            recorder.finish_phase(
+                phase,
+                extra={
+                    "container_id": container_id,
+                    "client_image": env_values["T_BENCH_TASK_DOCKER_CLIENT_IMAGE_NAME"],
+                    "client_container_name": env_values[
+                        "T_BENCH_TASK_DOCKER_CLIENT_CONTAINER_NAME"
+                    ],
+                },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        phase = recorder.start_phase("terminal_bench_resolve_container_workdir")
+        try:
+            inspected_workdir = await asyncio.to_thread(
+                _inspect_container_workdir,
+                container_executable=container_executable,
+                container_id=container_id,
+            )
+            container_workdir = await asyncio.to_thread(
+                _validate_container_workdir,
+                container_executable=container_executable,
+                container_id=container_id,
+                workdir=inspected_workdir,
+            )
+            recorder.finish_phase(
+                phase,
+                extra={
+                    "inspected_workdir": inspected_workdir,
+                    "tool_container_workdir": container_workdir,
+                },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        phase = recorder.start_phase("terminal_bench_resolve_python_runtime")
+        try:
+            base_exec_config = resolve_task_container_exec_config(
+                attempt_dir=task_output_dir,
+                image=env_values["T_BENCH_TASK_DOCKER_CLIENT_IMAGE_NAME"],
+                container_executable=container_executable,
+            )
+            dependency_bootstrap: dict[str, str | int] | None = None
+            try:
+                running_exec_config = await asyncio.to_thread(
+                    resolve_running_container_exec_config,
+                    container_id=container_id,
+                    exec_config=base_exec_config,
+                    container_executable=container_executable,
+                    cwd=container_workdir,
+                )
+            except RuntimeError:
+                dependency_bootstrap = await asyncio.to_thread(
+                    _install_terminal_bench_python_dependencies,
+                    container_executable=container_executable,
+                    container_id=container_id,
+                    workdir=container_workdir,
+                )
+                running_exec_config = await asyncio.to_thread(
+                    resolve_running_container_exec_config,
+                    container_id=container_id,
+                    exec_config=base_exec_config,
+                    container_executable=container_executable,
+                    cwd=container_workdir,
+                )
+            container_python_runtime = running_exec_config.runtime
+            container_pythonpath = None
+            recorder.finish_phase(
+                phase,
+                extra={
+                    "python_runtime": container_python_runtime,
+                    "pythonpath": container_pythonpath,
+                    "dependency_bootstrap": dependency_bootstrap,
+                },
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            recorder.finish_phase(phase, status="failed", error=exc)
+            raise
+
+        recorder.write(status="success")
+    except (Exception, asyncio.CancelledError) as exc:
+        try:
+            recorder.write(status="failed", error=exc)
+        except (Exception, asyncio.CancelledError):
+            logger.exception(
+                "Failed to write Terminal-Bench startup failure artifact for %s",
+                loaded.agent_id,
+            )
+        if cleanup_callback is not None:
+            try:
+                await asyncio.to_thread(cleanup_callback)
+            except (Exception, asyncio.CancelledError):
+                logger.exception(
+                    "Failed to clean Terminal-Bench compose project for %s",
+                    loaded.agent_id,
+                )
+        raise
+
+    container = PreparedContainer(
+        container_id=container_id,
+        container_executable=container_executable,
+        docker_image=env_values["T_BENCH_TASK_DOCKER_CLIENT_IMAGE_NAME"],
+        agent=None,
+        fixed_image=None,
+        python_runtime=container_python_runtime,
+        pythonpath=container_pythonpath,
+        workdir=container_workdir,
+        cleanup_fixed_image=False,
+        cleanup_callback=cleanup_callback,
+    )
+    return PreparedTraceSession(loaded=loaded, container=container)
+
+
 async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
@@ -1474,6 +1961,7 @@ async def _prepare_container_session(
     container_executable: str,
     network_mode: str = "host",
     fixed_images_by_source: dict[str, str] | None = None,
+    start_agent: bool = True,
 ) -> PreparedTraceSession:
     """Prepare a Docker/Podman container and start a persistent replay agent."""
     from trace_collect.openclaw_tools import ContainerAgent
@@ -1481,7 +1969,7 @@ async def _prepare_container_session(
     docker_image = _resolve_docker_image(loaded)
     if not docker_image:
         raise SimulateError(
-            f"Task {loaded.source_agent_id!r} has no resolvable docker_image"
+            f"Task {loaded.task_instance_id!r} has no resolvable docker_image"
         )
     normalized = normalize_image_reference(docker_image)
     recorder = ContainerStartupRecorder(
@@ -1543,7 +2031,9 @@ async def _prepare_container_session(
                 "--label",
                 f"agent-sched-bench.run_instance_id={loaded.agent_id}",
                 "--label",
-                f"agent-sched-bench.source_agent_id={loaded.source_agent_id}",
+                f"agent-sched-bench.source_action_agent_id={loaded.source_action_agent_id}",
+                "--label",
+                f"agent-sched-bench.task_instance_id={loaded.task_instance_id}",
                 "--label",
                 f"agent-sched-bench.manifest_index={loaded.manifest_index}",
                 "--label",
@@ -1591,14 +2081,28 @@ async def _prepare_container_session(
             recorder.finish_phase(phase, status="failed", error=exc)
             raise
 
-        agent = ContainerAgent(container_id, container_executable)
-        phase = recorder.start_phase("container_agent_start")
-        try:
-            await agent.start()
-            recorder.finish_phase(phase)
-        except (Exception, asyncio.CancelledError) as exc:
-            recorder.finish_phase(phase, status="failed", error=exc)
-            raise
+        if start_agent:
+            agent = ContainerAgent(
+                container_id,
+                container_executable,
+                python_runtime=None,
+                pythonpath=None,
+                workdir="/testbed",
+            )
+            phase = recorder.start_phase("container_agent_start")
+            try:
+                await agent.start()
+                recorder.finish_phase(phase)
+            except (Exception, asyncio.CancelledError) as exc:
+                recorder.finish_phase(phase, status="failed", error=exc)
+                raise
+        else:
+            phase = recorder.start_phase("container_agent_start")
+            recorder.finish_phase(
+                phase,
+                status="skipped",
+                extra={"reason": "openclaw_host_worker_owns_tool_agent"},
+            )
 
         recorder.write(status="success")
     except (Exception, asyncio.CancelledError) as exc:
@@ -1647,7 +2151,6 @@ async def _prepare_container_session(
         raise
 
     assert container_id is not None
-    assert agent is not None
 
     container = PreparedContainer(
         container_id=container_id,
@@ -1676,9 +2179,7 @@ def _log_trace_metadata(
     extra: dict[str, Any] | None = None,
 ) -> None:
     scaffolds = {session.scaffold for session in sessions}
-    source_models = [
-        (session.summary or {}).get("model", "unknown") for session in sessions
-    ]
+    source_models = [_source_model(session) for session in sessions]
     metadata: dict[str, Any] = {
         "scaffold": sessions[0].scaffold if len(scaffolds) == 1 else "mixed",
         "execution_environment": (
@@ -1696,13 +2197,20 @@ def _log_trace_metadata(
             {
                 "manifest_index": session.manifest_index,
                 "source_trace": str(session.source_trace),
-                "source_agent_id": session.source_agent_id,
+                "task_instance_id": session.task_instance_id,
+                "source_action_agent_id": session.source_action_agent_id,
+                "source_agent_id": session.source_action_agent_id,
                 "run_instance_id": session.run_instance_id,
                 "label": session.label,
+                "source_model": _source_model(session),
             }
             for session in sessions
         ],
-        "source_agent_ids": [session.source_agent_id for session in sessions],
+        "task_instance_ids": [session.task_instance_id for session in sessions],
+        "source_action_agent_ids": [
+            session.source_action_agent_id for session in sessions
+        ],
+        "source_agent_ids": [session.source_action_agent_id for session in sessions],
         "run_instance_ids": [session.run_instance_id for session in sessions],
         "source_models": source_models,
         "manifest": str(manifest),
@@ -1738,7 +2246,9 @@ def _make_trace_action(
     action_data = {
         **data,
         "run_instance_id": loaded.run_instance_id,
-        "source_agent_id": loaded.source_agent_id,
+        "task_instance_id": loaded.task_instance_id,
+        "source_action_agent_id": loaded.source_action_agent_id,
+        "source_agent_id": loaded.source_action_agent_id,
         "manifest_index": loaded.manifest_index,
     }
     if loaded.label is not None:
@@ -1762,8 +2272,8 @@ def _replay_agent_id_for_action(
 ) -> str:
     if not isinstance(source_action_agent_id, str) or not source_action_agent_id:
         return loaded.run_instance_id
-    subagent_prefix = f"{loaded.source_agent_id}:subagent:"
-    if source_action_agent_id == loaded.source_agent_id:
+    subagent_prefix = f"{loaded.source_action_agent_id}:subagent:"
+    if source_action_agent_id == loaded.source_action_agent_id:
         return loaded.run_instance_id
     if source_action_agent_id.startswith(subagent_prefix):
         return (
@@ -1784,8 +2294,10 @@ def _make_trace_summary(
     summary = {
         "agent_id": loaded.run_instance_id,
         "run_instance_id": loaded.run_instance_id,
-        "source_agent_id": loaded.source_agent_id,
-        "task_id": loaded.source_agent_id,
+        "source_agent_id": loaded.source_action_agent_id,
+        "source_action_agent_id": loaded.source_action_agent_id,
+        "task_instance_id": loaded.task_instance_id,
+        "task_id": loaded.task_instance_id,
         "manifest_index": loaded.manifest_index,
         "label": loaded.label,
         "success": success,
@@ -1811,7 +2323,7 @@ def _make_task_stats(
     return ReplayTaskStats(
         agent_id=loaded.run_instance_id,
         run_instance_id=loaded.run_instance_id,
-        source_agent_id=loaded.source_agent_id,
+        source_agent_id=loaded.source_action_agent_id,
         manifest_index=loaded.manifest_index,
         label=loaded.label,
         source_trace=str(loaded.source_trace),
@@ -2009,11 +2521,14 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         agent_stop_error = exc
 
     try:
-        await asyncio.to_thread(
-            stop_task_container,
-            ctr.container_id,
-            executable=ctr.container_executable,
-        )
+        if ctr.cleanup_callback is not None:
+            await asyncio.to_thread(ctr.cleanup_callback)
+        else:
+            await asyncio.to_thread(
+                stop_task_container,
+                ctr.container_id,
+                executable=ctr.container_executable,
+            )
         container_stopped = True
     except (Exception, asyncio.CancelledError) as exc:
         container_stop_error = exc
@@ -2181,7 +2696,13 @@ async def _prewarm_replay_agents_for_batch(
 
     assignments: dict[int, Any] = {id(runnable_actions[0]): ctr.agent}
     extra_agents = [
-        ContainerAgent(ctr.container_id, ctr.container_executable)
+        ContainerAgent(
+            ctr.container_id,
+            ctr.container_executable,
+            python_runtime=ctr.python_runtime,
+            pythonpath=ctr.pythonpath,
+            workdir=ctr.workdir,
+        )
         for _ in runnable_actions[1:]
     ]
     if extra_agents:
@@ -2260,7 +2781,7 @@ async def _prepare_replay_session(
 ) -> PreparedTraceSession:
     prepared: PreparedTraceSession | None = None
     session_resource_monitoring_enabled = (
-        resource_monitoring_enabled and not _is_host_mode(loaded)
+        resource_monitoring_enabled and _requires_task_container(loaded)
     )
     try:
         prepared = PreparedTraceSession(
@@ -2272,7 +2793,7 @@ async def _prepare_replay_session(
         _assign_task_output_dir(prepared, output_path)
         assert prepared.task_output_dir is not None
         task_output_dir = prepared.task_output_dir
-        if _is_host_mode(loaded):
+        if not _requires_task_container(loaded):
             recorder = ContainerStartupRecorder(
                 loaded=loaded,
                 task_output_dir=task_output_dir,
@@ -2286,19 +2807,28 @@ async def _prepare_replay_session(
             )
         else:
             if container_executable is None:
-                raise ValueError("container_executable is required for container-mode traces")
-            prepare_kwargs: dict[str, Any] = {}
-            if fixed_images_by_source:
-                prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
-            prepared = await _prepare_container_session(
-                loaded,
-                task_output_dir=task_output_dir,
-                container_executable=container_executable,
-                network_mode=network_mode,
-                **prepare_kwargs,
-            )
+                raise ValueError("container_executable is required for replay task containers")
+            if _is_terminal_bench_registry_task(loaded):
+                prepared = await _prepare_terminal_bench_container_session(
+                    loaded,
+                    task_output_dir=task_output_dir,
+                    container_executable=container_executable,
+                )
+            else:
+                prepare_kwargs: dict[str, Any] = {}
+                if _openclaw_trace_can_host_replay(loaded):
+                    prepare_kwargs["start_agent"] = False
+                if fixed_images_by_source:
+                    prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
+                prepared = await _prepare_container_session(
+                    loaded,
+                    task_output_dir=task_output_dir,
+                    container_executable=container_executable,
+                    network_mode=network_mode,
+                    **prepare_kwargs,
+                )
+                await _restore_source_runtime_artifacts(prepared)
             prepared.task_output_dir = task_output_dir
-            await _restore_source_runtime_artifacts(prepared)
         if prepared.container is not None:
             prepared.resource_monitoring_enabled = session_resource_monitoring_enabled
             prepared.memory_bandwidth_enabled = memory_bandwidth_enabled
@@ -3138,6 +3668,75 @@ def _append_replay_record(trace_logger: TraceLogger, record: dict[str, Any]) -> 
     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     handle.flush()
 
+def _openclaw_worker_timeout_s(
+    loaded: LoadedTraceSession,
+    *,
+    replay_speed: float,
+    command_timeout_s: float,
+) -> float:
+    action_count = max(1, len(loaded.actions))
+    if not loaded.actions:
+        return command_timeout_s + 120.0
+    bounds = [
+        _coerce_action_bounds(action, source_trace=loaded.source_trace)
+        for action in loaded.actions
+    ]
+    source_span_s = max(end for _, end in bounds) - min(start for start, _ in bounds)
+    tool_count = sum(
+        1 for action in loaded.actions if action.get("action_type") == "tool_exec"
+    )
+    return max(
+        command_timeout_s + 120.0,
+        source_span_s / replay_speed + (tool_count + 2) * command_timeout_s + 120.0,
+        action_count * 5.0,
+    )
+
+
+async def _stream_worker_output(stream: Any, path: Path) -> None:
+    with path.open("wb") as handle:
+        while True:
+            chunk = await stream.read(8192)
+            if not chunk:
+                return
+            handle.write(chunk)
+            handle.flush()
+
+
+async def _run_openclaw_worker_process(
+    *,
+    request_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    timeout_s: float,
+) -> int:
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "trace_collect.openclaw_host_replay_worker",
+        "--request",
+        str(request_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+    stdout_task = asyncio.create_task(_stream_worker_output(proc.stdout, stdout_path))
+    stderr_task = asyncio.create_task(_stream_worker_output(proc.stderr, stderr_path))
+    try:
+        await asyncio.wait_for(proc.wait(), timeout_s)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        with stderr_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                f"\nOpenClaw host replay worker timed out after {timeout_s:.1f}s\n"
+            )
+        return 124
+    finally:
+        await asyncio.gather(stdout_task, stderr_task)
+    return int(proc.returncode or 0)
+
+
 async def _run_openclaw_replay_session(
     prepared_session: PreparedTraceSession,
     *,
@@ -3147,14 +3746,8 @@ async def _run_openclaw_replay_session(
     command_timeout_s: float,
     warmup_skip_iterations: int = 0,
 ) -> ReplayTaskStats:
-    """Replay an OpenClaw trace by running the OpenClaw loop on the host.
-
-    LLM timing is owned by ``OpenClawReplayProvider.chat`` inside the OpenClaw
-    loop. The simulator prepares/cleans the root task container and aggregates
-    the emitted trace records; it does not sleep llm_call actions itself.
-    """
+    """Replay OpenClaw by launching one host worker process for this trace."""
     del warmup_skip_iterations
-
 
     loaded = prepared_session.loaded
     ctr = prepared_session.container
@@ -3163,56 +3756,80 @@ async def _run_openclaw_replay_session(
     if prepared_session.task_output_dir is None:
         raise RuntimeError("OpenClaw host replay requires task_output_dir")
 
-    from agents.openclaw._session_runner import SessionRunner
-    from trace_collect.openclaw_host_runtime import (
-        OpenClawReplayProvider,
-        build_container_tools_for_agent,
+    task_output_dir = prepared_session.task_output_dir
+    trace_file = task_output_dir / "openclaw_host_replay.jsonl"
+    runtime_dir = task_output_dir / "openclaw-runtime"
+    workspace = task_output_dir / "host-workspace"
+    status_path = task_output_dir / "openclaw_host_replay_status.json"
+    request_path = task_output_dir / "openclaw_host_replay_request.json"
+    stdout_path = task_output_dir / "openclaw_host_replay_stdout.txt"
+    stderr_path = task_output_dir / "openclaw_host_replay_stderr.txt"
+    prompt = str(loaded.task.get("problem_statement") or "Replay source OpenClaw trace.")
+    request = {
+        "source_trace": str(loaded.source_trace),
+        "source_actions": loaded.actions,
+        "task_prompt": prompt,
+        "prompt": prompt,
+        "output_trace": str(trace_file),
+        "runtime_dir": str(runtime_dir),
+        "workspace": str(workspace),
+        "status_path": str(status_path),
+        "container_executable": ctr.container_executable,
+        "container_id": ctr.container_id,
+        "container_workdir": ctr.workdir,
+        "container_python_runtime": ctr.python_runtime,
+        "container_pythonpath": ctr.pythonpath,
+        "replay_speed": replay_speed,
+        "llm_timing": {
+            "mode": llm_timing.mode,
+            "ttft_ms": llm_timing.ttft_ms,
+            "tpot_ms": llm_timing.tpot_ms,
+        },
+        "command_timeout_s": command_timeout_s,
+        "task_instance_id": loaded.task_instance_id,
+        "source_action_agent_id": loaded.source_action_agent_id,
+        "run_instance_id": loaded.run_instance_id,
+        "manifest_index": loaded.manifest_index,
+        "source_model": _source_model(loaded),
+        "expected_action_count": sum(
+            1
+            for action in loaded.actions
+            if action.get("action_type") in {"llm_call", "tool_exec"}
+        ),
+    }
+    task_output_dir.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps(request, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
-
-    llm_actions = [
-        action for action in loaded.actions if action.get("action_type") == "llm_call"
-    ]
-    provider = OpenClawReplayProvider(
-        llm_actions=llm_actions,
-        replay_speed=replay_speed,
-        timing_mode=llm_timing.mode,
-        llm_ttft_ms=llm_timing.ttft_ms,
-        llm_tpot_ms=llm_timing.tpot_ms,
-        model=str((loaded.summary or {}).get("model") or "replay-openclaw"),
-    )
-    runner = SessionRunner(
-        provider,
-        model=provider.get_default_model(),
-        max_iterations=max(1, len(llm_actions)),
-        context_window_tokens=65536,
-        tool_overrides=build_container_tools_for_agent(
-            ctr.agent,
-            exec_timeout=int(command_timeout_s),
+    worker_returncode = await _run_openclaw_worker_process(
+        request_path=request_path,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        timeout_s=_openclaw_worker_timeout_s(
+            loaded,
+            replay_speed=replay_speed,
+            command_timeout_s=command_timeout_s,
         ),
     )
-    trace_file = prepared_session.task_output_dir / "openclaw_host_replay.jsonl"
-    runtime_dir = prepared_session.task_output_dir / "openclaw-runtime"
-    workspace = prepared_session.task_output_dir / "host-workspace"
-    prompt = str(loaded.task.get("problem_statement") or "Replay source OpenClaw trace.")
-
-    wall_start = time.time()
-    result = await runner.run(
-        prompt=prompt,
-        workspace=workspace,
-        tool_workspace=Path("/testbed"),
-        project_workspace=Path("/testbed"),
-        session_key=f"simulate:{loaded.run_instance_id}",
-        trace_file=trace_file,
-        runtime_dir=runtime_dir,
-        instance_id=loaded.run_instance_id,
-        channel="simulate",
-        prepare_ms=None,
-    )
-    wall_end = time.time()
+    if status_path.exists():
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    else:
+        status = {
+            "success": False,
+            "stop_reason": "error",
+            "error": "OpenClaw host replay worker did not write status",
+            "elapsed_s": 0.0,
+            "sleep_records": [],
+            "agent_execution_environment": "host",
+            "tool_execution_environment": "task_container",
+            "tool_container_id": ctr.container_id,
+            "tool_container_user": "unknown",
+            "openclaw_host_pid": None,
+        }
 
     emitted_records: list[dict[str, Any]] = []
-    emitted_actions = 0
-    failed_actions = 0
+    replay_action_records: list[dict[str, Any]] = []
     if trace_file.exists():
         for line in trace_file.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -3224,99 +3841,102 @@ async def _run_openclaw_replay_session(
             if rtype == "action":
                 data = dict(record.get("data") or {})
                 data.setdefault("run_instance_id", loaded.run_instance_id)
-                data.setdefault("source_agent_id", loaded.source_agent_id)
+                data.setdefault("task_instance_id", loaded.task_instance_id)
+                data.setdefault("source_action_agent_id", loaded.source_action_agent_id)
+                data.setdefault("source_agent_id", loaded.source_action_agent_id)
                 data.setdefault("manifest_index", loaded.manifest_index)
                 data.setdefault("simulate_source", str(loaded.source_trace))
-                data.setdefault("replay_mode", "openclaw_host_process")
+                data.setdefault("replay_mode", "openclaw_host_worker")
                 data.setdefault("replay_speed", replay_speed)
+                data.setdefault("openclaw_host_pid", status.get("openclaw_host_pid"))
                 record["data"] = data
-                emitted_actions += 1
-                if data.get("success") is False:
-                    failed_actions += 1
+                replay_action_records.append(record)
             emitted_records.append(record)
 
-    expected_actions = sum(
-        1
-        for action in loaded.actions
-        if action.get("action_type") in {"llm_call", "tool_exec"}
-    )
-    if emitted_actions < expected_actions:
-        failed_actions += expected_actions - emitted_actions
-    if result.stop_reason != "completed" or result.error is not None:
+    action_counts = replay_action_failure_counts(loaded.actions, replay_action_records)
+    expected_actions = int(request["expected_action_count"])
+    missing_actions = max(0, expected_actions - action_counts.emitted_actions)
+    failed_actions = action_counts.unexpected_replay_failed_actions + missing_actions
+    if worker_returncode != 0 or status.get("success") is not True:
         failed_actions = max(1, failed_actions)
 
     sleep_drifts = [
         SleepDrift(
-            phase=item.phase,
-            expected_s=item.expected_s,
-            actual_s=item.actual_s,
+            phase=str(item.get("phase", "llm_replay")),
+            expected_s=float(item.get("expected_s", 0.0)),
+            actual_s=float(item.get("actual_s", 0.0)),
         )
-        for item in provider.sleep_records
+        for item in status.get("sleep_records", [])
+        if isinstance(item, dict)
     ]
+    summary_extra = {
+        "replay_mode": "openclaw_host_worker",
+        "replay_speed": replay_speed,
+        "llm_timing_mode": llm_timing.mode,
+        "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
+        "failed_actions": failed_actions,
+        "emitted_actions": action_counts.emitted_actions,
+        "source_failed_actions": action_counts.source_failed_actions,
+        "replay_failed_actions": action_counts.replay_failed_actions,
+        "unexpected_replay_failed_actions": (
+            action_counts.unexpected_replay_failed_actions
+        ),
+        "expected_actions": expected_actions,
+        "missing_source_action_count": missing_actions,
+        "worker_returncode": worker_returncode,
+        "worker_stop_reason": status.get("stop_reason"),
+        "worker_error": status.get("error"),
+        "worker_request_path": str(request_path),
+        "worker_status_path": str(status_path),
+        "worker_stdout_path": str(stdout_path),
+        "worker_stderr_path": str(stderr_path),
+        "worker_trace_path": str(trace_file),
+        "agent_execution_environment": status.get("agent_execution_environment", "host"),
+        "tool_execution_environment": status.get("tool_execution_environment", "task_container"),
+        "tool_runtime": status.get("tool_runtime"),
+        "tool_container_id": status.get("tool_container_id", ctr.container_id),
+        "tool_container_user": status.get("tool_container_user", "unknown"),
+        "tool_container_user_id": status.get("tool_container_user_id"),
+        "tool_container_workdir": status.get("tool_container_workdir"),
+        "openclaw_host_pid": status.get("openclaw_host_pid"),
+    }
+    summary_seen = False
     for record in emitted_records:
         if record.get("type") == "summary":
+            summary_seen = True
             record.update(
-                {
-                    "agent_id": loaded.run_instance_id,
-                    "run_instance_id": loaded.run_instance_id,
-                    "source_agent_id": loaded.source_agent_id,
-                    "task_id": loaded.source_agent_id,
-                    "manifest_index": loaded.manifest_index,
-                    "label": loaded.label,
-                    "success": result.stop_reason == "completed"
-                    and result.error is None
-                    and failed_actions == 0,
-                    "source_success": (loaded.summary or {}).get("success"),
-                    "elapsed_s": wall_end - wall_start,
-                    "source_trace": str(loaded.source_trace),
-                    "source_model": (loaded.summary or {}).get("model", "unknown"),
-                    "replay_mode": "openclaw_host_process",
-                    "replay_speed": replay_speed,
-                    "llm_timing_mode": llm_timing.mode,
-                    "sleep_drift": _summarize_sleep_drifts(sleep_drifts),
-                    "failed_actions": failed_actions,
-                }
+                _make_trace_summary(
+                    loaded=loaded,
+                    success=failed_actions == 0,
+                    elapsed_s=float(status.get("elapsed_s") or 0.0),
+                    source_model=_source_model(loaded),
+                    extra=summary_extra,
+                )
             )
         _append_replay_record(trace_logger, record)
+    if not summary_seen:
+        trace_logger.log_summary(
+            loaded.agent_id,
+            _make_trace_summary(
+                loaded=loaded,
+                success=failed_actions == 0,
+                elapsed_s=float(status.get("elapsed_s") or 0.0),
+                source_model=_source_model(loaded),
+                extra=summary_extra,
+            ),
+        )
     return _make_task_stats(
         loaded=loaded,
         success=failed_actions == 0,
-        elapsed_s=wall_end - wall_start,
+        elapsed_s=float(status.get("elapsed_s") or 0.0),
         failed_action_count=failed_actions,
     )
 
 
 def _openclaw_trace_can_host_replay(loaded: LoadedTraceSession) -> bool:
-    if loaded.scaffold != "openclaw":
-        return False
-    llm_actions = [
-        action for action in loaded.actions if action.get("action_type") == "llm_call"
-    ]
-    if not llm_actions:
-        return False
-    if any(
-        str(action.get("agent_id", "")) != loaded.source_agent_id
-        for action in loaded.actions
-        if action.get("action_type") in {"llm_call", "tool_exec"}
-    ):
-        return False
-    if not any(action.get("action_type") == "tool_exec" for action in loaded.actions):
-        return True
-    for action in llm_actions:
-        data = action.get("data") or {}
-        raw_response = data.get("raw_response")
-        if not isinstance(raw_response, dict):
-            continue
-        choices = raw_response.get("choices")
-        if not isinstance(choices, list) or not choices:
-            continue
-        choice = choices[0]
-        if not isinstance(choice, dict):
-            continue
-        message = choice.get("message")
-        if isinstance(message, dict) and message.get("tool_calls"):
-            return True
-    return False
+    return loaded.scaffold == "openclaw" and any(
+        action.get("action_type") == "llm_call" for action in loaded.actions
+    )
 
 
 async def _replay_cloud_model_session(
@@ -3330,18 +3950,28 @@ async def _replay_cloud_model_session(
     warmup_skip_iterations: int,
 ) -> ReplayTaskStats:
     loaded = prepared_session.loaded
-    if _openclaw_trace_can_host_replay(loaded) and prepared_session.container is not None:
-        if replay_zero_monotonic is not None:
-            await _sleep_until_monotonic(replay_zero_monotonic)
-        return await _run_openclaw_replay_session(
-            prepared_session,
-            trace_logger=trace_logger,
-            replay_speed=replay_speed,
-            llm_timing=llm_timing,
-            command_timeout_s=command_timeout_s,
-            warmup_skip_iterations=warmup_skip_iterations,
-        )
-    source_model = (loaded.summary or {}).get("model", "unknown")
+    if loaded.scaffold == "openclaw":
+        if prepared_session.container is None:
+            if _requires_task_container(loaded):
+                raise SimulateError(
+                    f"OpenClaw replay for {loaded.task_instance_id!r} requires a task container"
+                )
+        else:
+            if not _openclaw_trace_can_host_replay(loaded):
+                raise SimulateError(
+                    f"OpenClaw replay for {loaded.task_instance_id!r} has no source llm_call actions"
+                )
+            if replay_zero_monotonic is not None:
+                await _sleep_until_monotonic(replay_zero_monotonic)
+            return await _run_openclaw_replay_session(
+                prepared_session,
+                trace_logger=trace_logger,
+                replay_speed=replay_speed,
+                llm_timing=llm_timing,
+                command_timeout_s=command_timeout_s,
+                warmup_skip_iterations=warmup_skip_iterations,
+            )
+    source_model = _source_model(loaded)
     logger.info(
         "Replaying %s [scaffold=%s]: %d actions from %s at %.2fx (llm_timing=%s)",
         loaded.agent_id,
@@ -3526,8 +4156,10 @@ def _split_trace_by_agent(
                 metadata["execution_environment"] = _execution_environment(session)
                 metadata["instance_id"] = session.run_instance_id
                 metadata["run_instance_id"] = session.run_instance_id
-                metadata["source_agent_id"] = session.source_agent_id
-                metadata["task_id"] = session.source_agent_id
+                metadata["task_instance_id"] = session.task_instance_id
+                metadata["source_action_agent_id"] = session.source_action_agent_id
+                metadata["source_agent_id"] = session.source_action_agent_id
+                metadata["task_id"] = session.task_instance_id
                 metadata["manifest_index"] = session.manifest_index
                 metadata["label"] = session.label
                 metadata["source_trace"] = str(session.source_trace)
@@ -3537,14 +4169,19 @@ def _split_trace_by_agent(
                     {
                         "manifest_index": session.manifest_index,
                         "source_trace": str(session.source_trace),
-                        "source_agent_id": session.source_agent_id,
+                        "task_instance_id": session.task_instance_id,
+                        "source_action_agent_id": session.source_action_agent_id,
+                        "source_agent_id": session.source_action_agent_id,
                         "run_instance_id": session.run_instance_id,
                         "label": session.label,
+                        "source_model": _source_model(session),
                     }
                 ]
-                metadata["source_agent_ids"] = [session.source_agent_id]
+                metadata["task_instance_ids"] = [session.task_instance_id]
+                metadata["source_action_agent_ids"] = [session.source_action_agent_id]
+                metadata["source_agent_ids"] = [session.source_action_agent_id]
                 metadata["run_instance_ids"] = [session.run_instance_id]
-                source_model = (session.summary or {}).get("model", "unknown")
+                source_model = _source_model(session)
                 metadata["source_models"] = [source_model]
                 metadata["source_model"] = source_model
                 fh.write(json.dumps(metadata, ensure_ascii=False) + "\n")

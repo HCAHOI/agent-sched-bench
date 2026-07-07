@@ -86,7 +86,7 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
 
         async def execute(self, request: dict, *, timeout_s: float = 600.0) -> dict:
             agent_seen.setdefault("requests", []).append((request, timeout_s))
-            return {"ok": True, "result": "ok", "returncode": 0}
+            return {"ok": True, "result": "0\n/testbed\n", "returncode": 0}
 
     class FakeRunner:
         async def run_task(self, eval_task, **kwargs):
@@ -197,6 +197,9 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
     assert metadata["runtime_proof"]["agent_execution_environment"] == "host"
     assert metadata["runtime_proof"]["tool_execution_environment"] == "task_container"
     assert metadata["runtime_proof"]["tool_container_id"] == "cid-openclaw"
+    assert metadata["runtime_proof"]["tool_container_user"] == "root"
+    assert metadata["runtime_proof"]["tool_container_user_id"] == 0
+    assert metadata["runtime_proof"]["tool_container_workdir"] == "/testbed"
     assert start_seen["run_as_host_user"] is False
     assert start_seen["mount_host_home"] is False
     assert start_seen["container_home"] == "/root"
@@ -244,7 +247,7 @@ def test_run_openclaw_in_task_container_completed_without_patch_is_not_success(
             return None
 
         async def execute(self, request: dict, *, timeout_s: float = 600.0) -> dict:
-            return {"ok": True, "result": "ok", "returncode": 0}
+            return {"ok": True, "result": "0\n/testbed\n", "returncode": 0}
 
     class FakeRunner:
         async def run_task(self, eval_task, **kwargs):

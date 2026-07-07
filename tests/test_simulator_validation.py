@@ -25,6 +25,133 @@ def _write_manifest(path: Path, entries: list[str | dict[str, object]]) -> Path:
 def _single_trace_manifest(tmp_path: Path, trace_path: Path) -> Path:
     return _write_manifest(tmp_path / "manifest.yaml", [str(trace_path)])
 
+def test_terminal_bench_trace_identity_split_loads_action_owner_actions(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "trace_format_version": 5,
+                        "scaffold": "openclaw",
+                        "instance_id": "hydra-debug-slurm-mode",
+                        "task_source_kind": "terminal_bench_registry",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0",
+                        "agent_id": "cli:oc-df47179e",
+                        "iteration": 0,
+                        "ts_start": 1.0,
+                        "ts_end": 2.0,
+                        "data": {"messages_in": [], "raw_response": {"content": "ok"}},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "tool_exec",
+                        "action_id": "sub_tool_0",
+                        "agent_id": "cli:oc-df47179e:subagent:worker",
+                        "iteration": 0,
+                        "ts_start": 2.0,
+                        "ts_end": 3.0,
+                        "data": {"tool_name": "exec"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "other_llm_0",
+                        "agent_id": "cli:other",
+                        "iteration": 0,
+                        "ts_start": 4.0,
+                        "ts_end": 5.0,
+                        "data": {"messages_in": []},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "summary",
+                        "agent_id": "cli:oc-df47179e",
+                        "success": True,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from trace_collect.simulator import _parse_trace_session_file
+
+    task_instance_id, source_action_agent_id, _metadata, actions, summary = (
+        _parse_trace_session_file(trace_path)
+    )
+
+    assert task_instance_id == "hydra-debug-slurm-mode"
+    assert source_action_agent_id == "cli:oc-df47179e"
+    assert [action["action_id"] for action in actions] == ["llm_0", "sub_tool_0"]
+    assert summary == {"type": "summary", "agent_id": "cli:oc-df47179e", "success": True}
+
+
+def test_trace_parser_rejects_ambiguous_action_owners_without_summary(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "trace_format_version": 5,
+                        "scaffold": "openclaw",
+                        "instance_id": "hydra-debug-slurm-mode",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0",
+                        "agent_id": "cli:oc-a",
+                        "iteration": 0,
+                        "ts_start": 1.0,
+                        "ts_end": 2.0,
+                        "data": {"messages_in": []},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_1",
+                        "agent_id": "cli:oc-b",
+                        "iteration": 0,
+                        "ts_start": 3.0,
+                        "ts_end": 4.0,
+                        "data": {"messages_in": []},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from trace_collect.simulator import _parse_trace_session_file
+
+    with pytest.raises(SimulateError, match="Ambiguous action owner"):
+        _parse_trace_session_file(trace_path)
+
 
 def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"
@@ -179,6 +306,90 @@ def test_simulator_accepts_task_with_image_name(
 
 
 
+def test_openclaw_replay_provider_sleep_records_source_and_pid() -> None:
+    import os
+
+    from trace_collect.openclaw_host_runtime import OpenClawReplayProvider
+
+    async def run_sleep() -> dict[str, float | int | str]:
+        provider = OpenClawReplayProvider(
+            llm_actions=[], replay_speed=1.0, timing_mode="source_scaled"
+        )
+        record = await provider._sleep(0.001, phase="llm_replay")
+        assert record is not None
+        return record.to_dict()
+
+    sleep_record = asyncio.run(run_sleep())
+
+    assert sleep_record["phase"] == "llm_replay"
+    assert sleep_record["source"] == "openclaw_replay_provider_sleep"
+    assert sleep_record["pid"] == os.getpid()
+
+
+def test_source_model_prefers_summary_and_metadata_audit_fields() -> None:
+    from trace_collect.simulator import LoadedTraceSession, _source_model
+
+    loaded = LoadedTraceSession(
+        source_trace=Path("trace.jsonl"),
+        task_source=Path("tasks.json"),
+        task_instance_id="task",
+        source_action_agent_id="agent",
+        run_instance_id="task",
+        manifest_index=0,
+        scaffold="openclaw",
+        metadata={"source_model": "metadata-source-model"},
+        summary={"source_model": "summary-source-model"},
+        task={},
+        actions=[],
+        iterations={},
+    )
+
+    assert _source_model(loaded) == "summary-source-model"
+    loaded.summary = None
+    assert _source_model(loaded) == "metadata-source-model"
+
+
+def test_replay_failure_counts_align_expected_failures_by_order() -> None:
+    from trace_collect.openclaw_host_runtime import replay_action_failure_counts
+
+    source_actions = [
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "source-blocked",
+            "data": {"tool_name": "exec", "success": False},
+        },
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "source-ok",
+            "data": {"tool_name": "exec", "success": True},
+        },
+    ]
+    replay_records = [
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "synthetic-blocked-id",
+            "data": {"tool_name": "exec", "success": False},
+        },
+        {
+            "type": "action",
+            "action_type": "tool_exec",
+            "action_id": "synthetic-unexpected-id",
+            "data": {"tool_name": "exec", "success": False},
+        },
+    ]
+
+    counts = replay_action_failure_counts(source_actions, replay_records)
+
+    assert counts.emitted_actions == 2
+    assert counts.source_failed_actions == 1
+    assert counts.replay_failed_actions == 2
+    assert counts.unexpected_replay_failed_actions == 1
+
+
+
 def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -196,7 +407,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
                         "instance_id": "fc_openclaw_replay",
                         "agent_runtime_mode": "task_container_agent",
                         "execution_environment": "container",
-                        "model": "dummy",
+                        "model": "qwen/qwen3.7-max",
                         "mode": "collect",
                     }
                 ),
@@ -236,10 +447,10 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         encoding="utf-8",
     )
 
+
     from trace_collect.simulator import (
         PreparedContainer,
         PreparedTraceSession,
-        ReplayTaskStats,
     )
 
     class _FakeAgent:
@@ -252,6 +463,7 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         task_output_dir=None,
         container_executable,
         network_mode="host",
+        **_kwargs,
     ):
         return PreparedTraceSession(
             loaded=loaded,
@@ -277,59 +489,83 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
             )
         return None
 
-    provider_sleeps: list[dict[str, object]] = []
+    launched_commands: list[list[str]] = []
 
-    async def fake_provider_sleep(self, expected_s: float, *, phase: str):
-        from trace_collect.openclaw_host_runtime import ReplaySleepRecord
+    class _FakeStream:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self._chunks = chunks
 
-        record = ReplaySleepRecord(
-            phase=phase,
-            expected_s=expected_s,
-            actual_s=expected_s,
-        )
-        self.sleep_records.append(record)
-        provider_sleeps.append(record.to_dict())
-        return record
+        async def read(self, _n: int) -> bytes:
+            return self._chunks.pop(0) if self._chunks else b""
 
-    async def fake_run_openclaw_replay_session(
-        prepared_session,
-        *,
-        trace_logger,
-        replay_speed,
-        llm_timing,
-        command_timeout_s,
-        warmup_skip_iterations,
-        **_kwargs,
-    ):
-        from trace_collect.openclaw_host_runtime import OpenClawReplayProvider
+    class _FakeWorkerProcess:
+        returncode = 0
 
-        loaded = prepared_session.loaded
-        provider = OpenClawReplayProvider(
-            llm_actions=[
-                action
-                for action in loaded.actions
-                if action["action_type"] == "llm_call"
-            ],
-            replay_speed=replay_speed,
-            timing_mode=llm_timing.mode,
-            llm_ttft_ms=llm_timing.ttft_ms,
-            llm_tpot_ms=llm_timing.tpot_ms,
-            model="replay-openclaw",
-        )
-        await provider.chat(messages=[])
-        return ReplayTaskStats(
-            agent_id=loaded.run_instance_id,
-            run_instance_id=loaded.run_instance_id,
-            source_agent_id=loaded.source_agent_id,
-            manifest_index=loaded.manifest_index,
-            label=loaded.label,
-            source_trace=str(loaded.source_trace),
-            success=True,
-            elapsed_s=0.01,
-            action_count=len(loaded.actions),
-            llm_call_count=1,
-            tool_exec_count=0,
-        )
+        def __init__(self, cmd: tuple[object, ...]) -> None:
+            self._cmd = cmd
+            self.stdout = _FakeStream([b"worker stdout"])
+            self.stderr = _FakeStream([])
+
+        async def wait(self) -> int:
+            request_path = Path(self._cmd[-1])
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            Path(request["status_path"]).write_text(
+                json.dumps(
+                    {
+                        "success": True,
+                        "stop_reason": "completed",
+                        "elapsed_s": 0.02,
+                        "sleep_records": [
+                            {
+                                "phase": "llm_replay",
+                                "expected_s": 0.2,
+                                "actual_s": 0.2,
+                            }
+                        ],
+                        "agent_execution_environment": "host",
+                        "tool_execution_environment": "task_container",
+                        "tool_container_id": request["container_id"],
+                        "tool_container_user": "root",
+                        "tool_container_user_id": "0",
+                        "tool_container_workdir": "/testbed",
+                        "openclaw_host_pid": 4321,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            Path(request["output_trace"]).write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "action",
+                                "action_type": "llm_call",
+                                "action_id": "llm_0",
+                                "agent_id": request["run_instance_id"],
+                                "iteration": 0,
+                                "ts_start": 10.0,
+                                "ts_end": 10.2,
+                                "data": {"success": True},
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "summary",
+                                "agent_id": request["run_instance_id"],
+                                "success": True,
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return self.returncode
+
+    async def fake_create_subprocess_exec(*cmd, **_kwargs):
+        launched_commands.append(list(cmd))
+        return _FakeWorkerProcess(cmd)
 
     monkeypatch.setattr("trace_collect.simulator._prepare_container_session", fake_prepare)
     monkeypatch.setattr("trace_collect.simulator._prefetch_container_images", fake_prefetch)
@@ -339,13 +575,8 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
         fail_on_simulator_side_llm_sleep,
     )
     monkeypatch.setattr(
-        "trace_collect.openclaw_host_runtime.OpenClawReplayProvider._sleep",
-        fake_provider_sleep,
-    )
-    monkeypatch.setattr(
-        "trace_collect.simulator._run_openclaw_replay_session",
-        fake_run_openclaw_replay_session,
-        raising=False,
+        "trace_collect.simulator.asyncio.create_subprocess_exec",
+        fake_create_subprocess_exec,
     )
 
     trace_file = asyncio.run(
@@ -360,21 +591,38 @@ def test_openclaw_container_mode_replays_llm_via_host_replay_runner(
     )
 
     assert trace_file.exists()
-    assert provider_sleeps == [
-        {
-            "phase": "llm_replay",
-            "expected_s": pytest.approx(0.2),
-            "actual_s": pytest.approx(0.2),
-            "drift_s": pytest.approx(0.0),
-        }
+    records = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
     ]
+    summary = next(record for record in records if record["type"] == "summary")
+    assert summary["agent_execution_environment"] == "host"
+    assert summary["tool_execution_environment"] == "task_container"
+    assert summary["tool_container_user"] == "root"
+    assert summary["openclaw_host_pid"] == 4321
+    assert summary["sleep_drift"]["by_phase"]["llm_replay"]["sample_count"] == 1
+    assert summary["source_model"] == "qwen/qwen3.7-max"
+    import sys
+
+    assert len(launched_commands) == 1
+    assert launched_commands[0][:3] == [
+        sys.executable,
+        "-m",
+        "trace_collect.openclaw_host_replay_worker",
+    ]
+    assert launched_commands[0][3] == "--request"
+    request = json.loads(Path(launched_commands[0][4]).read_text(encoding="utf-8"))
+    assert request["container_id"] == "cid-openclaw-replay"
+    assert request["task_instance_id"] == "fc_openclaw_replay"
+    assert request["source_action_agent_id"] == "fc_openclaw_replay"
+    assert request["source_model"] == "qwen/qwen3.7-max"
 
 
-def test_openclaw_host_replay_marks_failed_emitted_and_missing_actions(
+def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Failed emitted actions and missing source-action coverage make replay fail."""
+    """A failing host worker produces failed stats and source/task audit fields."""
     from harness.trace_logger import TraceLogger
     from trace_collect.simulator import (
         LLMTimingConfig,
@@ -389,8 +637,9 @@ def test_openclaw_host_replay_marks_failed_emitted_and_missing_actions(
     loaded = LoadedTraceSession(
         source_trace=source_trace,
         task_source=tmp_path / "tasks.json",
-        source_agent_id="fc_openclaw_failed_replay",
         run_instance_id="fc_openclaw_failed_replay",
+        task_instance_id="fc_openclaw_failed_replay",
+        source_action_agent_id="cli:oc-failed",
         manifest_index=0,
         scaffold="openclaw",
         metadata={"scaffold": "openclaw", "instance_id": "fc_openclaw_failed_replay"},
@@ -401,7 +650,7 @@ def test_openclaw_host_replay_marks_failed_emitted_and_missing_actions(
                 "type": "action",
                 "action_type": "llm_call",
                 "action_id": "llm_0",
-                "agent_id": "fc_openclaw_failed_replay",
+                "agent_id": "cli:oc-failed",
                 "iteration": 0,
                 "ts_start": 1.0,
                 "ts_end": 2.0,
@@ -411,7 +660,7 @@ def test_openclaw_host_replay_marks_failed_emitted_and_missing_actions(
                 "type": "action",
                 "action_type": "tool_exec",
                 "action_id": "tool_0",
-                "agent_id": "fc_openclaw_failed_replay",
+                "agent_id": "cli:oc-failed",
                 "iteration": 0,
                 "ts_start": 2.0,
                 "ts_end": 3.0,
@@ -431,54 +680,44 @@ def test_openclaw_host_replay_marks_failed_emitted_and_missing_actions(
         task_output_dir=tmp_path / "task-output",
     )
 
-    class FakeSessionRunner:
-        def __init__(self, *_args, **_kwargs) -> None:
-            pass
-
-        async def run(self, **kwargs):
-            trace_file = kwargs["trace_file"]
-            trace_file.parent.mkdir(parents=True, exist_ok=True)
-            trace_file.write_text(
-                "\n".join(
-                    [
-                        json.dumps(
-                            {
-                                "type": "action",
-                                "action_type": "tool_exec",
-                                "action_id": "tool_0",
-                                "agent_id": "fc_openclaw_failed_replay",
-                                "iteration": 0,
-                                "ts_start": 2.0,
-                                "ts_end": 3.0,
-                                "data": {"success": False},
-                            }
-                        ),
-                        json.dumps(
-                            {
-                                "type": "summary",
-                                "agent_id": "fc_openclaw_failed_replay",
-                                "success": True,
-                            }
-                        ),
-                    ]
-                )
-                + "\n",
-                encoding="utf-8",
+    async def fake_worker_process(
+        *,
+        request_path: Path,
+        stdout_path: Path,
+        stderr_path: Path,
+        timeout_s: float,
+    ) -> int:
+        del timeout_s
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        assert request["task_instance_id"] == "fc_openclaw_failed_replay"
+        assert request["source_action_agent_id"] == "cli:oc-failed"
+        Path(request["status_path"]).write_text(
+            json.dumps(
+                {
+                    "success": False,
+                    "stop_reason": "error",
+                    "error": "worker died",
+                    "elapsed_s": 0.5,
+                    "sleep_records": [],
+                    "agent_execution_environment": "host",
+                    "tool_execution_environment": "task_container",
+                    "tool_container_id": request["container_id"],
+                    "tool_container_user": "root",
+                    "tool_container_user_id": "0",
+                    "tool_container_workdir": "/testbed",
+                    "openclaw_host_pid": 98765,
+                }
             )
-
-            class Result:
-                stop_reason = "completed"
-                error = None
-
-            return Result()
+            + "\n",
+            encoding="utf-8",
+        )
+        stdout_path.write_text("stdout text", encoding="utf-8")
+        stderr_path.write_text("stderr text", encoding="utf-8")
+        return 7
 
     monkeypatch.setattr(
-        "agents.openclaw._session_runner.SessionRunner",
-        FakeSessionRunner,
-    )
-    monkeypatch.setattr(
-        "trace_collect.openclaw_host_runtime.build_container_tools_for_agent",
-        lambda *_args, **_kwargs: [],
+        "trace_collect.simulator._run_openclaw_worker_process",
+        fake_worker_process,
     )
     trace_logger = TraceLogger(tmp_path / "replay-output", "replay")
     try:
@@ -503,7 +742,199 @@ def test_openclaw_host_replay_marks_failed_emitted_and_missing_actions(
     assert stats.failed_action_count == 2
     assert summary["success"] is False
     assert summary["failed_actions"] == 2
+    assert summary["task_instance_id"] == "fc_openclaw_failed_replay"
+    assert summary["source_action_agent_id"] == "cli:oc-failed"
+    assert summary["worker_returncode"] == 7
+    assert summary["worker_error"] == "worker died"
+    assert summary["agent_execution_environment"] == "host"
+    assert summary["tool_execution_environment"] == "task_container"
+    assert summary["tool_container_id"] == "cid-openclaw-failed-replay"
+    assert summary["tool_container_user"] == "root"
+    assert summary["tool_container_user_id"] == "0"
+    assert summary["tool_container_workdir"] == "/testbed"
+    assert summary["openclaw_host_pid"] == 98765
 
+
+def test_terminal_bench_compose_preparation_uses_runner_env_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    from agents.terminal_bench.runner import TerminalBenchRunner
+    from trace_collect.simulator import (
+        LoadedTraceSession,
+        _prepare_terminal_bench_container_session,
+    )
+
+    task_dir = tmp_path / "tb-task"
+    task_dir.mkdir()
+    (task_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    (task_dir / "docker-compose.yaml").write_text(
+        "services:\n  client:\n    image: ${T_BENCH_TASK_DOCKER_CLIENT_IMAGE_NAME}\n",
+        encoding="utf-8",
+    )
+    loaded = LoadedTraceSession(
+        source_trace=tmp_path / "trace.jsonl",
+        task_source=tmp_path / "tasks.json",
+        run_instance_id="replay-run",
+        task_instance_id="hello-world",
+        source_action_agent_id="cli:oc-source",
+        manifest_index=0,
+        scaffold="openclaw",
+        metadata={"instance_id": "hello-world"},
+        summary={"model": "source-model"},
+        task={
+            "instance_id": "hello-world",
+            "task_id": "hello-world",
+            "task_source_kind": "terminal_bench_registry",
+            "task_source_path": str(task_dir),
+            "problem_statement": "fix it",
+        },
+        actions=[],
+        iterations={},
+    )
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+        if cmd[:2] == ["docker", "image"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="amd64 linux\n", stderr="")
+        if cmd[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="/app/src\n", stderr="")
+        if cmd[:2] == ["docker", "exec"]:
+            stdout = "/usr/bin/python3\n" if "-s" in cmd else "/app/src\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+        stdout = "cid-client\n" if cmd[-3:] == ["ps", "-q", "client"] else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("trace_collect.simulator.subprocess.run", fake_run)
+
+    prepared = asyncio.run(
+        _prepare_terminal_bench_container_session(
+            loaded,
+            task_output_dir=tmp_path / "task-output",
+            container_executable="docker",
+        )
+    )
+    assert prepared.container is not None
+    prepared.container.cleanup_callback()
+
+    expected_project = TerminalBenchRunner._expected_client_container_name(
+        task_id="hello-world",
+        run_id="replay-run",
+    )
+    expected_compose = (
+        tmp_path
+        / "task-output"
+        / "terminal-bench-runtime"
+        / "task"
+        / "docker-compose.yaml"
+    ).resolve()
+    commands = [cmd for cmd, _kwargs in calls]
+    assert commands == [
+        [
+            "docker",
+            "compose",
+            "-p",
+            expected_project,
+            "-f",
+            str(expected_compose),
+            "build",
+        ],
+        [
+            "docker",
+            "compose",
+            "-p",
+            expected_project,
+            "-f",
+            str(expected_compose),
+            "up",
+            "-d",
+        ],
+        [
+            "docker",
+            "compose",
+            "-p",
+            expected_project,
+            "-f",
+            str(expected_compose),
+            "ps",
+            "-q",
+            "client",
+        ],
+        ["docker", "inspect", "--format", "{{.Config.WorkingDir}}", "cid-client"],
+        [
+            "docker",
+            "exec",
+            "-i",
+            "--user",
+            "0",
+            "-w",
+            "/app/src",
+            "cid-client",
+            "/bin/sh",
+            "-c",
+            "pwd",
+        ],
+        [
+            "docker",
+            "image",
+            "inspect",
+            "tb__hello-world__client",
+            "--format",
+            "{{.Architecture}} {{.Os}}",
+        ],
+        [
+            "docker",
+            "exec",
+            "-i",
+            "--user",
+            "0",
+            "-w",
+            "/app/src",
+            "cid-client",
+            "/bin/sh",
+            "-s",
+            "--",
+            "/usr/bin/python3",
+            "/usr/bin/python",
+            "/opt/miniconda3/bin/python3",
+            "/opt/miniconda3/bin/python",
+            "/opt/conda/bin/python3",
+            "/opt/conda/bin/python",
+            "python3",
+            "python",
+        ],
+        [
+            "docker",
+            "compose",
+            "-p",
+            expected_project,
+            "-f",
+            str(expected_compose),
+            "down",
+            "--volumes",
+            "--remove-orphans",
+        ],
+    ]
+    for cmd, kwargs in calls:
+        if cmd[:2] != ["docker", "compose"]:
+            continue
+        assert kwargs["cwd"] == expected_compose.parent
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        assert env["T_BENCH_TASK_DOCKER_CLIENT_CONTAINER_NAME"] == expected_project
+        assert env["T_BENCH_TASK_DOCKER_CLIENT_IMAGE_NAME"] == "tb__hello-world__client"
+        assert env["T_BENCH_TEST_DIR"] == "/tests"
+        assert env["T_BENCH_CONTAINER_LOGS_PATH"] == "/logs"
+        assert env["T_BENCH_CONTAINER_AGENT_LOGS_PATH"] == "/agent-logs"
+    assert prepared.container.container_id == "cid-client"
+    assert prepared.container.agent is None
+    assert prepared.container.docker_image == "tb__hello-world__client"
+    assert prepared.container.python_runtime == "/usr/bin/python3"
+    assert prepared.container.pythonpath is None
+    assert prepared.container.workdir == "/app/src"
 
 def test_container_mode_trace_requires_container_executable(tmp_path: Path) -> None:
     trace_path = tmp_path / "trace.jsonl"

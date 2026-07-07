@@ -117,6 +117,9 @@ def test_resolve_running_container_exec_config_probes_python(monkeypatch) -> Non
 
     cmd = seen["cmd"]
     assert isinstance(cmd, list)
+    user_idx = cmd.index("--user")
+    assert cmd[user_idx + 1] == "0"
+    assert user_idx < cmd.index("-w")
     assert "/opt/miniconda3/bin/python3" in cmd
     assert resolved.runtime == "/opt/miniconda3/bin/python3"
     assert resolved.pythonpath == exec_config.pythonpath
@@ -276,6 +279,11 @@ def test_bootstrap_task_container_python_uses_resolved_runtime(
     )
 
     assert seen["url"] == "https://bootstrap.pypa.io/get-pip.py"
+    cmd = seen["cmd"]
+    assert isinstance(cmd, list)
+    user_idx = cmd.index("--user")
+    assert cmd[user_idx + 1] == "0"
+    assert user_idx < cmd.index("-w")
     assert "/usr/bin/python3" in seen["cmd"]
     input_script = str(seen["input"])
     assert "https://host-only.invalid/simple" not in input_script
