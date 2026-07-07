@@ -8,17 +8,18 @@ from pathlib import Path
 import pytest
 
 from trace_collect.cli import _run_simulate, parse_simulate_args
-from trace_collect.simulator import (
+from trace_collect.simulate_manifest import _parse_trace_session_file
+from trace_collect.simulate_outputs import _make_trace_action, _replay_agent_id_for_action
+from trace_collect.simulate_types import (
     LLMTimingConfig,
     PreparedTraceSession,
     SimulateError,
     WorkerTraceInput,
+)
+from trace_collect.simulate_utils import _resolve_prep_concurrency
+from trace_collect.simulator import (
     _chunk_worker_inputs_by_concurrency,
-    _make_trace_action,
     _partition_worker_inputs,
-    _parse_trace_session_file,
-    _replay_agent_id_for_action,
-    _resolve_prep_concurrency,
     _run_worker_wave_async,
     _source_exec_timeout_s,
     simulate,
@@ -4229,7 +4230,7 @@ def test_execution_environment_infers_host_from_agent_runtime_mode() -> None:
     when agent_runtime_mode=host_controller is present. Regression guard for
     Codex P1 feedback on cc3a18a (PR #13)."""
     from types import SimpleNamespace
-    from trace_collect.simulator import _execution_environment
+    from trace_collect.simulate_utils import _execution_environment
 
     # Legacy host trace: no execution_environment, but agent_runtime_mode is set
     legacy_host = SimpleNamespace(

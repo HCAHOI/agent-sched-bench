@@ -90,7 +90,7 @@ def test_terminal_bench_trace_identity_split_loads_action_owner_actions(
         encoding="utf-8",
     )
 
-    from trace_collect.simulator import _parse_trace_session_file
+    from trace_collect.simulate_manifest import _parse_trace_session_file
 
     task_instance_id, source_action_agent_id, _metadata, actions, summary = (
         _parse_trace_session_file(trace_path)
@@ -147,7 +147,7 @@ def test_trace_parser_rejects_ambiguous_action_owners_without_summary(
         encoding="utf-8",
     )
 
-    from trace_collect.simulator import _parse_trace_session_file
+    from trace_collect.simulate_manifest import _parse_trace_session_file
 
     with pytest.raises(SimulateError, match="Ambiguous action owner"):
         _parse_trace_session_file(trace_path)
@@ -370,7 +370,8 @@ def test_llm_replay_duration_rejects_negative_completion_tokens() -> None:
 
 
 def test_source_model_prefers_summary_and_metadata_audit_fields() -> None:
-    from trace_collect.simulator import LoadedTraceSession, _source_model
+    from trace_collect.simulate_utils import _source_model
+    from trace_collect.simulator import LoadedTraceSession
 
     loaded = LoadedTraceSession(
         source_trace=Path("trace.jsonl"),
@@ -669,12 +670,12 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
 ) -> None:
     """A failing host worker produces failed stats and source/task audit fields."""
     from harness.trace_logger import TraceLogger
+    from trace_collect.simulate_openclaw import _run_openclaw_replay_session
     from trace_collect.simulator import (
         LLMTimingConfig,
         LoadedTraceSession,
         PreparedContainer,
         PreparedTraceSession,
-        _run_openclaw_replay_session,
     )
 
     source_trace = tmp_path / "source.jsonl"
@@ -761,7 +762,7 @@ def test_openclaw_host_replay_worker_failure_marks_failed_with_audit_metadata(
         return 7
 
     monkeypatch.setattr(
-        "trace_collect.simulator._run_openclaw_worker_process",
+        "trace_collect.simulate_openclaw._run_openclaw_worker_process",
         fake_worker_process,
     )
     trace_logger = TraceLogger(tmp_path / "replay-output", "replay")
