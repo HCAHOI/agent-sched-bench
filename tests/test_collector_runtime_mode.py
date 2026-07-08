@@ -1276,6 +1276,70 @@ def test_run_scaffold_tasks_copies_correctness_fields_from_attempt_summary(
     assert result["answer_parse_error"] is None
 
 
+@pytest.mark.parametrize("concurrency", [1, 2])
+def test_run_scaffold_tasks_exception_rows_fail_closed_for_browsecomp_accounting(
+    tmp_path: Path,
+    monkeypatch,
+    concurrency: int,
+) -> None:
+    monkeypatch.setattr(
+        "trace_collect.collector.ensure_source_image",
+        lambda source_image, *, container_executable: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.remove_image",
+        lambda image, *, container_executable: False,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.drop_cached_fixed_image",
+        lambda source_image: None,
+    )
+    monkeypatch.setattr(
+        "trace_collect.collector.prune_dangling_images",
+        lambda *, container_executable: None,
+    )
+    benchmark = SimpleNamespace(
+        execution_environment="host",
+        config=SimpleNamespace(
+            slug="browsecomp",
+            harness_split=None,
+            trace_root=tmp_path / "traces",
+            default_prompt_template="default",
+        ),
+        runtime_mode_for=lambda scaffold: "host_controller",
+        image_name_for=lambda task: None,
+    )
+
+    def make_inner(task: dict):
+        async def inner(ctx) -> AttemptResult:
+            raise RuntimeError(f"collector boom for {task['instance_id']}")
+
+        return inner
+
+    run_dir = asyncio.run(
+        _run_scaffold_tasks(
+            benchmark=benchmark,
+            tasks=[{"instance_id": "browsecomp-exception"}],
+            run_dir=tmp_path / f"run-{concurrency}",
+            model="openai/gpt-4.1",
+            scaffold="deep-research",
+            container_executable=None,
+            prompt_template=None,
+            min_free_disk_gb=0.001,
+            inner_factory=make_inner,
+            concurrency=concurrency,
+        )
+    )
+
+    [result] = [
+        json.loads(line) for line in (run_dir / "results.jsonl").read_text().splitlines()
+    ]
+    assert result["success"] is False
+    assert result["exit_status"] == "error"
+    assert result["correct"] is False
+    assert result["score"] == 0
+
+
 
 def test_resume_preserves_prior_result_rows_and_overwrites_rerun_by_instance_id(
     tmp_path: Path,

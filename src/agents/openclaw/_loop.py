@@ -192,6 +192,9 @@ class AgentLoop:
         runtime_label: str | None = None,
         hooks: list[AgentHook] | None = None,
         tool_overrides: list[Any] | None = None,
+        enabled_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+        subagent_enabled_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+        subagent_max_active_per_session: int | None = None,
     ):
         from agents.openclaw.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -233,6 +236,13 @@ class AgentLoop:
         self._last_run_outcomes: dict[str, dict[str, str | None]] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
         self._tool_overrides = list(tool_overrides or [])
+        self._enabled_tools = frozenset(enabled_tools) if enabled_tools is not None else None
+        self._subagent_enabled_tools = (
+            frozenset(subagent_enabled_tools)
+            if subagent_enabled_tools is not None
+            else None
+        )
+        self._subagent_max_active_per_session = subagent_max_active_per_session
         self._event_callback = None
 
         self.context = ContextBuilder(
@@ -264,6 +274,8 @@ class AgentLoop:
             skills_dir=skills_dir,
             hooks=self._extra_hooks,
             tool_overrides=self._tool_overrides,
+            enabled_tools=self._subagent_enabled_tools,
+            max_active_per_session=self._subagent_max_active_per_session,
         )
 
         self._running = False
@@ -291,22 +303,31 @@ class AgentLoop:
         )
         self._register_default_tools()
 
+    def _tool_enabled(self, name: str) -> bool:
+        return self._enabled_tools is None or name in self._enabled_tools
+
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         tool_allowed_dir = self.tool_workspace if self.restrict_to_workspace else None
         extra_read = [BUILTIN_SKILLS_DIR] if tool_allowed_dir else None
-        self.tools.register(
-            ReadFileTool(
-                workspace=self.tool_workspace,
-                allowed_dir=tool_allowed_dir,
-                extra_allowed_dirs=extra_read,
-            )
-        )
-        for cls in (WriteFileTool, EditFileTool, ListDirTool):
+        if self._tool_enabled("read_file"):
             self.tools.register(
-                cls(workspace=self.tool_workspace, allowed_dir=tool_allowed_dir)
+                ReadFileTool(
+                    workspace=self.tool_workspace,
+                    allowed_dir=tool_allowed_dir,
+                    extra_allowed_dirs=extra_read,
+                )
             )
-        if self.exec_config.enable:
+        for name, cls in (
+            ("write_file", WriteFileTool),
+            ("edit_file", EditFileTool),
+            ("list_dir", ListDirTool),
+        ):
+            if self._tool_enabled(name):
+                self.tools.register(
+                    cls(workspace=self.tool_workspace, allowed_dir=tool_allowed_dir)
+                )
+        if self._tool_enabled("exec") and self.exec_config.enable:
             self.tools.register(
                 ExecTool(
                     working_dir=str(self.tool_workspace),
@@ -315,15 +336,21 @@ class AgentLoop:
                     path_append=self.exec_config.path_append,
                 )
             )
-        self.tools.register(
-            WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
-        )
-        self.tools.register(WebFetchTool(proxy=self.web_proxy))
-        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
-        self.tools.register(SpawnTool(manager=self.subagents))
-        self.tools.register(SessionsYieldTool(manager=self.subagents))
+        if self._tool_enabled("web_search"):
+            self.tools.register(
+                WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
+            )
+        if self._tool_enabled("web_fetch"):
+            self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        if self._tool_enabled("message"):
+            self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
+        if self._tool_enabled("spawn"):
+            self.tools.register(SpawnTool(manager=self.subagents))
+        if self._tool_enabled("sessions_yield"):
+            self.tools.register(SessionsYieldTool(manager=self.subagents))
         for tool in self._tool_overrides:
-            self.tools.register(tool)
+            if self._tool_enabled(tool.name):
+                self.tools.register(tool)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -436,9 +463,24 @@ class AgentLoop:
         )
         self._last_usage = result.usage
         if session is not None:
+            terminal_yield_error = any(
+                event.get("status") == "error"
+                and event.get("should_yield") == "true"
+                for event in result.tool_events
+            )
+            waiting_for_runtime_event = (
+                result.stop_reason == "yielded"
+                and not terminal_yield_error
+                and any(
+                    event.get("name") == "sessions_yield"
+                    and event.get("status") == "ok"
+                    for event in result.tool_events
+                )
+            )
             self._last_run_outcomes[session.key] = {
                 "stop_reason": result.stop_reason,
                 "error": result.error,
+                "waiting_for_runtime_event": waiting_for_runtime_event,
             }
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)

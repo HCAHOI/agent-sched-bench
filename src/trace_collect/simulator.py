@@ -2795,7 +2795,7 @@ async def _replay_cloud_model_session(
     warmup_skip_iterations: int,
 ) -> ReplayTaskStats:
     loaded = prepared_session.loaded
-    if loaded.scaffold == "openclaw":
+    if loaded.scaffold == "openclaw" and _requires_task_container(loaded):
         if prepared_session.container is None:
             raise SimulateError(
                 f"OpenClaw replay for {loaded.task_instance_id!r} requires a task container"

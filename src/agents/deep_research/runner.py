@@ -57,10 +57,35 @@ class _LLMTraceRecord:
 
 
 @dataclass(slots=True)
+class _ToolMessageTraceRecord:
+    iteration: int
+    tool_name: str
+    tool_call_id: str
+    tool_args: str
+    tool_result: str
+    success: bool
+    ts_start: float
+    ts_end: float
+
+    def to_trace_payload(self) -> dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "tool_args": self.tool_args,
+            "iteration": self.iteration,
+            "tool_call_id": self.tool_call_id,
+            "tool_result": self.tool_result,
+            "duration_ms": max(0.0, self.ts_end - self.ts_start) * 1000.0,
+            "success": self.success,
+            "error": None if self.success else self.tool_result,
+        }
+
+
+@dataclass(slots=True)
 class _TraceCaptureHook(AgentHook):
     """Capture model calls emitted by ``AgentRunner``."""
 
     llm_records: list[_LLMTraceRecord] = field(default_factory=list)
+    tool_message_records: list[_ToolMessageTraceRecord] = field(default_factory=list)
     _iteration_start: dict[int, float] = field(default_factory=dict)
 
     async def before_iteration(self, context: AgentHookContext) -> None:
@@ -83,6 +108,42 @@ class _TraceCaptureHook(AgentHook):
                 ts_end=ts_end,
             )
         )
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        if not context.tool_calls:
+            return
+        calls_by_id = {call.id: call for call in context.tool_calls}
+        events_by_call_id = {
+            call.id: event for call, event in zip(context.tool_calls, context.tool_events)
+        }
+        for message in _trailing_tool_messages(context.messages):
+            tool_call_id = str(message.get("tool_call_id") or "")
+            if tool_call_id not in calls_by_id:
+                continue
+            call = calls_by_id[tool_call_id]
+            timing = context.tool_timings.get(tool_call_id, {})
+            ts_end = _float_or_now(timing.get("ts_end"))
+            ts_start = _float_or_default(timing.get("ts_start"), ts_end)
+            content = str(message.get("content") or "")
+            event = events_by_call_id.get(tool_call_id)
+            success = (
+                event.get("status") == "ok"
+                if event is not None
+                else not content.startswith("Error")
+            )
+            tool_name = str(message.get("name") or call.name)
+            self.tool_message_records.append(
+                _ToolMessageTraceRecord(
+                    iteration=context.iteration,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    tool_args=json.dumps(call.arguments, ensure_ascii=False),
+                    tool_result=content,
+                    success=success,
+                    ts_start=ts_start,
+                    ts_end=ts_end,
+                )
+            )
 
 
 class DeepResearchRunner:
@@ -251,6 +312,8 @@ class DeepResearchRunner:
                 )
             )
             break
+        tool_actions = _combined_tool_actions(tool_state.records, hook.tool_message_records)
+
 
         for call_index, record in enumerate(hook.llm_records):
             trace_logger.log_trace_action(
@@ -268,30 +331,41 @@ class DeepResearchRunner:
                         "messages_in": record.messages_in,
                         "raw_response": record.response,
                         "usage": record.usage,
+                        "prompt_tokens": _int_usage_value(
+                            record.usage.get("prompt_tokens")
+                        ),
+                        "completion_tokens": _int_usage_value(
+                            record.usage.get("completion_tokens")
+                        ),
+                        "total_tokens": _total_tokens(record.usage),
+                        "llm_latency_ms": max(
+                            0.0, record.ts_end - record.ts_start
+                        )
+                        * 1000.0,
+                        "llm_wall_latency_ms": max(
+                            0.0, record.ts_end - record.ts_start
+                        )
+                        * 1000.0,
                         "model": self.model,
                         "provider": self.provider_name,
                     },
                 ),
             )
-        for index, tool_record in enumerate(tool_state.records):
-            iteration = (
-                tool_record.iteration if tool_record.iteration is not None else index
-            )
-            action_suffix = (
-                tool_record.tool_call_id or f"{index}_{tool_record.tool_name}"
-            )
+        for tool_action in tool_actions:
             trace_logger.log_trace_action(
                 "deep_research",
                 TraceAction(
                     action_type="tool_exec",
-                    action_id=f"tool_{iteration}_{action_suffix}",
+                    action_id=(
+                        f"tool_{tool_action['iteration']}_{tool_action['action_suffix']}"
+                    ),
                     agent_id="deep_research",
                     program_id=self.benchmark_slug,
                     instance_id=attempt_ctx.instance_id,
-                    iteration=iteration,
-                    ts_start=tool_record.ts_start,
-                    ts_end=tool_record.ts_end,
-                    data=tool_record.to_trace_payload(),
+                    iteration=tool_action["iteration"],
+                    ts_start=tool_action["ts_start"],
+                    ts_end=tool_action["ts_end"],
+                    data=tool_action["data"],
                 ),
             )
 
@@ -308,9 +382,9 @@ class DeepResearchRunner:
             {
                 "n_iterations": len(hook.llm_records),
                 "total_llm_ms": _total_llm_ms(hook.llm_records),
-                "total_tool_ms": _total_tool_ms(tool_state.records),
+                "total_tool_ms": _total_tool_ms_from_actions(tool_actions),
                 "total_tokens": _total_tokens(result.usage),
-                "tool_ms_by_name": _tool_ms_by_name(tool_state.records),
+                "tool_ms_by_name": _tool_ms_by_name_from_actions(tool_actions),
                 "search_calls_used": tool_state.search_calls_used,
                 "fetch_calls_used": tool_state.fetch_calls_used,
                 "tool_budget_exhausted": tool_state.tool_budget_exhausted,
@@ -328,7 +402,7 @@ class DeepResearchRunner:
             exit_status=exit_status,
             trace_path=trace_path,
             model_patch=result.final_content or "",
-            tool_calls=[record.to_trace_payload() for record in tool_state.records],
+            tool_calls=[tool_action["data"] for tool_action in tool_actions],
             summary=summary,
             error=error,
             n_iterations=len(hook.llm_records),
@@ -627,16 +701,102 @@ def _total_llm_ms(records: list[_LLMTraceRecord]) -> float:
     return sum(max(0.0, record.ts_end - record.ts_start) * 1000.0 for record in records)
 
 
-def _total_tool_ms(records: list[ToolExecutionRecord]) -> float:
-    return sum(max(0.0, record.ts_end - record.ts_start) * 1000.0 for record in records)
+def _trailing_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    index = len(messages) - 1
+    while index >= 0 and messages[index].get("role") == "tool":
+        results.append(messages[index])
+        index -= 1
+    results.reverse()
+    return results
 
 
-def _tool_ms_by_name(records: list[ToolExecutionRecord]) -> dict[str, float]:
+def _float_or_default(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_or_now(value: Any) -> float:
+    return _float_or_default(value, time.time())
+
+
+def _combined_tool_actions(
+    web_records: list[ToolExecutionRecord],
+    message_records: list[_ToolMessageTraceRecord],
+) -> list[dict[str, Any]]:
+    web_by_call_id = {
+        record.tool_call_id: record
+        for record in web_records
+        if record.tool_call_id is not None
+    }
+    seen_call_ids: set[str] = set()
+    actions: list[dict[str, Any]] = []
+    for index, message_record in enumerate(message_records):
+        web_record = web_by_call_id.get(message_record.tool_call_id)
+        if web_record is not None:
+            seen_call_ids.add(message_record.tool_call_id)
+            iteration = (
+                web_record.iteration
+                if web_record.iteration is not None
+                else message_record.iteration
+            )
+            payload = web_record.to_trace_payload()
+            actions.append(
+                {
+                    "iteration": iteration,
+                    "action_suffix": web_record.tool_call_id
+                    or f"{index}_{web_record.tool_name}",
+                    "ts_start": web_record.ts_start,
+                    "ts_end": web_record.ts_end,
+                    "data": payload,
+                }
+            )
+            continue
+        actions.append(
+            {
+                "iteration": message_record.iteration,
+                "action_suffix": message_record.tool_call_id
+                or f"{index}_{message_record.tool_name}",
+                "ts_start": message_record.ts_start,
+                "ts_end": message_record.ts_end,
+                "data": message_record.to_trace_payload(),
+            }
+        )
+
+    for index, web_record in enumerate(web_records):
+        if web_record.tool_call_id is not None and web_record.tool_call_id in seen_call_ids:
+            continue
+        iteration = web_record.iteration if web_record.iteration is not None else index
+        actions.append(
+            {
+                "iteration": iteration,
+                "action_suffix": web_record.tool_call_id
+                or f"{index}_{web_record.tool_name}",
+                "ts_start": web_record.ts_start,
+                "ts_end": web_record.ts_end,
+                "data": web_record.to_trace_payload(),
+            }
+        )
+    return actions
+
+
+def _total_tool_ms_from_actions(actions: list[dict[str, Any]]) -> float:
+    return sum(
+        max(0.0, float(action["ts_end"]) - float(action["ts_start"])) * 1000.0
+        for action in actions
+    )
+
+
+def _tool_ms_by_name_from_actions(actions: list[dict[str, Any]]) -> dict[str, float]:
     totals: dict[str, float] = {}
-    for record in records:
-        totals[record.tool_name] = (
-            totals.get(record.tool_name, 0.0)
-            + max(0.0, record.ts_end - record.ts_start) * 1000.0
+    for action in actions:
+        data = action.get("data") or {}
+        name = str(data.get("tool_name") or "unknown")
+        totals[name] = (
+            totals.get(name, 0.0)
+            + max(0.0, float(action["ts_end"]) - float(action["ts_start"])) * 1000.0
         )
     return totals
 

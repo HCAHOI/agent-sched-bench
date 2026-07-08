@@ -740,6 +740,17 @@ def test_trace_records_empty_finalization_retry_as_separate_llm_call(
         == "Explanation: retry succeeded\nExact Answer: Mars\nConfidence: 81%"
     )
 
+    assert llm_calls[0]["data"]["prompt_tokens"] == 10
+    assert llm_calls[0]["data"]["completion_tokens"] == 0
+    assert llm_calls[0]["data"]["total_tokens"] == 10
+    assert llm_calls[1]["data"]["prompt_tokens"] == 12
+    assert llm_calls[1]["data"]["completion_tokens"] == 5
+    assert llm_calls[1]["data"]["total_tokens"] == 17
+    for llm_call in llm_calls:
+        elapsed_ms = (llm_call["ts_end"] - llm_call["ts_start"]) * 1000.0
+        assert llm_call["data"]["llm_latency_ms"] == pytest.approx(elapsed_ms)
+        assert llm_call["data"]["llm_wall_latency_ms"] == pytest.approx(elapsed_ms)
+
 
 def test_trace_preserves_iteration_and_call_ids_for_same_turn_tool_calls(
     tmp_path: Path,
@@ -831,11 +842,19 @@ def test_trace_preserves_iteration_and_call_ids_for_same_turn_tool_calls(
         for record in trace_records
         if record.get("type") == "action" and record.get("action_type") == "tool_exec"
     ]
-    assert [record["iteration"] for record in tool_execs] == [0, 0]
+    assert [record["iteration"] for record in tool_execs] == [0, 0, 0]
     assert [record["data"]["tool_call_id"] for record in tool_execs] == [
+        "bad-fetch-missing-url",
         "actual-search-call",
         "actual-fetch-call",
     ]
+    assert tool_execs[0]["data"]["success"] is False
+    assert "Invalid parameters" in tool_execs[0]["data"]["error"]
+    assert [record["data"]["success"] for record in tool_execs[1:]] == [True, True]
+    for record in tool_execs:
+        assert record["data"]["duration_ms"] == pytest.approx(
+            (record["ts_end"] - record["ts_start"]) * 1000.0
+        )
     assert {record["data"]["tool_call_id"] for record in tool_execs} == {
         call["tool_call_id"] for call in result.tool_calls
     }

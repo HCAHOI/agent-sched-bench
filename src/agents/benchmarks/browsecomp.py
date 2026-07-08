@@ -23,7 +23,7 @@ class BrowseCompBenchmark(Benchmark):
     """Benchmark plugin for OpenAI BrowseComp."""
 
     slug: ClassVar[str] = "browsecomp"
-    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"deep-research"}
+    SUPPORTED_SCAFFOLDS: ClassVar[set[str]] = {"deep-research", "openclaw"}
 
     _REQUIRED_EXTRAS: ClassVar[tuple[str, ...]] = (
         "task_source_kind",
@@ -131,7 +131,8 @@ class BrowseCompBenchmark(Benchmark):
     def validate_scaffold_support(self, scaffold: str) -> None:
         if scaffold not in self.SUPPORTED_SCAFFOLDS:
             raise NotImplementedError(
-                f"BrowseComp supports scaffold='deep-research' only, got {scaffold!r}"
+                "BrowseComp supports scaffold='deep-research' or scaffold='openclaw', "
+                f"got {scaffold!r}"
             )
 
     def image_name_for(self, task: dict[str, Any]) -> str | None:
@@ -148,10 +149,19 @@ class BrowseCompBenchmark(Benchmark):
         model: str,
         **kwargs: Any,
     ) -> Any:
-        self.validate_scaffold_support(scaffold)
-        from agents.deep_research.runner import DeepResearchRunner
+        if scaffold == "deep-research":
+            from agents.deep_research.runner import DeepResearchRunner
 
-        return DeepResearchRunner(
+            runner_cls = DeepResearchRunner
+        elif scaffold == "openclaw":
+            from agents.browsecomp.openclaw_runner import BrowseCompOpenClawRunner
+
+            runner_cls = BrowseCompOpenClawRunner
+        else:
+            self.validate_scaffold_support(scaffold)
+            raise AssertionError("unreachable")
+
+        return runner_cls(
             provider=provider,
             workspace_base=workspace_base,
             benchmark_slug=self.config.slug,

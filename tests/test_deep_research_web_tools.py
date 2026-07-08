@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import types
 
 import pytest
 
@@ -13,6 +15,25 @@ from agents.deep_research.web_tools import (
     DeepResearchWebSearchTool,
     WebToolRuntimeState,
 )
+
+
+def _install_failing_ddgs(monkeypatch, error: Exception) -> None:
+    ddgs_module = types.ModuleType("ddgs")
+
+    class FakeDDGS:
+        def __init__(self, *, timeout: int) -> None:
+            self.timeout = timeout
+
+        def text(self, query: str, *, max_results: int):
+            del query, max_results
+            raise error
+
+    ddgs_module.DDGS = FakeDDGS
+    monkeypatch.setitem(sys.modules, "ddgs", ddgs_module)
+    monkeypatch.setattr(
+        "agents.deep_research.web_tools.importlib.util.find_spec",
+        lambda name: object() if name == "ddgs" else None,
+    )
 
 
 def _config(**overrides) -> DeepResearchWebConfig:
@@ -175,6 +196,52 @@ def test_search_backend_failure_yields_and_records_fail_closed_state() -> None:
     assert record.actual_provider == "searxng"
     assert record.fallback_used is False
     assert record.error == "Error: primary search unavailable"
+    assert record.budget_exhausted is False
+
+
+def test_duckduckgo_no_results_exception_is_recoverable_empty_result(monkeypatch) -> None:
+    _install_failing_ddgs(monkeypatch, RuntimeError("No results found."))
+    state = WebToolRuntimeState(max_search_calls=2, max_fetch_calls=2)
+    tool = DeepResearchWebSearchTool(
+        config=_config(search_provider="duckduckgo", search_base_url=None),
+        state=state,
+        environ={},
+    )
+
+    result = asyncio.run(tool.execute(query="site:example.invalid absent", count=4))
+
+    assert result == "No results for: site:example.invalid absent"
+    assert not result.startswith("Error:")
+    assert state.tool_backend_failed is False
+    assert state.backend_failed_tool is None
+    [record] = state.records
+    assert record.actual_provider == "duckduckgo"
+    assert record.error is None
+    assert record.tool_result == result
+    assert record.budget_exhausted is False
+
+
+def test_duckduckgo_provider_exception_fails_closed(monkeypatch) -> None:
+    _install_failing_ddgs(monkeypatch, RuntimeError("backend exploded"))
+    state = WebToolRuntimeState(max_search_calls=2, max_fetch_calls=2)
+    tool = DeepResearchWebSearchTool(
+        config=_config(search_provider="duckduckgo", search_base_url=None),
+        state=state,
+        environ={},
+    )
+
+    result = asyncio.run(tool.execute(query="provider outage", count=4))
+
+    expected = "Error: DuckDuckGo search failed (backend exploded)"
+    assert isinstance(result, BackendFailureResult)
+    assert result.content == expected
+    assert state.tool_backend_failed is True
+    assert state.backend_failed_tool == "web_search"
+    assert state.backend_failure_error == expected
+    [record] = state.records
+    assert record.actual_provider == "duckduckgo"
+    assert record.error == expected
+    assert record.tool_result == expected
     assert record.budget_exhausted is False
 
 

@@ -56,6 +56,8 @@ class SubagentManager:
         skills_dir: Path | None = None,
         hooks: list[AgentHook] | None = None,
         tool_overrides: list[Any] | None = None,
+        enabled_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+        max_active_per_session: int | None = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -71,8 +73,16 @@ class SubagentManager:
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        self._sessions_with_subagents: set[str] = set()
         self._hooks = hooks or []
         self._tool_overrides = list(tool_overrides or [])
+        self._enabled_tools = (
+            frozenset(enabled_tools) if enabled_tools is not None else None
+        )
+        self.max_active_per_session = max_active_per_session
+
+    def _tool_enabled(self, name: str) -> bool:
+        return self._enabled_tools is None or name in self._enabled_tools
 
     async def spawn(
         self,
@@ -82,6 +92,17 @@ class SubagentManager:
         origin_chat_id: str = "direct",
         session_key: str | None = None,
     ) -> str:
+        if session_key and self.max_active_per_session is not None:
+            active = []
+            for existing_id in self._session_tasks.get(session_key, set()):
+                existing_task = self._running_tasks.get(existing_id)
+                if existing_task is not None and not existing_task.done():
+                    active.append(existing_id)
+            if len(active) >= self.max_active_per_session:
+                return (
+                    "Error: subagent concurrency budget exhausted "
+                    f"for this session ({self.max_active_per_session} active)"
+                )
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
@@ -94,6 +115,7 @@ class SubagentManager:
         self._running_tasks[task_id] = bg_task
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
+            self._sessions_with_subagents.add(session_key)
 
         def _cleanup(_: asyncio.Task) -> None:
             self._running_tasks.pop(task_id, None)
@@ -109,6 +131,9 @@ class SubagentManager:
 
     def has_active(self, session_key: str) -> bool:
         return bool(self._session_tasks.get(session_key))
+
+    def had_session_activity(self, session_key: str) -> bool:
+        return session_key in self._sessions_with_subagents
 
     async def wait_for_session(self, session_key: str) -> None:
         """Wait for all subagents currently associated with a session."""
@@ -126,6 +151,18 @@ class SubagentManager:
                 return
             if not tasks:
                 return
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def cancel_session(self, session_key: str) -> None:
+        ids = self._session_tasks.pop(session_key, set())
+        tasks: list[asyncio.Task[None]] = []
+        for task_id in list(ids):
+            task = self._running_tasks.pop(task_id, None)
+            if task is None or task.done():
+                continue
+            task.cancel()
+            tasks.append(task)
+        if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _build_hooks(self, task_id: str) -> list[AgentHook]:
@@ -147,27 +184,26 @@ class SubagentManager:
         logger.info("Subagent [{}] starting task: {}", task_id, label)
 
         try:
-            # Build subagent tools (no message tool, no spawn tool)
+            # Build subagent tools from an explicit allowlist when provided.
             tools = ToolRegistry()
             allowed_dir = self.workspace if self.restrict_to_workspace else None
             extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-            tools.register(
-                ReadFileTool(
-                    workspace=self.workspace,
-                    allowed_dir=allowed_dir,
-                    extra_allowed_dirs=extra_read,
+            if self._tool_enabled("read_file"):
+                tools.register(
+                    ReadFileTool(
+                        workspace=self.workspace,
+                        allowed_dir=allowed_dir,
+                        extra_allowed_dirs=extra_read,
+                    )
                 )
-            )
-            tools.register(
-                WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir)
-            )
-            tools.register(
-                EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir)
-            )
-            tools.register(
-                ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir)
-            )
-            if self.exec_config.enable:
+            for name, cls in (
+                ("write_file", WriteFileTool),
+                ("edit_file", EditFileTool),
+                ("list_dir", ListDirTool),
+            ):
+                if self._tool_enabled(name):
+                    tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+            if self._tool_enabled("exec") and self.exec_config.enable:
                 tools.register(
                     ExecTool(
                         working_dir=str(self.workspace),
@@ -176,12 +212,15 @@ class SubagentManager:
                         path_append=self.exec_config.path_append,
                     )
                 )
-            tools.register(
-                WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
-            )
-            tools.register(WebFetchTool(proxy=self.web_proxy))
+            if self._tool_enabled("web_search"):
+                tools.register(
+                    WebSearchTool(config=self.web_search_config, proxy=self.web_proxy)
+                )
+            if self._tool_enabled("web_fetch"):
+                tools.register(WebFetchTool(proxy=self.web_proxy))
             for tool in self._tool_overrides:
-                tools.register(tool)
+                if self._tool_enabled(tool.name):
+                    tools.register(tool)
 
             system_prompt = self._build_subagent_prompt()
             messages: list[dict[str, Any]] = [

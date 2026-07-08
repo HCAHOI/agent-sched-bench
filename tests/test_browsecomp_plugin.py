@@ -95,15 +95,171 @@ def _make_config(
     )
 
 
-def test_browsecomp_registered_for_deep_research_only(tmp_path: Path) -> None:
+def test_browsecomp_registered_for_deep_research_and_openclaw(tmp_path: Path) -> None:
     assert REGISTRY["browsecomp"] is BrowseCompBenchmark
     plugin = get_benchmark_class("browsecomp")(_make_config(tmp_path))
 
     assert plugin.execution_environment == "host"
     assert plugin.runtime_mode_for("deep-research") == "host_controller"
+    assert plugin.runtime_mode_for("openclaw") == "host_controller"
     assert plugin.image_name_for({"image_name": "should-not-be-used"}) is None
-    with pytest.raises(NotImplementedError, match="deep-research"):
-        plugin.runtime_mode_for("openclaw")
+    with pytest.raises(NotImplementedError, match="BrowseComp supports"):
+        plugin.runtime_mode_for("unsupported-scaffold")
+
+
+def test_browsecomp_openclaw_safe_tool_policy_is_web_only_and_spawn_capable() -> None:
+    from agents.browsecomp.openclaw_runner import (
+        _BROWSECOMP_PARENT_TOOLS,
+        _WEB_ONLY_TOOLS,
+    )
+
+    unsafe_tools = {"read_file", "write_file", "edit_file", "list_dir", "exec"}
+
+    assert _WEB_ONLY_TOOLS == frozenset({"web_search", "web_fetch"})
+    assert _BROWSECOMP_PARENT_TOOLS == frozenset(
+        {"web_search", "web_fetch", "spawn", "sessions_yield"}
+    )
+    assert _WEB_ONLY_TOOLS < _BROWSECOMP_PARENT_TOOLS
+    assert _BROWSECOMP_PARENT_TOOLS.isdisjoint(unsafe_tools)
+    assert _WEB_ONLY_TOOLS.isdisjoint({"spawn", "sessions_yield", *unsafe_tools})
+
+
+@pytest.mark.parametrize(
+    ("extras", "expected"),
+    [
+        ({}, 1),
+        ({"max_concurrent_research_units": 3}, 3),
+        ({"max_concurrent_research_units": "4"}, 4),
+    ],
+)
+def test_browsecomp_openclaw_research_unit_limit_accepts_positive_integers(
+    extras: dict[str, object],
+    expected: int,
+) -> None:
+    from agents.browsecomp.openclaw_runner import _max_concurrent_research_units
+
+    assert _max_concurrent_research_units(extras) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "message"),
+    [
+        (0, ">= 1"),
+        ("0", ">= 1"),
+        ("not-an-int", "integer"),
+    ],
+)
+def test_browsecomp_openclaw_research_unit_limit_fails_closed(
+    raw_value: object,
+    message: str,
+) -> None:
+    from agents.browsecomp.openclaw_runner import _max_concurrent_research_units
+
+    with pytest.raises(ValueError, match=message):
+        _max_concurrent_research_units({"max_concurrent_research_units": raw_value})
+
+
+def test_browsecomp_web_tool_budget_state_fails_closed_without_backend_calls() -> None:
+    from agents.deep_research.web_tools import ToolExecutionRecord, WebToolRuntimeState
+
+    state = WebToolRuntimeState(
+        max_search_calls=1,
+        max_fetch_calls=1,
+        fetch_calls_used=1,
+    )
+
+    assert state.check_budget("web_fetch") is False
+    assert state.tool_budget_exhausted is True
+    assert state.budget_exhausted_tool == "web_fetch"
+    assert state.records == []
+
+    payload = ToolExecutionRecord(
+        tool_name="web_fetch",
+        tool_args={"url": "https://example.com/already-spent"},
+        tool_result="Error: web_fetch tool budget exhausted",
+        requested_provider="jina",
+        actual_provider=None,
+        fallback_used=False,
+        error=None,
+        budget_exhausted=True,
+        ts_start=1.0,
+        ts_end=1.0,
+        iteration=0,
+        tool_call_id="fetch_budget_exhausted",
+    ).to_trace_payload()
+
+    assert payload["tool_call_id"] == "fetch_budget_exhausted"
+    assert payload["requested_provider"] == "jina"
+    assert payload["budget_exhausted"] is True
+    assert payload["success"] is False
+
+
+def test_browsecomp_openclaw_trace_enrichment_marks_failed_web_tool_actions(
+    tmp_path: Path,
+) -> None:
+    from agents.browsecomp.openclaw_runner import _enrich_trace_tool_actions
+    from agents.deep_research.web_tools import ToolExecutionRecord
+
+    trace_path = tmp_path / "trace.jsonl"
+    target_url = "https://example.com/backend-down"
+    backend_error = "Jina Reader failed: 503 backend timeout"
+    trace_path.write_text(
+        "".join(
+            json.dumps(record, ensure_ascii=False) + "\n"
+            for record in [
+                {"type": "trace_metadata", "scaffold": "openclaw"},
+                {
+                    "type": "action",
+                    "action_type": "tool_exec",
+                    "data": {
+                        "tool_name": "web_fetch",
+                        "tool_call_id": "fetch_backend_failure",
+                        "tool_args": json.dumps({"url": target_url}),
+                        "tool_result": json.dumps(
+                            {"error": backend_error, "url": target_url},
+                            ensure_ascii=False,
+                        ),
+                        "success": True,
+                    },
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    record = ToolExecutionRecord(
+        tool_name="web_fetch",
+        tool_args={"url": target_url},
+        tool_result={"error": backend_error, "url": target_url},
+        requested_provider="jina",
+        actual_provider="jina",
+        fallback_used=False,
+        error=backend_error,
+        budget_exhausted=False,
+        ts_start=1.0,
+        ts_end=2.0,
+        iteration=0,
+        tool_call_id="fetch_backend_failure",
+        preview=backend_error,
+        truncated_preview=False,
+    )
+
+    _enrich_trace_tool_actions(trace_path, [record])
+
+    records = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fetch_data = records[1]["data"]
+    payload = record.to_trace_payload()
+    assert payload["success"] is False
+    assert payload["error"] == backend_error
+    assert fetch_data["success"] is False
+    assert fetch_data["error"] == backend_error
+    assert fetch_data["requested_provider"] == "jina"
+    assert fetch_data["actual_provider"] == "jina"
+    assert fetch_data["fallback_used"] is False
+    assert fetch_data["budget_exhausted"] is False
 
 
 @pytest.mark.parametrize(

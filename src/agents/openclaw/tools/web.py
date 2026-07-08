@@ -223,8 +223,11 @@ class WebSearchTool(Tool):
             ]
             return _format_results(query, items, n)
         except Exception as e:
+            message = str(e)
+            if "no results found" in message.lower():
+                return f"No results for: {query}"
             logger.warning("DuckDuckGo search failed: {}", e)
-            return f"Error: DuckDuckGo search failed ({e})"
+            return f"Error: DuckDuckGo search failed ({message})"
 
 class WebFetchTool(Tool):
 

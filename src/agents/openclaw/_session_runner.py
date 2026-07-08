@@ -304,7 +304,15 @@ class TraceCollectorHook(AgentHook):
                 if result[1] != "_invalid_tool_call"
                 and not (result[0] and result[0].startswith("malformed_retry_"))
             ]
+            context_tool_events = getattr(context, "tool_events", []) or []
+            events_by_call_id = {
+                tc.id: event for tc, event in zip(context.tool_calls, context_tool_events)
+            }
             for tc_id, tool_name, tool_content, tool_ok in traceable_tool_results:
+                event = events_by_call_id.get(tc_id)
+                content_error = tool_content.startswith("Error")
+                if event is not None:
+                    tool_ok = event.get("status") == "ok" and not content_error
                 tool_start_mono = self._tool_start_ts.pop(tc_id, None)
                 tool_timings = getattr(context, "tool_timings", {}) or {}
                 timing = tool_timings.get(tc_id) or {}
@@ -341,8 +349,11 @@ class TraceCollectorHook(AgentHook):
                 if tool_name == "spawn":
                     self.emit_event(
                         SUBAGENT,
-                        "subagent_complete",
-                        {"task_preview": tool_content[:200]},
+                        "subagent_spawn_result",
+                        {
+                            "success": tool_ok,
+                            "result_preview": tool_content[:200],
+                        },
                         iteration=context.iteration,
                     )
 
@@ -371,6 +382,12 @@ class TraceCollectorHook(AgentHook):
                     "duration_ms": round(duration_ms, 1),
                     "success": tool_ok,
                 }
+                if not tool_ok:
+                    tool_action_data["error"] = (
+                        tool_content
+                        if content_error
+                        else (event.get("detail") if event is not None else tool_content)
+                    )
                 resource_timelines = getattr(context, "tool_resource_timelines", {})
                 resource_timeline = resource_timelines.get(tc_id)
                 if resource_timeline is not None:
@@ -734,6 +751,9 @@ class SessionRunner:
         exec_config: ExecToolConfig | None = None,
         malformed_retry_budget: int | None = None,
         tool_overrides: list[Any] | None = None,
+        enabled_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+        subagent_enabled_tools: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+        subagent_max_active_per_session: int | None = None,
     ) -> None:
         self.provider = provider
         self.model = model or provider.get_default_model()
@@ -745,21 +765,16 @@ class SessionRunner:
         self.exec_config = exec_config or ExecToolConfig()
         self.tool_overrides = list(tool_overrides or [])
         self.malformed_retry_budget = malformed_retry_budget
+        self.enabled_tools = (
+            frozenset(enabled_tools) if enabled_tools is not None else None
+        )
+        self.subagent_enabled_tools = (
+            frozenset(subagent_enabled_tools)
+            if subagent_enabled_tools is not None
+            else None
+        )
+        self.subagent_max_active_per_session = subagent_max_active_per_session
 
-    @staticmethod
-    def _scaffold_tools() -> list[str]:
-        return [
-            "read_file",
-            "write_file",
-            "edit_file",
-            "list_dir",
-            "exec",
-            "web_search",
-            "web_fetch",
-            "message",
-            "spawn",
-            "sessions_yield",
-        ]
 
     async def run(
         self,
@@ -775,6 +790,7 @@ class SessionRunner:
         channel: str = "cli",
         prepare_ms: float | None = None,
         runtime_label: str | None = None,
+        metadata_overrides: dict[str, Any] | None = None,
     ) -> SessionRunResult:
         workspace.mkdir(parents=True, exist_ok=True)
         trace_file = Path(trace_file)
@@ -801,30 +817,6 @@ class SessionRunner:
             task_id=iid,
         )
 
-        metadata = {
-            "type": "trace_metadata",
-            "scaffold": "openclaw",
-            "trace_format_version": 5,
-            "mode": "collect",
-            "model": self.model,
-            "instance_id": iid,
-            "session_key": session_key,
-            "runtime_dir": str(effective_runtime_dir),
-            "session_dir": str(effective_session_dir),
-            "memory_dir": str(effective_memory_dir),
-            "skills_dir": str(effective_skills_dir),
-            "tool_results_dir": str(effective_tool_results_dir),
-            "max_iterations": self.max_iterations,
-            "scaffold_capabilities": {
-                "tools": self._scaffold_tools(),
-                "memory": True,
-                "skills": True,
-                "file_ops": "structured",
-            },
-        }
-        if runtime_label is not None:
-            metadata["prompt_runtime_label"] = runtime_label
-        trace_hook.add_record(metadata)
 
         bus = MessageBus()
         collector = ResultCollector(bus)
@@ -852,7 +844,53 @@ class SessionRunner:
             malformed_retry_budget=self.malformed_retry_budget,
             runtime_label=runtime_label,
             tool_overrides=self.tool_overrides,
+            enabled_tools=self.enabled_tools,
+            subagent_enabled_tools=self.subagent_enabled_tools,
+            subagent_max_active_per_session=self.subagent_max_active_per_session,
         )
+
+        actual_tools = agent.tools.tool_names
+        file_tool_names = {"read_file", "write_file", "edit_file", "list_dir", "exec"}
+        metadata = {
+            "type": "trace_metadata",
+            "scaffold": "openclaw",
+            "trace_format_version": 5,
+            "mode": "collect",
+            "model": self.model,
+            "instance_id": iid,
+            "session_key": session_key,
+            "runtime_dir": str(effective_runtime_dir),
+            "session_dir": str(effective_session_dir),
+            "memory_dir": str(effective_memory_dir),
+            "skills_dir": str(effective_skills_dir),
+            "tool_results_dir": str(effective_tool_results_dir),
+            "max_iterations": self.max_iterations,
+            "scaffold_capabilities": {
+                "tools": actual_tools,
+                "memory": True,
+                "skills": True,
+                "file_ops": "structured"
+                if any(name in file_tool_names for name in actual_tools)
+                else "none",
+            },
+        }
+        if metadata_overrides:
+            metadata.update(metadata_overrides)
+            if "scaffold_capabilities" in metadata_overrides:
+                metadata["scaffold_capabilities"] = {
+                    **{
+                        "tools": actual_tools,
+                        "memory": True,
+                        "skills": True,
+                        "file_ops": "structured"
+                        if any(name in file_tool_names for name in actual_tools)
+                        else "none",
+                    },
+                    **metadata_overrides["scaffold_capabilities"],
+                }
+        if runtime_label is not None:
+            metadata["prompt_runtime_label"] = runtime_label
+        trace_hook.add_record(metadata)
 
         inject_event_callbacks(agent, trace_hook)
 
@@ -861,6 +899,44 @@ class SessionRunner:
         chat_id = session_key.split(":", 1)[-1] if ":" in session_key else session_key
         result_key = f"{channel}:{chat_id}"
         runtime_session_key = result_key
+
+        async def wait_for_session_complete() -> None:
+            """Wait until the dispatched session has produced a terminal outcome."""
+            while True:
+                outcomes = getattr(agent, "_last_run_outcomes", {})
+                outcome = outcomes.get(runtime_session_key) or outcomes.get(
+                    session_key, {}
+                )
+                outcome_seen = bool(outcome)
+                waiting_for_runtime_event = (
+                    outcome.get("waiting_for_runtime_event") is True
+                )
+                if waiting_for_runtime_event:
+                    await agent.subagents.wait_for_session(runtime_session_key)
+                await agent.wait_for_session_idle(session_key)
+                await agent.wait_for_session_idle(runtime_session_key)
+                active_subagents = agent.subagents.has_active(runtime_session_key)
+                active_dispatch = agent.has_active_session_tasks(session_key)
+                active_runtime_dispatch = agent.has_active_session_tasks(
+                    runtime_session_key
+                )
+                yielded_waiting_for_runtime = (
+                    waiting_for_runtime_event
+                    and collector.get_result(result_key) is None
+                )
+                blocking_subagents = waiting_for_runtime_event and active_subagents
+                if (
+                    outcome_seen
+                    and not blocking_subagents
+                    and not active_dispatch
+                    and not active_runtime_dispatch
+                    and not yielded_waiting_for_runtime
+                ):
+                    if active_subagents and not waiting_for_runtime_event:
+                        await agent.subagents.cancel_session(runtime_session_key)
+                    return
+                await asyncio.sleep(0)
+
 
         async with AsyncExitStack() as stack:
             await collector.start()
@@ -878,14 +954,37 @@ class SessionRunner:
             )
             await bus.publish_inbound(msg)
 
-            content = await collector.wait_for_result(result_key)
-            while True:
-                await agent.subagents.wait_for_session(runtime_session_key)
-                await agent.wait_for_session_idle(runtime_session_key)
-                if not agent.subagents.has_active(
-                    runtime_session_key
-                ) and not agent.has_active_session_tasks(runtime_session_key):
-                    break
+            result_task = asyncio.create_task(collector.wait_for_result(result_key))
+            completion_task = asyncio.create_task(wait_for_session_complete())
+            try:
+                done, _ = await asyncio.wait(
+                    {result_task, completion_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if result_task in done:
+                    content = result_task.result()
+                    await completion_task
+                else:
+                    outcomes = getattr(agent, "_last_run_outcomes", {})
+                    outcome = outcomes.get(runtime_session_key) or outcomes.get(
+                        session_key, {}
+                    )
+                    content = collector.get_result(result_key)
+                    if content is None:
+                        yielded_without_runtime_wait = (
+                            outcome.get("stop_reason") == "yielded"
+                            and outcome.get("waiting_for_runtime_event") is not True
+                        )
+                        if not yielded_without_runtime_wait:
+                            content = await result_task
+            finally:
+                for task in (result_task, completion_task):
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
 
         elapsed_s = time.monotonic() - wall_start
 

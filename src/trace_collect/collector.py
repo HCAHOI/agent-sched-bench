@@ -625,6 +625,10 @@ async def _run_scaffold_tasks(
                         exit_status="error",
                         error=f"{type(exc).__name__}: {exc}",
                         elapsed_s=time.monotonic() - t0,
+                        correct=False,
+                        score=0,
+                        grader_status="collect_error",
+                        answer_parse_error=type(exc).__name__,
                     )
                 else:
                     collected = CollectedTaskResult(
@@ -747,6 +751,10 @@ async def _run_scaffold_tasks(
                     exit_status="error",
                     error=f"{type(exc).__name__}: {exc}",
                     elapsed_s=time.monotonic() - t0,
+                    correct=False,
+                    score=0,
+                    grader_status="collect_error",
+                    answer_parse_error=type(exc).__name__,
                 )
                 result_rows[instance_id] = collected.to_dict()
             else:

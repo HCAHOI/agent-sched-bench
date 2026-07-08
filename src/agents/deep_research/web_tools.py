@@ -82,6 +82,8 @@ class ToolExecutionRecord:
             "fallback_used": self.fallback_used,
             "error": self.error,
             "budget_exhausted": self.budget_exhausted,
+            "duration_ms": max(0.0, self.ts_end - self.ts_start) * 1000.0,
+            "success": self.error is None and not self.budget_exhausted,
         }
         if self.artifact_path is not None:
             payload.update(
@@ -138,6 +140,7 @@ class BudgetExhaustedResult:
     """Tool result that asks AgentRunner to yield immediately."""
 
     should_yield = True
+    success = False
 
     def __init__(self, content: str) -> None:
         self.content = content
@@ -147,6 +150,7 @@ class BackendFailureResult:
     """Tool result that stops the attempt when configured backends all fail."""
 
     should_yield = True
+    success = False
 
     def __init__(self, content: str) -> None:
         self.content = content

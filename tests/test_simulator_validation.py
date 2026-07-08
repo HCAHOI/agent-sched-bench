@@ -481,6 +481,103 @@ def test_simulator_rejects_task_without_docker_image(tmp_path: Path) -> None:
                 model="dummy",
             )
         )
+
+
+def test_openclaw_host_mode_trace_simulates_without_container(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "trace_metadata",
+                        "trace_format_version": 5,
+                        "scaffold": "openclaw",
+                        "execution_environment": "host",
+                        "agent_runtime_mode": "host_controller",
+                        "instance_id": "browsecomp-openclaw-host",
+                        "model": "dummy",
+                        "mode": "collect",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "action",
+                        "action_type": "llm_call",
+                        "action_id": "llm_0",
+                        "agent_id": "browsecomp-openclaw-host",
+                        "iteration": 0,
+                        "ts_start": 1.0,
+                        "ts_end": 1.1,
+                        "data": {
+                            "messages_in": [],
+                            "completion_tokens": 1,
+                            "llm_latency_ms": 100.0,
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    task_source = tmp_path / "tasks.json"
+    task_source.write_text(
+        json.dumps(
+            [
+                {
+                    "instance_id": "browsecomp-openclaw-host",
+                    "problem_statement": "question",
+                }
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async def fail_prepare_container(*_args, **_kwargs):
+        raise AssertionError("host-mode OpenClaw replay must not prepare a container")
+
+    async def no_sleep(_seconds: float, *, phase: str):
+        return None
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prepare_container_session",
+        fail_prepare_container,
+    )
+    monkeypatch.setattr("trace_collect.simulator._sleep_and_measure", no_sleep)
+
+    trace_file = asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable=None,
+        )
+    )
+
+    records = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+    ]
+    summary = next(record for record in records if record["type"] == "summary")
+    assert summary["success"] is True
+    startup = json.loads(
+        (
+            tmp_path
+            / "out"
+            / "browsecomp-openclaw-host"
+            / "attempt_1"
+            / "container_startup.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert startup["status"] == "skipped"
+    assert startup["reason"] == "host_execution_environment"
+
 def test_simulator_accepts_task_with_image_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

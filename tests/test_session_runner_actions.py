@@ -19,14 +19,18 @@ import pytest
 # Skip the entire module if OpenClaw deps are unavailable.
 pytest.importorskip("agents.openclaw._session_runner")
 
+from agents.deep_research.web_tools import BackendFailureResult
 from agents.openclaw._hook import AgentHook, AgentHookContext
 from agents.openclaw._loop import AgentLoop
 from agents.openclaw._session_runner import (
     TraceCollectorHook,
     _resolve_run_outcome,
 )
+from agents.openclaw._subagent import SubagentManager
 from agents.openclaw.bus.queue import MessageBus
-from llm_call.provider_base import LLMProvider, LLMResponse
+from agents.openclaw.session.manager import Session
+from agents.openclaw.tools.base import Tool
+from llm_call.provider_base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 class _StubResponse:
@@ -114,6 +118,254 @@ class _CountingAfterLLMHook(AgentHook):
         self.calls += 1
         self.contents.append(context.response.content if context.response else None)
         self.usages.append(dict(context.usage))
+
+
+class _ToolEventCaptureHook(AgentHook):
+    def __init__(self) -> None:
+        self.iterations: list[list[dict[str, str]]] = []
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        self.iterations.append([dict(event) for event in context.tool_events])
+
+
+class _TerminalBackendFailureTool(Tool):
+    @property
+    def name(self) -> str:
+        return "terminal_backend_failure"
+
+    @property
+    def description(self) -> str:
+        return "Return the same terminal-yield failure shape as web backend exhaustion."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self, **kwargs: Any) -> BackendFailureResult:
+        del kwargs
+        return BackendFailureResult("web backend failed")
+
+
+class _BlockingProvider(LLMProvider):
+    def __init__(self) -> None:
+        super().__init__(api_key="test", api_base="http://test")
+        self.started: asyncio.Queue[str] = asyncio.Queue()
+        self.release = asyncio.Event()
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> LLMResponse:
+        del tools, model, max_tokens, temperature, reasoning_effort, tool_choice
+        self.started.put_nowait(str(messages[-1].get("content", "")))
+        await self.release.wait()
+        return LLMResponse(content="done")
+
+    def get_default_model(self) -> str:
+        return "fake-model"
+
+
+async def _seed_active_subagent(
+    manager: SubagentManager, session_key: str
+) -> asyncio.Task[bool]:
+    gate = asyncio.Event()
+    task = asyncio.create_task(gate.wait())
+    task_id = f"active-{session_key}"
+    manager._running_tasks[task_id] = task
+    manager._session_tasks.setdefault(session_key, set()).add(task_id)
+    manager._sessions_with_subagents.add(session_key)
+    return task
+
+
+def test_agent_loop_waits_for_runtime_event_when_yield_succeeds_with_recoverable_tool_error(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(
+        _drive_yield_succeeds_with_recoverable_tool_error_waits_for_runtime(tmp_path)
+    )
+
+
+async def _drive_yield_succeeds_with_recoverable_tool_error_waits_for_runtime(
+    tmp_path: Path,
+) -> None:
+    session = Session(key="cli:yield-recoverable")
+    capture = _ToolEventCaptureHook()
+    provider = _LoopPathProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="yield-call",
+                        name="sessions_yield",
+                        arguments={},
+                    ),
+                    ToolCallRequest(
+                        id="spawn-call",
+                        name="spawn",
+                        arguments={
+                            "task": "this spawn should exceed the active budget",
+                            "label": "overflow",
+                        },
+                    ),
+                ],
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path / "state",
+        tool_workspace=tmp_path / "worktree",
+        model="fake-model",
+        max_iterations=1,
+        max_tool_result_chars=1000,
+        hooks=[capture],
+        subagent_max_active_per_session=0,
+    )
+    await _seed_active_subagent(loop.subagents, session.key)
+
+    try:
+        final_content, _tools_used, _messages = await loop._run_agent_loop(
+            [{"role": "user", "content": "yield and hit a recoverable spawn error"}],
+            session=session,
+            channel="cli",
+            chat_id="yield-recoverable",
+        )
+
+        assert final_content is None
+        assert loop._last_run_outcomes[session.key] == {
+            "stop_reason": "yielded",
+            "error": None,
+            "waiting_for_runtime_event": True,
+        }
+        assert capture.iterations
+        events = {event["name"]: event for event in capture.iterations[-1]}
+        assert events["sessions_yield"]["status"] == "ok"
+        assert events["sessions_yield"]["should_yield"] == "true"
+        assert events["spawn"]["status"] == "error"
+        assert events["spawn"]["should_yield"] == "false"
+    finally:
+        await loop.subagents.cancel_session(session.key)
+
+
+def test_agent_loop_does_not_wait_when_terminal_yield_error_shares_turn_with_yield(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_terminal_yield_error_suppresses_runtime_wait(tmp_path))
+
+
+async def _drive_terminal_yield_error_suppresses_runtime_wait(tmp_path: Path) -> None:
+    session = Session(key="cli:yield-terminal")
+    capture = _ToolEventCaptureHook()
+    provider = _LoopPathProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallRequest(
+                        id="yield-call",
+                        name="sessions_yield",
+                        arguments={},
+                    ),
+                    ToolCallRequest(
+                        id="backend-failure-call",
+                        name="terminal_backend_failure",
+                        arguments={},
+                    ),
+                ],
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path / "state",
+        tool_workspace=tmp_path / "worktree",
+        model="fake-model",
+        max_iterations=1,
+        max_tool_result_chars=1000,
+        hooks=[capture],
+        tool_overrides=[_TerminalBackendFailureTool()],
+    )
+    await _seed_active_subagent(loop.subagents, session.key)
+
+    try:
+        final_content, _tools_used, _messages = await loop._run_agent_loop(
+            [{"role": "user", "content": "yield and hit a terminal backend failure"}],
+            session=session,
+            channel="cli",
+            chat_id="yield-terminal",
+        )
+
+        assert final_content is None
+        assert loop._last_run_outcomes[session.key] == {
+            "stop_reason": "yielded",
+            "error": None,
+            "waiting_for_runtime_event": False,
+        }
+        assert capture.iterations
+        events = {event["name"]: event for event in capture.iterations[-1]}
+        assert events["sessions_yield"]["status"] == "ok"
+        assert events["sessions_yield"]["should_yield"] == "true"
+        assert events["terminal_backend_failure"]["status"] == "error"
+        assert events["terminal_backend_failure"]["should_yield"] == "true"
+    finally:
+        await loop.subagents.cancel_session(session.key)
+
+
+def test_subagent_manager_cancel_session_drains_only_target_session(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_drive_cancel_session_drains_only_target_session(tmp_path))
+
+
+async def _drive_cancel_session_drains_only_target_session(tmp_path: Path) -> None:
+    provider = _BlockingProvider()
+    manager = SubagentManager(
+        provider=provider,
+        workspace=tmp_path / "workspace",
+        bus=MessageBus(),
+        max_tool_result_chars=1000,
+    )
+
+    await manager.spawn("target one", label="target-one", session_key="session-a")
+    await manager.spawn("target two", label="target-two", session_key="session-a")
+    await manager.spawn("unrelated", label="unrelated", session_key="session-b")
+    started = [await provider.started.get() for _ in range(3)]
+    assert sorted(started) == ["target one", "target two", "unrelated"]
+    target_ids = set(manager._session_tasks["session-a"])
+    unrelated_ids = set(manager._session_tasks["session-b"])
+
+    try:
+        await manager.cancel_session("session-a")
+
+        assert manager.has_active("session-a") is False
+        assert "session-a" not in manager._session_tasks
+        assert all(task_id not in manager._running_tasks for task_id in target_ids)
+        assert manager.has_active("session-b") is True
+        assert manager._session_tasks["session-b"] == unrelated_ids
+        assert all(
+            not manager._running_tasks[task_id].done() for task_id in unrelated_ids
+        )
+    finally:
+        await manager.cancel_session("session-b")
 
 
 def test_agent_loop_extra_hooks_receive_after_llm_response_from_runner(
@@ -285,6 +537,115 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
     assert llm["iteration"] == 0
     assert llm["ts_start"] == 1000.0
     assert llm["ts_end"] == 1000.25
+
+
+@pytest.mark.parametrize(
+    ("tool_content", "expected_success"),
+    [
+        ("Spawned subagent child-task", True),
+        ("Error: active subagent budget exceeded", False),
+    ],
+)
+def test_trace_collector_names_spawn_tool_result_event(
+    tmp_path: Path,
+    tool_content: str,
+    expected_success: bool,
+) -> None:
+    asyncio.run(
+        _drive_trace_collector_names_spawn_tool_result_event(
+            tmp_path,
+            tool_content,
+            expected_success,
+        )
+    )
+
+
+async def _drive_trace_collector_names_spawn_tool_result_event(
+    tmp_path: Path,
+    tool_content: str,
+    expected_success: bool,
+) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="spawn-trace")
+
+    messages_in = [{"role": "user", "content": "Start a child worker."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=messages_in))
+
+    spawn_call = _StubToolCall("spawn", {"task": "inspect logs", "label": "child-task"})
+    response = _StubResponse(
+        content="",
+        finish_reason="tool_calls",
+        extra={"llm_wall_ts_end": 1700.25},
+    )
+    messages_after_llm = messages_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": spawn_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": "spawn",
+                        "arguments": '{"task":"inspect logs","label":"child-task"}',
+                    },
+                }
+            ],
+        }
+    ]
+    ctx_before_tools = _StubContext(
+        iteration=0,
+        messages=messages_after_llm,
+        model_messages=messages_in,
+        llm_call_start_ts=1700.0,
+        tool_calls=[spawn_call],
+        response=response,
+    )
+    await hook.after_llm_response(ctx_before_tools)
+    await hook.before_execute_tools(ctx_before_tools)
+
+    messages_after_tool = messages_after_llm + [
+        {
+            "role": "tool",
+            "tool_call_id": spawn_call.id,
+            "name": "spawn",
+            "content": tool_content,
+        }
+    ]
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=messages_after_tool,
+            model_messages=messages_in,
+            llm_call_start_ts=1700.0,
+            tool_calls=[spawn_call],
+            response=response,
+            tool_timings={
+                spawn_call.id: {
+                    "ts_start": 1700.25,
+                    "ts_end": 1700.3,
+                    "duration_ms": 50.0,
+                }
+            },
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    subagent_events = [
+        record
+        for record in records
+        if record.get("type") == "event" and record.get("category") == "SUBAGENT"
+    ]
+
+    assert [event["event"] for event in subagent_events] == ["subagent_spawn_result"]
+    assert subagent_events[0]["data"] == {
+        "success": expected_success,
+        "result_preview": tool_content,
+    }
+    assert "subagent_complete" not in {
+        record.get("event") for record in records if record.get("type") == "event"
+    }
 
 
 def test_trace_collector_records_model_visible_messages_not_full_context(

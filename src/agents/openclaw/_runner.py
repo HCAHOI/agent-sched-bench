@@ -715,11 +715,28 @@ class AgentRunner:
                 resource_timeline,
             )
 
+        if getattr(result, "success", True) is False:
+            content = str(getattr(result, "content", result) or "")
+            detail = content.replace("\n", " ").strip()
+            if not detail:
+                detail = "(empty error result)"
+            event = {
+                "name": tool_call.name,
+                "status": "error",
+                "detail": detail[:120],
+                "should_yield": "true"
+                if getattr(result, "should_yield", False)
+                else "false",
+            }
+            error = RuntimeError(content) if spec.fail_on_tool_error else None
+            return finish(result, event, error, resource_timeline)
+
         if isinstance(result, str) and result.startswith("Error"):
             event = {
                 "name": tool_call.name,
                 "status": "error",
                 "detail": result.replace("\n", " ").strip()[:120],
+                "should_yield": "false",
             }
             error = RuntimeError(result) if spec.fail_on_tool_error else None
             return finish(result + _HINT, event, error, resource_timeline)
@@ -732,7 +749,14 @@ class AgentRunner:
             detail = detail[:120] + "..."
         return finish(
             result,
-            {"name": tool_call.name, "status": "ok", "detail": detail},
+            {
+                "name": tool_call.name,
+                "status": "ok",
+                "detail": detail,
+                "should_yield": "true"
+                if getattr(result, "should_yield", False)
+                else "false",
+            },
             None,
             resource_timeline,
         )
