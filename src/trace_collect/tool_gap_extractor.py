@@ -88,28 +88,34 @@ def extract_tool_gap_windows(
     for agent_id, actions in sorted(actions_by_agent.items()):
         llm_actions = [a for a in actions if a.get("action_type") == "llm_call"]
         tool_actions = [a for a in actions if a.get("action_type") == "tool_exec"]
-        tools_by_iteration: dict[int, list[dict[str, Any]]] = {}
-        for tool in tool_actions:
-            tools_by_iteration.setdefault(_int_field(tool, "iteration"), []).append(tool)
-        for index, llm_action in enumerate(llm_actions[:-1]):
+        for index, llm_action in enumerate(llm_actions):
             iteration = _int_field(llm_action, "iteration")
-            batch = tools_by_iteration.get(iteration, [])
-            if not batch:
-                continue
-            next_llm = llm_actions[index + 1]
             llm_end = _float_field(llm_action, "ts_end")
+            next_llm = _next_llm_for_iteration(
+                llm_actions,
+                current=llm_action,
+                current_index=index,
+                source_trace=trace_path,
+            )
+            if next_llm is None:
+                continue
             next_llm_start = _float_field(next_llm, "ts_start")
-            if next_llm_start < llm_end:
-                raise ValueError(
-                    f"{trace_path}: next LLM starts before prior LLM ends "
-                    f"for agent {agent_id!r} iteration {iteration}"
-                )
-            batch_end = max(_float_field(tool, "ts_end") for tool in batch)
+            candidate_batch = [
+                tool
+                for tool in tool_actions
+                if _int_field(tool, "iteration") == iteration
+                and _float_field(tool, "ts_start") >= llm_end
+                and _float_field(tool, "ts_start") < next_llm_start
+            ]
+            if not candidate_batch:
+                continue
+            batch_end = max(_float_field(tool, "ts_end") for tool in candidate_batch)
             if batch_end > next_llm_start:
                 raise ValueError(
                     f"{trace_path}: tool batch crosses next LLM start "
                     f"for agent {agent_id!r} iteration {iteration}"
                 )
+            batch = candidate_batch
             available_gap_ms = (next_llm_start - llm_end) * 1000.0
             tool_names = tuple(_tool_name(tool) for tool in batch)
             tool_call_ids = tuple(
@@ -168,6 +174,43 @@ def write_tool_gap_jsonl(windows: Iterable[ToolGapWindow], path: Path) -> int:
             fh.write("\n")
             count += 1
     return count
+
+
+def _next_llm_for_iteration(
+    llm_actions: list[dict[str, Any]],
+    *,
+    current: dict[str, Any],
+    current_index: int,
+    source_trace: Path,
+) -> dict[str, Any] | None:
+    """Return the next plausible same-lane LLM after ``current``.
+
+    Real traces can contain concatenated or interleaved sessions that reuse an
+    ``agent_id`` and reset ``iteration``. Do not key tool batches by iteration
+    alone across the whole trace: pair a window only with a later LLM whose
+    iteration advances and whose timestamp starts after the current LLM ends.
+    """
+
+    current_iteration = _int_field(current, "iteration")
+    current_end = _float_field(current, "ts_end")
+    candidates = [
+        (iteration, start, index, action)
+        for index, action in enumerate(llm_actions)
+        if index != current_index
+        for iteration in [_int_field(action, "iteration")]
+        for start in [_float_field(action, "ts_start")]
+        if iteration > current_iteration and start >= current_end
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    next_iteration, _, _, next_action = candidates[0]
+    if next_iteration != current_iteration + 1:
+        raise ValueError(
+            f"{source_trace}: missing next LLM iteration after "
+            f"{current.get('action_id')!r}"
+        )
+    return next_action
 
 
 def _tool_name(action: dict[str, Any]) -> str:
