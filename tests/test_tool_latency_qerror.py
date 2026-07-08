@@ -211,6 +211,42 @@ def test_evaluate_latency_qerror_waits_for_overlapping_tool_completion() -> None
     assert predictions["curl-after-long"]["history_count"] == 4
 
 
+
+def test_evaluate_latency_qerror_flushes_source_trace_history_despite_timestamp_reset() -> None:
+    rows = [
+        _latency_row(
+            "trace-a-long-tool",
+            "boundary-probe",
+            10_000.0,
+            tool_ts_start=100.0,
+            source_trace="trace-a",
+        ),
+        _latency_row(
+            "trace-b-first-tool",
+            "boundary-probe",
+            100.0,
+            tool_ts_start=0.0,
+            source_trace="trace-b",
+        ),
+    ]
+
+    summary = evaluate_latency_qerror(rows, quantile=0.5, epsilon_ms=1.0)
+
+    predictions = {row["sample_id"]: row for row in summary["predictions"]}
+    assert summary["row_count"] == 2
+    assert summary["cold_start_count"] == 1
+    assert summary["evaluated_count"] == 1
+
+    assert predictions["trace-a-long-tool"]["prediction_source"] == "cold_start"
+    assert predictions["trace-a-long-tool"]["history_count"] == 0
+    assert predictions["trace-a-long-tool"]["predicted_latency_ms"] is None
+    assert predictions["trace-a-long-tool"]["qerror"] is None
+
+    assert predictions["trace-b-first-tool"]["prediction_source"] == "tool_history"
+    assert predictions["trace-b-first-tool"]["history_count"] == 1
+    assert predictions["trace-b-first-tool"]["predicted_latency_ms"] == 10_000.0
+    assert predictions["trace-b-first-tool"]["qerror"] == pytest.approx(100.0)
+
 def test_evaluate_latency_qerror_floors_near_zero_actual_and_prediction() -> None:
     rows = [
         _latency_row("zero-first", "bash", 0.0, tool_ts_start=1.0),
