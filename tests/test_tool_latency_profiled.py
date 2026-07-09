@@ -398,6 +398,35 @@ def test_prefix_depth_differentiates_flag_values_with_backoff() -> None:
     assert unseen["prior_count"] == 4
 
 
+def test_skip_leading_cd_groups_across_working_directories() -> None:
+    profile_rows = [
+        _latency_row("p1", "exec", 900.0, tool_ts_start=0.0, source_trace="trace-p",
+                     tool_args={"command": "cd /repo-a && pytest -x"}),
+        _latency_row("p2", "exec", 900.0, tool_ts_start=1.0, source_trace="trace-p",
+                     tool_args={"command": "cd /repo-a && pytest tests/"}),
+    ]
+    eval_rows = [
+        _latency_row("scored", "exec", 900.0, tool_ts_start=0.0,
+                     tool_args={"command": "cd /repo-b && pytest -q"}),
+    ]
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+        command_field="command",
+        skip_leading_cd=True,
+    )
+
+    assert summary["skip_leading_cd"] is True
+    (decision,) = summary["decisions"]
+    # Different working directories share the workload node.
+    assert decision["prior_group_key"] == "exec:pytest"
+    assert decision["prior_count"] == 2
+    assert decision["probability_exceeds_threshold"] == 1.0
+
+
 def test_max_prefix_depth_caps_trie_nodes_end_to_end() -> None:
     profile_rows = [
         _latency_row("p1", "exec", 900.0, tool_ts_start=0.0, source_trace="trace-p",

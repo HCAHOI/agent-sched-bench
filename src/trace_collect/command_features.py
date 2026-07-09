@@ -56,16 +56,30 @@ def shell_command_heads(command: str) -> list[str]:
     return [token for token, is_head in _normalized_tokens(command) if is_head]
 
 
-def shell_command_prefix_tokens(command: str) -> list[str]:
+def shell_command_prefix_tokens(
+    command: str,
+    *,
+    skip_leading_cd: bool = False,
+) -> list[str]:
     """Normalized token stream of a shell command for prefix-tree keys.
 
     Heads are path-basenamed; env assignments, redirection operators,
     redirection targets, and fd numbers are dropped; command separators
     (``&&``, ``|``, ...) are kept as structural tokens. Untokenizable
     commands return an empty list.
+
+    ``skip_leading_cd`` drops leading ``cd <dir> <sep>`` segments
+    (repeatedly) so the prefix depth budget indexes the actual workload
+    instead of the working directory. ``cd`` is a generic POSIX builtin with
+    negligible cost that never defines the workload - the same spirit as the
+    env-assignment and redirection stripping, not a command class. Commands
+    consisting only of ``cd`` segments are kept unchanged.
     """
 
-    return [token for token, _ in _normalized_tokens(command)]
+    tokens = _normalized_tokens(command)
+    if skip_leading_cd:
+        tokens = _skip_leading_cd_segments(tokens)
+    return [token for token, _ in tokens]
 
 
 def command_prefix_keys(
@@ -73,12 +87,13 @@ def command_prefix_keys(
     command: str,
     *,
     max_depth: int,
+    skip_leading_cd: bool = False,
 ) -> tuple[str, ...]:
     """Nested prefix-node keys for one command, ordered general -> specific."""
 
     if max_depth < 1:
         raise ValueError(f"max_depth must be >= 1, got {max_depth}")
-    tokens = shell_command_prefix_tokens(command)
+    tokens = shell_command_prefix_tokens(command, skip_leading_cd=skip_leading_cd)
     if not tokens:
         return ()
     depth = min(len(tokens), max_depth)
@@ -91,6 +106,7 @@ def make_row_command_prefix_keys(
     command_field: str,
     *,
     max_depth: int,
+    skip_leading_cd: bool = False,
 ) -> Callable[[dict[str, Any]], tuple[str, ...]]:
     """Row-level prefix-key function reading the command from ``tool_args``.
 
@@ -111,9 +127,33 @@ def make_row_command_prefix_keys(
         tool_name = row.get("tool_name")
         if not isinstance(tool_name, str) or not tool_name:
             return ()
-        return command_prefix_keys(tool_name, command, max_depth=max_depth)
+        return command_prefix_keys(
+            tool_name,
+            command,
+            max_depth=max_depth,
+            skip_leading_cd=skip_leading_cd,
+        )
 
     return row_keys
+
+
+def _skip_leading_cd_segments(
+    tokens: list[tuple[str, bool]],
+) -> list[tuple[str, bool]]:
+    remaining = tokens
+    while remaining and remaining[0][1] and remaining[0][0] == "cd":
+        separator_index = next(
+            (
+                index
+                for index, (token, _) in enumerate(remaining)
+                if token and all(char in _HEAD_SEPARATOR_CHARS for char in token)
+            ),
+            None,
+        )
+        if separator_index is None:
+            return tokens  # command is only `cd ...`: keep it unchanged
+        remaining = remaining[separator_index + 1 :]
+    return remaining if remaining else tokens
 
 
 def _normalized_tokens(command: str) -> list[tuple[str, bool]]:

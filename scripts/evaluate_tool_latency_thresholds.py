@@ -7,25 +7,11 @@ import argparse
 import json
 from pathlib import Path
 
+from trace_collect.cli_helpers import comma_separated_floats
 from trace_collect.tool_latency_threshold import (
     load_and_evaluate_latency_thresholds,
     write_threshold_outputs,
 )
-
-
-def _comma_floats(value: str) -> list[float]:
-    parsed: list[float] = []
-    for raw in value.split(","):
-        text = raw.strip()
-        if not text:
-            continue
-        try:
-            parsed.append(float(text))
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(f"invalid threshold {text!r}") from exc
-    if not parsed:
-        raise argparse.ArgumentTypeError("at least one threshold is required")
-    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--thresholds-ms",
         required=True,
-        type=_comma_floats,
+        type=comma_separated_floats("threshold"),
         help="Comma-separated latency thresholds, e.g. 100,200,500",
     )
     parser.add_argument(

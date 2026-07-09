@@ -21,26 +21,12 @@ import argparse
 import json
 from pathlib import Path
 
+from trace_collect.cli_helpers import comma_separated_floats
 from trace_collect.tool_latency_profiled import (
     load_and_evaluate_profiled_latency_thresholds,
 )
 
 _ALL_PREDICTORS = ["prior_only", "online_only", "blended"]
-
-
-def _comma_floats(value: str) -> list[float]:
-    parsed: list[float] = []
-    for raw in value.split(","):
-        text = raw.strip()
-        if not text:
-            continue
-        try:
-            parsed.append(float(text))
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(f"invalid threshold {text!r}") from exc
-    if not parsed:
-        raise argparse.ArgumentTypeError("at least one threshold is required")
-    return parsed
 
 
 def _comma_predictors(value: str) -> list[str]:
@@ -74,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--thresholds-ms",
         required=True,
-        type=_comma_floats,
+        type=comma_separated_floats("threshold"),
         help="Comma-separated latency thresholds, e.g. 100,200,500",
     )
     parser.add_argument(
@@ -125,6 +111,14 @@ def build_parser() -> argparse.ArgumentParser:
             "with --command-field (default: 4)"
         ),
     )
+    parser.add_argument(
+        "--skip-leading-cd",
+        action="store_true",
+        help=(
+            "Drop leading 'cd <dir> &&' segments before building prefix keys "
+            "so the depth budget indexes the workload (needs --command-field)"
+        ),
+    )
     parser.add_argument("--output", type=Path, default=None, help="Write summary JSON")
     parser.add_argument(
         "--decisions-output",
@@ -150,6 +144,7 @@ def main() -> None:
             min_tool_history=args.min_tool_history,
             command_field=args.command_field,
             max_prefix_depth=args.max_prefix_depth,
+            skip_leading_cd=args.skip_leading_cd,
         )
 
     summary_payload = {

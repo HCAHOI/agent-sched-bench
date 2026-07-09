@@ -160,6 +160,7 @@ def evaluate_profiled_latency_thresholds(
     min_tool_history: int = 1,
     command_field: str | None = None,
     max_prefix_depth: int = 4,
+    skip_leading_cd: bool = False,
 ) -> dict[str, Any]:
     """Evaluate one predictor's threshold decisions on held-out eval rows.
 
@@ -176,6 +177,9 @@ def evaluate_profiled_latency_thresholds(
     default of 4 covers program, subcommand, and primary flags, and deeper
     distinctions rarely accumulate ``min_tool_history`` samples at trace
     scale - it is configurable, not tuned to any dataset.
+    ``skip_leading_cd`` applies command_features' leading-``cd`` segment
+    stripping before keying, so the depth budget indexes the workload
+    rather than the working directory.
     """
 
     if predictor not in _PREDICTORS:
@@ -204,7 +208,11 @@ def evaluate_profiled_latency_thresholds(
         z_score = NormalDist().inv_cdf((1.0 + abstain_confidence) / 2.0)
 
     row_group_keys = (
-        make_row_command_prefix_keys(command_field, max_depth=max_prefix_depth)
+        make_row_command_prefix_keys(
+            command_field,
+            max_depth=max_prefix_depth,
+            skip_leading_cd=skip_leading_cd,
+        )
         if command_field is not None
         else None
     )
@@ -291,6 +299,7 @@ def evaluate_profiled_latency_thresholds(
         "min_tool_history": min_tool_history,
         "command_field": command_field,
         "max_prefix_depth": max_prefix_depth if command_field is not None else None,
+        "skip_leading_cd": skip_leading_cd if command_field is not None else None,
         "thresholds_ms": thresholds,
         "profile_row_count": len(prior.global_values),
         "profile_trace_count": len(prior.source_traces),
@@ -318,6 +327,7 @@ def load_and_evaluate_profiled_latency_thresholds(
     min_tool_history: int = 1,
     command_field: str | None = None,
     max_prefix_depth: int = 4,
+    skip_leading_cd: bool = False,
 ) -> dict[str, Any]:
     return evaluate_profiled_latency_thresholds(
         read_tool_latency_jsonl(eval_path),
@@ -330,6 +340,7 @@ def load_and_evaluate_profiled_latency_thresholds(
         min_tool_history=min_tool_history,
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
+        skip_leading_cd=skip_leading_cd,
     )
 
 

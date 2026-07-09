@@ -19,27 +19,13 @@ import argparse
 import json
 from pathlib import Path
 
+from trace_collect.cli_helpers import comma_separated_floats
 from trace_collect.kv_profile_sweep import filter_profiles, load_profile
 from trace_collect.tool_latency_bucket import (
     bucket_edges_from_profile,
     load_and_evaluate_latency_buckets,
     write_bucket_outputs,
 )
-
-
-def _comma_floats(value: str) -> list[float]:
-    parsed: list[float] = []
-    for raw in value.split(","):
-        text = raw.strip()
-        if not text:
-            continue
-        try:
-            parsed.append(float(text))
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(f"invalid bucket edge {text!r}") from exc
-    if not parsed:
-        raise argparse.ArgumentTypeError("at least one bucket edge is required")
-    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     edges_source = parser.add_mutually_exclusive_group(required=True)
     edges_source.add_argument(
         "--bucket-edges-ms",
-        type=_comma_floats,
+        type=comma_separated_floats("bucket edge"),
         default=None,
         help="Comma-separated explicit bucket edges, e.g. 100,200,500",
     )

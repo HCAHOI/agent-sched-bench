@@ -20,32 +20,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from trace_collect.cli_helpers import comma_separated_floats
 from trace_collect.kv_profile_sweep import (
     evaluate_profile_sweep,
     filter_profiles,
     load_profile,
     load_tool_gaps,
 )
-
-
-def _comma_floats(value: str) -> list[float]:
-    values: list[float] = []
-    for raw in value.split(","):
-        text = raw.strip()
-        if not text:
-            continue
-        try:
-            number = float(text)
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(
-                f"invalid comma-separated float {text!r}"
-            ) from exc
-        if number < 0:
-            raise argparse.ArgumentTypeError("guard values must be non-negative")
-        values.append(number)
-    if not values:
-        raise argparse.ArgumentTypeError("at least one guard value is required")
-    return values
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--guards-ms",
-        type=_comma_floats,
+        type=comma_separated_floats("guard", require_nonnegative=True),
         default=[0.0],
         help="Comma-separated guard milliseconds added to KV cost (default: 0)",
     )

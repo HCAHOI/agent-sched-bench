@@ -45,6 +45,38 @@ def test_shell_command_prefix_tokens(command: str, tokens: list[str]) -> None:
     assert shell_command_prefix_tokens(command) == tokens
 
 
+def test_skip_leading_cd_drops_directory_segments() -> None:
+    assert shell_command_prefix_tokens(
+        "cd /testbed && python3 -m pytest", skip_leading_cd=True
+    ) == ["python3", "-m", "pytest"]
+    assert shell_command_prefix_tokens(
+        "cd /a && cd /b && make -j2", skip_leading_cd=True
+    ) == ["make", "-j2"]
+    # Trailing or mid-command cd segments are kept; only leading ones drop.
+    assert shell_command_prefix_tokens(
+        "make && cd /x", skip_leading_cd=True
+    ) == ["make", "&&", "cd", "/x"]
+
+
+def test_skip_leading_cd_keeps_cd_only_commands() -> None:
+    assert shell_command_prefix_tokens("cd /a", skip_leading_cd=True) == ["cd", "/a"]
+    assert shell_command_prefix_tokens(
+        "cd /a && cd /b", skip_leading_cd=True
+    ) == ["cd", "/a", "&&", "cd", "/b"]
+
+
+def test_skip_leading_cd_changes_prefix_keys() -> None:
+    keys = command_prefix_keys(
+        "exec", "cd /x && make -j2", max_depth=2, skip_leading_cd=True
+    )
+    assert keys == ("exec:make", "exec:make -j2")
+    # Default remains directory-first.
+    assert command_prefix_keys("exec", "cd /x && make -j2", max_depth=2) == (
+        "exec:cd",
+        "exec:cd /x",
+    )
+
+
 def test_prefix_keys_are_nested_and_depth_capped() -> None:
     keys = command_prefix_keys("exec", "make -j12 all clean install", max_depth=3)
     assert keys == ("exec:make", "exec:make -j12", "exec:make -j12 all")
