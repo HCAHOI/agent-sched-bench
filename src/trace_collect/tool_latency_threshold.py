@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from trace_collect.causal_history import iter_causal_latency_observations
+from trace_collect.classification_metrics import binary_classification_metrics
 from trace_collect.latency_outputs import write_summary_outputs
 from trace_collect.latency_validation import normalized_positive_floats
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
@@ -176,36 +177,19 @@ def _classification_metrics(
     decisions: list[ThresholdDecision],
 ) -> dict[str, float | int | None]:
     evaluated = [d for d in decisions if d.predicted_exceeds_threshold is not None]
-    positives = sum(d.label_exceeds_threshold for d in decisions)
-    if not evaluated:
-        return {
-            "row_count": len(decisions),
-            "evaluated_count": 0,
-            "cold_start_count": len(decisions),
-            "positive_count": positives,
-            "accuracy": None,
-            "precision": None,
-            "recall": None,
-            "false_positive_rate": None,
-            "false_negative_rate": None,
-        }
-    tp = sum(d.predicted_exceeds_threshold and d.label_exceeds_threshold for d in evaluated)
-    fp = sum(d.predicted_exceeds_threshold and not d.label_exceeds_threshold for d in evaluated)
-    tn = sum(
-        (not d.predicted_exceeds_threshold) and (not d.label_exceeds_threshold)
-        for d in evaluated
+    core = binary_classification_metrics(
+        (d.label_exceeds_threshold, d.predicted_exceeds_threshold) for d in evaluated
     )
-    fn = sum((not d.predicted_exceeds_threshold) and d.label_exceeds_threshold for d in evaluated)
     return {
         "row_count": len(decisions),
         "evaluated_count": len(evaluated),
         "cold_start_count": len(decisions) - len(evaluated),
-        "positive_count": positives,
-        "accuracy": (tp + tn) / len(evaluated),
-        "precision": _safe_div(tp, tp + fp),
-        "recall": _safe_div(tp, tp + fn),
-        "false_positive_rate": _safe_div(fp, fp + tn),
-        "false_negative_rate": _safe_div(fn, fn + tp),
+        "positive_count": sum(d.label_exceeds_threshold for d in decisions),
+        "accuracy": core["accuracy"],
+        "precision": core["precision"],
+        "recall": core["recall"],
+        "false_positive_rate": core["false_positive_rate"],
+        "false_negative_rate": core["false_negative_rate"],
     }
 
 
@@ -213,12 +197,6 @@ def _survival_probability(history: list[float], threshold_ms: float) -> float:
     if not history:
         raise ValueError("cannot predict without history")
     return sum(value > threshold_ms for value in history) / len(history)
-
-
-def _safe_div(numerator: int, denominator: int) -> float | None:
-    if denominator == 0:
-        return None
-    return numerator / denominator
 
 
 def _normalize_thresholds(values: Iterable[float]) -> list[float]:

@@ -21,6 +21,10 @@ import math
 from pathlib import Path
 from typing import Any, Iterable
 
+from trace_collect.classification_metrics import (
+    binary_classification_metrics,
+    safe_div,
+)
 from trace_collect.latency_validation import normalized_positive_floats
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
 from trace_collect.tool_latency_threshold import evaluate_latency_thresholds
@@ -133,10 +137,12 @@ def _sweep_point(
     swaps = [d for d in evaluated if d["probability_exceeds_threshold"] >= cutoff]
     declines = [d for d in evaluated if d["probability_exceeds_threshold"] < cutoff]
 
-    tp = sum(d["label_exceeds_threshold"] for d in swaps)
-    fp = len(swaps) - tp
-    fn = sum(d["label_exceeds_threshold"] for d in declines)
-    tn = len(declines) - fn
+    core = binary_classification_metrics(
+        [(d["label_exceeds_threshold"], True) for d in swaps]
+        + [(d["label_exceeds_threshold"], False) for d in declines]
+    )
+    fp = core["false_positive_count"]
+    fn = core["false_negative_count"]
 
     exposed_ms = sum(max(0.0, kv_cost_ms - d["latency_ms"]) for d in swaps)
     absorbed_ms = sum(min(kv_cost_ms, d["latency_ms"]) for d in swaps)
@@ -153,25 +159,19 @@ def _sweep_point(
         "cold_start_count": len(cold_start),
         "positive_count": positive_count,
         "swap_count": len(swaps),
-        "coverage": _safe_div(len(swaps), len(evaluated)),
-        "true_positive_count": tp,
+        "coverage": safe_div(len(swaps), len(evaluated)),
+        "true_positive_count": core["true_positive_count"],
         "false_positive_count": fp,
-        "true_negative_count": tn,
+        "true_negative_count": core["true_negative_count"],
         "false_negative_count": fn,
-        "precision": _safe_div(tp, tp + fp),
-        "recall": _safe_div(tp, tp + fn),
-        "stall_rate": _safe_div(fp, len(swaps)),
+        "precision": core["precision"],
+        "recall": core["recall"],
+        "stall_rate": safe_div(fp, len(swaps)),
         "exposed_ms_total": exposed_ms,
         "absorbed_ms_total": absorbed_ms,
         "missed_ms_total": missed_positive_count * kv_cost_ms,
         "absorbed_if_oracle_ms": positive_count * kv_cost_ms,
     }
-
-
-def _safe_div(numerator: int, denominator: int) -> float | None:
-    if denominator == 0:
-        return None
-    return numerator / denominator
 
 
 __all__ = [
