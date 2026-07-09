@@ -37,10 +37,11 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 from statistics import NormalDist
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from trace_collect.causal_history import iter_causal_latency_observations
 from trace_collect.classification_metrics import binary_classification_metrics, safe_div
+from trace_collect.command_features import make_row_command_key
 from trace_collect.latency_outputs import write_summary_outputs
 from trace_collect.latency_validation import (
     normalized_positive_floats,
@@ -54,11 +55,12 @@ _PREDICTORS = ("prior_only", "online_only", "blended")
 
 @dataclass(frozen=True)
 class LatencyPrior:
-    """Per-tool and global latency samples from the profile trace split."""
+    """Per-group, per-tool, and global latency samples from the profile split."""
 
     values_by_tool: dict[str, list[float]]  # each sorted ascending
     global_values: list[float]  # sorted ascending
     source_traces: frozenset[str]
+    values_by_group: dict[str, list[float]] | None = None  # each sorted ascending
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,7 @@ class ProfiledThresholdDecision:
     prior_count: int | None
     online_count: int | None
     effective_count: float | None
+    group_key: str | None = None
 
     def to_json_obj(self) -> dict[str, Any]:
         return {
@@ -100,13 +103,21 @@ class ProfiledThresholdDecision:
             "prior_count": self.prior_count,
             "online_count": self.online_count,
             "effective_count": self.effective_count,
+            "group_key": self.group_key,
         }
 
 
-def build_latency_prior(rows: Iterable[dict[str, Any]]) -> LatencyPrior:
-    """Aggregate profile-split rows into per-tool and global latency samples."""
+def build_latency_prior(
+    rows: Iterable[dict[str, Any]],
+    *,
+    row_group_key: Callable[[dict[str, Any]], str | None] | None = None,
+) -> LatencyPrior:
+    """Aggregate profile-split rows into group/tool/global latency samples."""
 
     values_by_tool: dict[str, list[float]] = {}
+    values_by_group: dict[str, list[float]] | None = (
+        {} if row_group_key is not None else None
+    )
     global_values: list[float] = []
     source_traces: set[str] = set()
     for index, row in enumerate(rows):
@@ -116,15 +127,23 @@ def build_latency_prior(rows: Iterable[dict[str, Any]]) -> LatencyPrior:
         source_traces.add(required_text(row, "source_trace", source=source))
         values_by_tool.setdefault(tool_name, []).append(latency_ms)
         global_values.append(latency_ms)
+        if values_by_group is not None:
+            group_key = row_group_key(row)
+            if group_key is not None:
+                values_by_group.setdefault(group_key, []).append(latency_ms)
     if not global_values:
         raise ValueError("empty latency prior: no profile rows supplied")
     for values in values_by_tool.values():
         values.sort()
+    if values_by_group is not None:
+        for values in values_by_group.values():
+            values.sort()
     global_values.sort()
     return LatencyPrior(
         values_by_tool=values_by_tool,
         global_values=global_values,
         source_traces=frozenset(source_traces),
+        values_by_group=values_by_group,
     )
 
 
@@ -138,14 +157,19 @@ def evaluate_profiled_latency_thresholds(
     probability_cutoff: float = 0.5,
     abstain_confidence: float | None = None,
     min_tool_history: int = 1,
+    command_field: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one predictor's threshold decisions on held-out eval rows.
 
     ``prior_strength`` (blended only) is the pseudo-observation weight of the
     prior; ``None`` pools raw counts. ``abstain_confidence`` enables the
     Wilson abstain band at that confidence level; ``None`` keeps plain
-    point-estimate decisions. ``min_tool_history`` gates the per-tool vs
+    point-estimate decisions. ``min_tool_history`` gates the group/tool vs
     global fallback on both the prior and online sides symmetrically.
+    ``command_field`` enables data-derived command grouping: rows whose
+    ``tool_args`` carry a shell command under that field are keyed by their
+    command heads (see command_features), refining both prior and online
+    history to group -> tool -> global.
     """
 
     if predictor not in _PREDICTORS:
@@ -173,7 +197,10 @@ def evaluate_profiled_latency_thresholds(
             )
         z_score = NormalDist().inv_cdf((1.0 + abstain_confidence) / 2.0)
 
-    prior = build_latency_prior(profile_rows)
+    row_group_key = (
+        make_row_command_key(command_field) if command_field is not None else None
+    )
+    prior = build_latency_prior(profile_rows, row_group_key=row_group_key)
     eval_list = list(eval_rows)
     if not eval_list:
         raise ValueError("no latency rows supplied")
@@ -193,11 +220,13 @@ def evaluate_profiled_latency_thresholds(
     for observation in iter_causal_latency_observations(
         eval_list,
         min_tool_history=min_tool_history,
+        row_group_key=row_group_key,
     ):
         row_count += 1
         prior_values, prior_source = _select_prior(
             prior,
             observation.tool_name,
+            observation.group_key,
             min_tool_history=min_tool_history,
         )
         online_history = observation.history
@@ -235,6 +264,7 @@ def evaluate_profiled_latency_thresholds(
                     prior_count=estimate["prior_count"],
                     online_count=estimate["online_count"],
                     effective_count=estimate["effective_count"],
+                    group_key=observation.group_key,
                 )
             )
 
@@ -244,10 +274,14 @@ def evaluate_profiled_latency_thresholds(
         "probability_cutoff": probability_cutoff,
         "abstain_confidence": abstain_confidence,
         "min_tool_history": min_tool_history,
+        "command_field": command_field,
         "thresholds_ms": thresholds,
         "profile_row_count": len(prior.global_values),
         "profile_trace_count": len(prior.source_traces),
         "profile_tool_count": len(prior.values_by_tool),
+        "profile_group_count": (
+            len(prior.values_by_group) if prior.values_by_group is not None else None
+        ),
         "row_count": row_count,
         "decision_count": len(decisions),
         "metrics_by_threshold": _metrics_by_threshold(decisions),
@@ -266,6 +300,7 @@ def load_and_evaluate_profiled_latency_thresholds(
     probability_cutoff: float = 0.5,
     abstain_confidence: float | None = None,
     min_tool_history: int = 1,
+    command_field: str | None = None,
 ) -> dict[str, Any]:
     return evaluate_profiled_latency_thresholds(
         read_tool_latency_jsonl(eval_path),
@@ -276,6 +311,7 @@ def load_and_evaluate_profiled_latency_thresholds(
         probability_cutoff=probability_cutoff,
         abstain_confidence=abstain_confidence,
         min_tool_history=min_tool_history,
+        command_field=command_field,
     )
 
 
@@ -296,9 +332,14 @@ def write_profiled_outputs(
 def _select_prior(
     prior: LatencyPrior,
     tool_name: str,
+    group_key: str | None,
     *,
     min_tool_history: int,
 ) -> tuple[list[float], str]:
+    if group_key is not None and prior.values_by_group is not None:
+        group_values = prior.values_by_group.get(group_key, [])
+        if len(group_values) >= min_tool_history:
+            return group_values, "prior_group"
     tool_values = prior.values_by_tool.get(tool_name, [])
     if len(tool_values) >= min_tool_history:
         return tool_values, "prior_tool"
@@ -436,6 +477,10 @@ def _selective_metrics(
         "cold_start_count": cold_start_count,
         "positive_count": sum(d.label_exceeds_threshold for d in decisions),
         "abstain_rate": safe_div(abstain_count, len(decisions) - cold_start_count),
+        "predicted_positive_rate": safe_div(
+            sum(bool(d.predicted_exceeds_threshold) for d in decided),
+            len(decided),
+        ),
         "accuracy": core["accuracy"],
         "precision": core["precision"],
         "recall": core["recall"],

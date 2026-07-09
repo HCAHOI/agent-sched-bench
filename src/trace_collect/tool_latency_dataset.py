@@ -34,6 +34,7 @@ class ToolLatencySample:
     latency_ms: float
     success: bool | None
     reported_duration_ms: float | None
+    tool_args: dict[str, Any] | None = None
 
     def to_json_obj(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -52,6 +53,8 @@ class ToolLatencySample:
         }
         if self.reported_duration_ms is not None:
             payload["reported_duration_ms"] = self.reported_duration_ms
+        if self.tool_args is not None:
+            payload["tool_args"] = self.tool_args
         return payload
 
 
@@ -109,9 +112,29 @@ def extract_tool_latency_samples(
                 latency_ms=latency_ms,
                 success=_optional_bool(data.get("success")),
                 reported_duration_ms=_optional_float(data.get("duration_ms")),
+                tool_args=_parse_tool_args(data.get("tool_args")),
             )
         )
     return samples
+
+
+def _parse_tool_args(value: Any) -> dict[str, Any] | None:
+    """Parse a tool_args payload (dict or JSON-encoded dict string).
+
+    Model-emitted arguments can be malformed; such rows return ``None`` and
+    downstream feature grouping falls back to the tool level by design.
+    """
+
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def extract_many_tool_latency_samples(

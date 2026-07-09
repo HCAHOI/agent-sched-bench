@@ -105,7 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-tool-history",
         type=int,
         default=1,
-        help="Minimum same-tool samples before using the per-tool rate (default: 1)",
+        help="Minimum same-group/tool samples before using that rate (default: 1)",
+    )
+    parser.add_argument(
+        "--command-field",
+        default=None,
+        help=(
+            "tool_args field holding a shell command (e.g. 'command'); enables "
+            "data-derived command-head grouping (default: off)"
+        ),
     )
     parser.add_argument("--output", type=Path, default=None, help="Write summary JSON")
     parser.add_argument(
@@ -130,6 +138,7 @@ def main() -> None:
             probability_cutoff=args.probability_cutoff,
             abstain_confidence=args.abstain_confidence,
             min_tool_history=args.min_tool_history,
+            command_field=args.command_field,
         )
 
     summary_payload = {

@@ -265,6 +265,91 @@ def test_min_tool_history_gates_prior_and_online_fallback_symmetrically() -> Non
     assert decisions["second"]["online_source"] == "global_history"
 
 
+def test_command_grouping_separates_commands_within_one_tool() -> None:
+    # Tool-level exec prior is a degenerate 50/50 mix; command groups separate it.
+    profile_rows = [
+        _latency_row("p1", "exec", 900.0, tool_ts_start=0.0, source_trace="trace-p",
+                     tool_args={"command": "pytest -x"}),
+        _latency_row("p2", "exec", 900.0, tool_ts_start=1.0, source_trace="trace-p",
+                     tool_args={"command": "pytest tests/"}),
+        _latency_row("p3", "exec", 50.0, tool_ts_start=2.0, source_trace="trace-p",
+                     tool_args={"command": "ls -la"}),
+        _latency_row("p4", "exec", 50.0, tool_ts_start=3.0, source_trace="trace-p",
+                     tool_args={"command": "ls /tmp"}),
+    ]
+    eval_rows = [
+        _latency_row("slow", "exec", 900.0, tool_ts_start=0.0,
+                     tool_args={"command": "pytest -q"}),
+        _latency_row("fast", "exec", 50.0, tool_ts_start=1.0,
+                     tool_args={"command": "ls"}),
+    ]
+
+    grouped = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+        command_field="command",
+    )
+    ungrouped = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+    )
+
+    assert grouped["command_field"] == "command"
+    assert grouped["profile_group_count"] == 2
+    decisions = {row["sample_id"]: row for row in grouped["decisions"]}
+    slow, fast = decisions["slow"], decisions["fast"]
+    assert slow["group_key"] == "exec:pytest"
+    assert slow["prior_source"] == "prior_group"
+    assert slow["probability_exceeds_threshold"] == 1.0
+    assert slow["predicted_exceeds_threshold"] is True
+    assert fast["group_key"] == "exec:ls"
+    assert fast["probability_exceeds_threshold"] == 0.0
+    assert fast["predicted_exceeds_threshold"] is False
+
+    metrics = grouped["metrics_by_threshold"]["100.0"]
+    assert metrics["accuracy"] == 1.0
+    assert metrics["predicted_positive_rate"] == 0.5
+
+    # Without grouping the tool-level prior is exactly at the 0.5 cutoff for
+    # every exec row: both rows predicted True (a degenerate constant answer).
+    flat = {row["sample_id"]: row for row in ungrouped["decisions"]}
+    assert flat["slow"]["probability_exceeds_threshold"] == 0.5
+    assert flat["fast"]["probability_exceeds_threshold"] == 0.5
+    assert ungrouped["metrics_by_threshold"]["100.0"]["predicted_positive_rate"] == 1.0
+
+
+def test_online_history_prefers_command_group_over_tool() -> None:
+    eval_rows = [
+        _latency_row("e1", "exec", 50.0, tool_ts_start=0.0,
+                     tool_args={"command": "ls"}),
+        _latency_row("e2", "exec", 900.0, tool_ts_start=1.0,
+                     tool_args={"command": "pytest -x"}),
+        _latency_row("e3", "exec", 900.0, tool_ts_start=2.0,
+                     tool_args={"command": "pytest tests/"}),
+    ]
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=_profile_rows(),
+        thresholds_ms=[100.0],
+        predictor="online_only",
+        command_field="command",
+    )
+
+    decisions = {row["sample_id"]: row for row in summary["decisions"]}
+    # e2: no pytest-group history yet, falls back to same-tool history [50].
+    assert decisions["e2"]["online_source"] == "tool_history"
+    assert decisions["e2"]["probability_exceeds_threshold"] == 0.0
+    # e3: pytest-group history [900] beats the mixed tool history [50, 900].
+    assert decisions["e3"]["online_source"] == "group_history"
+    assert decisions["e3"]["probability_exceeds_threshold"] == 1.0
+    assert decisions["e3"]["predicted_exceeds_threshold"] is True
+
+
 def test_empty_eval_rows_are_rejected() -> None:
     with pytest.raises(ValueError, match="no latency rows supplied"):
         evaluate_profiled_latency_thresholds(
@@ -398,8 +483,9 @@ def _latency_row(
     *,
     tool_ts_start: float,
     source_trace: str = "trace-e",
+    tool_args: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    row: dict[str, object] = {
         "sample_id": sample_id,
         "source_trace": source_trace,
         "tool_name": tool_name,
@@ -407,6 +493,9 @@ def _latency_row(
         "tool_ts_start": tool_ts_start,
         "tool_ts_end": tool_ts_start + latency_ms / 1000.0,
     }
+    if tool_args is not None:
+        row["tool_args"] = tool_args
+    return row
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:

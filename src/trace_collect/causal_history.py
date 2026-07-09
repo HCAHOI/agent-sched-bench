@@ -10,7 +10,7 @@ are scored against the same history snapshot and cannot see each other.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from trace_collect.latency_validation import (
     required_nonnegative_float,
@@ -35,19 +35,24 @@ class CausalLatencyObservation:
     latency_ms: float
     prediction_source: str
     history: list[float]
+    group_key: str | None = None
 
 
 def iter_causal_latency_observations(
     rows: Iterable[dict[str, Any]],
     *,
     min_tool_history: int = 1,
+    row_group_key: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> Iterator[CausalLatencyObservation]:
-    """Yield rows in causal order with their per-tool or global history.
+    """Yield rows in causal order with their group, per-tool, or global history.
 
-    ``prediction_source`` is ``tool_history`` when at least ``min_tool_history``
-    completed same-tool observations exist, ``global_history`` when any
-    completed observation exists, and ``cold_start`` (empty history) otherwise.
-    No tool classes are hardcoded; grouping is purely by observed ``tool_name``.
+    ``prediction_source`` is ``group_history`` when ``row_group_key`` assigns
+    the row a group with at least ``min_tool_history`` completed observations,
+    ``tool_history`` when that many completed same-tool observations exist,
+    ``global_history`` when any completed observation exists, and
+    ``cold_start`` (empty history) otherwise. No tool or command classes are
+    hardcoded; grouping is purely by observed ``tool_name`` and the
+    data-derived group key.
     """
 
     if min_tool_history < 1:
@@ -56,8 +61,15 @@ def iter_causal_latency_observations(
     ordered_rows = sorted(list(rows), key=row_order_key)
     global_history: list[float] = []
     history_by_tool: dict[str, list[float]] = {}
-    pending_updates: list[tuple[float, str, float]] = []
+    history_by_group: dict[str, list[float]] = {}
+    pending_updates: list[tuple[float, str, str | None, float]] = []
     current_source: str | None = None
+
+    def _apply_update(tool_name: str, group_key: str | None, latency_ms: float) -> None:
+        global_history.append(latency_ms)
+        history_by_tool.setdefault(tool_name, []).append(latency_ms)
+        if group_key is not None:
+            history_by_group.setdefault(group_key, []).append(latency_ms)
 
     row_index = 0
     while row_index < len(ordered_rows):
@@ -68,9 +80,8 @@ def iter_causal_latency_observations(
             source=f"row {bucket_start}",
         )
         if current_source is not None and bucket_source != current_source:
-            for _, tool_name, latency_ms in pending_updates:
-                global_history.append(latency_ms)
-                history_by_tool.setdefault(tool_name, []).append(latency_ms)
+            for _, tool_name, group_key, latency_ms in pending_updates:
+                _apply_update(tool_name, group_key, latency_ms)
             pending_updates = []
         current_source = bucket_source
         bucket_ts_start = required_nonnegative_float(
@@ -84,9 +95,8 @@ def iter_causal_latency_observations(
         pending_updates = [
             update for update in pending_updates if update[0] > bucket_ts_start
         ]
-        for _, tool_name, latency_ms in ready_updates:
-            global_history.append(latency_ms)
-            history_by_tool.setdefault(tool_name, []).append(latency_ms)
+        for _, tool_name, group_key, latency_ms in ready_updates:
+            _apply_update(tool_name, group_key, latency_ms)
 
         while row_index < len(ordered_rows):
             row = ordered_rows[row_index]
@@ -105,7 +115,7 @@ def iter_causal_latency_observations(
             row_index += 1
 
         bucket_rows = ordered_rows[bucket_start:row_index]
-        bucket_updates: list[tuple[float, str, float]] = []
+        bucket_updates: list[tuple[float, str, str | None, float]] = []
         for scored_index, row in enumerate(bucket_rows, start=bucket_start):
             sample_id = required_text(row, "sample_id", source=f"row {scored_index}")
             tool_name = required_text(row, "tool_name", source=f"row {scored_index}")
@@ -127,8 +137,15 @@ def iter_causal_latency_observations(
             if tool_ts_end < tool_ts_start:
                 raise ValueError(f"row {scored_index}: tool_ts_end < tool_ts_start")
 
+            group_key = row_group_key(row) if row_group_key is not None else None
+            group_history = (
+                history_by_group.get(group_key, []) if group_key is not None else []
+            )
             tool_history = history_by_tool.get(tool_name, [])
-            if len(tool_history) >= min_tool_history:
+            if group_key is not None and len(group_history) >= min_tool_history:
+                prediction_source = "group_history"
+                history = group_history
+            elif len(tool_history) >= min_tool_history:
                 prediction_source = "tool_history"
                 history = tool_history
             elif global_history:
@@ -146,8 +163,9 @@ def iter_causal_latency_observations(
                 latency_ms=latency_ms,
                 prediction_source=prediction_source,
                 history=history,
+                group_key=group_key,
             )
-            bucket_updates.append((tool_ts_end, tool_name, latency_ms))
+            bucket_updates.append((tool_ts_end, tool_name, group_key, latency_ms))
 
         pending_updates.extend(bucket_updates)
 
