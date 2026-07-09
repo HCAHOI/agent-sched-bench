@@ -299,14 +299,17 @@ def test_command_grouping_separates_commands_within_one_tool() -> None:
     )
 
     assert grouped["command_field"] == "command"
-    assert grouped["profile_group_count"] == 2
+    assert grouped["max_prefix_depth"] == 4
+    # Nodes: exec:pytest(+2 leaves), exec:ls(+2 leaves) -> 6 prefix nodes.
+    assert grouped["profile_group_count"] == 6
     decisions = {row["sample_id"]: row for row in grouped["decisions"]}
     slow, fast = decisions["slow"], decisions["fast"]
-    assert slow["group_key"] == "exec:pytest"
+    # "pytest -q" is unseen at depth 2; backs off to the exec:pytest node.
+    assert slow["prior_group_key"] == "exec:pytest"
     assert slow["prior_source"] == "prior_group"
     assert slow["probability_exceeds_threshold"] == 1.0
     assert slow["predicted_exceeds_threshold"] is True
-    assert fast["group_key"] == "exec:ls"
+    assert fast["prior_group_key"] == "exec:ls"
     assert fast["probability_exceeds_threshold"] == 0.0
     assert fast["predicted_exceeds_threshold"] is False
 
@@ -341,13 +344,88 @@ def test_online_history_prefers_command_group_over_tool() -> None:
     )
 
     decisions = {row["sample_id"]: row for row in summary["decisions"]}
-    # e2: no pytest-group history yet, falls back to same-tool history [50].
+    # e2: no pytest-node history yet, backs off to same-tool history [50].
     assert decisions["e2"]["online_source"] == "tool_history"
+    assert decisions["e2"]["online_group_key"] is None
     assert decisions["e2"]["probability_exceeds_threshold"] == 0.0
-    # e3: pytest-group history [900] beats the mixed tool history [50, 900].
+    # e3: the exec:pytest node history [900] beats the mixed tool history.
     assert decisions["e3"]["online_source"] == "group_history"
+    assert decisions["e3"]["online_group_key"] == "exec:pytest"
     assert decisions["e3"]["probability_exceeds_threshold"] == 1.0
     assert decisions["e3"]["predicted_exceeds_threshold"] is True
+
+
+def test_prefix_depth_differentiates_flag_values_with_backoff() -> None:
+    profile_rows = [
+        _latency_row("p1", "exec", 50.0, tool_ts_start=0.0, source_trace="trace-p",
+                     tool_args={"command": "make -j2"}),
+        _latency_row("p2", "exec", 50.0, tool_ts_start=1.0, source_trace="trace-p",
+                     tool_args={"command": "make -j2"}),
+        _latency_row("p3", "exec", 900.0, tool_ts_start=2.0, source_trace="trace-p",
+                     tool_args={"command": "make -j12"}),
+        _latency_row("p4", "exec", 900.0, tool_ts_start=3.0, source_trace="trace-p",
+                     tool_args={"command": "make -j12"}),
+    ]
+    eval_rows = [
+        _latency_row("fast", "exec", 50.0, tool_ts_start=0.0,
+                     tool_args={"command": "make -j2"}),
+        _latency_row("slow", "exec", 900.0, tool_ts_start=1.0,
+                     tool_args={"command": "make -j12"}),
+        _latency_row("unseen", "exec", 900.0, tool_ts_start=2.0,
+                     tool_args={"command": "make -j99"}),
+    ]
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+        command_field="command",
+    )
+
+    decisions = {row["sample_id"]: row for row in summary["decisions"]}
+    # Same program, different flag values: separated at depth 2.
+    fast, slow, unseen = decisions["fast"], decisions["slow"], decisions["unseen"]
+    assert fast["prior_group_key"] == "exec:make -j2"
+    assert fast["probability_exceeds_threshold"] == 0.0
+    assert fast["predicted_exceeds_threshold"] is False
+    assert slow["prior_group_key"] == "exec:make -j12"
+    assert slow["probability_exceeds_threshold"] == 1.0
+    assert slow["predicted_exceeds_threshold"] is True
+    # Unseen flag value backs off to the shared exec:make node (mixed 50/50).
+    assert unseen["prior_group_key"] == "exec:make"
+    assert unseen["probability_exceeds_threshold"] == 0.5
+    assert unseen["prior_count"] == 4
+
+
+def test_max_prefix_depth_caps_trie_nodes_end_to_end() -> None:
+    profile_rows = [
+        _latency_row("p1", "exec", 900.0, tool_ts_start=0.0, source_trace="trace-p",
+                     tool_args={"command": "make -j12 all install"}),
+        _latency_row("p2", "exec", 900.0, tool_ts_start=1.0, source_trace="trace-p",
+                     tool_args={"command": "make -j12 all clean"}),
+    ]
+    eval_rows = [
+        _latency_row("scored", "exec", 900.0, tool_ts_start=0.0,
+                     tool_args={"command": "make -j12 all verify"}),
+    ]
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+        command_field="command",
+        max_prefix_depth=2,
+    )
+
+    # Depth 2 cap: only exec:make and exec:make -j12 nodes exist; the depth-3
+    # "all" node that both profile commands share is never created.
+    assert summary["max_prefix_depth"] == 2
+    assert summary["profile_group_count"] == 2
+    (decision,) = summary["decisions"]
+    assert decision["prior_group_key"] == "exec:make -j12"
+    assert decision["prior_count"] == 2
 
 
 def test_empty_eval_rows_are_rejected() -> None:

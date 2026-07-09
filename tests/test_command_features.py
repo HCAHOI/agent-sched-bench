@@ -3,9 +3,10 @@ from __future__ import annotations
 import pytest
 
 from trace_collect.command_features import (
-    command_group_key,
-    make_row_command_key,
+    command_prefix_keys,
+    make_row_command_prefix_keys,
     shell_command_heads,
+    shell_command_prefix_tokens,
 )
 
 
@@ -28,25 +29,57 @@ def test_shell_command_heads(command: str, heads: list[str]) -> None:
     assert shell_command_heads(command) == heads
 
 
-def test_unparseable_and_empty_commands_yield_no_key() -> None:
-    assert shell_command_heads("echo 'unbalanced") == []
-    assert command_group_key("exec", "echo 'unbalanced") is None
-    assert command_group_key("exec", "   ") is None
+@pytest.mark.parametrize(
+    ("command", "tokens"),
+    [
+        ("make -j2 all", ["make", "-j2", "all"]),
+        ("cd /repo && FOO=1 python -m pytest", ["cd", "/repo", "&&", "python", "-m", "pytest"]),
+        ("pytest -x > log.txt 2>&1", ["pytest", "-x"]),
+        ("find . | head -5", ["find", ".", "|", "head", "-5"]),
+        # Numeric argument before a plain redirect is kept (only 2>&1 drops fds).
+        ("sleep 300 > log", ["sleep", "300"]),
+        ("timeout 60 pytest 2>&1", ["timeout", "60", "pytest"]),
+    ],
+)
+def test_shell_command_prefix_tokens(command: str, tokens: list[str]) -> None:
+    assert shell_command_prefix_tokens(command) == tokens
 
 
-def test_command_group_key_is_order_invariant_and_deduped() -> None:
-    key_a = command_group_key("exec", "find . | xargs grep X | head")
-    key_b = command_group_key("exec", "head -1 f && xargs <x && find .")
-    assert key_a == key_b == "exec:find+head+xargs"
+def test_prefix_keys_are_nested_and_depth_capped() -> None:
+    keys = command_prefix_keys("exec", "make -j12 all clean install", max_depth=3)
+    assert keys == ("exec:make", "exec:make -j12", "exec:make -j12 all")
+    assert command_prefix_keys("exec", "make", max_depth=4) == ("exec:make",)
 
 
-def test_make_row_command_key_reads_tool_args() -> None:
-    row_key = make_row_command_key("command")
-    assert (
-        row_key({"tool_name": "exec", "tool_args": {"command": "pytest -x"}})
-        == "exec:pytest"
+def test_prefix_keys_distinguish_flag_values_and_token_order() -> None:
+    j2 = command_prefix_keys("exec", "make -j2", max_depth=4)
+    j12 = command_prefix_keys("exec", "make -j12", max_depth=4)
+    assert j2[0] == j12[0] == "exec:make"
+    assert j2[1] != j12[1]
+    assert command_prefix_keys("exec", "a b", max_depth=2) != command_prefix_keys(
+        "exec", "b a", max_depth=2
     )
-    assert row_key({"tool_name": "exec", "tool_args": None}) is None
-    assert row_key({"tool_name": "exec", "tool_args": {"path": "/x"}}) is None
-    assert row_key({"tool_name": "exec", "tool_args": {"command": 3}}) is None
-    assert row_key({"tool_args": {"command": "ls"}}) is None
+
+
+def test_unparseable_and_empty_commands_yield_no_keys() -> None:
+    assert shell_command_prefix_tokens("echo 'unbalanced") == []
+    assert command_prefix_keys("exec", "echo 'unbalanced", max_depth=4) == ()
+    assert command_prefix_keys("exec", "   ", max_depth=4) == ()
+
+
+def test_prefix_keys_reject_invalid_depth() -> None:
+    with pytest.raises(ValueError, match="max_depth must be >= 1"):
+        command_prefix_keys("exec", "ls", max_depth=0)
+    with pytest.raises(ValueError, match="max_depth must be >= 1"):
+        make_row_command_prefix_keys("command", max_depth=0)
+
+
+def test_make_row_command_prefix_keys_reads_tool_args() -> None:
+    row_keys = make_row_command_prefix_keys("command", max_depth=4)
+    assert row_keys(
+        {"tool_name": "exec", "tool_args": {"command": "pytest -x"}}
+    ) == ("exec:pytest", "exec:pytest -x")
+    assert row_keys({"tool_name": "exec", "tool_args": None}) == ()
+    assert row_keys({"tool_name": "exec", "tool_args": {"path": "/x"}}) == ()
+    assert row_keys({"tool_name": "exec", "tool_args": {"command": 3}}) == ()
+    assert row_keys({"tool_args": {"command": "ls"}}) == ()

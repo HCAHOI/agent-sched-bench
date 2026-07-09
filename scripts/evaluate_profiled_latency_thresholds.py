@@ -112,7 +112,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "tool_args field holding a shell command (e.g. 'command'); enables "
-            "data-derived command-head grouping (default: off)"
+            "data-derived command prefix-tree grouping (default: off)"
+        ),
+    )
+    parser.add_argument(
+        "--max-prefix-depth",
+        type=int,
+        default=4,
+        help=(
+            "Maximum command prefix-tree depth in tokens; deeper nodes need "
+            "enough samples before being used. Only takes effect together "
+            "with --command-field (default: 4)"
         ),
     )
     parser.add_argument("--output", type=Path, default=None, help="Write summary JSON")
@@ -139,6 +149,7 @@ def main() -> None:
             abstain_confidence=args.abstain_confidence,
             min_tool_history=args.min_tool_history,
             command_field=args.command_field,
+            max_prefix_depth=args.max_prefix_depth,
         )
 
     summary_payload = {
