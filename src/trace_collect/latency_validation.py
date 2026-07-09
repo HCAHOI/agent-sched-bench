@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Iterable
 
 
 def required_text(row: dict[str, Any], field: str, *, source: str) -> str:
@@ -37,6 +37,18 @@ def required_nonnegative_float(
     return number
 
 
+def normalized_positive_floats(values: Iterable[float], *, label: str) -> list[float]:
+    """Sorted unique values, each required finite and positive."""
+
+    result = sorted({float(value) for value in values})
+    if not result:
+        raise ValueError(f"at least one {label} is required")
+    for value in result:
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{label}s must be finite and positive, got {value}")
+    return result
+
+
 def row_order_key(row: dict[str, Any]) -> tuple[str, float, str]:
     source_trace = required_text(
         row,
@@ -52,4 +64,9 @@ def row_order_key(row: dict[str, Any]) -> tuple[str, float, str]:
     return (source_trace, tool_ts_start, sample_id)
 
 
-__all__ = ["required_nonnegative_float", "required_text", "row_order_key"]
+__all__ = [
+    "normalized_positive_floats",
+    "required_nonnegative_float",
+    "required_text",
+    "row_order_key",
+]

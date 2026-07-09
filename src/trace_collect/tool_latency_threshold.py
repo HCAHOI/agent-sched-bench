@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from trace_collect.causal_history import iter_causal_latency_observations
 from trace_collect.latency_outputs import write_summary_outputs
+from trace_collect.latency_validation import normalized_positive_floats
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
 
 
@@ -221,13 +222,7 @@ def _safe_div(numerator: int, denominator: int) -> float | None:
 
 
 def _normalize_thresholds(values: Iterable[float]) -> list[float]:
-    thresholds = sorted({float(value) for value in values})
-    if not thresholds:
-        raise ValueError("at least one threshold is required")
-    for threshold in thresholds:
-        if not math.isfinite(threshold) or threshold <= 0.0:
-            raise ValueError(f"thresholds must be finite and positive, got {threshold}")
-    return thresholds
+    return normalized_positive_floats(values, label="threshold")
 
 
 __all__ = [

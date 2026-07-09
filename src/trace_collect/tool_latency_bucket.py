@@ -24,6 +24,7 @@ from typing import Any, Iterable
 from trace_collect.causal_history import iter_causal_latency_observations
 from trace_collect.kv_profile_sweep import KVSwapProfileEntry
 from trace_collect.latency_outputs import write_summary_outputs
+from trace_collect.latency_validation import normalized_positive_floats
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
 
 
@@ -225,13 +226,7 @@ def _bucket_metrics(decisions: list[BucketDecision], bucket_count: int) -> dict[
 
 
 def _normalize_bucket_edges(values: Iterable[float]) -> list[float]:
-    edges = sorted({float(value) for value in values})
-    if not edges:
-        raise ValueError("at least one bucket edge is required")
-    for edge in edges:
-        if not math.isfinite(edge) or edge <= 0.0:
-            raise ValueError(f"bucket edges must be finite and positive, got {edge}")
-    return edges
+    return normalized_positive_floats(values, label="bucket edge")
 
 
 __all__ = [
