@@ -50,6 +50,7 @@ def evaluate_deadline_policy(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
+    segment_costs: bool = False,
 ) -> dict[str, Any]:
     """Compare the t0-only and deadline-recheck swap policies per KV cost."""
 
@@ -69,6 +70,7 @@ def evaluate_deadline_policy(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        segment_costs=segment_costs,
     )
     decisions_by_threshold: dict[float, list[dict[str, Any]]] = {}
     for decision in inner["decisions"]:
@@ -92,6 +94,8 @@ def evaluate_deadline_policy(
         "command_field": command_field,
         "max_prefix_depth": inner["max_prefix_depth"],
         "skip_leading_cd": inner["skip_leading_cd"],
+        "segment_costs": inner["segment_costs"],
+        "segment_cost_model": inner["segment_cost_model"],
         "kv_costs_ms": kv_costs,
         "guard_ms": guard_ms,
         "recheck_at": "threshold",
@@ -115,6 +119,7 @@ def load_and_evaluate_deadline_policy(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
+    segment_costs: bool = False,
 ) -> dict[str, Any]:
     return evaluate_deadline_policy(
         read_tool_latency_jsonl(eval_path),
@@ -128,6 +133,7 @@ def load_and_evaluate_deadline_policy(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        segment_costs=segment_costs,
     )
 
 

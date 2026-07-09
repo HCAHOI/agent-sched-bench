@@ -41,7 +41,11 @@ from typing import Any, Callable, Iterable
 
 from trace_collect.causal_history import iter_causal_latency_observations
 from trace_collect.classification_metrics import binary_classification_metrics, safe_div
-from trace_collect.command_features import make_row_command_prefix_keys
+from trace_collect.command_features import (
+    make_row_command_prefix_keys,
+    segment_prefix_keys,
+)
+from trace_collect.segment_cost_model import SegmentCostModel, fit_segment_cost_model
 from trace_collect.latency_outputs import write_summary_outputs
 from trace_collect.latency_validation import (
     normalized_positive_floats,
@@ -85,6 +89,7 @@ class ProfiledThresholdDecision:
     effective_count: float | None
     prior_group_key: str | None = None
     online_group_key: str | None = None
+    threshold_deduction_ms: float | None = None
 
     def to_json_obj(self) -> dict[str, Any]:
         return {
@@ -106,6 +111,7 @@ class ProfiledThresholdDecision:
             "effective_count": self.effective_count,
             "prior_group_key": self.prior_group_key,
             "online_group_key": self.online_group_key,
+            "threshold_deduction_ms": self.threshold_deduction_ms,
         }
 
 
@@ -113,8 +119,14 @@ def build_latency_prior(
     rows: Iterable[dict[str, Any]],
     *,
     row_group_keys: Callable[[dict[str, Any]], tuple[str, ...]] | None = None,
+    row_group_value: Callable[[dict[str, Any]], float] | None = None,
 ) -> LatencyPrior:
-    """Aggregate profile-split rows into prefix-node/tool/global latency samples."""
+    """Aggregate profile-split rows into prefix-node/tool/global latency samples.
+
+    ``row_group_value`` optionally maps a row to the value stored in its
+    group nodes (e.g. a segment-attributed time); tool and global samples
+    always store the raw latency.
+    """
 
     values_by_tool: dict[str, list[float]] = {}
     values_by_group: dict[str, list[float]] | None = (
@@ -130,8 +142,11 @@ def build_latency_prior(
         values_by_tool.setdefault(tool_name, []).append(latency_ms)
         global_values.append(latency_ms)
         if values_by_group is not None:
+            group_value = (
+                row_group_value(row) if row_group_value is not None else latency_ms
+            )
             for group_key in row_group_keys(row):
-                values_by_group.setdefault(group_key, []).append(latency_ms)
+                values_by_group.setdefault(group_key, []).append(group_value)
     if not global_values:
         raise ValueError("empty latency prior: no profile rows supplied")
     for values in values_by_tool.values():
@@ -161,6 +176,7 @@ def evaluate_profiled_latency_thresholds(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
+    segment_costs: bool = False,
 ) -> dict[str, Any]:
     """Evaluate one predictor's threshold decisions on held-out eval rows.
 
@@ -180,6 +196,13 @@ def evaluate_profiled_latency_thresholds(
     ``skip_leading_cd`` applies command_features' leading-``cd`` segment
     stripping before keying, so the depth budget indexes the workload
     rather than the working directory.
+    ``segment_costs`` (requires ``command_field``) fits an additive
+    per-segment cost model on the profile split (see segment_cost_model);
+    each command is then keyed by its dominant segment's prefix chain, group
+    nodes store segment-attributed times (latency minus the other segments'
+    fitted costs), and group-node survival is queried at the deducted
+    threshold. Tool/global backoff levels keep raw latencies and the raw
+    threshold. Labels always use the raw latency and threshold.
     """
 
     if predictor not in _PREDICTORS:
@@ -207,19 +230,56 @@ def evaluate_profiled_latency_thresholds(
             )
         z_score = NormalDist().inv_cdf((1.0 + abstain_confidence) / 2.0)
 
-    row_group_keys = (
-        make_row_command_prefix_keys(
+    if segment_costs and command_field is None:
+        raise ValueError("segment_costs requires command_field")
+    if segment_costs and skip_leading_cd:
+        raise ValueError(
+            "segment_costs and skip_leading_cd are alternative preamble "
+            "treatments; enable only one"
+        )
+
+    row_group_keys: Callable[[dict[str, Any]], tuple[str, ...]] | None = None
+    row_group_value: Callable[[dict[str, Any]], float] | None = None
+    row_deduction: Callable[[dict[str, Any]], float] | None = None
+    segment_model: SegmentCostModel | None = None
+    profile_list = list(profile_rows)
+    if command_field is not None:
+        row_group_keys = make_row_command_prefix_keys(
             command_field,
             max_depth=max_prefix_depth,
             skip_leading_cd=skip_leading_cd,
         )
-        if command_field is not None
-        else None
+        if segment_costs:
+            segment_model = fit_segment_cost_model(
+                profile_list,
+                command_field=command_field,
+            )
+            row_group_keys, row_group_value, row_deduction = _make_segment_keying(
+                segment_model,
+                command_field,
+                fallback_keys=row_group_keys,
+                max_prefix_depth=max_prefix_depth,
+                min_tool_history=min_tool_history,
+            )
+    prior = build_latency_prior(
+        profile_list,
+        row_group_keys=row_group_keys,
+        row_group_value=row_group_value,
     )
-    prior = build_latency_prior(profile_rows, row_group_keys=row_group_keys)
     eval_list = list(eval_rows)
     if not eval_list:
         raise ValueError("no latency rows supplied")
+    deduction_by_sample_id: dict[str, float] = {}
+    if row_deduction is not None:
+        for index, row in enumerate(eval_list):
+            sample_id = required_text(row, "sample_id", source=f"eval row {index}")
+            deduction = row_deduction(row)
+            existing = deduction_by_sample_id.get(sample_id)
+            if existing is not None and existing != deduction:
+                raise ValueError(
+                    f"duplicate sample_id {sample_id!r} with conflicting deductions"
+                )
+            deduction_by_sample_id[sample_id] = deduction
     eval_traces = {
         required_text(row, "source_trace", source=f"eval row {index}")
         for index, row in enumerate(eval_list)
@@ -237,6 +297,7 @@ def evaluate_profiled_latency_thresholds(
         eval_list,
         min_tool_history=min_tool_history,
         row_group_keys=row_group_keys,
+        row_group_value=row_group_value,
     ):
         row_count += 1
         prior_values, prior_source, prior_group_key = _select_prior(
@@ -246,10 +307,32 @@ def evaluate_profiled_latency_thresholds(
             min_tool_history=min_tool_history,
         )
         online_history = observation.history
+        deduction = (
+            deduction_by_sample_id.get(observation.sample_id, 0.0)
+            if row_deduction is not None
+            else None
+        )
         for threshold_ms in thresholds:
+            # Group nodes hold segment-attributed values, so they answer the
+            # deducted-budget question; tool/global samples stay raw.
+            deducted_ms = (
+                max(0.0, threshold_ms - deduction) if deduction is not None else None
+            )
+            prior_query_ms = (
+                deducted_ms
+                if deducted_ms is not None and prior_source == "prior_group"
+                else threshold_ms
+            )
+            online_query_ms = (
+                deducted_ms
+                if deducted_ms is not None
+                and observation.prediction_source == "group_history"
+                else threshold_ms
+            )
             estimate = _estimate_survival(
                 predictor,
-                threshold_ms=threshold_ms,
+                prior_threshold_ms=prior_query_ms,
+                online_threshold_ms=online_query_ms,
                 prior_values=prior_values,
                 prior_source=prior_source,
                 prior_strength=prior_strength,
@@ -288,6 +371,7 @@ def evaluate_profiled_latency_thresholds(
                         if estimate["online_source"] == "group_history"
                         else None
                     ),
+                    threshold_deduction_ms=deduction,
                 )
             )
 
@@ -300,6 +384,10 @@ def evaluate_profiled_latency_thresholds(
         "command_field": command_field,
         "max_prefix_depth": max_prefix_depth if command_field is not None else None,
         "skip_leading_cd": skip_leading_cd if command_field is not None else None,
+        "segment_costs": segment_costs,
+        "segment_cost_model": (
+            segment_model.to_json_obj() if segment_model is not None else None
+        ),
         "thresholds_ms": thresholds,
         "profile_row_count": len(prior.global_values),
         "profile_trace_count": len(prior.source_traces),
@@ -328,6 +416,7 @@ def load_and_evaluate_profiled_latency_thresholds(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
+    segment_costs: bool = False,
 ) -> dict[str, Any]:
     return evaluate_profiled_latency_thresholds(
         read_tool_latency_jsonl(eval_path),
@@ -341,6 +430,7 @@ def load_and_evaluate_profiled_latency_thresholds(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        segment_costs=segment_costs,
     )
 
 
@@ -356,6 +446,81 @@ def write_profiled_outputs(
         summary_path=summary_path,
         detail_path=decisions_path,
     )
+
+
+def _make_segment_keying(
+    model: SegmentCostModel,
+    command_field: str,
+    *,
+    fallback_keys: Callable[[dict[str, Any]], tuple[str, ...]],
+    max_prefix_depth: int,
+    min_tool_history: int,
+) -> tuple[
+    Callable[[dict[str, Any]], tuple[str, ...]],
+    Callable[[dict[str, Any]], float],
+    Callable[[dict[str, Any]], float],
+]:
+    """Row keying/value/deduction functions for the segment-cost model.
+
+    A row is keyed by its dominant segment's prefix chain; its group nodes
+    store the segment-attributed value ``latency - deduction`` (clipped at
+    zero). Rows without a usable command or without any adequately observed
+    segment head fall back to whole-command keying with zero deduction.
+    Results are cached per row object, as the three callbacks are invoked
+    on the same rows repeatedly. ``min_tool_history`` deliberately doubles
+    as the segment-head evidence gate: both ask "how many observations
+    before this estimate is trusted over its backoff", and a second knob
+    would be an unjustified hyperparameter.
+    """
+
+    cache: dict[int, tuple[tuple[str, ...], float]] = {}
+
+    def derived(row: dict[str, Any]) -> tuple[tuple[str, ...], float]:
+        cache_id = id(row)
+        found = cache.get(cache_id)
+        if found is not None:
+            return found
+        tool_args = row.get("tool_args")
+        command = tool_args.get(command_field) if isinstance(tool_args, dict) else None
+        tool_name = row.get("tool_name")
+        if (
+            not isinstance(command, str)
+            or not command.strip()
+            or not isinstance(tool_name, str)
+            or not tool_name
+        ):
+            result = fallback_keys(row), 0.0
+        else:
+            dominant, deduction = model.dominant_segment_and_deduction(
+                tool_name,
+                command,
+                min_head_count=min_tool_history,
+            )
+            if dominant is None:
+                result = fallback_keys(row), 0.0
+            else:
+                result = (
+                    segment_prefix_keys(tool_name, dominant, max_depth=max_prefix_depth),
+                    deduction,
+                )
+        cache[cache_id] = result
+        return result
+
+    def row_keys(row: dict[str, Any]) -> tuple[str, ...]:
+        return derived(row)[0]
+
+    def row_value(row: dict[str, Any]) -> float:
+        latency_ms = required_nonnegative_float(
+            row,
+            "latency_ms",
+            source=f"row {row.get('sample_id', '<unknown>')}",
+        )
+        return max(0.0, latency_ms - derived(row)[1])
+
+    def row_deduction(row: dict[str, Any]) -> float:
+        return derived(row)[1]
+
+    return row_keys, row_value, row_deduction
 
 
 def _select_prior(
@@ -379,7 +544,8 @@ def _select_prior(
 def _estimate_survival(
     predictor: str,
     *,
-    threshold_ms: float,
+    prior_threshold_ms: float,
+    online_threshold_ms: float,
     prior_values: list[float],
     prior_source: str,
     prior_strength: float | None,
@@ -387,9 +553,9 @@ def _estimate_survival(
     online_source: str,
 ) -> dict[str, Any]:
     prior_count = len(prior_values)
-    prior_exceed = prior_count - bisect_right(prior_values, threshold_ms)
+    prior_exceed = prior_count - bisect_right(prior_values, prior_threshold_ms)
     online_count = len(online_history)
-    online_exceed = sum(value > threshold_ms for value in online_history)
+    online_exceed = sum(value > online_threshold_ms for value in online_history)
 
     if predictor == "prior_only":
         return {
@@ -418,6 +584,9 @@ def _estimate_survival(
     prior_weight = prior_strength if prior_strength is not None else float(prior_count)
     prior_rate = prior_exceed / prior_count
     effective_count = prior_weight + online_count
+    # Each side may condition at a different level (deducted group query vs
+    # raw tool/global query), but under the additive model both estimate the
+    # same P(latency > threshold), so pooling them stays coherent.
     probability = (prior_weight * prior_rate + online_exceed) / effective_count
     return {
         "probability": probability,

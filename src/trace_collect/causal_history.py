@@ -44,6 +44,7 @@ def iter_causal_latency_observations(
     *,
     min_tool_history: int = 1,
     row_group_keys: Callable[[dict[str, Any]], tuple[str, ...]] | None = None,
+    row_group_value: Callable[[dict[str, Any]], float] | None = None,
 ) -> Iterator[CausalLatencyObservation]:
     """Yield rows in causal order with their group, per-tool, or global history.
 
@@ -57,6 +58,11 @@ def iter_causal_latency_observations(
     exists, and ``cold_start`` (empty history) otherwise. No tool or command
     classes are hardcoded; grouping is purely by observed ``tool_name`` and
     the data-derived keys.
+
+    ``row_group_value`` optionally maps a completed row to the value stored
+    in its *group* histories (e.g. a segment-attributed time); tool and
+    global histories always store the raw latency, since they answer the
+    unconditioned per-tool question.
     """
 
     if min_tool_history < 1:
@@ -66,18 +72,19 @@ def iter_causal_latency_observations(
     global_history: list[float] = []
     history_by_tool: dict[str, list[float]] = {}
     history_by_group: dict[str, list[float]] = {}
-    pending_updates: list[tuple[float, str, tuple[str, ...], float]] = []
+    pending_updates: list[tuple[float, str, tuple[str, ...], float, float]] = []
     current_source: str | None = None
 
     def _apply_update(
         tool_name: str,
         group_keys: tuple[str, ...],
         latency_ms: float,
+        group_value: float,
     ) -> None:
         global_history.append(latency_ms)
         history_by_tool.setdefault(tool_name, []).append(latency_ms)
         for group_key in group_keys:
-            history_by_group.setdefault(group_key, []).append(latency_ms)
+            history_by_group.setdefault(group_key, []).append(group_value)
 
     row_index = 0
     while row_index < len(ordered_rows):
@@ -88,8 +95,8 @@ def iter_causal_latency_observations(
             source=f"row {bucket_start}",
         )
         if current_source is not None and bucket_source != current_source:
-            for _, tool_name, group_keys, latency_ms in pending_updates:
-                _apply_update(tool_name, group_keys, latency_ms)
+            for _, tool_name, group_keys, latency_ms, group_value in pending_updates:
+                _apply_update(tool_name, group_keys, latency_ms, group_value)
             pending_updates = []
         current_source = bucket_source
         bucket_ts_start = required_nonnegative_float(
@@ -103,8 +110,8 @@ def iter_causal_latency_observations(
         pending_updates = [
             update for update in pending_updates if update[0] > bucket_ts_start
         ]
-        for _, tool_name, group_keys, latency_ms in ready_updates:
-            _apply_update(tool_name, group_keys, latency_ms)
+        for _, tool_name, group_keys, latency_ms, group_value in ready_updates:
+            _apply_update(tool_name, group_keys, latency_ms, group_value)
 
         while row_index < len(ordered_rows):
             row = ordered_rows[row_index]
@@ -123,7 +130,7 @@ def iter_causal_latency_observations(
             row_index += 1
 
         bucket_rows = ordered_rows[bucket_start:row_index]
-        bucket_updates: list[tuple[float, str, tuple[str, ...], float]] = []
+        bucket_updates: list[tuple[float, str, tuple[str, ...], float, float]] = []
         for scored_index, row in enumerate(bucket_rows, start=bucket_start):
             sample_id = required_text(row, "sample_id", source=f"row {scored_index}")
             tool_name = required_text(row, "tool_name", source=f"row {scored_index}")
@@ -178,7 +185,12 @@ def iter_causal_latency_observations(
                 group_keys=group_keys,
                 group_key=selected_group_key,
             )
-            bucket_updates.append((tool_ts_end, tool_name, group_keys, latency_ms))
+            group_value = (
+                row_group_value(row) if row_group_value is not None else latency_ms
+            )
+            bucket_updates.append(
+                (tool_ts_end, tool_name, group_keys, latency_ms, group_value)
+            )
 
         pending_updates.extend(bucket_updates)
 

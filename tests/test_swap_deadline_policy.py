@@ -161,6 +161,57 @@ def test_multiple_kv_costs_produce_independent_points() -> None:
     assert large["deadline_swap_count"] == 0
 
 
+def test_deadline_invariants_hold_under_segment_costs() -> None:
+    # Deductions may move a swap between t0 and the deadline, but can never
+    # cause a deadline swap on a short call or miss a long one.
+    profile_rows = [
+        _latency_row("p1", "exec", 200.0, tool_ts_start=0.0, source_trace="trace-p",
+                     tool_args={"command": "prep"}),
+        _latency_row("p2", "exec", 200.0, tool_ts_start=1.0, source_trace="trace-p",
+                     tool_args={"command": "prep"}),
+        _latency_row("p3", "exec", 500.0, tool_ts_start=2.0, source_trace="trace-p",
+                     tool_args={"command": "prep && work"}),
+        _latency_row("p4", "exec", 500.0, tool_ts_start=3.0, source_trace="trace-p",
+                     tool_args={"command": "prep && work"}),
+    ]
+    eval_rows = [
+        # Deducted query 50ms on exec:work [300, 300] -> t0 swap.
+        _latency_row("long-compound", "exec", 900.0, tool_ts_start=0.0,
+                     tool_args={"command": "prep && work"}),
+        # Same aggressive t0 swap, but the call is short: immediate FP with
+        # 10ms exposure - never a deadline swap.
+        _latency_row("short-compound", "exec", 240.0, tool_ts_start=1.0,
+                     tool_args={"command": "prep && work"}),
+        # exec:prep [200, 200] says no at 250ms; the call outlives the
+        # deadline and is recovered by the proven-label late swap.
+        _latency_row("recovered-prep", "exec", 900.0, tool_ts_start=2.0,
+                     tool_args={"command": "prep"}),
+        # Short call with a no-swap t0 decision: nothing ever fires.
+        _latency_row("short-prep", "exec", 200.0, tool_ts_start=3.0,
+                     tool_args={"command": "prep"}),
+    ]
+
+    summary = evaluate_deadline_policy(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=[250.0],
+        guard_ms=0.0,
+        predictor="prior_only",
+        command_field="command",
+        segment_costs=True,
+    )
+
+    assert summary["segment_costs"] is True
+    (point,) = summary["points"]
+    assert point["positive_count"] == 2
+    deadline = point["policies"]["deadline_recheck"]
+    assert deadline["swap_count"] == 2
+    assert deadline["deadline_swap_count"] == 1
+    assert deadline["missed_ms_total"] == 0.0
+    assert deadline["hidden_fraction_of_oracle"] == 1.0
+    assert deadline["exposed_ms_total"] == 10.0
+
+
 def test_deadline_policy_rejects_invalid_costs_and_guard() -> None:
     eval_rows = [_latency_row("good", "probe", 100.0, tool_ts_start=0.0)]
 
