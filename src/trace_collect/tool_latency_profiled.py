@@ -37,7 +37,9 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 from statistics import NormalDist
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
+
+import numpy as np
 
 from trace_collect.causal_history import iter_causal_latency_observations
 from trace_collect.classification_metrics import binary_classification_metrics, safe_div
@@ -90,6 +92,7 @@ class ProfiledThresholdDecision:
     prior_group_key: str | None = None
     online_group_key: str | None = None
     threshold_deduction_ms: float | None = None
+    hazard_recheck_ms: float | None = None
 
     def to_json_obj(self) -> dict[str, Any]:
         return {
@@ -112,6 +115,7 @@ class ProfiledThresholdDecision:
             "prior_group_key": self.prior_group_key,
             "online_group_key": self.online_group_key,
             "threshold_deduction_ms": self.threshold_deduction_ms,
+            "hazard_recheck_ms": self.hazard_recheck_ms,
         }
 
 
@@ -178,6 +182,7 @@ def evaluate_profiled_latency_thresholds(
     skip_leading_cd: bool = False,
     segment_costs: bool = False,
     segment_fit: str = "nnls",
+    hazard_kv_by_threshold: Mapping[float, float] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one predictor's threshold decisions on held-out eval rows.
 
@@ -197,6 +202,18 @@ def evaluate_profiled_latency_thresholds(
     ``skip_leading_cd`` applies command_features' leading-``cd`` segment
     stripping before keying, so the depth budget indexes the workload
     rather than the working directory.
+    ``hazard_kv_by_threshold`` (policy support for swap_deadline_policy)
+    maps each threshold to its KV cost; when provided, every decision also
+    carries ``hazard_recheck_ms`` (see hazard_recheck_ms), computed from
+    the selected prior node's samples (or, for ``online_only``, the causal
+    online history - whose growth also defeats the per-node cache, an
+    O(n) recompute per row that is honest but slow at scale). For
+    ``prior_only`` the t0 decision is node-level, so optimizing over the
+    full node distribution is exactly the optimum for t0-declined calls;
+    for ``online_only``/``blended`` it is a parameter-free heuristic. Not
+    supported together with ``segment_costs``, whose attributed group
+    values answer deducted-budget questions rather than raw elapsed-time
+    ones.
     ``segment_costs`` (requires ``command_field``) fits an additive
     per-segment cost model on the profile split (see segment_cost_model);
     each command is then keyed by its dominant segment's prefix chain, group
@@ -238,6 +255,8 @@ def evaluate_profiled_latency_thresholds(
             "segment_costs and skip_leading_cd are alternative preamble "
             "treatments; enable only one"
         )
+    if hazard_kv_by_threshold is not None and segment_costs:
+        raise ValueError("hazard recheck is not supported with segment_costs")
 
     row_group_keys: Callable[[dict[str, Any]], tuple[str, ...]] | None = None
     row_group_value: Callable[[dict[str, Any]], float] | None = None
@@ -294,6 +313,7 @@ def evaluate_profiled_latency_thresholds(
         )
 
     decisions: list[ProfiledThresholdDecision] = []
+    hazard_cache: dict[tuple[int, int, float], float] = {}
     row_count = 0
     for observation in iter_causal_latency_observations(
         eval_list,
@@ -341,6 +361,25 @@ def evaluate_profiled_latency_thresholds(
                 online_history=online_history,
                 online_source=observation.prediction_source,
             )
+            hazard_ms: float | None = None
+            if hazard_kv_by_threshold is not None:
+                kv_cost_ms = hazard_kv_by_threshold.get(threshold_ms)
+                if kv_cost_ms is None:
+                    raise ValueError(
+                        f"hazard_kv_by_threshold is missing threshold {threshold_ms}"
+                    )
+                hazard_values = (
+                    online_history if predictor == "online_only" else prior_values
+                )
+                cache_key = (id(hazard_values), len(hazard_values), threshold_ms)
+                hazard_ms = hazard_cache.get(cache_key)
+                if hazard_ms is None:
+                    hazard_ms = hazard_recheck_ms(
+                        hazard_values,
+                        threshold_ms=threshold_ms,
+                        kv_cost_ms=kv_cost_ms,
+                    )
+                    hazard_cache[cache_key] = hazard_ms
             predicted, abstained, ci_low, ci_high = _decide(
                 estimate["probability"],
                 estimate["effective_count"],
@@ -374,6 +413,7 @@ def evaluate_profiled_latency_thresholds(
                         else None
                     ),
                     threshold_deduction_ms=deduction,
+                    hazard_recheck_ms=hazard_ms,
                 )
             )
 
@@ -451,6 +491,59 @@ def write_profiled_outputs(
         summary_path=summary_path,
         detail_path=decisions_path,
     )
+
+
+def hazard_recheck_ms(
+    values: list[float],
+    *,
+    threshold_ms: float,
+    kv_cost_ms: float,
+) -> float:
+    """Expected-cost-optimal swap re-check time for a t0-declined call.
+
+    The policy may start the swap at elapsed ``k`` while the call is still
+    running. Under the node's sample distribution, a candidate ``k`` earns,
+    per sample latency ``L``:
+
+    * 0 when ``L <= k`` (the re-check never fires),
+    * ``min(kv, L - k) - max(0, kv - (L - k))`` when ``L > threshold``
+      (hiding on a truly long call minus its residual stall),
+    * ``-max(0, kv - (L - k))`` when ``k < L <= threshold`` (a late swap on
+      a short call only stalls).
+
+    The expected benefit is piecewise linear in ``k`` with breakpoints only
+    at sample-derived points (``L`` and ``L - kv``), so maximizing over
+    those candidates plus ``{0, threshold}`` is exact - no grid and no
+    tuning parameter. Ties resolve to the latest ``k``, so thin or
+    ambiguous nodes degrade to the plain ``k = threshold`` re-check, which
+    never fires on short calls. Empty ``values`` return ``threshold_ms``.
+    """
+
+    if not values:
+        return threshold_ms
+    samples = np.asarray(values, dtype=float)
+    candidates = {0.0, threshold_ms}
+    for value in values:
+        if 0.0 < value < threshold_ms:
+            candidates.add(float(value))
+        edge = value - kv_cost_ms
+        if 0.0 < edge < threshold_ms:
+            candidates.add(float(edge))
+    is_long = samples > threshold_ms
+    best_k = threshold_ms
+    best_benefit = -math.inf
+    for k in sorted(candidates):
+        window = samples - k
+        fires = samples > k
+        hidden_on_long = np.where(
+            fires & is_long, np.minimum(kv_cost_ms, window), 0.0
+        )
+        exposed = np.where(fires, np.maximum(0.0, kv_cost_ms - window), 0.0)
+        benefit = float(np.mean(hidden_on_long - exposed))
+        if benefit >= best_benefit:
+            best_benefit = benefit
+            best_k = k
+    return best_k
 
 
 def _make_segment_keying(
@@ -698,6 +791,7 @@ __all__ = [
     "ProfiledThresholdDecision",
     "build_latency_prior",
     "evaluate_profiled_latency_thresholds",
+    "hazard_recheck_ms",
     "load_and_evaluate_profiled_latency_thresholds",
     "write_profiled_outputs",
 ]

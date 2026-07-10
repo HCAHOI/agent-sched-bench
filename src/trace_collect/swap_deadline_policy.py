@@ -2,13 +2,24 @@
 
 The t=0 survival decision only determines how *early* hiding starts: if it
 says "no swap" (including cold starts) and the tool is still running at
-elapsed ``k = threshold``, the policy starts the swap then. At ``k`` the
-exceedance label is proven - the call has already run longer than the
-threshold - so deadline swaps are never wrong; their only cost is the
-reduced remaining window ``latency - k`` available for hiding. Missed
-opportunities are structurally zero: every call longer than the threshold
-is swapped either immediately or at the deadline. The re-check time is the
-threshold itself, not a tuned parameter.
+elapsed ``k``, the policy starts the swap then. Two re-check modes:
+
+* ``threshold``: ``k = threshold``. At ``k`` the exceedance label is
+  proven - the call has already run longer than the threshold - so
+  deadline swaps are never wrong; their only cost is the reduced remaining
+  window ``latency - k`` available for hiding. The re-check time is the
+  threshold itself, not a tuned parameter.
+* ``hazard``: ``k`` is chosen per node by expected-cost maximization over
+  the node's samples (see tool_latency_profiled.hazard_recheck_ms;
+  parameter-free, ``k <= threshold``; exactly optimal for t0-declined
+  calls under ``prior_only``, a heuristic for the other predictors).
+  Earlier starts recover more hiding on thin-tailed corpora at the price
+  that a late swap may now fire on a short call (exposed stall, reported
+  as ``deadline_swap_on_short_count``).
+
+Under both modes missed opportunities are structurally zero: ``k <=
+threshold``, so every call longer than the threshold is swapped either
+immediately or at the re-check.
 
 For each KV cost this module reports both policies side by side:
 
@@ -29,7 +40,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from trace_collect.classification_metrics import safe_div
 from trace_collect.latency_validation import normalized_positive_floats
@@ -52,12 +63,17 @@ def evaluate_deadline_policy(
     skip_leading_cd: bool = False,
     segment_costs: bool = False,
     segment_fit: str = "nnls",
+    recheck: str = "threshold",
 ) -> dict[str, Any]:
     """Compare the t0-only and deadline-recheck swap policies per KV cost."""
 
     kv_costs = normalized_positive_floats(kv_costs_ms, label="kv cost")
     if not math.isfinite(guard_ms) or guard_ms < 0.0:
         raise ValueError(f"guard_ms must be finite and non-negative, got {guard_ms}")
+    if recheck not in ("threshold", "hazard"):
+        raise ValueError(
+            f"unknown recheck mode {recheck!r}; choose threshold or hazard"
+        )
 
     kv_cost_by_threshold = {kv_cost + guard_ms: kv_cost for kv_cost in kv_costs}
     inner = evaluate_profiled_latency_thresholds(
@@ -73,6 +89,9 @@ def evaluate_deadline_policy(
         skip_leading_cd=skip_leading_cd,
         segment_costs=segment_costs,
         segment_fit=segment_fit,
+        hazard_kv_by_threshold=(
+            kv_cost_by_threshold if recheck == "hazard" else None
+        ),
     )
     decisions_by_threshold: dict[float, list[dict[str, Any]]] = {}
     for decision in inner["decisions"]:
@@ -84,6 +103,7 @@ def evaluate_deadline_policy(
             kv_cost_ms=kv_cost_ms,
             guard_ms=guard_ms,
             threshold_ms=threshold_ms,
+            recheck=recheck,
         )
         for threshold_ms, kv_cost_ms in sorted(kv_cost_by_threshold.items())
     ]
@@ -101,7 +121,7 @@ def evaluate_deadline_policy(
         "segment_cost_model": inner["segment_cost_model"],
         "kv_costs_ms": kv_costs,
         "guard_ms": guard_ms,
-        "recheck_at": "threshold",
+        "recheck_at": recheck,
         "row_count": inner["row_count"],
         "profile_row_count": inner["profile_row_count"],
         "profile_trace_count": inner["profile_trace_count"],
@@ -124,6 +144,7 @@ def load_and_evaluate_deadline_policy(
     skip_leading_cd: bool = False,
     segment_costs: bool = False,
     segment_fit: str = "nnls",
+    recheck: str = "threshold",
 ) -> dict[str, Any]:
     return evaluate_deadline_policy(
         read_tool_latency_jsonl(eval_path),
@@ -139,6 +160,7 @@ def load_and_evaluate_deadline_policy(
         skip_leading_cd=skip_leading_cd,
         segment_costs=segment_costs,
         segment_fit=segment_fit,
+        recheck=recheck,
     )
 
 
@@ -148,6 +170,7 @@ def _policy_point(
     kv_cost_ms: float,
     guard_ms: float,
     threshold_ms: float,
+    recheck: str,
 ) -> dict[str, Any]:
     positive_count = sum(d["label_exceeds_threshold"] for d in decisions)
     cold_start_count = sum(
@@ -155,16 +178,23 @@ def _policy_point(
     )
     oracle_ms = positive_count * kv_cost_ms
 
+    if recheck == "hazard":
+        def recheck_of(decision: dict[str, Any]) -> float:
+            return decision["hazard_recheck_ms"]
+    else:
+        def recheck_of(decision: dict[str, Any]) -> float:
+            return threshold_ms
+
     t0_only = _accumulate_policy(
         decisions,
         kv_cost_ms=kv_cost_ms,
-        recheck_at_ms=None,
+        recheck_of=None,
         oracle_ms=oracle_ms,
     )
     deadline = _accumulate_policy(
         decisions,
         kv_cost_ms=kv_cost_ms,
-        recheck_at_ms=threshold_ms,
+        recheck_of=recheck_of,
         oracle_ms=oracle_ms,
     )
 
@@ -187,11 +217,12 @@ def _accumulate_policy(
     decisions: list[dict[str, Any]],
     *,
     kv_cost_ms: float,
-    recheck_at_ms: float | None,
+    recheck_of: Callable[[dict[str, Any]], float] | None,
     oracle_ms: float,
 ) -> dict[str, Any]:
     swap_count = 0
     deadline_swap_count = 0
+    deadline_swap_on_short_count = 0
     absorbed_ms = 0.0
     absorbed_on_long_ms = 0.0
     exposed_ms = 0.0
@@ -206,19 +237,29 @@ def _accumulate_policy(
             if label:
                 absorbed_on_long_ms += hidden
             exposed_ms += max(0.0, kv_cost_ms - latency_ms)
-        elif recheck_at_ms is not None and latency_ms > recheck_at_ms:
-            # The tool outlived the deadline, so the label is proven long.
-            deadline_swap_count += 1
-            remaining_ms = latency_ms - recheck_at_ms
-            hidden = min(kv_cost_ms, remaining_ms)
-            absorbed_ms += hidden
-            absorbed_on_long_ms += hidden
-            exposed_ms += max(0.0, kv_cost_ms - remaining_ms)
-        elif label:
+            continue
+        if recheck_of is not None:
+            recheck_at_ms = recheck_of(decision)
+            if latency_ms > recheck_at_ms:
+                # The tool is still running at the re-check. With k = threshold
+                # the label is proven long; with a hazard k < threshold the
+                # call may still turn out short (exposure only).
+                deadline_swap_count += 1
+                remaining_ms = latency_ms - recheck_at_ms
+                hidden = min(kv_cost_ms, remaining_ms)
+                absorbed_ms += hidden
+                if label:
+                    absorbed_on_long_ms += hidden
+                else:
+                    deadline_swap_on_short_count += 1
+                exposed_ms += max(0.0, kv_cost_ms - remaining_ms)
+                continue
+        if label:
             missed_positive_count += 1
     return {
         "swap_count": swap_count,
         "deadline_swap_count": deadline_swap_count,
+        "deadline_swap_on_short_count": deadline_swap_on_short_count,
         "absorbed_ms_total": absorbed_ms,
         "absorbed_on_long_ms_total": absorbed_on_long_ms,
         "exposed_ms_total": exposed_ms,

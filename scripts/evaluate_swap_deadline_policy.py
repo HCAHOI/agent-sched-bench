@@ -127,6 +127,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["nnls", "lad"],
         help="Segment-cost estimator: nnls (squared error) or lad (median regression)",
     )
+    parser.add_argument(
+        "--recheck",
+        default="threshold",
+        choices=["threshold", "hazard"],
+        help=(
+            "Re-check time for t0-declined calls: 'threshold' (k=T, late swaps "
+            "never wrong) or 'hazard' (per-node expected-cost-optimal k<=T)"
+        ),
+    )
     parser.add_argument("--output", type=Path, default=None, help="Write summary JSON")
     return parser
 
@@ -147,6 +156,7 @@ def main() -> None:
         skip_leading_cd=args.skip_leading_cd,
         segment_costs=args.segment_costs,
         segment_fit=args.segment_fit,
+        recheck=args.recheck,
     )
     payload = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output is not None:

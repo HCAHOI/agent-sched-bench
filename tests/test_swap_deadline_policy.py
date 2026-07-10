@@ -8,6 +8,7 @@ import pytest
 
 from scripts.evaluate_swap_deadline_policy import main as deadline_policy_main
 from trace_collect.swap_deadline_policy import evaluate_deadline_policy
+from trace_collect.tool_latency_profiled import hazard_recheck_ms
 
 
 def _profile_rows() -> list[dict[str, object]]:
@@ -210,6 +211,103 @@ def test_deadline_invariants_hold_under_segment_costs() -> None:
     assert deadline["missed_ms_total"] == 0.0
     assert deadline["hidden_fraction_of_oracle"] == 1.0
     assert deadline["exposed_ms_total"] == 10.0
+
+
+def test_hazard_recheck_picks_expected_cost_optimum() -> None:
+    # Benefits at candidates {0, 60, 150, 200}: 33.3, -6.7, 6.7, -26.7 -> k*=0.
+    assert hazard_recheck_ms(
+        [150.0, 150.0, 260.0], threshold_ms=200.0, kv_cost_ms=200.0
+    ) == 0.0
+    # All-long node: every k <= T hides fully; tie resolves to the latest
+    # candidate, i.e. the plain threshold re-check.
+    assert hazard_recheck_ms(
+        [900.0, 900.0], threshold_ms=100.0, kv_cost_ms=100.0
+    ) == 100.0
+    # Single long sample: any k <= L - kv hides fully; latest tie -> L - kv.
+    assert hazard_recheck_ms(
+        [260.0], threshold_ms=200.0, kv_cost_ms=200.0
+    ) == 60.0
+    # No evidence: degrade to the threshold re-check.
+    assert hazard_recheck_ms([], threshold_ms=200.0, kv_cost_ms=200.0) == 200.0
+
+
+def test_hazard_recheck_recovers_more_than_threshold_recheck() -> None:
+    profile_rows = [
+        _latency_row("p1", "quick", 150.0, tool_ts_start=0.0, source_trace="trace-p"),
+        _latency_row("p2", "quick", 150.0, tool_ts_start=1.0, source_trace="trace-p"),
+        _latency_row("p3", "quick", 260.0, tool_ts_start=2.0, source_trace="trace-p"),
+    ]
+    eval_rows = [
+        _latency_row("long-recovered", "quick", 260.0, tool_ts_start=0.0),
+        _latency_row("short-hit", "quick", 100.0, tool_ts_start=1.0),
+    ]
+
+    hazard = evaluate_deadline_policy(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=[200.0],
+        guard_ms=0.0,
+        predictor="prior_only",
+        recheck="hazard",
+    )
+    threshold = evaluate_deadline_policy(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=[200.0],
+        guard_ms=0.0,
+        predictor="prior_only",
+        recheck="threshold",
+    )
+
+    assert hazard["recheck_at"] == "hazard"
+    (hp,) = hazard["points"]
+    hd = hp["policies"]["deadline_recheck"]
+    # k*=0: the long call hides fully; the short call becomes a late swap on
+    # a short call (reported, exposed 100ms). Longs still never missed.
+    assert hd["deadline_swap_count"] == 2
+    assert hd["deadline_swap_on_short_count"] == 1
+    assert hd["absorbed_on_long_ms_total"] == 200.0
+    assert hd["exposed_ms_total"] == 100.0
+    assert hd["missed_ms_total"] == 0.0
+    assert hd["hidden_fraction_of_oracle"] == 1.0
+
+    (tp,) = threshold["points"]
+    td = tp["policies"]["deadline_recheck"]
+    # k=T only partially hides the long call and never touches the short.
+    assert td["deadline_swap_count"] == 1
+    assert td["deadline_swap_on_short_count"] == 0
+    assert td["absorbed_on_long_ms_total"] == 60.0
+    assert td["exposed_ms_total"] == 140.0
+    assert td["missed_ms_total"] == 0.0
+
+
+def test_hazard_recheck_rejects_invalid_mode_and_segment_costs() -> None:
+    eval_rows = [_latency_row("good", "probe", 100.0, tool_ts_start=0.0)]
+
+    with pytest.raises(ValueError, match="unknown recheck mode"):
+        evaluate_deadline_policy(
+            eval_rows,
+            profile_rows=_profile_rows(),
+            kv_costs_ms=[100.0],
+            guard_ms=0.0,
+            predictor="prior_only",
+            recheck="midpoint",
+        )
+    with pytest.raises(ValueError, match="not supported with segment_costs"):
+        evaluate_deadline_policy(
+            [_latency_row("good", "exec", 100.0, tool_ts_start=0.0,
+                          tool_args={"command": "work"})],
+            profile_rows=[
+                _latency_row("p1", "exec", 100.0, tool_ts_start=0.0,
+                             source_trace="trace-p", tool_args={"command": "work"}),
+            ],
+            kv_costs_ms=[100.0],
+            guard_ms=0.0,
+            predictor="prior_only",
+            command_field="command",
+            segment_costs=True,
+            recheck="hazard",
+        )
 
 
 def test_deadline_policy_rejects_invalid_costs_and_guard() -> None:
