@@ -128,6 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
             "costs from the threshold (needs --command-field)"
         ),
     )
+    parser.add_argument(
+        "--segment-fit",
+        default="nnls",
+        choices=["nnls", "lad"],
+        help="Segment-cost estimator: nnls (squared error) or lad (median regression)",
+    )
     parser.add_argument("--output", type=Path, default=None, help="Write summary JSON")
     parser.add_argument(
         "--decisions-output",
@@ -155,6 +161,7 @@ def main() -> None:
             max_prefix_depth=args.max_prefix_depth,
             skip_leading_cd=args.skip_leading_cd,
             segment_costs=args.segment_costs,
+            segment_fit=args.segment_fit,
         )
 
     summary_payload = {

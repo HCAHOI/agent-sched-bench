@@ -51,6 +51,7 @@ def evaluate_deadline_policy(
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
     segment_costs: bool = False,
+    segment_fit: str = "nnls",
 ) -> dict[str, Any]:
     """Compare the t0-only and deadline-recheck swap policies per KV cost."""
 
@@ -71,6 +72,7 @@ def evaluate_deadline_policy(
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
         segment_costs=segment_costs,
+        segment_fit=segment_fit,
     )
     decisions_by_threshold: dict[float, list[dict[str, Any]]] = {}
     for decision in inner["decisions"]:
@@ -95,6 +97,7 @@ def evaluate_deadline_policy(
         "max_prefix_depth": inner["max_prefix_depth"],
         "skip_leading_cd": inner["skip_leading_cd"],
         "segment_costs": inner["segment_costs"],
+        "segment_fit": inner["segment_fit"],
         "segment_cost_model": inner["segment_cost_model"],
         "kv_costs_ms": kv_costs,
         "guard_ms": guard_ms,
@@ -120,6 +123,7 @@ def load_and_evaluate_deadline_policy(
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
     segment_costs: bool = False,
+    segment_fit: str = "nnls",
 ) -> dict[str, Any]:
     return evaluate_deadline_policy(
         read_tool_latency_jsonl(eval_path),
@@ -134,6 +138,7 @@ def load_and_evaluate_deadline_policy(
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
         segment_costs=segment_costs,
+        segment_fit=segment_fit,
     )
 
 

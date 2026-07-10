@@ -21,10 +21,14 @@ the latency predictor itself:
 
 Costs are fit at segment-head granularity (``tool:head``) for
 identifiability; the dominant segment's distribution still comes from its
-full depth-capped prefix nodes. NNLS minimizes squared error, so
-heavy-tail rows dominate the fit - acceptable here because fitted costs
-only rank segments and shift thresholds, while distributions stay
-empirical. Known limitation, documented rather than tuned away.
+full depth-capped prefix nodes. Two established estimators are offered:
+``nnls`` minimizes squared error, so heavy-tail rows dominate the fit
+(e.g. a ubiquitous preamble can absorb shared variance from minute-long
+outliers); ``lad`` is non-negative median regression (least absolute
+deviations via the standard linear-programming encoding, solved with
+HiGHS), which is outlier-robust and parameter-free. Fitted costs only
+rank segments and shift thresholds either way - distributions stay
+empirical.
 """
 
 from __future__ import annotations
@@ -34,10 +38,13 @@ import math
 from typing import Any, Iterable
 
 import numpy as np
-from scipy.optimize import nnls
+from scipy import sparse
+from scipy.optimize import linprog, nnls
 
 from trace_collect.command_features import shell_command_segments
 from trace_collect.latency_validation import required_nonnegative_float, required_text
+
+_FIT_METHODS = ("nnls", "lad")
 
 
 @dataclass(frozen=True)
@@ -107,12 +114,20 @@ def fit_segment_cost_model(
     rows: Iterable[dict[str, Any]],
     *,
     command_field: str,
+    fit_method: str = "nnls",
 ) -> SegmentCostModel:
     """Fit non-negative additive segment-head costs on profile rows.
 
     Rows without a parseable command under ``command_field`` are skipped
     (they carry no segment structure). Raises when no command rows exist.
+    ``fit_method`` selects the estimator: ``nnls`` (squared error) or
+    ``lad`` (median regression, outlier-robust).
     """
+
+    if fit_method not in _FIT_METHODS:
+        raise ValueError(
+            f"unknown fit_method {fit_method!r}; choose one of {', '.join(_FIT_METHODS)}"
+        )
 
     row_heads: list[list[str]] = []
     latencies: list[float] = []
@@ -148,13 +163,47 @@ def fit_segment_cost_model(
         for head in heads:
             design[row_number, head_index[head]] += 1.0
     target = np.asarray(latencies)
-    costs, residual_norm = nnls(design, target)
+    if fit_method == "nnls":
+        costs, residual_norm = nnls(design, target)
+        residual_rms = float(residual_norm) / math.sqrt(len(row_heads))
+    else:
+        costs = _nonnegative_lad(design, target)
+        # L2 RMS is reported for comparability across fit methods, but for
+        # lad it is a diagnostic dominated by the deliberately un-fit tail
+        # rows - it is not the fitted loss.
+        residual_rms = float(np.sqrt(np.mean((design @ costs - target) ** 2)))
     return SegmentCostModel(
         costs_by_head={head: float(costs[column]) for head, column in head_index.items()},
         counts_by_head=counts,
         fitted_row_count=len(row_heads),
-        residual_rms_ms=float(residual_norm) / math.sqrt(len(row_heads)),
+        residual_rms_ms=residual_rms,
     )
+
+
+def _nonnegative_lad(design: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """Non-negative least-absolute-deviations fit via the standard LP encoding.
+
+    Minimize ``sum(u + v)`` subject to ``design @ c + u - v = target`` with
+    ``c, u, v >= 0`` - the textbook LP form of median regression, solved
+    with scipy's HiGHS backend. Parameter-free.
+    """
+
+    row_count, head_count = design.shape
+    objective = np.concatenate(
+        [np.zeros(head_count), np.ones(row_count), np.ones(row_count)]
+    )
+    identity = sparse.eye(row_count, format="csr")
+    equality = sparse.hstack([sparse.csr_matrix(design), identity, -identity])
+    result = linprog(
+        objective,
+        A_eq=equality,
+        b_eq=target,
+        bounds=(0, None),
+        method="highs",
+    )
+    if not result.success:
+        raise RuntimeError(f"LAD fit failed: {result.message}")
+    return np.asarray(result.x[:head_count])
 
 
 __all__ = ["SegmentCostModel", "fit_segment_cost_model"]

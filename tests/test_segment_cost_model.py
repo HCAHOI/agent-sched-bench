@@ -105,6 +105,42 @@ def test_repeated_head_within_one_command_is_additive_but_counted_once() -> None
     assert model.counts_by_head["exec:hop"] == 3
 
 
+def test_lad_recovers_costs_on_consistent_data() -> None:
+    rows = [_command_row(f"p{i}", "prep", 200.0, i) for i in range(2)] + [
+        _command_row(f"pw{i}", "prep && work", 500.0, 2 + i) for i in range(2)
+    ]
+
+    model = fit_segment_cost_model(rows, command_field="command", fit_method="lad")
+
+    assert model.costs_by_head["exec:prep"] == pytest.approx(200.0, abs=1e-6)
+    assert model.costs_by_head["exec:work"] == pytest.approx(300.0, abs=1e-6)
+    assert model.residual_rms_ms == pytest.approx(0.0, abs=1e-6)
+
+
+def test_lad_resists_the_outlier_that_breaks_nnls() -> None:
+    rows = (
+        [_command_row(f"p{i}", "prep", 200.0, i) for i in range(5)]
+        + [_command_row(f"pw{i}", "prep && work", 500.0, 5 + i) for i in range(5)]
+        + [_command_row("outlier", "prep", 100_000.0, 10)]
+    )
+
+    lad = fit_segment_cost_model(rows, command_field="command", fit_method="lad")
+    nnls_fit = fit_segment_cost_model(rows, command_field="command", fit_method="nnls")
+
+    # Median regression pins prep at its typical cost despite the outlier...
+    assert lad.costs_by_head["exec:prep"] == pytest.approx(200.0, abs=1e-4)
+    assert lad.costs_by_head["exec:work"] == pytest.approx(300.0, abs=1e-4)
+    # ...while squared loss lets the single 100s row inflate it massively.
+    assert nnls_fit.costs_by_head["exec:prep"] > 1_000.0
+
+
+def test_fit_rejects_unknown_method() -> None:
+    rows = [_command_row("r", "alpha", 100.0, 0)]
+
+    with pytest.raises(ValueError, match="unknown fit_method"):
+        fit_segment_cost_model(rows, command_field="command", fit_method="huber")
+
+
 def test_fit_rejects_rows_without_commands() -> None:
     with pytest.raises(ValueError, match="no command rows"):
         fit_segment_cost_model(

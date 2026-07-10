@@ -177,6 +177,7 @@ def evaluate_profiled_latency_thresholds(
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
     segment_costs: bool = False,
+    segment_fit: str = "nnls",
 ) -> dict[str, Any]:
     """Evaluate one predictor's threshold decisions on held-out eval rows.
 
@@ -253,6 +254,7 @@ def evaluate_profiled_latency_thresholds(
             segment_model = fit_segment_cost_model(
                 profile_list,
                 command_field=command_field,
+                fit_method=segment_fit,
             )
             row_group_keys, row_group_value, row_deduction = _make_segment_keying(
                 segment_model,
@@ -385,6 +387,7 @@ def evaluate_profiled_latency_thresholds(
         "max_prefix_depth": max_prefix_depth if command_field is not None else None,
         "skip_leading_cd": skip_leading_cd if command_field is not None else None,
         "segment_costs": segment_costs,
+        "segment_fit": segment_fit if segment_costs else None,
         "segment_cost_model": (
             segment_model.to_json_obj() if segment_model is not None else None
         ),
@@ -417,6 +420,7 @@ def load_and_evaluate_profiled_latency_thresholds(
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
     segment_costs: bool = False,
+    segment_fit: str = "nnls",
 ) -> dict[str, Any]:
     return evaluate_profiled_latency_thresholds(
         read_tool_latency_jsonl(eval_path),
@@ -431,6 +435,7 @@ def load_and_evaluate_profiled_latency_thresholds(
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
         segment_costs=segment_costs,
+        segment_fit=segment_fit,
     )
 
 
