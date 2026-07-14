@@ -331,6 +331,39 @@ def test_deadline_policy_rejects_invalid_costs_and_guard() -> None:
         )
 
 
+def test_deadline_policy_forwards_task_prior_settings() -> None:
+    profile_rows = [
+        _latency_row(
+            "p-a", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="trace-a", task_id="task-a",
+        ),
+        _latency_row(
+            "p-b", "probe", 50.0, tool_ts_start=0.0,
+            source_trace="trace-b", task_id="task-b",
+        ),
+    ]
+    eval_rows = [
+        _latency_row(
+            "eval", "probe", 900.0, tool_ts_start=0.0,
+            task_id="task-eval",
+        )
+    ]
+
+    summary = evaluate_deadline_policy(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=[100.0],
+        guard_ms=0.0,
+        predictor="prior_only",
+        min_profile_tasks=2,
+        prior_aggregation="task",
+    )
+
+    assert summary["min_profile_tasks"] == 2
+    assert summary["prior_aggregation"] == "task"
+    assert summary["profile_task_count"] == 2
+
+
 def test_deadline_policy_cli_writes_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -384,6 +417,7 @@ def _latency_row(
     *,
     tool_ts_start: float,
     source_trace: str = "trace-e",
+    task_id: str | None = None,
     tool_args: dict[str, object] | None = None,
 ) -> dict[str, object]:
     row: dict[str, object] = {
@@ -394,6 +428,8 @@ def _latency_row(
         "tool_ts_start": tool_ts_start,
         "tool_ts_end": tool_ts_start + latency_ms / 1000.0,
     }
+    if task_id is not None:
+        row["task_id"] = task_id
     if tool_args is not None:
         row["tool_args"] = tool_args
     return row

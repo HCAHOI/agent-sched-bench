@@ -10,8 +10,21 @@ from scripts.evaluate_profiled_latency_thresholds import main as evaluate_profil
 from trace_collect.tool_latency_profiled import (
     build_latency_prior,
     evaluate_profiled_latency_thresholds,
+    hazard_recheck_ms,
 )
 from trace_collect.tool_latency_threshold import evaluate_latency_thresholds
+
+
+def test_hazard_recheck_restore_cost_shifts_trigger_past_short_calls() -> None:
+    values = [80.0, 80.0, 150.0]
+    kwargs = {"threshold_ms": 100.0, "kv_cost_ms": 100.0}
+
+    assert hazard_recheck_ms(values, **kwargs) == 0.0
+    # Charging the swap-back of fires on short calls makes k=0 lose to k=80,
+    # which only the long call survives.
+    assert hazard_recheck_ms(values, restore_cost_ms=35.0, **kwargs) == 80.0
+    with pytest.raises(ValueError, match="restore_cost_ms"):
+        hazard_recheck_ms(values, restore_cost_ms=float("nan"), **kwargs)
 
 
 def _profile_rows() -> list[dict[str, object]]:
@@ -263,6 +276,207 @@ def test_min_tool_history_gates_prior_and_online_fallback_symmetrically() -> Non
     assert decisions["first"]["online_source"] == "cold_start"
     assert decisions["second"]["prior_source"] == "prior_global"
     assert decisions["second"]["online_source"] == "global_history"
+
+
+def test_min_profile_tasks_rejects_repetitive_group_and_backs_off() -> None:
+    profile_rows = [
+        _latency_row(
+            f"pytest-{index}", "exec", 900.0, tool_ts_start=float(index),
+            source_trace="trace-task-a", task_id="task-a",
+            tool_args={"command": "pytest -q"},
+        )
+        for index in range(4)
+    ]
+    profile_rows.append(
+        _latency_row(
+            "ls-task-b", "exec", 50.0, tool_ts_start=5.0,
+            source_trace="trace-task-b", task_id="task-b",
+            tool_args={"command": "ls"},
+        )
+    )
+    eval_rows = [
+        _latency_row(
+            "scored", "exec", 900.0, tool_ts_start=0.0,
+            task_id="task-eval", tool_args={"command": "pytest -x"},
+        )
+    ]
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+        command_field="command",
+        min_profile_tasks=2,
+    )
+
+    (decision,) = summary["decisions"]
+    assert decision["prior_source"] == "prior_tool"
+    assert decision["prior_group_key"] is None
+    assert decision["prior_count"] == 5
+    assert decision["prior_task_count"] == 2
+    assert summary["profile_task_count"] == 2
+    assert summary["min_profile_tasks"] == 2
+
+
+def test_min_profile_tasks_backs_off_from_tool_to_global() -> None:
+    profile_rows = [
+        _latency_row(
+            "probe-a", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="trace-task-a", task_id="task-a",
+        ),
+        _latency_row(
+            "other-b", "other", 50.0, tool_ts_start=0.0,
+            source_trace="trace-task-b", task_id="task-b",
+        ),
+    ]
+    eval_rows = [
+        _latency_row(
+            "scored", "probe", 900.0, tool_ts_start=0.0,
+            task_id="task-eval",
+        )
+    ]
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+        min_profile_tasks=2,
+    )
+
+    (decision,) = summary["decisions"]
+    assert decision["prior_source"] == "prior_global"
+    assert decision["prior_count"] == 2
+    assert decision["prior_task_count"] == 2
+
+
+def test_min_profile_tasks_selects_group_represented_by_two_tasks() -> None:
+    profile_rows = [
+        _latency_row(
+            "p-a", "exec", 900.0, tool_ts_start=0.0,
+            source_trace="trace-task-a", task_id="task-a",
+            tool_args={"command": "pytest -q"},
+        ),
+        _latency_row(
+            "p-b", "exec", 700.0, tool_ts_start=0.0,
+            source_trace="trace-task-b", task_id="task-b",
+            tool_args={"command": "pytest -x"},
+        ),
+    ]
+    eval_rows = [
+        _latency_row(
+            "scored", "exec", 800.0, tool_ts_start=0.0,
+            task_id="task-eval", tool_args={"command": "pytest tests/"},
+        )
+    ]
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0, 750.0, 1_000.0],
+        predictor="prior_only",
+        command_field="command",
+        min_profile_tasks=2,
+    )
+
+    decisions = summary["decisions"]
+    assert {row["prior_source"] for row in decisions} == {"prior_group"}
+    assert {row["prior_group_key"] for row in decisions} == {"exec:pytest"}
+    assert {row["prior_task_count"] for row in decisions} == {2}
+    probabilities = [row["probability_exceeds_threshold"] for row in decisions]
+    assert probabilities == sorted(probabilities, reverse=True)
+
+
+def test_task_aggregation_is_invariant_to_repeated_calls_within_task() -> None:
+    base_profile = [
+        _latency_row(
+            "slow-a", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="trace-task-a", task_id="task-a",
+        ),
+        _latency_row(
+            "fast-b", "probe", 50.0, tool_ts_start=0.0,
+            source_trace="trace-task-b", task_id="task-b",
+        ),
+    ]
+    repeated_profile = base_profile + [
+        _latency_row(
+            f"slow-a-{index}", "probe", 900.0,
+            tool_ts_start=float(index + 1),
+            source_trace="trace-task-a", task_id="task-a",
+        )
+        for index in range(8)
+    ]
+    eval_rows = [
+        _latency_row(
+            "scored", "probe", 900.0, tool_ts_start=0.0,
+            task_id="task-eval",
+        )
+    ]
+
+    task_base = evaluate_profiled_latency_thresholds(
+        eval_rows, profile_rows=base_profile, thresholds_ms=[100.0],
+        predictor="prior_only", min_profile_tasks=2, prior_aggregation="task",
+    )
+    task_repeated = evaluate_profiled_latency_thresholds(
+        eval_rows, profile_rows=repeated_profile, thresholds_ms=[100.0],
+        predictor="prior_only", min_profile_tasks=2, prior_aggregation="task",
+    )
+    call_repeated = evaluate_profiled_latency_thresholds(
+        eval_rows, profile_rows=repeated_profile, thresholds_ms=[100.0],
+        predictor="prior_only", min_profile_tasks=2, prior_aggregation="call",
+    )
+    task_curve = evaluate_profiled_latency_thresholds(
+        eval_rows, profile_rows=repeated_profile,
+        thresholds_ms=[10.0, 100.0, 1_000.0], predictor="prior_only",
+        min_profile_tasks=2, prior_aggregation="task",
+    )
+
+    assert task_base["decisions"][0]["probability_exceeds_threshold"] == 0.5
+    assert task_repeated["decisions"][0]["probability_exceeds_threshold"] == 0.5
+    assert call_repeated["decisions"][0]["probability_exceeds_threshold"] == 0.9
+    assert task_repeated["decisions"][0]["effective_count"] == 2.0
+    curve = [row["probability_exceeds_threshold"] for row in task_curve["decisions"]]
+    assert curve == [1.0, 0.5, 0.0]
+
+
+def test_brier_metrics_report_call_and_task_macro_coverage() -> None:
+    profile_rows = [
+        _latency_row(
+            "p-a", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="trace-profile-a", task_id="profile-a",
+        ),
+        _latency_row(
+            "p-b", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="trace-profile-b", task_id="profile-b",
+        ),
+    ]
+    eval_rows = [
+        _latency_row(
+            f"correct-{index}", "probe", 900.0, tool_ts_start=float(index),
+            source_trace="trace-eval-a", task_id="eval-a",
+        )
+        for index in range(3)
+    ]
+    eval_rows.append(
+        _latency_row(
+            "wrong", "probe", 50.0, tool_ts_start=0.0,
+            source_trace="trace-eval-b", task_id="eval-b",
+        )
+    )
+
+    summary = evaluate_profiled_latency_thresholds(
+        eval_rows,
+        profile_rows=profile_rows,
+        thresholds_ms=[100.0],
+        predictor="prior_only",
+    )
+
+    metrics = summary["metrics_by_threshold"]["100.0"]
+    assert metrics["probability_count"] == 4
+    assert metrics["probability_task_count"] == 2
+    assert metrics["brier_score"] == 0.25
+    assert metrics["task_macro_brier_score"] == 0.5
 
 
 def test_command_grouping_separates_commands_within_one_tool() -> None:
@@ -659,6 +873,45 @@ def test_shared_traces_between_profile_and_eval_are_rejected() -> None:
         )
 
 
+def test_shared_logical_task_between_different_traces_is_rejected() -> None:
+    profile_rows = [
+        _latency_row(
+            "profile", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="trace-profile-attempt", task_id="same-task",
+        )
+    ]
+    eval_rows = [
+        _latency_row(
+            "eval", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="trace-eval-attempt", task_id="same-task",
+        )
+    ]
+
+    with pytest.raises(ValueError, match="disjoint logical tasks.*same-task"):
+        evaluate_profiled_latency_thresholds(
+            eval_rows,
+            profile_rows=profile_rows,
+            thresholds_ms=[100.0],
+            predictor="prior_only",
+        )
+
+
+def test_conflicting_task_ids_within_one_trace_are_rejected() -> None:
+    profile_rows = [
+        _latency_row(
+            "first", "probe", 900.0, tool_ts_start=0.0,
+            source_trace="same-trace", task_id="task-a",
+        ),
+        _latency_row(
+            "second", "probe", 900.0, tool_ts_start=1.0,
+            source_trace="same-trace", task_id="task-b",
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="maps to conflicting task_id values"):
+        build_latency_prior(profile_rows)
+
+
 def test_empty_profile_rows_are_rejected() -> None:
     with pytest.raises(ValueError, match="empty latency prior"):
         build_latency_prior([])
@@ -692,6 +945,48 @@ def test_profiled_eval_rejects_invalid_parameters() -> None:
                 predictor="prior_only",
                 abstain_confidence=confidence,
             )
+    with pytest.raises(ValueError, match="min_profile_tasks must be >= 1"):
+        evaluate_profiled_latency_thresholds(
+            eval_rows,
+            profile_rows=_profile_rows(),
+            thresholds_ms=[100.0],
+            predictor="prior_only",
+            min_profile_tasks=0,
+        )
+    with pytest.raises(ValueError, match="fewer logical tasks"):
+        evaluate_profiled_latency_thresholds(
+            eval_rows,
+            profile_rows=_profile_rows(),
+            thresholds_ms=[100.0],
+            predictor="prior_only",
+            min_profile_tasks=2,
+        )
+    with pytest.raises(ValueError, match="supported only for prior_only"):
+        evaluate_profiled_latency_thresholds(
+            eval_rows,
+            profile_rows=_profile_rows(),
+            thresholds_ms=[100.0],
+            predictor="blended",
+            prior_aggregation="task",
+        )
+    with pytest.raises(ValueError, match="not supported with Wilson"):
+        evaluate_profiled_latency_thresholds(
+            eval_rows,
+            profile_rows=_profile_rows(),
+            thresholds_ms=[100.0],
+            predictor="prior_only",
+            prior_aggregation="task",
+            abstain_confidence=0.95,
+        )
+    with pytest.raises(ValueError, match="not supported with hazard"):
+        evaluate_profiled_latency_thresholds(
+            eval_rows,
+            profile_rows=_profile_rows(),
+            thresholds_ms=[100.0],
+            predictor="prior_only",
+            prior_aggregation="task",
+            hazard_kv_by_threshold={100.0: 100.0},
+        )
 
 
 def test_evaluate_profiled_cli_compares_predictors(
@@ -761,6 +1056,57 @@ def test_evaluate_profiled_cli_compares_predictors(
     assert prior_first["predicted_exceeds_threshold"] is True
 
 
+def test_evaluate_profiled_cli_forwards_task_prior_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_path = tmp_path / "profile.jsonl"
+    eval_path = tmp_path / "eval.jsonl"
+    summary_path = tmp_path / "summary.json"
+    _write_jsonl(
+        profile_path,
+        [
+            _latency_row(
+                "p-a", "probe", 900.0, tool_ts_start=0.0,
+                source_trace="trace-a", task_id="task-a",
+            ),
+            _latency_row(
+                "p-b", "probe", 50.0, tool_ts_start=0.0,
+                source_trace="trace-b", task_id="task-b",
+            ),
+        ],
+    )
+    _write_jsonl(
+        eval_path,
+        [_latency_row(
+            "eval", "probe", 900.0, tool_ts_start=0.0,
+            task_id="task-eval",
+        )],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluate_profiled_latency_thresholds.py",
+            "--profile-latencies", str(profile_path),
+            "--eval-latencies", str(eval_path),
+            "--thresholds-ms", "100",
+            "--predictors", "prior_only",
+            "--min-profile-tasks", "2",
+            "--prior-aggregation", "task",
+            "--output", str(summary_path),
+        ],
+    )
+
+    evaluate_profiled_main()
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))["by_predictor"]
+    prior_summary = summary["prior_only"]
+    assert prior_summary["min_profile_tasks"] == 2
+    assert prior_summary["prior_aggregation"] == "task"
+    assert prior_summary["profile_task_count"] == 2
+
+
 def _latency_row(
     sample_id: str,
     tool_name: str,
@@ -768,6 +1114,7 @@ def _latency_row(
     *,
     tool_ts_start: float,
     source_trace: str = "trace-e",
+    task_id: str | None = None,
     tool_args: dict[str, object] | None = None,
 ) -> dict[str, object]:
     row: dict[str, object] = {
@@ -778,6 +1125,8 @@ def _latency_row(
         "tool_ts_start": tool_ts_start,
         "tool_ts_end": tool_ts_start + latency_ms / 1000.0,
     }
+    if task_id is not None:
+        row["task_id"] = task_id
     if tool_args is not None:
         row["tool_args"] = tool_args
     return row

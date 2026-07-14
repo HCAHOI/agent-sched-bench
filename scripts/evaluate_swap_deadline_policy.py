@@ -98,6 +98,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum same-group/tool samples before using that rate (default: 1)",
     )
     parser.add_argument(
+        "--min-profile-tasks",
+        type=int,
+        default=1,
+        help=(
+            "Minimum distinct profile tasks before using a group/tool prior "
+            "node (default: 1)"
+        ),
+    )
+    parser.add_argument(
+        "--prior-aggregation",
+        choices=["call", "task"],
+        default="call",
+        help=(
+            "Prior ECDF weighting: pooled calls or equal weight per task; "
+            "task is supported only with prior_only (default: call)"
+        ),
+    )
+    parser.add_argument(
         "--command-field",
         default=None,
         help="tool_args field holding a shell command; enables prefix-tree grouping",
@@ -151,6 +169,8 @@ def main() -> None:
         probability_cutoff=args.probability_cutoff,
         prior_strength=args.prior_strength,
         min_tool_history=args.min_tool_history,
+        min_profile_tasks=args.min_profile_tasks,
+        prior_aggregation=args.prior_aggregation,
         command_field=args.command_field,
         max_prefix_depth=args.max_prefix_depth,
         skip_leading_cd=args.skip_leading_cd,

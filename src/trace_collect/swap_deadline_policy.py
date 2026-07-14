@@ -58,6 +58,8 @@ def evaluate_deadline_policy(
     probability_cutoff: float = 0.5,
     prior_strength: float | None = None,
     min_tool_history: int = 1,
+    min_profile_tasks: int = 1,
+    prior_aggregation: str = "call",
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
@@ -84,14 +86,14 @@ def evaluate_deadline_policy(
         prior_strength=prior_strength,
         probability_cutoff=probability_cutoff,
         min_tool_history=min_tool_history,
+        min_profile_tasks=min_profile_tasks,
+        prior_aggregation=prior_aggregation,
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
         segment_costs=segment_costs,
         segment_fit=segment_fit,
-        hazard_kv_by_threshold=(
-            kv_cost_by_threshold if recheck == "hazard" else None
-        ),
+        hazard_kv_by_threshold=(kv_cost_by_threshold if recheck == "hazard" else None),
     )
     decisions_by_threshold: dict[float, list[dict[str, Any]]] = {}
     for decision in inner["decisions"]:
@@ -113,6 +115,8 @@ def evaluate_deadline_policy(
         "probability_cutoff": probability_cutoff,
         "prior_strength": prior_strength,
         "min_tool_history": min_tool_history,
+        "min_profile_tasks": min_profile_tasks,
+        "prior_aggregation": prior_aggregation,
         "command_field": command_field,
         "max_prefix_depth": inner["max_prefix_depth"],
         "skip_leading_cd": inner["skip_leading_cd"],
@@ -125,6 +129,7 @@ def evaluate_deadline_policy(
         "row_count": inner["row_count"],
         "profile_row_count": inner["profile_row_count"],
         "profile_trace_count": inner["profile_trace_count"],
+        "profile_task_count": inner["profile_task_count"],
         "points": points,
     }
 
@@ -139,6 +144,8 @@ def load_and_evaluate_deadline_policy(
     probability_cutoff: float = 0.5,
     prior_strength: float | None = None,
     min_tool_history: int = 1,
+    min_profile_tasks: int = 1,
+    prior_aggregation: str = "call",
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
@@ -155,6 +162,8 @@ def load_and_evaluate_deadline_policy(
         probability_cutoff=probability_cutoff,
         prior_strength=prior_strength,
         min_tool_history=min_tool_history,
+        min_profile_tasks=min_profile_tasks,
+        prior_aggregation=prior_aggregation,
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
@@ -173,15 +182,15 @@ def _policy_point(
     recheck: str,
 ) -> dict[str, Any]:
     positive_count = sum(d["label_exceeds_threshold"] for d in decisions)
-    cold_start_count = sum(
-        d["predicted_exceeds_threshold"] is None for d in decisions
-    )
+    cold_start_count = sum(d["predicted_exceeds_threshold"] is None for d in decisions)
     oracle_ms = positive_count * kv_cost_ms
 
     if recheck == "hazard":
+
         def recheck_of(decision: dict[str, Any]) -> float:
             return decision["hazard_recheck_ms"]
     else:
+
         def recheck_of(decision: dict[str, Any]) -> float:
             return threshold_ms
 

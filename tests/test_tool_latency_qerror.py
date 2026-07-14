@@ -9,6 +9,7 @@ import pytest
 from scripts.evaluate_tool_latency_qerror import main as evaluate_qerror_main
 from scripts.extract_tool_latencies import main as extract_latencies_main
 from trace_collect.tool_latency_dataset import (
+    MISSING_TOOL_NAME,
     extract_tool_latency_samples,
     read_tool_latency_jsonl,
 )
@@ -34,6 +35,7 @@ def test_extract_tool_latencies_cli_preserves_identity_outcome_and_timing(
                 tool_call_id="call-bash-1",
                 success=True,
                 duration_ms=777.0,
+                instance_id="container-session-a",
             ),
             _tool_exec(
                 action_id="tool-read-1",
@@ -63,13 +65,14 @@ def test_extract_tool_latencies_cli_preserves_identity_outcome_and_timing(
         {
             "action_id": "tool-bash-1",
             "agent_id": "agent-a",
-            "instance_id": "task-123",
+            "instance_id": "container-session-a",
             "iteration": 3,
             "latency_ms": pytest.approx(125.0),
             "reported_duration_ms": 777.0,
             "sample_id": f"{trace_path}:agent-a:3:tool-bash-1",
             "source_trace": str(trace_path),
             "success": True,
+            "task_id": "task-123",
             "tool_call_id": "call-bash-1",
             "tool_name": "bash",
             "tool_ts_end": 10.125,
@@ -84,12 +87,57 @@ def test_extract_tool_latencies_cli_preserves_identity_outcome_and_timing(
             "sample_id": f"{trace_path}:agent-a:4:tool-read-1",
             "source_trace": str(trace_path),
             "success": False,
+            "task_id": "task-123",
             "tool_call_id": "call-read-1",
             "tool_name": "read",
             "tool_ts_end": 11.5,
             "tool_ts_start": 11.25,
         },
     ]
+
+
+def test_extract_tool_latencies_preserves_missing_tool_name_as_explicit_class(
+    tmp_path: Path,
+) -> None:
+    trace_path = _write_trace_jsonl(
+        tmp_path / "trace.jsonl",
+        [
+            _metadata_record(instance_id="task-malformed"),
+            _tool_exec(
+                action_id="tool-empty-1",
+                agent_id="agent-a",
+                iteration=8,
+                ts_start=12.0,
+                ts_end=12.0,
+                tool_name="",
+                tool_call_id="call-empty-1",
+                success=False,
+                duration_ms=0.0,
+            ),
+        ],
+    )
+
+    samples = extract_tool_latency_samples(trace_path)
+
+    assert len(samples) == 1
+    row = samples[0].to_json_obj()
+    assert row["tool_name"] == MISSING_TOOL_NAME
+    assert row["tool_name_missing"] is True
+    assert row["success"] is False
+    assert row["latency_ms"] == 0.0
+    assert row["reported_duration_ms"] == 0.0
+
+
+def test_read_tool_latencies_rejects_non_bool_missing_tool_marker(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "latencies.jsonl"
+    row = _latency_row("missing", MISSING_TOOL_NAME, 0.0, tool_ts_start=1.0)
+    row["tool_name_missing"] = "true"
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="tool_name_missing.*must be a bool"):
+        read_tool_latency_jsonl(path)
 
 
 def test_evaluate_latency_qerror_is_causal_by_tool_timestamp_not_input_order() -> None:
@@ -129,7 +177,9 @@ def test_evaluate_latency_qerror_is_causal_by_tool_timestamp_not_input_order() -
     assert predictions["read-future"]["qerror"] == pytest.approx(50.0)
 
 
-def test_evaluate_latency_qerror_scores_same_timestamp_bucket_before_history_update() -> None:
+def test_evaluate_latency_qerror_scores_same_timestamp_bucket_before_history_update() -> (
+    None
+):
     rows = [
         _latency_row("read-history", "read", 100.0, tool_ts_start=1.0),
         _latency_row("read-slow-parallel", "read", 10_000.0, tool_ts_start=2.0),
@@ -211,8 +261,9 @@ def test_evaluate_latency_qerror_waits_for_overlapping_tool_completion() -> None
     assert predictions["curl-after-long"]["history_count"] == 4
 
 
-
-def test_evaluate_latency_qerror_flushes_source_trace_history_despite_timestamp_reset() -> None:
+def test_evaluate_latency_qerror_flushes_source_trace_history_despite_timestamp_reset() -> (
+    None
+):
     rows = [
         _latency_row(
             "trace-a-long-tool",
@@ -247,6 +298,7 @@ def test_evaluate_latency_qerror_flushes_source_trace_history_despite_timestamp_
     assert predictions["trace-b-first-tool"]["predicted_latency_ms"] == 10_000.0
     assert predictions["trace-b-first-tool"]["qerror"] == pytest.approx(100.0)
 
+
 def test_evaluate_latency_qerror_floors_near_zero_actual_and_prediction() -> None:
     rows = [
         _latency_row("zero-first", "bash", 0.0, tool_ts_start=1.0),
@@ -264,7 +316,9 @@ def test_evaluate_latency_qerror_floors_near_zero_actual_and_prediction() -> Non
     assert predictions["near-zero-third"]["qerror"] == pytest.approx(2.0)
 
 
-def test_malformed_negative_latency_and_bad_latency_rows_fail_closed(tmp_path: Path) -> None:
+def test_malformed_negative_latency_and_bad_latency_rows_fail_closed(
+    tmp_path: Path,
+) -> None:
     negative_trace = _write_trace_jsonl(
         tmp_path / "negative-trace.jsonl",
         [
@@ -286,20 +340,23 @@ def test_malformed_negative_latency_and_bad_latency_rows_fail_closed(tmp_path: P
         extract_tool_latency_samples(negative_trace)
 
     with pytest.raises(ValueError, match="latency_ms"):
-        evaluate_latency_qerror([
-            _latency_row("negative", "bash", -1.0, tool_ts_start=1.0),
-        ])
+        evaluate_latency_qerror(
+            [
+                _latency_row("negative", "bash", -1.0, tool_ts_start=1.0),
+            ]
+        )
 
     with pytest.raises(ValueError, match="tool_ts_start"):
-        evaluate_latency_qerror([
-            {
-                "sample_id": "missing-timestamp",
-                "source_trace": "trace-a",
-                "tool_name": "bash",
-                "latency_ms": 1.0,
-            },
-        ])
-
+        evaluate_latency_qerror(
+            [
+                {
+                    "sample_id": "missing-timestamp",
+                    "source_trace": "trace-a",
+                    "tool_name": "bash",
+                    "latency_ms": 1.0,
+                },
+            ]
+        )
 
 
 @pytest.mark.parametrize(
@@ -373,7 +430,6 @@ def test_malformed_rows_missing_source_trace_fail_closed(tmp_path: Path) -> None
         read_tool_latency_jsonl(latencies_path)
 
 
-
 @pytest.mark.parametrize("field", ["source_trace", "sample_id", "tool_name"])
 @pytest.mark.parametrize("value", [1.25, float("nan"), float("inf")])
 def test_evaluate_latency_qerror_rejects_non_string_identity_fields(
@@ -387,7 +443,7 @@ def test_evaluate_latency_qerror_rejects_non_string_identity_fields(
         evaluate_latency_qerror([row])
 
 
-@pytest.mark.parametrize("field", ["source_trace", "sample_id", "tool_name"])
+@pytest.mark.parametrize("field", ["source_trace", "sample_id", "tool_name", "task_id"])
 @pytest.mark.parametrize("value", [1.25, float("nan"), float("inf")])
 def test_tool_latency_jsonl_loader_rejects_non_string_identity_fields(
     tmp_path: Path,
@@ -401,6 +457,17 @@ def test_tool_latency_jsonl_loader_rejects_non_string_identity_fields(
 
     with pytest.raises(ValueError, match=rf"{field!r} must be a string"):
         read_tool_latency_jsonl(latencies_path)
+
+
+def test_tool_latency_jsonl_loader_backfills_legacy_task_id(tmp_path: Path) -> None:
+    row = _latency_row("legacy", "bash", 1.0, tool_ts_start=1.0)
+    latencies_path = tmp_path / "legacy.jsonl"
+    _write_jsonl(latencies_path, [row])
+
+    (loaded,) = read_tool_latency_jsonl(latencies_path)
+
+    assert loaded["task_id"] == row["source_trace"]
+
 
 @pytest.mark.parametrize(
     ("field", "value"),
@@ -517,6 +584,7 @@ def _tool_exec(
     tool_call_id: str,
     success: bool,
     duration_ms: float | None = None,
+    instance_id: str | None = None,
 ) -> dict[str, object]:
     data: dict[str, object] = {
         "tool_name": tool_name,
@@ -525,7 +593,7 @@ def _tool_exec(
     }
     if duration_ms is not None:
         data["duration_ms"] = duration_ms
-    return {
+    action: dict[str, object] = {
         "type": "action",
         "action_type": "tool_exec",
         "action_id": action_id,
@@ -535,6 +603,9 @@ def _tool_exec(
         "ts_end": ts_end,
         "data": data,
     }
+    if instance_id is not None:
+        action["instance_id"] = instance_id
+    return action
 
 
 def _latency_row(

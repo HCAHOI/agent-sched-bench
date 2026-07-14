@@ -4,7 +4,7 @@
 Runs the prior_only / online_only / blended survival predictors over the
 same eval rows and thresholds so they can be compared directly. The profile
 and eval latency files must be extracted from disjoint task-level trace
-splits (enforced via source_trace overlap check).
+splits (enforced via source_trace and logical task_id overlap checks).
 
 Usage:
   uv run python scripts/evaluate_profiled_latency_thresholds.py \
@@ -94,6 +94,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum same-group/tool samples before using that rate (default: 1)",
     )
     parser.add_argument(
+        "--min-profile-tasks",
+        type=int,
+        default=1,
+        help=(
+            "Minimum distinct profile tasks before using a group/tool prior "
+            "node (default: 1)"
+        ),
+    )
+    parser.add_argument(
+        "--prior-aggregation",
+        choices=["call", "task"],
+        default="call",
+        help=(
+            "Prior ECDF weighting: pooled calls or equal weight per task; "
+            "task is supported only with prior_only (default: call)"
+        ),
+    )
+    parser.add_argument(
         "--command-field",
         default=None,
         help=(
@@ -157,6 +175,8 @@ def main() -> None:
             probability_cutoff=args.probability_cutoff,
             abstain_confidence=args.abstain_confidence,
             min_tool_history=args.min_tool_history,
+            min_profile_tasks=args.min_profile_tasks,
+            prior_aggregation=args.prior_aggregation,
             command_field=args.command_field,
             max_prefix_depth=args.max_prefix_depth,
             skip_leading_cd=args.skip_leading_cd,
@@ -167,7 +187,9 @@ def main() -> None:
     summary_payload = {
         "predictors": args.predictors,
         "by_predictor": {
-            predictor: {key: value for key, value in summary.items() if key != "decisions"}
+            predictor: {
+                key: value for key, value in summary.items() if key != "decisions"
+            }
             for predictor, summary in by_predictor.items()
         },
     }
