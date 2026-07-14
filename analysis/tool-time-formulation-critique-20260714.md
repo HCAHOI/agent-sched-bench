@@ -202,10 +202,23 @@ triggers exactly (built-in check). Conclusion: restore cost must be a
 first-class action parameter; with it, the trigger machinery survives F1.
 Sensitivity analysis only — a certified rho>0 claim needs a fresh corpus.
 
+## B1 result (2026-07-14): baseline wins at rho=0, collapses at honest rho
+
+Within-task completion-gated history baseline
+(`analysis/tool-time-within-task-baseline-20260714/`): at rho=0 it beats
+the deadline by +280.5 s — roughly double the gated method — confirming the
+critique. At rho=0.5 it turns net-negative (two certified-harmful cells;
+−397.8 s at rho=1.0) while the refit gated policy holds and certifies over
+it (+515.9 s, 3 cells, at rho=1.0). Conclusions: restore-zero results are
+not evidence for the method; the machinery's contribution is robustness;
+within-task signal is real and should become the deepest context level of
+the hierarchy (hybrid, with a gated-B1 control first).
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
 1b. Mode B refit — DONE 2026-07-14, method adapts (above).
+2. B1 within-task baseline — DONE 2026-07-14, two-sided result (above).
 2. B1 within-task last-value baseline.
 3. E4 concentration diagnostic (cheap, reuses confirmation outputs).
 4. E2 transfer protocol.
