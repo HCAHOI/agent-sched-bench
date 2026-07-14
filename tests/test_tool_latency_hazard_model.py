@@ -336,3 +336,133 @@ def test_fit_hazard_model_consumes_causal_features_without_leakage() -> None:
     spec = _tool_spec()
     feats = list(iter_causal_row_features(rows, spec=spec))
     assert 0 < len(feats) <= len(rows)
+
+
+# --- Logistic regression guard: the default path is unchanged ----------------
+
+
+def test_fit_hazard_model_default_family_is_logistic_and_seed_independent() -> None:
+    # Regression guard for the model_family/seed additions: the default path is
+    # still the logistic family and stays byte-identical to before those
+    # arguments existed. Neither the new default nor any seed perturbs the
+    # fitted coefficients (seed is a GBM-only knob), so the recorded logistic
+    # results remain reproducible.
+    rows = _separable_rows()
+    spec = _tool_spec()
+    grid = build_log_grid([float(row["latency_ms"]) for row in rows], num_intervals=8)
+    baseline = fit_hazard_model(rows, spec=spec, grid=grid, l2_penalty=1e-3)
+    assert baseline.model_family == "logistic"
+    assert baseline.estimator is None
+    probe = _feats("q", "fast", 0.0)
+    for seed in (1, 999):
+        other = fit_hazard_model(
+            rows,
+            spec=spec,
+            grid=grid,
+            l2_penalty=1e-3,
+            model_family="logistic",
+            seed=seed,
+        )
+        np.testing.assert_array_equal(baseline.coef, other.coef)
+        np.testing.assert_array_equal(
+            baseline.predict_interval_masses(probe),
+            other.predict_interval_masses(probe),
+        )
+
+
+# --- GBM family: same seam, nonlinear estimator ------------------------------
+
+
+def test_fit_hazard_model_gbm_rejects_l2_penalty() -> None:
+    rows = _separable_rows()
+    spec = _tool_spec()
+    grid = build_log_grid([float(row["latency_ms"]) for row in rows], num_intervals=8)
+    with pytest.raises(ValueError, match="l2_penalty is logistic-only"):
+        fit_hazard_model(
+            rows, spec=spec, grid=grid, l2_penalty=1e-3, model_family="gbm", seed=0
+        )
+
+
+def test_fit_hazard_model_gbm_requires_seed() -> None:
+    rows = _separable_rows()
+    spec = _tool_spec()
+    grid = build_log_grid([float(row["latency_ms"]) for row in rows], num_intervals=8)
+    with pytest.raises(ValueError, match="requires an explicit seed"):
+        fit_hazard_model(rows, spec=spec, grid=grid, model_family="gbm")
+
+
+def test_fit_hazard_model_gbm_separates_fast_and_slow_tools() -> None:
+    rows = _separable_rows()
+    spec = _tool_spec()
+    grid = build_log_grid([float(row["latency_ms"]) for row in rows], num_intervals=8)
+    model = fit_hazard_model(rows, spec=spec, grid=grid, model_family="gbm", seed=0)
+    assert model.model_family == "gbm"
+    assert model.coef is None and model.l2_penalty is None
+
+    fast_masses = model.predict_interval_masses(_feats("q-fast", "fast", 0.0))
+    slow_masses = model.predict_interval_masses(_feats("q-slow", "slow", 0.0))
+    for masses in (fast_masses, slow_masses):
+        assert masses.shape == (grid.num_intervals,)
+        assert np.all(masses >= -1e-12)
+        assert float(masses.sum()) == pytest.approx(1.0)
+        survival = 1.0 - np.cumsum(masses)
+        assert np.all(np.diff(survival) <= 1e-12)  # monotone by construction
+    # The fast tool concentrates mass on short intervals; the slow tool on the
+    # long tail, so the mass-weighted expected latency is ordered.
+    assert float(fast_masses @ grid.reps) < float(slow_masses @ grid.reps)
+
+    threshold_ms = 1000.0
+    kv_cost_ms = 1000.0
+    trigger_fast = survival_trigger_ms(
+        grid, fast_masses, threshold_ms=threshold_ms, kv_cost_ms=kv_cost_ms
+    )
+    trigger_slow = survival_trigger_ms(
+        grid, slow_masses, threshold_ms=threshold_ms, kv_cost_ms=kv_cost_ms
+    )
+    # The almost-always-long tool swaps no later than the almost-always-short
+    # one, and both triggers stay within the deadline.
+    assert trigger_slow <= trigger_fast
+    assert trigger_fast <= threshold_ms
+
+
+def test_fit_hazard_model_gbm_is_deterministic_under_fixed_seed() -> None:
+    rows = _separable_rows()
+    spec = _tool_spec()
+    grid = build_log_grid([float(row["latency_ms"]) for row in rows], num_intervals=8)
+    first = fit_hazard_model(rows, spec=spec, grid=grid, model_family="gbm", seed=7)
+    second = fit_hazard_model(rows, spec=spec, grid=grid, model_family="gbm", seed=7)
+    for tool in ("fast", "slow"):
+        np.testing.assert_array_equal(
+            first.predict_interval_masses(_feats("q", tool, 0.0)),
+            second.predict_interval_masses(_feats("q", tool, 0.0)),
+        )
+
+
+def test_fit_hazard_model_gbm_uses_interval_index_feature() -> None:
+    # A single tool with a strictly bimodal latency (a short mode and a long
+    # mode, nothing between) has a NON-geometric interval-mass profile. If the
+    # GBM ignored the appended interval-index column it would predict one hazard
+    # for every interval of this fixed context, giving a monotone-decreasing
+    # (geometric) mass vector. A rise anywhere in the mass vector is therefore
+    # only possible if the per-interval hazard varies with the interval index.
+    rows: list[dict[str, object]] = []
+    for task in range(20):
+        task_id = f"task-{task}"
+        ts = task * 100_000.0
+        for call in range(4):
+            rows.append(_row(f"short-{task}-{call}", task_id, "x", 50.0, ts))
+            ts += 10_000.0
+        for call in range(4):
+            rows.append(_row(f"long-{task}-{call}", task_id, "x", 4000.0, ts))
+            ts += 10_000.0
+    spec = _tool_spec()
+    latencies = [float(row["latency_ms"]) for row in rows]
+    grid = build_log_grid(
+        latencies, num_intervals=10, low_quantile=0.0, high_quantile=1.0
+    )
+    model = fit_hazard_model(rows, spec=spec, grid=grid, model_family="gbm", seed=0)
+    masses = model.predict_interval_masses(_feats("q", "x", 0.0))
+    assert float(masses.sum()) == pytest.approx(1.0)
+    # The long mode forces mass to rise again after the near-empty middle
+    # intervals — impossible under a constant (index-independent) hazard.
+    assert np.any(np.diff(masses) > 1e-3)

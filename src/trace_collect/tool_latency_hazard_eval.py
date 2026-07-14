@@ -118,6 +118,8 @@ def evaluate_hazard_model_clock(
     l2_penalty: float | None = None,
     cv_folds: int = DEFAULT_CV_FOLDS,
     l2_grid: Sequence[float] = DEFAULT_L2_GRID,
+    model_family: str = "logistic",
+    seed: int | None = None,
     calibration_edge_stride: int = 1,
     reliability_bin_count: int = 10,
 ) -> dict[str, Any]:
@@ -168,6 +170,11 @@ def evaluate_hazard_model_clock(
     if overlap:
         raise AssertionError(f"profile and eval tasks overlap: {sorted(overlap)}")
 
+    if model_family not in ("logistic", "gbm"):
+        raise ValueError(
+            f"unknown model_family {model_family!r}; expected 'logistic' or 'gbm'"
+        )
+
     # --- Fits (fraction-independent): outer model on all profile rows, l2 once.
     outer_grid = build_log_grid(_row_latencies(profile_list), num_intervals=num_intervals)
     outer_model = fit_hazard_model(
@@ -177,6 +184,8 @@ def evaluate_hazard_model_clock(
         l2_penalty=l2_penalty,
         cv_folds=cv_folds,
         l2_grid=l2_grid,
+        model_family=model_family,
+        seed=seed,
     )
     selected_l2 = outer_model.l2_penalty
 
@@ -187,6 +196,8 @@ def evaluate_hazard_model_clock(
         num_intervals=num_intervals,
         selected_l2=selected_l2,
         profile_tasks=profile_tasks,
+        model_family=model_family,
+        seed=seed,
     )
     outer_predictions = _outer_eval_predictions(
         eval_list, spec=spec, outer_model=outer_model, outer_grid=outer_grid
@@ -234,8 +245,9 @@ def evaluate_hazard_model_clock(
         "guard_ms": guard_ms,
         "inner_folds": inner_folds,
         "num_intervals": num_intervals,
+        "model_family": model_family,
         "l2_penalty": selected_l2,
-        "l2_selected_on_full_profile": l2_penalty is None,
+        "l2_selected_on_full_profile": model_family == "logistic" and l2_penalty is None,
         "cv_folds": cv_folds,
         "l2_grid": [float(value) for value in l2_grid],
         "restore_cost_fractions": fractions,
@@ -255,16 +267,21 @@ def _inner_probe_predictions(
     spec: SurvivalFeatureSpec,
     inner_folds: int,
     num_intervals: int,
-    selected_l2: float,
+    selected_l2: float | None,
     profile_tasks: set[str],
+    model_family: str,
+    seed: int | None,
 ) -> list[_PredictedCall]:
     """Task-OOF probe fits + mass predictions, computed once (rho-independent).
 
     Each inner fold fits the grid quantiles, feature vocabulary, and hazard
-    coefficients on the inner-train rows only, so a task present only in the
-    held-out fold cannot inform its own probe masses (an unseen tool encodes to
-    an all-zero block). Masses are cached per held-out call for reuse across
-    every restore fraction and kv cost.
+    model on the inner-train rows only, so a task present only in the held-out
+    fold cannot inform its own probe masses (an unseen tool encodes to an
+    all-zero block). The logistic penalty selected once on the full profile
+    (``selected_l2``, ``None`` for the GBM) is reused for every inner fit;
+    ``model_family`` and ``seed`` are the same as the outer fit. Masses are
+    cached per held-out call for reuse across every restore fraction and kv
+    cost.
     """
 
     profile_folds = balanced_task_folds(profile_list, fold_count=inner_folds)
@@ -283,7 +300,12 @@ def _inner_probe_predictions(
             _row_latencies(inner_train), num_intervals=num_intervals
         )
         inner_model = fit_hazard_model(
-            inner_train, spec=spec, grid=inner_grid, l2_penalty=selected_l2
+            inner_train,
+            spec=spec,
+            grid=inner_grid,
+            l2_penalty=selected_l2,
+            model_family=model_family,
+            seed=seed,
         )
         inner_task_by_sample = {
             str(row["sample_id"]): str(row["task_id"]) for row in inner_eval

@@ -552,6 +552,7 @@ def run_hazard_model_confirmation(
     seed: int,
     l2_penalty: float | None = None,
     feature_set: str = "full",
+    model_family: str = "logistic",
 ) -> dict[str, Any]:
     """Score the learned hazard clock against the refit gated policies.
 
@@ -559,6 +560,11 @@ def run_hazard_model_confirmation(
     ``with_within_task`` (no task aggregates), or ``cross_task_only``
     (tool/prefix blocks only). Command parsing config always comes from
     the frozen manifest.
+
+    ``model_family`` selects the estimator: ``logistic`` (the pooled penalized
+    discrete-time logistic; ``l2_penalty=None`` selects the penalty per fold)
+    or ``gbm`` (a HistGradientBoosting hazard over the same person-period rows;
+    ``l2_penalty`` must stay ``None`` and the fold's fits use ``seed``).
 
     The structural twin of :func:`run_within_task_baseline`. Folds are the outer
     loop: each fold fits the hazard model exactly once (the fit is
@@ -597,6 +603,10 @@ def run_hazard_model_confirmation(
         raise ValueError(
             f"unknown feature_set {feature_set!r}; "
             f"expected one of {sorted(ablation_toggles)}"
+        )
+    if model_family not in ("logistic", "gbm"):
+        raise ValueError(
+            f"unknown model_family {model_family!r}; expected 'logistic' or 'gbm'"
         )
     spec = SurvivalFeatureSpec(
         command_field=manifest["command_field"],
@@ -665,6 +675,8 @@ def run_hazard_model_confirmation(
             num_intervals=num_intervals,
             restore_cost_fractions=restore_cost_fractions,
             l2_penalty=l2_penalty,
+            model_family=model_family,
+            seed=seed,
         )
         shared = {
             field: value
@@ -746,6 +758,7 @@ def run_hazard_model_confirmation(
         "schema_version": 1,
         "mode": "hazard_model_confirmation",
         "feature_set": feature_set,
+        "model_family": model_family,
         "confirmation_root": str(confirmation_root),
         "mode_b_root": str(mode_b_root),
         "gated_b1_root": str(gated_b1_root),

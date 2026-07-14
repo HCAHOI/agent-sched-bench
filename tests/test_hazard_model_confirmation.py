@@ -212,6 +212,66 @@ def test_evaluate_hazard_model_clock_use_candidate_predicate() -> None:
         assert row["offline_gated_hazard_trigger_ms"] == pytest.approx(expected)
 
 
+def test_evaluate_hazard_model_clock_gbm_fires_early_only_on_slow_tool() -> None:
+    # The GBM family drives the identical trigger/gate seam. On the separable
+    # corpus it must recover the same qualitative decision as the logistic arm:
+    # the slow tool swaps early (within the deadline) and the fast tool waits.
+    profile_rows = _corpus([f"p{index}" for index in range(8)], fast=4, slow=4)
+    eval_rows = _corpus(["e0", "e1"], fast=2, slow=2)
+
+    result = evaluate_hazard_model_clock(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=[COST_MS],
+        guard_ms=0.0,
+        inner_folds=2,
+        spec=TOOL_SPEC,
+        num_intervals=8,
+        restore_cost_fractions=[0.0],
+        model_family="gbm",
+        seed=0,
+    )
+    assert result["model_family"] == "gbm"
+    # The GBM has no L2 penalty; the logistic-only bookkeeping is None/False.
+    assert result["l2_penalty"] is None
+    assert result["l2_selected_on_full_profile"] is False
+
+    decisions = result["by_restore_cost_fraction"]["0.0"]["decisions"]
+    slow = [row for row in decisions if row["tool_name"] == "slow"]
+    fast = [row for row in decisions if row["tool_name"] == "fast"]
+    assert len(slow) == 4 and len(fast) == 4
+    for row in slow:
+        # Firing anywhere in (0, threshold) on a 150 ms call hides swap cost.
+        assert 0.0 < row["hazard_trigger_ms"] < row["threshold_ms"]
+        assert row["hazard_margin_normalized"] > 0.0
+        assert row["latency_ms"] > row["hazard_trigger_ms"]
+    for row in fast:
+        # The 10 ms fast call never exceeds its own candidate trigger.
+        assert row["latency_ms"] <= row["hazard_trigger_ms"] + 1e-9
+
+
+def test_evaluate_hazard_model_clock_gbm_is_deterministic() -> None:
+    profile_rows = _corpus([f"p{index}" for index in range(8)], fast=4, slow=4)
+    eval_rows = _corpus(["e0", "e1"], fast=2, slow=2)
+    kwargs = dict(
+        profile_rows=profile_rows,
+        kv_costs_ms=[COST_MS],
+        guard_ms=0.0,
+        inner_folds=2,
+        spec=TOOL_SPEC,
+        num_intervals=8,
+        restore_cost_fractions=[0.0],
+        model_family="gbm",
+        seed=3,
+    )
+    first = evaluate_hazard_model_clock(eval_rows, **kwargs)
+    second = evaluate_hazard_model_clock(eval_rows, **kwargs)
+    assert (
+        first["by_restore_cost_fraction"]["0.0"]["decisions"]
+        == second["by_restore_cost_fraction"]["0.0"]["decisions"]
+    )
+
+
 def test_evaluate_hazard_model_clock_rejects_task_overlap() -> None:
     rows = _corpus(["shared"], fast=2, slow=2)
     with pytest.raises(AssertionError, match="profile and eval tasks overlap"):
@@ -526,6 +586,97 @@ def test_run_hazard_model_confirmation_merges_and_scores(tmp_path: Path) -> None
     assert result["hazard_guards"]["0.0"][0]["fold"] == "f1"
     assert result["grid_l2_choices"]["0.0"][0]["l2_penalty"] == pytest.approx(1e-4)
     assert (tmp_path / "hazard" / "summary.md").read_text(encoding="utf-8")
+
+
+def _build_confirmation_inputs(
+    tmp_path: Path, *, profile_tasks: int, eval_tasks: int
+) -> tuple[Path, Path, Path, list[dict[str, Any]]]:
+    """Materialize the confirmation/mode-b/gated-b1 inputs for a rho=0 run."""
+
+    confirmation = tmp_path / "confirmation"
+    (confirmation / "provenance").mkdir(parents=True)
+    (confirmation / "provenance" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "fold_count": 1,
+                "inner_folds": 2,
+                "costs_ms": [COST_MS],
+                "guard_ms": 0.0,
+                "min_tool_history": 1,
+                "min_profile_tasks": 1,
+                "command_field": None,
+                "max_prefix_depth": 4,
+                "skip_leading_cd": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (confirmation / "data").mkdir()
+    eval_rows = _corpus([f"e{i}" for i in range(eval_tasks)], fast=2, slow=2)
+    profile_rows = _corpus([f"p{i}" for i in range(profile_tasks)], fast=3, slow=3)
+    _write_jsonl(confirmation / "data" / "f1_eval.jsonl", eval_rows)
+    _write_jsonl(confirmation / "data" / "f1_profile.jsonl", profile_rows)
+
+    mode_b = tmp_path / "mode-b"
+    (mode_b / "rho_0.0").mkdir(parents=True)
+    _write_jsonl(
+        mode_b / "rho_0.0" / "f1_decisions.jsonl",
+        [
+            _mode_b_decision(
+                row["sample_id"],
+                task_id=row["task_id"],
+                latency_ms=row["latency_ms"],
+                tool_name=row["tool_name"],
+            )
+            for row in eval_rows
+        ],
+    )
+    gated_b1 = tmp_path / "b1"
+    gated_b1.mkdir()
+    _write_jsonl(
+        gated_b1 / "rho_0.0_decisions.jsonl",
+        [_gated_b1_row(row["sample_id"], latency_ms=row["latency_ms"]) for row in eval_rows],
+    )
+    return confirmation, mode_b, gated_b1, eval_rows
+
+
+def test_run_hazard_model_confirmation_gbm_end_to_end(tmp_path: Path) -> None:
+    # Full plumbing of model_family='gbm' through the driver: --seed threads into
+    # every fold fit (no l2), the payload records the family, and the deployed
+    # gated hazard trigger still fires early only on slow-tool calls.
+    confirmation, mode_b, gated_b1, eval_rows = _build_confirmation_inputs(
+        tmp_path, profile_tasks=8, eval_tasks=2
+    )
+
+    result = run_hazard_model_confirmation(
+        confirmation,
+        mode_b_root=mode_b,
+        gated_b1_root=gated_b1,
+        output_root=tmp_path / "hazard",
+        restore_cost_fractions=[0.0],
+        num_intervals=8,
+        replicates=200,
+        confidence_level=0.95,
+        seed=0,
+        model_family="gbm",
+    )
+
+    assert result["model_family"] == "gbm"
+    assert result["decision_row_count"] == len(eval_rows)
+    assert result["grid_l2_choices"]["0.0"][0]["l2_penalty"] is None
+
+    merged = [
+        json.loads(line)
+        for line in (tmp_path / "hazard" / "rho_0.0_decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    for row in merged:
+        fired = (
+            row["latency_ms"] > row["offline_gated_hazard_trigger_ms"]
+            and row["offline_gated_hazard_trigger_ms"] < row["threshold_ms"]
+        )
+        assert fired == (row["tool_name"] == "slow")
 
 
 def test_run_hazard_model_confirmation_refuses_existing_output(tmp_path: Path) -> None:

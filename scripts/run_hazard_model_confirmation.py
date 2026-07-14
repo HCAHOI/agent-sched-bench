@@ -59,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="full",
         help="Ablation arm; command parsing config always comes from the manifest",
     )
+    parser.add_argument(
+        "--model-family",
+        choices=("logistic", "gbm"),
+        default="logistic",
+        help="Hazard estimator: pooled penalized logistic (default) or "
+        "HistGradientBoosting; the GBM's fold fits are seeded by --seed",
+    )
     parser.add_argument("--replicates", type=int, default=50_000)
     parser.add_argument("--confidence-level", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=0)
@@ -76,6 +83,7 @@ def main() -> None:
         restore_cost_fractions=args.restore_cost_fractions,
         num_intervals=args.num_intervals,
         feature_set=args.feature_set,
+        model_family=args.model_family,
         replicates=args.replicates,
         confidence_level=args.confidence_level,
         seed=args.seed,

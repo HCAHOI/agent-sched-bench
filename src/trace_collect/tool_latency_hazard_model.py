@@ -154,38 +154,80 @@ def build_log_grid(
 class FittedHazardModel:
     """A fitted discrete-time hazard model over one grid and feature encoder.
 
-    ``coef`` concatenates ``J - 1`` unpenalized per-interval intercepts (one
-    per free-hazard interval, i.e. every interval below the absorbing top)
-    with the shared L2-penalized feature coefficients.
+    Two estimator families share the same survival/mass pipeline behind a
+    single ``predict_interval_masses`` entry point, so the downstream
+    trigger/gate code never learns which family produced the masses:
+
+    * ``"logistic"`` (default): ``coef`` concatenates ``J - 1`` unpenalized
+      per-interval intercepts (one per free-hazard interval, i.e. every
+      interval below the absorbing top) with the shared L2-penalized feature
+      coefficients; ``estimator`` is ``None``.
+    * ``"gbm"``: ``estimator`` is a fitted
+      ``HistGradientBoostingClassifier`` over the encoder features plus the
+      interval index as one ordinal column (the tree interacts context with
+      time, replacing the per-interval intercepts). ``coef`` and
+      ``l2_penalty`` are ``None``.
     """
 
     encoder: FittedFeatureEncoder
     grid: DiscreteTimeGrid
-    coef: np.ndarray
-    l2_penalty: float
+    coef: np.ndarray | None
+    l2_penalty: float | None
+    model_family: str = "logistic"
+    estimator: Any | None = None
 
     def predict_interval_masses(self, feats: CausalRowFeatures) -> np.ndarray:
         """Return the interval mass vector ``p_j`` for one call (sums to 1).
 
-        Hazards ``h_i = sigmoid(alpha_i + beta . x)`` are formed for the
-        ``J - 1`` free intervals; survival ``S_j = prod_{i<=j}(1 - h_i)`` is
-        monotone non-increasing by construction. Masses are the survival
-        differences ``p_j = S_{j-1} - S_j`` for the free intervals and the
-        absorbing top interval receives all remaining survivors
-        ``p_top = S_{J-2}``, so the vector sums to 1 exactly.
+        Per-interval hazards ``h_i`` are formed for the ``J - 1`` free
+        intervals (from the logistic linear predictor or the GBM's
+        ``predict_proba``); survival ``S_j = prod_{i<=j}(1 - h_i)`` is monotone
+        non-increasing by construction. Masses are the survival differences
+        ``p_j = S_{j-1} - S_j`` for the free intervals and the absorbing top
+        interval receives all remaining survivors ``p_top = S_{J-2}``, so the
+        vector sums to 1 exactly.
         """
 
         x = np.asarray(self.encoder.transform(feats), dtype=float)
         num_free = self.grid.num_intervals - 1
-        intercepts = self.coef[:num_free]
-        beta = self.coef[num_free:]
-        logits = intercepts + float(x @ beta)
-        hazards = expit(logits)
-        survival = np.cumprod(1.0 - hazards)
-        prev_survival = np.concatenate(([1.0], survival[:-1]))
-        free_masses = prev_survival - survival
-        top_mass = survival[-1]
-        return np.concatenate((free_masses, [top_mass]))
+        if self.model_family == "gbm":
+            hazards = self._gbm_interval_hazards(x, num_free)
+        else:
+            intercepts = self.coef[:num_free]
+            beta = self.coef[num_free:]
+            logits = intercepts + float(x @ beta)
+            hazards = expit(logits)
+        return _masses_from_hazards(hazards)
+
+    def _gbm_interval_hazards(self, x: np.ndarray, num_free: int) -> np.ndarray:
+        """Per-interval GBM hazards for one call's fixed feature vector.
+
+        The context ``x`` is held constant across the ``J - 1`` free intervals
+        and the interval index sweeps ``0 .. J - 2`` in the appended ordinal
+        column (matching the fit-time layout), so the tree can vary the hazard
+        with time exactly as the per-interval intercepts do in the logistic
+        family.
+        """
+
+        interval_col = np.arange(num_free, dtype=float).reshape(-1, 1)
+        design = np.hstack((np.tile(x, (num_free, 1)), interval_col))
+        return self.estimator.predict_proba(design)[:, 1]
+
+
+def _masses_from_hazards(hazards: np.ndarray) -> np.ndarray:
+    """Convert ``J - 1`` free-interval hazards into a length-``J`` mass vector.
+
+    ``S_j = prod_{i<=j}(1 - h_i)`` is monotone non-increasing since every
+    ``h_i in (0, 1)``; ``p_j = S_{j-1} - S_j`` for the free intervals and the
+    absorbing top interval takes all remaining survivors ``S_{J-2}``, so the
+    result sums to 1 exactly regardless of estimator family.
+    """
+
+    survival = np.cumprod(1.0 - hazards)
+    prev_survival = np.concatenate(([1.0], survival[:-1]))
+    free_masses = prev_survival - survival
+    top_mass = survival[-1]
+    return np.concatenate((free_masses, [top_mass]))
 
 
 def fit_hazard_model(
@@ -197,25 +239,50 @@ def fit_hazard_model(
     max_iter: int = 200,
     cv_folds: int = DEFAULT_CV_FOLDS,
     l2_grid: Sequence[float] = DEFAULT_L2_GRID,
+    model_family: str = "logistic",
+    seed: int | None = None,
 ) -> FittedHazardModel:
-    """Fit a pooled penalized discrete-time hazard model on TRAIN rows.
+    """Fit a discrete-time hazard model on TRAIN rows.
 
     The causal feature encoder and the grid are fit on the training split
     only. Each train call with latency ``L`` is person-period expanded: it
     emits one row per interval it is at risk in, with target 1 in the interval
     containing ``L`` (see ``_expand_person_periods``) and 0 for earlier
     survived intervals; a call landing in the absorbing top interval emits
-    survived-only rows. The pooled logistic uses one unpenalized intercept per
-    free interval and one L2-penalized coefficient vector shared across
-    intervals, optimized by scipy L-BFGS-B on the mean regularized log-loss
-    (scikit-learn's LogisticRegression penalizes every coefficient uniformly
-    and cannot exempt the per-interval intercepts, so the scipy path is used).
+    survived-only rows. This person-period design is shared by both families.
 
-    ``l2_penalty=None`` selects the penalty by ``cv_folds``-fold
-    task-grouped CV log-loss over ``l2_grid`` on the TRAINING rows only
-    (folds group by ``task_id`` so calls from one task never straddle a CV
-    split); ties prefer the larger penalty. No eval data enters any stage.
+    ``model_family="logistic"`` (default) fits a pooled penalized logistic:
+    one unpenalized intercept per free interval and one L2-penalized
+    coefficient vector shared across intervals, optimized by scipy L-BFGS-B on
+    the mean regularized log-loss (scikit-learn's ``LogisticRegression``
+    penalizes every coefficient uniformly and cannot exempt the per-interval
+    intercepts, so the scipy path is used). ``l2_penalty=None`` selects the
+    penalty by ``cv_folds``-fold task-grouped CV log-loss over ``l2_grid`` on
+    the TRAINING rows only (folds group by ``task_id`` so calls from one task
+    never straddle a CV split); ties prefer the larger penalty.
+
+    ``model_family="gbm"`` fits a ``HistGradientBoostingClassifier`` on the
+    same person-period rows, with the interval index appended as one ordinal
+    feature column (so the tree interacts context with time, replacing the
+    per-interval intercepts). ``l2_penalty`` is logistic-only and must be
+    ``None`` for the GBM (raised otherwise); ``seed`` is required to make the
+    GBM's internal validation split and any subsampling deterministic. It is
+    unused by the logistic path, which stays byte-identical regardless of
+    ``seed``. No eval data enters any stage.
     """
+
+    if model_family not in ("logistic", "gbm"):
+        raise ValueError(
+            f"unknown model_family {model_family!r}; expected 'logistic' or 'gbm'"
+        )
+    if model_family == "gbm":
+        if l2_penalty is not None:
+            raise ValueError(
+                "l2_penalty is logistic-only; pass l2_penalty=None with "
+                "model_family='gbm'"
+            )
+        if seed is None:
+            raise ValueError("model_family='gbm' requires an explicit seed")
 
     from trace_collect.tool_latency_survival_features import (
         fit_feature_encoder,
@@ -254,8 +321,19 @@ def fit_hazard_model(
     call_index, interval_index, targets = _expand_person_periods(
         event_intervals, num_intervals
     )
-    design = _design_matrix(interval_index, features[call_index], num_free)
 
+    if model_family == "gbm":
+        estimator = _fit_gbm(features[call_index], interval_index, targets, seed=seed)
+        return FittedHazardModel(
+            encoder=encoder,
+            grid=grid,
+            coef=None,
+            l2_penalty=None,
+            model_family="gbm",
+            estimator=estimator,
+        )
+
+    design = _design_matrix(interval_index, features[call_index], num_free)
     if l2_penalty is None:
         l2_penalty = _select_l2_by_cv(
             design,
@@ -271,7 +349,11 @@ def fit_hazard_model(
         raise ValueError(f"l2_penalty must be finite and non-negative, got {l2_penalty}")
     coef = _fit_penalized_logistic(design, targets, num_free, l2_penalty, max_iter)
     return FittedHazardModel(
-        encoder=encoder, grid=grid, coef=coef, l2_penalty=float(l2_penalty)
+        encoder=encoder,
+        grid=grid,
+        coef=coef,
+        l2_penalty=float(l2_penalty),
+        model_family="logistic",
     )
 
 
@@ -504,6 +586,47 @@ def _fit_penalized_logistic(
         options={"maxiter": max_iter},
     )
     return result.x
+
+
+def _fit_gbm(
+    row_features: np.ndarray,
+    interval_index: np.ndarray,
+    targets: np.ndarray,
+    *,
+    seed: int,
+) -> Any:
+    """Fit a HistGradientBoosting hazard on the person-period rows.
+
+    The design is the encoder features with the interval index appended as one
+    ordinal column, so a single tree ensemble models the interval hazard as a
+    function of context and time together (replacing the logistic family's
+    per-interval intercepts). Hyperparameters are scikit-learn defaults with
+    two documented exceptions: ``early_stopping=True`` forces the internal
+    validation-based capacity control on regardless of corpus size (the default
+    ``'auto'`` only enables it above 10k samples, so per-fold behavior would
+    otherwise flip with fold size), and ``random_state=seed`` makes that
+    validation split and any subsampling deterministic. ``max_leaf_nodes=31``
+    and ``learning_rate=0.1`` are left at their defaults (no grid, no
+    eval-tuning); ``max_iter`` capacity is handled by early stopping.
+
+    Disclosure: scikit-learn's internal early-stopping validation split is
+    row-level (class-stratified), not task-grouped, so person-period rows of
+    one call or task can straddle the internal train/validation boundary.
+    The effect is confined to capacity control inside the training partition
+    (mildly optimistic stopping loss, possibly a few extra trees); the
+    outer/inner train-vs-eval TASK split is fully respected, so no eval
+    information enters the fit.
+    """
+
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    design = np.column_stack((row_features, interval_index.astype(float)))
+    estimator = HistGradientBoostingClassifier(
+        early_stopping=True,
+        random_state=seed,
+    )
+    estimator.fit(design, targets.astype(int))
+    return estimator
 
 
 def _select_l2_by_cv(
