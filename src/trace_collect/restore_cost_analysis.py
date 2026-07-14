@@ -30,7 +30,10 @@ from typing import Any
 
 from trace_collect.tool_latency_confirmation import paired_task_cluster_bootstrap
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
-from trace_collect.tool_latency_offline_probe import evaluate_offline_probe_clock
+from trace_collect.tool_latency_offline_probe import (
+    evaluate_offline_probe_clock,
+    select_probe_guard,
+)
 from trace_collect.tool_latency_within_task import within_task_trigger_rows
 
 
@@ -249,8 +252,12 @@ def run_mode_b_refit(
     return result
 
 
-# Contrasts for the within-task baseline: does task-local history alone beat
-# the deadline, and does the cross-task gated machinery beat that baseline?
+# Contrasts for the within-task baseline. The first pair keeps the ungated
+# B1 (does task-local history alone beat the deadline, and does the cross-task
+# gated machinery beat it?); the second pair repeats both against the *gated*
+# B1 — the fair control that gets the same cross-fitted margin-guard
+# protection as the cross-task method, so the ungated collapse under restore
+# cost is not a straw man.
 WITHIN_TASK_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
     (
         "within_task_vs_deadline",
@@ -262,6 +269,18 @@ WITHIN_TASK_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
         "gated_vs_within_task",
         "offline_gated_robust_trigger_ms",
         "within_task_trigger_ms",
+        False,
+    ),
+    (
+        "gated_within_task_vs_deadline",
+        "gated_within_task_trigger_ms",
+        "deadline_trigger_ms",
+        False,
+    ),
+    (
+        "gated_vs_gated_within_task",
+        "offline_gated_robust_trigger_ms",
+        "gated_within_task_trigger_ms",
         False,
     ),
 )
@@ -308,10 +327,12 @@ def run_within_task_baseline(
         )
     }
     history_coverage: dict[str, dict[str, int]] = {}
+    within_task_guards: dict[str, list[dict[str, Any]]] = {}
     decision_count = 0
     for fraction in restore_cost_fractions:
         key = fraction_key(fraction)
         decisions: list[dict[str, Any]] = []
+        fold_guards: list[dict[str, Any]] = []
         for fold in range(1, fold_count + 1):
             fold_name = f"f{fold}"
             eval_rows = list(
@@ -319,8 +340,23 @@ def run_within_task_baseline(
                     confirmation_root / "data" / f"{fold_name}_eval.jsonl"
                 )
             )
-            baseline_rows = within_task_trigger_rows(
-                eval_rows,
+            profile_rows = list(
+                read_tool_latency_jsonl(
+                    confirmation_root / "data" / f"{fold_name}_profile.jsonl"
+                )
+            )
+            # Frozen fold construction guarantees this, but the guard is only
+            # causally clean if profile (fit) and eval (apply) tasks are
+            # disjoint, so verify rather than trust.
+            overlap = {str(row["task_id"]) for row in eval_rows} & {
+                str(row["task_id"]) for row in profile_rows
+            }
+            if overlap:
+                raise AssertionError(
+                    f"fold {fold_name} profile and eval tasks overlap: "
+                    f"{sorted(overlap)}"
+                )
+            within_task_kwargs = dict(
                 kv_costs_ms=costs,
                 guard_ms=manifest["guard_ms"],
                 command_field=manifest["command_field"],
@@ -328,11 +364,27 @@ def run_within_task_baseline(
                 skip_leading_cd=manifest["skip_leading_cd"],
                 restore_cost_fraction=fraction,
             )
+            baseline_rows = within_task_trigger_rows(eval_rows, **within_task_kwargs)
+            # Fit the margin guard on the fold's profile tasks only, scoring
+            # each profile call's within-task margin against its realized
+            # early-fire utility (same select_probe_guard machinery, and the
+            # same restore fraction, as the cross-task probe).
+            profile_rows_scored = within_task_trigger_rows(
+                profile_rows, **within_task_kwargs
+            )
+            guard_calibration = select_probe_guard(
+                profile_rows_scored,
+                score_field="within_task_margin_normalized",
+                candidate_field="within_task_trigger_ms",
+                restore_cost_fraction=fraction,
+            )
+            fold_guards.append({"fold": fold_name, **guard_calibration})
             decisions.extend(
                 _merge_within_task_rows(
                     mode_b_root / f"rho_{key}" / f"{fold_name}_decisions.jsonl",
                     baseline_rows,
                     fold_name=fold_name,
+                    guard_normalized=guard_calibration["selected_guard_normalized"],
                 )
             )
         _write_jsonl(output_root / f"rho_{key}_decisions.jsonl", decisions)
@@ -342,6 +394,7 @@ def run_within_task_baseline(
                 f"{len(decisions)} != {decision_count}"
             )
         decision_count = len(decisions)
+        within_task_guards[key] = fold_guards
         history_coverage[key] = {
             "with_history": sum(
                 row["within_task_source"] != "none" for row in decisions
@@ -351,6 +404,10 @@ def run_within_task_baseline(
             ),
             "early_within_task_triggers": sum(
                 row["within_task_trigger_ms"] < row["threshold_ms"]
+                for row in decisions
+            ),
+            "gated_early_within_task_triggers": sum(
+                row["gated_within_task_trigger_ms"] < row["threshold_ms"]
                 for row in decisions
             ),
         }
@@ -381,6 +438,7 @@ def run_within_task_baseline(
         "costs_ms": costs,
         "restore_cost_fractions": restore_cost_fractions,
         "history_coverage": history_coverage,
+        "within_task_guards": within_task_guards,
         "bootstrap": {
             "replicates": replicates,
             "confidence_level": confidence_level,
@@ -396,8 +454,11 @@ def run_within_task_baseline(
             intro_lines=(
                 "The within-task policy uses only the current task's strictly",
                 "earlier calls (deepest prefix context, then tool level) with",
-                "the same hazard-recheck estimator; both it and the refit",
-                "gated policy are fitted and scored at each restore fraction.",
+                "the same hazard-recheck estimator. The gated variant adds a",
+                "margin guard fitted on each fold's profile tasks and applied",
+                "to its disjoint eval tasks, matching the cross-task method's",
+                "protection; every policy is fitted and scored at each",
+                "restore fraction.",
             ),
         ),
         encoding="utf-8",
@@ -410,8 +471,16 @@ def _merge_within_task_rows(
     baseline_rows: list[dict[str, Any]],
     *,
     fold_name: str,
+    guard_normalized: float | None,
 ) -> list[dict[str, Any]]:
-    """Attach within-task triggers to the fold's refit decision rows."""
+    """Attach within-task triggers to the fold's refit decision rows.
+
+    ``guard_normalized`` is the fold's profile-fitted margin guard. Each eval
+    trigger is gated exactly as ``evaluate_offline_probe_clock`` gates the
+    cross-task candidate: keep the early trigger only when a guard exists, the
+    trigger fires before the deadline, and the call's within-task margin
+    strictly clears the guard; otherwise fall back to the deadline.
+    """
 
     baseline_by_key = {
         (str(row["sample_id"]), float(row["kv_cost_ms"])): row
@@ -432,11 +501,26 @@ def _merge_within_task_rows(
                 abs_tol=1e-9,
             ):
                 raise ValueError(f"{field} mismatch for decision {key}")
+        trigger_ms = float(baseline["within_task_trigger_ms"])
+        threshold_ms = float(baseline["threshold_ms"])
+        margin_normalized = float(baseline["within_task_margin_normalized"])
+        gated_trigger_ms = (
+            trigger_ms
+            if (
+                guard_normalized is not None
+                and trigger_ms < threshold_ms
+                and margin_normalized > guard_normalized
+            )
+            else threshold_ms
+        )
         merged.append(
             {
                 **decision,
                 "outer_fold": fold_name,
                 "within_task_trigger_ms": baseline["within_task_trigger_ms"],
+                "within_task_margin_normalized": margin_normalized,
+                "gated_within_task_trigger_ms": gated_trigger_ms,
+                "gated_within_task_guard_normalized": guard_normalized,
                 "within_task_source": baseline["within_task_source"],
                 "within_task_history_count": (
                     baseline["within_task_history_count"]

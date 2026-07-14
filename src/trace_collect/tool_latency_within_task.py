@@ -5,9 +5,13 @@ only the current task's own earlier calls: at each tool call, the same-task
 calls already **completed** at its start, in the deepest available context
 (command-prefix depth back-off, then tool level), form an empirical latency
 sample, and the trigger is the same expected-utility-optimal re-check time
-the cross-task policies use (``hazard_recheck_ms``) at the same restore
-cost. A call whose context has no completed same-task sample falls back to
-the fixed deadline.
+the cross-task policies use at the same restore cost. Each row also carries
+``within_task_margin_normalized`` — the history's expected utility advantage
+over the deadline per kv cost, from the same ``mean_clock_region_stats``
+projection the cross-task probe scores — so a cross-fitted margin guard can
+gate these triggers exactly as it gates the cross-task ones. A call whose
+context has no completed same-task sample falls back to the fixed deadline
+with a zero margin.
 
 With a single prior sample this reduces to the last-value rule: an earlier
 long call triggers immediately, an earlier short call waits for the
@@ -30,7 +34,7 @@ from trace_collect.latency_validation import (
     required_nonnegative_float,
     required_text,
 )
-from trace_collect.tool_latency_profiled import hazard_recheck_ms
+from trace_collect.tool_latency_offline_probe import mean_clock_region_stats
 from trace_collect.tool_latency_utility_clock import validate_restore_cost
 
 
@@ -141,16 +145,22 @@ def _score_task_rows(
         )
         for kv_cost_ms in kv_costs:
             threshold_ms = kv_cost_ms + guard_ms
-            trigger_ms = (
-                hazard_recheck_ms(
+            if history:
+                # The same estimator the cross-task probe uses: its trigger is
+                # hazard_recheck_ms by construction, and normalized_margin is
+                # the history's expected utility advantage over the deadline
+                # (per kv cost), the score the margin guard gates on.
+                stats = mean_clock_region_stats(
                     history,
                     threshold_ms=threshold_ms,
                     kv_cost_ms=kv_cost_ms,
                     restore_cost_ms=restore_cost_fraction * kv_cost_ms,
                 )
-                if history
-                else threshold_ms
-            )
+                trigger_ms = stats.trigger_ms
+                margin_normalized = stats.normalized_margin
+            else:
+                trigger_ms = threshold_ms
+                margin_normalized = 0.0
             output.append(
                 {
                     "sample_id": row["sample_id"],
@@ -160,6 +170,7 @@ def _score_task_rows(
                     "kv_cost_ms": kv_cost_ms,
                     "threshold_ms": threshold_ms,
                     "within_task_trigger_ms": trigger_ms,
+                    "within_task_margin_normalized": margin_normalized,
                     "within_task_source": history_source,
                     "within_task_history_count": len(history),
                 }

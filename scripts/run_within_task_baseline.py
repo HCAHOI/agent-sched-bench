@@ -4,8 +4,12 @@
 The strongest simple competitor from the formulation critique: predict each
 call from the current task's own earlier calls only (deepest command-prefix
 context, then tool level), using the same hazard-recheck estimator and the
-same restore-cost-aware utility. Merges into the Mode B refit decisions so
-both policies in every contrast share fitting and scoring restore fractions.
+same restore-cost-aware utility. Runs two variants side by side: the ungated
+B1 and a gated B1 whose per-fold margin guard is fitted on that fold's profile
+tasks and applied to its disjoint eval tasks — the same cross-fitted guard
+protection the cross-task method has, so the ungated collapse under restore
+cost is compared against a fair control. Both merge into the Mode B refit
+decisions so every contrast shares fitting and scoring restore fractions.
 See trace_collect.restore_cost_analysis.run_within_task_baseline.
 """
 
