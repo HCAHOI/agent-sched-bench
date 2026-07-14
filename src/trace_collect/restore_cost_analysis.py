@@ -30,10 +30,15 @@ from typing import Any
 
 from trace_collect.tool_latency_confirmation import paired_task_cluster_bootstrap
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
+from trace_collect.tool_latency_hazard_eval import (
+    HAZARD_COMPARISONS,
+    evaluate_hazard_model_clock,
+)
 from trace_collect.tool_latency_offline_probe import (
     evaluate_offline_probe_clock,
     select_probe_guard,
 )
+from trace_collect.tool_latency_survival_features import SurvivalFeatureSpec
 from trace_collect.tool_latency_within_task import within_task_trigger_rows
 
 
@@ -534,6 +539,304 @@ def _merge_within_task_rows(
     return merged
 
 
+def run_hazard_model_confirmation(
+    confirmation_root: Path,
+    *,
+    mode_b_root: Path,
+    gated_b1_root: Path,
+    output_root: Path,
+    restore_cost_fractions: list[float],
+    num_intervals: int,
+    replicates: int,
+    confidence_level: float,
+    seed: int,
+    l2_penalty: float | None = None,
+) -> dict[str, Any]:
+    """Score the learned hazard clock against the refit gated policies.
+
+    The structural twin of :func:`run_within_task_baseline`. Folds are the outer
+    loop: each fold fits the hazard model exactly once (the fit is
+    fraction-independent) and scores every restore fraction from the cached
+    masses. Each fraction's per-``(sample, kv_cost)`` triggers are merged into
+    the Mode B refit decisions (``mode_b_root/rho_<frac>/f*_decisions.jsonl``,
+    source of ``deadline_trigger_ms`` and ``offline_gated_robust_trigger_ms``)
+    and the gated-B1 decisions (``gated_b1_root/rho_<frac>_decisions.jsonl``,
+    source of ``gated_within_task_trigger_ms``), so every policy in every
+    contrast is fit and scored at the same restore cost. The feature spec
+    mirrors the frozen trie config from the manifest. ``l2_penalty=None``
+    selects the penalty per fold on that fold's profile rows.
+    """
+
+    _validate_fractions(restore_cost_fractions)
+    if num_intervals < 2:
+        raise ValueError("num_intervals must be at least 2")
+    confirmation_root = confirmation_root.resolve()
+    mode_b_root = mode_b_root.resolve()
+    gated_b1_root = gated_b1_root.resolve()
+    output_root = output_root.resolve()
+    if output_root.exists():
+        raise FileExistsError(f"refusing to mix stale output: {output_root}")
+    manifest = _read_frozen_manifest(confirmation_root)
+    fold_count = manifest["fold_count"]
+    costs = [float(cost) for cost in manifest["costs_ms"]]
+    spec = SurvivalFeatureSpec(
+        command_field=manifest["command_field"],
+        max_prefix_depth=manifest["max_prefix_depth"],
+        skip_leading_cd=manifest["skip_leading_cd"],
+    )
+
+    output_root.mkdir(parents=True)
+    comparisons: dict[str, dict[str, Any]] = {
+        name: {
+            "treatment_trigger_field": treatment_field,
+            "baseline_trigger_field": baseline_field,
+            "enforce_gated_treatment": enforce_gated,
+            "by_restore_cost_fraction": {},
+        }
+        for name, treatment_field, baseline_field, enforce_gated in HAZARD_COMPARISONS
+    }
+    # One gated-B1 lookup per fraction; each fold pops its samples out, and the
+    # residual must be empty once every fold is merged (unmatched both ways).
+    gated_lookups: dict[str, dict[tuple[str, float], dict[str, Any]]] = {}
+    hazard_guards: dict[str, list[dict[str, Any]]] = {}
+    grid_l2_choices: dict[str, list[dict[str, Any]]] = {}
+    calibrations_by_fraction: dict[str, list[dict[str, Any]]] = {}
+    decisions_by_fraction: dict[str, list[dict[str, Any]]] = {}
+    for fraction in restore_cost_fractions:
+        key = fraction_key(fraction)
+        (output_root / f"rho_{key}").mkdir()
+        gated_lookups[key] = _load_gated_within_task(
+            gated_b1_root / f"rho_{key}_decisions.jsonl"
+        )
+        hazard_guards[key] = []
+        grid_l2_choices[key] = []
+        calibrations_by_fraction[key] = []
+        decisions_by_fraction[key] = []
+
+    # Folds outermost so the model is fit exactly once per fold (inner_folds
+    # inner fits + 1 outer fit); every fraction reuses that fold's cached masses.
+    for fold in range(1, fold_count + 1):
+        fold_name = f"f{fold}"
+        eval_rows = list(
+            read_tool_latency_jsonl(
+                confirmation_root / "data" / f"{fold_name}_eval.jsonl"
+            )
+        )
+        profile_rows = list(
+            read_tool_latency_jsonl(
+                confirmation_root / "data" / f"{fold_name}_profile.jsonl"
+            )
+        )
+        overlap = {str(row["task_id"]) for row in eval_rows} & {
+            str(row["task_id"]) for row in profile_rows
+        }
+        if overlap:
+            raise AssertionError(
+                f"fold {fold_name} profile and eval tasks overlap: "
+                f"{sorted(overlap)}"
+            )
+        fold_result = evaluate_hazard_model_clock(
+            eval_rows,
+            profile_rows=profile_rows,
+            kv_costs_ms=costs,
+            guard_ms=manifest["guard_ms"],
+            inner_folds=manifest["inner_folds"],
+            spec=spec,
+            num_intervals=num_intervals,
+            restore_cost_fractions=restore_cost_fractions,
+            l2_penalty=l2_penalty,
+        )
+        shared = {
+            field: value
+            for field, value in fold_result.items()
+            if field != "by_restore_cost_fraction"
+        }
+        for fraction in restore_cost_fractions:
+            key = fraction_key(fraction)
+            per_fraction = fold_result["by_restore_cost_fraction"][key]
+            hazard_rows = per_fraction["decisions"]
+            summary = {
+                **shared,
+                "restore_cost_fraction": fraction,
+                "calibration_guard": per_fraction["calibration_guard"],
+            }
+            fraction_root = output_root / f"rho_{key}"
+            _write_json(fraction_root / f"{fold_name}_summary.json", summary)
+            _write_jsonl(
+                fraction_root / f"{fold_name}_hazard_decisions.jsonl", hazard_rows
+            )
+            hazard_guards[key].append(
+                {"fold": fold_name, **per_fraction["calibration_guard"]}
+            )
+            grid_l2_choices[key].append(
+                {
+                    "fold": fold_name,
+                    "l2_penalty": shared["l2_penalty"],
+                    "l2_selected_on_full_profile": shared[
+                        "l2_selected_on_full_profile"
+                    ],
+                    "num_intervals": shared["num_intervals"],
+                    "grid_edges_ms": shared["outer_grid_edges_ms"],
+                }
+            )
+            calibrations_by_fraction[key].append(
+                {"fold": fold_name, "hazard_calibration": shared["hazard_calibration"]}
+            )
+            decisions_by_fraction[key].extend(
+                _merge_hazard_rows(
+                    mode_b_root / f"rho_{key}" / f"{fold_name}_decisions.jsonl",
+                    hazard_rows,
+                    gated_within_task_by_key=gated_lookups[key],
+                    fold_name=fold_name,
+                )
+            )
+
+    decision_count = 0
+    for fraction in restore_cost_fractions:
+        key = fraction_key(fraction)
+        if gated_lookups[key]:
+            raise ValueError(
+                f"{len(gated_lookups[key])} gated-B1 rows unmatched at "
+                f"fraction {key}"
+            )
+        decisions = decisions_by_fraction[key]
+        _write_jsonl(output_root / f"rho_{key}_decisions.jsonl", decisions)
+        if decision_count and len(decisions) != decision_count:
+            raise AssertionError(
+                "restore fractions produced differing decision counts: "
+                f"{len(decisions)} != {decision_count}"
+            )
+        decision_count = len(decisions)
+        for name, treatment_field, baseline_field, enforce_gated in HAZARD_COMPARISONS:
+            comparisons[name]["by_restore_cost_fraction"][key] = (
+                paired_task_cluster_bootstrap(
+                    decisions,
+                    costs_ms=costs,
+                    replicates=replicates,
+                    confidence_level=confidence_level,
+                    seed=seed,
+                    baseline_trigger_field=baseline_field,
+                    treatment_trigger_field=treatment_field,
+                    restore_cost_fraction=fraction,
+                    enforce_gated_treatment=enforce_gated,
+                )
+            )
+
+    result = {
+        "schema_version": 1,
+        "mode": "hazard_model_confirmation",
+        "confirmation_root": str(confirmation_root),
+        "mode_b_root": str(mode_b_root),
+        "gated_b1_root": str(gated_b1_root),
+        "fold_count": fold_count,
+        "decision_row_count": decision_count,
+        "costs_ms": costs,
+        "num_intervals": num_intervals,
+        "restore_cost_fractions": restore_cost_fractions,
+        "hazard_guards": hazard_guards,
+        "grid_l2_choices": grid_l2_choices,
+        "calibrations_by_fraction": calibrations_by_fraction,
+        "bootstrap": {
+            "replicates": replicates,
+            "confidence_level": confidence_level,
+            "seed": seed,
+        },
+        "comparisons": comparisons,
+    }
+    _write_json(output_root / "hazard_model_confirmation.json", result)
+    (output_root / "summary.md").write_text(
+        render_summary_markdown(
+            result,
+            title="Hazard-model confirmation",
+            intro_lines=(
+                "A learned discrete-time hazard model predicts each call's",
+                "latency distribution; its trigger and margin guard replace the",
+                "empirical trie behind the same utility-clock seam. Every policy",
+                "is fit and scored at each restore fraction, and the hazard gate",
+                "reuses the cross-fitted margin guard the trie method has.",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    return result
+
+
+def _load_gated_within_task(path: Path) -> dict[tuple[str, float], dict[str, Any]]:
+    """Index one fraction's gated-B1 decisions by ``(sample_id, kv_cost)``."""
+
+    lookup: dict[tuple[str, float], dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        key = (str(row["sample_id"]), float(row["kv_cost_ms"]))
+        if key in lookup:
+            raise ValueError(f"duplicate gated-B1 decision key: {key}")
+        lookup[key] = row
+    return lookup
+
+
+def _merge_hazard_rows(
+    decisions_path: Path,
+    hazard_rows: list[dict[str, Any]],
+    *,
+    gated_within_task_by_key: dict[tuple[str, float], dict[str, Any]],
+    fold_name: str,
+) -> list[dict[str, Any]]:
+    """Attach hazard triggers and the gated-B1 trigger to Mode B decisions.
+
+    Joins each Mode B refit decision to its hazard row (from the current fold)
+    and its gated-B1 row (from the shared per-fraction lookup) by
+    ``(sample_id, kv_cost)``, verifying the latency and threshold agree. The
+    gate is already applied inside ``evaluate_hazard_model_clock``, so the
+    merge only carries ``offline_gated_hazard_trigger_ms`` through. Unmatched
+    rows in either direction raise, mirroring ``_merge_within_task_rows``.
+    """
+
+    hazard_by_key = {
+        (str(row["sample_id"]), float(row["kv_cost_ms"])): row for row in hazard_rows
+    }
+    merged: list[dict[str, Any]] = []
+    for line in decisions_path.read_text(encoding="utf-8").splitlines():
+        decision = json.loads(line)
+        key = (str(decision["sample_id"]), float(decision["kv_cost_ms"]))
+        hazard = hazard_by_key.pop(key, None)
+        if hazard is None:
+            raise ValueError(f"no hazard row for decision {key}")
+        gated = gated_within_task_by_key.pop(key, None)
+        if gated is None:
+            raise ValueError(f"no gated-B1 row for decision {key}")
+        for field in ("latency_ms", "threshold_ms"):
+            for other, label in ((hazard, "hazard"), (gated, "gated-B1")):
+                if not math.isclose(
+                    float(decision[field]),
+                    float(other[field]),
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                ):
+                    raise ValueError(f"{field} mismatch for decision {key} vs {label}")
+        merged.append(
+            {
+                **decision,
+                "outer_fold": fold_name,
+                "hazard_trigger_ms": hazard["hazard_trigger_ms"],
+                "hazard_margin_normalized": hazard["hazard_margin_normalized"],
+                "offline_gated_hazard_trigger_ms": hazard[
+                    "offline_gated_hazard_trigger_ms"
+                ],
+                "offline_gated_hazard_guard_normalized": hazard[
+                    "offline_gated_hazard_guard_normalized"
+                ],
+                "gated_within_task_trigger_ms": gated["gated_within_task_trigger_ms"],
+            }
+        )
+    if hazard_by_key:
+        raise ValueError(
+            f"{len(hazard_by_key)} hazard rows unmatched in {fold_name}"
+        )
+    return merged
+
+
 def render_summary_markdown(
     result: dict[str, Any],
     *,
@@ -714,6 +1017,7 @@ __all__ = [
     "fraction_key",
     "load_fold_decisions",
     "render_summary_markdown",
+    "run_hazard_model_confirmation",
     "run_mode_b_refit",
     "run_within_task_baseline",
 ]

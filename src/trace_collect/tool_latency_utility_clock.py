@@ -477,6 +477,32 @@ def trigger_policy_utility_ms(
     return float(utility[0, 0])
 
 
+def utility_matrix(
+    samples: np.ndarray,
+    candidates: np.ndarray,
+    *,
+    threshold_ms: float,
+    kv_cost_ms: float,
+    restore_cost_ms: float = 0.0,
+) -> np.ndarray:
+    """Public passthrough to the shared utility functional.
+
+    Exposes ``_utility_matrix`` unchanged so learned-predictor lanes (e.g.
+    the discrete-time hazard model) apply the identical
+    ``hidden_on_long - exposed - rho*restore`` semantics to interval masses
+    instead of raw samples. Additive, non-behavioral: the empirical policies
+    keep calling ``_utility_matrix`` directly.
+    """
+
+    return _utility_matrix(
+        samples,
+        candidates,
+        threshold_ms=threshold_ms,
+        kv_cost_ms=kv_cost_ms,
+        restore_cost_ms=restore_cost_ms,
+    )
+
+
 def _utility_matrix(
     samples: np.ndarray,
     candidates: np.ndarray,
@@ -567,5 +593,6 @@ __all__ = [
     "load_and_evaluate_utility_clock_policy",
     "robust_utility_trigger_ms",
     "trigger_policy_utility_ms",
+    "utility_matrix",
     "validate_restore_cost",
 ]

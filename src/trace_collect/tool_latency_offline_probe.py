@@ -963,6 +963,21 @@ def _score_clock_rows(
     return output
 
 
+def balanced_task_folds(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    fold_count: int,
+) -> list[set[str]]:
+    """Public alias for the task-grouped fold split (see _balanced_task_folds).
+
+    Additive re-export so learned-predictor lanes can reuse the same
+    row-balanced, task-disjoint fold partition for inner cross-validation
+    without reimplementing it. Behavior is identical to the private helper.
+    """
+
+    return _balanced_task_folds(rows, fold_count=fold_count)
+
+
 def _balanced_task_folds(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -1141,6 +1156,7 @@ def _validate_config(
 __all__ = [
     "MeanClockRegionStats",
     "aggregate_offline_probe_cv",
+    "balanced_task_folds",
     "evaluate_offline_probe_clock",
     "load_and_evaluate_offline_probe_clock",
     "mean_clock_region_stats",
