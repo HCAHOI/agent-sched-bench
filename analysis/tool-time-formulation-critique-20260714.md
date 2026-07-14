@@ -214,11 +214,22 @@ not evidence for the method; the machinery's contribution is robustness;
 within-task signal is real and should become the deepest context level of
 the hierarchy (hybrid, with a gated-B1 control first).
 
+## Gated-B1 control (2026-07-14): the gate needs cross-task pooling
+
+Fair control (`analysis/tool-time-within-task-gated-20260714/`): giving the
+within-task baseline the same margin-guard machinery does not save it — at
+rho=1.0 every fold's guard selects "never early" (gated-B1 == deadline,
+delta exactly 0), and at rho=0.5 the gated variant is worse than ungated.
+At rho=0 the gated baseline (+205.5 s) still beats the cross-task method.
+Conclusion: within-task signal and cross-task pooled certification are
+complementary — direct motivation for the hybrid hierarchy.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
 1b. Mode B refit — DONE 2026-07-14, method adapts (above).
 2. B1 within-task baseline — DONE 2026-07-14, two-sided result (above).
+2b. Gated-B1 control — DONE 2026-07-14, gate needs pooling (above).
 2. B1 within-task last-value baseline.
 3. E4 concentration diagnostic (cheap, reuses confirmation outputs).
 4. E2 transfer protocol.
