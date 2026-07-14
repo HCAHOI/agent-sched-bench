@@ -224,12 +224,45 @@ At rho=0 the gated baseline (+205.5 s) still beats the cross-task method.
 Conclusion: within-task signal and cross-task pooled certification are
 complementary — direct motivation for the hybrid hierarchy.
 
+## E2 result (2026-07-14): the gate transfers, the priors do not
+
+SWE-ReBench-fitted rules applied frozen to Terminal-Bench
+(`analysis/tool-time-transfer-terminal-bench-20260714/`): gated policy
+net-negative vs the deadline at every rho (−13.9 to −86.5 s), though the
+gate bounds losses (no harmful cells) while ungated clocks are
+catastrophic (mean-hazard −540.8 s, 4 harmful cells at rho=1.0).
+ScienceAgentBench (`...-science-agent-bench-20260714/`) is neutral — the
+corpus is tool-sparse (~1.7 calls/task), nothing to win. The strong
+generalization claim fails; surviving framings: (a) the certification
+machinery is the transferable artifact (safety), (b) deployment-matched
+fitting with a few-shot target-adaptation question as the open middle
+ground. Both corpora were development-exposed (sensitivity only).
+
+## Campaign synthesis (2026-07-14)
+
+- Restore cost must be a first-class action parameter; rho=0 results are
+  non-evidence (E1, B1).
+- With rho in the objective, the cross-task gated method holds certified
+  gains within-benchmark (Mode B) where every simpler variant fails:
+  ungated clocks and the within-task baseline collapse under rho, and the
+  gate cannot rescue within-task margins (gated-B1).
+- The priors are benchmark-local: frozen transfer is neutral-to-negative,
+  but the gate consistently bounds damage everywhere (E2).
+- Defensible thesis for the paper: a certified trigger-gating framework
+  whose value is robustness under honest cost accounting and whose priors
+  are fitted per deployment workload — not universal latency priors.
+- Next phase: hybrid hierarchy (within-task deepest level + cross-task
+  pooled certification), few-shot target adaptation curve, measured rho on
+  target hardware, fresh-corpus certification at rho>0.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
 1b. Mode B refit — DONE 2026-07-14, method adapts (above).
 2. B1 within-task baseline — DONE 2026-07-14, two-sided result (above).
 2b. Gated-B1 control — DONE 2026-07-14, gate needs pooling (above).
+3. E2 transfer (Terminal-Bench, ScienceAgentBench) — DONE 2026-07-14,
+   priors don't transfer, gate does (above).
 2. B1 within-task last-value baseline.
 3. E4 concentration diagnostic (cheap, reuses confirmation outputs).
 4. E2 transfer protocol.
