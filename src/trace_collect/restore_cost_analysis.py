@@ -31,6 +31,7 @@ from typing import Any
 from trace_collect.tool_latency_confirmation import paired_task_cluster_bootstrap
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
 from trace_collect.tool_latency_offline_probe import evaluate_offline_probe_clock
+from trace_collect.tool_latency_within_task import within_task_trigger_rows
 
 
 _FOLD_DECISIONS_PATTERN = re.compile(r"^f(\d+)_decisions\.jsonl$")
@@ -248,6 +249,207 @@ def run_mode_b_refit(
     return result
 
 
+# Contrasts for the within-task baseline: does task-local history alone beat
+# the deadline, and does the cross-task gated machinery beat that baseline?
+WITHIN_TASK_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
+    (
+        "within_task_vs_deadline",
+        "within_task_trigger_ms",
+        "deadline_trigger_ms",
+        False,
+    ),
+    (
+        "gated_vs_within_task",
+        "offline_gated_robust_trigger_ms",
+        "within_task_trigger_ms",
+        False,
+    ),
+)
+
+
+def run_within_task_baseline(
+    confirmation_root: Path,
+    *,
+    mode_b_root: Path,
+    output_root: Path,
+    restore_cost_fractions: list[float],
+    replicates: int,
+    confidence_level: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Score the within-task baseline against the refit gated policy.
+
+    For each fraction, within-task triggers are computed at that fraction on
+    the frozen fold eval rows and merged into the Mode B refit decisions
+    (``mode_b_root/rho_<fraction>/f*_decisions.jsonl``), so both policies in
+    every contrast are fitted and scored at the same restore cost.
+    """
+
+    _validate_fractions(restore_cost_fractions)
+    confirmation_root = confirmation_root.resolve()
+    mode_b_root = mode_b_root.resolve()
+    output_root = output_root.resolve()
+    if output_root.exists():
+        raise FileExistsError(f"refusing to mix stale output: {output_root}")
+    manifest = _read_frozen_manifest(confirmation_root)
+    fold_count = manifest["fold_count"]
+    costs = [float(cost) for cost in manifest["costs_ms"]]
+
+    output_root.mkdir(parents=True)
+    comparisons: dict[str, dict[str, Any]] = {
+        name: {
+            "treatment_trigger_field": treatment_field,
+            "baseline_trigger_field": baseline_field,
+            "enforce_gated_treatment": enforce_gated,
+            "by_restore_cost_fraction": {},
+        }
+        for name, treatment_field, baseline_field, enforce_gated in (
+            WITHIN_TASK_COMPARISONS
+        )
+    }
+    history_coverage: dict[str, dict[str, int]] = {}
+    decision_count = 0
+    for fraction in restore_cost_fractions:
+        key = fraction_key(fraction)
+        decisions: list[dict[str, Any]] = []
+        for fold in range(1, fold_count + 1):
+            fold_name = f"f{fold}"
+            eval_rows = list(
+                read_tool_latency_jsonl(
+                    confirmation_root / "data" / f"{fold_name}_eval.jsonl"
+                )
+            )
+            baseline_rows = within_task_trigger_rows(
+                eval_rows,
+                kv_costs_ms=costs,
+                guard_ms=manifest["guard_ms"],
+                command_field=manifest["command_field"],
+                max_prefix_depth=manifest["max_prefix_depth"],
+                skip_leading_cd=manifest["skip_leading_cd"],
+                restore_cost_fraction=fraction,
+            )
+            decisions.extend(
+                _merge_within_task_rows(
+                    mode_b_root / f"rho_{key}" / f"{fold_name}_decisions.jsonl",
+                    baseline_rows,
+                    fold_name=fold_name,
+                )
+            )
+        _write_jsonl(output_root / f"rho_{key}_decisions.jsonl", decisions)
+        if decision_count and len(decisions) != decision_count:
+            raise AssertionError(
+                "restore fractions produced differing decision counts: "
+                f"{len(decisions)} != {decision_count}"
+            )
+        decision_count = len(decisions)
+        history_coverage[key] = {
+            "with_history": sum(
+                row["within_task_source"] != "none" for row in decisions
+            ),
+            "without_history": sum(
+                row["within_task_source"] == "none" for row in decisions
+            ),
+            "early_within_task_triggers": sum(
+                row["within_task_trigger_ms"] < row["threshold_ms"]
+                for row in decisions
+            ),
+        }
+        for name, treatment_field, baseline_field, enforce_gated in (
+            WITHIN_TASK_COMPARISONS
+        ):
+            comparisons[name]["by_restore_cost_fraction"][key] = (
+                paired_task_cluster_bootstrap(
+                    decisions,
+                    costs_ms=costs,
+                    replicates=replicates,
+                    confidence_level=confidence_level,
+                    seed=seed,
+                    baseline_trigger_field=baseline_field,
+                    treatment_trigger_field=treatment_field,
+                    restore_cost_fraction=fraction,
+                    enforce_gated_treatment=enforce_gated,
+                )
+            )
+
+    result = {
+        "schema_version": 1,
+        "mode": "within_task_baseline",
+        "confirmation_root": str(confirmation_root),
+        "mode_b_root": str(mode_b_root),
+        "fold_count": fold_count,
+        "decision_row_count": decision_count,
+        "costs_ms": costs,
+        "restore_cost_fractions": restore_cost_fractions,
+        "history_coverage": history_coverage,
+        "bootstrap": {
+            "replicates": replicates,
+            "confidence_level": confidence_level,
+            "seed": seed,
+        },
+        "comparisons": comparisons,
+    }
+    _write_json(output_root / "within_task_baseline.json", result)
+    (output_root / "summary.md").write_text(
+        render_summary_markdown(
+            result,
+            title="Within-task history baseline (B1)",
+            intro_lines=(
+                "The within-task policy uses only the current task's strictly",
+                "earlier calls (deepest prefix context, then tool level) with",
+                "the same hazard-recheck estimator; both it and the refit",
+                "gated policy are fitted and scored at each restore fraction.",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    return result
+
+
+def _merge_within_task_rows(
+    decisions_path: Path,
+    baseline_rows: list[dict[str, Any]],
+    *,
+    fold_name: str,
+) -> list[dict[str, Any]]:
+    """Attach within-task triggers to the fold's refit decision rows."""
+
+    baseline_by_key = {
+        (str(row["sample_id"]), float(row["kv_cost_ms"])): row
+        for row in baseline_rows
+    }
+    merged: list[dict[str, Any]] = []
+    for line in decisions_path.read_text(encoding="utf-8").splitlines():
+        decision = json.loads(line)
+        key = (str(decision["sample_id"]), float(decision["kv_cost_ms"]))
+        baseline = baseline_by_key.pop(key, None)
+        if baseline is None:
+            raise ValueError(f"no within-task row for decision {key}")
+        for field in ("latency_ms", "threshold_ms"):
+            if not math.isclose(
+                float(decision[field]),
+                float(baseline[field]),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise ValueError(f"{field} mismatch for decision {key}")
+        merged.append(
+            {
+                **decision,
+                "outer_fold": fold_name,
+                "within_task_trigger_ms": baseline["within_task_trigger_ms"],
+                "within_task_source": baseline["within_task_source"],
+                "within_task_history_count": (
+                    baseline["within_task_history_count"]
+                ),
+            }
+        )
+    if baseline_by_key:
+        raise ValueError(
+            f"{len(baseline_by_key)} within-task rows unmatched in {fold_name}"
+        )
+    return merged
+
+
 def render_summary_markdown(
     result: dict[str, Any],
     *,
@@ -423,9 +625,11 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 __all__ = [
     "COMPARISONS",
+    "WITHIN_TASK_COMPARISONS",
     "analyze_restore_cost_sweep",
     "fraction_key",
     "load_fold_decisions",
     "render_summary_markdown",
     "run_mode_b_refit",
+    "run_within_task_baseline",
 ]
