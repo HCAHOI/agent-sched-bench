@@ -255,6 +255,26 @@ ground. Both corpora were development-exposed (sensitivity only).
   pooled certification), few-shot target adaptation curve, measured rho on
   target hardware, fresh-corpus certification at rho>0.
 
+## Hazard-model phase result (2026-07-14/15): trie beats linear hazard
+
+The critique's concrete alternative was implemented in full
+(docs/hazard-model-phase-plan-20260714.md; review-gated, equivalence
+anchors proven, fits amortized across rho) and evaluated in three feature
+arms (`analysis/tool-time-hazard-model-{full,within-task,cross-task}-
+20260714/`). Verdict: the pooled penalized logistic loses head-to-head to
+the gated trie at every rho in every arm (−118 to −235 s totals, zero
+certified-positive cells); its guard collapses it to the deadline at
+rho ≥ 0.25; more features make rho=0 worse. Diagnosis from the calibration
+block: marginally calibrated but not SHARP (reliability bins show heavy
+shrinkage; predicted 0.55 survival → observed 0.78). The trigger utility
+pays for conditional sharpness, and at ~7k calls the memorizing trie is
+the sharper survival estimator. The gate again bounded the weak predictor
+safely (zero harmful cells gated; −669 s ungated). The factorization
+architecture (amortization, calibration diagnostics, drop-in seam) worked
+exactly as designed — the estimator, not the formulation, failed. Open:
+GBM arm (nonlinear, sharpness-capable, plan-sanctioned), trie-native
+within-task node level.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
@@ -263,6 +283,9 @@ ground. Both corpora were development-exposed (sensitivity only).
 2b. Gated-B1 control — DONE 2026-07-14, gate needs pooling (above).
 3. E2 transfer (Terminal-Bench, ScienceAgentBench) — DONE 2026-07-14,
    priors don't transfer, gate does (above).
+4. Hazard-model phase (learned survival estimator) — DONE 2026-07-15,
+   linear hazard loses to trie; sharpness is the binding constraint
+   (above).
 2. B1 within-task last-value baseline.
 3. E4 concentration diagnostic (cheap, reuses confirmation outputs).
 4. E2 transfer protocol.
