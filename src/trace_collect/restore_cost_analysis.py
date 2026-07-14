@@ -551,8 +551,14 @@ def run_hazard_model_confirmation(
     confidence_level: float,
     seed: int,
     l2_penalty: float | None = None,
+    feature_set: str = "full",
 ) -> dict[str, Any]:
     """Score the learned hazard clock against the refit gated policies.
+
+    ``feature_set`` names the ablation arm: ``full`` (all blocks),
+    ``with_within_task`` (no task aggregates), or ``cross_task_only``
+    (tool/prefix blocks only). Command parsing config always comes from
+    the frozen manifest.
 
     The structural twin of :func:`run_within_task_baseline`. Folds are the outer
     loop: each fold fits the hazard model exactly once (the fit is
@@ -579,10 +585,24 @@ def run_hazard_model_confirmation(
     manifest = _read_frozen_manifest(confirmation_root)
     fold_count = manifest["fold_count"]
     costs = [float(cost) for cost in manifest["costs_ms"]]
+    ablation_toggles = {
+        "full": {},
+        "with_within_task": {"use_task_aggregates": False},
+        "cross_task_only": {
+            "use_within_task_history": False,
+            "use_task_aggregates": False,
+        },
+    }
+    if feature_set not in ablation_toggles:
+        raise ValueError(
+            f"unknown feature_set {feature_set!r}; "
+            f"expected one of {sorted(ablation_toggles)}"
+        )
     spec = SurvivalFeatureSpec(
         command_field=manifest["command_field"],
         max_prefix_depth=manifest["max_prefix_depth"],
         skip_leading_cd=manifest["skip_leading_cd"],
+        **ablation_toggles[feature_set],
     )
 
     output_root.mkdir(parents=True)
@@ -725,6 +745,7 @@ def run_hazard_model_confirmation(
     result = {
         "schema_version": 1,
         "mode": "hazard_model_confirmation",
+        "feature_set": feature_set,
         "confirmation_root": str(confirmation_root),
         "mode_b_root": str(mode_b_root),
         "gated_b1_root": str(gated_b1_root),

@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     # Grid resolution swept in the plan at {20, 40, 80}; 40 balances tail
     # resolution against per-interval support on the ~9k-call corpus.
     parser.add_argument("--num-intervals", type=int, default=40)
+    parser.add_argument(
+        "--feature-set",
+        choices=("full", "with_within_task", "cross_task_only"),
+        default="full",
+        help="Ablation arm; command parsing config always comes from the manifest",
+    )
     parser.add_argument("--replicates", type=int, default=50_000)
     parser.add_argument("--confidence-level", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=0)
@@ -69,6 +75,7 @@ def main() -> None:
         output_root=args.output_root,
         restore_cost_fractions=args.restore_cost_fractions,
         num_intervals=args.num_intervals,
+        feature_set=args.feature_set,
         replicates=args.replicates,
         confidence_level=args.confidence_level,
         seed=args.seed,
