@@ -191,9 +191,21 @@ is protective under rho but converges toward the deadline. Top-3 tasks carry
 48% of the rho=0 gain (E4 preview). Details in that directory's findings.md.
 Open: Mode B refit, transfer (E2), measured rho.
 
+## Mode B result (2026-07-14): the formulation adapts
+
+Refit with rho in the objective on the same frozen folds
+(`analysis/tool-time-restore-cost-mode-b-20260714/`): gated_vs_deadline
+stays ≈ +120–150 s at every rho with certified-positive cells at each
+fraction (e.g. {1000, 4500} at rho=1.0); fires-on-short collapse 90 → 11
+while total early fires persist. The rho=0 refit reproduced the frozen
+triggers exactly (built-in check). Conclusion: restore cost must be a
+first-class action parameter; with it, the trigger machinery survives F1.
+Sensitivity analysis only — a certified rho>0 claim needs a fresh corpus.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
+1b. Mode B refit — DONE 2026-07-14, method adapts (above).
 2. B1 within-task last-value baseline.
 3. E4 concentration diagnostic (cheap, reuses confirmation outputs).
 4. E2 transfer protocol.
