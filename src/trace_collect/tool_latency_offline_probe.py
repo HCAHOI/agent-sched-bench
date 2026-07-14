@@ -27,6 +27,7 @@ from trace_collect.tool_latency_utility_clock import (
     robust_prior_nodes,
     robust_utility_trigger_stats,
     trigger_policy_utility_ms,
+    validate_restore_cost,
 )
 
 
@@ -58,6 +59,7 @@ def mean_clock_region_stats(
     *,
     threshold_ms: float,
     kv_cost_ms: float,
+    restore_cost_ms: float = 0.0,
 ) -> MeanClockRegionStats:
     """Project one empirical latency prior into decision-relevant regions."""
     if not values:
@@ -74,6 +76,7 @@ def mean_clock_region_stats(
         samples,
         threshold_ms=threshold_ms,
         kv_cost_ms=kv_cost_ms,
+        restore_cost_ms=restore_cost_ms,
     )
     band_gain_ms = 0.0
     short_penalty_ms = 0.0
@@ -84,12 +87,14 @@ def mean_clock_region_stats(
             trigger_ms,
             threshold_ms=threshold_ms,
             kv_cost_ms=kv_cost_ms,
+            restore_cost_ms=restore_cost_ms,
         )
         deadline_utility = trigger_policy_utility_ms(
             latency_ms,
             threshold_ms,
             threshold_ms=threshold_ms,
             kv_cost_ms=kv_cost_ms,
+            restore_cost_ms=restore_cost_ms,
         )
         delta_ms = candidate_utility - deadline_utility
         if threshold_ms < latency_ms < threshold_ms + kv_cost_ms:
@@ -144,8 +149,10 @@ def select_probe_guard(
     *,
     score_field: str = "probe_margin_normalized",
     candidate_field: str = "probe_candidate_trigger_ms",
+    restore_cost_fraction: float = 0.0,
 ) -> dict[str, Any]:
     """Select a dimensionless margin guard by cross-fitted probe utility."""
+    validate_restore_cost(restore_cost_fraction, label="restore_cost_fraction")
     eligible: list[tuple[float, float, str]] = []
     probe_tasks: set[str] = set()
     for index, row in enumerate(probe_decisions):
@@ -166,18 +173,21 @@ def select_probe_guard(
             raise ValueError(f"{source} contains an invalid score/trigger/cost")
         if candidate_ms >= threshold_ms or score <= 0.0:
             continue
+        restore_cost_ms = restore_cost_fraction * cost_ms
         delta_normalized = (
             trigger_policy_utility_ms(
                 latency_ms,
                 candidate_ms,
                 threshold_ms=threshold_ms,
                 kv_cost_ms=cost_ms,
+                restore_cost_ms=restore_cost_ms,
             )
             - trigger_policy_utility_ms(
                 latency_ms,
                 threshold_ms,
                 threshold_ms=threshold_ms,
                 kv_cost_ms=cost_ms,
+                restore_cost_ms=restore_cost_ms,
             )
         ) / cost_ms
         eligible.append((score, delta_normalized, task_id))
@@ -229,9 +239,17 @@ def evaluate_offline_probe_clock(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
+    restore_cost_fraction: float = 0.0,
 ) -> dict[str, Any]:
-    """Learn a profile-only guard and evaluate it on disjoint outer tasks."""
+    """Learn a profile-only guard and evaluate it on disjoint outer tasks.
+
+    ``restore_cost_fraction`` enters every fit and scoring stage identically
+    (inner-fold probe scoring, guard selection, outer triggers, and the
+    pooled summary), so refit and evaluation always share one utility. The
+    0.0 default reproduces the frozen restore-zero certification exactly.
+    """
     kv_costs = normalized_positive_floats(kv_costs_ms, label="kv cost")
+    validate_restore_cost(restore_cost_fraction, label="restore_cost_fraction")
     _validate_config(
         guard_ms=guard_ms,
         inner_folds=inner_folds,
@@ -262,15 +280,20 @@ def evaluate_offline_probe_clock(
                 command_field=command_field,
                 max_prefix_depth=max_prefix_depth,
                 skip_leading_cd=skip_leading_cd,
+                restore_cost_fraction=restore_cost_fraction,
             )
         )
     if {str(row["task_id"]) for row in profile_list} != all_profile_tasks:
         raise AssertionError("inner folds do not cover every profile task")
-    calibration = select_probe_guard(probe_decisions)
+    calibration = select_probe_guard(
+        probe_decisions,
+        restore_cost_fraction=restore_cost_fraction,
+    )
     robust_calibration = select_probe_guard(
         probe_decisions,
         score_field="probe_robust_margin_normalized",
         candidate_field="probe_robust_candidate_trigger_ms",
+        restore_cost_fraction=restore_cost_fraction,
     )
 
     baseline = evaluate_utility_clock_policy(
@@ -283,6 +306,7 @@ def evaluate_offline_probe_clock(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        restore_cost_fraction=restore_cost_fraction,
     )
     scored_rows = _score_clock_rows(
         eval_list,
@@ -294,6 +318,7 @@ def evaluate_offline_probe_clock(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        restore_cost_fraction=restore_cost_fraction,
     )
     scored_by_key = {
         (str(row["sample_id"]), float(row["kv_cost_ms"])): row for row in scored_rows
@@ -369,11 +394,15 @@ def evaluate_offline_probe_clock(
     if scored_by_key:
         raise AssertionError("scored decisions were not matched to baseline rows")
 
-    summary = summarize_offline_probe_decisions(decisions)
+    summary = summarize_offline_probe_decisions(
+        decisions,
+        restore_cost_fraction=restore_cost_fraction,
+    )
     return {
         "policies": list(POLICY_TRIGGER_FIELDS),
         "kv_costs_ms": kv_costs,
         "guard_ms": guard_ms,
+        "restore_cost_fraction": restore_cost_fraction,
         "inner_folds": inner_folds,
         "min_tool_history": min_tool_history,
         "min_profile_tasks": min_profile_tasks,
@@ -402,6 +431,7 @@ def load_and_evaluate_offline_probe_clock(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
+    restore_cost_fraction: float = 0.0,
 ) -> dict[str, Any]:
     """Load latency JSONLs and evaluate the offline-probe clock."""
     return evaluate_offline_probe_clock(
@@ -415,15 +445,23 @@ def load_and_evaluate_offline_probe_clock(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        restore_cost_fraction=restore_cost_fraction,
     )
 
 
 def summarize_offline_probe_decisions(
     decisions: Sequence[Mapping[str, Any]],
+    *,
+    restore_cost_fraction: float = 0.0,
 ) -> dict[str, Any]:
-    """Recompute pooled policy utility from raw offline-probe decisions."""
+    """Recompute pooled policy utility from raw offline-probe decisions.
+
+    Score at the same ``restore_cost_fraction`` the decisions were fitted
+    with; the 0.0 default keeps the frozen certification at restore zero.
+    """
     if not decisions:
         raise ValueError("offline-probe decisions must be non-empty")
+    validate_restore_cost(restore_cost_fraction, label="restore_cost_fraction")
     by_cost: dict[float, list[Mapping[str, Any]]] = defaultdict(list)
     seen: set[tuple[str, float]] = set()
     for row in decisions:
@@ -434,7 +472,8 @@ def summarize_offline_probe_decisions(
         seen.add(key)
         by_cost[cost].append(row)
     points = {
-        str(cost): _summarize_cost(rows) for cost, rows in sorted(by_cost.items())
+        str(cost): _summarize_cost(rows, restore_cost_fraction=restore_cost_fraction)
+        for cost, rows in sorted(by_cost.items())
     }
     return {
         "sample_count": len({str(row["sample_id"]) for row in decisions}),
@@ -515,9 +554,12 @@ def aggregate_offline_probe_cv(
             }
         )
         decisions.extend(fold_decisions)
-    pooled = summarize_offline_probe_decisions(decisions)
     if common_config is None:
         raise AssertionError("validated CV folds produced no configuration")
+    pooled = summarize_offline_probe_decisions(
+        decisions,
+        restore_cost_fraction=common_config["restore_cost_fraction"],
+    )
     if pooled["costs_ms"] != common_config["kv_costs_ms"]:
         raise AssertionError("pooled cost panel differs from validated fold config")
     pooled["fold_count"] = expected_fold_count
@@ -548,6 +590,11 @@ def _validate_fold_output(
     if missing:
         raise ValueError(f"{fold} summary is missing config fields: {missing}")
     config = {field: summary[field] for field in config_fields}
+    # Folds fitted at different restore costs must never be pooled; summaries
+    # written before the field existed were fitted at restore zero.
+    config["restore_cost_fraction"] = float(
+        summary.get("restore_cost_fraction", 0.0)
+    )
     costs = [float(cost) for cost in config["kv_costs_ms"]]
     if not costs or len(costs) != len(set(costs)):
         raise ValueError(f"{fold} summary has invalid kv_costs_ms")
@@ -810,6 +857,7 @@ def _score_clock_rows(
     command_field: str | None,
     max_prefix_depth: int,
     skip_leading_cd: bool,
+    restore_cost_fraction: float = 0.0,
 ) -> list[dict[str, Any]]:
     row_group_keys = (
         make_row_command_prefix_keys(
@@ -848,6 +896,7 @@ def _score_clock_rows(
         robust_node, robust_parent = robust_prior_nodes(hierarchy)
         for cost_ms in kv_costs:
             threshold_ms = cost_ms + guard_ms
+            restore_cost_ms = restore_cost_fraction * cost_ms
             key = (id(selected.values), threshold_ms, cost_ms)
             stats = mean_cache.get(key)
             if stats is None:
@@ -855,6 +904,7 @@ def _score_clock_rows(
                     selected.values,
                     threshold_ms=threshold_ms,
                     kv_cost_ms=cost_ms,
+                    restore_cost_ms=restore_cost_ms,
                 )
                 mean_cache[key] = stats
             robust_key = (
@@ -870,6 +920,7 @@ def _score_clock_rows(
                     parent=robust_parent,
                     threshold_ms=threshold_ms,
                     kv_cost_ms=cost_ms,
+                    restore_cost_ms=restore_cost_ms,
                 )
                 robust_values = (
                     robust_stats.trigger_ms,
@@ -941,7 +992,11 @@ def _balanced_task_folds(
     return folds
 
 
-def _summarize_cost(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _summarize_cost(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    restore_cost_fraction: float = 0.0,
+) -> dict[str, Any]:
     cost_ms = float(rows[0]["kv_cost_ms"])
     threshold_ms = float(rows[0]["threshold_ms"])
     if any(
@@ -968,6 +1023,7 @@ def _summarize_cost(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             cost_ms=cost_ms,
             headroom_ms=headroom_ms,
             oracle_ms=oracle_ms,
+            restore_cost_ms=restore_cost_fraction * cost_ms,
         )
         for policy, trigger_field in POLICY_TRIGGER_FIELDS.items()
     }
@@ -1000,6 +1056,7 @@ def _summarize_policy(
     cost_ms: float,
     headroom_ms: float,
     oracle_ms: float,
+    restore_cost_ms: float = 0.0,
 ) -> dict[str, Any]:
     net_ms = 0.0
     deadline_net_ms = 0.0
@@ -1012,21 +1069,23 @@ def _summarize_policy(
         trigger_ms = float(row[trigger_field])
         if not 0.0 <= trigger_ms <= threshold_ms:
             raise ValueError(f"invalid trigger {trigger_ms} in {trigger_field}")
-        # The frozen certification is scored at restore cost zero; restore
-        # sensitivity lives in scripts/analyze_restore_cost_sweep.py. Plumbing
-        # restore_cost_ms through here would silently change certified numbers
-        # and break the far-tail zero-delta assertion below.
+        # The frozen certification path keeps the restore-zero default; Mode B
+        # refits pass the fit-time restore cost so scoring matches fitting.
+        # Restore only touches short-call fires, so the far-tail zero-delta
+        # assertion below holds at any restore cost.
         utility = trigger_policy_utility_ms(
             latency_ms,
             trigger_ms,
             threshold_ms=threshold_ms,
             kv_cost_ms=cost_ms,
+            restore_cost_ms=restore_cost_ms,
         )
         deadline_utility = trigger_policy_utility_ms(
             latency_ms,
             threshold_ms,
             threshold_ms=threshold_ms,
             kv_cost_ms=cost_ms,
+            restore_cost_ms=restore_cost_ms,
         )
         delta_ms = utility - deadline_utility
         net_ms += utility

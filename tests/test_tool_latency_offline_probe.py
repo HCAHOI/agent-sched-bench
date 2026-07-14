@@ -98,6 +98,30 @@ def test_offline_probe_cross_fits_profile_tasks_and_applies_learned_guard() -> N
         assert sum(probabilities) == pytest.approx(1.0)
 
 
+def test_offline_probe_refit_with_restore_cost_moves_triggers_later() -> None:
+    result = evaluate_offline_probe_clock(
+        _eval_rows(),
+        profile_rows=_profile_rows(),
+        kv_costs_ms=[100.0],
+        guard_ms=0.0,
+        inner_folds=4,
+        restore_cost_fraction=0.35,
+    )
+
+    assert result["restore_cost_fraction"] == 0.35
+    # At restore 35 the k=0 clock loses to k=80 on every [80,80,150] node, so
+    # both refit policies wait past the short calls and never fire on them.
+    point = result["points"]["100.0"]
+    for policy in ("offline_probe_guard", "offline_gated_robust_clock"):
+        row = point["policies"][policy]
+        assert row["early_trigger_count"] == 1
+        assert row["early_trigger_on_short_count"] == 0
+        assert row["delta_vs_deadline_ms"] == 40.0
+    for decision in result["decisions"]:
+        assert decision["offline_probe_trigger_ms"] == 80.0
+        assert decision["offline_gated_robust_trigger_ms"] == 80.0
+
+
 def test_offline_robust_guard_filters_low_margin_and_retains_high_margin() -> None:
     profile_by_task = {
         "p0": {"alpha": [180.0, 220.0, 120.0], "beta": [220.0, 80.0, 80.0]},
