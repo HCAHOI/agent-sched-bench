@@ -275,6 +275,20 @@ exactly as designed — the estimator, not the formulation, failed. Open:
 GBM arm (nonlinear, sharpness-capable, plan-sanctioned), trie-native
 within-task node level.
 
+## GBM arm result (2026-07-15): sharpness confirmed, frontier split
+
+Same features/seam/gate, estimator swapped to HistGradientBoosting
+(`analysis/tool-time-hazard-model-gbm-full-20260715/`): head-to-head vs
+the gated trie flips from −235 s (linear) to +170 s at rho=0 (certified
+cell at 1000 ms), +322 s vs the deadline (2 certified; 3 at rho=0.25), and
+it is the first policy to beat gated-B1 at every fraction — the nonlinear
+model converts the within-task signal. At rho ≥ 0.5 the trie's LOTO
+unanimity still wins (−94 s, one harmful cell at rho=1.0). Reliability
+bins confirm the mechanism: shrunken middle → confident extremes. No
+policy dominates; measured rho picks the regime. Next: bagged/LOTO
+ensemble for the GBM (import the trie's robustness into the sharp
+estimator), trie-native within-task level, measured rho.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
