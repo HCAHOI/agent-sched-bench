@@ -303,6 +303,20 @@ pre-registered grid (this was the eighth analysis on the frozen
 collection). Frontier unchanged: single GBM at rho ≤ 0.25, trie at
 rho ≥ 0.5, measured rho decides.
 
+## Gate-union result (2026-07-15): dominates both parents
+
+Mechanism analysis (`analysis/tool-time-mechanism-analysis-20260715.md`)
+found all policy divergence on exec calls, zero per-tool switching
+headroom, and largely disjoint gate firing. The parameter-free OR-union
+(`analysis/tool-time-gate-union-20260715/`) beats the deadline with
+certified cells at ALL four fractions (+348.5 to +136.0 s) and
+certifiably beats BOTH parents at every fraction — the rho frontier
+collapses. Unanimity is right within an estimator family; OR is right
+across families with disjoint strengths. First-order caveat: the rule
+was corpus-selected (tenth analysis on the frozen collection) — the
+union is the pre-registered primary hypothesis for the fresh-corpus
+certification, not a claimable result.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
