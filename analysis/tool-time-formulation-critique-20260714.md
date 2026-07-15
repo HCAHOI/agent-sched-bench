@@ -289,6 +289,20 @@ policy dominates; measured rho picks the regime. Next: bagged/LOTO
 ensemble for the GBM (import the trie's robustness into the sharp
 estimator), trie-native within-task level, measured rho.
 
+## Ensemble arm result (2026-07-15): unanimity hedges too hard at M=5
+
+Task-jackknife GBM ensemble
+(`analysis/tool-time-hazard-ensemble-gbm-20260715/`): loses to the single
+gated GBM at every rho (−37.5 to −159.8 s) and does not close the trie
+gap at rho ≥ 0.5. Faithful mechanism transplant (bit-exact anchor); the
+failure is granularity — 20%-of-tasks-out members are far noisier than
+the trie's one-task-out family. Nuance: at rho=0 it certifies MORE cells
+vs deadline than any policy (4) with tighter LCBs — unanimity trades
+total for certainty. M-tuning deferred to a fresh corpus with a
+pre-registered grid (this was the eighth analysis on the frozen
+collection). Frontier unchanged: single GBM at rho ≤ 0.25, trie at
+rho ≥ 0.5, measured rho decides.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
