@@ -22,14 +22,21 @@ must tolerate unknown keys.
 
 from __future__ import annotations
 
+from collections import defaultdict
 import json
 import math
 from pathlib import Path
 import re
 from typing import Any
 
-from trace_collect.tool_latency_confirmation import paired_task_cluster_bootstrap
+import numpy as np
+
+from trace_collect.tool_latency_confirmation import (
+    _resample_task_totals,
+    paired_task_cluster_bootstrap,
+)
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
+from trace_collect.tool_latency_utility_clock import trigger_policy_utility_ms
 from trace_collect.tool_latency_hazard_eval import (
     HAZARD_COMPARISONS,
     HAZARD_ENSEMBLE_COMPARISONS,
@@ -1034,6 +1041,350 @@ def run_gate_union_analysis(
     return result
 
 
+# The candidate gates the certified union may OR: the empirical trie gate and
+# the learned hazard gate, each named by its gated (guard-protected) trigger.
+CERTIFIED_UNION_GATES: tuple[tuple[str, str], ...] = (
+    ("trie", "offline_gated_robust_trigger_ms"),
+    ("hazard", "offline_gated_hazard_trigger_ms"),
+)
+
+_CERTIFIED_UNION_REQUIRED_FIELDS = (
+    "outer_fold",
+    "sample_id",
+    "task_id",
+    "latency_ms",
+    "kv_cost_ms",
+    "threshold_ms",
+    "deadline_trigger_ms",
+    "offline_gated_hazard_trigger_ms",
+    "offline_gated_robust_trigger_ms",
+)
+
+_CERTIFIED_INCLUSION_CRITERIA = ("loo_point", "loo_lcb")
+
+# certified_union_trigger_ms fires when EITHER *certified* gate opens early, at
+# whichever fitted trigger comes first — the naive union restricted to the gates
+# that beat the deadline on the fitting partition. The naive union
+# (gate_union_trigger_ms = min of both gates unconditionally) is the fourth
+# baseline so the certified rule is measured against the combiner it corrects.
+CERTIFIED_UNION_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
+    (
+        "certified_union_vs_deadline",
+        "certified_union_trigger_ms",
+        "deadline_trigger_ms",
+        False,
+    ),
+    (
+        "certified_union_vs_gated_hazard",
+        "certified_union_trigger_ms",
+        "offline_gated_hazard_trigger_ms",
+        False,
+    ),
+    (
+        "certified_union_vs_gated_robust",
+        "certified_union_trigger_ms",
+        "offline_gated_robust_trigger_ms",
+        False,
+    ),
+    (
+        "certified_union_vs_naive_union",
+        "certified_union_trigger_ms",
+        "gate_union_trigger_ms",
+        False,
+    ),
+)
+
+
+def run_certified_union_analysis(
+    hazard_root: Path,
+    *,
+    output_root: Path,
+    restore_cost_fractions: list[float],
+    replicates: int,
+    confidence_level: float,
+    seed: int,
+    inclusion_criterion: str = "loo_point",
+) -> dict[str, Any]:
+    """Bootstrap the certified OR-union of the trie and hazard gates.
+
+    Re-scores the merged decisions of a hazard confirmation run
+    (``hazard_root/rho_<fraction>_decisions.jsonl``, the same source as
+    :func:`run_gate_union_analysis`). Where the naive union ORs both gates
+    unconditionally, the certified union ORs only the gates that certifiably
+    beat the deadline on the fitting partition — decided WITHOUT looking at the
+    rows being scored.
+
+    Cross-fitted inclusion (the leakage-free core): the decisions span every
+    outer fold (``outer_fold`` field). For each outer fold ``f`` and candidate
+    gate ``g``, inclusion is decided using ONLY the rows with
+    ``outer_fold != f`` (leave-fold-out): the gate is included for fold ``f``
+    iff its total utility advantage over the deadline on those other folds'
+    rows passes the criterion. Because fold ``f``'s own rows never enter its
+    inclusion decision, the eval partition is never used to certify the rule it
+    is then scored under — no leakage into the scored partition.
+
+    ``inclusion_criterion`` selects that test: ``loo_point`` (default) includes
+    a gate iff its leave-fold-out total delta is strictly positive;
+    ``loo_lcb`` (conservative) includes it iff a task-clustered bootstrap lower
+    bound of that delta is strictly positive.
+
+    The certified-union trigger for each row of fold ``f`` is the min over the
+    gates included for ``f`` (always ``<= threshold``), or the deadline if no
+    gate is included. Triggers stay exactly as fitted at each fraction; only the
+    combination rule is new (a Mode-A style derived re-scoring, not a refit).
+
+    Sensitivity only: the certified-union rule family was itself selected after
+    observing gate behavior on these corpora, so these intervals certify the
+    combiner on the corpora that motivated it. A fresh-corpus certification is
+    required before any headline claim.
+    """
+
+    _validate_fractions(restore_cost_fractions)
+    if inclusion_criterion not in _CERTIFIED_INCLUSION_CRITERIA:
+        raise ValueError(
+            f"unknown inclusion_criterion {inclusion_criterion!r}; expected one of "
+            f"{_CERTIFIED_INCLUSION_CRITERIA}"
+        )
+    hazard_root = hazard_root.resolve()
+    output_root = output_root.resolve()
+    if output_root.exists():
+        raise FileExistsError(f"refusing to mix stale output: {output_root}")
+
+    output_root.mkdir(parents=True)
+    comparisons: dict[str, dict[str, Any]] = {
+        name: {
+            "treatment_trigger_field": treatment_field,
+            "baseline_trigger_field": baseline_field,
+            "enforce_gated_treatment": enforce_gated,
+            "by_restore_cost_fraction": {},
+        }
+        for name, treatment_field, baseline_field, enforce_gated in (
+            CERTIFIED_UNION_COMPARISONS
+        )
+    }
+    inclusion_by_fraction: dict[str, dict[str, dict[str, Any]]] = {}
+    decision_count = 0
+    costs: list[float] = []
+    for fraction in restore_cost_fractions:
+        key = fraction_key(fraction)
+        decisions = _load_certified_union_decisions(
+            hazard_root / f"rho_{key}_decisions.jsonl"
+        )
+        fraction_costs = sorted({float(row["kv_cost_ms"]) for row in decisions})
+        if decision_count and (
+            len(decisions) != decision_count or fraction_costs != costs
+        ):
+            raise AssertionError(
+                "restore fractions carry differing decision counts or cost "
+                f"sets: {len(decisions)}/{fraction_costs} != "
+                f"{decision_count}/{costs}"
+            )
+        costs = fraction_costs
+        decision_count = len(decisions)
+
+        fold_names = sorted({str(row["outer_fold"]) for row in decisions})
+        if len(fold_names) < 2:
+            raise ValueError(
+                "certified union needs >= 2 outer folds for leave-fold-out "
+                f"inclusion, found {fold_names}"
+            )
+        inclusion = {
+            fold: _fold_gate_inclusion(
+                [row for row in decisions if str(row["outer_fold"]) != fold],
+                restore_cost_fraction=fraction,
+                inclusion_criterion=inclusion_criterion,
+                replicates=replicates,
+                confidence_level=confidence_level,
+                seed=seed,
+            )
+            for fold in fold_names
+        }
+        inclusion_by_fraction[key] = inclusion
+
+        for row in decisions:
+            fold = str(row["outer_fold"])
+            included_triggers = [
+                float(row[gate_field])
+                for gate_name, gate_field in CERTIFIED_UNION_GATES
+                if inclusion[fold][gate_name]["included"]
+            ]
+            row["certified_union_trigger_ms"] = (
+                min(included_triggers)
+                if included_triggers
+                else float(row["threshold_ms"])
+            )
+        _write_jsonl(output_root / f"rho_{key}_decisions.jsonl", decisions)
+
+        for name, treatment_field, baseline_field, enforce_gated in (
+            CERTIFIED_UNION_COMPARISONS
+        ):
+            comparisons[name]["by_restore_cost_fraction"][key] = (
+                paired_task_cluster_bootstrap(
+                    decisions,
+                    costs_ms=costs,
+                    replicates=replicates,
+                    confidence_level=confidence_level,
+                    seed=seed,
+                    baseline_trigger_field=baseline_field,
+                    treatment_trigger_field=treatment_field,
+                    restore_cost_fraction=fraction,
+                    enforce_gated_treatment=enforce_gated,
+                )
+            )
+
+    result = {
+        "schema_version": 1,
+        "mode": "certified_union_analysis",
+        "confirmation_root": str(hazard_root),
+        "inclusion_criterion": inclusion_criterion,
+        "decision_row_count": decision_count,
+        "costs_ms": costs,
+        "restore_cost_fractions": restore_cost_fractions,
+        "bootstrap": {
+            "replicates": replicates,
+            "confidence_level": confidence_level,
+            "seed": seed,
+        },
+        "gate_inclusion_by_restore_cost_fraction": inclusion_by_fraction,
+        "comparisons": comparisons,
+    }
+    _write_json(output_root / "certified_union_analysis.json", result)
+    (output_root / "summary.md").write_text(
+        render_summary_markdown(
+            result,
+            title="Certified-union combiner (OR of certified trie/hazard gates)",
+            intro_lines=(
+                "certified_union_trigger_ms ORs only the gates that certifiably",
+                "beat the deadline on the FITTING partition: for each outer fold,",
+                "a gate is included using ONLY the OTHER folds' rows (cross-fitted",
+                "leave-fold-out), so a fold's own rows never certify the rule they",
+                "are scored under. The trigger is the min over included gates, or",
+                f"the deadline if none is included (criterion: {inclusion_criterion}).",
+                "Sensitivity only: the certified-union rule family was itself",
+                "selected after observing gate behavior on these corpora, so these",
+                "intervals carry selection optimism; fresh-corpus certification is",
+                "required before any headline claim.",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    return result
+
+
+def _load_certified_union_decisions(path: Path) -> list[dict[str, Any]]:
+    """Load merged decisions and attach the naive-union trigger inline.
+
+    Requires the leave-fold-out partition (``outer_fold``) and both gate
+    triggers on every row; ``gate_union_trigger_ms`` is the unconditional
+    min-of-both baseline the certified rule is compared against.
+    """
+
+    decisions: list[dict[str, Any]] = []
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        source = f"{path}:{line_number}"
+        for field in _CERTIFIED_UNION_REQUIRED_FIELDS:
+            if field not in row:
+                raise ValueError(f"{source} lacks {field}")
+        row["gate_union_trigger_ms"] = min(
+            float(row["offline_gated_hazard_trigger_ms"]),
+            float(row["offline_gated_robust_trigger_ms"]),
+        )
+        decisions.append(row)
+    if not decisions:
+        raise ValueError(f"no decisions in {path}")
+    return decisions
+
+
+def _fold_gate_inclusion(
+    leave_fold_out_rows: list[dict[str, Any]],
+    *,
+    restore_cost_fraction: float,
+    inclusion_criterion: str,
+    replicates: int,
+    confidence_level: float,
+    seed: int,
+) -> dict[str, dict[str, Any]]:
+    """Decide each gate's inclusion for one fold from the other folds' rows.
+
+    For each candidate gate, sums the per-task utility advantage of the gate's
+    trigger over the deadline across the leave-fold-out rows. ``loo_point``
+    includes the gate iff that total is strictly positive; ``loo_lcb`` requires
+    a task-clustered bootstrap lower bound of the total to be strictly positive.
+
+    The advantage is aggregated across all kv-cost columns into ONE inclusion
+    decision per (fold, gate), re-decided per ``restore_cost_fraction``. A gate
+    net-positive on the cost-aggregate but locally harmful at a single cost is
+    still included at that cost; this matches the total-utility framing and
+    keeps inclusion a single per-fold rule rather than a per-cost one.
+    """
+
+    records: dict[str, dict[str, Any]] = {}
+    for gate_name, gate_field in CERTIFIED_UNION_GATES:
+        task_deltas: dict[str, float] = defaultdict(float)
+        for row in leave_fold_out_rows:
+            cost = float(row["kv_cost_ms"])
+            threshold = float(row["threshold_ms"])
+            latency = float(row["latency_ms"])
+            restore_cost_ms = restore_cost_fraction * cost
+            gate_utility = trigger_policy_utility_ms(
+                latency,
+                float(row[gate_field]),
+                threshold_ms=threshold,
+                kv_cost_ms=cost,
+                restore_cost_ms=restore_cost_ms,
+            )
+            deadline_utility = trigger_policy_utility_ms(
+                latency,
+                float(row["deadline_trigger_ms"]),
+                threshold_ms=threshold,
+                kv_cost_ms=cost,
+                restore_cost_ms=restore_cost_ms,
+            )
+            task_deltas[str(row["task_id"])] += gate_utility - deadline_utility
+        total_delta = sum(task_deltas.values())
+        record: dict[str, Any] = {"leave_fold_out_delta_ms": total_delta}
+        if inclusion_criterion == "loo_point":
+            record["included"] = total_delta > 0.0
+        else:
+            lcb = _task_cluster_lower_bound(
+                list(task_deltas.values()),
+                replicates=replicates,
+                confidence_level=confidence_level,
+                seed=seed,
+            )
+            record["leave_fold_out_lcb_ms"] = lcb
+            record["included"] = lcb > 0.0
+        records[gate_name] = record
+    return records
+
+
+def _task_cluster_lower_bound(
+    task_totals: list[float],
+    *,
+    replicates: int,
+    confidence_level: float,
+    seed: int,
+) -> float:
+    """Lower confidence bound of a scalar total by resampling task clusters.
+
+    Reuses the confirmation bootstrap's task-cluster resampler on a single
+    (across-cost) contribution column, so the LCB uses the same PCG64 draw and
+    percentile convention as :func:`paired_task_cluster_bootstrap`.
+    """
+
+    contributions = np.asarray(task_totals, dtype=float).reshape(-1, 1)
+    bootstrap_totals = _resample_task_totals(
+        contributions, replicates=replicates, seed=seed
+    )
+    alpha = 1.0 - confidence_level
+    return float(np.quantile(bootstrap_totals[:, 0], alpha / 2.0, method="linear"))
+
+
 def render_summary_markdown(
     result: dict[str, Any],
     *,
@@ -1222,6 +1573,8 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 __all__ = [
+    "CERTIFIED_UNION_COMPARISONS",
+    "CERTIFIED_UNION_GATES",
     "COMPARISONS",
     "GATE_UNION_COMPARISONS",
     "WITHIN_TASK_COMPARISONS",
@@ -1229,6 +1582,7 @@ __all__ = [
     "fraction_key",
     "load_fold_decisions",
     "render_summary_markdown",
+    "run_certified_union_analysis",
     "run_gate_union_analysis",
     "run_hazard_model_confirmation",
     "run_mode_b_refit",
