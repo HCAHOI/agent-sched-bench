@@ -370,6 +370,21 @@ failure. Its only weakness is conservatism on underpowered corpora — a
 DATA problem, the sharpest argument for the fresh corpus. Pre-registered
 primary for the fresh corpus; naive union = negative control.
 
+## P2 reload-vs-recompute (2026-07-15): first honest multi-action step
+
+`analysis/tool-time-recompute-restore-swe-rebench-20260715/`: a second
+restore mechanism, restore = min(rho*kv, rate*context), Continuum/
+ThunderAgent's reload-vs-recompute, with rate SWEPT (stand-in for a later
+measured prefill curve) and EXACT causal context length (llm_call
+prompt_tokens, 4640/4640). At measured rho=0.94: swap-only is -32.9 s vs
+deadline (reconfirmed); recompute certifiably cuts restore cost (+101.8 s,
+4 cert, at cheap prefill); at cheap prefill (0.05 ms/tok) it recovers the
+deficit to +68.9 s vs deadline (uncertified). Whether recompute helps
+hinges on ONE unmeasured number (H100 prefill-vs-context) -> the concrete
+next fresh-GPU measurement. Mode-A lower bound; the factorization (new
+action = new cost functional over frozen triggers, cost swept like rho)
+works exactly as designed.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
