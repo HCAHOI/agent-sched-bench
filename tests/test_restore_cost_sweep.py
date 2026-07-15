@@ -9,6 +9,7 @@ import pytest
 from trace_collect.restore_cost_analysis import (
     analyze_restore_cost_sweep,
     render_summary_markdown,
+    run_gate_union_analysis,
     run_mode_b_refit,
 )
 from trace_collect.tool_latency_offline_probe import evaluate_offline_probe_clock
@@ -166,6 +167,58 @@ def test_mode_b_refit_reproduces_frozen_zero_and_adapts_triggers(
     # for 20; the refit at 0.35 fires at 80 on long calls only (+40 each).
     assert zero_delta == pytest.approx(8 * 100.0 - 16 * 20.0)
     assert refit_delta == pytest.approx(8 * 40.0)
+
+
+def test_gate_union_takes_earlier_trigger_and_scores_it(tmp_path: Path) -> None:
+    hazard_root = tmp_path / "hazard"
+    hazard_root.mkdir()
+    rows = [
+        # Long call: hazard gate fires at 0 (+100 vs deadline), trie waits.
+        {
+            "sample_id": "a",
+            "task_id": "task-a",
+            "latency_ms": 150.0,
+            "kv_cost_ms": 100.0,
+            "threshold_ms": 100.0,
+            "deadline_trigger_ms": 100.0,
+            "offline_gated_hazard_trigger_ms": 0.0,
+            "offline_gated_robust_trigger_ms": 100.0,
+        },
+        # Short call: trie gate fires at 50 (exposed 70), hazard waits.
+        {
+            "sample_id": "b",
+            "task_id": "task-b",
+            "latency_ms": 80.0,
+            "kv_cost_ms": 100.0,
+            "threshold_ms": 100.0,
+            "deadline_trigger_ms": 100.0,
+            "offline_gated_hazard_trigger_ms": 100.0,
+            "offline_gated_robust_trigger_ms": 50.0,
+        },
+    ]
+    (hazard_root / "rho_0.0_decisions.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    result = run_gate_union_analysis(
+        hazard_root,
+        output_root=tmp_path / "union",
+        restore_cost_fractions=[0.0],
+        replicates=100,
+        confidence_level=0.95,
+        seed=0,
+    )
+
+    # Union inherits both early fires: +100 (a) − 70 (b) vs the deadline.
+    points = {
+        name: comparison["by_restore_cost_fraction"]["0.0"]["points"]["100.0"]
+        for name, comparison in result["comparisons"].items()
+    }
+    assert points["union_vs_deadline"]["paired_delta_ms"] == 30.0
+    assert points["union_vs_gated_hazard"]["paired_delta_ms"] == -70.0
+    assert points["union_vs_gated_robust"]["paired_delta_ms"] == 100.0
+    assert (tmp_path / "union" / "summary.md").exists()
 
 
 def _latency_rows(

@@ -33,13 +33,13 @@ from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
 from trace_collect.tool_latency_hazard_eval import (
     HAZARD_COMPARISONS,
     HAZARD_ENSEMBLE_COMPARISONS,
+    build_survival_feature_spec,
     evaluate_hazard_model_clock,
 )
 from trace_collect.tool_latency_offline_probe import (
     evaluate_offline_probe_clock,
     select_probe_guard,
 )
-from trace_collect.tool_latency_survival_features import SurvivalFeatureSpec
 from trace_collect.tool_latency_within_task import within_task_trigger_rows
 
 
@@ -599,19 +599,6 @@ def run_hazard_model_confirmation(
     manifest = _read_frozen_manifest(confirmation_root)
     fold_count = manifest["fold_count"]
     costs = [float(cost) for cost in manifest["costs_ms"]]
-    ablation_toggles = {
-        "full": {},
-        "with_within_task": {"use_task_aggregates": False},
-        "cross_task_only": {
-            "use_within_task_history": False,
-            "use_task_aggregates": False,
-        },
-    }
-    if feature_set not in ablation_toggles:
-        raise ValueError(
-            f"unknown feature_set {feature_set!r}; "
-            f"expected one of {sorted(ablation_toggles)}"
-        )
     if model_family not in ("logistic", "gbm"):
         raise ValueError(
             f"unknown model_family {model_family!r}; expected 'logistic' or 'gbm'"
@@ -621,11 +608,11 @@ def run_hazard_model_confirmation(
             f"ensemble_members must be 0 or >= 2, got {ensemble_members}"
         )
     ensemble_on = ensemble_members >= 2
-    spec = SurvivalFeatureSpec(
+    spec = build_survival_feature_spec(
+        feature_set,
         command_field=manifest["command_field"],
         max_prefix_depth=manifest["max_prefix_depth"],
         skip_leading_cd=manifest["skip_leading_cd"],
-        **ablation_toggles[feature_set],
     )
 
     active_comparisons = HAZARD_COMPARISONS + (
@@ -902,6 +889,151 @@ def _merge_hazard_rows(
     return merged
 
 
+# The union fires when EITHER gate opens early, at whichever trigger comes
+# first. Mechanism analysis (tool-time-mechanism-analysis-20260715) showed the
+# two gates fire on largely disjoint calls, so the OR combines complementary
+# coverage; it is parameter-free (both triggers are computed offline).
+GATE_UNION_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
+    ("union_vs_deadline", "gate_union_trigger_ms", "deadline_trigger_ms", False),
+    (
+        "union_vs_gated_hazard",
+        "gate_union_trigger_ms",
+        "offline_gated_hazard_trigger_ms",
+        False,
+    ),
+    (
+        "union_vs_gated_robust",
+        "gate_union_trigger_ms",
+        "offline_gated_robust_trigger_ms",
+        False,
+    ),
+)
+
+
+def run_gate_union_analysis(
+    hazard_root: Path,
+    *,
+    output_root: Path,
+    restore_cost_fractions: list[float],
+    replicates: int,
+    confidence_level: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Bootstrap the OR-union of the trie and hazard gates.
+
+    Re-scores the merged decisions of a hazard confirmation run
+    (``hazard_root/rho_<fraction>_decisions.jsonl``) with the derived field
+    ``gate_union_trigger_ms = min(offline_gated_hazard_trigger_ms,
+    offline_gated_robust_trigger_ms)``. Triggers stay exactly as fitted at
+    each fraction; only the combination rule is new, so this is a Mode-A
+    style derived re-scoring, not a refit.
+
+    Sensitivity only: the OR rule was itself selected after observing gate
+    disjointness on this corpus, so these intervals certify the combiner on
+    the corpus that motivated it. A fresh-corpus certification is required
+    before any headline claim.
+    """
+
+    _validate_fractions(restore_cost_fractions)
+    hazard_root = hazard_root.resolve()
+    output_root = output_root.resolve()
+    if output_root.exists():
+        raise FileExistsError(f"refusing to mix stale output: {output_root}")
+
+    output_root.mkdir(parents=True)
+    comparisons: dict[str, dict[str, Any]] = {
+        name: {
+            "treatment_trigger_field": treatment_field,
+            "baseline_trigger_field": baseline_field,
+            "enforce_gated_treatment": enforce_gated,
+            "by_restore_cost_fraction": {},
+        }
+        for name, treatment_field, baseline_field, enforce_gated in (
+            GATE_UNION_COMPARISONS
+        )
+    }
+    decision_count = 0
+    costs: list[float] = []
+    for fraction in restore_cost_fractions:
+        key = fraction_key(fraction)
+        decisions_path = hazard_root / f"rho_{key}_decisions.jsonl"
+        decisions: list[dict[str, Any]] = []
+        for line_number, line in enumerate(
+            decisions_path.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            row = json.loads(line)
+            source = f"{decisions_path}:{line_number}"
+            for field in (
+                "offline_gated_hazard_trigger_ms",
+                "offline_gated_robust_trigger_ms",
+            ):
+                if field not in row:
+                    raise ValueError(f"{source} lacks {field}")
+            row["gate_union_trigger_ms"] = min(
+                float(row["offline_gated_hazard_trigger_ms"]),
+                float(row["offline_gated_robust_trigger_ms"]),
+            )
+            decisions.append(row)
+        if not decisions:
+            raise ValueError(f"no decisions in {decisions_path}")
+        costs = sorted({float(row["kv_cost_ms"]) for row in decisions})
+        if decision_count and len(decisions) != decision_count:
+            raise AssertionError(
+                "restore fractions carry differing decision counts: "
+                f"{len(decisions)} != {decision_count}"
+            )
+        decision_count = len(decisions)
+        for name, treatment_field, baseline_field, enforce_gated in (
+            GATE_UNION_COMPARISONS
+        ):
+            comparisons[name]["by_restore_cost_fraction"][key] = (
+                paired_task_cluster_bootstrap(
+                    decisions,
+                    costs_ms=costs,
+                    replicates=replicates,
+                    confidence_level=confidence_level,
+                    seed=seed,
+                    baseline_trigger_field=baseline_field,
+                    treatment_trigger_field=treatment_field,
+                    restore_cost_fraction=fraction,
+                    enforce_gated_treatment=enforce_gated,
+                )
+            )
+
+    result = {
+        "schema_version": 1,
+        "mode": "gate_union_analysis",
+        "confirmation_root": str(hazard_root),
+        "decision_row_count": decision_count,
+        "costs_ms": costs,
+        "restore_cost_fractions": restore_cost_fractions,
+        "bootstrap": {
+            "replicates": replicates,
+            "confidence_level": confidence_level,
+            "seed": seed,
+        },
+        "comparisons": comparisons,
+    }
+    _write_json(output_root / "gate_union_analysis.json", result)
+    (output_root / "summary.md").write_text(
+        render_summary_markdown(
+            result,
+            title="Gate-union combiner (OR of trie and hazard gates)",
+            intro_lines=(
+                "gate_union_trigger_ms = min of the two gated triggers as",
+                "fitted at each fraction; the combination rule is the only",
+                "new element (parameter-free derived re-scoring). Sensitivity",
+                "only: the OR rule was selected after observing gate",
+                "disjointness on this same frozen corpus, so these intervals",
+                "carry selection optimism; fresh-corpus certification is",
+                "required before any headline claim.",
+            ),
+        ),
+        encoding="utf-8",
+    )
+    return result
+
+
 def render_summary_markdown(
     result: dict[str, Any],
     *,
@@ -913,10 +1045,11 @@ def render_summary_markdown(
 ) -> str:
     """Summarize simultaneous labels and total deltas per fraction."""
 
+    source = result.get("confirmation_root") or result.get("trace_root")
     lines = [
         f"# {title}",
         "",
-        f"Source: `{result['confirmation_root']}`",
+        f"Source: `{source}`",
         "",
         *intro_lines,
         "Labels use the Bonferroni-corrected simultaneous intervals over",
@@ -995,23 +1128,36 @@ def _validate_fractions(restore_cost_fractions: list[float]) -> None:
         raise ValueError("restore_cost_fractions must be unique")
 
 
+_FROZEN_MANIFEST_FIELDS = (
+    "fold_count",
+    "inner_folds",
+    "costs_ms",
+    "guard_ms",
+    "min_tool_history",
+    "min_profile_tasks",
+    "command_field",
+    "max_prefix_depth",
+    "skip_leading_cd",
+)
+
+
 def _read_frozen_manifest(confirmation_root: Path) -> dict[str, Any]:
-    manifest_path = confirmation_root / "provenance" / "manifest.json"
+    return load_config_manifest(confirmation_root / "provenance" / "manifest.json")
+
+
+def load_config_manifest(manifest_path: Path) -> dict[str, Any]:
+    """Read a frozen config manifest json and require every frozen field.
+
+    The same field set the confirmation protocol freezes
+    (:data:`_FROZEN_MANIFEST_FIELDS`); callers that only vary the estimator
+    (num_intervals, model_family, …) reuse this to source the shared fold and
+    command-parsing config.
+    """
+
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError(f"manifest must be a JSON object: {manifest_path}")
-    required = (
-        "fold_count",
-        "inner_folds",
-        "costs_ms",
-        "guard_ms",
-        "min_tool_history",
-        "min_profile_tasks",
-        "command_field",
-        "max_prefix_depth",
-        "skip_leading_cd",
-    )
-    missing = [field for field in required if field not in manifest]
+    missing = [field for field in _FROZEN_MANIFEST_FIELDS if field not in manifest]
     if missing:
         raise ValueError(f"manifest lacks frozen config fields: {missing}")
     return manifest
@@ -1077,11 +1223,13 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 __all__ = [
     "COMPARISONS",
+    "GATE_UNION_COMPARISONS",
     "WITHIN_TASK_COMPARISONS",
     "analyze_restore_cost_sweep",
     "fraction_key",
     "load_fold_decisions",
     "render_summary_markdown",
+    "run_gate_union_analysis",
     "run_hazard_model_confirmation",
     "run_mode_b_refit",
     "run_within_task_baseline",
