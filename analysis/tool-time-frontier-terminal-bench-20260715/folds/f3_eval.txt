@@ -1,0 +1,17 @@
+analyze-access-logs
+build-tcc-qemu
+configure-git-webserver
+dna-assembly
+extract-moves-from-video
+fix-code-vulnerability
+get-bitcoin-nodes
+hf-model-inference
+install-windows-xp
+matlab-python-conversion
+multi-source-data-merger
+play-zork
+prove-plus-comm
+recover-accuracy-log
+setup-custom-dev-env
+tmux-advanced-workflow
+weighted-max-sat-solver

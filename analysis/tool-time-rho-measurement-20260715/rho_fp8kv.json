@@ -1,0 +1,193 @@
+{
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+  "dtype": "fp8",
+  "bytes_per_token": 49152,
+  "kv_layout": {
+    "num_hidden_layers": 48,
+    "num_key_value_heads": 4,
+    "head_dim": 128,
+    "dtype": "fp8",
+    "dtype_size": 1,
+    "bytes_per_token": 49152,
+    "num_attention_heads": 32,
+    "hidden_size": 2048
+  },
+  "token_sweep": [
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072
+  ],
+  "pinned": true,
+  "repeats": 30,
+  "device_info": {
+    "host": "wise-love-slices-fin-02",
+    "device": "NVIDIA H100 80GB HBM3",
+    "torch_version": "2.11.0+cu130"
+  },
+  "pcie": {
+    "pcie_link_width": "16",
+    "pcie_link_gen": "5"
+  },
+  "note": "rho = swap_in_ms / swap_out_ms measured by timing pinned-buffer D2H/H2D copies of KV-block-sized transfers with CUDA events.",
+  "measurements": [
+    {
+      "tokens": 512,
+      "bytes": 25165824,
+      "swap_out_ms": 0.47249600291252136,
+      "swap_in_ms": 0.44308800995349884,
+      "swap_out_GBps": 53.261453736909694,
+      "swap_in_GBps": 56.796445479626264,
+      "rho": 0.9377603349494003
+    },
+    {
+      "tokens": 1024,
+      "bytes": 50331648,
+      "swap_out_ms": 0.9406879842281342,
+      "swap_in_ms": 0.8797119855880737,
+      "swap_out_GBps": 53.50514606742723,
+      "swap_in_GBps": 57.21377999227108,
+      "rho": 0.9351793584457303
+    },
+    {
+      "tokens": 2048,
+      "bytes": 100663296,
+      "swap_out_ms": 1.875328004360199,
+      "swap_in_ms": 1.7534239888191223,
+      "swap_out_GBps": 53.67770105600436,
+      "swap_in_GBps": 57.40955789466167,
+      "rho": 0.9349958965804137
+    },
+    {
+      "tokens": 4096,
+      "bytes": 201326592,
+      "swap_out_ms": 3.743824005126953,
+      "swap_in_ms": 3.4993600845336914,
+      "swap_out_GBps": 53.77565604694418,
+      "swap_in_GBps": 57.53240224971814,
+      "rho": 0.9347020799432659
+    },
+    {
+      "tokens": 8192,
+      "bytes": 402653184,
+      "swap_out_ms": 7.482223987579346,
+      "swap_in_ms": 6.9923999309539795,
+      "swap_out_GBps": 53.814639159214295,
+      "swap_in_GBps": 57.58440420684943,
+      "rho": 0.9345349648128037
+    },
+    {
+      "tokens": 16384,
+      "bytes": 805306368,
+      "swap_out_ms": 14.955935955047607,
+      "swap_in_ms": 13.97702407836914,
+      "swap_out_GBps": 53.84526721834552,
+      "swap_in_GBps": 57.61643991486665,
+      "rho": 0.9345469330959467
+    },
+    {
+      "tokens": 32768,
+      "bytes": 1610612736,
+      "swap_out_ms": 29.904111862182617,
+      "swap_in_ms": 27.94467258453369,
+      "swap_out_GBps": 53.859239940739236,
+      "swap_in_GBps": 57.63577050787894,
+      "rho": 0.9344759246929224
+    },
+    {
+      "tokens": 65536,
+      "bytes": 3221225472,
+      "swap_out_ms": 59.79800033569336,
+      "swap_in_ms": 55.879695892333984,
+      "swap_out_GBps": 53.8684480069019,
+      "swap_in_GBps": 57.645723022660775,
+      "rho": 0.9344743231987217
+    },
+    {
+      "tokens": 131072,
+      "bytes": 6442450944,
+      "swap_out_ms": 119.34579086303711,
+      "swap_in_ms": 111.96004867553711,
+      "swap_out_GBps": 53.981383821013395,
+      "swap_in_GBps": 57.54240928092464,
+      "rho": 0.9381147660584362
+    }
+  ],
+  "cost_grid": [
+    {
+      "target_swap_out_ms": 500,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 1000,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 1500,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 2000,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 2500,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 3000,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 3500,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 4000,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 4500,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    },
+    {
+      "target_swap_out_ms": 5000,
+      "tokens": null,
+      "swap_in_ms": null,
+      "rho": null,
+      "in_range": false
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+ancient-puzzle
+cartpole-rl-training
+create-bucket
+dna-insert
+extract-safely
+fix-ocaml-gc
+git-leak-recovery
+huarong-dao-solver
+llm-inference-batching-scheduler
+mixed-integer-programming
+npm-conflict-resolution
+play-zork-easy
+puzzle-solver
+recover-obfuscated-files
+shell-deobfuscation
+tune-mjcf

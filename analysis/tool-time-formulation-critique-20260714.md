@@ -317,6 +317,45 @@ was corpus-selected (tenth analysis on the frozen collection) — the
 union is the pre-registered primary hypothesis for the fresh-corpus
 certification, not a claimable result.
 
+## MEASURED rho (2026-07-15): the real operating point is the hard regime
+
+Hardware measurement on a rented H100 (Gen5 x16), coder-model KV layout
+(`analysis/tool-time-rho-measurement-20260715/`): **rho = swap_in/swap_out
+= 0.94, flat across 48 MB -> 55 GB and both KV dtypes** (bandwidth-bound;
+~54/57 GB/s). Real rho sits at the pessimistic end of the swept
+{0,0.25,0.5,1.0}. This validates the campaign: rho=0 was the wrong regime,
+and at the true operating point the gate-union is the standout policy
+(+136 s vs deadline, +112 vs GBM, +18 vs trie, no harmful cells). Next box
+task: E5 contention (does the ratio survive competing PCIe/memory traffic).
+
+## Terminal-Bench frontier (2026-07-15): the frontier is corpus-dependent
+
+Within-benchmark trie-vs-GBM on Terminal-Bench (83 tasks; dev-exposed,
+sensitivity only; `analysis/tool-time-frontier-terminal-bench-20260715/`):
+the SWE-ReBench ordering does NOT replicate. On TB the GBM beats the trie
+at ALL fractions (+354/+457/+13/+14 s, point estimates), and the trie is
+net-HARMFUL vs the deadline at low rho (-298/-416 s) — the opposite of
+SWE-ReBench. Nothing certifies (all inconclusive, wide CIs on the small
+corpus), but the qualitative flip kills any "trie wins at high rho" claim
+as a general statement: which estimator wins is a property of the workload,
+not the method. Open: run the gate-union re-scoring on the TB decisions —
+does the union's disjointness premise hold on a second workload?
+
+## Gate-union on Terminal-Bench (2026-07-15): the union does NOT generalize
+
+Running the union re-scoring on the TB decisions
+(`analysis/tool-time-gate-union-terminal-bench-20260715/`): the union is
+WORSE than the single GBM at every fraction (-9 to -420 s) and net-negative
+vs the deadline at low rho — the trie is harmful on TB, so the OR inherits
+its misfires. The naive union's SWE-ReBench dominance was contingent on
+both gates being individually useful. The principled fix — a CERTIFIED
+UNION that ORs only gates which certifiably beat the deadline on the
+fitting partition — drops the trie on TB (-> GBM alone, correct) and ORs
+both on SWE-ReBench (-> the +136 s winner). Campaign through-line holds:
+no universal policy; fit per deployment, certify each component, combine
+only the certified ones. The certified union is the pre-registered PRIMARY
+hypothesis for the fresh corpus; the naive union is demoted to an ablation.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).

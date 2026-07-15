@@ -1,0 +1,17 @@
+amuse-install
+build-pov-ray
+compile-compcert
+deterministic-tarball
+extract-elf
+find-restaurant
+gcc-compiler-optimization
+hello-world
+install-windows-3.11
+make-mips-interpreter
+mteb-leaderboard
+path-tracing-reverse
+predict-customer-churn
+query-optimize
+security-celery-redis-rce
+sqlite-with-gcov
+wasm-pipeline
