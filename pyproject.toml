@@ -27,6 +27,9 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
+# GPU-only extra for scripts/measure_kv_swap_cost.py (KV-swap cost measurement).
+# vllm pulls torch + CUDA; install on the H100 box only.
+gpu = ["vllm>=0.6"]
 dev = [
   "pytest>=8.3,<9.0",
   "pytest-asyncio>=0.26,<1.0",
