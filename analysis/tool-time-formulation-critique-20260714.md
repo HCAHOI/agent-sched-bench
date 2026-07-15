@@ -385,6 +385,18 @@ next fresh-GPU measurement. Mode-A lower bound; the factorization (new
 action = new cost functional over frozen triggers, cost swept like rho)
 works exactly as designed.
 
+## P1 tool-name baseline (2026-07-15): command-prefix beats Continuum's estimator
+
+At the measured operating point rho=0.94
+(`analysis/tool-time-tool-name-baseline-{swe-rebench,terminal-bench}-20260715/`):
+our command-prefix (full) trie certifiably beats Continuum's per-tool-name
+CDF estimator on SWE-ReBench (+158.7 s, 1 certified cell) and beats it in
+point estimate on Terminal-Bench (+46.4 s, underpowered). The learned GBM
+is NOT a clean further win over tool-name (2 certified-harmful cells on
+SWE-ReBench). So the demonstrated value is command-PREFIX conditioning, not
+learning per se — matching Continuum's own Fig 5 cd-tail pathology. (Low-rho
+sweep columns are the sensitivity probe, not deployment claims.)
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
