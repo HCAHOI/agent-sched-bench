@@ -35,7 +35,13 @@ from trace_collect.tool_latency_confirmation import (
     _resample_task_totals,
     paired_task_cluster_bootstrap,
 )
+from trace_collect.tool_latency_context import context_lengths_from_traces
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
+from trace_collect.tool_latency_recompute import (
+    effective_min_restore_ms,
+    recompute_restore_ms,
+    validate_recompute_rate,
+)
 from trace_collect.tool_latency_utility_clock import trigger_policy_utility_ms
 from trace_collect.tool_latency_hazard_eval import (
     HAZARD_COMPARISONS,
@@ -1385,6 +1391,274 @@ def _task_cluster_lower_bound(
     return float(np.quantile(bootstrap_totals[:, 0], alpha / 2.0, method="linear"))
 
 
+# P2 reload-vs-recompute restore choice. All three contrasts keep the gated
+# trigger fitted at restore cost zero (Mode A); only the restore cost charged
+# on fires-on-short changes. C1 isolates the mechanism increment: the same
+# gated trigger scored under min(swap-in, recompute) vs swap-in only, so its
+# paired delta is non-negative by construction (min <= swap). C2/C3 place the
+# min-restore and swap-only policies against the never-early deadline.
+RECOMPUTE_RESTORE_COMPARISONS: tuple[tuple[str, str, str, str, str, bool], ...] = (
+    (
+        "min_restore_vs_swap_restore",
+        "offline_gated_robust_trigger_ms",
+        "offline_gated_robust_trigger_ms",
+        "p2_min_restore_ms",
+        "p2_swap_restore_ms",
+        True,
+    ),
+    (
+        "min_restore_gated_vs_deadline",
+        "offline_gated_robust_trigger_ms",
+        "deadline_trigger_ms",
+        "p2_min_restore_ms",
+        "p2_min_restore_ms",
+        False,
+    ),
+    (
+        "swap_restore_gated_vs_deadline",
+        "offline_gated_robust_trigger_ms",
+        "deadline_trigger_ms",
+        "p2_swap_restore_ms",
+        "p2_swap_restore_ms",
+        False,
+    ),
+)
+
+# Default recompute-rate grid (ms/token). Chosen to bracket the swap/recompute
+# crossover context (restore_cost_fraction * kv_cost_ms / rate) across the
+# swept kv grid and the observed context range, not tuned to any outcome; it
+# is a stand-in for a later measured H100 prefill-vs-context curve, exactly as
+# rho was swept before it was measured. See tool_latency_recompute.
+DEFAULT_RECOMPUTE_RATES_MS_PER_TOKEN: tuple[float, ...] = (0.05, 0.15, 0.5, 1.5)
+
+
+def rate_key(rate: float) -> str:
+    return str(float(rate))
+
+
+def _trace_paths_from_decisions(decisions: list[dict[str, Any]]) -> list[Path]:
+    """Recover the raw trace paths embedded in decision sample ids."""
+
+    paths: set[str] = set()
+    for row in decisions:
+        sample_id = str(row["sample_id"])
+        # sample_id == f"{trace_path}:{agent_id}:{iteration}:{action_id}"
+        paths.add(sample_id.rsplit(":", 3)[0])
+    resolved: list[Path] = []
+    for path_str in sorted(paths):
+        path = Path(path_str)
+        if not path.exists():
+            raise FileNotFoundError(f"trace referenced by decisions is missing: {path}")
+        resolved.append(path)
+    return resolved
+
+
+def _attach_restore_fields(
+    decisions: list[dict[str, Any]],
+    context_by_sample: dict[str, int],
+    *,
+    restore_cost_fraction: float,
+    recompute_rate_ms_per_token: float,
+) -> list[dict[str, Any]]:
+    """Attach per-row swap, recompute, and min restore costs for one grid cell."""
+
+    attached: list[dict[str, Any]] = []
+    for row in decisions:
+        sample_id = str(row["sample_id"])
+        context_length = context_by_sample.get(sample_id)
+        if context_length is None:
+            raise ValueError(f"no context length for decision sample {sample_id!r}")
+        cost = float(row["kv_cost_ms"])
+        swap_restore_ms = restore_cost_fraction * cost
+        recompute_ms = recompute_restore_ms(
+            context_length, recompute_rate_ms_per_token
+        )
+        attached.append(
+            {
+                **row,
+                "context_length_tokens": context_length,
+                "p2_swap_restore_ms": swap_restore_ms,
+                "p2_recompute_restore_ms": recompute_ms,
+                "p2_min_restore_ms": effective_min_restore_ms(
+                    swap_restore_ms, recompute_ms
+                ),
+            }
+        )
+    return attached
+
+
+def run_recompute_restore_sweep(
+    confirmation_root: Path,
+    *,
+    restore_cost_fractions: list[float],
+    recompute_rates_ms_per_token: list[float],
+    replicates: int,
+    confidence_level: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Re-score frozen gated triggers under the reload-vs-recompute choice.
+
+    For every ``(restore_cost_fraction, recompute_rate)`` cell the gated
+    trigger stays exactly as fitted (Mode A); the restore charged on fires on
+    short calls becomes ``min(fraction * kv_cost_ms, rate * context_length)``,
+    where ``context_length`` is the call's resident KV token count recovered
+    from the raw traces. The paired task-cluster bootstrap then certifies the
+    mechanism increment (:data:`RECOMPUTE_RESTORE_COMPARISONS`).
+
+    Sensitivity only: the recompute-rate grid is a stand-in for a measured
+    prefill curve and the triggers were fit under swap-only restore, so this
+    lower-bounds the value of a recompute-aware policy. Fresh-corpus
+    certification at a measured rate is required before any headline claim.
+    """
+
+    _validate_fractions(restore_cost_fractions)
+    _validate_recompute_rates(recompute_rates_ms_per_token)
+    decisions, fold_names = load_fold_decisions(confirmation_root)
+    costs = sorted({float(row["kv_cost_ms"]) for row in decisions})
+    context_by_sample = context_lengths_from_traces(
+        _trace_paths_from_decisions(decisions)
+    )
+    context_values = sorted(
+        context_by_sample[sample_id]
+        for sample_id in {str(row["sample_id"]) for row in decisions}
+    )
+    context_stats = {
+        "sample_count": len(context_values),
+        "min": context_values[0],
+        "median": context_values[len(context_values) // 2],
+        "max": context_values[-1],
+    }
+
+    by_recompute_rate: dict[str, Any] = {}
+    for rate in recompute_rates_ms_per_token:
+        comparisons: dict[str, dict[str, Any]] = {
+            name: {
+                "treatment_trigger_field": treatment_trigger,
+                "baseline_trigger_field": baseline_trigger,
+                "treatment_restore_cost_ms_field": treatment_restore,
+                "baseline_restore_cost_ms_field": baseline_restore,
+                "enforce_gated_treatment": enforce_gated,
+                "by_restore_cost_fraction": {},
+            }
+            for (
+                name,
+                treatment_trigger,
+                baseline_trigger,
+                treatment_restore,
+                baseline_restore,
+                enforce_gated,
+            ) in RECOMPUTE_RESTORE_COMPARISONS
+        }
+        for fraction in restore_cost_fractions:
+            attached = _attach_restore_fields(
+                decisions,
+                context_by_sample,
+                restore_cost_fraction=fraction,
+                recompute_rate_ms_per_token=rate,
+            )
+            for (
+                name,
+                treatment_trigger,
+                baseline_trigger,
+                treatment_restore,
+                baseline_restore,
+                enforce_gated,
+            ) in RECOMPUTE_RESTORE_COMPARISONS:
+                comparisons[name]["by_restore_cost_fraction"][
+                    fraction_key(fraction)
+                ] = paired_task_cluster_bootstrap(
+                    attached,
+                    costs_ms=costs,
+                    replicates=replicates,
+                    confidence_level=confidence_level,
+                    seed=seed,
+                    baseline_trigger_field=baseline_trigger,
+                    treatment_trigger_field=treatment_trigger,
+                    restore_cost_fraction=fraction,
+                    baseline_restore_cost_ms_field=baseline_restore,
+                    treatment_restore_cost_ms_field=treatment_restore,
+                    enforce_gated_treatment=enforce_gated,
+                )
+        by_recompute_rate[rate_key(rate)] = {"comparisons": comparisons}
+
+    return {
+        "schema_version": 1,
+        "mode": "reload_vs_recompute_restore",
+        "confirmation_root": str(confirmation_root.resolve()),
+        "fold_count": len(fold_names),
+        "fold_names": fold_names,
+        "decision_row_count": len(decisions),
+        "costs_ms": costs,
+        "restore_cost_fractions": restore_cost_fractions,
+        "recompute_rates_ms_per_token": recompute_rates_ms_per_token,
+        "context_length_stats": context_stats,
+        "bootstrap": {
+            "replicates": replicates,
+            "confidence_level": confidence_level,
+            "seed": seed,
+        },
+        "by_recompute_rate": by_recompute_rate,
+    }
+
+
+def render_recompute_restore_markdown(result: dict[str, Any]) -> str:
+    """Summarize the reload-vs-recompute sweep as one table per recompute rate."""
+
+    lines = [
+        "# Reload-vs-recompute restore choice (P2)",
+        "",
+        f"Source: `{result['confirmation_root']}`",
+        "",
+        "Gated triggers stay fitted at restore cost zero (Mode A); the restore",
+        "charged on fires on short calls is min(swap-in, recompute), with",
+        "recompute = rate * per-call context length recovered from traces.",
+        "Labels use the Bonferroni-corrected simultaneous intervals over all kv",
+        "costs within one comparison-fraction cell.",
+        "",
+        "Context length (tokens): "
+        f"min {result['context_length_stats']['min']}, "
+        f"median {result['context_length_stats']['median']}, "
+        f"max {result['context_length_stats']['max']}.",
+        "",
+    ]
+    for rate in result["recompute_rates_ms_per_token"]:
+        rate_block = result["by_recompute_rate"][rate_key(rate)]
+        lines.append(f"## recompute rate {rate} ms/token")
+        lines.append("")
+        for name, comparison in rate_block["comparisons"].items():
+            lines.append(f"### {name}")
+            lines.append("")
+            lines.append(
+                "| restore fraction | positive | inconclusive | harmful "
+                "| total delta (ms) | worst simultaneous LCB (ms) |"
+            )
+            lines.append("|---|---|---|---|---|---|")
+            for fraction in result["restore_cost_fractions"]:
+                payload = comparison["by_restore_cost_fraction"][fraction_key(fraction)]
+                points = payload["points"].values()
+                labels = [point["simultaneous_label"] for point in points]
+                total_delta = sum(point["paired_delta_ms"] for point in points)
+                worst_lcb = min(
+                    point["simultaneous_interval_ms"]["low"] for point in points
+                )
+                lines.append(
+                    f"| {fraction} | {labels.count('positive')} "
+                    f"| {labels.count('inconclusive')} | {labels.count('harmful')} "
+                    f"| {total_delta:.1f} | {worst_lcb:.1f} |"
+                )
+            lines.append("")
+    return "\n".join(lines)
+
+
+def _validate_recompute_rates(recompute_rates_ms_per_token: list[float]) -> None:
+    if not recompute_rates_ms_per_token:
+        raise ValueError("recompute_rates_ms_per_token must be non-empty")
+    if len(set(recompute_rates_ms_per_token)) != len(recompute_rates_ms_per_token):
+        raise ValueError("recompute_rates_ms_per_token must be unique")
+    for rate in recompute_rates_ms_per_token:
+        validate_recompute_rate(rate)
+
+
 def render_summary_markdown(
     result: dict[str, Any],
     *,
@@ -1578,11 +1852,16 @@ __all__ = [
     "COMPARISONS",
     "GATE_UNION_COMPARISONS",
     "WITHIN_TASK_COMPARISONS",
+    "DEFAULT_RECOMPUTE_RATES_MS_PER_TOKEN",
+    "RECOMPUTE_RESTORE_COMPARISONS",
     "analyze_restore_cost_sweep",
     "fraction_key",
     "load_fold_decisions",
+    "rate_key",
+    "render_recompute_restore_markdown",
     "render_summary_markdown",
     "run_certified_union_analysis",
+    "run_recompute_restore_sweep",
     "run_gate_union_analysis",
     "run_hazard_model_confirmation",
     "run_mode_b_refit",

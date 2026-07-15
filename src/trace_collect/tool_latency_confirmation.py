@@ -25,6 +25,8 @@ def paired_task_cluster_bootstrap(
     baseline_trigger_field: str = "robust_trigger_ms",
     treatment_trigger_field: str = "offline_gated_robust_trigger_ms",
     restore_cost_fraction: float = 0.0,
+    baseline_restore_cost_ms_field: str | None = None,
+    treatment_restore_cost_ms_field: str | None = None,
     enforce_gated_treatment: bool = True,
 ) -> dict[str, Any]:
     """Bootstrap paired workload-total utility by resampling logical tasks.
@@ -36,6 +38,15 @@ def paired_task_cluster_bootstrap(
     the baseline trigger or the deadline; disable it only for comparisons
     whose baseline is not the gate's fallback pair (e.g. treatment vs. the
     fixed deadline itself).
+
+    ``baseline_restore_cost_ms_field`` / ``treatment_restore_cost_ms_field``
+    optionally override the restore charge on each side with a per-row
+    absolute cost (in ms) read from that decision field, instead of
+    ``restore_cost_fraction * kv_cost_ms``. This lets one policy pay a
+    context-dependent restore (e.g. min(swap-in, recompute); see
+    tool_latency_recompute) while another pays the plain swap-in, with both
+    firing on the same trigger. ``None`` (default) keeps the scalar swap
+    charge, reproducing the frozen numerics exactly.
 
     ``restore_cost_fraction`` and ``enforce_gated_treatment`` are additive
     output keys on top of schema_version 1; defaults reproduce the frozen
@@ -137,20 +148,26 @@ def paired_task_cluster_bootstrap(
         ):
             raise ValueError(f"{source} treatment is not baseline or deadline")
 
-        restore_cost_ms = restore_cost_fraction * cost
+        scalar_restore_cost_ms = restore_cost_fraction * cost
+        baseline_restore_cost_ms = _resolve_restore_cost(
+            row, baseline_restore_cost_ms_field, scalar_restore_cost_ms, source=source
+        )
+        treatment_restore_cost_ms = _resolve_restore_cost(
+            row, treatment_restore_cost_ms_field, scalar_restore_cost_ms, source=source
+        )
         baseline_utility = trigger_policy_utility_ms(
             latency,
             baseline_trigger,
             threshold_ms=threshold,
             kv_cost_ms=cost,
-            restore_cost_ms=restore_cost_ms,
+            restore_cost_ms=baseline_restore_cost_ms,
         )
         treatment_utility = trigger_policy_utility_ms(
             latency,
             treatment_trigger,
             threshold_ms=threshold,
             kv_cost_ms=cost,
-            restore_cost_ms=restore_cost_ms,
+            restore_cost_ms=treatment_restore_cost_ms,
         )
         contributions[task_index[task_id], cost_index[cost]] += (
             treatment_utility - baseline_utility
@@ -252,6 +269,8 @@ def paired_task_cluster_bootstrap(
         "baseline_trigger_field": baseline_trigger_field,
         "treatment_trigger_field": treatment_trigger_field,
         "restore_cost_fraction": restore_cost_fraction,
+        "baseline_restore_cost_ms_field": baseline_restore_cost_ms_field,
+        "treatment_restore_cost_ms_field": treatment_restore_cost_ms_field,
         "enforce_gated_treatment": enforce_gated_treatment,
         "sample_count": len(rows_by_sample),
         "task_count": len(task_ids),
@@ -272,6 +291,25 @@ def paired_task_cluster_bootstrap(
         "fold_paired_delta_ms_by_cost": fold_paired_delta_ms_by_cost,
         "task_contributions": task_contributions,
     }
+
+
+def _resolve_restore_cost(
+    row: Mapping[str, Any],
+    field: str | None,
+    scalar_restore_cost_ms: float,
+    *,
+    source: str,
+) -> float:
+    """Per-row restore cost: a decision field when named, else the scalar."""
+
+    if field is None:
+        return scalar_restore_cost_ms
+    value = row.get(field)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(f"{source} lacks a numeric restore field {field!r}")
+    restore_cost_ms = float(value)
+    validate_restore_cost(restore_cost_ms, label=field)
+    return restore_cost_ms
 
 
 def _resample_task_totals(
