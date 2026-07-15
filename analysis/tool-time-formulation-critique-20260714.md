@@ -356,6 +356,20 @@ no universal policy; fit per deployment, certify each component, combine
 only the certified ones. The certified union is the pre-registered PRIMARY
 hypothesis for the fresh corpus; the naive union is demoted to an ablation.
 
+## Certified union (2026-07-15): robustness realized, power-limited
+
+`analysis/tool-time-certified-union-*-20260715/`: OR only gates that
+certify against the deadline on the fitting partition (cross-fitted
+leave-fold-out, review-verified leak-free). On SWE-ReBench both certify ->
+certified == naive == the dominant winner. On Terminal-Bench loo_point is
+too noisy (trie leaks into 1/5 folds) and loo_lcb reverts to the deadline
+(83 tasks can't certify either gate) -> SAFE, beating the naive union's
+catastrophe by +257..+379 s, at the cost of forgoing the GBM's uncertified
++55 s. The certified union NEVER has the naive union's cross-workload
+failure. Its only weakness is conservatism on underpowered corpora — a
+DATA problem, the sharpest argument for the fresh corpus. Pre-registered
+primary for the fresh corpus; naive union = negative control.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
