@@ -32,6 +32,7 @@ from trace_collect.tool_latency_confirmation import paired_task_cluster_bootstra
 from trace_collect.tool_latency_dataset import read_tool_latency_jsonl
 from trace_collect.tool_latency_hazard_eval import (
     HAZARD_COMPARISONS,
+    HAZARD_ENSEMBLE_COMPARISONS,
     evaluate_hazard_model_clock,
 )
 from trace_collect.tool_latency_offline_probe import (
@@ -553,6 +554,7 @@ def run_hazard_model_confirmation(
     l2_penalty: float | None = None,
     feature_set: str = "full",
     model_family: str = "logistic",
+    ensemble_members: int = 0,
 ) -> dict[str, Any]:
     """Score the learned hazard clock against the refit gated policies.
 
@@ -565,6 +567,12 @@ def run_hazard_model_confirmation(
     discrete-time logistic; ``l2_penalty=None`` selects the penalty per fold)
     or ``gbm`` (a HistGradientBoosting hazard over the same person-period rows;
     ``l2_penalty`` must stay ``None`` and the fold's fits use ``seed``).
+
+    ``ensemble_members`` (0 = off, else ``>= 2``) turns on the bagged arm: each
+    fold additionally fits ``M`` leave-one-Mth-out members whose unanimity
+    trigger and weakest-member margin import the trie's robustness. When on, the
+    four :data:`HAZARD_ENSEMBLE_COMPARISONS` contrasts are added and the
+    ensemble triggers are merged into the decisions alongside the single model.
 
     The structural twin of :func:`run_within_task_baseline`. Folds are the outer
     loop: each fold fits the hazard model exactly once (the fit is
@@ -608,6 +616,11 @@ def run_hazard_model_confirmation(
         raise ValueError(
             f"unknown model_family {model_family!r}; expected 'logistic' or 'gbm'"
         )
+    if ensemble_members < 0 or ensemble_members == 1:
+        raise ValueError(
+            f"ensemble_members must be 0 or >= 2, got {ensemble_members}"
+        )
+    ensemble_on = ensemble_members >= 2
     spec = SurvivalFeatureSpec(
         command_field=manifest["command_field"],
         max_prefix_depth=manifest["max_prefix_depth"],
@@ -615,6 +628,9 @@ def run_hazard_model_confirmation(
         **ablation_toggles[feature_set],
     )
 
+    active_comparisons = HAZARD_COMPARISONS + (
+        HAZARD_ENSEMBLE_COMPARISONS if ensemble_on else ()
+    )
     output_root.mkdir(parents=True)
     comparisons: dict[str, dict[str, Any]] = {
         name: {
@@ -623,7 +639,7 @@ def run_hazard_model_confirmation(
             "enforce_gated_treatment": enforce_gated,
             "by_restore_cost_fraction": {},
         }
-        for name, treatment_field, baseline_field, enforce_gated in HAZARD_COMPARISONS
+        for name, treatment_field, baseline_field, enforce_gated in active_comparisons
     }
     # One gated-B1 lookup per fraction; each fold pops its samples out, and the
     # residual must be empty once every fold is merged (unmatched both ways).
@@ -677,6 +693,7 @@ def run_hazard_model_confirmation(
             l2_penalty=l2_penalty,
             model_family=model_family,
             seed=seed,
+            ensemble_members=ensemble_members,
         )
         shared = {
             field: value
@@ -692,6 +709,10 @@ def run_hazard_model_confirmation(
                 "restore_cost_fraction": fraction,
                 "calibration_guard": per_fraction["calibration_guard"],
             }
+            if "ensemble_calibration_guard" in per_fraction:
+                summary["ensemble_calibration_guard"] = per_fraction[
+                    "ensemble_calibration_guard"
+                ]
             fraction_root = output_root / f"rho_{key}"
             _write_json(fraction_root / f"{fold_name}_summary.json", summary)
             _write_jsonl(
@@ -739,7 +760,7 @@ def run_hazard_model_confirmation(
                 f"{len(decisions)} != {decision_count}"
             )
         decision_count = len(decisions)
-        for name, treatment_field, baseline_field, enforce_gated in HAZARD_COMPARISONS:
+        for name, treatment_field, baseline_field, enforce_gated in active_comparisons:
             comparisons[name]["by_restore_cost_fraction"][key] = (
                 paired_task_cluster_bootstrap(
                     decisions,
@@ -759,6 +780,7 @@ def run_hazard_model_confirmation(
         "mode": "hazard_model_confirmation",
         "feature_set": feature_set,
         "model_family": model_family,
+        "ensemble_members": ensemble_members,
         "confirmation_root": str(confirmation_root),
         "mode_b_root": str(mode_b_root),
         "gated_b1_root": str(gated_b1_root),
@@ -849,21 +871,30 @@ def _merge_hazard_rows(
                     abs_tol=1e-9,
                 ):
                     raise ValueError(f"{field} mismatch for decision {key} vs {label}")
-        merged.append(
-            {
-                **decision,
-                "outer_fold": fold_name,
-                "hazard_trigger_ms": hazard["hazard_trigger_ms"],
-                "hazard_margin_normalized": hazard["hazard_margin_normalized"],
-                "offline_gated_hazard_trigger_ms": hazard[
-                    "offline_gated_hazard_trigger_ms"
-                ],
-                "offline_gated_hazard_guard_normalized": hazard[
-                    "offline_gated_hazard_guard_normalized"
-                ],
-                "gated_within_task_trigger_ms": gated["gated_within_task_trigger_ms"],
-            }
-        )
+        merged_row = {
+            **decision,
+            "outer_fold": fold_name,
+            "hazard_trigger_ms": hazard["hazard_trigger_ms"],
+            "hazard_margin_normalized": hazard["hazard_margin_normalized"],
+            "offline_gated_hazard_trigger_ms": hazard[
+                "offline_gated_hazard_trigger_ms"
+            ],
+            "offline_gated_hazard_guard_normalized": hazard[
+                "offline_gated_hazard_guard_normalized"
+            ],
+            "gated_within_task_trigger_ms": gated["gated_within_task_trigger_ms"],
+        }
+        # The bagged ensemble arm is optional; carry its triggers only when the
+        # hazard evaluator produced them (ensemble_members >= 2).
+        if "ensemble_hazard_trigger_ms" in hazard:
+            for field in (
+                "ensemble_hazard_trigger_ms",
+                "ensemble_hazard_margin_normalized",
+                "offline_gated_ensemble_hazard_trigger_ms",
+                "offline_gated_ensemble_hazard_guard_normalized",
+            ):
+                merged_row[field] = hazard[field]
+        merged.append(merged_row)
     if hazard_by_key:
         raise ValueError(
             f"{len(hazard_by_key)} hazard rows unmatched in {fold_name}"

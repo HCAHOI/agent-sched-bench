@@ -693,3 +693,162 @@ def test_run_hazard_model_confirmation_refuses_existing_output(tmp_path: Path) -
             confidence_level=0.95,
             seed=0,
         )
+
+
+# --- Bagged ensemble arm -----------------------------------------------------
+
+
+def _json_no_ensemble_keys(payload: Any) -> bool:
+    return "ensemble" not in json.dumps(payload)
+
+
+def test_ensemble_members_zero_is_byte_identical_to_default() -> None:
+    # The ensemble arm is purely additive: ensemble_members=0 must reproduce the
+    # default output dict exactly and introduce no ensemble_* keys anywhere.
+    profile_rows = _corpus([f"p{index}" for index in range(4)], fast=3, slow=3)
+    eval_rows = _corpus(["e0", "e1"], fast=2, slow=2)
+    default = _evaluate(eval_rows, profile_rows)
+    explicit_off = _evaluate(eval_rows, profile_rows, ensemble_members=0)
+    assert default == explicit_off
+    assert _json_no_ensemble_keys(default)
+
+
+def test_ensemble_members_one_is_rejected() -> None:
+    with pytest.raises(ValueError, match="ensemble_members must be 0 or >= 2"):
+        _evaluate(
+            _corpus(["e0", "e1"], fast=2, slow=2),
+            _corpus([f"p{index}" for index in range(4)], fast=3, slow=3),
+            ensemble_members=1,
+        )
+
+
+def test_leave_one_mth_out_partition_is_deterministic_and_covers_every_task() -> None:
+    from trace_collect.tool_latency_hazard_eval import _leave_one_mth_out_tasks
+
+    task_ids = ["t3", "t0", "t2", "t1", "t4"]  # unsorted on purpose
+    members = _leave_one_mth_out_tasks(task_ids, 3)
+    assert members == _leave_one_mth_out_tasks(task_ids, 3)  # deterministic
+    # sorted -> [t0,t1,t2,t3,t4]; member m holds out positions == m (mod 3).
+    assert members == [{"t0", "t3"}, {"t1", "t4"}, {"t2"}]
+    # Every task is left out by exactly one member (disjoint cover).
+    union = set().union(*members)
+    assert union == set(task_ids)
+    assert sum(len(m) for m in members) == len(task_ids)
+
+
+def test_evaluate_hazard_model_clock_ensemble_adds_fields_and_guard() -> None:
+    # With M=2 the evaluator fits the full model plus two leave-one-Mth-out
+    # members, and every decision carries the ensemble trigger/margin plus its
+    # deployed gated trigger; the per-fraction dict carries the ensemble guard.
+    profile_rows = _corpus([f"p{index}" for index in range(4)], fast=3, slow=3)
+    eval_rows = _corpus(["e0", "e1"], fast=2, slow=2)
+    result = _evaluate(eval_rows, profile_rows, ensemble_members=2)
+    assert result["ensemble_members"] == 2
+
+    fraction_result = result["by_restore_cost_fraction"]["0.0"]
+    assert "ensemble_calibration_guard" in fraction_result
+    ensemble_guard = fraction_result["ensemble_calibration_guard"][
+        "selected_guard_normalized"
+    ]
+    for row in fraction_result["decisions"]:
+        candidate = row["ensemble_hazard_trigger_ms"]
+        threshold = row["threshold_ms"]
+        margin = row["ensemble_hazard_margin_normalized"]
+        # The deployed gated trigger obeys the same predicate as the single model.
+        use_candidate = (
+            ensemble_guard is not None and candidate < threshold and margin > ensemble_guard
+        )
+        expected = candidate if use_candidate else threshold
+        assert row["offline_gated_ensemble_hazard_trigger_ms"] == pytest.approx(expected)
+        assert row["offline_gated_ensemble_hazard_guard_normalized"] == ensemble_guard
+
+    # On the separable corpus the ensemble still fires early only on slow calls.
+    slow = [r for r in fraction_result["decisions"] if r["tool_name"] == "slow"]
+    fast = [r for r in fraction_result["decisions"] if r["tool_name"] == "fast"]
+    for row in slow:
+        assert 0.0 < row["ensemble_hazard_trigger_ms"] < row["threshold_ms"]
+        assert row["latency_ms"] > row["offline_gated_ensemble_hazard_trigger_ms"]
+    for row in fast:
+        assert row["latency_ms"] <= row["ensemble_hazard_trigger_ms"] + 1e-9
+
+
+def test_evaluate_hazard_model_clock_ensemble_is_deterministic() -> None:
+    profile_rows = _corpus([f"p{index}" for index in range(4)], fast=3, slow=3)
+    eval_rows = _corpus(["e0", "e1"], fast=2, slow=2)
+    first = _evaluate(eval_rows, profile_rows, ensemble_members=3, fractions=(0.0, 0.5))
+    second = _evaluate(eval_rows, profile_rows, ensemble_members=3, fractions=(0.0, 0.5))
+    assert first == second
+
+
+def test_run_hazard_model_confirmation_ensemble_adds_contrasts(tmp_path: Path) -> None:
+    # End-to-end: --ensemble-members threads through the driver, the four
+    # ensemble contrasts appear, ensemble_members is recorded, and the merged
+    # decisions carry the deployed gated ensemble trigger.
+    confirmation, mode_b, gated_b1, eval_rows = _build_confirmation_inputs(
+        tmp_path, profile_tasks=4, eval_tasks=2
+    )
+    result = run_hazard_model_confirmation(
+        confirmation,
+        mode_b_root=mode_b,
+        gated_b1_root=gated_b1,
+        output_root=tmp_path / "hazard",
+        restore_cost_fractions=[0.0],
+        num_intervals=8,
+        replicates=200,
+        confidence_level=0.95,
+        seed=0,
+        l2_penalty=1e-4,
+        ensemble_members=2,
+    )
+    assert result["ensemble_members"] == 2
+    for name in (
+        "ensemble_hazard_vs_deadline",
+        "gated_ensemble_vs_deadline",
+        "gated_ensemble_vs_gated_hazard",
+        "gated_ensemble_vs_gated_robust",
+    ):
+        assert name in result["comparisons"]
+    # Each slow eval call hides the full cost early, so the ungated ensemble vs
+    # deadline contrast nets +400 like the single model does.
+    delta = result["comparisons"]["ensemble_hazard_vs_deadline"][
+        "by_restore_cost_fraction"
+    ]["0.0"]["points"][str(COST_MS)]["paired_delta_ms"]
+    assert delta == pytest.approx(4 * 100.0)
+
+    merged = [
+        json.loads(line)
+        for line in (tmp_path / "hazard" / "rho_0.0_decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    for row in merged:
+        assert "offline_gated_ensemble_hazard_trigger_ms" in row
+        fired = (
+            row["latency_ms"] > row["offline_gated_ensemble_hazard_trigger_ms"]
+            and row["offline_gated_ensemble_hazard_trigger_ms"] < row["threshold_ms"]
+        )
+        assert fired == (row["tool_name"] == "slow")
+
+
+def test_run_hazard_model_confirmation_off_omits_ensemble_contrasts(tmp_path: Path) -> None:
+    confirmation, mode_b, gated_b1, _ = _build_confirmation_inputs(
+        tmp_path, profile_tasks=4, eval_tasks=2
+    )
+    result = run_hazard_model_confirmation(
+        confirmation,
+        mode_b_root=mode_b,
+        gated_b1_root=gated_b1,
+        output_root=tmp_path / "hazard",
+        restore_cost_fractions=[0.0],
+        num_intervals=8,
+        replicates=200,
+        confidence_level=0.95,
+        seed=0,
+        l2_penalty=1e-4,
+    )
+    assert result["ensemble_members"] == 0
+    assert "ensemble_hazard_vs_deadline" not in result["comparisons"]
+    merged = (tmp_path / "hazard" / "rho_0.0_decisions.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "ensemble" not in merged

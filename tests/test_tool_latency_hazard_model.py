@@ -466,3 +466,113 @@ def test_fit_hazard_model_gbm_uses_interval_index_feature() -> None:
     # The long mode forces mass to rise again after the near-empty middle
     # intervals — impossible under a constant (index-independent) hazard.
     assert np.any(np.diff(masses) > 1e-3)
+
+
+# --- Bagged ensemble trigger: anchors to the trie's robust clock -------------
+
+
+def _uniform_member(samples: list[float]) -> tuple[np.ndarray, np.ndarray]:
+    """A degenerate ``(reps, masses)`` member: reps are the raw samples (with
+    multiplicity) under a uniform mass, so ``masses @ util`` is the empirical
+    mean utility over those samples — exactly one ``_node_utility_curves`` curve.
+    """
+
+    reps = np.asarray(samples, dtype=float)
+    return reps, np.full(reps.shape, 1.0 / reps.size)
+
+
+def test_ensemble_trigger_reproduces_trie_robust_clock_restore_zero() -> None:
+    from trace_collect.tool_latency_hazard_model import ensemble_survival_trigger_stats
+    from trace_collect.tool_latency_profiled import LatencyPriorNode
+    from trace_collect.tool_latency_utility_clock import robust_utility_trigger_stats
+
+    task_a = [80.0, 80.0, 150.0]
+    task_b = [80.0, 80.0, 150.0]
+    # Members are the trie node's leave-one-task-out family: full list, then
+    # each task dropped in turn (uniform masses over the surviving samples).
+    members = [
+        _uniform_member(task_a + task_b),
+        _uniform_member(task_b),  # drop task-a
+        _uniform_member(task_a),  # drop task-b
+    ]
+    node = LatencyPriorNode(
+        values=task_a + task_b,
+        values_by_task={"task-a": task_a, "task-b": task_b},
+        source="prior_tool",
+        group_key=None,
+    )
+    ensemble = ensemble_survival_trigger_stats(
+        members, threshold_ms=100.0, kv_cost_ms=100.0
+    )
+    trie = robust_utility_trigger_stats(
+        node, parent=None, threshold_ms=100.0, kv_cost_ms=100.0
+    )
+    assert ensemble.trigger_ms == trie.trigger_ms == 0.0
+    assert ensemble.normalized_advantage == pytest.approx(trie.normalized_advantage)
+    assert ensemble.normalized_advantage == pytest.approx(1.0 / 15.0)
+
+
+def test_ensemble_trigger_reproduces_trie_robust_clock_restore_cost() -> None:
+    from trace_collect.tool_latency_hazard_model import ensemble_survival_trigger_stats
+    from trace_collect.tool_latency_profiled import LatencyPriorNode
+    from trace_collect.tool_latency_utility_clock import robust_utility_trigger_stats
+
+    task_a = [80.0, 80.0, 150.0]
+    task_b = [80.0, 80.0, 150.0]
+    members = [
+        _uniform_member(task_a + task_b),
+        _uniform_member(task_b),
+        _uniform_member(task_a),
+    ]
+    node = LatencyPriorNode(
+        values=task_a + task_b,
+        values_by_task={"task-a": task_a, "task-b": task_b},
+        source="prior_tool",
+        group_key=None,
+    )
+    # A restore charge of 35 makes the free k=0 fire on short calls unattractive;
+    # the unanimous trigger slides out to 80, exactly as the trie's does.
+    ensemble = ensemble_survival_trigger_stats(
+        members, threshold_ms=100.0, kv_cost_ms=100.0, restore_cost_ms=35.0
+    )
+    trie = robust_utility_trigger_stats(
+        node, parent=None, threshold_ms=100.0, kv_cost_ms=100.0, restore_cost_ms=35.0
+    )
+    assert ensemble.trigger_ms == trie.trigger_ms == 80.0
+    assert ensemble.normalized_advantage == pytest.approx(trie.normalized_advantage)
+
+
+def test_ensemble_trigger_waits_when_one_member_vetoes_early_action() -> None:
+    from trace_collect.tool_latency_hazard_model import ensemble_survival_trigger_stats
+
+    # Member A concentrates on a 150 ms (in-band) call: alone it fires early at
+    # 50 ms. Member B concentrates on an 80 ms (short) call: acting early only
+    # exposes swap cost, so its advantage over waiting is negative. The
+    # unanimity walk lets B veto every early candidate, mirroring the trie's
+    # leave-one-task-out veto.
+    member_a = (np.array([150.0]), np.array([1.0]))
+    member_b = (np.array([80.0]), np.array([1.0]))
+
+    solo = ensemble_survival_trigger_stats(
+        [member_a], threshold_ms=100.0, kv_cost_ms=100.0
+    )
+    assert solo.trigger_ms == 50.0 and solo.normalized_advantage > 0.0
+
+    vetoed = ensemble_survival_trigger_stats(
+        [member_a, member_b], threshold_ms=100.0, kv_cost_ms=100.0
+    )
+    assert vetoed.trigger_ms == 100.0
+    assert vetoed.normalized_advantage == 0.0
+
+
+def test_ensemble_trigger_rejects_empty_and_bad_members() -> None:
+    from trace_collect.tool_latency_hazard_model import ensemble_survival_trigger_stats
+
+    with pytest.raises(ValueError, match="requires >= 1 member"):
+        ensemble_survival_trigger_stats([], threshold_ms=100.0, kv_cost_ms=100.0)
+    with pytest.raises(ValueError, match="masses must sum to 1"):
+        ensemble_survival_trigger_stats(
+            [(np.array([80.0, 150.0]), np.array([0.4, 0.4]))],
+            threshold_ms=100.0,
+            kv_cost_ms=100.0,
+        )

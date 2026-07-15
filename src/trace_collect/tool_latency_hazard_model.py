@@ -36,6 +36,7 @@ from trace_collect.tool_latency_offline_probe import (
     balanced_task_folds,
 )
 from trace_collect.tool_latency_utility_clock import (
+    RobustUtilityTriggerStats,
     utility_matrix,
     validate_restore_cost,
 )
@@ -498,6 +499,72 @@ def survival_clock_region_stats(
     )
 
 
+def ensemble_survival_trigger_stats(
+    members: Sequence[tuple[np.ndarray, np.ndarray]],
+    *,
+    threshold_ms: float,
+    kv_cost_ms: float,
+    restore_cost_ms: float = 0.0,
+) -> RobustUtilityTriggerStats:
+    """Robust unanimity trigger across a bagged family of predicted mass vectors.
+
+    This is the learned-predictor twin of
+    :func:`trace_collect.tool_latency_utility_clock.robust_utility_trigger_stats`.
+    Each ``member`` is a ``(reps, masses)`` pair — one hazard model's interval
+    representatives and predicted masses; member grids may differ, so bare rep
+    arrays are passed rather than a shared :class:`DiscreteTimeGrid`. The
+    candidate set is ``{0, threshold}`` plus every ``{rep, rep - kv}`` in
+    ``(0, threshold)`` unioned over ALL members (mirroring ``_utility_candidates``
+    over the trie's model nodes). Per member the expected-utility curve is
+    ``masses @ utility_matrix(reps, candidates, ...)``, exactly the empirical
+    per-curve mean utility. Then the identical robust walk: the earliest
+    candidate whose MINIMUM advantage over the best future candidate — clipped at
+    zero, ``max(0.0, future[index + 1])`` — is strictly positive across every
+    member; ties wait; no unanimous early candidate falls back to the fixed
+    threshold. ``normalized_advantage`` is that weakest advantage divided by the
+    kv cost. A single member reduces to the same walk (no special case), so it is
+    a strict-improvement rule, not the argmax of ``survival_trigger_ms``.
+    """
+
+    if not members:
+        raise ValueError("ensemble_survival_trigger_stats requires >= 1 member")
+    _validate_utility_inputs(threshold_ms, kv_cost_ms, restore_cost_ms)
+    member_reps: list[np.ndarray] = []
+    member_masses: list[np.ndarray] = []
+    for reps, masses in members:
+        validated_reps, validated_masses = _validate_reps_and_masses_arrays(reps, masses)
+        member_reps.append(validated_reps)
+        member_masses.append(validated_masses)
+
+    candidates = _trigger_candidates(
+        np.concatenate(member_reps), threshold_ms, kv_cost_ms
+    )
+    curves = [
+        masses
+        @ utility_matrix(
+            reps,
+            candidates,
+            threshold_ms=threshold_ms,
+            kv_cost_ms=kv_cost_ms,
+            restore_cost_ms=restore_cost_ms,
+        )
+        for reps, masses in zip(member_reps, member_masses, strict=True)
+    ]
+    future_best = [np.maximum.accumulate(curve[::-1])[::-1] for curve in curves]
+    for index, candidate in enumerate(candidates[:-1]):
+        advantages = [
+            float(curve[index] - max(0.0, future[index + 1]))
+            for curve, future in zip(curves, future_best, strict=True)
+        ]
+        minimum_advantage = min(advantages)
+        if minimum_advantage > 0.0:
+            return RobustUtilityTriggerStats(
+                trigger_ms=float(candidate),
+                normalized_advantage=minimum_advantage / kv_cost_ms,
+            )
+    return RobustUtilityTriggerStats(threshold_ms, 0.0)
+
+
 def _expand_person_periods(
     event_intervals: np.ndarray,
     num_intervals: int,
@@ -702,11 +769,25 @@ def _validated_reps_and_masses(
     grid: DiscreteTimeGrid,
     masses: np.ndarray,
 ) -> np.ndarray:
-    reps = np.asarray(grid.reps, dtype=float)
+    reps, _ = _validate_reps_and_masses_arrays(grid.reps, masses)
+    return reps
+
+
+def _validate_reps_and_masses_arrays(
+    reps: np.ndarray,
+    masses: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate a rep/mass pair without requiring a ``DiscreteTimeGrid`` wrapper.
+
+    The ensemble trigger accepts bare ``(reps, masses)`` members whose grids may
+    differ, so it reuses this array-level check rather than the grid-level one.
+    """
+
+    reps = np.asarray(reps, dtype=float)
     mass_array = np.asarray(masses, dtype=float)
     if mass_array.shape != reps.shape:
         raise ValueError(
-            f"masses length {mass_array.shape} does not match grid reps {reps.shape}"
+            f"masses length {mass_array.shape} does not match reps {reps.shape}"
         )
     if not np.all(np.isfinite(mass_array)) or np.any(mass_array < -1e-12):
         raise ValueError("interval masses must be finite and non-negative")
@@ -714,7 +795,7 @@ def _validated_reps_and_masses(
         raise ValueError(f"interval masses must sum to 1, got {float(mass_array.sum())}")
     if not np.all(np.isfinite(reps)) or np.any(reps < 0.0):
         raise ValueError("grid reps must be finite and non-negative")
-    return reps
+    return reps, mass_array
 
 
 def _validate_utility_inputs(
@@ -735,6 +816,7 @@ __all__ = [
     "DiscreteTimeGrid",
     "FittedHazardModel",
     "build_log_grid",
+    "ensemble_survival_trigger_stats",
     "fit_hazard_model",
     "survival_clock_region_stats",
     "survival_trigger_ms",

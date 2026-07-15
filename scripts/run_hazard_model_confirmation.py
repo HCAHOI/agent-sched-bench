@@ -66,6 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hazard estimator: pooled penalized logistic (default) or "
         "HistGradientBoosting; the GBM's fold fits are seeded by --seed",
     )
+    parser.add_argument(
+        "--ensemble-members",
+        type=int,
+        default=0,
+        help="Bagged ensemble members M (0 = off, else >= 2). Each fold fits M "
+        "leave-one-Mth-out members plus the full model; their unanimity trigger "
+        "and weakest-member margin import the trie's robustness",
+    )
     parser.add_argument("--replicates", type=int, default=50_000)
     parser.add_argument("--confidence-level", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=0)
@@ -84,6 +92,7 @@ def main() -> None:
         num_intervals=args.num_intervals,
         feature_set=args.feature_set,
         model_family=args.model_family,
+        ensemble_members=args.ensemble_members,
         replicates=args.replicates,
         confidence_level=args.confidence_level,
         seed=args.seed,
