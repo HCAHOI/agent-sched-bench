@@ -59,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="full",
     )
     parser.add_argument("--ensemble-members", type=int, default=0)
+    parser.add_argument(
+        "--tool-name-trie",
+        action="store_true",
+        help="Also fit a tool-identity-only trie (command_field=None, "
+        "Continuum's P(tau, f)) on the same folds and add the tool-name-vs-full, "
+        "tool-name-vs-GBM, and tool-name-vs-deadline contrasts.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--restore-cost-fractions",
@@ -96,6 +103,7 @@ def main() -> None:
         eval_latencies=args.eval_latencies,
         feature_set=args.feature_set,
         ensemble_members=args.ensemble_members,
+        tool_name_trie=args.tool_name_trie,
     )
     print(
         f"Frontier over {result['task_count']} tasks x "

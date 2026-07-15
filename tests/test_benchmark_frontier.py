@@ -8,6 +8,8 @@ import pytest
 
 from trace_collect.benchmark_frontier import (
     FRONTIER_COMPARISONS,
+    FRONTIER_TOOL_NAME_COMPARISONS,
+    _merge_tool_name_rows,
     _merge_trie_hazard_rows,
     run_benchmark_frontier,
 )
@@ -361,3 +363,239 @@ def test_run_benchmark_frontier_ensemble_adds_contrasts(tmp_path: Path) -> None:
     )
     assert "offline_gated_ensemble_hazard_trigger_ms" in merged
     assert "ensemble_guards" in result
+
+
+# --- Tool-name-only trie arm (P1: Continuum's per-tool-name prior) -----------
+
+
+def _command_row(
+    sample_id: str,
+    *,
+    task_id: str,
+    command: str,
+    latency_ms: float,
+    ts_start: float,
+) -> dict[str, Any]:
+    return {
+        "sample_id": sample_id,
+        "source_trace": f"trace-{task_id}",
+        "task_id": task_id,
+        "tool_name": "exec",
+        "tool_args": {"command": command},
+        "latency_ms": latency_ms,
+        "tool_ts_start": ts_start,
+        "tool_ts_end": ts_start + latency_ms / 1000.0,
+    }
+
+
+def _command_corpus(task_ids: list[str]) -> list[dict[str, Any]]:
+    """One tool ("exec") whose latency is a function of the command, not the tool.
+
+    Each task issues two ``make build`` calls (150 ms, inside the (100, 200)
+    band, so an early swap hides the whole 100 ms cost) and two ``ls`` calls
+    (10 ms, short). The command-prefix (full) trie separates the two commands
+    into distinct group nodes; the tool-name-only trie (command_field=None) can
+    only pool them under the single ``exec`` tool node, so its evidence and its
+    prior_source differ from the full trie by construction.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for offset, task_id in enumerate(task_ids):
+        ts = offset * 100_000.0
+        for call in range(2):
+            rows.append(
+                _command_row(
+                    f"{task_id}-make-{call}",
+                    task_id=task_id,
+                    command="make build",
+                    latency_ms=SLOW_MS,
+                    ts_start=ts,
+                )
+            )
+            ts += 1000.0
+        for call in range(2):
+            rows.append(
+                _command_row(
+                    f"{task_id}-ls-{call}",
+                    task_id=task_id,
+                    command="ls",
+                    latency_ms=FAST_MS,
+                    ts_start=ts,
+                )
+            )
+            ts += 1000.0
+    return rows
+
+
+def _run_command_corpus(
+    tmp_path: Path,
+    *,
+    num_tasks: int = 12,
+    fold_count: int = 2,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    rows = _command_corpus([f"t{i:02d}" for i in range(num_tasks)])
+    latencies = tmp_path / "command_corpus.jsonl"
+    _write_corpus(latencies, rows)
+    return run_benchmark_frontier(
+        None,
+        output_root=tmp_path / "frontier",
+        fold_count=fold_count,
+        inner_folds=2,
+        kv_costs_ms=[COST_MS],
+        guard_ms=0.0,
+        min_tool_history=1,
+        min_profile_tasks=1,
+        command_field="command",
+        max_prefix_depth=4,
+        skip_leading_cd=False,
+        num_intervals=8,
+        model_family="logistic",
+        seed=0,
+        restore_cost_fractions=[0.0],
+        replicates=200,
+        confidence_level=0.95,
+        exposure_note="dev-exposed corpus (sensitivity replication only)",
+        eval_latencies=latencies,
+        **kwargs,
+    )
+
+
+def test_tool_name_trie_arm_adds_p1_contrasts_and_stays_tool_level(
+    tmp_path: Path,
+) -> None:
+    result = _run_command_corpus(tmp_path, tool_name_trie=True)
+
+    assert result["tool_name_trie"] is True
+    # The three P1 contrasts are present on top of the base three.
+    for name, *_ in FRONTIER_TOOL_NAME_COMPARISONS:
+        assert name in result["comparisons"]
+    assert {
+        "gated_tool_name_vs_deadline",
+        "gated_robust_vs_gated_tool_name",
+        "gated_hazard_vs_gated_tool_name",
+    } == {name for name, *_ in FRONTIER_TOOL_NAME_COMPARISONS}
+
+    merged = [
+        json.loads(line)
+        for line in (tmp_path / "frontier" / "rho_0.0_decisions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    # The join is 1:1: adding the tool-name trigger does not change row count.
+    assert len(merged) == 12 * 4
+    for row in merged:
+        # Tool-name arm never groups by command: its prior is the tool node (or
+        # the global cold-start back-off), never a command-prefix group.
+        assert row["tool_name_prior_source"] in ("prior_tool", "prior_global")
+        assert row["tool_name_prior_group_key"] is None
+        assert "offline_gated_tool_name_trigger_ms" in row
+    # The full trie, on the same rows, DOES condition on the command prefix —
+    # proving the two conditionings are genuinely different estimators here.
+    assert any(row["robust_source"] == "prior_group" for row in merged)
+    assert any(
+        row["tool_name_prior_group_key"] is None for row in merged
+    )
+    # Per-fold provenance summary for the tool-name arm is written out.
+    assert (
+        tmp_path / "frontier" / "rho_0.0" / "f1_tool_name_trie_summary.json"
+    ).is_file()
+
+
+def test_tool_name_trie_arm_off_by_default(tmp_path: Path) -> None:
+    result = _run_command_corpus(tmp_path)
+    assert result["tool_name_trie"] is False
+    for name, *_ in FRONTIER_TOOL_NAME_COMPARISONS:
+        assert name not in result["comparisons"]
+    merged = (tmp_path / "frontier" / "rho_0.0_decisions.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "offline_gated_tool_name_trigger_ms" not in merged
+
+
+# --- Tool-name merge join integrity (mirrors _merge_trie_hazard_rows) --------
+
+
+def _base_merged_row(sample_id: str, *, latency_ms: float) -> dict[str, Any]:
+    return {
+        "sample_id": sample_id,
+        "task_id": "t0",
+        "tool_name": "exec",
+        "latency_ms": latency_ms,
+        "kv_cost_ms": COST_MS,
+        "threshold_ms": THRESHOLD_MS,
+        "deadline_trigger_ms": THRESHOLD_MS,
+        "offline_gated_robust_trigger_ms": 50.0,
+        "offline_gated_hazard_trigger_ms": 50.0,
+        "outer_fold": "f1",
+    }
+
+
+def _tool_name_decision(
+    sample_id: str,
+    *,
+    latency_ms: float,
+    trigger_ms: float,
+) -> dict[str, Any]:
+    return {
+        "sample_id": sample_id,
+        "task_id": "t0",
+        "tool_name": "exec",
+        "latency_ms": latency_ms,
+        "kv_cost_ms": COST_MS,
+        "threshold_ms": THRESHOLD_MS,
+        "deadline_trigger_ms": THRESHOLD_MS,
+        "offline_gated_robust_trigger_ms": trigger_ms,
+        "offline_gated_robust_guard_normalized": 0.0,
+        "probe_robust_source": "prior_tool",
+        "probe_robust_group_key": None,
+    }
+
+
+def test_merge_tool_name_rows_joins_trigger() -> None:
+    merged = _merge_tool_name_rows(
+        [_base_merged_row("s0", latency_ms=SLOW_MS)],
+        [_tool_name_decision("s0", latency_ms=SLOW_MS, trigger_ms=70.0)],
+        fold_name="f1",
+    )
+    assert len(merged) == 1
+    row = merged[0]
+    # The full-trie and GBM triggers are preserved untouched; only the
+    # tool-name fields are added.
+    assert row["offline_gated_robust_trigger_ms"] == 50.0
+    assert row["offline_gated_hazard_trigger_ms"] == 50.0
+    assert row["offline_gated_tool_name_trigger_ms"] == 70.0
+    assert row["tool_name_prior_source"] == "prior_tool"
+    assert row["tool_name_prior_group_key"] is None
+
+
+def test_merge_tool_name_rows_raises_on_missing_row() -> None:
+    with pytest.raises(ValueError, match="no tool-name row"):
+        _merge_tool_name_rows(
+            [_base_merged_row("s0", latency_ms=SLOW_MS)],
+            [],
+            fold_name="f1",
+        )
+
+
+def test_merge_tool_name_rows_raises_on_unmatched_rows() -> None:
+    with pytest.raises(ValueError, match="tool-name rows unmatched"):
+        _merge_tool_name_rows(
+            [_base_merged_row("s0", latency_ms=SLOW_MS)],
+            [
+                _tool_name_decision("s0", latency_ms=SLOW_MS, trigger_ms=70.0),
+                _tool_name_decision("s1", latency_ms=SLOW_MS, trigger_ms=70.0),
+            ],
+            fold_name="f1",
+        )
+
+
+def test_merge_tool_name_rows_raises_on_deadline_mismatch() -> None:
+    stale = _tool_name_decision("s0", latency_ms=SLOW_MS, trigger_ms=70.0)
+    stale["deadline_trigger_ms"] = THRESHOLD_MS + 1.0
+    with pytest.raises(ValueError, match="deadline_trigger_ms mismatch"):
+        _merge_tool_name_rows(
+            [_base_merged_row("s0", latency_ms=SLOW_MS)],
+            [stale],
+            fold_name="f1",
+        )

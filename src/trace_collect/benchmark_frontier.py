@@ -74,6 +74,36 @@ FRONTIER_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
 )
 
 
+# Extra contrasts activated only with the tool-name-only trie arm
+# (``tool_name_trie=True``): the tool-name trie (Continuum's tool-identity prior
+# with cold-start back-off, i.e. ``command_field=None``) against the deadline,
+# and the two full-conditioning gated policies against it. The head-to-heads
+# quantify what command-prefix conditioning (full trie) and the learned model
+# (GBM) buy over tool-name conditioning alone. As in every frontier contrast the
+# gates are independent point-margin guards, so the gated-treatment invariant
+# stays off.
+FRONTIER_TOOL_NAME_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
+    (
+        "gated_tool_name_vs_deadline",
+        "offline_gated_tool_name_trigger_ms",
+        "deadline_trigger_ms",
+        False,
+    ),
+    (
+        "gated_robust_vs_gated_tool_name",
+        "offline_gated_robust_trigger_ms",
+        "offline_gated_tool_name_trigger_ms",
+        False,
+    ),
+    (
+        "gated_hazard_vs_gated_tool_name",
+        "offline_gated_hazard_trigger_ms",
+        "offline_gated_tool_name_trigger_ms",
+        False,
+    ),
+)
+
+
 # Extra contrasts activated only with the bagged ensemble arm (``M >= 2``): the
 # gated ensemble against the deadline, the single hazard model, and the gated
 # trie.
@@ -122,6 +152,7 @@ def run_benchmark_frontier(
     eval_latencies: Path | None = None,
     feature_set: str = "full",
     ensemble_members: int = 0,
+    tool_name_trie: bool = False,
 ) -> dict[str, Any]:
     """Fold a target corpus and bootstrap the gated trie vs gated hazard frontier.
 
@@ -175,8 +206,10 @@ def run_benchmark_frontier(
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
     )
-    active_comparisons = FRONTIER_COMPARISONS + (
-        FRONTIER_ENSEMBLE_COMPARISONS if ensemble_on else ()
+    active_comparisons = (
+        FRONTIER_COMPARISONS
+        + (FRONTIER_TOOL_NAME_COMPARISONS if tool_name_trie else ())
+        + (FRONTIER_ENSEMBLE_COMPARISONS if ensemble_on else ())
     )
 
     output_root.mkdir(parents=True)
@@ -280,9 +313,38 @@ def run_benchmark_frontier(
                 fold_name=fold_name,
                 ensemble_on=ensemble_on,
             )
+            tool_name_result: dict[str, Any] | None = None
+            if tool_name_trie:
+                # Second empirical trie on the SAME fold split, conditioned on
+                # tool identity only (command_field=None disables prefix
+                # grouping, leaving tool + global back-off nodes) — Continuum's
+                # P(tau, f). Refit per fraction like the full trie.
+                tool_name_result = evaluate_offline_probe_clock(
+                    eval_rows,
+                    profile_rows=profile_rows,
+                    kv_costs_ms=costs,
+                    guard_ms=guard_ms,
+                    inner_folds=inner_folds,
+                    min_tool_history=min_tool_history,
+                    min_profile_tasks=min_profile_tasks,
+                    command_field=None,
+                    max_prefix_depth=max_prefix_depth,
+                    skip_leading_cd=skip_leading_cd,
+                    restore_cost_fraction=fraction,
+                )
+                merged = _merge_tool_name_rows(
+                    merged,
+                    tool_name_result.pop("decisions"),
+                    fold_name=fold_name,
+                )
             decisions_by_fraction[key].extend(merged)
 
             _write_json(fraction_root / f"{fold_name}_trie_summary.json", trie_result)
+            if tool_name_result is not None:
+                _write_json(
+                    fraction_root / f"{fold_name}_tool_name_trie_summary.json",
+                    tool_name_result,
+                )
             hazard_summary = {
                 **hazard_shared,
                 "restore_cost_fraction": fraction,
@@ -344,6 +406,7 @@ def run_benchmark_frontier(
         "feature_set": feature_set,
         "model_family": model_family,
         "ensemble_members": ensemble_members,
+        "tool_name_trie": tool_name_trie,
         "trace_root": str(eval_source),
         "exposure_note": exposure_note,
         "fold_count": fold_count,
@@ -445,6 +508,61 @@ def _merge_trie_hazard_rows(
     return merged
 
 
+def _merge_tool_name_rows(
+    merged_rows: list[dict[str, Any]],
+    tool_name_rows: list[dict[str, Any]],
+    *,
+    fold_name: str,
+) -> list[dict[str, Any]]:
+    """Join the tool-name trie's gated trigger onto the merged trie/hazard rows.
+
+    The tool-name trie is a second :func:`evaluate_offline_probe_clock` run with
+    ``command_field=None`` on the identical fold split, so every
+    ``(sample_id, kv_cost)`` panel matches exactly. Its
+    ``offline_gated_robust_trigger_ms`` (the gated tool-identity clock) enters as
+    ``offline_gated_tool_name_trigger_ms``; latency, threshold, and the shared
+    deadline must agree, and unmatched rows in either direction raise — the same
+    join discipline as :func:`_merge_trie_hazard_rows`.
+    """
+
+    tool_name_by_key = {
+        (str(row["sample_id"]), float(row["kv_cost_ms"])): row
+        for row in tool_name_rows
+    }
+    result: list[dict[str, Any]] = []
+    for base in merged_rows:
+        key = (str(base["sample_id"]), float(base["kv_cost_ms"]))
+        tool_name = tool_name_by_key.pop(key, None)
+        if tool_name is None:
+            raise ValueError(f"no tool-name row for decision {key}")
+        for field in ("latency_ms", "threshold_ms", "deadline_trigger_ms"):
+            if not math.isclose(
+                float(base[field]),
+                float(tool_name[field]),
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise ValueError(f"{field} mismatch for tool-name decision {key}")
+        result.append(
+            {
+                **base,
+                "offline_gated_tool_name_trigger_ms": tool_name[
+                    "offline_gated_robust_trigger_ms"
+                ],
+                "offline_gated_tool_name_guard_normalized": tool_name[
+                    "offline_gated_robust_guard_normalized"
+                ],
+                "tool_name_prior_source": tool_name["probe_robust_source"],
+                "tool_name_prior_group_key": tool_name["probe_robust_group_key"],
+            }
+        )
+    if tool_name_by_key:
+        raise ValueError(
+            f"{len(tool_name_by_key)} tool-name rows unmatched in {fold_name}"
+        )
+    return result
+
+
 def _rows_for_tasks(
     rows_by_task: dict[str, list[dict[str, Any]]],
     task_ids: set[str],
@@ -462,5 +580,6 @@ def _write_task_set(path: Path, task_ids: set[str]) -> None:
 __all__ = [
     "FRONTIER_COMPARISONS",
     "FRONTIER_ENSEMBLE_COMPARISONS",
+    "FRONTIER_TOOL_NAME_COMPARISONS",
     "run_benchmark_frontier",
 ]
