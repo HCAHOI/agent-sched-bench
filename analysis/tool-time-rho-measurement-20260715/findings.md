@@ -59,12 +59,31 @@ retroactively validates the whole campaign:
 The measured rho is slightly below 1.0 (0.94), so the rho=1.0 column is a
 hair conservative; the qualitative conclusions are unchanged.
 
+## E5 contention probe (exploratory): rho survives contention
+
+`contention_probe.py` / `rho_contention_probe.json` — the same swap timed
+idle vs under (a) a concurrent GPU matmul load, (b) a host-DRAM-bandwidth
+load (8 threads), (c) both:
+
+| condition | rho | swap-out GB/s |
+|---|---|---|
+| idle | 0.938 | 54.0 |
+| gpu_load | 0.938 | 54.0 |
+| host_load | 0.938 | 54.0 |
+| both | 0.938 | 54.0 |
+
+rho AND absolute bandwidth are unchanged to three digits. The swap is
+PCIe-bound, and neither GPU compute (HBM/SMs) nor host DRAM bandwidth
+contends for the PCIe link, so rho ~= 0.94 is robust to the two most
+obvious sources of competing work. The one condition NOT tested is a
+concurrent PCIe stream (another request's swap / weight load on the same
+link) — the rigorous E5 should add it; but the first-order result is that
+rho is a stable hardware property, not a load-sensitive one.
+
 ## Caveats / next
 
-1. **Idle measurement.** This is the swap primitive with no competing
-   traffic. E5 (inference/tool containers contending for PCIe + host
-   memory bandwidth) can lower absolute bandwidth; the RATIO should be more
-   robust but must be verified — next box task.
+1. Concurrent-PCIe contention untested (see the E5 probe above); rho robust
+   to GPU-compute and host-memory contention.
 2. **Platform-specific.** Gen5 x16 discrete H100. A Gen4 A100 has ~half the
    bandwidth (absolute ms doubles; ratio direction similar). A GH200 /
    unified-memory (NVLink-C2C) system would be radically different

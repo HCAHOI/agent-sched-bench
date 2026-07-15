@@ -1,0 +1,121 @@
+{
+  "device": "NVIDIA H100 80GB HBM3",
+  "conditions": {
+    "idle": [
+      {
+        "tokens": 8192,
+        "MiB": 768.0,
+        "swap_out_ms": 14.956,
+        "swap_in_ms": 13.977,
+        "out_GBps": 53.85,
+        "in_GBps": 57.62,
+        "rho": 0.9345
+      },
+      {
+        "tokens": 65536,
+        "MiB": 6144.0,
+        "swap_out_ms": 119.339,
+        "swap_in_ms": 111.957,
+        "out_GBps": 53.98,
+        "in_GBps": 57.54,
+        "rho": 0.9381
+      },
+      {
+        "tokens": 131072,
+        "MiB": 12288.0,
+        "swap_out_ms": 238.189,
+        "swap_in_ms": 224.317,
+        "out_GBps": 54.1,
+        "in_GBps": 57.44,
+        "rho": 0.9418
+      }
+    ],
+    "gpu_load": [
+      {
+        "tokens": 8192,
+        "MiB": 768.0,
+        "swap_out_ms": 14.988,
+        "swap_in_ms": 14.004,
+        "out_GBps": 53.73,
+        "in_GBps": 57.51,
+        "rho": 0.9343
+      },
+      {
+        "tokens": 65536,
+        "MiB": 6144.0,
+        "swap_out_ms": 119.36,
+        "swap_in_ms": 111.985,
+        "out_GBps": 53.97,
+        "in_GBps": 57.53,
+        "rho": 0.9382
+      },
+      {
+        "tokens": 131072,
+        "MiB": 12288.0,
+        "swap_out_ms": 238.2,
+        "swap_in_ms": 224.379,
+        "out_GBps": 54.09,
+        "in_GBps": 57.42,
+        "rho": 0.942
+      }
+    ],
+    "host_load": [
+      {
+        "tokens": 8192,
+        "MiB": 768.0,
+        "swap_out_ms": 14.959,
+        "swap_in_ms": 13.982,
+        "out_GBps": 53.83,
+        "in_GBps": 57.6,
+        "rho": 0.9346
+      },
+      {
+        "tokens": 65536,
+        "MiB": 6144.0,
+        "swap_out_ms": 119.354,
+        "swap_in_ms": 111.963,
+        "out_GBps": 53.98,
+        "in_GBps": 57.54,
+        "rho": 0.9381
+      },
+      {
+        "tokens": 131072,
+        "MiB": 12288.0,
+        "swap_out_ms": 238.206,
+        "swap_in_ms": 224.327,
+        "out_GBps": 54.09,
+        "in_GBps": 57.44,
+        "rho": 0.9417
+      }
+    ],
+    "both": [
+      {
+        "tokens": 8192,
+        "MiB": 768.0,
+        "swap_out_ms": 15.011,
+        "swap_in_ms": 14.024,
+        "out_GBps": 53.65,
+        "in_GBps": 57.42,
+        "rho": 0.9343
+      },
+      {
+        "tokens": 65536,
+        "MiB": 6144.0,
+        "swap_out_ms": 119.37,
+        "swap_in_ms": 112.006,
+        "out_GBps": 53.97,
+        "in_GBps": 57.52,
+        "rho": 0.9383
+      },
+      {
+        "tokens": 131072,
+        "MiB": 12288.0,
+        "swap_out_ms": 238.338,
+        "swap_in_ms": 224.535,
+        "out_GBps": 54.06,
+        "in_GBps": 57.38,
+        "rho": 0.9421
+      }
+    ]
+  }
+}
