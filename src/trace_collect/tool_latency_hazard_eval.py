@@ -130,6 +130,46 @@ HAZARD_ENSEMBLE_COMPARISONS: tuple[tuple[str, str, str, bool], ...] = (
 )
 
 
+# Feature-block toggles per ablation arm. ``full`` keeps every block; the other
+# arms drop task aggregates (and, for ``cross_task_only``, within-task history).
+# Command parsing config is always supplied by the caller (the frozen manifest).
+_FEATURE_SET_TOGGLES: dict[str, dict[str, bool]] = {
+    "full": {},
+    "with_within_task": {"use_task_aggregates": False},
+    "cross_task_only": {
+        "use_within_task_history": False,
+        "use_task_aggregates": False,
+    },
+}
+
+
+def build_survival_feature_spec(
+    feature_set: str,
+    *,
+    command_field: str | None,
+    max_prefix_depth: int,
+    skip_leading_cd: bool,
+) -> SurvivalFeatureSpec:
+    """Build the hazard feature spec for one ablation arm.
+
+    ``feature_set`` names the arm: ``full`` (all blocks), ``with_within_task``
+    (no task aggregates), or ``cross_task_only`` (tool/prefix blocks only). The
+    command-parsing config is passed through verbatim.
+    """
+
+    if feature_set not in _FEATURE_SET_TOGGLES:
+        raise ValueError(
+            f"unknown feature_set {feature_set!r}; "
+            f"expected one of {sorted(_FEATURE_SET_TOGGLES)}"
+        )
+    return SurvivalFeatureSpec(
+        command_field=command_field,
+        max_prefix_depth=max_prefix_depth,
+        skip_leading_cd=skip_leading_cd,
+        **_FEATURE_SET_TOGGLES[feature_set],
+    )
+
+
 @dataclass(frozen=True)
 class _PredictedCall:
     """One call's rho-independent prediction: cached masses over a fixed grid.
@@ -785,5 +825,6 @@ def _spec_config(spec: SurvivalFeatureSpec) -> dict[str, Any]:
 __all__ = [
     "HAZARD_COMPARISONS",
     "HAZARD_ENSEMBLE_COMPARISONS",
+    "build_survival_feature_spec",
     "evaluate_hazard_model_clock",
 ]
