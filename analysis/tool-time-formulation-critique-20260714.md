@@ -397,6 +397,40 @@ SWE-ReBench). So the demonstrated value is command-PREFIX conditioning, not
 learning per se — matching Continuum's own Fig 5 cd-tail pathology. (Low-rho
 sweep columns are the sensitivity probe, not deployment claims.)
 
+## Phase 0 — gate coverage / robustness (E3), 2026-07-16
+
+Hardening the certification gate on the frozen SWE-ReBench corpus BEFORE any
+fresh collection (Fable-5 review's Phase 0; closes the long-open E3 coverage
+item). Operating-point restore proxy rho=1.0. Full record:
+`analysis/tool-time-gate-robustness-swe-rebench-20260716/`.
+
+- **The certificate is ~2.6-2.7x ANTICONSERVATIVE.** Under a paired sign-flip
+  null (the exact randomization null for E[delta]>0), the deployed task-cluster
+  Bonferroni-percentile certificate certifies a false positive at 6.75% (nominal
+  2.5%, one-sided family) / 13.05% two-sided (nominal 5%) — stable across inner
+  replicates, so it is a real estimator property, not MC noise. The percentile
+  bootstrap under-covers this skewed ~100-cluster data. CONSEQUENCE: the single
+  certified cell on SWE-ReBench (certified-union vs deadline, kv=4500 ms, the
+  only positive cell) sits at the ~13% false-cert noise floor — it should be
+  treated as UNCERTIFIED until the CI is replaced with a coverage-valid
+  procedure (studentized/BCa, or a permutation/calibrated certificate). This is
+  a prerequisite fix before the fresh-corpus run, else the fresh certificate
+  inherits the same optimism.
+- **Repo clustering — quantified non-issue.** 94 repos / 100 tasks / 88
+  singletons / max 2 tasks/repo; repo-resampled labels identical and CI widths
+  within ~5%. Near-singleton clusters mean the test has little power to detect
+  within-repo correlation — but there is essentially no within-repo replication
+  to carry any. A denser-repo fresh corpus would need this re-checked.
+- **Censoring — real but immaterial.** A ~300 s exec-timeout cap plateau (3
+  calls within 30 ms) + 1 at ~600 s = ~4 clear censored calls (0.09%); at
+  6/4640 (0.13%) even counting two ambiguous round-number singletons, too few to
+  move the paired totals. Constant-cap detection is a LOWER bound (this branch's
+  exec timeout is resource-integrated/stall-based → varying wall-clock cap).
+
+Two of the three sharpest reviewer objections (repo clustering, censoring) are
+now quantified non-threats; the third (bootstrap coverage) is a confirmed real
+problem with a clear fix path. Cheap (~4 min CPU), no fresh data spent.
+
 ## Execution order
 
 1. E1 restore-cost extension + sweep — DONE 2026-07-14, F1 confirmed (above).
