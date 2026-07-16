@@ -103,8 +103,7 @@ separated.
 
 - The certification instrument had a real coverage hole (~2.7x anticonservative);
   it is now FIXED with an exact paired randomization certificate (0.62x nominal),
-  which must be the certificate the fresh-corpus run uses (percentile retired to
-  a backward-compat/anchor role, default-off).
+  which must be the certificate the fresh-corpus run uses.
 - Under the fixed instrument the one SWE-ReBench certified-union win holds
   (kv=4500, p=0.0001) — it was not an artifact. Selection optimism (dev-exposed)
   is the remaining, orthogonal reason it is still "sensitivity, not certified"

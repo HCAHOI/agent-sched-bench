@@ -413,7 +413,7 @@ item). Operating-point restore proxy rho=1.0. Full record:
   (`permutation_draws` in `paired_task_cluster_bootstrap`, additive/default-off,
   review-gated APPROVE); on the IDENTICAL null it holds at 0.62x nominal
   one-sided / 0.59x two-sided. This is now the instrument the fresh-corpus run
-  must use; percentile is retired to backward-compat/anchor. CORRECTION to an
+  must use. CORRECTION to an
   earlier read: under the FIXED certificate the single SWE-ReBench cell
   (certified-union vs deadline, kv=4500 ms) STILL certifies (permutation
   p_positive=0.0001 < 0.0025 family tail; next-smallest cell p=0.0101) — so that
