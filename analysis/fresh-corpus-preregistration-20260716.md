@@ -26,6 +26,21 @@ measured operating point.
   inventory and the three dev roots in `excluded_trace_roots`, enforced by
   `run_offline_gated_robust_confirmation.py` (content-overlap rejection).
 
+### Amendment (2026-07-16, logged): collection concurrency = 2
+
+Collection runs at `--concurrency 2` (uncapped containers), a documented
+deviation from the dev corpus's serial (concurrency 1) collection. Rationale:
+the host is 8-core/15GB; measured per-task peak memory is <1 GiB (non-binding)
+and CPU is a low duty cycle (median peak ~1 core, occasional ~8-core build/test
+spikes), so two tasks each retain the full core set most of the time. RISK
+(honest): when two CPU-heavy tool calls overlap, both slow, inflating those
+(long) tool durations — a small, RANDOM (not systematic) perturbation vs dev,
+concentrated in the long-call region the analysis cares about. Not expected to
+change the pre-registered H1/H2 direction; if a fresh result is marginal, this
+is a candidate confound to check (e.g. re-collect a subset serially). Container
+CPU-pinning was rejected because capping the ~8-core build tasks would bias
+their durations DIRECTIONALLY vs dev, which is worse than random contention.
+
 ## Operating point and certificate
 
 - rho = KV swap-back/swap-out cost = **0.94** (measured, H100 Gen5x16). The fresh
