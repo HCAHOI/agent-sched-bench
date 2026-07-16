@@ -26,6 +26,24 @@ measured operating point.
   inventory and the three dev roots in `excluded_trace_roots`, enforced by
   `run_offline_gated_robust_confirmation.py` (content-overlap rejection).
 
+### Amendment (2026-07-16, logged): sample extended 200 -> target 300
+
+The fresh sample was extended from `--sample 200` to `--sample 300` (still
+`--skip 150 --selection-seed 42` -> `shuffled[150:450]`), collected overnight
+until the API credit budget is exhausted (expected final N in ~250-300).
+Rationale: Phase 0b showed the broader cost-family cells (kv=5000, 1500) need
+~300 tasks to approach certifiable power, and the primary claims (flagship
+certified-union-vs-deadline, P1) are already well-powered at 200, so the
+extension only strengthens secondary cells + robustness. INTEGRITY: this is NOT
+results-driven — `shuffled[150:450]` is a fixed extension of the same
+deterministic seed-42 shuffle prefix (verified disjoint from dev `[0:150]`:
+fresh300 n dev = 0, extra `[350:450]` n dev = 0), collected in shuffle order, so
+truncation at credit-exhaustion drops a random tail (tasks are NOT ordered by
+cost/difficulty), introducing no selection or cost bias. The final N is recorded
+post-hoc; the pre-registered PRIMARY hypotheses and decision rules are unchanged.
+Credit-exhausted tasks fail with empty traces and are removed before analysis
+(same cleanup as the docker-commit failures).
+
 ### Amendment (2026-07-16, logged): collection concurrency = 2
 
 Collection runs at `--concurrency 2` (uncapped containers), a documented
