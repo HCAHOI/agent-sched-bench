@@ -41,6 +41,7 @@ import numpy as np
 
 from trace_collect.restore_cost_analysis import _load_certified_union_decisions
 from trace_collect.tool_latency_confirmation import (
+    _permutation_simultaneous_labels,
     _resample_task_totals,
     paired_task_cluster_bootstrap,
 )
@@ -115,53 +116,76 @@ def calibration_under_signflip(
     null_draws: int,
     bootstrap_seed: int,
     signflip_seed: int,
+    permutation_seed: int,
 ) -> dict[str, Any]:
-    """False-certification rate of the gate under a paired sign-flip null.
+    """False-certification rate of BOTH certificates under a paired sign-flip null.
 
     For each null draw, flip each task's whole delta vector by an independent
-    +/-1, then run the deployed task-cluster bootstrap and Bonferroni labels.
-    Report how often the null wrongly certifies a positive (one-sided) or any
-    non-inconclusive (two-sided) cost cell -- the gate's empirical type-I.
+    +/-1 (the correct paired-randomization H0), then score BOTH the deployed
+    percentile-bootstrap certificate and the proposed permutation certificate on
+    that null and count how often each wrongly certifies a positive/harmful cost
+    cell -- their empirical type-I on the identical, statistically-valid null.
     """
     task_count, cost_count = contributions.shape
     alpha = 1.0 - confidence_level
     signflip_rng = np.random.Generator(np.random.PCG64(signflip_seed))
-    any_positive = 0
-    any_harmful = 0
-    any_nonnull = 0
+    perc_positive = 0
+    perc_harmful = 0
+    perc_any = 0
+    perm_positive = 0
+    perm_harmful = 0
+    perm_any = 0
     per_cost_positive = np.zeros(cost_count, dtype=int)
     for draw in range(null_draws):
         signs = signflip_rng.choice(np.array([-1.0, 1.0]), size=task_count)
         null_matrix = signs[:, None] * contributions
         observed = null_matrix.sum(axis=0)
-        # Distinct bootstrap seed per draw so inner resamples are independent
-        # across nulls but reproducible; PCG64 as in the deployed resampler.
+        # Percentile certificate (deployed): bootstrap the null dataset. Distinct
+        # seed per draw so inner resamples are independent but reproducible.
         totals = _resample_task_totals(
             null_matrix,
             replicates=inner_replicates,
             seed=bootstrap_seed + draw,
         )
-        labels = _labels_from_totals(
+        perc = _labels_from_totals(
             totals, observed, confidence_level=confidence_level
         )
-        cell_labels = [cell["label"] for cell in labels]
-        pos = [i for i, lab in enumerate(cell_labels) if lab == "positive"]
-        harm = any(lab == "harmful" for lab in cell_labels)
-        any_positive += 1 if pos else 0
-        any_harmful += 1 if harm else 0
-        any_nonnull += 1 if (pos or harm) else 0
+        pos = [i for i, cell in enumerate(perc) if cell["label"] == "positive"]
+        harm = any(c["label"] == "harmful" for c in perc)
+        perc_positive += 1 if pos else 0
+        perc_harmful += 1 if harm else 0
+        perc_any += 1 if (pos or harm) else 0
         for i in pos:
             per_cost_positive[i] += 1
+        # Permutation certificate (proposed): the null dataset is one sign-flip of
+        # the data (~H0); the cert draws its OWN independent inner sign-flips, so
+        # this is a legitimate (non-circular) type-I measurement on the correct
+        # paired null. Exact under exchangeability => should hold at <= nominal.
+        perm = _permutation_simultaneous_labels(
+            null_matrix,
+            observed,
+            confidence_level=confidence_level,
+            draws=inner_replicates,
+            seed=permutation_seed + draw,
+        )["points"]
+        perm_pos = any(c["permutation_label"] == "positive" for c in perm)
+        perm_harm = any(c["permutation_label"] == "harmful" for c in perm)
+        perm_positive += 1 if perm_pos else 0
+        perm_harmful += 1 if perm_harm else 0
+        perm_any += 1 if (perm_pos or perm_harm) else 0
     return {
         "null_draws": null_draws,
         "inner_replicates": inner_replicates,
         "confidence_level": confidence_level,
         "nominal_family_alpha": alpha,
         "nominal_one_sided_family_alpha": alpha / 2.0,
-        "empirical_family_positive_rate": any_positive / null_draws,
-        "empirical_family_harmful_rate": any_harmful / null_draws,
-        "empirical_family_any_cert_rate": any_nonnull / null_draws,
-        "per_cost_positive_rate": (per_cost_positive / null_draws).tolist(),
+        "percentile_family_positive_rate": perc_positive / null_draws,
+        "percentile_family_harmful_rate": perc_harmful / null_draws,
+        "percentile_family_any_cert_rate": perc_any / null_draws,
+        "permutation_family_positive_rate": perm_positive / null_draws,
+        "permutation_family_harmful_rate": perm_harmful / null_draws,
+        "permutation_family_any_cert_rate": perm_any / null_draws,
+        "percentile_per_cost_positive_rate": (per_cost_positive / null_draws).tolist(),
     }
 
 
@@ -312,6 +336,7 @@ def main() -> None:
         treatment_trigger_field="certified_union_trigger_ms",
         restore_cost_fraction=args.restore_cost_fraction,
         enforce_gated_treatment=False,
+        permutation_draws=args.replicates,
     )
     task_ids, cost_list, contributions = _contribution_matrix(real)
 
@@ -346,6 +371,7 @@ def main() -> None:
         null_draws=args.null_draws,
         bootstrap_seed=args.seed + 1,
         signflip_seed=args.seed + 7,
+        permutation_seed=args.seed + 13,
     )
     censoring = censoring_audit(decisions)
 
@@ -361,7 +387,11 @@ def main() -> None:
         "costs_ms": cost_list,
         "deployed_certificate_task_cluster": {
             str(c): {
-                "label": lib_labels[i],
+                "percentile_label": lib_labels[i],
+                "permutation_label": real["points"][str(c)]["permutation_label"],
+                "permutation_p_positive": real["points"][str(c)][
+                    "permutation_p_positive"
+                ],
                 "paired_delta_ms": real["points"][str(c)]["paired_delta_ms"],
                 "simultaneous_interval_ms": real["points"][str(c)][
                     "simultaneous_interval_ms"

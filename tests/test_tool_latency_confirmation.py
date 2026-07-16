@@ -218,6 +218,58 @@ def test_task_cluster_bootstrap_harmful_and_zero_boundaries() -> None:
     assert zero["points"]["100.0"]["simultaneous_label"] == "inconclusive"
 
 
+def test_permutation_certificate_off_by_default_is_byte_identical() -> None:
+    decisions = _decision_panel(
+        task_ids=[f"task-{index}" for index in range(5)],
+        costs=[100.0],
+        latency_ms=80.0,
+    )
+    kwargs = {
+        "costs_ms": [100.0],
+        "replicates": 1_000,
+        "confidence_level": 0.95,
+        "seed": 0,
+    }
+
+    off = paired_task_cluster_bootstrap(decisions, **kwargs)
+    on = paired_task_cluster_bootstrap(decisions, permutation_draws=2_000, **kwargs)
+
+    assert "permutation" not in off
+    assert "permutation_label" not in off["points"]["100.0"]
+    assert paired_task_cluster_bootstrap(decisions, **kwargs) == off  # reproducible
+    assert on["permutation"]["method"] == "paired_signflip_randomization"
+    # Percentile certifies a clean 5-task win; the randomization test cannot at
+    # family tail 0.0025 because the smallest achievable p-value is 1/2^5 ~ 0.031.
+    assert on["points"]["100.0"]["simultaneous_label"] == "positive"
+    assert on["points"]["100.0"]["permutation_label"] == "inconclusive"
+    assert on["points"]["100.0"]["permutation_p_positive"] == pytest.approx(
+        1.0 / 32.0, abs=0.01
+    )
+    # The exact-test floor 1/2^5 binds (> the 1/2001 Monte-Carlo floor), so no
+    # 5-task result can ever certify at family tail 0.0025.
+    assert on["permutation"]["min_achievable_p_value"] == pytest.approx(1.0 / 32.0)
+    assert on["permutation"]["min_achievable_p_value"] > 0.0025
+
+
+def test_permutation_certificate_certifies_a_clean_wide_win() -> None:
+    # 40 tasks, each a strictly positive paired delta: min achievable p-value is
+    # 1/2^40 << 0.0025, so an unambiguous win now certifies under the exact test.
+    decisions = _decision_panel(
+        task_ids=[f"task-{index}" for index in range(40)],
+        costs=[100.0],
+        latency_ms=80.0,
+    )
+    result = paired_task_cluster_bootstrap(
+        decisions,
+        costs_ms=[100.0],
+        replicates=1_000,
+        confidence_level=0.95,
+        seed=0,
+        permutation_draws=5_000,
+    )
+    assert result["points"]["100.0"]["permutation_label"] == "positive"
+
+
 def test_confirmation_manifest_accepts_only_frozen_configuration(
     tmp_path: Path,
 ) -> None:

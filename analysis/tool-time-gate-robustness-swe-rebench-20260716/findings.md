@@ -1,90 +1,113 @@
-# Phase 0 — gate robustness on the frozen corpus (2026-07-16)
+# Phase 0 — gate robustness + certificate coverage fix (2026-07-16)
 
 Hardens the certification gate on existing SWE-ReBench data BEFORE any fresh
-collection, per the Fable-5 review's Phase 0. Three leakage-free re-analyses of
-the committed certified-union decisions at the operating-point restore proxy
-(rho=1.0, the committed proxy for the measured rho=0.94; the low-rho files are
-the closed sensitivity probe and are not read here). Corpus: SWE-ReBench 100
-tasks / 94 repos / 4640 calls / 10-cost family. Certificate under test:
-`certified_union_trigger_ms` vs the deadline, via the deployed
-`paired_task_cluster_bootstrap` (task-cluster Bonferroni-percentile simultaneous
-interval; `simultaneous_label=="positive"` is the certificate).
+collection (Fable-5 review's Phase 0), then FIXES the coverage hole it exposed.
+Three leakage-free re-analyses of the committed certified-union decisions at the
+operating-point restore proxy (rho=1.0, the committed proxy for the measured
+rho=0.94; the low-rho files are the closed sensitivity probe and are not read
+here). Corpus: SWE-ReBench 100 tasks / 94 repos / 4640 calls / 10-cost family.
+Certificate under test: `certified_union_trigger_ms` vs the deadline.
 
-Script: `scripts/analyze_gate_robustness.py` (reuses the deployed
-`paired_task_cluster_bootstrap` + `_resample_task_totals`, not reimplementations;
-anchor assertion reproduces the library's labels). Review-gated (fresh reviewer,
-two blocking findings fixed and re-confirmed).
+Script: `scripts/analyze_gate_robustness.py`. Library change:
+`paired_task_cluster_bootstrap` gains an opt-in `permutation_draws` that attaches
+a coverage-valid certificate (default off = frozen numerics byte-identical).
+Review-gated.
 
-## Result: the certificate is ~2.6-2.7x anticonservative (the load-bearing finding)
+## Finding 1: the deployed percentile certificate is ~2.7x anticonservative
 
-Under a **paired sign-flip null** (flip each task's whole paired-delta vector by
-+/-1 — the exact paired-randomization null for a certificate testing E[delta]>0,
-preserving the heavy-tailed cluster magnitudes the real bootstrap faces) and
-recomputing the deployed bootstrap+Bonferroni labels on each null draw
-(2000 draws, 20000 inner replicates = deployed resolution):
+Under a **paired sign-flip null** — flip each task's whole paired-delta vector by
++/-1, the paired-randomization H0 (exact under sign-symmetry of the paired
+deltas, a sharper null than E[delta]=0), preserving the heavy-tailed
+cluster magnitudes and cross-cost correlation the real bootstrap faces — and
+recomputing the deployed Bonferroni-percentile labels on each null draw (2000
+draws x 20000 inner replicates = deployed resolution):
 
-| quantity | nominal | empirical | ratio |
-|---|---|---|---|
-| one-sided family false-**positive** cert rate | 0.025 | **0.0675** | **2.70x** |
-| two-sided family any-cert rate | 0.050 | **0.1305** | **2.61x** |
-| family false-**harmful** rate | 0.025 | 0.0650 | 2.60x |
+| certificate | one-sided family pos. rate (nominal 0.025) | two-sided any-cert (nominal 0.05) |
+|---|---|---|
+| **percentile (deployed)** | **0.0675 (2.70x)** | **0.1305 (2.61x)** |
+| **permutation (fix)** | 0.0155 (0.62x) | 0.0295 (0.59x) |
 
-The percentile-bootstrap Bonferroni certificate under-covers on this skewed
-~100-cluster data: it certifies at ~2.7x its nominal rate when there is NO real
-effect. Bonferroni is itself conservative here (the cost columns are highly
-correlated), so the per-cost undercoverage is worse than the family ratio — the
-2.7x understates the per-cell problem. The magnitude is stable across inner
-replicates (6.85%/13.5% at 4000 vs 6.75%/13.05% at 20000), so it is a real
-property of the estimator, not Monte-Carlo noise.
+The percentile bootstrap under-covers on this skewed ~100-cluster data: it
+certifies at ~2.7x its nominal rate under no effect (Bonferroni is itself
+conservative here, so the per-cell undercoverage is worse than the family ratio).
+Stable across inner replicates (6.85%/13.5% at 4000 vs 6.75%/13.05% at 20000),
+so it is a real estimator property, not Monte-Carlo noise. A percentile
+`simultaneous_label == "positive"` therefore must NOT carry a headline
+certification.
 
-**Consequence for the campaign's one SWE-ReBench win:** the certified-union-vs-
-deadline certificate has exactly ONE positive cost cell (kv=4500 ms; identical
-under task and repo clustering). A single positive cell against a two-sided
-family false-cert rate of ~13% is at the noise floor — it is plausibly a false
-positive. The "certified union beats the deadline on SWE-ReBench" claim should
-be treated as UNCERTIFIED until the certificate's coverage is fixed. This is
-precisely why Phase 0 runs before spending fresh data: the certification RULE
-needs a coverage fix (studentized/BCa bootstrap, or a permutation/calibrated
-certificate) before any fresh-corpus headline.
+## The fix: an exact paired sign-flip randomization certificate
 
-## Repo clustering — quantified non-issue (no aggregation to worry about)
+`_permutation_simultaneous_labels` (in `tool_latency_confirmation.py`, exposed via
+`paired_task_cluster_bootstrap(..., permutation_draws=N)`) replaces the percentile
+interval with a one-sided randomization p-value per cost cell (standard +1
+correction), Bonferroni-simultaneous over the cost family at tail alpha/(2m). It
+is exact under exchangeability and distribution-free, so it stays calibrated
+under the per-task tails that break the percentile bound. Measured on the SAME
+sign-flip null it holds at 0.62x nominal one-sided / 0.59x two-sided (the
+comparison is fair — both certificates are scored on the identical valid null;
+the percentile cert fails on the very draws where the permutation cert holds).
+The randomization test's validity is a theorem under exchangeability; this
+empirical pass confirms the implementation. Its p-value floor is 1/2^n, so it is
+(correctly) MORE conservative than the percentile bound at small task counts — it
+refuses to certify a clean 5-task win because the smallest achievable p (1/32)
+exceeds the 0.0025 family tail; at n=100 it has ample resolution.
 
-SWE-ReBench-100 is near repo-unique: **94 repos, 88 singletons, 6 repos with 2
-tasks, max 2 tasks/repo**. Resampling repos instead of tasks leaves the
-certificate labels IDENTICAL (only kv=4500 positive in both) and CI widths
-within ~5% (e.g. kv=4500: task 78524 vs repo 81839 ms). Honest scope: because
-94/100 clusters are singletons, repo resampling is arithmetically ~= task
-resampling and the test has little power to detect within-repo correlation —
-there is simply almost no within-repo replication to carry it. So repo
-clustering is not a threat on THIS corpus, but a fresh corpus with denser
-repos would need this re-checked.
+BCa was considered and rejected: its acceleration term is driven by the same
+extreme clusters that cause the under-coverage, so it is fragile exactly where it
+is needed; the randomization test needs no such estimate.
 
-## Censoring — real but immaterial (0.13% of calls)
+## The single SWE-ReBench win SURVIVES the fixed certificate
 
-Tool exec timeouts do cap the upper tail. The unambiguous censoring signature is
-a **~300 s cap plateau: 3 calls clustered within 30 ms (300074.6 / 300100.3 /
-300104.9 ms)** plus **1 at ~600 s (600085.2)** — a one-sided upward window
-`[cap, cap*1.02]` catches them (censored calls overshoot the nominal cap by
-teardown overhead). Two further lone calls near 60 s / 120 s also fall in the
-window but sit near round numbers with no cluster, so they are equally likely
-genuinely-long calls, not caps — counted conservatively, the total is **6
-suspect calls (0.129%)**, of which ~4 are real caps. The plateau is visible in
-`top_latencies_ms`. My first
-audit used a too-tight symmetric tolerance and printed a false "no pileup"; the
-reviewer caught it (fixed). Magnitude verdict: 6/4640 calls cannot move the
-task-clustered paired totals, so censoring does not threaten the aggregate
-certificate. Caveat: this branch's exec timeout is resource-integrated/stall-
-based (see src/trace_collect/CLAUDE.md), which censors at a VARYING wall-clock
-value and leaves no constant pileup — so constant-cap detection is a LOWER
-bound on true censoring. Per-tool caps were not separated.
+Under the coverage-valid permutation certificate on the real corpus, exactly one
+cost cell certifies: **kv=4500 ms, permutation p_positive = 0.0001** (well below
+the 0.0025 family tail; delta +33834 ms). The next-smallest cell p-values are
+0.0101 (5000), 0.0273 (1500), 0.0312 (3000) — all above 0.0025, correctly not
+certified. So the certified-union-vs-deadline win on SWE-ReBench is NOT a false
+positive of the broken instrument — it holds under the exact test. (This
+supersedes an earlier draft of this doc that, reasoning only from the percentile
+noise floor, called the cell "plausibly a fluke" — the coverage-valid test
+settles it: the cell is real.)
+
+Two issues were conflated and are now separated:
+1. **Instrument validity** (bootstrap under-coverage) — FIXED by the permutation
+   certificate.
+2. **Selection optimism** (dev-exposed corpus; the certified-union rule was
+   itself chosen after observing gate behavior on these corpora) — NOT a
+   statistical-instrument problem; still requires the fresh-corpus certification.
+   The permutation certificate is now the instrument that fresh run should use.
+
+## Finding 2 (repo clustering) — quantified non-issue
+
+SWE-ReBench-100 is near repo-unique: 94 repos, 88 singletons, 6 repos with 2
+tasks, max 2 tasks/repo. Resampling repos instead of tasks leaves the certificate
+labels identical (only kv=4500 positive) and CI widths within ~5%. Honest scope:
+with 94/100 clusters singleton, repo resampling is ~= task resampling and the
+test has little power to detect within-repo correlation — there is almost no
+within-repo replication to carry it. Not a threat on THIS corpus; a denser-repo
+fresh corpus would need this re-checked.
+
+## Finding 3 (censoring) — real but immaterial
+
+The unambiguous censoring signature is a ~300 s exec-timeout plateau (3 calls
+within 30 ms: 300074.6 / 300100.3 / 300104.9 ms) plus 1 at ~600 s (600085.2), via
+a one-sided upward window `[cap, cap*1.02]` (censored calls overshoot the nominal
+cap by teardown overhead). Two further lone calls near 60 s / 120 s fall in the
+window but have no cluster and are as likely genuinely-long calls, so ~4 of the 6
+suspect calls are real caps. Total 6/4640 = 0.13% — too few to move the
+task-clustered paired totals. Constant-cap detection is a LOWER bound (this
+branch's exec timeout is resource-integrated/stall-based per
+src/trace_collect/CLAUDE.md → varying wall-clock cap); per-tool caps not
+separated.
 
 ## Bottom line
 
-- Repo clustering and censoring are NOT threats on this corpus (quantified,
-  pre-empts two of the sharpest reviewer objections).
-- The gate's certificate is materially anticonservative (~2.7x). The single
-  SWE-ReBench "certified" win is at the false-cert noise floor and should not
-  be quoted as certified until the bootstrap CI is replaced with a
-  coverage-valid procedure. This is a prerequisite fix BEFORE the fresh-corpus
-  certification run (else the fresh certificate inherits the same optimism).
-- Cheap to run (~4 min CPU); no fresh data spent.
+- The certification instrument had a real coverage hole (~2.7x anticonservative);
+  it is now FIXED with an exact paired randomization certificate (0.62x nominal),
+  which must be the certificate the fresh-corpus run uses (percentile retired to
+  a backward-compat/anchor role, default-off).
+- Under the fixed instrument the one SWE-ReBench certified-union win holds
+  (kv=4500, p=0.0001) — it was not an artifact. Selection optimism (dev-exposed)
+  is the remaining, orthogonal reason it is still "sensitivity, not certified"
+  until the fresh corpus.
+- Repo clustering and censoring are quantified non-threats on this corpus.
+- Cheap (~8 min CPU); no fresh data spent.

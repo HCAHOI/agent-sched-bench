@@ -404,18 +404,22 @@ fresh collection (Fable-5 review's Phase 0; closes the long-open E3 coverage
 item). Operating-point restore proxy rho=1.0. Full record:
 `analysis/tool-time-gate-robustness-swe-rebench-20260716/`.
 
-- **The certificate is ~2.6-2.7x ANTICONSERVATIVE.** Under a paired sign-flip
-  null (the exact randomization null for E[delta]>0), the deployed task-cluster
-  Bonferroni-percentile certificate certifies a false positive at 6.75% (nominal
-  2.5%, one-sided family) / 13.05% two-sided (nominal 5%) — stable across inner
-  replicates, so it is a real estimator property, not MC noise. The percentile
-  bootstrap under-covers this skewed ~100-cluster data. CONSEQUENCE: the single
-  certified cell on SWE-ReBench (certified-union vs deadline, kv=4500 ms, the
-  only positive cell) sits at the ~13% false-cert noise floor — it should be
-  treated as UNCERTIFIED until the CI is replaced with a coverage-valid
-  procedure (studentized/BCa, or a permutation/calibrated certificate). This is
-  a prerequisite fix before the fresh-corpus run, else the fresh certificate
-  inherits the same optimism.
+- **The deployed percentile certificate is ~2.6-2.7x ANTICONSERVATIVE, now
+  FIXED.** Under a paired sign-flip null (exact under sign-symmetry of the paired
+  deltas), the deployed task-cluster Bonferroni-percentile certificate
+  false-certifies at 6.75% (nominal 2.5%, one-sided family) / 13.05% two-sided
+  (nominal 5%) — stable across inner replicates, a real estimator property. FIX:
+  added an exact paired sign-flip randomization certificate
+  (`permutation_draws` in `paired_task_cluster_bootstrap`, additive/default-off,
+  review-gated APPROVE); on the IDENTICAL null it holds at 0.62x nominal
+  one-sided / 0.59x two-sided. This is now the instrument the fresh-corpus run
+  must use; percentile is retired to backward-compat/anchor. CORRECTION to an
+  earlier read: under the FIXED certificate the single SWE-ReBench cell
+  (certified-union vs deadline, kv=4500 ms) STILL certifies (permutation
+  p_positive=0.0001 < 0.0025 family tail; next-smallest cell p=0.0101) — so that
+  win is NOT a false positive of the broken instrument. Two orthogonal issues
+  now separated: instrument validity (FIXED) vs selection optimism (dev-exposed,
+  post-hoc rule — still needs the fresh corpus).
 - **Repo clustering — quantified non-issue.** 94 repos / 100 tasks / 88
   singletons / max 2 tasks/repo; repo-resampled labels identical and CI widths
   within ~5%. Near-singleton clusters mean the test has little power to detect

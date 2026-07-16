@@ -28,6 +28,8 @@ def paired_task_cluster_bootstrap(
     baseline_restore_cost_ms_field: str | None = None,
     treatment_restore_cost_ms_field: str | None = None,
     enforce_gated_treatment: bool = True,
+    permutation_draws: int = 0,
+    permutation_seed: int | None = None,
 ) -> dict[str, Any]:
     """Bootstrap paired workload-total utility by resampling logical tasks.
 
@@ -51,6 +53,19 @@ def paired_task_cluster_bootstrap(
     ``restore_cost_fraction`` and ``enforce_gated_treatment`` are additive
     output keys on top of schema_version 1; defaults reproduce the frozen
     confirmation numerics exactly.
+
+    ``permutation_draws`` (default 0 = off, output byte-identical to before)
+    attaches a COVERAGE-VALID simultaneous certificate alongside the percentile
+    one. The percentile-bootstrap ``simultaneous_label`` under-covers on skewed
+    ~100-cluster data (measured ~2.7x anticonservative; see
+    analysis/tool-time-gate-robustness-swe-rebench-20260716), so it must not
+    carry a headline certification. When ``permutation_draws > 0`` each point
+    also gets a ``permutation_label`` from a paired sign-flip randomization test
+    (flip each task's whole paired-delta vector by +/-1 -- the exact
+    exchangeability null for E[delta]=0), Bonferroni-simultaneous over the cost
+    family at one-sided tail ``alpha/(2m)``. This is exact under exchangeability
+    and distribution-free, so it stays calibrated under the heavy per-task tails
+    that break the percentile bound. ``permutation_seed`` defaults to ``seed``.
     """
 
     costs = normalized_positive_floats(costs_ms, label="confirmation cost")
@@ -65,6 +80,20 @@ def paired_task_cluster_bootstrap(
         raise ValueError("confidence_level must be finite and between zero and one")
     if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
         raise ValueError("seed must be a non-negative integer")
+    if (
+        not isinstance(permutation_draws, int)
+        or isinstance(permutation_draws, bool)
+        or permutation_draws < 0
+    ):
+        raise ValueError("permutation_draws must be a non-negative integer")
+    if permutation_seed is None:
+        permutation_seed = seed
+    elif (
+        not isinstance(permutation_seed, int)
+        or isinstance(permutation_seed, bool)
+        or permutation_seed < 0
+    ):
+        raise ValueError("permutation_seed must be a non-negative integer")
 
     rows = list(decisions)
     if not rows:
@@ -204,6 +233,18 @@ def paired_task_cluster_bootstrap(
     )
     observed = np.sum(contributions, axis=0)
 
+    permutation = (
+        _permutation_simultaneous_labels(
+            contributions,
+            observed,
+            confidence_level=confidence_level,
+            draws=permutation_draws,
+            seed=permutation_seed,
+        )
+        if permutation_draws > 0
+        else None
+    )
+
     points: dict[str, Any] = {}
     for column, cost in enumerate(costs):
         simultaneous_low = float(simultaneous_quantiles[0, column])
@@ -241,6 +282,8 @@ def paired_task_cluster_bootstrap(
             },
             **counts[cost],
         }
+        if permutation is not None:
+            points[str(cost)].update(permutation["points"][column])
 
     task_contributions = [
         {
@@ -290,6 +333,80 @@ def paired_task_cluster_bootstrap(
         "points": points,
         "fold_paired_delta_ms_by_cost": fold_paired_delta_ms_by_cost,
         "task_contributions": task_contributions,
+        **({"permutation": permutation["config"]} if permutation is not None else {}),
+    }
+
+
+def _permutation_simultaneous_labels(
+    contributions: np.ndarray,
+    observed: np.ndarray,
+    *,
+    confidence_level: float,
+    draws: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Paired sign-flip randomization certificate over the cost family.
+
+    For each draw, flip each task's whole (across-cost) contribution vector by an
+    independent +/-1 -- one sign vector shared across cost columns per draw, so
+    the joint cross-cost structure is preserved -- and form the null cost totals.
+    The one-sided randomization p-values (with the standard +1 correction so the
+    test is valid at finite ``draws``) are compared against the Bonferroni
+    one-sided family tail ``alpha/(2m)``. Exact under SIGN-SYMMETRY of the paired
+    deltas (a sharper null than ``E[delta]=0``), hence calibrated where the
+    percentile bound is not. The smallest resolvable p-value is
+    ``max(2^-n, 1/(draws+1))`` -- the exact-test floor OR the Monte-Carlo floor,
+    whichever binds; certification at tail ``alpha/(2m)`` is impossible below it.
+    """
+    if draws < 1:
+        raise ValueError("permutation draws must be positive")
+    task_count, cost_count = contributions.shape
+    alpha = 1.0 - confidence_level
+    family_tail = alpha / (2.0 * cost_count)
+    rng = np.random.Generator(np.random.PCG64(seed))
+    ge = np.zeros(cost_count, dtype=np.int64)
+    le = np.zeros(cost_count, dtype=np.int64)
+    tol = 1e-9
+    batch_size = 4096
+    for start in range(0, draws, batch_size):
+        stop = min(start + batch_size, draws)
+        signs = rng.choice(
+            np.array([-1.0, 1.0]), size=(stop - start, task_count)
+        )
+        null_totals = signs @ contributions
+        ge += np.sum(null_totals >= observed - tol, axis=0)
+        le += np.sum(null_totals <= observed + tol, axis=0)
+    p_positive = (1.0 + ge) / (draws + 1.0)
+    p_harmful = (1.0 + le) / (draws + 1.0)
+    point_updates: list[dict[str, Any]] = []
+    for column in range(cost_count):
+        if p_positive[column] <= family_tail:
+            label = "positive"
+        elif p_harmful[column] <= family_tail:
+            label = "harmful"
+        else:
+            label = "inconclusive"
+        point_updates.append(
+            {
+                "permutation_label": label,
+                "permutation_p_positive": float(p_positive[column]),
+                "permutation_p_harmful": float(p_harmful[column]),
+            }
+        )
+    return {
+        "points": point_updates,
+        "config": {
+            "method": "paired_signflip_randomization",
+            "draws": draws,
+            "seed": seed,
+            "bit_generator": "PCG64",
+            "simultaneous_method": "bonferroni_signflip",
+            "simultaneous_family_size": cost_count,
+            "simultaneous_tail_probability": family_tail,
+            "exact_test_floor_p_value": 2.0 ** (-task_count),
+            "monte_carlo_floor_p_value": 1.0 / (draws + 1.0),
+            "min_achievable_p_value": max(2.0 ** (-task_count), 1.0 / (draws + 1.0)),
+        },
     }
 
 
