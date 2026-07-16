@@ -224,10 +224,9 @@ aggregate JSONs + summary.md + findings.md ARE.
 
 - rho DISCIPLINE (section 2) — do not quote low-rho as deployment; use
   Mode-B triggers.
-- GPU box: a fragile unattended vLLM-in-background-thread harness WEDGED the
-  H100 (unkillable D-state, needed the process to finally die / a reboot) and
-  burned ~4h. Keep unattended GPU jobs simple; run heavy installs/serving
-  under nohup but verify liveness, not just launch.
+- GPU: keep unattended jobs simple and verify liveness, not just launch
+  (a background-thread vLLM harness once wedged the box). Platform-specific;
+  the next box may differ.
 - Subagents in this session reliably went idle WITHOUT delivering their
   report; a follow-up "send your report" nudge always retrieved it. Expect
   this.
