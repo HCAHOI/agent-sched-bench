@@ -71,19 +71,22 @@ def parse_collect_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sample",
         type=nonnegative_int_arg,
         default=None,
-        help="Randomly sample N tasks after filtering and skipping (for testing).",
+        help="Select N tasks using benchmark-owned sampling.",
     )
     parser.add_argument(
         "--selection-seed",
         type=int,
         default=None,
-        help="Seed for --sample random task selection; defaults to benchmark YAML.",
+        help="Seed for --sample task selection; defaults to benchmark YAML.",
     )
     parser.add_argument(
         "--skip",
         type=nonnegative_int_arg,
         default=0,
-        help="Skip the first N tasks after --instance-ids filtering and before --sample.",
+        help=(
+            "Selection offset interpreted by the benchmark plugin; with "
+            "--instance-ids, skip within the explicit ID order."
+        ),
     )
     parser.add_argument(
         "--instance-ids",

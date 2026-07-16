@@ -79,6 +79,23 @@ class SWERebenchBenchmark(Benchmark):
             pool = list(tasks)
         return super().select_subset(pool, n=n, seed=seed)
 
+    def select_window(
+        self,
+        tasks: list[dict[str, Any]],
+        *,
+        n: int,
+        seed: int | None,
+        skip: int,
+    ) -> list[dict[str, Any]]:
+        """Return a window from one reproducible SWE-Rebench shuffle."""
+        through_window = self.select_subset(tasks, n=skip + n, seed=seed)
+        if len(through_window) != skip + n:
+            raise ValueError(
+                "Not enough SWE-Rebench tasks for requested selection window: "
+                f"skip={skip}, sample={n}, available={len(through_window)}"
+            )
+        return through_window[skip:]
+
     # Override: reuse the SWEBenchRunner for swe_patch tasks
 
     def build_runner(

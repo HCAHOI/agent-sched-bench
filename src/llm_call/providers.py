@@ -34,6 +34,10 @@ PROVIDERS: dict[str, ProviderDefinition] = {
         api_base="https://api.deepseek.com",
         env_key="DEEPSEEK_API_KEY",
     ),
+    "pioneer": ProviderDefinition(
+        api_base="https://api.pioneer.ai/v1",
+        env_key="PIONEER_API_KEY",
+    ),
 }
 
 

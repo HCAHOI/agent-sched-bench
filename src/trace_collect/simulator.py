@@ -19,6 +19,11 @@ from pathlib import Path
 from threading import BrokenBarrierError
 from typing import Any
 
+from agents.science_agent_bench.artifacts import (
+    load_manifest,
+    task_record_sha256,
+    verify_content_inventory,
+)
 from harness.container_image_prep import (
     ensure_fixed_image,
     ensure_source_image,
@@ -87,6 +92,7 @@ from trace_collect.simulate_utils import (
     _coerce_action_bounds,
     _exception_payload,
     _is_host_mode,
+    _is_science_agent_bench_verified_task,
     _is_terminal_bench_registry_task,
     _requires_task_container,
     _resolve_docker_image,
@@ -810,6 +816,8 @@ def _validate_loaded_sessions(
                     f"Terminal-Bench task {session.task_instance_id!r} has no task_source_path"
                 )
             continue
+        if _is_science_agent_bench_verified_task(session):
+            _science_agent_bench_mount_args(session)
         docker_image = _resolve_docker_image(session)
         if not docker_image:
             raise SimulateError(
@@ -941,6 +949,11 @@ async def _cleanup_sweep_fixed_images(
         return
     cleanup_error: BaseException | None = None
     for source_image, fixed_image in fixed_images.items():
+        # Passthrough image prep returns the source image itself (no fixed
+        # derivative); never delete the shared source image out from under
+        # other concurrent replay sessions.
+        if fixed_image == source_image:
+            continue
         try:
             removed = await asyncio.to_thread(
                 remove_image,
@@ -1355,6 +1368,183 @@ async def _prepare_terminal_bench_container_session(
     return PreparedTraceSession(loaded=loaded, container=container)
 
 
+@functools.lru_cache(maxsize=None)
+def _verified_science_agent_bench_dataset_source(
+    *,
+    data_root: str,
+    dataset_root: str,
+    benchmark_content_sha256: str,
+    dataset_content_sha256: str,
+    archive_sha256: str,
+    dataset_revision: str,
+    harness_revision: str,
+    tasks_content_sha256: str,
+    task_instance_id: str,
+    task_record_content_sha256: str,
+) -> Path:
+    resolved_data_root = Path(data_root).resolve()
+    try:
+        manifest = load_manifest(resolved_data_root / "artifact-manifest.json")
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        raise SimulateError(str(exc)) from exc
+    expected_values = {
+        "benchmark_content_sha256": benchmark_content_sha256,
+        "archive_sha256": archive_sha256,
+        "dataset_revision": dataset_revision,
+        "official_harness_revision": harness_revision,
+        "tasks_content_sha256": tasks_content_sha256,
+    }
+    for key, expected in expected_values.items():
+        if manifest.get(key) != expected:
+            raise SimulateError(
+                f"ScienceAgentBench replay {key} mismatch: "
+                f"trace={expected!r}, local={manifest.get(key)!r}"
+            )
+    local_task_hashes = {
+        entry["instance_id"]: entry["sha256"] for entry in manifest["tasks"]
+    }
+    if local_task_hashes.get(task_instance_id) != task_record_content_sha256:
+        raise SimulateError(
+            "ScienceAgentBench replay task record does not match the trusted "
+            "local manifest"
+        )
+    local_dataset = manifest["dataset_roots"].get(dataset_root)
+    if not isinstance(local_dataset, dict) or (
+        local_dataset.get("content_sha256") != dataset_content_sha256
+    ):
+        raise SimulateError(
+            "ScienceAgentBench replay dataset-root digest does not match the "
+            "trusted local manifest"
+        )
+    benchmark_root = (
+        resolved_data_root / str(manifest["benchmark_dirname"])
+    ).resolve()
+    if benchmark_root.parent != resolved_data_root:
+        raise SimulateError(
+            "ScienceAgentBench benchmark directory escapes the trusted data root"
+        )
+    try:
+        verify_content_inventory(
+            benchmark_root,
+            manifest,
+            dataset_root=dataset_root,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise SimulateError(str(exc)) from exc
+    source = (benchmark_root / "datasets" / dataset_root).resolve()
+    if not source.is_relative_to(benchmark_root):
+        raise SimulateError(
+            f"ScienceAgentBench dataset source escapes benchmark root: {source}"
+        )
+    return source
+
+
+def _science_agent_bench_mount_args(loaded: LoadedTraceSession) -> list[str]:
+    metadata = loaded.metadata or {}
+    dataset_root = loaded.task.get("dataset_dir_name") or metadata.get(
+        "sab_dataset_root"
+    )
+    if not isinstance(dataset_root, str) or not dataset_root:
+        raise SimulateError(
+            "ScienceAgentBench task "
+            f"{loaded.task_instance_id!r} has no sab_dataset_root"
+        )
+    if (
+        Path(dataset_root).name != dataset_root
+        or dataset_root in {".", ".."}
+        or any(not (char.isalnum() or char in "._-") for char in dataset_root)
+    ):
+        raise SimulateError(
+            f"unsafe ScienceAgentBench dataset root: {dataset_root!r}"
+        )
+    tree_lines = str(loaded.task.get("dataset_folder_tree") or "").splitlines()
+    derived_dataset_root = (
+        tree_lines[0][4:].rstrip("/")
+        if tree_lines and tree_lines[0].startswith("|-- ")
+        else ""
+    )
+    if derived_dataset_root != dataset_root:
+        raise SimulateError(
+            "ScienceAgentBench replay dataset_dir_name differs from the hashed "
+            f"dataset_folder_tree: {dataset_root!r} != {derived_dataset_root!r}"
+        )
+    metadata_root = metadata.get("sab_dataset_root")
+    if metadata_root != dataset_root:
+        raise SimulateError(
+            "ScienceAgentBench task and trace dataset roots differ: "
+            f"task={dataset_root!r}, trace={metadata_root!r}"
+        )
+    expected_relpath = f"datasets/{dataset_root}"
+    task_relpath = loaded.task.get("sab_dataset_relpath")
+    metadata_relpath = metadata.get("sab_dataset_relpath")
+    if task_relpath != expected_relpath or metadata_relpath != expected_relpath:
+        raise SimulateError(
+            "ScienceAgentBench replay dataset locator mismatch: "
+            f"expected {expected_relpath!r}, task={task_relpath!r}, "
+            f"trace={metadata_relpath!r}"
+        )
+    required_metadata = {
+        "benchmark_content_sha256": metadata.get(
+            "sab_benchmark_content_sha256"
+        ),
+        "dataset_content_sha256": metadata.get(
+            "sab_dataset_root_content_sha256"
+        ),
+        "archive_sha256": metadata.get("sab_archive_sha256"),
+        "dataset_revision": metadata.get("sab_dataset_revision"),
+        "harness_revision": metadata.get("sab_harness_revision"),
+        "tasks_content_sha256": metadata.get("sab_tasks_content_sha256"),
+        "task_record_content_sha256": metadata.get(
+            "sab_task_record_sha256"
+        ),
+    }
+    missing = [
+        name
+        for name, value in required_metadata.items()
+        if not isinstance(value, str) or not value
+    ]
+    if missing:
+        raise SimulateError(
+            "ScienceAgentBench replay trace lacks verified provenance: "
+            + ", ".join(missing)
+        )
+    try:
+        observed_task_sha256 = task_record_sha256(loaded.task)
+    except ValueError as exc:
+        raise SimulateError(str(exc)) from exc
+    if observed_task_sha256 != required_metadata["task_record_content_sha256"]:
+        raise SimulateError(
+            "ScienceAgentBench replay task source differs from the collected "
+            "task record"
+        )
+    configured_root = os.environ.get("AGENT_SCHED_BENCH_SAB_DATA_ROOT")
+    if configured_root:
+        data_root = Path(configured_root).expanduser().resolve()
+    else:
+        data_root = (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "science-agent-bench-verified"
+        ).resolve()
+    source = _verified_science_agent_bench_dataset_source(
+        data_root=str(data_root),
+        dataset_root=dataset_root,
+        task_instance_id=str(loaded.task_instance_id),
+        **required_metadata,
+    )
+    if "," in str(source):
+        raise SimulateError(
+            f"ScienceAgentBench dataset source cannot contain ',': {source}"
+        )
+    return [
+        "--mount",
+        (
+            f"type=bind,src={source},"
+            f"dst=/testbed/benchmark/datasets/{dataset_root},readonly"
+        ),
+    ]
+
+
 async def _prepare_container_session(
     loaded: LoadedTraceSession,
     *,
@@ -1363,6 +1553,7 @@ async def _prepare_container_session(
     network_mode: str = "host",
     fixed_images_by_source: dict[str, str] | None = None,
     start_agent: bool = True,
+    start_extra_args: list[str] | None = None,
 ) -> PreparedTraceSession:
     """Prepare a Docker/Podman container and start a persistent replay agent."""
     from trace_collect.openclaw_tools import ContainerAgent
@@ -1440,6 +1631,7 @@ async def _prepare_container_session(
                 "--label",
                 f"agent-sched-bench.output_dir={task_output_dir}",
             ]
+            extra_args.extend(start_extra_args or [])
             container_id = await asyncio.to_thread(
                 start_task_container,
                 fixed_name,
@@ -1529,8 +1721,11 @@ async def _prepare_container_session(
             except (Exception, asyncio.CancelledError) as cleanup_exc:
                 cleanup_errors.append(cleanup_exc)
                 logger.exception("Failed to stop startup container for %s", loaded.agent_id)
-        if cleanup_fixed_image and recorder.fixed_image is not None and (
-            container_id is None or container_stopped
+        if (
+            cleanup_fixed_image
+            and recorder.fixed_image is not None
+            and recorder.fixed_image != recorder.source_image
+            and (container_id is None or container_stopped)
         ):
             try:
                 await asyncio.to_thread(
@@ -1650,7 +1845,12 @@ async def _finalize_prepared_session(prepared: PreparedTraceSession) -> None:
         prepared.container_resource_recorder.unregister_container(ctr.container_id)
         prepared.container_resource_recorder = None
 
-    if container_stopped and ctr.fixed_image and ctr.cleanup_fixed_image:
+    if (
+        container_stopped
+        and ctr.fixed_image
+        and ctr.cleanup_fixed_image
+        and ctr.fixed_image != ctr.docker_image
+    ):
         try:
             removed_fixed = await asyncio.to_thread(
                 remove_image,
@@ -1893,6 +2093,10 @@ async def _prepare_replay_session(
                 prepare_kwargs: dict[str, Any] = {}
                 if loaded.scaffold == "openclaw":
                     prepare_kwargs["start_agent"] = False
+                if _is_science_agent_bench_verified_task(loaded):
+                    prepare_kwargs["start_extra_args"] = (
+                        _science_agent_bench_mount_args(loaded)
+                    )
                 if fixed_images_by_source:
                     prepare_kwargs["fixed_images_by_source"] = fixed_images_by_source
                 prepared = await _prepare_container_session(

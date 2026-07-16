@@ -126,6 +126,22 @@ def test_resolve_llm_config_supports_deepseek() -> None:
     assert resolved.env_key == "DEEPSEEK_API_KEY"
 
 
+def test_resolve_llm_config_supports_pioneer() -> None:
+    resolved = resolve_llm_config(
+        provider="pioneer",
+        api_base=None,
+        api_key=None,
+        model="zai-org/GLM-5.2",
+        environ={"PIONEER_API_KEY": "pioneer-test-key"},
+    )
+
+    assert resolved.name == "pioneer"
+    assert resolved.api_base == "https://api.pioneer.ai/v1"
+    assert resolved.api_key == "pioneer-test-key"
+    assert resolved.model == "zai-org/GLM-5.2"
+    assert resolved.env_key == "PIONEER_API_KEY"
+
+
 def test_uses_openrouter_matches_base_url() -> None:
     assert uses_openrouter("https://openrouter.ai/api/v1") is True
     assert uses_openrouter("https://api.openai.com/v1") is False

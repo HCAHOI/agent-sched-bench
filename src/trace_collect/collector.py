@@ -226,7 +226,7 @@ def _select_tasks(
     selection_seed: int | None = None,
     skip: int = 0,
 ) -> list[dict[str, Any]]:
-    """Filter tasks, then apply ``skip`` and benchmark-owned random sampling."""
+    """Filter tasks, then apply benchmark-owned subset selection."""
     selected = list(tasks)
     if instance_ids is not None:
         by_id = {task["instance_id"]: task for task in tasks}
@@ -238,15 +238,20 @@ def _select_tasks(
         selected = [by_id[instance_id] for instance_id in instance_ids]
     if skip < 0:
         raise ValueError(f"skip must be non-negative, got {skip}")
-    if skip:
-        selected = selected[skip:]
     if sample is not None:
         if sample < 0:
             raise ValueError(f"sample must be non-negative, got {sample}")
         if instance_ids is None:
-            selected = benchmark.select_subset(selected, n=sample, seed=selection_seed)
+            selected = benchmark.select_window(
+                selected,
+                n=sample,
+                seed=selection_seed,
+                skip=skip,
+            )
         else:
-            selected = selected[:sample]
+            selected = selected[skip : skip + sample]
+    elif skip:
+        selected = selected[skip:]
     return selected
 
 
@@ -752,6 +757,7 @@ async def collect_traces(
             env_key=env_key,
             api_base=model_backend.api_base,
             api_key=model_backend.api_key,
+            container_executable=container_executable,
             mcp_config=mcp_config,
             mcp_servers=load_mcp_servers(mcp_config),
             generation_config=generation_config,
@@ -795,15 +801,11 @@ async def collect_traces(
                 )
 
             assert runner is not None
-            ctx.agent_start_time = datetime.now(tz=timezone.utc)
-            try:
-                result = await runner.run_task(
-                    task,
-                    attempt_ctx=ctx,
-                    prompt_template=ctx.prompt_template,
-                )
-            finally:
-                ctx.agent_end_time = datetime.now(tz=timezone.utc)
+            result = await runner.run_task(
+                task,
+                attempt_ctx=ctx,
+                prompt_template=ctx.prompt_template,
+            )
             if not isinstance(result, AttemptResult):
                 raise TypeError(
                     "benchmark runner returned "

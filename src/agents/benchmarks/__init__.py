@@ -12,6 +12,9 @@ New benchmarks register here by adding an entry to :data:`REGISTRY`.
 from __future__ import annotations
 
 from agents.benchmarks.base import Benchmark, BenchmarkConfig
+from agents.benchmarks.science_agent_bench_verified import (
+    ScienceAgentBenchVerifiedBenchmark,
+)
 from agents.benchmarks.swe_bench_verified import SWEBenchVerified
 from agents.benchmarks.swe_rebench import SWERebenchBenchmark
 from agents.benchmarks.terminal_bench import TerminalBenchBenchmark
@@ -21,6 +24,7 @@ __all__ = [
     "get_benchmark_class",
     "Benchmark",
     "BenchmarkConfig",
+    "ScienceAgentBenchVerifiedBenchmark",
     "SWEBenchVerified",
     "SWERebenchBenchmark",
     "TerminalBenchBenchmark",
@@ -28,6 +32,7 @@ __all__ = [
 
 #: Maps benchmark slug → concrete :class:`~agents.benchmarks.base.Benchmark` subclass.
 REGISTRY: dict[str, type[Benchmark]] = {
+    "science-agent-bench-verified": ScienceAgentBenchVerifiedBenchmark,
     "swe-bench-verified": SWEBenchVerified,
     "swe-rebench": SWERebenchBenchmark,
     "terminal-bench": TerminalBenchBenchmark,

@@ -558,6 +558,16 @@ class _SelectionBenchmark:
         self.calls.append(([task["instance_id"] for task in tasks], n, seed))
         return list(reversed(tasks))[:n]
 
+    def select_window(
+        self,
+        tasks: list[dict[str, str]],
+        *,
+        n: int,
+        seed: int | None = None,
+        skip: int,
+    ) -> list[dict[str, str]]:
+        return self.select_subset(tasks[skip:], n=n, seed=seed)
+
 
 def test_select_tasks_preserves_explicit_instance_order() -> None:
     tasks = [
@@ -583,7 +593,7 @@ def test_select_tasks_preserves_explicit_instance_order() -> None:
     ]
 
 
-def test_select_tasks_applies_skip_before_random_sample() -> None:
+def test_select_tasks_delegates_window_to_benchmark() -> None:
     tasks = [
         {"instance_id": "task-1"},
         {"instance_id": "task-2"},

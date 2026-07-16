@@ -7,23 +7,16 @@ writeable for agent runs.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
-import threading
 import time
 
 from harness.container_runtime import image_exists_command
 
 _IMAGE_CACHE: dict[tuple[str, str, str], tuple[str, float]] = {}
-_BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
-_BUILD_LOCKS_GUARD = threading.Lock()
 _PULL_ATTEMPTS = 3
 _PULL_BACKOFF_SECONDS = 1.0
-_ARCH_ALIASES = {
-    "amd64": "amd64",
-    "x86_64": "amd64",
-    "arm64": "arm64",
-    "aarch64": "arm64",
-}
+_IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _image_slug(source_image: str) -> str:
@@ -31,9 +24,15 @@ def _image_slug(source_image: str) -> str:
 
 
 def normalize_image_reference(image: str) -> str:
-    """Return a fully qualified image reference when possible."""
+    """Return a fully qualified image reference when possible.
+
+    MUST remain idempotent: simulator.py's fixed-vs-source cleanup guards
+    rely on normalize_image_reference(out) == out.
+    """
     if not image:
         return ""
+    if _IMAGE_ID_RE.fullmatch(image):
+        return image
     registry_prefix = os.environ.get("TASK_CONTAINER_IMAGE_REGISTRY_PREFIX", "").strip()
     if registry_prefix:
         registry_prefix = registry_prefix.rstrip("/")
@@ -73,37 +72,6 @@ def _run(
         text=True,
         timeout=timeout,
     )
-
-
-def _normalize_arch(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    return _ARCH_ALIASES.get(raw.lower(), raw.lower())
-
-
-def _inspect_image_platform(image: str, executable: str) -> str | None:
-    result = _run(
-        [
-            executable,
-            "image",
-            "inspect",
-            image,
-            "--format",
-            "{{.Architecture}} {{.Os}}",
-        ],
-        check=False,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        return None
-    parts = result.stdout.strip().split()
-    if len(parts) != 2:
-        return None
-    arch, os_name = parts
-    norm_arch = _normalize_arch(arch)
-    if norm_arch is None:
-        return None
-    return f"{os_name.lower()}/{norm_arch}"
 
 
 def _is_retryable_pull_failure(text: str) -> bool:
@@ -150,6 +118,12 @@ def ensure_source_image(
         return
     if _image_exists(source_image, container_executable):
         return
+    if _IMAGE_ID_RE.fullmatch(source_image):
+        raise RuntimeError(
+            "Recorded immutable source image is unavailable locally: "
+            f"{source_image}. Replay cannot pull an image ID; restore the "
+            "collection image or provide an explicit image override."
+        )
     _pull_source_image(source_image, container_executable)
 
 
@@ -195,58 +169,6 @@ def prune_dangling_images(*, container_executable: str) -> None:
         )
 
 
-def _build_fixed_image(
-    source_image: str,
-    fixed_name: str,
-    executable: str,
-    uid: int,
-    gid: int,
-    image_platform: str | None,
-) -> None:
-    """Commit a writable derivative with /testbed chowned to ``uid:gid``.
-
-    Implementation mirrors agentcgroup/scripts/run_swebench.py::_fix_permissions.
-    """
-    run_cmd = [executable, "run", "-d"]
-    if image_platform:
-        run_cmd.extend(["--platform", image_platform])
-    run_cmd.extend([source_image, "sleep", "120"])
-    start = _run(run_cmd, check=True, timeout=180)
-    container_id = start.stdout.strip()
-    try:
-        _run(
-            [
-                executable,
-                "exec",
-                container_id,
-                "chown",
-                "-R",
-                f"{uid}:{gid}",
-                "/testbed",
-            ],
-            check=True,
-            timeout=120,
-        )
-        _run(
-            [executable, "commit", container_id, fixed_name],
-            check=True,
-            timeout=240,
-        )
-    finally:
-        _run([executable, "stop", container_id], check=False, timeout=30)
-        _run([executable, "rm", "-f", container_id], check=False, timeout=30)
-
-
-def _build_lock_for(source_image: str, executable: str) -> threading.Lock:
-    key = (executable, source_image)
-    with _BUILD_LOCKS_GUARD:
-        lock = _BUILD_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _BUILD_LOCKS[key] = lock
-        return lock
-
-
 def ensure_fixed_image(
     source_image: str,
     *,
@@ -256,62 +178,26 @@ def ensure_fixed_image(
     fixed_image_name: str | None = None,
     rebuild: bool = False,
 ) -> tuple[str, float]:
-    """Return ``(fixed_image_name, elapsed_seconds)``.
+    """Ensure the source image is local; run it DIRECTLY (no fixed derivative).
 
-    Caches per process unless ``rebuild`` is set. ``rebuild`` removes any
-    existing derivative tag before building from the already-local source image.
+    The task container runs as root, so ``/testbed`` (root-owned in the swebench
+    source image, which already contains the checked-out repo) is writable
+    without a chown. The legacy chown-and-``docker commit`` derivative was
+    therefore unnecessary, and that ``commit`` failed intermittently under
+    concurrency on the overlayfs driver. We keep the pull and drop the build,
+    returning the source image unchanged. ``host_uid``/``host_gid``/
+    ``fixed_image_name``/``rebuild`` are accepted for call-site compatibility
+    and ignored (matches origin/docs/cli-first-drop-verified-current@3da41b0).
     """
     source_image = normalize_image_reference(source_image)
-    fixed_name = fixed_image_name or fixed_image_name_for(source_image)
-    cache_key = (container_executable, source_image, fixed_name)
-
-    if not rebuild and cache_key in _IMAGE_CACHE:
-        return _IMAGE_CACHE[cache_key]
-
-    build_lock = _build_lock_for(source_image, container_executable)
-    with build_lock:
-        if not rebuild and cache_key in _IMAGE_CACHE:
-            return _IMAGE_CACHE[cache_key]
-
-        if rebuild:
-            _IMAGE_CACHE.pop(cache_key, None)
-            remove_image(fixed_name, container_executable=container_executable)
-        elif _image_exists(fixed_name, container_executable):
-            _IMAGE_CACHE[cache_key] = (fixed_name, 0.0)
-            return _IMAGE_CACHE[cache_key]
-
-        ensure_source_image(
-            source_image,
-            container_executable=container_executable,
-        )
-        image_platform = _inspect_image_platform(source_image, container_executable)
-
-        uid = host_uid if host_uid is not None else os.getuid()
-        gid = host_gid if host_gid is not None else os.getgid()
-
-        t0 = time.time()
-        try:
-            _build_fixed_image(
-                source_image,
-                fixed_name,
-                container_executable,
-                uid,
-                gid,
-                image_platform,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError(
-                f"Failed to build fixed derivative image for {source_image}: {exc}"
-            ) from exc
-        elapsed = time.time() - t0
-        _IMAGE_CACHE[cache_key] = (fixed_name, elapsed)
-        return _IMAGE_CACHE[cache_key]
+    ensure_source_image(source_image, container_executable=container_executable)
+    return source_image, 0.0
 
 
 def clear_image_cache() -> None:
+    # No-op under the passthrough (the cache is never populated); kept for
+    # call-site compatibility.
     _IMAGE_CACHE.clear()
-    with _BUILD_LOCKS_GUARD:
-        _BUILD_LOCKS.clear()
 
 
 def drop_cached_fixed_image(source_image: str) -> None:

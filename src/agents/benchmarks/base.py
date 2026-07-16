@@ -196,6 +196,17 @@ class Benchmark(ABC):
         random.Random(effective_seed).shuffle(shuffled)
         return shuffled[:effective_n]
 
+    def select_window(
+        self,
+        tasks: list[dict[str, Any]],
+        *,
+        n: int,
+        seed: int | None,
+        skip: int,
+    ) -> list[dict[str, Any]]:
+        """Select a benchmark-owned subset after skipping source-order tasks."""
+        return self.select_subset(tasks[skip:], n=n, seed=seed)
+
     def image_name_for(self, task: dict[str, Any]) -> str | None:
         return task.get("image_name")
 

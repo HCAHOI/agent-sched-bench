@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 import json
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -87,36 +85,20 @@ def _reset_image_cache() -> None:
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
-def test_ensure_fixed_image_builds_when_derivative_missing(
+def test_ensure_fixed_image_passthrough_pulls_source_no_build(
     container_executable: str,
 ) -> None:
+    # Passthrough contract: ensure_fixed_image no longer builds a chown/commit
+    # derivative. It pulls the (missing) source image and returns it unchanged;
+    # the container runs as root so /testbed is already writable.
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if cmd[:3] == [container_executable, "image", "inspect"] and "--format" in cmd:
-            return subprocess.CompletedProcess(
-                cmd,
-                0,
-                stdout="amd64 linux\n",
-                stderr="",
-            )
-        # existence probe → missing (returncode=1)
-        if container_executable == "podman" and cmd[:3] == [
-            "podman",
-            "image",
-            "exists",
-        ]:
+        if container_executable == "podman" and cmd[:3] == ["podman", "image", "exists"]:
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
-        if container_executable == "docker" and cmd[:3] == [
-            "docker",
-            "image",
-            "inspect",
-        ]:
+        if container_executable == "docker" and cmd[:3] == ["docker", "image", "inspect"]:
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
-        # run -d → container id
-        if cmd[1:3] == ["run", "-d"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="cid_xyz\n", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     with patch(
@@ -129,43 +111,23 @@ def test_ensure_fixed_image_builds_when_derivative_missing(
             host_uid=1000,
             host_gid=1000,
         )
-    assert fixed == "swebench-fixed-docker.io_swerebench_foo_latest"
-    assert elapsed >= 0.0
-    # Expect: fixed exists (miss), source exists (miss), pull, run -d, exec chown, commit, stop, rm
+
+    assert fixed == "docker.io/swerebench/foo:latest"
+    assert elapsed == 0.0
     verbs = [" ".join(c[1:3]) for c in calls]
-    if container_executable == "podman":
-        assert verbs.count("image exists") == 2
-        assert verbs.count("image inspect") == 1
-    else:
-        assert verbs.count("image inspect") == 3
     assert "pull docker.io/swerebench/foo:latest" in [" ".join(c[1:4]) for c in calls]
-    assert any("run -d" in v for v in verbs)
-    run_cmd = next(cmd for cmd in calls if cmd[1:3] == ["run", "-d"])
-    assert run_cmd[:5] == [
-        container_executable,
-        "run",
-        "-d",
-        "--platform",
-        "linux/amd64",
-    ]
-    assert any("exec cid_xyz" == " ".join(c[1:3]) for c in calls)
-    assert any("commit cid_xyz" == " ".join(c[1:3]) for c in calls)
+    assert not any(v == "run -d" for v in verbs)
+    assert not any(v.startswith("commit") for v in verbs)
+    assert not any(v.startswith("exec") for v in verbs)
 
 
-def test_ensure_fixed_image_rebuild_removes_existing_derivative() -> None:
+def test_ensure_fixed_image_ignores_derivative_args() -> None:
+    # fixed_image_name / rebuild are accepted for call-site compatibility but
+    # ignored: the source image is always returned as-is (no rebuild, no commit).
     calls = []
-    fixed_name = "swebench-fixed-custom:attempt"
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if cmd[:3] == ["docker", "image", "inspect"] and "--format" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="amd64 linux\n", stderr="")
-        if cmd[:3] == ["docker", "image", "inspect"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        if cmd[:3] == ["docker", "image", "rm"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        if cmd[1:3] == ["run", "-d"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="cid_xyz\n", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     with patch(
@@ -175,160 +137,16 @@ def test_ensure_fixed_image_rebuild_removes_existing_derivative() -> None:
         fixed, elapsed = ensure_fixed_image(
             "swerebench/foo:latest",
             container_executable="docker",
-            fixed_image_name=fixed_name,
+            fixed_image_name="swebench-fixed-custom:attempt",
             rebuild=True,
-            host_uid=1000,
-            host_gid=1000,
         )
 
-    assert fixed == fixed_name
-    assert elapsed >= 0.0
-    assert ["docker", "image", "rm", "-f", fixed_name] in calls
-    assert ["docker", "commit", "cid_xyz", fixed_name] in calls
-
-
-def test_ensure_fixed_image_serializes_builds_per_source_image(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    active = 0
-    max_active = 0
-    active_lock = threading.Lock()
-    built: list[str] = []
-
-    def fake_build_fixed_image(
-        source_image: str,
-        fixed_name: str,
-        executable: str,
-        uid: int,
-        gid: int,
-        image_platform: str | None,
-    ) -> None:
-        nonlocal active, max_active
-        assert source_image == "docker.io/swerebench/shared:latest"
-        assert executable == "docker"
-        assert image_platform is None
-        with active_lock:
-            active += 1
-            max_active = max(max_active, active)
-        time.sleep(0.02)
-        with active_lock:
-            active -= 1
-            built.append(fixed_name)
-
-    monkeypatch.setattr("harness.container_image_prep._image_exists", lambda *_: False)
-    monkeypatch.setattr("harness.container_image_prep.ensure_source_image", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("harness.container_image_prep._inspect_image_platform", lambda *_: None)
-    monkeypatch.setattr("harness.container_image_prep._build_fixed_image", fake_build_fixed_image)
-
-    def build(index: int) -> tuple[str, float]:
-        return ensure_fixed_image(
-            "swerebench/shared:latest",
-            container_executable="docker",
-            fixed_image_name=f"fixed-shared:{index}",
-            rebuild=True,
-            host_uid=1000,
-            host_gid=1000,
-        )
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(build, range(4)))
-
-    assert max_active == 1
-    assert sorted(fixed for fixed, _elapsed in results) == [
-        "fixed-shared:0",
-        "fixed-shared:1",
-        "fixed-shared:2",
-        "fixed-shared:3",
-    ]
-    assert sorted(built) == [
-        "fixed-shared:0",
-        "fixed-shared:1",
-        "fixed-shared:2",
-        "fixed-shared:3",
-    ]
-
-
-def test_ensure_fixed_image_cache_is_scoped_by_container_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    build_calls: list[tuple[str, str]] = []
-
-    monkeypatch.setattr("harness.container_image_prep._image_exists", lambda *_: False)
-    monkeypatch.setattr("harness.container_image_prep.ensure_source_image", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("harness.container_image_prep._inspect_image_platform", lambda *_: None)
-
-    def fake_build_fixed_image(
-        source_image: str,
-        fixed_name: str,
-        executable: str,
-        uid: int,
-        gid: int,
-        image_platform: str | None,
-    ) -> None:
-        build_calls.append((executable, fixed_name))
-
-    monkeypatch.setattr("harness.container_image_prep._build_fixed_image", fake_build_fixed_image)
-
-    docker_result = ensure_fixed_image(
-        "swerebench/shared:latest",
-        container_executable="docker",
-        fixed_image_name="fixed-shared:latest",
-        host_uid=1000,
-        host_gid=1000,
-    )
-    podman_result = ensure_fixed_image(
-        "swerebench/shared:latest",
-        container_executable="podman",
-        fixed_image_name="fixed-shared:latest",
-        host_uid=1000,
-        host_gid=1000,
-    )
-
-    assert docker_result[0] == "fixed-shared:latest"
-    assert podman_result[0] == "fixed-shared:latest"
-    assert build_calls == [
-        ("docker", "fixed-shared:latest"),
-        ("podman", "fixed-shared:latest"),
-    ]
-
-
-@pytest.mark.parametrize("container_executable", ["docker", "podman"])
-def test_ensure_fixed_image_raises_on_build_failure(
-    container_executable: str,
-) -> None:
-    def boom(cmd, **kwargs):
-        if cmd[:3] == [container_executable, "image", "inspect"] and "--format" in cmd:
-            return subprocess.CompletedProcess(
-                cmd,
-                0,
-                stdout="amd64 linux\n",
-                stderr="",
-            )
-        if container_executable == "podman" and cmd[:3] == [
-            "podman",
-            "image",
-            "exists",
-        ]:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
-        if container_executable == "docker" and cmd[:3] == [
-            "docker",
-            "image",
-            "inspect",
-        ]:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
-        if cmd[1:3] == ["run", "-d"]:
-            raise subprocess.CalledProcessError(1, cmd, stderr="kaboom")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    with patch(
-        "harness.container_image_prep.subprocess.run",
-        side_effect=boom,
-    ):
-        with pytest.raises(RuntimeError, match="Failed to build"):
-            ensure_fixed_image(
-                "swerebench/img",
-                container_executable=container_executable,
-            )
+    assert fixed == "docker.io/swerebench/foo:latest"
+    assert elapsed == 0.0
+    verbs = [" ".join(c[1:3]) for c in calls]
+    assert not any(v == "run -d" for v in verbs)
+    assert not any(v.startswith("commit") for v in verbs)
+    assert not any(v.startswith("image rm") for v in verbs)
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])
@@ -377,6 +195,27 @@ def test_ensure_source_image_pulls_when_missing(
         "pull",
         "docker.io/swerebench/source:latest",
     ]
+
+
+def test_immutable_image_id_is_not_rewritten_as_registry_name() -> None:
+    image_id = "sha256:" + "a" * 64
+    assert normalize_image_reference(image_id) == image_id
+
+
+@pytest.mark.parametrize("container_executable", ["docker", "podman"])
+def test_missing_immutable_image_id_is_never_pulled(
+    container_executable: str,
+) -> None:
+    image_id = "sha256:" + "a" * 64
+
+    with patch(
+        "harness.container_image_prep.subprocess.run",
+        return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="missing"),
+    ) as run:
+        with pytest.raises(RuntimeError, match="unavailable locally"):
+            ensure_source_image(image_id, container_executable=container_executable)
+
+    assert all("pull" not in call.args[0] for call in run.call_args_list)
 
 
 @pytest.mark.parametrize("container_executable", ["docker", "podman"])

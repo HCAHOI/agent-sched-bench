@@ -190,3 +190,31 @@ def test_select_subset_exclude_lite_true_drops_lite() -> None:
     assert lite_count == 0, (
         "exclude_lite=True must drop every task with meta.is_lite=True"
     )
+
+
+def test_select_window_uses_one_seeded_shuffle() -> None:
+    plugin = SWERebenchBenchmark(_make_config())
+    tasks = [
+        plugin.normalize_task(_make_rebench_row(f"repo__task-{index}"))
+        for index in range(200)
+    ]
+
+    first = plugin.select_window(tasks, n=50, seed=42, skip=0)
+    following = plugin.select_window(tasks, n=100, seed=42, skip=50)
+    through_window = plugin.select_subset(tasks, n=150, seed=42)
+
+    assert following == through_window[50:]
+    assert {task["instance_id"] for task in first}.isdisjoint(
+        task["instance_id"] for task in following
+    )
+
+
+def test_select_window_rejects_insufficient_pool() -> None:
+    plugin = SWERebenchBenchmark(_make_config())
+    tasks = [
+        plugin.normalize_task(_make_rebench_row(f"repo__task-{index}"))
+        for index in range(10)
+    ]
+
+    with pytest.raises(ValueError, match="Not enough SWE-Rebench tasks"):
+        plugin.select_window(tasks, n=8, seed=42, skip=5)

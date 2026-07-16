@@ -594,6 +594,62 @@ def test_run_attempt_supports_non_image_success_without_patch(
     assert resources["summary"]["sample_count"] >= 1
 
 
+def test_host_runner_can_publish_replay_image_without_cleanup_image(
+    tmp_path: Path,
+) -> None:
+    ctx = AttemptContext(
+        run_dir=tmp_path / "run",
+        instance_id="1",
+        attempt=1,
+        task={"instance_id": "1"},
+        model="model",
+        scaffold="openclaw",
+        source_image=None,
+        execution_environment="container",
+    )
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+    image_id = "sha256:" + "a" * 64
+
+    async def inner(inner_ctx: AttemptContext) -> AttemptResult:
+        inner_ctx.replay_source_image = image_id
+        inner_ctx.replay_fixed_image = image_id
+        inner_ctx.replay_task_payload = {
+            "instance_id": "1",
+            "task_inst": "scientific task",
+            "sab_dataset_relpath": "datasets/example",
+        }
+        return AttemptResult(
+            success=True,
+            exit_status="completed",
+            trace_path=trace_source,
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+            disable_resource_monitoring=True,
+        )
+    )
+
+    assert ctx.source_image is None
+    assert ctx.fixed_image is None
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    assert manifest["replay"] == {
+        "replay_ready": True,
+        "source_image": image_id,
+        "fixed_image_name": image_id,
+    }
+    assert manifest["task"]["task_inst"] == "scientific task"
+    assert manifest["task"]["sab_dataset_relpath"] == "datasets/example"
+    results = json.loads((ctx.attempt_dir / "results.json").read_text())
+    assert results["replay_ready"] is True
+    assert results["docker_image"] == image_id
+
+
 def test_run_attempt_waits_for_published_container_name_before_sampling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

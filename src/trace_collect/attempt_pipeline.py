@@ -161,6 +161,9 @@ class AttemptContext:
     agent_runtime_mode: str = "host_controller"
     execution_environment: str = "container"
     fixed_image: str | None = None
+    replay_source_image: str | None = None
+    replay_fixed_image: str | None = None
+    replay_task_payload: dict[str, Any] | None = None
     container_id: str | None = None
     attempt_dir: Path = field(init=False)
     start_time: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -787,11 +790,17 @@ async def run_attempt(
     ):
         status = "error"
     success = bool(result.success) if result is not None else False
+    replay_source_image = ctx.replay_source_image or ctx.source_image
+    replay_fixed_image = ctx.replay_fixed_image or ctx.fixed_image
     task_payload: dict[str, Any] = {
         "instance_id": ctx.instance_id,
         "repo": ctx.task.get("repo"),
-        "docker_image": ctx.source_image,
+        "docker_image": replay_source_image,
     }
+    if ctx.replay_task_payload is not None:
+        task_payload.update(ctx.replay_task_payload)
+        task_payload["instance_id"] = ctx.instance_id
+        task_payload["docker_image"] = replay_source_image
     for key in ("task_source_kind", "task_source_id", "task_source_path"):
         if key in ctx.task:
             task_payload[key] = ctx.task.get(key)
@@ -813,9 +822,9 @@ async def run_attempt(
             "runtime_proof": result.runtime_proof if result is not None else {},
         },
         "replay": {
-            "replay_ready": bool(ctx.fixed_image),
-            "source_image": ctx.source_image,
-            "fixed_image_name": ctx.fixed_image,
+            "replay_ready": bool(replay_fixed_image),
+            "source_image": replay_source_image,
+            "fixed_image_name": replay_fixed_image,
         },
         "result_summary": {
             "exit_code": 0 if success else 1,
@@ -841,7 +850,7 @@ async def run_attempt(
     }
 
     results_payload: dict[str, Any] = {
-        "image": ctx.source_image,
+        "image": replay_source_image,
         "start_time": ctx.start_time_iso(),
         "end_time": ctx.end_time_iso(),
         "memory_limit": None,
@@ -859,10 +868,10 @@ async def run_attempt(
             "teardown_s": ctx.teardown_seconds(),
             "permission_fix_s": ctx.permission_fix_time_s,
         },
-        "replay_ready": bool(ctx.fixed_image),
+        "replay_ready": bool(replay_fixed_image),
         "instance_id": ctx.instance_id,
         "repo": ctx.task.get("repo"),
-        "docker_image": ctx.source_image,
+        "docker_image": replay_source_image,
         "success": success,
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
