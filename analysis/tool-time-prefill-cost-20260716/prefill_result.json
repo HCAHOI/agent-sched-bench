@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "measurement": "prefill_recompute_cost",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+  "kv_cache_dtype": "fp8",
+  "quantization": "fp8",
+  "max_model_len": 40960,
+  "kv_layout": {
+    "num_hidden_layers": 48,
+    "num_key_value_heads": 4,
+    "head_dim": 128,
+    "dtype": "float8_e4m3fn",
+    "dtype_size": 1,
+    "bytes_per_token": 49152
+  },
+  "device": {
+    "host": "0146-dsm-prxmx30201",
+    "device": "NVIDIA H100 PCIe",
+    "torch_version": "2.11.0+cu130"
+  },
+  "points": [
+    {
+      "context_tokens": 8,
+      "prefill_ms_median": 78.2019499999933,
+      "prefill_ms_min": 75.09689699963928,
+      "prefill_ms_max": 89.43217099977119,
+      "ms_per_token": 9.775243749999163,
+      "repeats": 10
+    },
+    {
+      "context_tokens": 512,
+      "prefill_ms_median": 76.79937149987381,
+      "prefill_ms_min": 74.7697080000762,
+      "prefill_ms_max": 131.70426699980453,
+      "ms_per_token": 0.14999877246069104,
+      "repeats": 10
+    },
+    {
+      "context_tokens": 1024,
+      "prefill_ms_median": 74.79818150000028,
+      "prefill_ms_min": 73.15689200004272,
+      "prefill_ms_max": 76.09922999972696,
+      "ms_per_token": 0.07304509912109403,
+      "repeats": 10
+    },
+    {
+      "context_tokens": 2048,
+      "prefill_ms_median": 80.07340150015807,
+      "prefill_ms_min": 72.95123999983844,
+      "prefill_ms_max": 103.51927500005331,
+      "ms_per_token": 0.03909834057624906,
+      "repeats": 10
+    },
+    {
+      "context_tokens": 4096,
+      "prefill_ms_median": 118.60333399999945,
+      "prefill_ms_min": 117.50734899987947,
+      "prefill_ms_max": 122.27890399981334,
+      "ms_per_token": 0.028955892089843616,
+      "repeats": 10
+    },
+    {
+      "context_tokens": 8192,
+      "prefill_ms_median": 254.81495949998134,
+      "prefill_ms_min": 252.04144899998937,
+      "prefill_ms_max": 260.4313890001322,
+      "ms_per_token": 0.031105341735837566,
+      "repeats": 10
+    },
+    {
+      "context_tokens": 16384,
+      "prefill_ms_median": 611.4756424999541,
+      "prefill_ms_min": 600.2539900000556,
+      "prefill_ms_max": 614.8529199999757,
+      "ms_per_token": 0.03732151138305384,
+      "repeats": 10
+    },
+    {
+      "context_tokens": 32768,
+      "prefill_ms_median": 1685.9336105001148,
+      "prefill_ms_min": 1678.4063800000695,
+      "prefill_ms_max": 1690.7317139998668,
+      "ms_per_token": 0.051450610672000574,
+      "repeats": 10
+    }
+  ],
+  "linear_fit": {
+    "slope_ms_per_token": 0.04860517886682947,
+    "intercept_ms": -22.523942633447252,
+    "r_squared": 0.9657733870809478,
+    "note": "adopt slope_ms_per_token as the P2 recompute rate; prefill is super-linear so a linear rate under-charges long context"
+  },
+  "overhead_floor_ms": 74.79818150000028,
+  "min_context_tokens": 8,
+  "vocab_size": 151643
+}
