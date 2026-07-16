@@ -44,6 +44,15 @@ post-hoc; the pre-registered PRIMARY hypotheses and decision rules are unchanged
 Credit-exhausted tasks fail with empty traces and are removed before analysis
 (same cleanup as the docker-commit failures).
 
+**FINAL N = 277** (2026-07-17): credits depleted around task ~288 (dashscope
+"account in good standing" / quota errors). After removing 22 empty/partial
+tail dirs (16 fully credit-exhausted + 6 stale non-terminal attempt_1 kept
+alongside a valid attempt_2), the corpus is **277 tasks, each with exactly one
+valid trace.jsonl**. The production extractor
+(`extract_tool_latency_samples`) processes all 277 with **0 errors and 13,410
+tool-call samples** (~3x the dev-100 corpus's ~4.6k). Fully disjoint from dev,
+analysis-ready.
+
 ### Amendment (2026-07-16, logged): collection concurrency = 2
 
 Collection runs at `--concurrency 2` (uncapped containers), a documented
