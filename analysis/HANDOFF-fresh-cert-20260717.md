@@ -51,16 +51,22 @@ Drivers refuse a pre-existing `--output-root` (don't pre-create leaf dirs).
 (`scripts/analyze_frontier_permutation.py`, ruff-clean — permutation cert for
 one paired trigger contrast on frontier decisions).
 
-**In flight:** Step 2 = `python scripts/run_offline_gated_robust_confirmation.py
---manifest $B/offline-gated-robust/manifest.json --output-root
-$B/offline-gated-robust/results` (frozen trie confirmation, ~10 min/fold ×5).
-Output `.../results/cv/f{1..5}_decisions.jsonl`. Watch: monitor `bav2slo4u`; log
-`$B/offline-gated-robust/step2.log`.
+**In flight (RELAUNCHED):** the WHOLE pipeline (steps 2-9) is running via a
+detached `nohup` driver `$B/cert_steps_2_9.sh` -> log `$B/cert_driver.log`
+(started ~04:08 2026-07-17, driver pid 1423884; step2 = run_offline_gated_robust_
+confirmation, ~10 min/fold ×5). Monitor `b5h2d8w53`.
+NOTE: the FIRST step-2 attempt (launched by a subagent) was killed by the harness
+when the subagent idled — see gotcha. It is now driven from the MAIN loop via
+nohup, which survives.
 
-**To FINISH (steps 3-9):** once `.../results/cv/f5_decisions.jsonl` exists, run
-the ready driver (also inlined below):
-`nohup bash /tmp/claude-1000/-home-chiyu-workspace-agent-sched-bench/90ab32fe-510a-4883-96ad-278d143015e1/scratchpad/cert_steps_3_9.sh > $B/cert_driver.log 2>&1 &`
-It runs (all with `--restore-cost-fractions 0.0,0.94 --replicates 50000 --seed 0`):
+**To CHECK / FINISH:** `grep -E "VERDICTS|FAILED|ALL DONE" $B/cert_driver.log`.
+If it shows "ALL DONE", the H1/H2 verdicts are printed at the tail of the log.
+If a step FAILED (or the driver died), remove that step's partial `--output-root`
+(the drivers refuse a pre-existing output dir) and relaunch:
+`nohup bash $B/cert_steps_2_9.sh > $B/cert_driver.log 2>&1 &` (step 2 refuses an
+existing `results/` — `rm -rf $B/offline-gated-robust/results` first if partial).
+The driver runs (all with `--restore-cost-fractions 0.0,0.94 --replicates 50000 --seed 0`):
+0. `run_offline_gated_robust_confirmation.py --manifest $B/offline-gated-robust/manifest.json --output-root $B/offline-gated-robust/results`  (step 2)
 1. `run_restore_cost_mode_b.py --confirmation-root $B/offline-gated-robust/results --output-root $B/restore-cost-mode-b`
 2. `run_within_task_baseline.py --confirmation-root .../results --mode-b-root $B/restore-cost-mode-b --output-root $B/within-task-gated`
 3. `run_hazard_model_confirmation.py --confirmation-root .../results --mode-b-root $B/restore-cost-mode-b --gated-b1-root $B/within-task-gated --num-intervals 40 --model-family gbm --feature-set full --ensemble-members 0 --output-root $B/hazard-model-gbm-full`
@@ -93,12 +99,14 @@ The driver prints the H1/H2 verdicts at the end (grep `cert_driver.log` for "VER
 
 ## 5. Live processes / monitors at handoff time
 
-- Step 2 confirmation: `pgrep -f run_offline_gated_robust_confirmation` (running).
-- Monitor `bav2slo4u` — fires when Step 2's `cv/f5_decisions.jsonl` appears.
-- Compression `pid 1419480` -> `/home/chiyu/workspace/fresh-corpus-277-traces.tar.zst`.
+- **Certification driver `pid 1423884`** = `nohup bash $B/cert_steps_2_9.sh` ->
+  `$B/cert_driver.log` (steps 2-9, running). Monitor `b5h2d8w53` (fires on
+  ALL DONE / FAILED / driver-gone; also emits a progress line every ~10 min).
+- Download archive DONE: `/home/chiyu/workspace/fresh-corpus-277-traces.tar.zst`
+  (15M, single dir, 277 tasks, integrity-verified).
 - Collection is DONE; all collector/prune/collection-monitor processes stopped.
-- The executor subagent that started this went idle mid-run (known pattern) — do
-  NOT rely on it; drive steps 3-9 via the driver above.
+- The executor subagent that started this went idle then mis-reported step 2 as
+  killed — do NOT rely on it; the pipeline is now driven from the MAIN loop.
 
 ## 6. Gotchas
 
@@ -110,3 +118,9 @@ The driver prints the H1/H2 verdicts at the end (grep `cert_driver.log` for "VER
 - Hazard params must match dev-100: num-intervals 40, gbm, full, ensemble 0, seed 0.
 - The bulky per-fraction decision JSONLs are reproducible; commit aggregates +
   findings, not the giant decision files.
+- **CRITICAL run-lifecycle lesson:** long compute (the 50k-replicate steps, ~50
+  min each) MUST be launched via a detached `nohup ... &` from the MAIN loop
+  (like the collection). Do NOT run them inside a subagent's Bash tool / harness
+  `run_in_background` — those get killed when the subagent idles/ends (this
+  killed the first step-2 attempt after 50 min at fold 2). nohup-from-main-loop
+  survives across compaction and subagent lifecycles.
