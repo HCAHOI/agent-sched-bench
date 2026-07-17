@@ -51,22 +51,26 @@ Drivers refuse a pre-existing `--output-root` (don't pre-create leaf dirs).
 (`scripts/analyze_frontier_permutation.py`, ruff-clean — permutation cert for
 one paired trigger contrast on frontier decisions).
 
-**In flight (RELAUNCHED):** the WHOLE pipeline (steps 2-9) is running via a
-detached `nohup` driver `$B/cert_steps_2_9.sh` -> log `$B/cert_driver.log`
-(started ~04:08 2026-07-17, driver pid 1423884; step2 = run_offline_gated_robust_
-confirmation, ~10 min/fold ×5). Monitor `b5h2d8w53`.
-NOTE: the FIRST step-2 attempt (launched by a subagent) was killed by the harness
-when the subagent idled — see gotcha. It is now driven from the MAIN loop via
-nohup, which survives.
+**In flight (PARALLELIZED into 2 chains for CPU efficiency):** the pipeline runs
+as TWO concurrent detached `nohup` chains (H1 chain steps 2-7 is a strict
+dependency chain; H2 frontier steps 8-9 are INDEPENDENT — inputs only
+`--config-manifest` + `--trace-root` — so they run in parallel):
+- Chain A (H1) = `$B/chain_A_h1.sh` -> `$B/chain_A.log` (steps 2,3,4,5,6,7).
+- Chain B (H2) = `$B/chain_B_h2.sh` -> `$B/chain_B.log` (steps 8,9).
+Launched with `OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=2` (GBM uses ~4 cores;
+~5 cores active vs 1 sequential). Monitor `brvv317p7`. This changes NO numerics
+(same seeds, same drivers) — only the process layout.
+Each chain writes to its own `--output-root`s (no collision). Completion markers:
+`CHAIN_A_H1_DONE` / `CHAIN_B_H2_DONE`.
 
-**To CHECK / FINISH:** `grep -E "VERDICTS|FAILED|ALL DONE" $B/cert_driver.log`.
-If it shows "ALL DONE", the H1/H2 verdicts are printed at the tail of the log.
-If a step FAILED (or the driver died), remove that step's partial `--output-root`
-(the drivers refuse a pre-existing output dir) and relaunch:
-`nohup bash $B/cert_steps_2_9.sh > $B/cert_driver.log 2>&1 &` (step 2 refuses an
-existing `results/` — `rm -rf $B/offline-gated-robust/results` first if partial).
-The driver runs (all with `--restore-cost-fractions 0.0,0.94 --replicates 50000 --seed 0`):
-0. `run_offline_gated_robust_confirmation.py --manifest $B/offline-gated-robust/manifest.json --output-root $B/offline-gated-robust/results`  (step 2)
+**To CHECK / FINISH:** `grep -E "CHAIN_._H._DONE|FAILED" $B/chain_A.log $B/chain_B.log`.
+When BOTH show DONE, read verdicts from the artifacts (§H1/H2 below). If a chain
+FAILED or died, `rm -rf` that step's partial `--output-root` (drivers refuse a
+pre-existing output dir; step 2 refuses existing `results/`) and relaunch that
+chain: `export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=2; nohup bash
+$B/chain_A_h1.sh > $B/chain_A.log 2>&1 &` (and/or chain_B). The chains run (all
+with `--restore-cost-fractions 0.0,0.94 --replicates 50000 --seed 0`):
+0. `run_offline_gated_robust_confirmation.py --manifest $B/offline-gated-robust/manifest.json --output-root $B/offline-gated-robust/results`  (step 2, chain A)
 1. `run_restore_cost_mode_b.py --confirmation-root $B/offline-gated-robust/results --output-root $B/restore-cost-mode-b`
 2. `run_within_task_baseline.py --confirmation-root .../results --mode-b-root $B/restore-cost-mode-b --output-root $B/within-task-gated`
 3. `run_hazard_model_confirmation.py --confirmation-root .../results --mode-b-root $B/restore-cost-mode-b --gated-b1-root $B/within-task-gated --num-intervals 40 --model-family gbm --feature-set full --ensemble-members 0 --output-root $B/hazard-model-gbm-full`
@@ -99,9 +103,11 @@ The driver prints the H1/H2 verdicts at the end (grep `cert_driver.log` for "VER
 
 ## 5. Live processes / monitors at handoff time
 
-- **Certification driver `pid 1423884`** = `nohup bash $B/cert_steps_2_9.sh` ->
-  `$B/cert_driver.log` (steps 2-9, running). Monitor `b5h2d8w53` (fires on
-  ALL DONE / FAILED / driver-gone; also emits a progress line every ~10 min).
+- **Certification = 2 parallel nohup chains**: `chain_A_h1.sh` (steps 2-7 ->
+  `chain_A.log`) + `chain_B_h2.sh` (steps 8-9 -> `chain_B.log`). Monitor
+  `brvv317p7` (fires on both-DONE with verdicts / FAILED / died; ~10-min progress
+  lines). Gotcha: `chain_B_h2.sh` header MUST define `FR=traces/swe-rebench/
+  qwen3.7-max/fresh-seed42-skip150-n200` (step 8's `--trace-root $FR`).
 - Download archive DONE: `/home/chiyu/workspace/fresh-corpus-277-traces.tar.zst`
   (15M, single dir, 277 tasks, integrity-verified).
 - Collection is DONE; all collector/prune/collection-monitor processes stopped.
