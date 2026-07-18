@@ -34,7 +34,7 @@ gpu = ["vllm>=0.6"]
 # release that introduced KVConnectorBase_V1 + the OffloadingConnector we cite
 # in spike/README.md. Base install stays GPU-free; the spike's CPU logic
 # (control/timing/report) has no dep on this extra.
-serving-spike = ["vllm>=0.11,<0.12"]
+serving-spike = ["vllm==0.11.2"]  # exact pin: 0.11.2 changed the connector ctor ABI vs 0.11.0; 0.11.0 needs nvcc at runtime
 dev = [
   "pytest>=8.3,<9.0",
   "pytest-asyncio>=0.26,<1.0",

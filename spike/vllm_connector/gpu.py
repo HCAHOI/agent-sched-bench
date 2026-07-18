@@ -162,10 +162,21 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
     0 -- forwarded to :class:`CudaBlockTransfer`).
     """
 
-    def __init__(self, vllm_config: "VllmConfig", role: "KVConnectorRole"):
+    def __init__(
+        self,
+        vllm_config: "VllmConfig",
+        role: "KVConnectorRole",
+        kv_cache_config: object | None = None,
+    ):
+        # vllm 0.11.2 added a third positional arg (kv_cache_config) to
+        # KVConnectorBase_V1.__init__; 0.11.0 has only (vllm_config, role).
+        # Accept both so the pin can float within the tested patch series.
         if not HAVE_VLLM:  # pragma: no cover - off-GPU guard
             raise RuntimeError("SelectiveOffloadConnector requires vllm (GPU box only)")
-        super().__init__(vllm_config, role)
+        try:
+            super().__init__(vllm_config, role, kv_cache_config)
+        except TypeError:  # 0.11.0 two-arg base
+            super().__init__(vllm_config, role)
         extra = vllm_config.kv_transfer_config.kv_connector_extra_config
         self._control = OffloadControl(extra["control_path"])
         self._timing_path = extra["timing_path"]
