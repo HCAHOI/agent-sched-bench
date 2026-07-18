@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 from typing import Any, Iterable
 
+from trace_collect.command_features import command_has_concurrent_segments
 from trace_collect.tool_gap_extractor import (
     _float_field,
     _int_field,
@@ -202,12 +203,21 @@ def extract_segment_latency_samples(
     trace_path: Path,
     *,
     agent_filter: str | None = None,
+    skip_concurrent: bool = False,
 ) -> list[SegmentLatencySample]:
     """Extract per-atom segment latency samples from one replayed trace.
 
     Malformed telemetry fails fast here (never during replay). Entries recorded
     as ``telemetry_absent`` are skipped, not errors: some execs run under a
     non-bash shell where per-segment timing is unavailable by design.
+
+    ``skip_concurrent`` drops actions whose parent command runs its segments
+    concurrently (pipelines, background jobs, loops): their segment_timeline
+    bounds are fictitious by the duration-validity ceiling and can even be
+    reversed (``t_end_ms < t_start_ms``), which otherwise fails fast here.
+    Off by default so the strict per-segment validation is preserved for the
+    canonical dataset; duration analyses that must exclude these parents
+    anyway (and count them) pass ``skip_concurrent=True``.
     """
 
     trace = TraceData.load(trace_path, agent_filter=agent_filter)
@@ -243,6 +253,12 @@ def extract_segment_latency_samples(
                 _float_field(action, "ts_end") - _float_field(action, "ts_start")
             ) * 1000.0
         parent_chain_command = _segment_exec_command(data.get("tool_args"))
+        if (
+            skip_concurrent
+            and parent_chain_command is not None
+            and command_has_concurrent_segments(parent_chain_command)
+        ):
+            continue
         raw_total = _optional_float(timeline.get("raw_total_ms"))
         for entry in segments:
             if not isinstance(entry, dict):
@@ -284,11 +300,16 @@ def extract_many_segment_latency_samples(
     trace_paths: Iterable[Path],
     *,
     agent_filter: str | None = None,
+    skip_concurrent: bool = False,
 ) -> list[SegmentLatencySample]:
     samples: list[SegmentLatencySample] = []
     for trace_path in trace_paths:
         samples.extend(
-            extract_segment_latency_samples(trace_path, agent_filter=agent_filter)
+            extract_segment_latency_samples(
+                trace_path,
+                agent_filter=agent_filter,
+                skip_concurrent=skip_concurrent,
+            )
         )
     samples.sort(
         key=lambda sample: (
