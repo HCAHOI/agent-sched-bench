@@ -1,0 +1,26 @@
+{
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "vllm_version": "0.11.2",
+  "scenario": "pause",
+  "kv_seam": "PausableScheduler(scheduler_cls) force_preempt+hold + connector get_num_new_matched_tokens/save_retained/load_retained",
+  "num_load_requests": 8,
+  "env": {
+    "host": "0156-dsm-prxmx30091",
+    "python": "3.12.13",
+    "torch": "2.9.0+cu128",
+    "gpu": "NVIDIA H100 PCIe",
+    "cuda": "12.8",
+    "driver_version": "580.126.09",
+    "pcie_link_width": "16",
+    "pcie_link_gen": "4"
+  },
+  "pause": {
+    "tool_duration_s": 3.0,
+    "blocks_freed": 99,
+    "pause_to_freed_ms": 108.59643000003416,
+    "resume_to_first_token_ms": 39.17605900005583,
+    "identical": true
+  },
+  "reference_num_tokens": 1024,
+  "resumed_num_tokens": 1024
+}
