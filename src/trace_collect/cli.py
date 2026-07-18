@@ -306,6 +306,15 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         help="Simulated TPOT in milliseconds when --llm-timing ttft-tpot.",
     )
     parser.add_argument(
+        "--no-segment-timeline",
+        dest="segment_timeline",
+        action="store_false",
+        help=(
+            "Disable per-segment (atom) command-timing telemetry during "
+            "container replay. On by default; invisible to replayed commands."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -472,6 +481,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_ttft_ms": args.llm_ttft_ms,
         "llm_tpot_ms": args.llm_tpot_ms,
         "structured_output": args.output_dir == "traces/simulate",
+        "segment_timeline": args.segment_timeline,
     }
 
     sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"

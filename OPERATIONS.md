@@ -33,7 +33,7 @@ PYTHONPATH=src python -m trace_collect.cli \
 ### Required
 
 - `--provider`: one of `openrouter`, `dashscope`, `openai`, `siliconflow`,
-  `deepseek`.
+  `deepseek`, `pioneer`.
 - `--model`: model slug for the provider.
 - `--scaffold openclaw`.
 - `--mcp-config` for OpenClaw. YAML path, or literal `none` for an explicit
@@ -48,6 +48,7 @@ PYTHONPATH=src python -m trace_collect.cli \
   - `OPENAI_API_KEY`
   - `SILICONFLOW_API_KEY`
   - `DEEPSEEK_API_KEY`
+  - `PIONEER_API_KEY`
 - Override with `--api-key` or `--api-base` for OpenAI-compatible gateways.
 
 ### Task selection
@@ -194,6 +195,56 @@ fixed v1 model:
 Host/no-op replay and multi-command exec preserve `resource_timeline` as source
 metadata only.
 
+### Segment-timeline telemetry (per-atom command timing)
+
+Chained exec commands (`cd X && make && pytest`) arrive as one tool call. During
+container replay we re-run the *unmodified* command under `bash -x -c` with
+xtrace redirected to a dedicated fd (`BASH_XTRACEFD`, `PS4='+$EPOCHREALTIME '`),
+capturing per-top-level-segment start timestamps without touching the command's
+stdout/stderr or semantics. Output lands in `tool_exec.data.segment_timeline`
+(v2): `segments[{segment_index, command_text, t_start_ms, t_end_ms}]` plus
+`raw_total_ms` (measured exec wall time, for cross-checking — not forced to equal
+the segment sum).
+
+- On by default in simulate replay (invisible to replayed commands, cheap).
+- `--no-segment-timeline` opts out (keeps the historical `/bin/sh -c` path).
+- When bash is unavailable the field is `{version: 2, telemetry_absent: true,
+  reason}` and replay is unaffected. Malformed telemetry fails fast only at
+  extraction, never during replay.
+- Known ceiling: telemetry-on execs run under bash; `--no-segment-timeline`
+  execs keep `/bin/sh`.
+
+Extract per-atom samples with
+`trace_collect.tool_latency_dataset.extract_segment_latency_samples` (fields:
+`task_id, tool_name, segment_index, segment_command, segment_ms,
+parent_chain_command, parent_total_ms, parent_raw_total_ms`).
+
+#### Full-corpus fresh-277 replay at --replay-speed 20 (8-core / 15 GB host)
+
+```
+PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
+    --manifest /abs/path/to/fresh-277-manifest.yaml \
+    --container docker \
+    --workers 8 \
+    --concurrency 8 \
+    --prep-concurrency 8 \
+    --replay-speed 20 \
+    --output-dir traces/fresh-277-segtimeline
+```
+
+- Segment telemetry is on by default; add `--no-segment-timeline` only to
+  reproduce the pre-telemetry baseline.
+- Concurrency: on an 8-core / 15 GB host keep `--workers 8 --concurrency 8` so
+  at most 8 task containers run at once (~1 core, ~1.5 GB each). Drop to
+  `--workers 4 --concurrency 4` if replayed builds (`make`, `pytest`) are
+  memory-heavy. `--prep-concurrency` throttles concurrent image builds; keep it
+  <= workers to avoid a build-time memory spike.
+- Disk: each fixed image is built once and shared; budget ~2-3 GB for images
+  plus a few MB per trace. Segment telemetry adds only small JSON per exec.
+- Wall clock: replay re-executes tool commands for real (unaffected by
+  `--replay-speed`), so total time is dominated by real tool execution, not the
+  20x-accelerated LLM gaps. Budget hours for the full 277, not minutes.
+
 ### Manifest format
 
 Simplest form, a list of absolute trace paths:
@@ -254,6 +305,7 @@ Forbidden:
 | `swe-bench-verified` | `task_container_agent` | `princeton-nlp/SWE-bench_Verified` | openclaw |
 | `swe-rebench` | `task_container_agent` | `nebius/SWE-rebench` | openclaw |
 | `terminal-bench` | `host_controller` | Terminal-Bench tasks | openclaw |
+| [`science-agent-bench-verified`](configs/benchmarks/science-agent-bench-verified.md) | `host_controller` | `osunlp/ScienceAgentBench` (`verified`) | openclaw |
 
 ### Adding a benchmark
 

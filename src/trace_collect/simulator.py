@@ -3175,6 +3175,7 @@ async def simulate(
     llm_ttft_ms: float | None = None,
     llm_tpot_ms: float | None = None,
     structured_output: bool = False,
+    segment_timeline: bool = True,
 ) -> Path:
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
@@ -3184,6 +3185,10 @@ async def simulate(
         raise ValueError("workers must be >= 1")
     if prep_concurrency < 0:
         raise ValueError("prep_concurrency must be >= 0")
+    # Transport the segment-timeline toggle to every replay ContainerAgent
+    # (including worker subprocesses, which inherit os.environ at spawn) via the
+    # same env-var channel used for OPENCLAW_CONTAINER_WORKDIR. Replay only.
+    os.environ["OPENCLAW_SEGMENT_TIMELINE"] = "1" if segment_timeline else "0"
     llm_timing = LLMTimingConfig(
         mode=llm_timing_mode,
         ttft_ms=llm_ttft_ms,

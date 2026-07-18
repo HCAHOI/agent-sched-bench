@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import textwrap
 from typing import Any
 
@@ -137,7 +138,7 @@ def remap_source_runtime_artifact_tool_args(
 # Persistent Python agent script injected into Docker containers; reads JSON-line
 # requests from stdin and writes JSON-line responses to stdout.
 _REPLAY_AGENT_SCRIPT = textwrap.dedent(r"""
-import json, os, sys, subprocess, difflib, signal, time
+import json, os, sys, subprocess, difflib, signal, time, re, shutil, tempfile
 WORKDIR = os.environ.get("OPENCLAW_CONTAINER_WORKDIR", "/testbed") or "/testbed"
 
 def _find_match(content, old_text):
@@ -181,6 +182,98 @@ def _truncate_output(text, limit=_MAX_OUTPUT):
         return text
     half = limit // 2
     return text[:half] + f"\n\n... ({len(text) - limit} chars truncated) ...\n\n" + text[-half:]
+
+# --- Per-segment (atom) command timing telemetry (v2) --------------------
+# Chained commands ("cd X && make && pytest") arrive as one exec call. When
+# enabled we re-run the *unmodified* command under `bash -x -c` with xtrace
+# redirected to a dedicated fd (BASH_XTRACEFD), so per-top-level-segment start
+# timestamps land in a file the command itself never sees. PS4 embeds
+# $EPOCHREALTIME; bash replicates PS4's first char per nesting level, so lines
+# with exactly one leading '+' are the top-level segments. Best-effort: absent
+# bash or the flag, the untouched /bin/sh path runs and telemetry is recorded
+# as absent -- replay never fails because timing hiccupped.
+# ponytail: nested `bash -x` inside a replayed command inherits PS4/BASH_XTRACEFD
+# and could add spurious depth-1 lines; rare, caught at extraction via
+# raw_total_ms reconciliation. Upgrade path: per-invocation trace-fd tagging.
+_SEGMENT_TIMELINE_VERSION = 2
+_SEGMENT_TIMELINE_ENABLED = os.environ.get("OPENCLAW_SEGMENT_TIMELINE") == "1"
+_SEGMENT_BASH_PATH = shutil.which("bash") if _SEGMENT_TIMELINE_ENABLED else None
+_SEGMENT_TRACE_DIR = os.environ.get("TMPDIR") or "/tmp"
+_SEGMENT_LINE_RE = re.compile(r"^(\++)(\d+[.,]\d+)\s(.*)$")
+
+
+def _segment_absent(reason):
+    return {
+        "version": _SEGMENT_TIMELINE_VERSION,
+        "telemetry_absent": True,
+        "reason": reason,
+    }
+
+
+def _segments_from_xtrace(text, start_wall, end_wall):
+    events = []
+    for line in text.splitlines():
+        match = _SEGMENT_LINE_RE.match(line)
+        if match is None or len(match.group(1)) != 1:
+            continue
+        events.append((float(match.group(2).replace(",", ".")), match.group(3)))
+    if not events:
+        return _segment_absent("no_segments_traced")
+    segments = []
+    for index, (epoch, command_text) in enumerate(events):
+        t_start_ms = (epoch - start_wall) * 1000.0
+        next_epoch = events[index + 1][0] if index + 1 < len(events) else end_wall
+        t_end_ms = (next_epoch - start_wall) * 1000.0
+        segments.append({
+            "segment_index": index,
+            "command_text": command_text,
+            "t_start_ms": round(t_start_ms, 3),
+            "t_end_ms": round(t_end_ms, 3),
+        })
+    return {
+        "version": _SEGMENT_TIMELINE_VERSION,
+        "source": "bash_xtrace_epochrealtime",
+        "segments": segments,
+        "segment_count": len(segments),
+        "raw_total_ms": round((end_wall - start_wall) * 1000.0, 3),
+    }
+
+
+def _open_segment_trace():
+    if not _SEGMENT_TIMELINE_ENABLED or not _SEGMENT_BASH_PATH:
+        return None
+    fd, path = tempfile.mkstemp(prefix=".openclaw-segtrace.", dir=_SEGMENT_TRACE_DIR)
+    return (fd, path)
+
+
+def _shell_launch(cmd, env, seg):
+    # seg is None -> identical to the historical /bin/sh -c path (shell=True).
+    if seg is None:
+        return cmd, {"shell": True, "env": env}
+    fd, _path = seg
+    traced_env = dict(env)
+    traced_env["PS4"] = "+$EPOCHREALTIME "
+    traced_env["BASH_XTRACEFD"] = str(fd)
+    return [_SEGMENT_BASH_PATH, "-x", "-c", cmd], {"env": traced_env, "pass_fds": (fd,)}
+
+
+def _finish_segment_trace(seg, start_wall, end_wall):
+    fd, path = seg
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            result = _segments_from_xtrace(handle.read(), start_wall, end_wall)
+    except OSError as exc:
+        result = _segment_absent("trace_read_error: %s" % exc)
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return result
+
 
 _RESOURCE_CPU_RATE_EPS_CORE = 0.05
 _RESOURCE_NET_RATE_EPS_BPS = 1024.0
@@ -359,84 +452,107 @@ def _run_shell_command_with_resource_timeout(cmd, timeout, env, source_resource_
         min(_RESOURCE_STALL_MAX_S, timeout_s),
     )
     start_new_session = hasattr(os, "setsid")
-    process = subprocess.Popen(
-        cmd,
-        shell=True,
-        cwd=WORKDIR,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-        env=env,
-        start_new_session=start_new_session,
-    )
-    virtual_time_s = 0.0
-    last_counters = _read_resource_counters()
-    last_progress_wall_s = last_counters["time_s"]
-    while True:
-        try:
-            stdout, stderr = process.communicate(timeout=_RESOURCE_SAMPLE_INTERVAL_S)
-            output = (stdout or "") + (stderr or "")
-            return {
-                "ok": True,
-                "result": _truncate_output(output),
-                "returncode": process.returncode,
-                "resource_timeout_policy": "resource_integrated",
-                "resource_virtual_time_s": round(virtual_time_s, 6),
-            }
-        except subprocess.TimeoutExpired:
-            current_counters = _read_resource_counters()
-            wall_dt_s = max(0.0, current_counters["time_s"] - last_counters["time_s"])
-            deltas = {
-                "cpu_core_s": _counter_delta(last_counters, current_counters, "cpu_usage_s"),
-                "rx_bytes": _counter_delta(last_counters, current_counters, "rx_bytes"),
-                "tx_bytes": _counter_delta(last_counters, current_counters, "tx_bytes"),
-            }
-            progress_s = _resource_progress_increment(
-                samples,
-                virtual_time_s,
-                wall_dt_s,
-                deltas,
+    seg = _open_segment_trace()
+
+    def _finalize(resp, start_wall):
+        if seg is not None:
+            resp["segment_timeline"] = _finish_segment_trace(
+                seg, start_wall, time.time()
             )
-            virtual_time_s += progress_s
-            if progress_s > _RESOURCE_PROGRESS_EPS_S:
-                last_progress_wall_s = current_counters["time_s"]
-            if virtual_time_s >= timeout_s:
-                _kill_process_group(process)
-                stdout, stderr = process.communicate()
+        return resp
+
+    try:
+        launch_args, launch_kwargs = _shell_launch(cmd, env, seg)
+        start_wall = time.time()
+        process = subprocess.Popen(
+            launch_args,
+            cwd=WORKDIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            start_new_session=start_new_session,
+            **launch_kwargs,
+        )
+        virtual_time_s = 0.0
+        last_counters = _read_resource_counters()
+        last_progress_wall_s = last_counters["time_s"]
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=_RESOURCE_SAMPLE_INTERVAL_S)
                 output = (stdout or "") + (stderr or "")
-                if output:
-                    output = _truncate_output(output) + "\n[resource_timeout]"
-                else:
-                    output = "[resource_timeout]"
-                return {
-                    "ok": False,
-                    "result": output,
-                    "returncode": 124,
+                resp = {
+                    "ok": True,
+                    "result": _truncate_output(output),
+                    "returncode": process.returncode,
                     "resource_timeout_policy": "resource_integrated",
                     "resource_virtual_time_s": round(virtual_time_s, 6),
                 }
-            stalled_s = current_counters["time_s"] - last_progress_wall_s
-            if stalled_s >= stall_timeout_s and _resource_has_active_demand(
-                samples,
-                virtual_time_s,
-            ):
-                _kill_process_group(process)
-                stdout, stderr = process.communicate()
-                output = (stdout or "") + (stderr or "")
-                marker = "[resource_stall_timeout]"
-                if output:
-                    output = _truncate_output(output) + "\n" + marker
-                else:
-                    output = marker
-                return {
-                    "ok": False,
-                    "result": output,
-                    "returncode": 124,
-                    "resource_timeout_policy": "resource_integrated",
-                    "resource_virtual_time_s": round(virtual_time_s, 6),
-                    "resource_stall_s": round(stalled_s, 6),
+                _finalize(resp, start_wall)
+                seg = None
+                return resp
+            except subprocess.TimeoutExpired:
+                current_counters = _read_resource_counters()
+                wall_dt_s = max(0.0, current_counters["time_s"] - last_counters["time_s"])
+                deltas = {
+                    "cpu_core_s": _counter_delta(last_counters, current_counters, "cpu_usage_s"),
+                    "rx_bytes": _counter_delta(last_counters, current_counters, "rx_bytes"),
+                    "tx_bytes": _counter_delta(last_counters, current_counters, "tx_bytes"),
                 }
-            last_counters = current_counters
+                progress_s = _resource_progress_increment(
+                    samples,
+                    virtual_time_s,
+                    wall_dt_s,
+                    deltas,
+                )
+                virtual_time_s += progress_s
+                if progress_s > _RESOURCE_PROGRESS_EPS_S:
+                    last_progress_wall_s = current_counters["time_s"]
+                if virtual_time_s >= timeout_s:
+                    _kill_process_group(process)
+                    stdout, stderr = process.communicate()
+                    output = (stdout or "") + (stderr or "")
+                    if output:
+                        output = _truncate_output(output) + "\n[resource_timeout]"
+                    else:
+                        output = "[resource_timeout]"
+                    resp = {
+                        "ok": False,
+                        "result": output,
+                        "returncode": 124,
+                        "resource_timeout_policy": "resource_integrated",
+                        "resource_virtual_time_s": round(virtual_time_s, 6),
+                    }
+                    _finalize(resp, start_wall)
+                    seg = None
+                    return resp
+                stalled_s = current_counters["time_s"] - last_progress_wall_s
+                if stalled_s >= stall_timeout_s and _resource_has_active_demand(
+                    samples,
+                    virtual_time_s,
+                ):
+                    _kill_process_group(process)
+                    stdout, stderr = process.communicate()
+                    output = (stdout or "") + (stderr or "")
+                    marker = "[resource_stall_timeout]"
+                    if output:
+                        output = _truncate_output(output) + "\n" + marker
+                    else:
+                        output = marker
+                    resp = {
+                        "ok": False,
+                        "result": output,
+                        "returncode": 124,
+                        "resource_timeout_policy": "resource_integrated",
+                        "resource_virtual_time_s": round(virtual_time_s, 6),
+                        "resource_stall_s": round(stalled_s, 6),
+                    }
+                    _finalize(resp, start_wall)
+                    seg = None
+                    return resp
+                last_counters = current_counters
+    finally:
+        if seg is not None:
+            _finish_segment_trace(seg, 0.0, 0.0)
 
 
 def handle_exec(args):
@@ -451,14 +567,27 @@ def handle_exec(args):
     )
     if resource_response is not None:
         return resource_response
+    seg = _open_segment_trace()
     try:
-        r = subprocess.run(cmd, shell=True, cwd=WORKDIR,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           universal_newlines=True, timeout=timeout, env=env)
-        output = (r.stdout or "") + (r.stderr or "")
-        return {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "result": "[timeout]", "returncode": 124}
+        launch_args, launch_kwargs = _shell_launch(cmd, env, seg)
+        start_wall = time.time()
+        try:
+            r = subprocess.run(launch_args, cwd=WORKDIR,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               universal_newlines=True, timeout=timeout, **launch_kwargs)
+            end_wall = time.time()
+            output = (r.stdout or "") + (r.stderr or "")
+            resp = {"ok": True, "result": _truncate_output(output), "returncode": r.returncode}
+        except subprocess.TimeoutExpired:
+            end_wall = time.time()
+            resp = {"ok": False, "result": "[timeout]", "returncode": 124}
+        if seg is not None:
+            resp["segment_timeline"] = _finish_segment_trace(seg, start_wall, end_wall)
+            seg = None
+        return resp
+    finally:
+        if seg is not None:
+            _finish_segment_trace(seg, 0.0, 0.0)
 
 def handle_commands(args):
     cmds = args.get("commands", [])
@@ -828,6 +957,11 @@ class ContainerAgent:
         if self._pythonpath:
             cmd.extend(["-e", f"PYTHONPATH={self._pythonpath}"])
         cmd.extend(["-e", f"OPENCLAW_CONTAINER_WORKDIR={self._workdir}"])
+        # Forward the simulate-only segment-timeline toggle into the container.
+        # The collect CLI never sets it, so the collect exec path is unchanged.
+        segment_flag = os.environ.get("OPENCLAW_SEGMENT_TIMELINE")
+        if segment_flag is not None:
+            cmd.extend(["-e", f"OPENCLAW_SEGMENT_TIMELINE={segment_flag}"])
         cmd.extend(
             [
                 self._container_id,
@@ -1099,6 +1233,7 @@ def _trace_tool_response_metadata(resp: dict[str, Any]) -> dict[str, Any]:
         "resource_timeout_policy",
         "resource_virtual_time_s",
         "resource_stall_s",
+        "segment_timeline",
     ):
         if key in resp:
             metadata[key] = resp[key]
