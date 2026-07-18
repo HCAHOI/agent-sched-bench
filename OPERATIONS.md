@@ -229,6 +229,7 @@ PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
     --concurrency 8 \
     --prep-concurrency 8 \
     --replay-speed 20 \
+    --cleanup-images \
     --output-dir traces/fresh-277-segtimeline
 ```
 
@@ -239,8 +240,19 @@ PYTHONPATH=src:. uv run python -m trace_collect.cli simulate \
   `--workers 4 --concurrency 4` if replayed builds (`make`, `pytest`) are
   memory-heavy. `--prep-concurrency` throttles concurrent image builds; keep it
   <= workers to avoid a build-time memory spike.
-- Disk: each fixed image is built once and shared; budget ~2-3 GB for images
-  plus a few MB per trace. Segment telemetry adds only small JSON per exec.
+- Disk (`--cleanup-images` REQUIRED for fresh-277): the fresh-277 corpus has
+  **277 unique ~2.8 GB source images** (one per task), so pulling them all is
+  ~775 GB. `--cleanup-images` skips the up-front global prefetch and instead
+  pulls each task's image on demand, then removes it once no pending session
+  still references it. Resident image footprint is then ~`concurrency` x 3 GB
+  (~24 GB at `--concurrency 8`) plus a few MB per trace, not the full corpus.
+  Segment telemetry adds only small JSON per exec.
+  - WARNING: an earlier version of this runbook claimed "each fixed image is
+    built once and shared; budget ~2-3 GB for images." That estimate was WRONG
+    for fresh-277 — it holds only for shared-image corpora (e.g. a single
+    swe-bench base image). Without `--cleanup-images`, the fresh-277 prefetch
+    stage pulls every unique image up front and fills the disk before a single
+    task replays. Leave `--cleanup-images` OFF only for shared-image corpora.
 - Wall clock: replay re-executes tool commands for real (unaffected by
   `--replay-speed`), so total time is dominated by real tool execution, not the
   20x-accelerated LLM gaps. Budget hours for the full 277, not minutes.

@@ -25,6 +25,7 @@ from agents.science_agent_bench.artifacts import (
     verify_content_inventory,
 )
 from harness.container_image_prep import (
+    drop_cached_fixed_image,
     ensure_fixed_image,
     ensure_source_image,
     fixed_image_name_for,
@@ -860,18 +861,103 @@ def _validate_container_runtime(
         )
 
 
+def _replay_source_image(session: LoadedTraceSession) -> str | None:
+    """Normalized source image a container-mode replay session pulls, if any.
+
+    Terminal-bench registry tasks resolve their image inside the registry
+    harness, so they never expose a host-pullable source image here.
+    """
+    if not _requires_task_container(session):
+        return None
+    if _is_terminal_bench_registry_task(session):
+        return None
+    docker_image = _resolve_docker_image(session)
+    if docker_image is None:
+        return None
+    return normalize_image_reference(docker_image)
+
+
 def _container_source_images(sessions: list[LoadedTraceSession]) -> list[str]:
-    images: set[str] = set()
-    for session in sessions:
-        if not _requires_task_container(session):
-            continue
-        if _is_terminal_bench_registry_task(session):
-            continue
-        docker_image = _resolve_docker_image(session)
-        if docker_image is None:
-            continue
-        images.add(normalize_image_reference(docker_image))
+    images = {
+        image
+        for session in sessions
+        if (image := _replay_source_image(session)) is not None
+    }
     return sorted(images)
+
+
+@dataclass
+class _ImageCleanupState:
+    """Refcount bookkeeping for ``--cleanup-images`` source-image removal.
+
+    ``refcounts`` maps a normalized source image to the number of pending
+    replay sessions that still reference it. Each session decrements its image
+    on finalize; the image is removed once the count reaches zero so per-task
+    unique images do not accumulate on disk during a replay.
+    """
+
+    image_by_instance: dict[str, str]
+    refcounts: dict[str, int]
+    lock: asyncio.Lock
+    container_executable: str | None
+    skipped: int = 0
+
+
+def _build_image_cleanup_state(
+    sessions: list[LoadedTraceSession],
+    *,
+    container_executable: str | None,
+) -> _ImageCleanupState:
+    image_by_instance: dict[str, str] = {}
+    refcounts: dict[str, int] = {}
+    for session in sessions:
+        image = _replay_source_image(session)
+        if image is None:
+            continue
+        image_by_instance[session.run_instance_id] = image
+        refcounts[image] = refcounts.get(image, 0) + 1
+    return _ImageCleanupState(
+        image_by_instance=image_by_instance,
+        refcounts=refcounts,
+        lock=asyncio.Lock(),
+        container_executable=container_executable,
+    )
+
+
+async def _release_source_image(
+    state: _ImageCleanupState,
+    run_instance_id: str,
+) -> None:
+    """Decrement an image's pending refcount and remove it best-effort at zero.
+
+    Callers must invoke this only after the session's container is finalized,
+    so the image is no longer referenced by a running container. Removal
+    failures are logged and counted, never raised (matches the collector's
+    best-effort cleanup semantics).
+    """
+    image = state.image_by_instance.get(run_instance_id)
+    if image is None or state.container_executable is None:
+        return
+    async with state.lock:
+        remaining = state.refcounts.get(image, 0) - 1
+        state.refcounts[image] = remaining
+        should_remove = remaining <= 0
+    if not should_remove:
+        return
+    try:
+        removed = await asyncio.to_thread(
+            remove_image,
+            image,
+            container_executable=state.container_executable,
+        )
+        drop_cached_fixed_image(image)
+        if removed:
+            logger.info("cleanup-images: removed source image %s", image)
+    except Exception as exc:
+        state.skipped += 1
+        logger.warning(
+            "cleanup-images: failed to remove source image %s: %s", image, exc
+        )
 
 
 def _has_container_mode_sessions(sessions: list[LoadedTraceSession]) -> bool:
@@ -2151,6 +2237,7 @@ async def _run_cloud_model_queue(
     resource_monitoring_enabled: bool = True,
     memory_bandwidth_enabled: bool = True,
     monitoring_policy: dict[str, object] | None = None,
+    cleanup_state: _ImageCleanupState | None = None,
 ) -> tuple[list[PreparedTraceSession], list[ReplayTaskStats]]:
     if concurrency < 1:
         raise ValueError("concurrency must be >= 1")
@@ -2251,6 +2338,13 @@ async def _run_cloud_model_queue(
                     if completed_session_count == len(loaded_sessions):
                         stop_workers()
             finally:
+                # Release the source image after finalize (container stopped),
+                # so per-task unique images are removed as soon as no pending
+                # session references them.
+                if cleanup_state is not None and loaded is not None:
+                    await _release_source_image(
+                        cleanup_state, loaded.run_instance_id
+                    )
                 queue.task_done()
 
     worker_results = await asyncio.gather(
@@ -2536,6 +2630,7 @@ async def _run_cloud_model_worker_waves(
     resource_monitoring_enabled: bool,
     memory_bandwidth_enabled: bool,
     monitoring_policy: dict[str, object] | None,
+    cleanup_state: _ImageCleanupState | None = None,
 ) -> tuple[list[WorkerReplayResult], list[ReplayTaskStats]]:
     if workers < 1:
         raise ValueError("workers must be >= 1")
@@ -2607,6 +2702,15 @@ async def _run_cloud_model_worker_waves(
             replay_results.extend(sorted(wave_results, key=lambda item: item.worker_index))
             for result in sorted(wave_results, key=lambda item: item.worker_index):
                 task_stats.extend(result.task_stats)
+            # The wave's containers are finalized in their subprocesses before
+            # the wave returns, so it is safe to release each session's source
+            # image now; refcounts keep images shared across waves alive until
+            # their last wave completes.
+            if cleanup_state is not None:
+                for entry in wave:
+                    await _release_source_image(
+                        cleanup_state, entry.run_instance_id
+                    )
     task_stats.sort(key=lambda stat: stat.manifest_index)
     replay_results.sort(key=lambda item: (item.wave_index, item.worker_index))
     return replay_results, task_stats
@@ -3176,6 +3280,7 @@ async def simulate(
     llm_tpot_ms: float | None = None,
     structured_output: bool = False,
     segment_timeline: bool = True,
+    cleanup_images: bool = False,
 ) -> Path:
     if mode != "cloud_model":
         raise ValueError(f"Unsupported simulate mode: {mode}")
@@ -3233,10 +3338,27 @@ async def simulate(
         has_host_session=any(_is_host_mode(session) for session in loaded_sessions),
     )
     monitoring_policy_dict = monitoring_policy.to_dict()
-    await _prefetch_container_images(
-        loaded_sessions,
-        container_executable=container_executable,
-    )
+    # When --cleanup-images is on, skip the global prefetch: each task pulls its
+    # source image on demand (ensure_fixed_image -> ensure_source_image) and the
+    # image is removed once no pending session references it. Prefetching all
+    # per-task-unique images up front can exceed disk before any task replays.
+    cleanup_state: _ImageCleanupState | None = None
+    if cleanup_images:
+        cleanup_state = _build_image_cleanup_state(
+            loaded_sessions,
+            container_executable=container_executable,
+        )
+        logger.info(
+            "cleanup-images: on-demand pulls with per-task removal for "
+            "%d source image(s) across %d session(s)",
+            len(cleanup_state.refcounts),
+            len(cleanup_state.image_by_instance),
+        )
+    else:
+        await _prefetch_container_images(
+            loaded_sessions,
+            container_executable=container_executable,
+        )
 
     output_path = Path(output_dir)
     if structured_output:
@@ -3268,11 +3390,18 @@ async def simulate(
     )
 
     try:
-        sweep_fixed_images = await _prebuild_sweep_fixed_images(
-            loaded_sessions,
-            output_path=output_path,
-            container_executable=container_executable,
-        )
+        if cleanup_images:
+            # Prebuilding sweep fixed images pulls every source image up front
+            # (ensure_fixed_image is a pull-through passthrough), which defeats
+            # the on-demand cleanup budget; leave it empty so each task pulls
+            # and releases its own image.
+            sweep_fixed_images = {}
+        else:
+            sweep_fixed_images = await _prebuild_sweep_fixed_images(
+                loaded_sessions,
+                output_path=output_path,
+                container_executable=container_executable,
+            )
         run_wall_start = time.monotonic()
         run_id = _build_run_id(mode=mode, model=model, concurrency=concurrency)
         if workers == 1:
@@ -3329,6 +3458,7 @@ async def simulate(
                 resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
+                cleanup_state=cleanup_state,
             )
         else:
             worker_results, task_stats = await _run_cloud_model_worker_waves(
@@ -3348,6 +3478,7 @@ async def simulate(
                 resource_monitoring_enabled=monitoring_policy.per_task_resource_enabled,
                 memory_bandwidth_enabled=monitoring_policy.memory_bandwidth_enabled,
                 monitoring_policy=monitoring_policy_dict,
+                cleanup_state=cleanup_state,
             )
             container_resource_summary = {
                 "status": "disabled",
@@ -3428,5 +3559,10 @@ async def simulate(
         container_resources=container_resource_summary,
         monitoring_policy=monitoring_policy_dict,
     )
+    if cleanup_state is not None:
+        logger.info(
+            "cleanup-images: %d source image removal(s) skipped due to errors",
+            cleanup_state.skipped,
+        )
     logger.info("Simulate complete [%s] -> %s", mode, trace_file)
     return trace_file

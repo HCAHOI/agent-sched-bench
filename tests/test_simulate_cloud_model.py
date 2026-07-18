@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from harness.container_image_prep import normalize_image_reference
 from trace_collect.cli import _run_simulate, parse_simulate_args
 from trace_collect.simulate_manifest import _parse_trace_session_file
 from trace_collect.simulate_outputs import _make_trace_action, _replay_agent_id_for_action
@@ -20,8 +21,10 @@ from trace_collect.simulate_types import (
 )
 from trace_collect.simulate_utils import _resolve_prep_concurrency
 from trace_collect.simulator import (
+    _build_image_cleanup_state,
     _chunk_worker_inputs_by_concurrency,
     _partition_worker_inputs,
+    _release_source_image,
     _run_cloud_model_queue,
     _run_worker_wave_async,
     _source_exec_timeout_s,
@@ -4368,3 +4371,187 @@ def test_tongyi_deepresearch_fixture_is_valid_v5() -> None:
         assert "tool_args" in tool["data"]
         assert "tool_result" in tool["data"]
         assert "duration_ms" in tool["data"]
+
+
+def _cleanup_loaded(
+    tmp_path: Path,
+    task_id: str,
+    *,
+    manifest_index: int,
+    image_name: str | None,
+    execution_environment: str = "container",
+    task_source_kind: str | None = None,
+) -> LoadedTraceSession:
+    task: dict[str, object] = {"instance_id": task_id, "problem_statement": task_id}
+    if image_name is not None:
+        task["image_name"] = image_name
+    if task_source_kind is not None:
+        task["task_source_kind"] = task_source_kind
+    return LoadedTraceSession(
+        source_trace=tmp_path / f"{task_id}.jsonl",
+        task_source=tmp_path / "tasks.json",
+        task_instance_id=task_id,
+        source_action_agent_id=task_id,
+        run_instance_id=task_id,
+        manifest_index=manifest_index,
+        scaffold="generic",
+        metadata={"execution_environment": execution_environment},
+        summary=None,
+        task=task,
+        actions=[],
+        iterations={},
+    )
+
+
+def test_parse_simulate_args_cleanup_images_flag_defaults_off() -> None:
+    default_args = parse_simulate_args(["--manifest", "manifest.yaml"])
+    assert default_args.cleanup_images is False
+    enabled = parse_simulate_args(["--manifest", "manifest.yaml", "--cleanup-images"])
+    assert enabled.cleanup_images is True
+
+
+def test_build_image_cleanup_state_refcounts_shared_and_unique(tmp_path: Path) -> None:
+    sessions = [
+        _cleanup_loaded(tmp_path, "shared-a", manifest_index=0, image_name="repo/shared"),
+        _cleanup_loaded(tmp_path, "shared-b", manifest_index=1, image_name="repo/shared"),
+        _cleanup_loaded(tmp_path, "unique", manifest_index=2, image_name="repo/unique"),
+        # Host-mode session: no source image, excluded from refcounts.
+        _cleanup_loaded(
+            tmp_path,
+            "host",
+            manifest_index=3,
+            image_name=None,
+            execution_environment="host",
+        ),
+        # Terminal-bench registry: image resolves inside the harness, excluded.
+        _cleanup_loaded(
+            tmp_path,
+            "tb",
+            manifest_index=4,
+            image_name="repo/tb",
+            task_source_kind="terminal_bench_registry",
+        ),
+    ]
+
+    state = _build_image_cleanup_state(sessions, container_executable="docker")
+
+    shared = normalize_image_reference("repo/shared")
+    unique = normalize_image_reference("repo/unique")
+    assert state.refcounts == {shared: 2, unique: 1}
+    assert state.image_by_instance == {
+        "shared-a": shared,
+        "shared-b": shared,
+        "unique": unique,
+    }
+
+
+def test_release_source_image_removes_only_when_refcount_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sessions = [
+        _cleanup_loaded(tmp_path, "a", manifest_index=0, image_name="repo/shared"),
+        _cleanup_loaded(tmp_path, "b", manifest_index=1, image_name="repo/shared"),
+    ]
+    state = _build_image_cleanup_state(sessions, container_executable="docker")
+
+    removed: list[str] = []
+
+    def fake_remove_image(image: str, *, container_executable: str) -> bool:
+        removed.append(image)
+        return True
+
+    monkeypatch.setattr("trace_collect.simulator.remove_image", fake_remove_image)
+
+    async def run() -> None:
+        await _release_source_image(state, "a")
+        assert removed == []  # one holder remains
+        await _release_source_image(state, "b")
+
+    asyncio.run(run())
+
+    shared = normalize_image_reference("repo/shared")
+    assert removed == [shared]
+    assert state.refcounts[shared] == 0
+    assert state.skipped == 0
+
+
+def test_release_source_image_is_best_effort_on_remove_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sessions = [
+        _cleanup_loaded(tmp_path, "a", manifest_index=0, image_name="repo/unique"),
+    ]
+    state = _build_image_cleanup_state(sessions, container_executable="docker")
+
+    def boom(image: str, *, container_executable: str) -> bool:
+        raise RuntimeError("docker rm failed")
+
+    monkeypatch.setattr("trace_collect.simulator.remove_image", boom)
+
+    # Must not raise: cleanup failures are logged and counted, never fatal.
+    asyncio.run(_release_source_image(state, "a"))
+    assert state.skipped == 1
+
+
+def test_simulate_cleanup_images_skips_prefetch_and_removes_images(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    task_source = tmp_path / "tasks.json"
+    _write_trace(trace_path, agent_id="task-a", tool_name="write_file")
+    _write_tasks(task_source, "task-a")
+    _patch_simulator_runtime(monkeypatch, tmp_path)
+
+    events: list[tuple[str, str]] = []
+
+    async def recording_prefetch(*_args, **_kwargs) -> None:
+        events.append(("prefetch", ""))
+
+    async def recording_prebuild(*_args, **_kwargs) -> dict[str, str]:
+        events.append(("prebuild", ""))
+        return {}
+
+    async def recording_finalize(prepared) -> None:
+        events.append(("finalize", prepared.loaded.task_instance_id))
+
+    def recording_remove(image: str, *, container_executable: str) -> bool:
+        events.append(("remove", image))
+        return True
+
+    monkeypatch.setattr(
+        "trace_collect.simulator._prefetch_container_images", recording_prefetch
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._prebuild_sweep_fixed_images", recording_prebuild
+    )
+    monkeypatch.setattr(
+        "trace_collect.simulator._finalize_prepared_session", recording_finalize
+    )
+    monkeypatch.setattr("trace_collect.simulator.remove_image", recording_remove)
+
+    asyncio.run(
+        simulate(
+            manifest=_single_trace_manifest(tmp_path, trace_path),
+            task_source=task_source,
+            output_dir=tmp_path / "out",
+            mode="cloud_model",
+            container_executable="docker",
+            replay_speed=100.0,
+            cleanup_images=True,
+        )
+    )
+
+    kinds = [kind for kind, _ in events]
+    # Prefetch / prebuild are skipped entirely under --cleanup-images.
+    assert "prefetch" not in kinds
+    assert "prebuild" not in kinds
+    # The task's source image is removed, and only after its session finalizes.
+    expected_image = normalize_image_reference("swebench-test/task-a")
+    assert ("finalize", "task-a") in events
+    assert ("remove", expected_image) in events
+    assert events.index(("finalize", "task-a")) < events.index(
+        ("remove", expected_image)
+    )

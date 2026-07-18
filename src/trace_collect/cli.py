@@ -315,6 +315,17 @@ def parse_simulate_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--cleanup-images",
+        action="store_true",
+        help=(
+            "Remove each task's source container image once no pending replay "
+            "session references it, and skip the up-front global image prefetch. "
+            "Off by default (shared-image corpora reuse a small set of images); "
+            "turn on for per-task-unique-image corpora where prefetching every "
+            "image would exceed disk."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -482,6 +493,7 @@ def _run_simulate(args: argparse.Namespace) -> None:
         "llm_tpot_ms": args.llm_tpot_ms,
         "structured_output": args.output_dir == "traces/simulate",
         "segment_timeline": args.segment_timeline,
+        "cleanup_images": args.cleanup_images,
     }
 
     sweep_path = Path(args.output_dir) / "throughput_sweep.jsonl"
