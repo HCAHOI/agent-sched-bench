@@ -128,6 +128,11 @@ class FakeTransferBackend:
         ms = (nbytes / (rate_gbps * 1e9)) * 1000.0
         return TransferTiming(bytes_moved=nbytes, milliseconds=ms, num_blocks=len(block_ids))
 
+    # Dedicated per-request retained buffers (pause-save survives eviction and
+    # is NOT recycled into the shared staging pool until the resume-load frees
+    # it). Mirrors the GPU backend's ``save_retained`` / ``load_retained``.
+    retained: dict[str, list[int]] = field(default_factory=dict)
+
     def offload(self, block_ids: list[int]) -> TransferTiming:
         self.offloaded.update(block_ids)
         return self._timing(block_ids, self.offload_gbps)
@@ -138,6 +143,31 @@ class FakeTransferBackend:
             raise ValueError(f"restoring blocks never offloaded: {missing}")
         self.offloaded.difference_update(block_ids)
         return self._timing(block_ids, self.restore_gbps)
+
+    def save_retained(self, request_id: str, block_ids: list[int]) -> TransferTiming:
+        if request_id in self.retained:
+            raise ValueError(f"request {request_id!r} already has a retained save")
+        self.retained[request_id] = list(block_ids)
+        return self._timing(block_ids, self.offload_gbps)
+
+    def load_retained(self, request_id: str, block_ids: list[int]) -> TransferTiming:
+        if request_id not in self.retained:
+            raise ValueError(f"no retained save for request {request_id!r}")
+        saved = self.retained.pop(request_id)  # freed after resume-load
+        if len(saved) != len(block_ids):
+            raise ValueError(
+                f"resume-load block count {len(block_ids)} != saved {len(saved)}"
+            )
+        return self._timing(block_ids, self.restore_gbps)
+
+    def free_retained(self, request_id: str) -> None:
+        """Drop a retained save without loading it.
+
+        Used when the request finishes/aborts while paused, or resumes for
+        free via the local prefix cache (no load needed) -- either way the
+        buffer must not leak. No-op if nothing is retained for the id.
+        """
+        self.retained.pop(request_id, None)
 
 
 def validate_staging_capacity(max_blocks: int, num_blocks: int) -> None:
@@ -200,6 +230,271 @@ def validate_block_ids(num_blocks_in_dim: int, block_ids: list[int]) -> None:
         raise ValueError(
             f"block ids out of range for dim size {num_blocks_in_dim}: {bad}"
         )
+
+
+# --- P4 pause/resume pure logic (scheduler + connector bookkeeping) ---------
+#
+# All GPU-free: the state machine, the delta-only matched-tokens math, the
+# saved-KV registry lifecycle, and the file-based save-confirmation handshake.
+# The vllm-dependent PausableScheduler (scheduler.py) and the connector
+# (gpu.py) are thin wrappers over these, so the correctness-bearing logic is
+# unit tested off-GPU.
+
+
+def cdiv(a: int, b: int) -> int:
+    """Ceiling division (blocks needed to cover ``a`` tokens of ``b``/block)."""
+    if b <= 0:
+        raise ValueError(f"block size must be > 0, got {b}")
+    return -(-a // b)
+
+
+def assert_saved_covers_tokens(num_tokens: int, block_count: int, block_size: int) -> None:
+    """Fail fast unless ``block_count`` blocks exactly cover ``num_tokens``.
+
+    The pause instant's invariant (memo Q4): the KV we save must be exactly the
+    request's ``num_computed_tokens`` -- no more, no less -- or resume mis-slices
+    the sequence. ``block_count`` whole blocks cover ``num_tokens`` iff
+    ``block_count == ceil(num_tokens / block_size)``.
+
+    Raises:
+        ValueError: on non-positive tokens or a block count that under- or
+            over-covers the computed tokens.
+    """
+    if num_tokens <= 0:
+        raise ValueError(f"num_tokens must be > 0 at pause, got {num_tokens}")
+    expected = cdiv(num_tokens, block_size)
+    if block_count != expected:
+        raise ValueError(
+            f"saved {block_count} blocks do not cover {num_tokens} tokens "
+            f"(expected {expected} at block_size {block_size})"
+        )
+
+
+def resume_load_block_ids(new_block_ids: list[int], saved_block_count: int) -> list[int]:
+    """Slice the scheduler's full prefix block set down to the saved blocks.
+
+    v0.11.2's ``update_state_after_alloc`` hands the connector the FULL prefix
+    block set (``new_computed_blocks + new_blocks``), not just the external
+    delta. Because the pause save is confirmed 1+ steps AFTER the pause trigger
+    (the save-confirm lag -- see P4_EVICTION_DESIGN.md appendix), the request
+    keeps running for that lag and can accrue extra computed tokens the save
+    never covered. When that lag's suffix crosses a block boundary,
+    ``len(new_block_ids) > saved_block_count`` -- the retained buffer only holds
+    the saved prefix, so the resume-load must use only its first
+    ``saved_block_count`` blocks; the scheduler recomputes the remaining
+    (unsaved) suffix into the rest on its own.
+
+    Raises:
+        ValueError: if the scheduler allocated FEWER blocks than the save
+            covers -- that would mean the connector is about to under-load,
+            not a lag artifact.
+    """
+    if len(new_block_ids) < saved_block_count:
+        raise ValueError(
+            f"scheduler allocated {len(new_block_ids)} blocks, fewer than the "
+            f"{saved_block_count} blocks the pause-save covers"
+        )
+    return new_block_ids[:saved_block_count]
+
+
+def matched_tokens_delta(saved_tokens: int, num_local_computed: int) -> int:
+    """Extra tokens the connector supplies BEYOND the local prefix-cache hit.
+
+    ``get_num_new_matched_tokens`` must return only tokens beyond
+    ``num_local_computed`` (scheduler.py:457) or the scheduler double-allocates
+    (memo Q2 self-hit). Under low pressure the request's own just-freed blocks
+    are still prefix-cached, so ``num_local_computed`` can already cover the
+    whole save -> delta 0 (resume for free); under real pressure the delta is
+    the whole save.
+    """
+    if saved_tokens < 0 or num_local_computed < 0:
+        raise ValueError("token counts must be >= 0")
+    return max(0, saved_tokens - num_local_computed)
+
+
+@dataclass
+class PauseBook:
+    """Scheduler-side pause state machine (memo Q3 hold-set).
+
+    A request moves RUNNING -> ``pausing`` (save emitted, blocks NOT yet freed)
+    -> ``paused`` (save confirmed, blocks freed, held in no queue) -> resumed.
+    Both dicts map ``request_id -> num_computed_tokens`` captured at the pause
+    instant; the value is what resume restores as the saved token count. The
+    dicts double as the fail-fast bookkeeping (double-pause / resume-unknown
+    raise).
+    """
+
+    pausing: dict[str, int] = field(default_factory=dict)
+    paused: dict[str, int] = field(default_factory=dict)
+    # RESUME arrived while still pausing (save not yet confirmed) -- honored
+    # immediately after confirm_saved instead of being dropped (memo Q3: a
+    # dropped RESUME here would hang the request paused forever).
+    resume_deferred: set[str] = field(default_factory=set)
+
+    def mark_pausing(self, request_id: str, num_computed_tokens: int) -> None:
+        if request_id in self.pausing or request_id in self.paused:
+            raise ValueError(f"request {request_id!r} already pausing/paused")
+        if num_computed_tokens <= 0:
+            raise ValueError(f"cannot pause with {num_computed_tokens} computed tokens")
+        self.pausing[request_id] = num_computed_tokens
+
+    def confirm_saved(self, request_id: str) -> int:
+        """pausing -> paused; return the captured token count (blocks now free)."""
+        if request_id not in self.pausing:
+            raise ValueError(f"request {request_id!r} is not pausing")
+        n = self.pausing.pop(request_id)
+        self.paused[request_id] = n
+        return n
+
+    def resume(self, request_id: str) -> int:
+        """paused -> resumed; return the captured token count to restore."""
+        if request_id not in self.paused:
+            raise ValueError(f"request {request_id!r} is not paused")
+        return self.paused.pop(request_id)
+
+    def is_pausing(self, request_id: str) -> bool:
+        return request_id in self.pausing
+
+    def is_paused(self, request_id: str) -> bool:
+        return request_id in self.paused
+
+    def defer_resume(self, request_id: str) -> None:
+        """Record that a RESUME arrived while ``request_id`` is still pausing."""
+        if request_id not in self.pausing:
+            raise ValueError(f"request {request_id!r} is not pausing")
+        self.resume_deferred.add(request_id)
+
+    def pop_deferred_resume(self, request_id: str) -> bool:
+        """True (and clears) if a RESUME was deferred AND the save is confirmed.
+
+        Gated on ``is_paused`` rather than trusting the caller's ordering: if
+        this were called while still ``pausing``, popping the flag now and
+        returning True would make the caller's `resume_request` no-op (still
+        pausing, not paused) and the deferred RESUME would be lost for good --
+        the exact hang this mechanism exists to prevent. Left set until the
+        save actually confirms, so a premature poll is a safe no-op, not a
+        silent drop.
+        """
+        if request_id in self.resume_deferred and self.is_paused(request_id):
+            self.resume_deferred.discard(request_id)
+            return True
+        return False
+
+    def drop_finished(self, finished_ids: object) -> None:
+        """Liveness: a request that finished between trigger and pause is gone.
+
+        Same rule as the connector's ``_drop_finished`` -- silently forget any
+        finished id in either state so a stale entry never drives a free/resume
+        against reassigned blocks.
+        """
+        for req_id in finished_ids or ():
+            self.pausing.pop(req_id, None)
+            self.paused.pop(req_id, None)
+            self.resume_deferred.discard(req_id)
+
+
+@dataclass
+class SavedKVRegistry:
+    """Connector-side host registry of saved KV (memo item 3).
+
+    Maps ``request_id -> (num_tokens_saved, block_count)``. ``register`` is
+    called when the pause-save directive is emitted; ``matched_tokens`` answers
+    ``get_num_new_matched_tokens`` delta-only; ``record_resume_blocks`` stashes
+    the freshly allocated block ids the worker must load into on resume; ``drop``
+    forgets the request once the resume-load has been emitted.
+    """
+
+    saved: dict[str, tuple[int, int]] = field(default_factory=dict)
+    resume_blocks: dict[str, list[int]] = field(default_factory=dict)
+
+    def register(self, request_id: str, num_tokens_saved: int, block_count: int) -> None:
+        if num_tokens_saved <= 0 or block_count <= 0:
+            raise ValueError("saved token/block counts must be > 0")
+        self.saved[request_id] = (num_tokens_saved, block_count)
+
+    def is_saved(self, request_id: str) -> bool:
+        return request_id in self.saved
+
+    def matched_tokens(self, request_id: str, num_local_computed: int) -> tuple[int, bool]:
+        """Return ``(delta, load_async)`` for a resuming request, else ``(0, False)``.
+
+        Only known (previously paused) request_ids match; everything else falls
+        through to ``(0, False)`` exactly like the base connector. ``load_async``
+        is False -- the spike uses the synchronous resume-load path.
+        """
+        if request_id not in self.saved:
+            return 0, False
+        saved_tokens, _ = self.saved[request_id]
+        return matched_tokens_delta(saved_tokens, num_local_computed), False
+
+    def record_resume_blocks(self, request_id: str, block_ids: list[int]) -> None:
+        if request_id not in self.saved:
+            raise ValueError(f"resume blocks for unknown saved request {request_id!r}")
+        self.resume_blocks[request_id] = list(block_ids)
+
+    def drop(self, request_id: str) -> None:
+        self.saved.pop(request_id, None)
+        self.resume_blocks.pop(request_id, None)
+
+
+class SaveConfirmationReader:
+    """Worker -> scheduler pause-save confirmation over the timing JSONL.
+
+    The worker appends a ``{"phase": "pause_saved", "request_id": ...}`` row
+    after a synchronous pause-save completes; the scheduler polls this reader
+    each step for newly confirmed request ids. A line cursor makes ``poll``
+    return only rows appended since the previous call. This is the simplest
+    correct handshake given a synchronous save (memo: upgrade path is the async
+    saved-set returned in KVConnectorOutput, consumed like finished_sending).
+
+    ponytail: re-reads the whole file and slices past the cursor each poll --
+    fine for a spike (steps ~10 ms, file is tiny); switch to the async saved-set
+    if it ever shows up in scheduler-step time.
+    """
+
+    CONFIRM_PHASE = "pause_saved"
+
+    def __init__(self, timing_path: str):
+        self._path = timing_path
+        self._cursor = 0
+
+    def poll(self) -> set[str]:
+        from pathlib import Path
+
+        p = Path(self._path)
+        if not p.exists():
+            return set()
+        lines = p.read_text().splitlines()
+        new = lines[self._cursor :]
+        self._cursor = len(lines)
+        confirmed: set[str] = set()
+        for line in new:
+            if not line:
+                continue
+            row = json.loads(line)
+            if row.get("phase") == self.CONFIRM_PHASE and row.get("request_id"):
+                confirmed.add(row["request_id"])
+        return confirmed
+
+
+@dataclass
+class PauseResult:
+    """One pause/resume cycle in the ``--scenario pause`` run.
+
+    ``identical`` is the GPU-only unknown the memo flags (risk #2): whether the
+    greedy continuation after pause/resume is token-for-token identical to an
+    uninterrupted run of the same prompt+seed -- i.e. loading the saved KV is
+    bit-faithful, not merely close.
+    """
+
+    tool_duration_s: float
+    blocks_freed: int
+    pause_to_freed_ms: float
+    resume_to_first_token_ms: float
+    identical: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass

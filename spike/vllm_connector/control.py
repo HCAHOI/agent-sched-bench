@@ -21,11 +21,21 @@ from pathlib import Path
 
 
 class OffloadPhase(str, enum.Enum):
-    """What the connector should do with the target request's KV blocks."""
+    """What the connector / scheduler should do with the target request's KV.
+
+    OFFLOAD/RESTORE drive the W1 *copy-only* scenario (connector reads this
+    file directly). PAUSE/RESUME drive the P4 *evict* scenario and are consumed
+    by :class:`PausableScheduler` (which then pokes the connector in-process) --
+    a PAUSE saves the KV, frees the blocks, and holds the request out of every
+    queue until a RESUME reallocates + reloads it. Same atomic-rename channel,
+    zero new IPC.
+    """
 
     RESIDENT = "resident"  # blocks live on GPU, no action
     OFFLOAD = "offload"  # copy target blocks GPU -> host, then mark offloaded
     RESTORE = "restore"  # copy target blocks host -> GPU, then mark resident
+    PAUSE = "pause"  # save KV -> evict blocks -> hold (scheduler-driven)
+    RESUME = "resume"  # reallocate -> load saved KV -> continue generation
 
 
 @dataclass
@@ -93,6 +103,12 @@ class OffloadControl:
 
     def request_restore(self, request_id: str) -> ControlState:
         return self._transition(request_id, OffloadPhase.RESTORE)
+
+    def request_pause(self, request_id: str) -> ControlState:
+        return self._transition(request_id, OffloadPhase.PAUSE)
+
+    def request_resume(self, request_id: str) -> ControlState:
+        return self._transition(request_id, OffloadPhase.RESUME)
 
     def clear(self) -> ControlState:
         return self._transition(None, OffloadPhase.RESIDENT)

@@ -318,3 +318,85 @@ Recommendation: A, with hold-set encoding and synchronous save in v1.
 - vllm/v1/request.py:223-243                — RequestStatus (PREEMPTED)
 - vllm/v1/core/kv_cache_manager.py:335-343  — free() keeps request alive
 - vllm/v1/core/kv_cache_manager.py:176-192  — get_computed_blocks/self-hit
+
+## Implementation notes (lane C, appended 2026-07-18 — memo body unchanged)
+
+Built per this memo. Files: `spike/vllm_connector/scheduler.py` (new),
+`spike/vllm_connector/{control,core,gpu}.py`, `spike/run_spike.py`
+(`--scenario pause`), `tests/test_vllm_connector_spike_logic.py`. CPU suite +
+ruff green without vllm; GPU-verified next rental (checklist below).
+
+**Deviation 1 (the only material one): NO fork patch.** The memo assumed a fork
+of `v1/core/sched/scheduler.py`. v0.11.2 injects a custom scheduler BY CONFIG,
+so `PausableScheduler(Scheduler)` lives in OUR repo, zero forked/vendored files.
+Evidence: `SchedulerConfig.scheduler_cls: str | type[object] | None` ("Can be a
+class directly or the path to a class of form 'mod.custom_class'"),
+`get_scheduler_cls()`→`resolve_obj_by_qualname`; `EngineCore` does
+`vllm_config.scheduler_config.get_scheduler_cls()(...)`; surfaced via
+`EngineArgs.scheduler_cls`. Selected with
+`scheduler_cls="spike.vllm_connector.scheduler.PausableScheduler"`. Strictly
+cleaner than a fork and it rides the same `<0.12` pin. `force_preempt` still
+mirrors the free primitive (:321-324) exactly, minus the `waiting.prepend`.
+
+**Deviation 2 (minor): save-confirm channel is the timing file, not a new set.**
+The v1 synchronous save is confirmed worker→scheduler by a `pause_saved` row the
+worker appends to the timing JSONL it already writes; the scheduler polls it with
+a line cursor (`SaveConfirmationReader`). Zero new IPC. Upgrade path unchanged:
+the async saved-set in `KVConnectorOutput`, consumed like `finished_sending`.
+
+**Resume recomputes a lag-bounded suffix (documented, not a bug).** The 2-phase
+pause keeps the request RUNNING across the PAUSE step and however many steps the
+synchronous save-confirm takes (memo "save-before-free") — this save-confirm lag
+is USUALLY one step but is NOT bounded to exactly one token (chunked prefill /
+batching can advance more than one token per step). Whatever tokens accrue
+during the lag were never in the save, so on resume `num_computed_tokens` is
+restored only to the pause-instant count; the scheduler recomputes the lag
+suffix from the bit-identical saved prefix — correct, and preserves greedy
+logit-identity. The fail-fast `assert_saved_covers_tokens` pins "saved == n_c_t
+at pause instant." The upgrade path (async saved-set in `KVConnectorOutput`,
+confirmed the same step the save is queued) shrinks this lag toward zero.
+
+**Resume path uses the matched-tokens seam, not a directive-from-control.** On
+RESUME the scheduler moves the held request to `waiting`; the stock :447 gate →
+`get_num_new_matched_tokens` (delta-only, keyed on request_id) → `allocate_slots`
+→ `update_state_after_alloc` (queues the resume-load) drives the H2D load.
+Retained pause-saves use a dedicated pinned buffer per request (out of the
+staging pool), freed after the resume-load or, if the request never needs one
+(a finish-while-paused abort, or a free self-hit resume where the local prefix
+cache already covers the save), by an explicit `release` directive.
+
+**Reviewer fix: `update_state_after_alloc` receives the FULL prefix block set,
+not just the delta.** v0.11.2 passes `new_computed_blocks + new_blocks`, so when
+the save-confirm lag's suffix crosses a block boundary,
+`len(new_block_ids) > saved_block_count` — the retained buffer only covers the
+saved prefix. `resume_load_block_ids` (core.py) slices the resume-load to the
+first `saved_block_count` blocks; the scheduler's own allocation owns the
+recomputed suffix in the rest. A CPU regression test
+(`test_resume_load_block_ids_slices_boundary_crossing_suffix`) exercises the
+boundary-crossing case directly.
+
+**GPU-session checklist (validate lane C):**
+1. `uv pip install -e '.[serving-spike]'`; confirm `scheduler_cls` string
+   resolves (engine boots with `PausableScheduler`, not the stock one).
+2. `--scenario pause` single-tenant first: confirm `pause_events.jsonl` shows
+   `pausing`→`freed`, `blocks_freed>0`, and generation continues post-resume.
+3. **Logit-identity**: `identical: true` in the JSON (greedy). This is memo risk
+   #2 — the GPU-only unknown: loading saved KV is bit-faithful, not just close.
+   If false, inspect the lag-suffix recompute (above) and `--block-dim`.
+4. Multi-tenant: under real memory pressure, confirm the freed blocks admit a
+   co-tenant during the tool window, then resume restores the agent (memo build
+   -plan row 5). Watch `pause_to_freed_ms` and `resume_to_first_token_ms`.
+5. Confirm `finished_req_ids` prunes both the connector table and the scheduler's
+   pause sets (liveness) — kill a load request mid-pause and check no crash.
+6. `--transfer-mode staged` vs the sync retained save: the retained save is
+   deliberately synchronous (strided-style) even in staged mode; verify it does
+   not stall co-tenant ITL beyond the one-off budget.
+7. RESUME-during-save-in-flight: fire RESUME immediately after PAUSE (before the
+   `pause_saved` confirmation lands) and confirm the request still resumes —
+   `PauseBook.defer_resume`/`pop_deferred_resume` should honor it right after
+   `force_preempt`, not drop it (reviewer fix, was a hang-forever bug).
+8. Retained-buffer leak check: finish a load request mid-pause and confirm its
+   pinned buffer is released (`release` directive, `CudaBlockTransfer.
+   free_retained`); separately, drive a low-pressure run where the resumed
+   request's tokens are already prefix-cache-local (`num_external_tokens==0`)
+   and confirm the buffer is released there too, not just on a real load.

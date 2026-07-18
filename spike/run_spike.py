@@ -31,7 +31,13 @@ import time
 from pathlib import Path
 
 from spike.vllm_connector.control import OffloadControl
-from spike.vllm_connector.core import RepetitionResult, SpikeReport, TransferTiming, env_info
+from spike.vllm_connector.core import (
+    PauseResult,
+    RepetitionResult,
+    SpikeReport,
+    TransferTiming,
+    env_info,
+)
 from spike.vllm_connector.gpu import vllm_version
 
 # A long, low-entropy prompt so the agent request holds many KV blocks worth
@@ -43,6 +49,18 @@ _LOAD_PROMPT = "Count slowly and explain each step.\n"
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="meta-llama/Llama-3.1-8B")
+    p.add_argument(
+        "--scenario",
+        choices=["offload", "pause"],
+        default="offload",
+        help=(
+            "'offload' (default, W1): copy KV GPU<->host mid tool-call, measure "
+            "transfer path + co-tenant interference (blocks NOT freed). 'pause' "
+            "(P4): save KV -> EVICT blocks -> hold -> resume, via PausableScheduler; "
+            "reports pause_to_freed_ms, resume_to_first_token_ms, blocks_freed, and "
+            "a greedy logit-identity check of the resumed continuation."
+        ),
+    )
     p.add_argument("--num-load", type=int, default=8, help="co-running load requests")
     p.add_argument("--repetitions", type=int, default=5)
     p.add_argument("--tool-duration-s", type=float, default=3.0)
@@ -133,8 +151,13 @@ def _gpu_env_info() -> dict[str, object]:
     return info
 
 
-def make_engine(args: argparse.Namespace, control_path: str, timing_path: str):
-    """Construct the vLLM async engine wired to the offload connector."""
+def make_engine(args: argparse.Namespace, control_path: str, timing_path: str, events_path: str):
+    """Construct the vLLM async engine wired to the offload connector.
+
+    For ``--scenario pause`` the async engine ALSO injects our
+    :class:`PausableScheduler` by config (``scheduler_cls``, a v0.11.2 seam --
+    no forked vLLM file). The offload scenario keeps the stock scheduler.
+    """
     from vllm import AsyncEngineArgs, AsyncLLMEngine
     from vllm.config import KVTransferConfig
     from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
@@ -151,18 +174,25 @@ def make_engine(args: argparse.Namespace, control_path: str, timing_path: str):
         kv_connector_extra_config={
             "control_path": control_path,
             "timing_path": timing_path,
+            "pause_events_path": events_path,
             "block_dim": args.block_dim,
             "transfer_mode": args.transfer_mode,
             "max_blocks": args.staging_max_blocks,
             "chunk_bytes": args.chunk_bytes,
         },
     )
+    engine_kwargs: dict = {}
+    if args.scenario == "pause":
+        # Config-injected custom scheduler; spec decode is off by default in
+        # this config (memo: cleaner for a paused request).
+        engine_kwargs["scheduler_cls"] = "spike.vllm_connector.scheduler.PausableScheduler"
     engine_args = AsyncEngineArgs(
         model=args.model,
         gpu_memory_utilization=args.gpu_memory_utilization,
         kv_transfer_config=kv_cfg,
         seed=args.seed,
         enforce_eager=True,  # deterministic timing; skip cudagraph capture
+        **engine_kwargs,
     )
     return AsyncLLMEngine.from_engine_args(engine_args)
 
@@ -202,10 +232,11 @@ async def run(args: argparse.Namespace) -> SpikeReport:
     Path(args.control_dir).mkdir(parents=True, exist_ok=True)
     control_path = str(Path(args.control_dir) / "control.json")
     timing_path = str(Path(args.control_dir) / "timings.jsonl")
+    events_path = str(Path(args.control_dir) / "pause_events.jsonl")
     Path(timing_path).unlink(missing_ok=True)
 
     control = OffloadControl(control_path)
-    engine = make_engine(args, control_path, timing_path)
+    engine = make_engine(args, control_path, timing_path, events_path)
     rng = random.Random(args.seed)
 
     reps: list[RepetitionResult] = []
@@ -272,6 +303,132 @@ async def run(args: argparse.Namespace) -> SpikeReport:
     )
 
 
+async def _drain_capture(
+    engine, prompt: str, request_id: str, max_tokens: int, seed: int
+) -> tuple[list[int], list[float]]:
+    """Like ``_drain`` but also return the full generated token-id list.
+
+    Greedy (temperature=0.0), so the token ids are deterministic for a given
+    prompt -- the logit-identity check compares a paused/resumed run's ids
+    against an uninterrupted run's ids (memo risk #2: is loading saved KV
+    bit-faithful?).
+    """
+    from vllm import SamplingParams
+
+    params = SamplingParams(max_tokens=max_tokens, temperature=0.0, seed=seed)
+    stamps: list[float] = []
+    token_ids: list[int] = []
+    prev = 0
+    async for out in engine.generate(prompt, params, request_id):
+        ids = list(out.outputs[0].token_ids)
+        if len(ids) > prev:
+            stamps.append(time.perf_counter())
+            prev = len(ids)
+        token_ids = ids
+    return token_ids, stamps
+
+
+def _read_events(events_path: str, request_id: str) -> dict[str, dict]:
+    """Latest pause event per phase for ``request_id`` (phase -> row)."""
+    if not Path(events_path).exists():
+        return {}
+    latest: dict[str, dict] = {}
+    for line in Path(events_path).read_text().splitlines():
+        if not line:
+            continue
+        row = json.loads(line)
+        if row.get("request_id") == request_id:
+            latest[row["phase"]] = row
+    return latest
+
+
+async def run_pause(args: argparse.Namespace) -> dict:
+    """--scenario pause: save KV -> EVICT -> hold -> resume, with measurement.
+
+    (1) Uninterrupted control run of the agent prompt (greedy) captures the
+        reference continuation. (2) A second run pauses the agent mid-stream
+        under co-tenant load, waits ``tool_duration_s`` (the simulated tool
+        call), resumes, and captures the continuation. Reports pause->freed
+        latency + blocks freed (from the scheduler's event log), resume->first
+        -token latency, and whether the two continuations are token-identical.
+    """
+    Path(args.control_dir).mkdir(parents=True, exist_ok=True)
+    control_path = str(Path(args.control_dir) / "control.json")
+    timing_path = str(Path(args.control_dir) / "timings.jsonl")
+    events_path = str(Path(args.control_dir) / "pause_events.jsonl")
+    Path(timing_path).unlink(missing_ok=True)
+    Path(events_path).unlink(missing_ok=True)
+
+    control = OffloadControl(control_path)
+    engine = make_engine(args, control_path, timing_path, events_path)
+
+    # (1) Reference: uninterrupted greedy run, no pause, no load.
+    control_tokens, _ = await _drain_capture(
+        engine, _AGENT_PROMPT, "agent-control", args.max_tokens, args.seed
+    )
+
+    # (2) Pause run: agent + co-tenant load, paused mid-stream.
+    agent_id = "agent-pause"
+    load_tasks = [
+        asyncio.create_task(
+            _drain(engine, _LOAD_PROMPT, f"load-{i}", args.max_tokens, args.seed + i)
+        )
+        for i in range(args.num_load)
+    ]
+    agent_task = asyncio.create_task(
+        _drain_capture(engine, _AGENT_PROMPT, agent_id, args.max_tokens, args.seed)
+    )
+    await asyncio.sleep(0.5)  # let the agent accumulate KV
+    control.request_pause(agent_id)
+    await asyncio.sleep(args.tool_duration_s)  # the simulated tool call
+    t_resume = time.perf_counter()
+    control.request_resume(agent_id)
+
+    pause_tokens, stamps = await agent_task
+    await asyncio.gather(*load_tasks)
+    control.clear()
+
+    events = _read_events(events_path, agent_id)
+    if "pausing" not in events or "freed" not in events:
+        raise RuntimeError(
+            f"pause seam did not fire: events={sorted(events)} "
+            "(no save-confirm/free) -- see README pause section"
+        )
+    pause_to_freed_ms = (events["freed"]["t"] - events["pausing"]["t"]) * 1000.0
+    blocks_freed = int(events["freed"]["blocks_freed"])
+
+    post_resume = [s for s in stamps if s >= t_resume]
+    if not post_resume:
+        raise RuntimeError(
+            "no token generated after resume -- raise --max-tokens so the agent "
+            "still has tokens to emit post-resume"
+        )
+    resume_to_first_token_ms = (post_resume[0] - t_resume) * 1000.0
+
+    result = PauseResult(
+        tool_duration_s=args.tool_duration_s,
+        blocks_freed=blocks_freed,
+        pause_to_freed_ms=pause_to_freed_ms,
+        resume_to_first_token_ms=resume_to_first_token_ms,
+        identical=pause_tokens == control_tokens,
+    )
+    return {
+        "model": args.model,
+        "vllm_version": vllm_version(),
+        "scenario": "pause",
+        "kv_seam": (
+            "PausableScheduler(scheduler_cls) force_preempt+hold + connector "
+            "get_num_new_matched_tokens/save_retained/load_retained"
+        ),
+        "num_load_requests": args.num_load,
+        "env": {**env_info(), **_gpu_env_info()},
+        "pause": result.to_dict(),
+        # Provenance for the identity check: greedy, so seed does not alter ids.
+        "reference_num_tokens": len(control_tokens),
+        "resumed_num_tokens": len(pause_tokens),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     # Any failure -- notably vLLM EngineDeadError surfacing through the awaited
@@ -279,12 +436,16 @@ def main(argv: list[str] | None = None) -> int:
     # bare `asyncio.run(...)` had let a swallowed error still exit 0, marking a
     # broken run as a clean spike. Catch, report, and fail loudly instead.
     try:
-        report = asyncio.run(run(args))
+        if args.scenario == "pause":
+            payload = asyncio.run(run_pause(args))
+            text = json.dumps(payload, indent=2)
+        else:
+            text = asyncio.run(run(args)).to_json()
     except Exception as exc:  # noqa: BLE001 - top-level guard, re-report and exit
         print(f"spike run failed: {exc!r}", file=sys.stderr)
         return 1
-    Path(args.output).write_text(report.to_json())
-    print(report.to_json())
+    Path(args.output).write_text(text)
+    print(text)
     return 0
 
 

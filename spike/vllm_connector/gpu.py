@@ -24,8 +24,11 @@ from typing import TYPE_CHECKING, Any
 
 from .control import OffloadControl, OffloadPhase
 from .core import (
+    SavedKVRegistry,
     TransferTiming,
+    assert_saved_covers_tokens,
     chunk_ranges,
+    resume_load_block_ids,
     validate_block_ids,
     validate_staging_capacity,
 )
@@ -58,15 +61,27 @@ if TYPE_CHECKING:  # pragma: no cover
 
 @dataclass
 class SelectiveOffloadMeta(KVConnectorMetadata):  # type: ignore[misc,valid-type]
-    """Per-step connector metadata: the offload/restore directive, if any.
+    """Per-step connector metadata: the offload/restore/pause/resume directives.
 
     Built in ``build_connector_meta`` (scheduler process), delivered to
     ``start_load_kv`` (worker process) via vLLM's own metadata-passing --
     verify on the box that a single step's metadata always makes it to the
     worker that executes it (README risk).
+
+    Each directive is ``(phase, request_id, block_ids)``. ``phase`` is one of
+    ``offload`` / ``restore`` (W1 copy scenario), ``pause`` / ``resume`` (P4
+    evict scenario), or ``release`` (P4 cleanup: drop a retained buffer without
+    loading it -- finish-while-paused or a free self-hit resume; ``block_ids``
+    is unused/empty for ``release``). ``request_id`` keys the worker's
+    per-request retained pinned buffer for pause/resume/release.
     """
 
-    directives: list[tuple[str, list[int]]] = field(default_factory=list)
+    directives: list[tuple[str, str, list[int]]] = field(default_factory=list)
+
+
+# Internal directive phase for dropping a retained buffer without loading it
+# (not an OffloadControl-facing phase -- never appears on the control file).
+_RELEASE = "release"
 
 
 def vllm_version() -> str | None:
@@ -175,6 +190,9 @@ class CudaBlockTransfer:
         # host staging (reused every transfer).
         self._host: dict[str, torch.Tensor] = {}
         self._dev_stage: dict[str, torch.Tensor] = {}
+        # Per-request retained pinned buffers for pause/resume (NOT recycled
+        # into the staging pool): request_id -> {layer_name: pinned host tensor}.
+        self._retained: dict[str, dict[str, torch.Tensor]] = {}
         self._stream: torch.cuda.Stream | None = None
         if mode == "staged":
             self._stream = torch.cuda.Stream()
@@ -289,6 +307,85 @@ class CudaBlockTransfer:
     def restore(self, block_ids: list[int]) -> TransferTiming:
         return self.begin(block_ids, to_host=False).wait()
 
+    # --- pause/resume: dedicated retained buffers ------------------------
+    # A pause-save must SURVIVE eviction until the matching resume-load, so it
+    # cannot reuse the recycled staging buffer (a co-tenant's next offload would
+    # overwrite it). Each paused request gets its own pinned host buffer, freed
+    # only after its resume-load. The copy is SYNCHRONOUS (blocking) regardless
+    # of ``mode`` -- a pause-save is a rare, one-off event allowed to cost the
+    # full ~10-72 ms once (memo), so correctness over overlap here.
+
+    def save_retained(self, request_id: str, block_ids: list[int]) -> TransferTiming:
+        if request_id in self._retained:
+            raise ValueError(f"request {request_id!r} already has a retained save")
+        if not block_ids:
+            raise ValueError("refusing to save zero blocks")
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()
+        start.record()
+        buf: dict[str, "torch.Tensor"] = {}
+        for name, dev in self.kv_caches.items():
+            dev_f = self._fronted(dev)
+            validate_block_ids(dev_f.shape[0], block_ids)
+            host = torch.empty(
+                (len(block_ids), *dev_f.shape[1:]),
+                dtype=dev_f.dtype,
+                device="cpu",
+                pin_memory=True,
+            )
+            idx = torch.tensor(block_ids, device=dev.device, dtype=torch.long)
+            host.copy_(torch.index_select(dev_f, 0, idx), non_blocking=True)
+            buf[name] = host
+        end.record()
+        torch.cuda.synchronize()
+        self._retained[request_id] = buf
+        ms = start.elapsed_time(end)
+        return TransferTiming(
+            bytes_moved=len(block_ids) * self._bytes_per_block(),
+            milliseconds=ms,
+            num_blocks=len(block_ids),
+        )
+
+    def load_retained(self, request_id: str, block_ids: list[int]) -> TransferTiming:
+        if request_id not in self._retained:
+            raise ValueError(f"no retained save for request {request_id!r}")
+        buf = self._retained[request_id]
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()
+        start.record()
+        for name, dev in self.kv_caches.items():
+            dev_f = self._fronted(dev)
+            validate_block_ids(dev_f.shape[0], block_ids)
+            host = buf[name]
+            if host.shape[0] != len(block_ids):
+                raise ValueError(
+                    f"resume-load {len(block_ids)} blocks != saved {host.shape[0]} "
+                    f"for request {request_id!r} (self-hit partial-resume is an "
+                    "untested low-pressure edge; target regime is full-delta)"
+                )
+            idx = torch.tensor(block_ids, device=dev.device, dtype=torch.long)
+            dev_f.index_copy_(0, idx, host.to(dev.device, non_blocking=True))
+        end.record()
+        torch.cuda.synchronize()
+        del self._retained[request_id]  # free the pinned buffer post-resume
+        ms = start.elapsed_time(end)
+        return TransferTiming(
+            bytes_moved=len(block_ids) * self._bytes_per_block(),
+            milliseconds=ms,
+            num_blocks=len(block_ids),
+        )
+
+    def free_retained(self, request_id: str) -> None:
+        """Drop a retained pause-save without loading it.
+
+        Used when the paused request finishes/aborts, or resumes for free via
+        the local prefix cache (no load needed) -- either way the pinned
+        buffer must not leak. No-op if nothing is retained for the id.
+        """
+        self._retained.pop(request_id, None)
+
 
 class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-type]
     """Externally-triggered selective KV offload for one target request.
@@ -328,13 +425,19 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         self._mode = str(extra.get("transfer_mode", "staged"))
         self._max_blocks = int(extra.get("max_blocks", 128))
         self._chunk_bytes = int(extra.get("chunk_bytes", 0))
+        self._block_size = int(vllm_config.cache_config.block_size)
         self._role = role
         self._last_epoch = -1
         self._block_ids: dict[str, list[int]] = {}
         self._transfer: CudaBlockTransfer | None = None
         # Transfers kicked in start_load_kv, drained (timed + recorded) in
-        # wait_for_save so start_load_kv never blocks the worker step.
+        # wait_for_save / get_finished so start_load_kv never blocks the worker.
         self._pending: list[tuple[str, Any]] = []
+        # P4 pause/resume (scheduler side): saved-KV registry + a queue of
+        # directives the scheduler asked for (pause-save / resume-load) that
+        # build_connector_meta drains into the next step's metadata.
+        self._saved = SavedKVRegistry()
+        self._queued: list[tuple[str, str, list[int]]] = []
 
     # --- worker side -----------------------------------------------------
     def register_kv_caches(self, kv_caches: dict[str, "torch.Tensor"]) -> None:
@@ -347,15 +450,34 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         )
 
     def start_load_kv(self, forward_context: Any, **kwargs: Any) -> None:
-        # Kick any offload/restore directives the scheduler queued for this
-        # step onto the transfer stream and return immediately -- do NOT block
-        # the worker step behind the copy. Timing is read later in
-        # wait_for_save. Runs in the worker process where the KV tensors live.
+        # Execute the directives the scheduler queued for this step. Runs in the
+        # worker process where the KV tensors live.
+        #   offload/restore -- kicked async onto the transfer stream, drained in
+        #     wait_for_save / get_finished (do NOT block the worker step).
+        #   pause  -- SYNCHRONOUS save into a dedicated retained buffer, then
+        #     append a pause_saved confirmation the scheduler polls (memo: the
+        #     one-off save is allowed to cost the full transfer once).
+        #   resume -- SYNCHRONOUS load from the retained buffer into the freshly
+        #     allocated blocks, so the KV is present before this step's forward.
+        #   release -- drop a retained buffer with no transfer at all (P4
+        #     cleanup: finish-while-paused or a free self-hit resume).
         meta = self._get_connector_metadata()
-        for phase, block_ids in meta.directives:  # type: ignore[attr-defined]
+        for phase, request_id, block_ids in meta.directives:  # type: ignore[attr-defined]
             assert self._transfer is not None
-            to_host = phase == OffloadPhase.OFFLOAD.value
-            self._pending.append((phase, self._transfer.begin(block_ids, to_host=to_host)))
+            if phase == OffloadPhase.PAUSE.value:
+                timing = self._transfer.save_retained(request_id, block_ids)
+                self._record(phase, timing, request_id=request_id)
+                self._record("pause_saved", timing, request_id=request_id)
+            elif phase == OffloadPhase.RESUME.value:
+                timing = self._transfer.load_retained(request_id, block_ids)
+                self._record(phase, timing, request_id=request_id)
+            elif phase == _RELEASE:
+                self._transfer.free_retained(request_id)
+            else:
+                to_host = phase == OffloadPhase.OFFLOAD.value
+                self._pending.append(
+                    (phase, self._transfer.begin(block_ids, to_host=to_host))
+                )
 
     def wait_for_layer_load(self, layer_name: str) -> None:
         # Restore correctness is enforced GPU-side in the staged path (the
@@ -369,11 +491,27 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
     def wait_for_save(self) -> None:
         # End-of-step drain: block on each kicked transfer's completion event
         # (off the forward-pass critical path), then record its timing.
+        self._drain_pending()
+
+    def get_finished(
+        self, finished_req_ids: set[str]
+    ) -> tuple[set[str] | None, set[str] | None]:
+        # Called every step, INCLUDING kv_connector_no_forward / empty-batch
+        # steps where wait_for_save is skipped -- exactly the steps a pause
+        # creates. Draining here guarantees kicked offload/restore transfers are
+        # always timed + recorded (lane-A carry-over fix). We do not use the
+        # finished_sending/recving sets, so return empty.
+        self._drain_pending()
+        return None, None
+
+    def _drain_pending(self) -> None:
         for phase, pending in self._pending:
             self._record(phase, pending.wait())
         self._pending.clear()
 
-    def _record(self, phase: str, timing: TransferTiming) -> None:
+    def _record(
+        self, phase: str, timing: TransferTiming, request_id: str | None = None
+    ) -> None:
         import json
 
         with open(self._timing_path, "a") as f:
@@ -381,6 +519,7 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
                 json.dumps(
                     {
                         "phase": phase,
+                        "request_id": request_id,
                         "milliseconds": timing.milliseconds,
                         "bytes_moved": timing.bytes_moved,
                         "num_blocks": timing.num_blocks,
@@ -391,16 +530,59 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
             )
 
     # --- scheduler side --------------------------------------------------
+    def register_pause_save(self, request_id: str, num_computed_tokens: int) -> int:
+        """Scheduler poke (in-process): queue a pause-save for a running request.
+
+        Called by :class:`PausableScheduler` at the pause instant, BEFORE it
+        frees anything. Records the saved-KV registry entry (so a later resume's
+        get_num_new_matched_tokens can report the count) and queues the SAVE
+        directive the worker executes. Fail fast unless the tracked blocks
+        exactly cover ``num_computed_tokens``. Returns the block count (== blocks
+        that will be freed).
+        """
+        block_ids = self._block_ids.get(request_id)
+        if not block_ids:
+            raise ValueError(f"cannot pause-save untracked request {request_id!r}")
+        assert_saved_covers_tokens(num_computed_tokens, len(block_ids), self._block_size)
+        self._saved.register(request_id, num_computed_tokens, len(block_ids))
+        self._queued.append((OffloadPhase.PAUSE.value, request_id, list(block_ids)))
+        return len(block_ids)
+
     def get_num_new_matched_tokens(
         self, request: Any, num_computed_tokens: int
-    ) -> tuple[int, bool]:
-        return 0, False
+    ) -> tuple[int | None, bool]:
+        # For a resuming (previously paused) request, report the saved token
+        # count MINUS the local prefix-cache hit (delta-only, memo Q2 self-hit);
+        # every other request falls through to (0, False) exactly like the base.
+        return self._saved.matched_tokens(request.request_id, num_computed_tokens)
 
     def update_state_after_alloc(
         self, request: Any, blocks: Any, num_external_tokens: int
     ) -> None:
-        # Track the target request's block ids so we can offload them later.
-        self._block_ids[request.request_id] = list(blocks.get_block_ids()[0])
+        # Track the request's block ids (used by pause-save and offload).
+        new_block_ids = list(blocks.get_block_ids()[0])
+        self._block_ids[request.request_id] = new_block_ids
+        if not self._saved.is_saved(request.request_id):
+            return
+        if num_external_tokens > 0:
+            # A resuming saved request just got fresh blocks allocated for its
+            # external tokens. v0.11.2 hands us the FULL prefix block set here
+            # (computed + new), which can be WIDER than the save if the
+            # save-confirm lag advanced the request past a block boundary
+            # (P4_EVICTION_DESIGN.md appendix) -- slice to what the retained
+            # buffer actually covers; the scheduler recomputes the rest.
+            saved_block_count = self._saved.saved[request.request_id][1]
+            resume_block_ids = resume_load_block_ids(new_block_ids, saved_block_count)
+            self._saved.record_resume_blocks(request.request_id, resume_block_ids)
+            self._queued.append(
+                (OffloadPhase.RESUME.value, request.request_id, resume_block_ids)
+            )
+        else:
+            # Low-pressure self-hit (memo Q2): the local prefix cache already
+            # covers the saved tokens, so there is nothing to load -- but the
+            # retained pinned buffer would otherwise leak forever.
+            self._queued.append((_RELEASE, request.request_id, []))
+        self._saved.drop(request.request_id)  # resume (loaded or not) is once
 
     def _drop_finished(self, scheduler_output: Any) -> None:
         # A request can finish (or be preempted out) between the driver's
@@ -413,17 +595,34 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         if finished:
             for req_id in finished:
                 self._block_ids.pop(req_id, None)
+                if self._saved.is_saved(req_id):
+                    # Request finished/aborted while pausing-or-paused: the
+                    # retained buffer has no resume coming, so release it
+                    # explicitly rather than leaking it (memo Q4 liveness).
+                    self._queued.append((_RELEASE, req_id, []))
+                    self._saved.drop(req_id)
 
     def build_connector_meta(self, scheduler_output: Any) -> "KVConnectorMetadata":
         self._drop_finished(scheduler_output)
         meta = SelectiveOffloadMeta()
+        # 1. Drain any pause-save / resume-load directives the scheduler queued
+        #    in-process this step (P4 evict scenario).
+        meta.directives.extend(self._queued)
+        self._queued.clear()
+        # 2. W1 copy scenario: read the control file directly for OFFLOAD /
+        #    RESTORE. PAUSE / RESUME are NOT handled here -- PausableScheduler
+        #    owns those and pokes us via register_pause_save / the alloc path,
+        #    so reacting to them here too would double-emit.
         state = self._control.read()
-        if state.epoch != self._last_epoch and state.phase != OffloadPhase.RESIDENT:
+        if state.epoch != self._last_epoch and state.phase in (
+            OffloadPhase.OFFLOAD,
+            OffloadPhase.RESTORE,
+        ):
             self._last_epoch = state.epoch
             target = state.target_request_id or ""
             block_ids = self._block_ids.get(target, [])
             if block_ids:
-                meta.directives.append((state.phase.value, block_ids))
+                meta.directives.append((state.phase.value, target, block_ids))
             else:
                 # Untracked or already-finished target: refuse the directive
                 # rather than offload/restore nothing silently.

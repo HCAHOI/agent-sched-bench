@@ -155,6 +155,42 @@ ceiling — **~20+ GB/s on Gen4 x16** (a ~7–8× offload-latency drop, 72 ms �
 ~10 ms), with the remaining gap to 25 GB/s being fixed DMA-setup + gather-kernel
 time. Confirm the realized number on the box; it is the header result of lane A.
 
+## Pause / evict scenario (P4 lane C)
+
+The default `--scenario offload` only *copies* KV (blocks stay resident). The P4
+scenario actually **evicts**: save the agent request's KV host-side, free its GPU
+blocks, hold it out of every queue for the tool call, then reallocate + reload +
+resume. It injects a custom scheduler by config — **no forked vLLM file**
+(`scheduler_cls` is a v0.11.2 seam; see `scheduler.py` module docstring for the
+evidence and `P4_EVICTION_DESIGN.md` implementation appendix).
+
+```bash
+PYTHONPATH=src:. python spike/run_spike.py \
+    --model meta-llama/Llama-3.1-8B \
+    --scenario pause --num-load 8 --tool-duration-s 3.0 \
+    --block-dim 1 --seed 0 --output pause_note.json
+```
+
+Flow: N load requests + one agent request; at ~0.5 s the driver writes a PAUSE to
+the control file → `PausableScheduler` registers the save with the connector and
+marks the request "pausing" (blocks NOT yet freed) → the worker saves the KV
+synchronously into a dedicated pinned buffer and appends a `pause_saved`
+confirmation → the scheduler `force_preempt`s (frees blocks, holds the request)
+→ after `tool_duration_s` the driver writes RESUME → the stock resume gate
+consults the connector's `get_num_new_matched_tokens`, reallocates, and the
+worker loads the saved KV back → generation continues.
+
+Extra JSON (`pause` block): `pause_to_freed_ms`, `resume_to_first_token_ms`,
+`blocks_freed` (from the scheduler's `pause_events.jsonl`), and `identical`.
+
+**What the logit-identity check proves.** The driver runs the *same* prompt+seed
+twice under greedy decoding — once uninterrupted, once through pause/resume — and
+compares the two continuations token-for-token. `identical: true` means loading
+the saved KV is **bit-faithful**, not merely close: the resumed logits match the
+uninterrupted run exactly. This is the one GPU-only unknown the design memo flags
+(risk #2). Greedy only — seeded random sampling loses the per-request RNG offset
+across the eviction (documented gap); spec decode is off in this config.
+
 ## CPU tests (no GPU)
 
 ```bash
