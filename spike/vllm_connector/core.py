@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import platform
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -232,6 +233,80 @@ def validate_block_ids(num_blocks_in_dim: int, block_ids: list[int]) -> None:
         )
 
 
+# --- W1 offload/restore target tracking (GPU-validation bugfix) -------------
+#
+# GPU run found: staged mode's async transfer no longer stalls the forward
+# pass (fix #2), so the offloaded request's own decode now races ahead
+# unthrottled. Offload does NOT pause the request (documented limitation), so
+# its live block-id list keeps growing after OFFLOAD -- and can go away
+# entirely if the request finishes before RESTORE's control-file epoch is
+# observed. build_connector_meta previously re-read that LIVE list for
+# RESTORE too, instead of the exact blocks OFFLOAD actually staged host-side:
+# wrong (possibly larger, or gone) block ids for restore. Symmetric with
+# SavedKVRegistry below (P4 pause/resume solves the identical class of bug for
+# the evict scenario) -- this is the W1 copy-scenario counterpart.
+
+
+@dataclass
+class OffloadedBlocks:
+    """Connector-side registry of the exact block ids OFFLOAD last staged.
+
+    ``record`` is called when an OFFLOAD directive is emitted; ``pop`` is
+    called when a RESTORE directive is being built and returns the pinned
+    list (one-shot) so RESTORE always operates on precisely what was staged,
+    never a live/grown/absent list -- ``None`` means "nothing to restore"
+    (never offloaded, already restored, or the request finished first).
+    ``drop`` forgets a pending record without restoring (the request finished
+    mid-offload -- its blocks are about to be freed/reassigned, restoring into
+    them would corrupt a co-tenant's KV).
+    """
+
+    offloaded: dict[str, list[int]] = field(default_factory=dict)
+
+    def record(self, request_id: str, block_ids: list[int]) -> None:
+        self.offloaded[request_id] = list(block_ids)
+
+    def pop(self, request_id: str) -> list[int] | None:
+        return self.offloaded.pop(request_id, None)
+
+    def drop(self, request_id: str) -> None:
+        self.offloaded.pop(request_id, None)
+
+
+def check_repetition_transfers(
+    offload_rows: list[dict[str, object]],
+    restore_rows: list[dict[str, object]],
+    skip_rows: list[dict[str, object]],
+    rep: int,
+) -> None:
+    """Fail fast on an incomplete repetition, with an accurate diagnosis.
+
+    A ``restore_skipped`` row means the connector correctly refused to
+    restore (the target already finished before the RESTORE trigger could
+    fire -- the documented offload-does-not-pause liveness race, not a broken
+    transfer seam). Anything else missing means the seam itself did not fire.
+
+    Raises:
+        RuntimeError: On an incomplete repetition, in either case above.
+    """
+    if offload_rows and restore_rows:
+        return
+    if skip_rows:
+        reason = skip_rows[-1].get("reason", "unknown")
+        raise RuntimeError(
+            f"rep {rep}: restore skipped ({reason}) -- the target request "
+            "finished before the restore trigger fired (offload does not "
+            "pause the request; see README risk #2), not a broken seam. "
+            "Raise --max-tokens or lower --tool-duration-s so the agent "
+            "request cannot finish before restore fires."
+        )
+    raise RuntimeError(
+        f"rep {rep}: connector recorded no transfer "
+        f"(offload={len(offload_rows)}, restore={len(restore_rows)}); "
+        "the seam did not fire -- see README risk section"
+    )
+
+
 # --- P4 pause/resume pure logic (scheduler + connector bookkeeping) ---------
 #
 # All GPU-free: the state machine, the delta-only matched-tokens math, the
@@ -391,6 +466,24 @@ class PauseBook:
             self.pausing.pop(req_id, None)
             self.paused.pop(req_id, None)
             self.resume_deferred.discard(req_id)
+
+
+def guard_pause_trigger(action: Callable[[], None]) -> Exception | None:
+    """Run a pause-trigger action, catching any exception instead of propagating it.
+
+    A PAUSE trigger can legitimately fail fast (e.g.
+    ``assert_saved_covers_tokens`` rejecting a stale block count -- the exact
+    GPU-confirmed bug this guard exists for). EngineCore has no top-level guard
+    around ``schedule()``, so letting that exception escape kills the whole
+    engine -- every co-tenant, not just the request being paused. This must
+    fail the PAUSE, not the ENGINE. Returns the caught exception (for the
+    caller to log) or ``None`` on success.
+    """
+    try:
+        action()
+    except Exception as exc:  # noqa: BLE001 - intentional: contain to this trigger
+        return exc
+    return None
 
 
 @dataclass

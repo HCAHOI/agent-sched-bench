@@ -13,6 +13,7 @@ import pytest
 from spike.vllm_connector import (
     FakeTransferBackend,
     OffloadControl,
+    OffloadedBlocks,
     OffloadPhase,
     PauseBook,
     PauseResult,
@@ -23,8 +24,10 @@ from spike.vllm_connector import (
     TransferTiming,
     assert_saved_covers_tokens,
     cdiv,
+    check_repetition_transfers,
     chunk_ranges,
     gbps,
+    guard_pause_trigger,
     itl_summary,
     matched_tokens_delta,
     percentile,
@@ -179,6 +182,70 @@ def test_repetition_result_rejects_mismatched_transfers() -> None:
         RepetitionResult.from_timings(0, 0, 1.0, off, res)
 
 
+# --- GPU-validation bugfix: restore must reuse the EXACT offloaded blocks,
+# not the connector's live (and, on a finished/pruned target, absent) tracking
+# table -- reproduces the "offload=1, restore=0" bug reported off the box in
+# staged mode.
+
+
+def test_offloaded_blocks_pop_returns_pinned_set_once() -> None:
+    reg = OffloadedBlocks()
+    reg.record("agent-0", [1, 2, 3])
+    # A live/grown re-read must NOT leak in -- pop always returns exactly what
+    # was recorded, and only once (one-shot, mirrors SavedKVRegistry.drop).
+    assert reg.pop("agent-0") == [1, 2, 3]
+    assert reg.pop("agent-0") is None
+
+
+def test_offloaded_blocks_pop_of_unknown_request_is_none() -> None:
+    # Never offloaded, already restored, or the request finished first -- all
+    # three collapse to the same safe "nothing to restore" signal.
+    reg = OffloadedBlocks()
+    assert reg.pop("never-offloaded") is None
+
+
+def test_offloaded_blocks_drop_forgets_without_restoring() -> None:
+    reg = OffloadedBlocks()
+    reg.record("agent-0", [1, 2, 3])
+    reg.drop("agent-0")  # request finished mid-offload; blocks about to be freed
+    assert reg.pop("agent-0") is None
+
+
+def test_offloaded_blocks_record_is_a_snapshot_not_a_live_view() -> None:
+    # The exact bug: if record() aliased the caller's list, later mutating
+    # that list (e.g. a scheduler live block-id table growing) would corrupt
+    # the pinned restore set. record() must copy.
+    live = [1, 2, 3]
+    reg = OffloadedBlocks()
+    reg.record("agent-0", live)
+    live.append(4)  # simulate the live table growing after OFFLOAD
+    assert reg.pop("agent-0") == [1, 2, 3]
+
+
+def test_check_repetition_transfers_passes_when_both_present() -> None:
+    rows = [{"phase": "offload"}]
+    check_repetition_transfers(rows, rows, [], rep=0)
+
+
+def test_check_repetition_transfers_distinguishes_finished_target_from_broken_seam() -> None:
+    # offload fired, restore never did, but a restore_skipped row explains why
+    # -- must raise a message about the liveness race, not "seam did not fire".
+    with pytest.raises(RuntimeError, match="finished before the restore trigger"):
+        check_repetition_transfers(
+            [{"phase": "offload"}],
+            [],
+            [{"phase": "restore_skipped", "reason": "target request finished before restore fired"}],
+            rep=0,
+        )
+
+
+def test_check_repetition_transfers_reports_broken_seam_when_no_skip_row() -> None:
+    # No restore row AND no explanatory skip row -- this is the "seam is
+    # actually broken" case and must keep the original diagnostic.
+    with pytest.raises(RuntimeError, match="the seam did not fire"):
+        check_repetition_transfers([{"phase": "offload"}], [], [], rep=0)
+
+
 def _report_with_one_rep() -> SpikeReport:
     be = FakeTransferBackend(bytes_per_block=2048)
     off = be.offload([0, 1, 2, 3])
@@ -281,6 +348,17 @@ def test_assert_saved_covers_tokens_exact_coverage() -> None:
         assert_saved_covers_tokens(0, block_count=0, block_size=16)
 
 
+def test_assert_saved_covers_tokens_rejects_gpu_confirmed_stale_count() -> None:
+    # Exact numbers from the GPU crash: the connector's admission-time
+    # self._block_ids (97 blocks) went stale as decode grew the request to
+    # 1581 computed tokens (needs ceil(1581/16) = 99 blocks). The stale count
+    # must fail fast; the fresh count from kv_cache_manager.get_block_ids
+    # must pass.
+    with pytest.raises(ValueError, match=r"saved 97 blocks do not cover 1581 tokens"):
+        assert_saved_covers_tokens(1581, block_count=97, block_size=16)
+    assert_saved_covers_tokens(1581, block_count=99, block_size=16)  # fresh count: ok
+
+
 def test_matched_tokens_delta_is_beyond_local_only() -> None:
     # Real pressure: nothing local -> the whole save is the delta.
     assert matched_tokens_delta(100, 0) == 100
@@ -377,6 +455,60 @@ def test_pausebook_drop_finished_clears_deferred_resume() -> None:
     # No leaked deferred-resume flag for a request that never gets confirmed.
     pb.mark_pausing("r", 10)
     assert pb.pop_deferred_resume("r") is False
+
+
+def test_guard_pause_trigger_contains_exception_instead_of_propagating() -> None:
+    # This is the exact GPU crash: assert_saved_covers_tokens raised inside
+    # the PAUSE trigger and the exception escaped schedule(), killing
+    # EngineCore for every co-tenant. guard_pause_trigger must catch it and
+    # hand it back for logging -- never let it propagate.
+    def bad_pause() -> None:
+        assert_saved_covers_tokens(1581, block_count=97, block_size=16)
+
+    exc = guard_pause_trigger(bad_pause)
+    assert isinstance(exc, ValueError)
+    assert "do not cover" in str(exc)
+
+
+def test_guard_pause_trigger_returns_none_on_success() -> None:
+    calls = []
+    assert guard_pause_trigger(lambda: calls.append(1)) is None
+    assert calls == [1]  # the action actually ran
+
+
+def test_register_pause_save_uses_fresh_block_ids_not_stale_admission_cache() -> None:
+    # Exercises the REAL production method (spike/vllm_connector/gpu.py),
+    # off-GPU: construct via object.__new__ to skip __init__'s vllm/torch
+    # requirement, wiring only the attributes register_pause_save touches --
+    # same class the GPU box crashed in, same numbers from that crash.
+    from spike.vllm_connector.gpu import SelectiveOffloadConnector
+
+    conn = object.__new__(SelectiveOffloadConnector)
+    conn._saved = SavedKVRegistry()
+    conn._queued = []
+    conn._block_size = 16
+
+    fresh_block_ids = list(range(99))  # kv_cache_manager.get_block_ids(...) at pause
+    block_count = conn.register_pause_save("agent-0", 1581, fresh_block_ids)
+
+    assert block_count == 99
+    assert conn._saved.saved["agent-0"] == (1581, 99)
+    phase, req_id, directive_block_ids = conn._queued[0]
+    assert phase == OffloadPhase.PAUSE.value
+    assert req_id == "agent-0"
+    assert directive_block_ids == fresh_block_ids  # the directive carries the FRESH count
+
+    # The stale admission count (97) that crashed the GPU box must still
+    # fail fast -- register_pause_save no longer has a self._block_ids
+    # fallback to silently prefer, so this can only happen if a caller
+    # explicitly (and wrongly) passes the stale count.
+    conn2 = object.__new__(SelectiveOffloadConnector)
+    conn2._saved = SavedKVRegistry()
+    conn2._queued = []
+    conn2._block_size = 16
+    with pytest.raises(ValueError, match=r"saved 97 blocks do not cover 1581 tokens"):
+        conn2.register_pause_save("agent-0", 1581, list(range(97)))
+    assert conn2._queued == []  # rejected before queuing anything
 
 
 def test_saved_kv_registry_lifecycle() -> None:

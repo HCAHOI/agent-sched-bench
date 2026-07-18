@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from .control import OffloadControl, OffloadPhase
 from .core import (
+    OffloadedBlocks,
     SavedKVRegistry,
     TransferTiming,
     assert_saved_covers_tokens,
@@ -438,6 +439,11 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         # build_connector_meta drains into the next step's metadata.
         self._saved = SavedKVRegistry()
         self._queued: list[tuple[str, str, list[int]]] = []
+        # W1 copy scenario (scheduler side, GPU-validation bugfix): the exact
+        # block ids OFFLOAD staged host-side per target, so RESTORE reuses
+        # precisely what was staged instead of re-reading self._block_ids
+        # (see build_connector_meta).
+        self._offloaded = OffloadedBlocks()
 
     # --- worker side -----------------------------------------------------
     def register_kv_caches(self, kv_caches: dict[str, "torch.Tensor"]) -> None:
@@ -530,19 +536,27 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
             )
 
     # --- scheduler side --------------------------------------------------
-    def register_pause_save(self, request_id: str, num_computed_tokens: int) -> int:
+    def register_pause_save(
+        self, request_id: str, num_computed_tokens: int, block_ids: list[int]
+    ) -> int:
         """Scheduler poke (in-process): queue a pause-save for a running request.
 
         Called by :class:`PausableScheduler` at the pause instant, BEFORE it
-        frees anything. Records the saved-KV registry entry (so a later resume's
-        get_num_new_matched_tokens can report the count) and queues the SAVE
-        directive the worker executes. Fail fast unless the tracked blocks
-        exactly cover ``num_computed_tokens``. Returns the block count (== blocks
-        that will be freed).
+        frees anything. ``block_ids`` MUST be the request's CURRENT block ids
+        (e.g. ``kv_cache_manager.get_block_ids(request_id)[0]``) fetched by the
+        caller at the pause instant -- NOT ``self._block_ids``, which this
+        connector only refreshes in ``update_state_after_alloc`` (admission /
+        resume). v0.11.2 does not call that hook as a running request's decode
+        grows past its originally allocated blocks, so ``self._block_ids`` goes
+        stale mid-generation (GPU-confirmed: 97 admission blocks vs 99 actual
+        at 1581 computed tokens, block_size 16). Records the saved-KV registry
+        entry (so a later resume's ``get_num_new_matched_tokens`` can report
+        the count) and queues the SAVE directive the worker executes. Fail
+        fast unless ``block_ids`` exactly covers ``num_computed_tokens``.
+        Returns the block count (== blocks that will be freed).
         """
-        block_ids = self._block_ids.get(request_id)
         if not block_ids:
-            raise ValueError(f"cannot pause-save untracked request {request_id!r}")
+            raise ValueError(f"cannot pause-save {request_id!r} with no block ids")
         assert_saved_covers_tokens(num_computed_tokens, len(block_ids), self._block_size)
         self._saved.register(request_id, num_computed_tokens, len(block_ids))
         self._queued.append((OffloadPhase.PAUSE.value, request_id, list(block_ids)))
@@ -559,7 +573,13 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
     def update_state_after_alloc(
         self, request: Any, blocks: Any, num_external_tokens: int
     ) -> None:
-        # Track the request's block ids (used by pause-save and offload).
+        # Track the request's block ids for the W1 offload/restore scenario.
+        # ADMISSION-STALE: this hook fires on alloc (admission/resume), not on
+        # every decode step, so self._block_ids does NOT reflect blocks a
+        # running request grows into mid-generation (GPU-confirmed). Pause-save
+        # does NOT read this table -- PausableScheduler passes CURRENT block
+        # ids from kv_cache_manager.get_block_ids() at the pause instant
+        # instead (see register_pause_save docstring).
         new_block_ids = list(blocks.get_block_ids()[0])
         self._block_ids[request.request_id] = new_block_ids
         if not self._saved.is_saved(request.request_id):
@@ -595,6 +615,17 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         if finished:
             for req_id in finished:
                 self._block_ids.pop(req_id, None)
+                if self._offloaded.pop(req_id) is not None:
+                    # GPU-validation bugfix: the request finished (or was
+                    # preempted out) between OFFLOAD and RESTORE -- its blocks
+                    # are about to be freed/reassigned, so restoring into them
+                    # would corrupt a co-tenant's KV. Drop the pinned record
+                    # and log it observably (not just a silent skip) so the
+                    # driver can tell "target finished first" apart from a
+                    # genuinely broken seam (README risk #2).
+                    self._write_restore_skipped(
+                        req_id, "target request finished before restore fired"
+                    )
                 if self._saved.is_saved(req_id):
                     # Request finished/aborted while pausing-or-paused: the
                     # retained buffer has no resume coming, so release it
@@ -620,16 +651,46 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         ):
             self._last_epoch = state.epoch
             target = state.target_request_id or ""
-            block_ids = self._block_ids.get(target, [])
-            if block_ids:
-                meta.directives.append((state.phase.value, target, block_ids))
+            if state.phase is OffloadPhase.RESTORE:
+                # GPU-validation bugfix: RESTORE must reuse EXACTLY the block
+                # ids OFFLOAD staged host-side, not self._block_ids (which is
+                # keyed by allocation events, not decode -- see
+                # update_state_after_alloc -- and reads stale/absent once the
+                # target has already finished). A miss here means "never
+                # offloaded" or "target finished before restore fired", not
+                # "seam broken" -- refuse and record why (see _drop_finished).
+                block_ids = self._offloaded.pop(target)
+                if not block_ids:
+                    self._write_restore_skipped(
+                        target, "no matching offload record for this target"
+                    )
+                    logger.warning(
+                        "restore directive for request %r skipped: no matching "
+                        "offload record (never offloaded, already restored, or "
+                        "finished)",
+                        target,
+                    )
+                    return meta
             else:
-                # Untracked or already-finished target: refuse the directive
-                # rather than offload/restore nothing silently.
-                logger.warning(
-                    "offload directive for request %r (phase=%s) skipped: "
-                    "not tracked or already finished",
-                    target,
-                    state.phase.value,
-                )
+                block_ids = self._block_ids.get(target, [])
+                if not block_ids:
+                    logger.warning(
+                        "offload directive for request %r skipped: "
+                        "not tracked or already finished",
+                        target,
+                    )
+                    return meta
+                self._offloaded.record(target, block_ids)
+            meta.directives.append((state.phase.value, target, block_ids))
         return meta
+
+    def _write_restore_skipped(self, request_id: str, reason: str) -> None:
+        import json
+
+        with open(self._timing_path, "a") as f:
+            f.write(
+                json.dumps(
+                    {"phase": "restore_skipped", "request_id": request_id, "reason": reason}
+                )
+                + "\n"
+            )

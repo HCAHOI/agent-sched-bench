@@ -34,12 +34,18 @@ WHAT IT ADDS (memo item 1 + the save-before-free handshake, item 2)
   ``prepend_request``; the stock ``num_computed_tokens==0`` resume gate
   (scheduler.py:447) then consults our connector's
   ``get_num_new_matched_tokens`` and loads the saved KV (memo Q2).
-- Save-before-free: on PAUSE we register the save with the connector and mark
-  the request "pausing" but DO NOT free -- the blocks stay resident so the
-  worker's synchronous save reads valid KV. Only once the worker confirms the
-  save (a ``pause_saved`` row it appends to the timing file, polled by
-  :class:`SaveConfirmationReader`) do we ``force_preempt`` and free (memo's
-  synchronous-save v1; upgrade path is the async saved-set in KVConnectorOutput).
+- Save-before-free: on PAUSE we fetch the request's CURRENT block ids from
+  ``kv_cache_manager.get_block_ids`` (the scheduler's own source of truth --
+  NOT the connector's admission-time cache, which goes stale as a running
+  request's decode grows past its originally allocated blocks), register the
+  save with the connector, and mark the request "pausing" but DO NOT free --
+  the blocks stay resident so the worker's synchronous save reads valid KV.
+  Only once the worker confirms the save (a ``pause_saved`` row it appends to
+  the timing file, polled by :class:`SaveConfirmationReader`) do we
+  ``force_preempt`` and free (memo's synchronous-save v1; upgrade path is the
+  async saved-set in KVConnectorOutput). A PAUSE trigger failure (e.g. a
+  block-count mismatch) is contained by :func:`guard_pause_trigger` -- it
+  fails the PAUSE, not the whole EngineCore process.
 
 All correctness-bearing bookkeeping lives in CPU-tested pure logic
 (:class:`PauseBook`, :class:`SaveConfirmationReader`, the connector's
@@ -56,7 +62,7 @@ from pathlib import Path
 from typing import Any
 
 from .control import OffloadControl, OffloadPhase
-from .core import PauseBook, SaveConfirmationReader
+from .core import PauseBook, SaveConfirmationReader, guard_pause_trigger
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +117,20 @@ class PausableScheduler(Scheduler):  # type: ignore[misc,valid-type]
             return
         target = state.target_request_id
         if state.phase == OffloadPhase.PAUSE:
+            # Advance the epoch BEFORE attempting the pause so a failure is
+            # never retried on the next step (would spin on the same bad
+            # trigger). guard_pause_trigger contains any exception here --
+            # e.g. a stale block count failing assert_saved_covers_tokens --
+            # to this PAUSE only; it must not kill EngineCore for every
+            # co-tenant (GPU-confirmed crash this replaces).
             self._last_epoch = state.epoch
-            self._begin_pause(target)
+            exc = guard_pause_trigger(lambda: self._begin_pause(target))
+            if exc is not None:
+                logger.error(
+                    "pause trigger failed for %r; refusing (engine keeps serving): %r",
+                    target,
+                    exc,
+                )
         elif state.phase == OffloadPhase.RESUME:
             self._last_epoch = state.epoch
             self._request_resume(target)
@@ -143,9 +161,20 @@ class PausableScheduler(Scheduler):  # type: ignore[misc,valid-type]
             logger.warning("pause skipped for %r: not a running, unpaused request", req_id)
             return
         n_c_t = req.num_computed_tokens
+        # Fetch the request's CURRENT block ids from the scheduler's own
+        # source of truth at the pause instant -- NOT the connector's
+        # self._block_ids, which only refreshes on alloc (admission/resume)
+        # and goes stale as a running request's decode grows past its
+        # originally allocated blocks (GPU-confirmed: 97 admission blocks vs
+        # 99 actual at 1581 computed tokens). kv_cache_manager.get_block_ids
+        # mirrors update_state_after_alloc's own blocks.get_block_ids() call
+        # (group 0), just read fresh instead of cached.
+        block_ids = list(self.kv_cache_manager.get_block_ids(req_id)[0])
         # Register the save with our scheduler-side connector (in-process) and
         # mark pausing. Blocks are NOT freed yet -- the save reads them first.
-        block_count = self.connector.register_pause_save(req_id, n_c_t)  # type: ignore[attr-defined]
+        block_count = self.connector.register_pause_save(  # type: ignore[attr-defined]
+            req_id, n_c_t, block_ids
+        )
         self._pause.mark_pausing(req_id, n_c_t)
         self._pause_blocks[req_id] = block_count
         self._record_event("pausing", req_id, num_computed_tokens=n_c_t, block_count=block_count)

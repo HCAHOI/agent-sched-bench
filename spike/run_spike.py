@@ -36,6 +36,7 @@ from spike.vllm_connector.core import (
     RepetitionResult,
     SpikeReport,
     TransferTiming,
+    check_repetition_transfers,
     env_info,
 )
 from spike.vllm_connector.gpu import vllm_version
@@ -274,12 +275,8 @@ async def run(args: argparse.Namespace) -> SpikeReport:
         if offload_event:
             off = _read_timings(timing_path, "offload")
             res = _read_timings(timing_path, "restore")
-            if not off or not res:
-                raise RuntimeError(
-                    f"rep {rep}: connector recorded no transfer "
-                    f"(offload={len(off)}, restore={len(res)}); "
-                    "the seam did not fire -- see README risk section"
-                )
+            skipped = _read_timings(timing_path, "restore_skipped")
+            check_repetition_transfers(off, res, skipped, rep)
             o, r = off[-1], res[-1]
             reps.append(
                 RepetitionResult.from_timings(
