@@ -17,10 +17,12 @@ from spike.vllm_connector import (
     RepetitionResult,
     SpikeReport,
     TransferTiming,
+    chunk_ranges,
     gbps,
     itl_summary,
     percentile,
     validate_block_ids,
+    validate_staging_capacity,
 )
 from spike.vllm_connector.control import ControlState
 
@@ -82,6 +84,61 @@ def test_fake_backend_rejects_zero_blocks() -> None:
     be = FakeTransferBackend(bytes_per_block=64)
     with pytest.raises(ValueError, match="zero blocks"):
         be.offload([])
+
+
+def test_fake_backend_enforces_staging_capacity() -> None:
+    # Mirrors the staged GPU backend: a transfer wider than the pre-allocated
+    # staging buffer fails fast rather than overrunning it.
+    be = FakeTransferBackend(bytes_per_block=64, max_blocks=4)
+    be.offload([0, 1, 2, 3])  # exactly at capacity is fine
+    with pytest.raises(ValueError, match="exceeds staging capacity 4"):
+        be.offload([0, 1, 2, 3, 4])
+
+
+def test_fake_backend_records_chunk_count() -> None:
+    # chunk_bytes caps bytes per copy; 8 blocks x 64 B = 512 B in 128-B chunks
+    # -> 2 blocks/chunk -> 4 chunks. Bytes moved is unchanged by chunking.
+    be = FakeTransferBackend(bytes_per_block=64, chunk_bytes=128)
+    off = be.offload([0, 1, 2, 3, 4, 5, 6, 7])
+    assert be.last_num_chunks == 4
+    assert off.bytes_moved == 8 * 64
+    # chunk_bytes=0 disables chunking -> a single copy.
+    be2 = FakeTransferBackend(bytes_per_block=64)
+    be2.offload([0, 1, 2, 3])
+    assert be2.last_num_chunks == 1
+
+
+def test_validate_staging_capacity_bounds() -> None:
+    validate_staging_capacity(max_blocks=10, num_blocks=10)  # at capacity: ok
+    with pytest.raises(ValueError, match="exceeds staging capacity 10"):
+        validate_staging_capacity(max_blocks=10, num_blocks=11)
+    with pytest.raises(ValueError, match="must be > 0"):
+        validate_staging_capacity(max_blocks=10, num_blocks=0)
+
+
+def test_chunk_ranges_partition_is_exact_and_bounded() -> None:
+    # No chunking -> one range covering everything.
+    assert chunk_ranges(5, bytes_per_block=100, chunk_bytes=0) == [(0, 5)]
+    # 100-B blocks, 250-B chunks -> 2 blocks/chunk -> [(0,2),(2,4),(4,5)].
+    ranges = chunk_ranges(5, bytes_per_block=100, chunk_bytes=250)
+    assert ranges == [(0, 2), (2, 4), (4, 5)]
+    # Ranges tile [0, num_blocks) with no gaps or overlaps.
+    assert ranges[0][0] == 0 and ranges[-1][1] == 5
+    assert all(a[1] == b[0] for a, b in zip(ranges, ranges[1:]))
+    # Each chunk stays within the byte cap.
+    assert all((c1 - c0) * 100 <= 250 for c0, c1 in ranges)
+
+
+def test_chunk_ranges_never_zero_blocks_when_block_exceeds_cap() -> None:
+    # A single block larger than chunk_bytes still moves one whole block/chunk.
+    assert chunk_ranges(3, bytes_per_block=1000, chunk_bytes=100) == [(0, 1), (1, 2), (2, 3)]
+
+
+def test_chunk_ranges_rejects_bad_input() -> None:
+    with pytest.raises(ValueError, match="num_blocks must be > 0"):
+        chunk_ranges(0, bytes_per_block=100, chunk_bytes=100)
+    with pytest.raises(ValueError, match="bytes_per_block must be > 0"):
+        chunk_ranges(4, bytes_per_block=0, chunk_bytes=100)
 
 
 def test_validate_block_ids_accepts_in_range() -> None:

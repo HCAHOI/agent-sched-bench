@@ -14,10 +14,12 @@ from .core import (
     SpikeReport,
     TransferBackend,
     TransferTiming,
+    chunk_ranges,
     gbps,
     itl_summary,
     percentile,
     validate_block_ids,
+    validate_staging_capacity,
 )
 
 __all__ = [
@@ -29,8 +31,10 @@ __all__ = [
     "SpikeReport",
     "TransferBackend",
     "TransferTiming",
+    "chunk_ranges",
     "gbps",
     "itl_summary",
     "percentile",
     "validate_block_ids",
+    "validate_staging_capacity",
 ]

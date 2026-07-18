@@ -108,11 +108,22 @@ class FakeTransferBackend:
     bytes_per_block: int
     offload_gbps: float = 20.0  # D2H over PCIe gen4 x16, ballpark
     restore_gbps: float = 18.0  # H2D typically a touch slower
+    # Mirror the staged GPU backend's knobs so the same staging/chunk logic is
+    # exercised off-GPU: ``max_blocks`` bounds the pre-allocated staging buffer,
+    # ``chunk_bytes`` splits each transfer via ``chunk_ranges``.
+    max_blocks: int | None = None
+    chunk_bytes: int = 0
     offloaded: set[int] = field(default_factory=set)
+    last_num_chunks: int = 0
 
     def _timing(self, block_ids: list[int], rate_gbps: float) -> TransferTiming:
         if not block_ids:
             raise ValueError("refusing to time a transfer of zero blocks")
+        if self.max_blocks is not None:
+            validate_staging_capacity(self.max_blocks, len(block_ids))
+        self.last_num_chunks = len(
+            chunk_ranges(len(block_ids), self.bytes_per_block, self.chunk_bytes)
+        )
         nbytes = len(block_ids) * self.bytes_per_block
         ms = (nbytes / (rate_gbps * 1e9)) * 1000.0
         return TransferTiming(bytes_moved=nbytes, milliseconds=ms, num_blocks=len(block_ids))
@@ -127,6 +138,51 @@ class FakeTransferBackend:
             raise ValueError(f"restoring blocks never offloaded: {missing}")
         self.offloaded.difference_update(block_ids)
         return self._timing(block_ids, self.restore_gbps)
+
+
+def validate_staging_capacity(max_blocks: int, num_blocks: int) -> None:
+    """Fail fast if a transfer would overrun the pre-allocated staging buffer.
+
+    The staged transfer path sizes one pinned host buffer (and a device gather
+    buffer) for ``max_blocks`` at ``register_kv_caches`` time. A request that
+    resolved to more blocks than that would silently write past the buffer, so
+    reject it rather than corrupt memory.
+
+    Raises:
+        ValueError: If ``num_blocks`` exceeds ``max_blocks`` or is non-positive.
+    """
+    if num_blocks <= 0:
+        raise ValueError(f"num_blocks must be > 0, got {num_blocks}")
+    if num_blocks > max_blocks:
+        raise ValueError(
+            f"transfer of {num_blocks} blocks exceeds staging capacity "
+            f"{max_blocks}; raise --staging-max-blocks"
+        )
+
+
+def chunk_ranges(
+    num_blocks: int, bytes_per_block: int, chunk_bytes: int
+) -> list[tuple[int, int]]:
+    """Split ``num_blocks`` into ``[start, stop)`` ranges of <= ``chunk_bytes``.
+
+    The staged transfer copies blocks in these ranges so no single copy moves
+    more than ``chunk_bytes`` (a rate limiter that lets co-tenant work slip
+    between chunks). ``chunk_bytes <= 0`` disables chunking (one range). A block
+    is the atom -- if one block alone exceeds ``chunk_bytes`` we still move a
+    whole block per chunk rather than subdivide it.
+
+    Raises:
+        ValueError: On non-positive ``num_blocks``, or non-positive
+            ``bytes_per_block`` when chunking is requested.
+    """
+    if num_blocks <= 0:
+        raise ValueError(f"num_blocks must be > 0, got {num_blocks}")
+    if chunk_bytes <= 0:
+        return [(0, num_blocks)]
+    if bytes_per_block <= 0:
+        raise ValueError(f"bytes_per_block must be > 0, got {bytes_per_block}")
+    per_chunk = max(1, chunk_bytes // bytes_per_block)
+    return [(i, min(i + per_chunk, num_blocks)) for i in range(0, num_blocks, per_chunk)]
 
 
 def validate_block_ids(num_blocks_in_dim: int, block_ids: list[int]) -> None:

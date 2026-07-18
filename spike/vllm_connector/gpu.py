@@ -23,7 +23,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .control import OffloadControl, OffloadPhase
-from .core import TransferTiming, validate_block_ids
+from .core import (
+    TransferTiming,
+    chunk_ranges,
+    validate_block_ids,
+    validate_staging_capacity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,30 +78,107 @@ def vllm_version() -> str | None:
         return None
 
 
+class _CompletedTransfer:
+    """A synchronous transfer whose timing is already known.
+
+    Returned by the strided (baseline) path, which blocks to completion inside
+    ``begin`` exactly like the original implementation, so ``wait`` is a no-op
+    that hands back the timing measured then.
+    """
+
+    def __init__(self, timing: TransferTiming):
+        self._timing = timing
+
+    def wait(self) -> TransferTiming:
+        return self._timing
+
+
+class _StreamTransfer:
+    """A transfer enqueued on a dedicated CUDA stream, timed by CUDA events.
+
+    ``begin`` records ``start``/``end`` events around the copy and returns
+    without synchronizing, so the worker step does not stall behind it. The
+    host-side wait (needed to read ``elapsed_time``) is deferred to ``wait``,
+    which the connector calls in ``wait_for_save`` -- off the forward-pass
+    critical path.
+    """
+
+    def __init__(
+        self,
+        start: "torch.cuda.Event",
+        end: "torch.cuda.Event",
+        bytes_moved: int,
+        num_blocks: int,
+    ):
+        self._start = start
+        self._end = end
+        self._bytes_moved = bytes_moved
+        self._num_blocks = num_blocks
+
+    def wait(self) -> TransferTiming:
+        self._end.synchronize()
+        ms = self._start.elapsed_time(self._end)
+        return TransferTiming(
+            bytes_moved=self._bytes_moved, milliseconds=ms, num_blocks=self._num_blocks
+        )
+
+
 class CudaBlockTransfer:
     """Copy paged KV blocks between the GPU cache and pinned host memory.
 
     ``kv_caches`` maps layer name -> the layer's paged KV tensor as handed to
-    the connector by ``register_kv_caches``. The standard vLLM v1 layout puts
-    the block index on dim 0, so block ``b`` of a layer is ``tensor[b]``; we
-    gather the target blocks per layer into a pinned host tensor (offload) and
-    scatter them back (restore), timing the whole gather/scatter with CUDA
-    events. This is exactly the operation vLLM's own preemption-swap performs.
+    the connector by ``register_kv_caches``. Block ``b`` of a layer is
+    ``tensor.movedim(block_dim, 0)[b]``.
+
+    Two transfer modes (selectable for A/B measurement via ``mode``):
+
+    - ``"strided"`` -- the original baseline: a Python loop of per-block copies
+      bracketed by full ``torch.cuda.synchronize()``. Kept so the next GPU
+      session can reproduce the W1 numbers (72 ms / 2.8 GB/s, 189 ms co-tenant
+      ITL tail) against the improved path.
+    - ``"staged"`` (default) -- pre-allocate one pinned host buffer and one
+      contiguous device gather buffer per layer at construction (sized for
+      ``max_blocks``). Each transfer gathers the target blocks into the
+      contiguous device buffer with a single ``index_select`` per chunk, then
+      does one large ``copy_`` per chunk to/from pinned host. All work runs on
+      a dedicated CUDA stream with event timing, so it overlaps the forward
+      pass instead of serializing the whole device. ``chunk_bytes`` (0 =
+      disabled) caps the bytes per copy as a rate limiter.
 
     ``block_dim`` is honored, not decorative: every shape/index computation
-    below operates on ``tensor.movedim(block_dim, 0)`` (a view, so writes
-    through it mutate the original storage), so a non-default layout is a
-    single constructor arg away -- verify the real dim on the box (README).
+    operates on ``tensor.movedim(block_dim, 0)`` (a view, so writes through it
+    mutate the original storage), so a non-default layout is a single
+    constructor arg away -- verify the real dim on the box (README).
     """
 
-    def __init__(self, kv_caches: dict[str, "torch.Tensor"], block_dim: int = 0):
+    def __init__(
+        self,
+        kv_caches: dict[str, "torch.Tensor"],
+        block_dim: int = 0,
+        *,
+        mode: str = "staged",
+        max_blocks: int = 128,
+        chunk_bytes: int = 0,
+    ):
         if not HAVE_TORCH:  # pragma: no cover - off-GPU guard
             raise RuntimeError("CudaBlockTransfer requires torch (GPU box only)")
         if not kv_caches:
             raise ValueError("kv_caches is empty; register_kv_caches not called?")
+        if mode not in ("strided", "staged"):
+            raise ValueError(f"mode must be 'strided' or 'staged', got {mode!r}")
         self.kv_caches = kv_caches
         self.block_dim = block_dim
+        self.mode = mode
+        self.max_blocks = max_blocks
+        self.chunk_bytes = chunk_bytes
+        # strided: restore reads back from here; staged: pre-allocated pinned
+        # host staging (reused every transfer).
         self._host: dict[str, torch.Tensor] = {}
+        self._dev_stage: dict[str, torch.Tensor] = {}
+        self._stream: torch.cuda.Stream | None = None
+        if mode == "staged":
+            self._stream = torch.cuda.Stream()
+            self._alloc_staging()
 
     def _fronted(self, t: "torch.Tensor") -> "torch.Tensor":
         """View of ``t`` with the block dim moved to the front (dim 0)."""
@@ -109,9 +191,33 @@ class CudaBlockTransfer:
             total += fronted[0].numel() * t.element_size()
         return total
 
-    def _copy(self, block_ids: list[int], to_host: bool) -> TransferTiming:
+    def _alloc_staging(self) -> None:
+        for name, dev in self.kv_caches.items():
+            dev_f = self._fronted(dev)
+            rest = dev_f.shape[1:]
+            self._host[name] = torch.empty(
+                (self.max_blocks, *rest),
+                dtype=dev_f.dtype,
+                device="cpu",
+                pin_memory=True,
+            )
+            self._dev_stage[name] = torch.empty(
+                (self.max_blocks, *rest), dtype=dev_f.dtype, device=dev.device
+            )
+
+    def begin(self, block_ids: list[int], *, to_host: bool):
+        """Start a transfer; return a handle whose ``wait()`` yields timing.
+
+        Staged mode returns without host-side synchronization (copy runs on the
+        dedicated stream); strided mode blocks to completion here.
+        """
         if not block_ids:
             raise ValueError("refusing to transfer zero blocks")
+        if self.mode == "staged":
+            return self._begin_staged(block_ids, to_host=to_host)
+        return self._begin_strided(block_ids, to_host=to_host)
+
+    def _begin_strided(self, block_ids: list[int], *, to_host: bool) -> _CompletedTransfer:
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         torch.cuda.synchronize()
@@ -137,13 +243,51 @@ class CudaBlockTransfer:
         torch.cuda.synchronize()
         ms = start.elapsed_time(end)
         nbytes = len(block_ids) * self._bytes_per_block()
-        return TransferTiming(bytes_moved=nbytes, milliseconds=ms, num_blocks=len(block_ids))
+        return _CompletedTransfer(
+            TransferTiming(bytes_moved=nbytes, milliseconds=ms, num_blocks=len(block_ids))
+        )
+
+    def _begin_staged(self, block_ids: list[int], *, to_host: bool) -> _StreamTransfer:
+        nb = len(block_ids)
+        validate_staging_capacity(self.max_blocks, nb)
+        bpb = self._bytes_per_block()
+        default = torch.cuda.current_stream()
+        assert self._stream is not None
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        with torch.cuda.stream(self._stream):
+            # See writes the forward pass already queued on the default stream
+            # before we read/overwrite the same KV blocks.
+            self._stream.wait_stream(default)
+            start.record()
+            for name, dev in self.kv_caches.items():
+                dev_f = self._fronted(dev)
+                validate_block_ids(dev_f.shape[0], block_ids)
+                host = self._host[name]
+                stage = self._dev_stage[name]
+                for c0, c1 in chunk_ranges(nb, bpb, self.chunk_bytes):
+                    idx = torch.tensor(block_ids[c0:c1], device=dev.device, dtype=torch.long)
+                    if to_host:
+                        torch.index_select(dev_f, 0, idx, out=stage[c0:c1])
+                        host[c0:c1].copy_(stage[c0:c1], non_blocking=True)
+                    else:
+                        stage[c0:c1].copy_(host[c0:c1], non_blocking=True)
+                        dev_f.index_copy_(0, idx, stage[c0:c1])
+            end.record()
+        if not to_host:
+            # Restore writes KV the forward pass will read this step; make the
+            # default stream wait for the copy (GPU-side ordering, no host stall).
+            # NOTE: this ordering is correct ONLY under enforce_eager=True (the
+            # forward runs on current_stream()); a CUDA-graph replay stream
+            # would NOT be gated by this wait — revisit before dropping eager.
+            default.wait_event(end)
+        return _StreamTransfer(start, end, nb * bpb, nb)
 
     def offload(self, block_ids: list[int]) -> TransferTiming:
-        return self._copy(block_ids, to_host=True)
+        return self.begin(block_ids, to_host=True).wait()
 
     def restore(self, block_ids: list[int]) -> TransferTiming:
-        return self._copy(block_ids, to_host=False)
+        return self.begin(block_ids, to_host=False).wait()
 
 
 class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-type]
@@ -181,36 +325,53 @@ class SelectiveOffloadConnector(KVConnectorBase_V1):  # type: ignore[misc,valid-
         self._control = OffloadControl(extra["control_path"])
         self._timing_path = extra["timing_path"]
         self._block_dim = int(extra.get("block_dim", 0))
+        self._mode = str(extra.get("transfer_mode", "staged"))
+        self._max_blocks = int(extra.get("max_blocks", 128))
+        self._chunk_bytes = int(extra.get("chunk_bytes", 0))
         self._role = role
         self._last_epoch = -1
         self._block_ids: dict[str, list[int]] = {}
         self._transfer: CudaBlockTransfer | None = None
+        # Transfers kicked in start_load_kv, drained (timed + recorded) in
+        # wait_for_save so start_load_kv never blocks the worker step.
+        self._pending: list[tuple[str, Any]] = []
 
     # --- worker side -----------------------------------------------------
     def register_kv_caches(self, kv_caches: dict[str, "torch.Tensor"]) -> None:
-        self._transfer = CudaBlockTransfer(kv_caches, block_dim=self._block_dim)
+        self._transfer = CudaBlockTransfer(
+            kv_caches,
+            block_dim=self._block_dim,
+            mode=self._mode,
+            max_blocks=self._max_blocks,
+            chunk_bytes=self._chunk_bytes,
+        )
 
     def start_load_kv(self, forward_context: Any, **kwargs: Any) -> None:
-        # Execute any offload/restore directives the scheduler queued for this
-        # step. Runs in the worker process where the KV tensors live.
+        # Kick any offload/restore directives the scheduler queued for this
+        # step onto the transfer stream and return immediately -- do NOT block
+        # the worker step behind the copy. Timing is read later in
+        # wait_for_save. Runs in the worker process where the KV tensors live.
         meta = self._get_connector_metadata()
         for phase, block_ids in meta.directives:  # type: ignore[attr-defined]
             assert self._transfer is not None
-            timing = (
-                self._transfer.offload(block_ids)
-                if phase == OffloadPhase.OFFLOAD.value
-                else self._transfer.restore(block_ids)
-            )
-            self._record(phase, timing)
+            to_host = phase == OffloadPhase.OFFLOAD.value
+            self._pending.append((phase, self._transfer.begin(block_ids, to_host=to_host)))
 
     def wait_for_layer_load(self, layer_name: str) -> None:
+        # Restore correctness is enforced GPU-side in the staged path (the
+        # forward stream waits on the copy's completion event), so no per-layer
+        # host wait is needed here.
         return None
 
     def save_kv_layer(self, *args: Any, **kwargs: Any) -> None:
         return None
 
     def wait_for_save(self) -> None:
-        return None
+        # End-of-step drain: block on each kicked transfer's completion event
+        # (off the forward-pass critical path), then record its timing.
+        for phase, pending in self._pending:
+            self._record(phase, pending.wait())
+        self._pending.clear()
 
     def _record(self, phase: str, timing: TransferTiming) -> None:
         import json

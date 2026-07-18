@@ -75,9 +75,14 @@ shape/index computation runs through `tensor.movedim(block_dim, 0)`, so a
 different layout is `--block-dim N` on the driver (threaded through
 `kv_connector_extra_config["block_dim"]` into the connector and
 `CudaBlockTransfer`), not a code change. Confirm the real dim against the
-running model's cache shape before trusting byte counts — `_copy` bounds
--checks every block id against that dim's size and raises rather than
-corrupting an out-of-range block.
+running model's cache shape before trusting byte counts — `begin` bounds
+-checks every block id against that dim's size (`validate_block_ids`) and
+raises rather than corrupting an out-of-range block.
+
+VRAM note: staged mode pre-allocates a contiguous device gather buffer of
+`--staging-max-blocks` blocks per layer OUTSIDE vLLM's gpu_memory_utilization
+reservation (~2 MB/block). The default (128) costs ~256 MB; raise it only
+with matching headroom or a lower `--gpu-memory-utilization`.
 
 ## Setup (GPU box, the moment it is rented)
 
@@ -101,6 +106,54 @@ offloaded mid-stream on even repetitions (odd reps are the no-offload control
 window for the interference baseline). Latencies come back via a JSONL the
 worker appends (`--control-dir`), since the connector runs in a separate
 process from the driver.
+
+### Transfer-path knobs (P4 lane A)
+
+The default run uses the improved **staged** transfer path. Knobs:
+
+- `--transfer-mode {strided,staged}` — `staged` (default) pre-allocates one
+  pinned host staging buffer + a contiguous device gather buffer per layer and
+  moves blocks with batched `index_select` + a large `copy_` on a **dedicated
+  CUDA stream** (event-timed, off the forward-pass critical path). `strided`
+  is the W1 baseline: a per-block Python loop bracketed by full
+  `torch.cuda.synchronize()` — kept only to A/B against.
+- `--staging-max-blocks N` (default 512) — staged buffer capacity in blocks; a
+  transfer wider than this fails fast (W1 requests held ~97 blocks).
+- `--chunk-bytes B` (default 0 = off) — cap bytes per copy op as a rate limiter
+  so co-tenant work can slip between chunks, trimming the ITL tail at the
+  offload moment.
+
+### A/B the improvement in one session
+
+Run both paths back to back on the rented box, then diff the two `summary`
+blocks (bandwidth + interference):
+
+```bash
+for MODE in strided staged; do
+  PYTHONPATH=src:. python spike/run_spike.py \
+      --model meta-llama/Llama-3.1-8B \
+      --num-load 8 --repetitions 6 --tool-duration-s 3.0 --seed 0 \
+      --block-dim 1 --transfer-mode "$MODE" \
+      --output "spike_note_${MODE}.json" || exit 1
+done
+```
+
+`run_spike.py` exits nonzero if the engine dies mid-run (so a broken run never
+looks clean); `|| exit 1` aborts the sweep on the first failure.
+
+**Expected bandwidth math.** W1 baseline (strided) measured ~2.8 GB/s offload —
+~8× below the Gen4 x16 pinned-DMA ceiling (~25 GB/s). Two effects cost that 8×:
+(1) each of the 97 blocks is a separate small `copy_` (per-copy launch + DMA
+setup overhead dominates a ~2 MB block), and (2) after `movedim(block_dim=1,0)`
+every per-block source view is **strided**, so the DMA can't run as one
+contiguous descriptor. Staged fixes both: `index_select` gathers all 97 blocks
+into one **contiguous** device buffer in a single kernel, then one (or a few,
+under `--chunk-bytes`) large pinned `copy_` moves the whole ~203 MB as
+back-to-back full-width DMA bursts. With per-copy overhead amortized over one
+large contiguous transfer, effective bandwidth should approach the pinned-DMA
+ceiling — **~20+ GB/s on Gen4 x16** (a ~7–8× offload-latency drop, 72 ms →
+~10 ms), with the remaining gap to 25 GB/s being fixed DMA-setup + gather-kernel
+time. Confirm the realized number on the box; it is the header result of lane A.
 
 ## CPU tests (no GPU)
 

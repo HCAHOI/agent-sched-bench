@@ -26,6 +26,7 @@ import asyncio
 import json
 import random
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -58,6 +59,37 @@ def build_parser() -> argparse.ArgumentParser:
             "Block-index dimension of the paged KV tensor vLLM hands to "
             "register_kv_caches; forwarded to the connector's CudaBlockTransfer. "
             "Default 0 matches the standard v1 layout -- verify on the box."
+        ),
+    )
+    p.add_argument(
+        "--transfer-mode",
+        choices=["strided", "staged"],
+        default="staged",
+        help=(
+            "KV transfer path. 'staged' (default): pinned staging buffer + "
+            "batched async copies on a dedicated stream (the improved path). "
+            "'strided': the original per-block loop with a full device sync "
+            "(the W1 baseline) -- select it to A/B the improvement."
+        ),
+    )
+    p.add_argument(
+        "--staging-max-blocks",
+        type=int,
+        default=128,
+        help=(
+            "Staged mode only: pre-allocated staging buffer capacity in blocks. "
+            "A transfer of more blocks than this fails fast. Size above the "
+            "largest request's block count (W1 measured ~97)."
+        ),
+    )
+    p.add_argument(
+        "--chunk-bytes",
+        type=int,
+        default=0,
+        help=(
+            "Staged mode only: cap bytes moved per copy op as a rate limiter "
+            "(0 = one copy, no chunking). Lets co-tenant work slip between "
+            "chunks to shave the ITL tail at the offload moment."
         ),
     )
     return p
@@ -120,6 +152,9 @@ def make_engine(args: argparse.Namespace, control_path: str, timing_path: str):
             "control_path": control_path,
             "timing_path": timing_path,
             "block_dim": args.block_dim,
+            "transfer_mode": args.transfer_mode,
+            "max_blocks": args.staging_max_blocks,
+            "chunk_bytes": args.chunk_bytes,
         },
     )
     engine_args = AsyncEngineArgs(
@@ -239,7 +274,15 @@ async def run(args: argparse.Namespace) -> SpikeReport:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    report = asyncio.run(run(args))
+    # Any failure -- notably vLLM EngineDeadError surfacing through the awaited
+    # request streams -- must exit nonzero. The engine can die mid-run and a
+    # bare `asyncio.run(...)` had let a swallowed error still exit 0, marking a
+    # broken run as a clean spike. Catch, report, and fail loudly instead.
+    try:
+        report = asyncio.run(run(args))
+    except Exception as exc:  # noqa: BLE001 - top-level guard, re-report and exit
+        print(f"spike run failed: {exc!r}", file=sys.stderr)
+        return 1
     Path(args.output).write_text(report.to_json())
     print(report.to_json())
     return 0
