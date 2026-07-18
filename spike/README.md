@@ -191,14 +191,118 @@ uninterrupted run exactly. This is the one GPU-only unknown the design memo flag
 (risk #2). Greedy only — seeded random sampling loses the per-request RNG offset
 across the eviction (documented gap); spec decode is off in this config.
 
+## Certified scenario (P4 integration — closes the loop)
+
+`--scenario certified` wires the **certified trigger** (the fresh-corpus
+validated offline policy) to the **validated PAUSE mechanism**. It replays REAL
+tool calls and, at each call, fires the pause at the certified per-command-group
+trigger — demonstrating the whole system end to end.
+
+### 1. Export a deployment trigger table
+
+From a certified-union decisions JSONL (e.g. `rho_0.94_decisions.jsonl` from the
+fresh-cert artifacts), pick one kv-cost cell and export a small
+`{group_key -> trigger_ms}` table:
+
+```bash
+python scripts/export_trigger_table.py \
+    --decisions .../certified-union-loo-lcb/rho_0.94_decisions.jsonl \
+    --kv-cost-ms 5000 --deadline-ms 5000 \
+    --max-prefix-depth 4 --restore-cost-fraction 0.94 \
+    --output trigger_table_kv5000.json
+```
+
+The flags MUST match the offline fit (the fresh cert used `max_prefix_depth=4`,
+`skip_leading_cd=False`, `guard_ms=0` so `deadline==kv_cost`).
+`--restore-cost-fraction` is REQUIRED (no default) and must equal the rho the
+decisions file was fit/scored at — it is validated against the fraction encoded
+in the decisions filename (`rho_<fraction>_decisions...`) and **rejected if
+0.0**: scoring restore-free manufactures early-fire wins by never charging a
+misfire's swap-back cost (campaign finding F1), so a sub-operating-point
+fraction is forbidden here without explicit human approval outside this
+script; the measured system operating point is rho=0.94 (see the rho
+directive). Fold policy: each group's trigger is the median over its outer
+folds of the per-fold median trigger; groups that never beat the deadline are
+dropped (they fall back to the deadline). Lookup follows the production trie's
+deepest-first prefix-backoff ORDER — it reuses
+`trace_collect.command_features.command_prefix_keys` — but not its per-call
+support gating (`min_tool_history`/`min_profile_tasks`), which is applied at
+fit time only; see `lookup_trigger`'s docstring for the bounded divergence
+this implies.
+
+> **This table is a deployment DEMO table derived from eval artifacts — it is
+> not itself a certified object.** The certified claim is H1 (certified-union vs
+> deadline) on the held-out eval. A static per-group table drops the per-row GBM
+> hazard component of the union (collapsed by median), so its firing decisions
+> only approximate the certified rule.
+
+### 2. Run the certified scenario (GPU box)
+
+```bash
+PYTHONPATH=src:. python spike/run_spike.py \
+    --model meta-llama/Llama-3.1-8B --scenario certified \
+    --trigger-table trigger_table_kv5000.json \
+    --trace-root traces/swe-rebench \
+    --replay-limit 10 --num-load 8 --block-dim 1 --seed 0 \
+    --output certified_note.json
+```
+
+Flow: engine + N load co-tenants + one pausable agent request. The K real tool
+calls are replayed sequentially; at each call start we look up its group trigger
+`k`. If the REAL duration `> k`, at `t=k` we issue PAUSE (the validated control
+path: evict the agent's KV, free blocks for co-tenants) and at `t=duration`
+RESUME — otherwise no action (the call ends before the trigger, exactly the
+policy semantics). Durations are the observed `latency_ms` from the traces via
+the production extractor — never synthetic.
+
+### What the numbers do and do not claim
+
+- **`mechanism`** (`pause_to_freed_ms`, `blocks_freed`, `resume_to_first_token_ms`)
+  and **`identical`** are measured LIVE — mechanism-in-the-loop timing and K-cycle
+  logit-identity, measured truthfully on the GPU.
+- **`accounting`** (`kv_saved_ms`, `delta_vs_deadline_ms`, `delta_vs_never_ms`,
+  correct-fire / misfire counts) is accounting over the real replayed durations
+  using the same utility functional the offline cert scores with
+  (`trigger_policy_utility_ms`), charged at the table's restore-cost fraction
+  (`restore_cost_ms = restore_cost_fraction * kv_cost_ms`, read from the
+  table's metadata — `run_certified` fails fast if that fraction is 0.0, the
+  exact restore-free setup that manufactures early-fire wins). These are
+  **demo / integration numbers** — they do not re-certify anything; the
+  certified claim remains H1 on the eval.
+
+CPU-testable core (table build/load/lookup/backoff + fold policy, replay
+selection + determinism, per-call fire/no-fire + accounting) lives in
+`spike/{trigger_table,tool_replay,certified_replay}.py` and is unit tested in
+`tests/test_certified_trigger_integration.py` (no vllm/GPU).
+
+**GPU-session checklist for this scenario:**
+1. Export a table (step 1) and confirm `group_key_count > 0` in its metadata.
+2. Boot with `--scenario certified` and a small `--replay-limit` (~10);
+   confirm the engine resolves `PausableScheduler` (same seam as `--scenario
+   pause`).
+3. Confirm `mechanism.blocks_freed` has one entry per fired call and each
+   `pause_to_freed_ms > 0` — the pause seam fired for every fired call
+   (`run_certified` fails fast otherwise).
+4. **`identical: true`** — K sequential pause/resume cycles on one request stay
+   bit-faithful to the uninterrupted run (memo risk #2 at K > 1). Raise
+   `--max-tokens` if the agent runs out of tokens before the last call.
+5. Cross-check `accounting.delta_vs_deadline_ms` against a hand recomputation
+   from `per_call` for a couple of fired calls.
+6. Watch a co-tenant admitted into the freed blocks during a fired pause window
+   (multi-tenant admission is the remaining P4 build-plan row).
+
 ## CPU tests (no GPU)
 
 ```bash
-PYTHONPATH=src:. python -m pytest tests/test_vllm_connector_spike_logic.py -q
+PYTHONPATH=src:. python -m pytest \
+    tests/test_vllm_connector_spike_logic.py \
+    tests/test_certified_trigger_integration.py -q
 ```
 
-Covers control channel, timing math, ITL stats, fake backend, report schema —
-everything the driver depends on except the CUDA copy and vLLM orchestration.
+Covers control channel, timing math, ITL stats, fake backend, report schema, and
+the certified-trigger integration (table/lookup/fold policy, replay selection,
+per-call accounting) — everything the driver depends on except the CUDA copy and
+vLLM orchestration.
 
 ## Output schema (`spike_note.json`)
 

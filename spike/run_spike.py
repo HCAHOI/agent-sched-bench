@@ -52,15 +52,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default="meta-llama/Llama-3.1-8B")
     p.add_argument(
         "--scenario",
-        choices=["offload", "pause"],
+        choices=["offload", "pause", "certified"],
         default="offload",
         help=(
             "'offload' (default, W1): copy KV GPU<->host mid tool-call, measure "
             "transfer path + co-tenant interference (blocks NOT freed). 'pause' "
             "(P4): save KV -> EVICT blocks -> hold -> resume, via PausableScheduler; "
             "reports pause_to_freed_ms, resume_to_first_token_ms, blocks_freed, and "
-            "a greedy logit-identity check of the resumed continuation."
+            "a greedy logit-identity check of the resumed continuation. 'certified' "
+            "(P4 integration): replay K REAL tool calls; fire the validated PAUSE "
+            "mechanism at the CERTIFIED per-command-group trigger; account KV-time "
+            "saved vs deadline-only and never-pause over the real durations."
         ),
+    )
+    p.add_argument(
+        "--trigger-table",
+        help="certified scenario: deployment trigger-table JSON (export_trigger_table.py)",
+    )
+    p.add_argument(
+        "--trace-root",
+        help="certified scenario: root dir of fresh-corpus trace.jsonl files to replay",
+    )
+    p.add_argument(
+        "--replay-task-ids",
+        default=None,
+        help="certified scenario: comma-separated task-id filter for the replay set",
+    )
+    p.add_argument(
+        "--replay-limit",
+        type=int,
+        default=10,
+        help="certified scenario: number of tool calls to replay (default 10)",
     )
     p.add_argument("--num-load", type=int, default=8, help="co-running load requests")
     p.add_argument("--repetitions", type=int, default=5)
@@ -426,6 +448,181 @@ async def run_pause(args: argparse.Namespace) -> dict:
     }
 
 
+def _read_all_events(events_path: str, request_id: str, phase: str) -> list[dict]:
+    """All pause-event rows of ``phase`` for ``request_id``, in file order."""
+    if not Path(events_path).exists():
+        return []
+    rows: list[dict] = []
+    for line in Path(events_path).read_text().splitlines():
+        if not line:
+            continue
+        row = json.loads(line)
+        if row.get("request_id") == request_id and row.get("phase") == phase:
+            rows.append(row)
+    return rows
+
+
+async def run_certified(args: argparse.Namespace) -> dict:
+    """--scenario certified: replay real tool calls, fire the CERTIFIED trigger.
+
+    Closes the P4 loop: the certified per-command-group trigger table (offline,
+    fresh-corpus validated) drives the validated PAUSE mechanism. For each
+    replayed real tool call, look up its group trigger k; if the REAL duration
+    exceeds k, at elapsed k issue PAUSE (evict the agent's KV, free blocks for
+    co-tenants) and at the real duration issue RESUME -- otherwise no action (the
+    call ends before the trigger, exactly the policy semantics). Mechanism timing
+    (pause->freed, blocks freed, resume->first token) is measured LIVE; the
+    KV-time-saved deltas vs deadline-only and never-pause are accounting over the
+    real replayed durations (demo/integration numbers, not a re-certification).
+    """
+    if not args.trigger_table or not args.trace_root:
+        raise ValueError("--scenario certified requires --trigger-table and --trace-root")
+
+    from spike.certified_replay import account_call, aggregate_certified
+    from spike.tool_replay import build_replay_schedule
+    from spike.trigger_table import load_trigger_table, lookup_trigger
+
+    table = load_trigger_table(args.trigger_table)
+    restore_cost_fraction = float(table.metadata.get("restore_cost_fraction", 0.0))
+    if restore_cost_fraction <= 0.0:
+        raise ValueError(
+            f"trigger table {args.trigger_table} has restore_cost_fraction "
+            f"{restore_cost_fraction} -- scoring the certified scenario "
+            "restore-free manufactures early-fire wins by never charging a "
+            "misfire's swap-back cost (campaign finding F1). Re-export the "
+            "table with --restore-cost-fraction matching the measured "
+            "operating point (rho=0.94); see spike/README.md."
+        )
+    restore_cost_ms = restore_cost_fraction * table.kv_cost_ms
+    task_ids = (
+        [t for t in args.replay_task_ids.split(",") if t]
+        if args.replay_task_ids
+        else None
+    )
+    schedule = build_replay_schedule(
+        args.trace_root,
+        task_ids=task_ids,
+        limit=args.replay_limit,
+        seed=args.seed,
+    )
+
+    Path(args.control_dir).mkdir(parents=True, exist_ok=True)
+    control_path = str(Path(args.control_dir) / "control.json")
+    timing_path = str(Path(args.control_dir) / "timings.jsonl")
+    events_path = str(Path(args.control_dir) / "pause_events.jsonl")
+    Path(timing_path).unlink(missing_ok=True)
+    Path(events_path).unlink(missing_ok=True)
+
+    control = OffloadControl(control_path)
+    engine = make_engine(args, control_path, timing_path, events_path)
+
+    # Reference: uninterrupted greedy run for the end-of-run logit-identity check.
+    control_tokens, _ = await _drain_capture(
+        engine, _AGENT_PROMPT, "agent-control", args.max_tokens, args.seed
+    )
+
+    agent_id = "agent-certified"
+    load_tasks = [
+        asyncio.create_task(
+            _drain(engine, _LOAD_PROMPT, f"load-{i}", args.max_tokens, args.seed + i)
+        )
+        for i in range(args.num_load)
+    ]
+    agent_task = asyncio.create_task(
+        _drain_capture(engine, _AGENT_PROMPT, agent_id, args.max_tokens, args.seed)
+    )
+    await asyncio.sleep(0.5)  # let the agent accumulate KV before the first call
+
+    results = []
+    resume_stamps: list[float] = []
+    for call in schedule:
+        lookup = lookup_trigger(table, call.tool_name, call.command)
+        result = account_call(
+            lookup,
+            sample_id=call.sample_id,
+            task_id=call.task_id,
+            tool_name=call.tool_name,
+            command=call.command,
+            duration_ms=call.duration_ms,
+            kv_cost_ms=table.kv_cost_ms,
+            deadline_ms=table.deadline_ms,
+            restore_cost_ms=restore_cost_ms,
+        )
+        results.append(result)
+        duration_s = call.duration_ms / 1000.0
+        if result.fired:
+            await asyncio.sleep(lookup.trigger_ms / 1000.0)
+            control.request_pause(agent_id)
+            await asyncio.sleep(duration_s - lookup.trigger_ms / 1000.0)
+            resume_stamps.append(time.perf_counter())
+            control.request_resume(agent_id)
+        else:
+            await asyncio.sleep(duration_s)
+
+    agent_tokens, stamps = await agent_task
+    await asyncio.gather(*load_tasks)
+    control.clear()
+
+    pausing_events = _read_all_events(events_path, agent_id, "pausing")
+    freed_events = _read_all_events(events_path, agent_id, "freed")
+    fired_count = sum(r.fired for r in results)
+    if len(freed_events) != fired_count:
+        raise RuntimeError(
+            f"expected {fired_count} freed events (one per fired call), got "
+            f"{len(freed_events)} -- pause seam did not fire for every call"
+        )
+    if len(pausing_events) != len(freed_events):
+        raise RuntimeError(
+            f"pausing event count {len(pausing_events)} != freed event count "
+            f"{len(freed_events)} -- zipping them would silently truncate or "
+            "misalign pause_to_freed_ms against the wrong call"
+        )
+    pause_to_freed_ms = [
+        (freed["t"] - pausing["t"]) * 1000.0
+        for pausing, freed in zip(pausing_events, freed_events)
+    ]
+    blocks_freed = [int(freed["blocks_freed"]) for freed in freed_events]
+    resume_to_first_token_ms: list[float] = []
+    for t_resume in resume_stamps:
+        post_resume = next((s for s in stamps if s >= t_resume), None)
+        if post_resume is None:
+            raise RuntimeError(
+                "no token generated after a resume -- raise --max-tokens so "
+                "the agent still has tokens to emit after every fired call's "
+                "resume (silently reporting 0.0 here would hide a real "
+                "mechanism failure)"
+            )
+        resume_to_first_token_ms.append(post_resume - t_resume)
+
+    return {
+        "model": args.model,
+        "vllm_version": vllm_version(),
+        "scenario": "certified",
+        "kv_seam": (
+            "certified per-group trigger table -> PausableScheduler force_preempt"
+            "+hold (validated PAUSE mechanism)"
+        ),
+        "num_load_requests": args.num_load,
+        "env": {**env_info(), **_gpu_env_info()},
+        "trigger_table": args.trigger_table,
+        "kv_cost_ms": table.kv_cost_ms,
+        "deadline_ms": table.deadline_ms,
+        "replay_call_count": len(schedule),
+        "accounting": aggregate_certified(results),
+        "per_call": [r.to_dict() for r in results],
+        "mechanism": {
+            "pause_to_freed_ms": pause_to_freed_ms,
+            "blocks_freed": blocks_freed,
+            "resume_to_first_token_ms": [s * 1000.0 for s in resume_to_first_token_ms],
+        },
+        # Greedy, so seed does not alter ids; K pause/resume cycles must stay
+        # bit-faithful to the uninterrupted run (memo risk #2 at K > 1).
+        "identical": agent_tokens == control_tokens,
+        "reference_num_tokens": len(control_tokens),
+        "resumed_num_tokens": len(agent_tokens),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     # Any failure -- notably vLLM EngineDeadError surfacing through the awaited
@@ -435,6 +632,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.scenario == "pause":
             payload = asyncio.run(run_pause(args))
+            text = json.dumps(payload, indent=2)
+        elif args.scenario == "certified":
+            payload = asyncio.run(run_certified(args))
             text = json.dumps(payload, indent=2)
         else:
             text = asyncio.run(run(args)).to_json()
