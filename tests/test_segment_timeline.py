@@ -98,6 +98,40 @@ def test_shell_launch_is_faithful_when_tracing_off(
     assert kwargs == {"shell": True, "env": {"A": "1"}}
 
 
+def test_shell_launch_sets_ps4_in_script_body_not_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: PS4 set via subprocess env (not a bash-internal assignment)
+    was proven live, in a real task container (bash 5.2.15), to be captured
+    once at shell startup -- before EPOCHREALTIME is live -- and never
+    re-expanded per xtrace line, silently freezing every segment timestamp
+    empty (telemetry_absent: no_segments_traced for every exec). This bug
+    passed on host bash (which apparently does re-expand env-inherited PS4),
+    so a host-only functional test cannot reliably catch a regression to the
+    env-based pattern -- this test pins the fix structurally instead: PS4
+    must live in the script body (subject to bash's normal per-line
+    re-expansion), and must never be injected via the subprocess environment.
+    """
+    launch = _script_namespace(monkeypatch, enabled=True)["_shell_launch"]
+
+    args, kwargs = launch("cd /x && make", {"A": "1"}, (99, "/tmp/whatever"))
+
+    assert "PS4" not in kwargs["env"], "PS4 must not be set via subprocess env"
+    assert kwargs["env"]["BASH_XTRACEFD"] == "99"
+    assert args[0].endswith("bash")
+    assert args[1] == "-c"
+    script_body = args[2]
+    assert script_body.startswith("PS4='+$EPOCHREALTIME '\n")
+    assert "\nset -x\n" in script_body
+    # PS4 assignment must precede set -x, and the user's command must follow
+    # both untouched (verbatim, no wrapping/escaping).
+    ps4_idx = script_body.index("PS4=")
+    set_x_idx = script_body.index("set -x")
+    cmd_idx = script_body.index("cd /x && make")
+    assert ps4_idx < set_x_idx < cmd_idx
+    assert script_body.endswith("cd /x && make")
+
+
 # --- real exec smoke (host bash; docker-independent) -----------------------
 
 

@@ -221,6 +221,7 @@ class AgentRunner:
                     new_events,
                     fatal_error,
                     tool_resource_timelines,
+                    tool_segment_timelines,
                     tool_timings,
                 ) = await self._execute_tools(
                     spec,
@@ -230,6 +231,7 @@ class AgentRunner:
                 tool_events.extend(new_events)
                 context.tool_events = list(new_events)
                 context.tool_resource_timelines = tool_resource_timelines
+                context.tool_segment_timelines = tool_segment_timelines
                 context.tool_timings = tool_timings
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
@@ -514,6 +516,7 @@ class AgentRunner:
         list[dict[str, str]],
         BaseException | None,
         dict[str, dict[str, Any]],
+        dict[str, dict[str, Any]],
         dict[str, dict[str, float]],
     ]:
         batches = self._partition_tool_batches(spec, tool_calls)
@@ -523,6 +526,7 @@ class AgentRunner:
                 dict[str, str],
                 BaseException | None,
                 str,
+                dict[str, Any] | None,
                 dict[str, Any] | None,
                 dict[str, float],
             ]
@@ -546,6 +550,7 @@ class AgentRunner:
         results: list[Any] = []
         events: list[dict[str, str]] = []
         resource_timelines: dict[str, dict[str, Any]] = {}
+        segment_timelines: dict[str, dict[str, Any]] = {}
         tool_timings: dict[str, dict[str, float]] = {}
         fatal_error: BaseException | None = None
         for (
@@ -554,6 +559,7 @@ class AgentRunner:
             error,
             tool_call_id,
             resource_timeline,
+            segment_timeline,
             timing,
         ) in tool_results:
             results.append(result)
@@ -561,9 +567,11 @@ class AgentRunner:
             tool_timings[tool_call_id] = timing
             if resource_timeline is not None:
                 resource_timelines[tool_call_id] = resource_timeline
+            if segment_timeline is not None:
+                segment_timelines[tool_call_id] = segment_timeline
             if error is not None and fatal_error is None:
                 fatal_error = error
-        return results, events, fatal_error, resource_timelines, tool_timings
+        return results, events, fatal_error, resource_timelines, segment_timelines, tool_timings
 
     async def _run_tool(
         self,
@@ -576,6 +584,7 @@ class AgentRunner:
         BaseException | None,
         str,
         dict[str, Any] | None,
+        dict[str, Any] | None,
         dict[str, float],
     ]:
         started_wall = time.time()
@@ -585,11 +594,13 @@ class AgentRunner:
             event: dict[str, str],
             error: BaseException | None,
             resource_timeline: dict[str, Any] | None,
+            segment_timeline: dict[str, Any] | None = None,
         ) -> tuple[
             Any,
             dict[str, str],
             BaseException | None,
             str,
+            dict[str, Any] | None,
             dict[str, Any] | None,
             dict[str, float],
         ]:
@@ -600,6 +611,7 @@ class AgentRunner:
                 error,
                 tool_call.id,
                 resource_timeline,
+                segment_timeline,
                 {
                     "ts_start": started_wall,
                     "ts_end": ended_wall,
@@ -635,6 +647,7 @@ class AgentRunner:
 
         resource_recorder: ResourceTimelineRecorder | None = None
         resource_timeline: dict[str, Any] | None = None
+        segment_timeline: dict[str, Any] | None = None
         try:
             # Keep telemetry scoped to OpenClaw exec intervals until other tool
             # runtimes have per-action resource isolation.
@@ -648,6 +661,10 @@ class AgentRunner:
                 else:
                     result = await spec.tools.execute(tool_call.name, params)
             resource_timeline = resource_recorder.to_trace_dict()
+            # Side-channel populated only by ContainerExecTool during replay
+            # (see agents/openclaw/tools/container.py); None for every other
+            # tool and for real collection, where segment tracing is disabled.
+            segment_timeline = getattr(tool, "last_segment_timeline", None)
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
@@ -673,7 +690,7 @@ class AgentRunner:
                 "detail": result.replace("\n", " ").strip()[:120],
             }
             error = RuntimeError(result) if spec.fail_on_tool_error else None
-            return finish(result + _HINT, event, error, resource_timeline)
+            return finish(result + _HINT, event, error, resource_timeline, segment_timeline)
 
         detail = "" if result is None else str(result)
         detail = detail.replace("\n", " ").strip()
@@ -686,6 +703,7 @@ class AgentRunner:
             {"name": tool_call.name, "status": "ok", "detail": detail},
             None,
             resource_timeline,
+            segment_timeline,
         )
 
     @staticmethod

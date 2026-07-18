@@ -65,6 +65,7 @@ class _StubContext:
         usage: dict[str, int] | None = None,
         response: _StubResponse | None = None,
         tool_resource_timelines: dict[str, dict[str, Any]] | None = None,
+        tool_segment_timelines: dict[str, dict[str, Any]] | None = None,
         tool_timings: dict[str, dict[str, float]] | None = None,
     ) -> None:
         self.iteration = iteration
@@ -73,6 +74,7 @@ class _StubContext:
         self.usage = usage or {}
         self.response = response
         self.tool_resource_timelines = tool_resource_timelines or {}
+        self.tool_segment_timelines = tool_segment_timelines or {}
         self.tool_timings = tool_timings or {}
         self.malformed_retry_count = 0
 
@@ -244,6 +246,86 @@ async def _drive_emits_tool_resource_timeline(tmp_path: Path) -> None:
     records = [json.loads(line) for line in trace_file.read_text().splitlines()]
     tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
     assert tool_exec["data"]["resource_timeline"] == resource_timeline
+
+
+def test_trace_collector_emits_tool_segment_timeline(tmp_path: Path) -> None:
+    """Regression: segment_timeline must reach the trace via context, exactly
+    like resource_timeline. This is the attach point downstream of the real
+    bug (ContainerExecTool.execute() dropping the container response's
+    segment_timeline entirely) -- see test_container_exec_segment_marshaling.py
+    for the end-to-end proof through the actual response-marshaling chain.
+    """
+    asyncio.run(_drive_emits_tool_segment_timeline(tmp_path))
+
+
+async def _drive_emits_tool_segment_timeline(tmp_path: Path) -> None:
+    trace_file = tmp_path / "trace.jsonl"
+    hook = TraceCollectorHook(trace_file, instance_id="test-segment")
+
+    msgs_in = [{"role": "user", "content": "Run chained command."}]
+    await hook.before_iteration(_StubContext(iteration=0, messages=msgs_in))
+    stub_tc = _StubToolCall("exec", {"command": "cd /tmp && make"})
+    msgs_after_llm = msgs_in + [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": stub_tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": '{"command":"cd /tmp && make"}',
+                    },
+                }
+            ],
+        }
+    ]
+    await hook.before_execute_tools(
+        _StubContext(iteration=0, messages=msgs_after_llm, tool_calls=[stub_tc])
+    )
+    segment_timeline = {
+        "version": 2,
+        "source": "bash_xtrace_epochrealtime",
+        "segments": [
+            {
+                "segment_index": 0,
+                "command_text": "cd /tmp",
+                "t_start_ms": 0.0,
+                "t_end_ms": 2.0,
+            },
+            {
+                "segment_index": 1,
+                "command_text": "make",
+                "t_start_ms": 2.0,
+                "t_end_ms": 500.0,
+            },
+        ],
+        "segment_count": 2,
+        "raw_total_ms": 500.0,
+    }
+    msgs_after_tool = msgs_after_llm + [
+        {
+            "role": "tool",
+            "tool_call_id": stub_tc.id,
+            "name": "exec",
+            "content": "ok",
+        }
+    ]
+    await hook.after_iteration(
+        _StubContext(
+            iteration=0,
+            messages=msgs_after_tool,
+            tool_calls=[stub_tc],
+            response=_StubResponse(content="", finish_reason="tool_calls"),
+            tool_segment_timelines={stub_tc.id: segment_timeline},
+        )
+    )
+    hook.close()
+
+    records = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    tool_exec = next(record for record in records if record.get("action_type") == "tool_exec")
+    assert tool_exec["data"]["segment_timeline"] == segment_timeline
 
 
 def test_trace_collector_uses_runner_tool_timings(tmp_path: Path) -> None:

@@ -224,6 +224,13 @@ class ContainerExecTool(_ContainerTool):
             restrict_to_workspace=restrict_to_workspace,
             path_append=path_append,
         )
+        # Side-channel for tool_collect.openclaw_tools' segment_timeline (v2)
+        # telemetry. execute() must keep returning a plain str (it feeds the
+        # LLM's tool-result message during real collection), so the container
+        # response's extra fields are stashed here for _runner.py._run_tool to
+        # pick up after the call, mirroring how resource_timeline is sourced
+        # via a host-side ResourceTimelineRecorder wrapping this same call.
+        self.last_segment_timeline: dict[str, Any] | None = None
 
     @property
     def name(self) -> str:
@@ -248,6 +255,10 @@ class ContainerExecTool(_ContainerTool):
         timeout: int | None = None,
         **_: Any,
     ) -> str:
+        # Reset FIRST, before any early return: a guard-blocked exec must
+        # never inherit the previous call's segment timeline (stale-but-valid
+        # telemetry would silently corrupt the segment dataset).
+        self.last_segment_timeline = None
         workdir = working_dir or self.workspace
         guard_error = self._guard._guard_command(command, workdir)
         if guard_error:
@@ -261,6 +272,9 @@ class ContainerExecTool(_ContainerTool):
             {"command": effective_command, "timeout": effective_timeout},
             timeout_s=float(effective_timeout),
         )
+        segment_timeline = response.get("segment_timeline")
+        if isinstance(segment_timeline, dict):
+            self.last_segment_timeline = segment_timeline
         result = self._result_or_error(response)
         returncode = response.get("returncode")
         if isinstance(returncode, int) and not isinstance(returncode, bool):

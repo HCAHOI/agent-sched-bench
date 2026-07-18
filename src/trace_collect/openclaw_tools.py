@@ -211,6 +211,11 @@ def _segment_absent(reason):
 
 
 def _segments_from_xtrace(text, start_wall, end_wall):
+    # ponytail: sequential-operator ceiling -- pipeline members (a | b) both
+    # emit depth-1 lines but run CONCURRENTLY, so their derived durations are
+    # fictitious (first ~0ms, last gets the span); loop headers re-emit per
+    # iteration. Durations are trustworthy only for && / ; / newline chains;
+    # downstream analyses must filter on the parent command (see CLAUDE.md).
     events = []
     for line in text.splitlines():
         match = _SEGMENT_LINE_RE.match(line)
@@ -252,9 +257,20 @@ def _shell_launch(cmd, env, seg):
         return cmd, {"shell": True, "env": env}
     fd, _path = seg
     traced_env = dict(env)
-    traced_env["PS4"] = "+$EPOCHREALTIME "
     traced_env["BASH_XTRACEFD"] = str(fd)
-    return [_SEGMENT_BASH_PATH, "-x", "-c", cmd], {"env": traced_env, "pass_fds": (fd,)}
+    # PS4 must be a bash-internal assignment, not an inherited env var: on the
+    # bash builds observed in real task containers, an env-inherited PS4 is
+    # captured once at shell startup (before EPOCHREALTIME is live) and never
+    # re-expanded per xtrace line, silently freezing every timestamp empty.
+    # A PS4 assignment in the script body, before `set -x`, gets bash's normal
+    # per-line re-expansion. Verified live in a real task container (bash
+    # 5.2.15): env-set PS4 -> "+ cmd" (no timestamp); script-body PS4 ->
+    # "+<epoch> cmd" (real timestamps).
+    preamble = "PS4='+$EPOCHREALTIME '\nset -x\n"
+    return [_SEGMENT_BASH_PATH, "-c", preamble + cmd], {
+        "env": traced_env,
+        "pass_fds": (fd,),
+    }
 
 
 def _finish_segment_trace(seg, start_wall, end_wall):
