@@ -135,6 +135,35 @@ certifies where the policies diverge. External validity: wrapper
 classes that emerge on TraceLab replay (roadmap item) are the transfer
 story; a hardcoded token rule has none.
 
+### Stage-2 pre-registration (added post-Stage-1, before any Stage-2 code)
+
+Stage-1 showed neither knob works alone (normalization at me=1 is
+MAE-worse; the me=5 gate without normalization is flat), so the
+candidate is the JOINT policy, entered as ONE iteration:
+
+- **P_new:** production prior with (a) screen-learned key
+  normalization — the WTN screen re-learned per fit fold on ORIGINAL
+  trace durations (the screen needs only per-call totals + command
+  text; re-learning on originals removes the replay-hardware transfer
+  assumption, and Stage-1's replay-learned selection serves as a
+  consistency check, reported), and (b) node evidence gate = 5.
+  Depth 4, rho=0.94, hazard/utility machinery — all frozen.
+- **P_0:** the exact frozen certified config (the H1-certified
+  policy). No other knob may differ between arms.
+- **Comparison:** paired per-task trigger-policy utility at rho=0.94
+  on the fresh-277 decision corpus, task-clustered sign-flip
+  permutation per kv cell (kv3500, kv5000), same replicate count and
+  Bonferroni discipline as the H1 certification.
+- **Oracle row:** hardcoded cd-only + me=5, reported alongside but
+  never certified or shipped (standing directive above).
+- **KILL:** no kv cell certifies where P_new and P_0 diverge; or the
+  original-durations screen selection contradicts Stage-1's (cd not
+  transparent in every fold) — that inconsistency is reported as the
+  finding, not papered over.
+- **No pipeline forks:** P_new must run through the existing
+  confirmation/certification machinery via configuration, not through
+  a parallel reimplementation.
+
 ## Integrity rules
 
 Screen thresholds are documented config applied to fit-fold statistics
