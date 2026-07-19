@@ -87,19 +87,26 @@ conditioning approximates and what atom decomposition throws away.
    remain the interesting future direction — as mid-call evidence, not as
    the fit-time unit.
 
-## Verdict (revised 2026-07-19)
+## Verdict (revised 2026-07-19; kill tests run same day)
 
 The shipped conditioning unit stays chain-prefix (cd-skip variant now
 evidenced twice), but the question is sharper than "atoms lose": naive
 atoms lose; argument-conditioned atom tries are competitive and beaten
-only by argument thinness on the heavy verbs. Three live follow-ups:
+only by argument thinness on the heavy verbs. The two pre-registered
+follow-ups were run on the full corpus and **both KILLED**
+(`boundary-evidence-stage1-2026-07-19.md`,
+`stable-atom-overlap-2026-07-19.md`):
 1. cd-normalization — method iteration, cheapest, evidenced twice.
-2. **Atom boundaries as runtime EVIDENCE** (not fit-time units): mid-call
-   survival re-conditioning at observed segment completions — recommended
-   next build in `atom-estimator-design-20260719.md`, with a pre-registered
-   2-day kill test on existing data (does boundary identity add decision
-   divergence beyond elapsed time?). Sidesteps verb instability, argument
-   thinness, and cross-atom state simultaneously; degrades exactly to the
-   certified policy on pipes.
-3. Stable-atom screening (certify the conditioning unit per command class)
-   — 1-day overlap diagnostic decides whether it lives.
+   **Still live; now the only surviving atom-study follow-up.**
+2. Atom boundaries as runtime EVIDENCE — **KILLED at Stage 1**. Boundary
+   identity flips 72.9% of re-check decisions vs elapsed-only, but the
+   paired log-score gain is −0.0137 nats with a task-clustered 95% CI of
+   [−0.41, +0.20] covering zero: the decision churn is noise, not
+   information. The worst possible deployment profile — large behavioral
+   divergence with no predictive backing — which is exactly what the kill
+   switch existed to catch. §Secondary-3's "interesting future direction"
+   gets a measured **no**.
+3. Stable-atom screening — **KILLED**. The screen is a one-atom trick:
+   apt-get is the only fold-stable qualifier (pytest 1/5 folds, Jaccard
+   0.8), and the pooled node fires on 29/4,824 held-out calls with only
+   9 (0.19% of corpus) landing where the trie is thin — no union mass.

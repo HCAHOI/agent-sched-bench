@@ -1,5 +1,14 @@
 # Design memo — atom-structured duration estimation, post-mortem edition
 
+> **OUTCOME (2026-07-19, same-day full-corpus runs, review-gated code):
+> C KILLED at Stage 1** (divergence 72.9% but log-score gain −0.0137,
+> CI [−0.41, +0.20] covers zero → churn without information;
+> `boundary-evidence-stage1-2026-07-19.md`). **B KILLED** (one-atom
+> trick: apt-get sole fold-stable qualifier; 9/4,824 thin-trie overlap
+> calls; `stable-atom-overlap-2026-07-19.md`). Per the pre-registered
+> consequence: chain-prefix + cd-skip stays the shipped estimator; A's
+> Stage-1 CV test is the next cheapest falsification if ever wanted.
+
 > Informed by the five-model atom study (segment-atom-study-2026-07-19).
 > atom_trie (model #5) final outcome: beats cert-config trie on MAE (974 vs
 > 996), loses narrowly to cdskip (971); heavy verbs stuck at verb-level

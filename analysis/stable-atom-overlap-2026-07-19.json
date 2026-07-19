@@ -1,0 +1,237 @@
+{
+  "provenance": {
+    "exploratory": true,
+    "final": true,
+    "replayed_on": "our_hardware",
+    "traces_dir": "traces/fresh-277-segtimeline",
+    "corpus_file_count": 277,
+    "git_sha": "5a88cd01a830700ebcca1666efcdd1043714dbcc",
+    "generated": "2026-07-19T16:52:40",
+    "cert_fit_config": {
+      "max_prefix_depth": 4,
+      "skip_leading_cd": false,
+      "min_tool_history": 1,
+      "min_profile_tasks": 1
+    }
+  },
+  "config": {
+    "fold_count": 5,
+    "screen": {
+      "action_relevance_floor_ms": 500.0,
+      "cv_cap": 1.0,
+      "min_task_support": 10
+    },
+    "thin_support_cap": 5,
+    "kill_overlap_frac": 0.05,
+    "fold_jaccard_floor": 1.0
+  },
+  "full_corpus_stability": [
+    {
+      "atom": "case",
+      "task_count": 11,
+      "median_ms": 0.008000000000000007,
+      "cv_across_tasks": 0.10657152778967992
+    },
+    {
+      "atom": "conda",
+      "task_count": 11,
+      "median_ms": 0.013999999999999346,
+      "cv_across_tasks": 0.12921914767617587
+    },
+    {
+      "atom": "source",
+      "task_count": 11,
+      "median_ms": 4.316000000000001,
+      "cv_across_tasks": 0.1497293075472389
+    },
+    {
+      "atom": "__conda_activate",
+      "task_count": 11,
+      "median_ms": 0.014000000000000234,
+      "cv_across_tasks": 0.16061490557531666
+    },
+    {
+      "atom": "[",
+      "task_count": 11,
+      "median_ms": 0.005000000000009663,
+      "cv_across_tasks": 0.16798421022624996
+    },
+    {
+      "atom": "__conda_hashr",
+      "task_count": 11,
+      "median_ms": 0.027999999999991587,
+      "cv_across_tasks": 0.2829898348316766
+    },
+    {
+      "atom": "cat",
+      "task_count": 275,
+      "median_ms": 1.3709999999999996,
+      "cv_across_tasks": 0.32015843071188194
+    },
+    {
+      "atom": "rm",
+      "task_count": 18,
+      "median_ms": 1.515,
+      "cv_across_tasks": 0.32747322712912325
+    },
+    {
+      "atom": "head",
+      "task_count": 17,
+      "median_ms": 1.024,
+      "cv_across_tasks": 0.3406255885821096
+    },
+    {
+      "atom": "apt-get",
+      "task_count": 16,
+      "median_ms": 4901.79225,
+      "cv_across_tasks": 0.41114592791868737
+    },
+    {
+      "atom": "wc",
+      "task_count": 25,
+      "median_ms": 1.797,
+      "cv_across_tasks": 0.4150788572473018
+    },
+    {
+      "atom": "cd",
+      "task_count": 277,
+      "median_ms": 0.07200000000000006,
+      "cv_across_tasks": 0.4254998958086398
+    },
+    {
+      "atom": "ls",
+      "task_count": 140,
+      "median_ms": 1.9842499999999998,
+      "cv_across_tasks": 0.5573712937105606
+    },
+    {
+      "atom": "which",
+      "task_count": 181,
+      "median_ms": 1.4785,
+      "cv_across_tasks": 0.6354456848118624
+    },
+    {
+      "atom": "local",
+      "task_count": 11,
+      "median_ms": 91.62950000000001,
+      "cv_across_tasks": 0.6528456572687455
+    },
+    {
+      "atom": "echo",
+      "task_count": 275,
+      "median_ms": 0.07099999999999995,
+      "cv_across_tasks": 0.9474729676539558
+    },
+    {
+      "atom": "hash",
+      "task_count": 11,
+      "median_ms": 0.022999999999996135,
+      "cv_across_tasks": 1.7733583382788687
+    },
+    {
+      "atom": "find",
+      "task_count": 44,
+      "median_ms": 4.4334999999999996,
+      "cv_across_tasks": 1.7787078182193223
+    },
+    {
+      "atom": "pytest",
+      "task_count": 15,
+      "median_ms": 1013.9549999999999,
+      "cv_across_tasks": 1.8725137311956552
+    },
+    {
+      "atom": "git",
+      "task_count": 276,
+      "median_ms": 4.43575,
+      "cv_across_tasks": 2.3444587810276025
+    },
+    {
+      "atom": "__unparsed__",
+      "task_count": 144,
+      "median_ms": 122.162,
+      "cv_across_tasks": 2.4839809207396106
+    },
+    {
+      "atom": "python",
+      "task_count": 108,
+      "median_ms": 0.849,
+      "cv_across_tasks": 2.56727040503771
+    },
+    {
+      "atom": "pip3",
+      "task_count": 56,
+      "median_ms": 0.6945000000000001,
+      "cv_across_tasks": 3.0640433013478554
+    },
+    {
+      "atom": "pip",
+      "task_count": 27,
+      "median_ms": 0.42199999999999993,
+      "cv_across_tasks": 3.6509261721843553
+    },
+    {
+      "atom": "grep",
+      "task_count": 184,
+      "median_ms": 2.268,
+      "cv_across_tasks": 5.233216329232476
+    },
+    {
+      "atom": "python3",
+      "task_count": 241,
+      "median_ms": 69.636,
+      "cv_across_tasks": 5.970324285352232
+    }
+  ],
+  "screen_selection": {
+    "per_fold_qualifying": [
+      [
+        "apt-get",
+        "pytest"
+      ],
+      [
+        "apt-get"
+      ],
+      [
+        "apt-get"
+      ],
+      [
+        "apt-get"
+      ],
+      [
+        "apt-get"
+      ]
+    ],
+    "intersection": [
+      "apt-get"
+    ],
+    "union": [
+      "apt-get",
+      "pytest"
+    ],
+    "mean_pairwise_jaccard": 0.8,
+    "fold_stable": false
+  },
+  "overlap": {
+    "total_calls": 4824,
+    "divergent_calls": 29,
+    "overlap_calls": 9,
+    "strict_fallback_overlap_calls": 0,
+    "overlap_fraction_of_divergent": 0.3103448275862069,
+    "overlap_fraction_of_total": 0.0018656716417910447,
+    "firing_atom_divergent": {
+      "apt-get": 18,
+      "pytest": 11
+    },
+    "firing_atom_overlap": {
+      "apt-get": 5,
+      "pytest": 4
+    }
+  },
+  "kill_readout": {
+    "kill_overlap_frac": 0.05,
+    "overlap_below_bar": false,
+    "fold_stable": false,
+    "verdict": "KILL"
+  }
+}

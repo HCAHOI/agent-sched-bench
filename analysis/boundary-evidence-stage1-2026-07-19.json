@@ -1,0 +1,123 @@
+{
+  "provenance": {
+    "exploratory": true,
+    "final": true,
+    "replayed_on": "our_hardware",
+    "traces_dir": "traces/fresh-277-segtimeline",
+    "corpus_file_count": 277,
+    "git_sha": "5a88cd01a830700ebcca1666efcdd1043714dbcc",
+    "generated": "2026-07-19T18:02:04",
+    "operating_point": {
+      "kv_costs_ms": [
+        500.0,
+        1000.0,
+        1500.0,
+        2000.0,
+        2500.0,
+        3000.0,
+        3500.0,
+        4000.0,
+        4500.0,
+        5000.0
+      ],
+      "guard_ms": 0.0,
+      "restore_cost_fraction": 0.94
+    }
+  },
+  "config": {
+    "fold_count": 5,
+    "kv_costs_ms": [
+      500.0,
+      1000.0,
+      1500.0,
+      2000.0,
+      2500.0,
+      3000.0,
+      3500.0,
+      4000.0,
+      4500.0,
+      5000.0
+    ],
+    "restore_cost_fraction": 0.94,
+    "proximity_bandwidth_ms": null,
+    "min_conditional_samples": 5,
+    "kill_divergence_frac": 0.01,
+    "bootstrap_replicates": 10000,
+    "bootstrap_confidence": 0.95,
+    "bootstrap_seed": 0,
+    "decision_tolerance_ms": 1e-06
+  },
+  "census": {
+    "input_chains": 4824,
+    "analysable_chains": 4026,
+    "tasks": 277,
+    "boundary_events": 4867,
+    "events_supported": 4367,
+    "events_scored": 4367,
+    "events_thin_E": 1,
+    "events_thin_EplusB": 499,
+    "support_coverage_fraction": 0.8972673104581878
+  },
+  "decision_divergence": {
+    "per_kv": {
+      "500": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.77994046256011
+      },
+      "1000": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.832837188000916
+      },
+      "1500": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.830547286466682
+      },
+      "2000": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.42431875429356536
+      },
+      "2500": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.8742844057705519
+      },
+      "3000": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.5715594229448133
+      },
+      "3500": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.638424547744447
+      },
+      "4000": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.7735287382642546
+      },
+      "4500": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.7959697732997482
+      },
+      "5000": {
+        "decision_count": 4367,
+        "divergence_fraction": 0.7700938859629036
+      }
+    },
+    "pooled_decision_count": 43670,
+    "pooled_divergence_fraction": 0.7291504465307992
+  },
+  "log_score_gain": {
+    "scored_event_count": 4367,
+    "scored_task_count": 277,
+    "mean_gain": -0.013689419591530092,
+    "ci_low": -0.4147813690388804,
+    "ci_high": 0.19938668700741624,
+    "confidence": 0.95,
+    "ci_covers_zero": true
+  },
+  "kill_readout": {
+    "kill_divergence_frac": 0.01,
+    "divergence_below_bar": false,
+    "ci_covers_zero": true,
+    "gain_ci_above_zero": false,
+    "verdict": "KILL"
+  }
+}
