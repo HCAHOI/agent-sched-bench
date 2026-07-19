@@ -317,7 +317,6 @@ Forbidden:
 | `swe-bench-verified` | `task_container_agent` | `princeton-nlp/SWE-bench_Verified` | openclaw |
 | `swe-rebench` | `task_container_agent` | `nebius/SWE-rebench` | openclaw |
 | `terminal-bench` | `host_controller` | Terminal-Bench tasks | openclaw |
-| [`science-agent-bench-verified`](configs/benchmarks/science-agent-bench-verified.md) | `host_controller` | `osunlp/ScienceAgentBench` (`verified`) | openclaw |
 
 ### Adding a benchmark
 

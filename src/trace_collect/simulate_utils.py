@@ -161,23 +161,6 @@ def _resolve_docker_image(loaded: LoadedTraceSession) -> str | None:
         or loaded.task.get("image_name")
         or loaded.task.get("docker_image")
     )
-    if _is_science_agent_bench_verified_task(loaded):
-        image_id = metadata.get("sab_agent_base_image_id")
-        if not isinstance(image_id, str) or not image_id.startswith("sha256:") or (
-            len(image_id) != 71
-        ) or any(
-            char not in "0123456789abcdef" for char in image_id.removeprefix("sha256:")
-        ):
-            raise SimulateError(
-                "ScienceAgentBench replay requires the immutable "
-                "sab_agent_base_image_id recorded during collection"
-            )
-        if explicit is not None and str(explicit) != image_id:
-            raise SimulateError(
-                "ScienceAgentBench replay image override must equal the "
-                f"recorded immutable image ID {image_id}"
-            )
-        return image_id
     if explicit:
         return str(explicit)
     return None
@@ -212,14 +195,6 @@ def _is_host_mode(loaded: LoadedTraceSession) -> bool:
 
 def _is_terminal_bench_registry_task(loaded: LoadedTraceSession) -> bool:
     return loaded.task.get("task_source_kind") == "terminal_bench_registry"
-
-
-def _is_science_agent_bench_verified_task(loaded: LoadedTraceSession) -> bool:
-    metadata = loaded.metadata or {}
-    return (
-        loaded.task.get("task_source_kind") == "science_agent_bench_verified"
-        or metadata.get("benchmark") == "science-agent-bench-verified"
-    )
 
 
 def _requires_task_container(loaded: LoadedTraceSession) -> bool:
