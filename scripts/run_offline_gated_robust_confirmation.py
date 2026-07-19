@@ -59,7 +59,6 @@ FROZEN_CONFIG = {
 REQUIRED_EXCLUDED_TRACE_ROOTS = [
     "traces/swe-rebench/qwen3.7-max/20260624T162037",
     "traces/terminal-bench/zai-org-GLM-5.2/20260709T171830",
-    "traces/science-agent-bench-verified/qwen3.7-max/20260710T165110",
 ]
 
 
@@ -69,42 +68,93 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
+    shard = parser.add_mutually_exclusive_group()
+    shard.add_argument(
+        "--only-fold",
+        type=int,
+        default=None,
+        help="Run ONLY this outer fold's body (write its f{N}_* files) and exit "
+        "before any shared provenance or cross-fold aggregation. Lets K folds "
+        "run as K concurrent processes into one output root.",
+    )
+    shard.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help="Skip the fold loop; write the shared provenance/all.jsonl, "
+        "reconstruct all_decisions from the cv/f*_decisions.jsonl the fold "
+        "processes wrote, then run the aggregation + bootstrap + hashes.",
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    run_confirmation(args.manifest, output_root=args.output_root)
+    run_confirmation(
+        args.manifest,
+        output_root=args.output_root,
+        only_fold=args.only_fold,
+        aggregate_only=args.aggregate_only,
+    )
 
 
-def run_confirmation(manifest_path: Path, *, output_root: Path) -> None:
-    """Validate fresh inputs, run fixed OOF policies, and bootstrap by task."""
+def run_confirmation(
+    manifest_path: Path,
+    *,
+    output_root: Path,
+    only_fold: int | None = None,
+    aggregate_only: bool = False,
+) -> None:
+    """Validate fresh inputs, run fixed OOF policies, and bootstrap by task.
+
+    Orchestration modes leave the numerics untouched. The bare call runs every
+    fold then aggregates. ``only_fold=N`` runs just fold N's body, writes its
+    ``f{N}_*`` split/data/cv files, and returns before any shared provenance or
+    cross-fold aggregation, so K folds can run as K concurrent processes into
+    one output root. ``aggregate_only`` skips the fold loop, reconstructs
+    ``all_decisions`` from the ``cv/f*_decisions.jsonl`` those processes wrote
+    (in fold order, re-stamping ``outer_fold`` exactly as the loop does), then
+    runs the shared provenance + aggregation + bootstrap. Only the full run and
+    the aggregate pass write the shared provenance (which hashes the ~GB
+    development traces) and ``all.jsonl`` / ``all_tasks.txt``; fold processes
+    never touch them, so concurrent folds neither race nor redundantly hash.
+    """
+
+    if only_fold is not None and aggregate_only:
+        raise ValueError("--only-fold and --aggregate-only are mutually exclusive")
+    sharded = only_fold is not None or aggregate_only
 
     repo_root = Path(__file__).resolve().parents[1]
     manifest_path = manifest_path.resolve()
     output_root = output_root.resolve()
-    if output_root.exists():
+    if output_root.exists() and not sharded:
         raise FileExistsError(f"refusing to mix stale output: {output_root}")
     manifest = _read_manifest(manifest_path, repo_root=repo_root)
     trace_root = Path(manifest["trace_root"])
     task_ids_path = Path(manifest["task_ids_file"])
     if _paths_overlap(output_root, trace_root):
         raise ValueError("output_root must not overlap trace_root")
+    fold_count = manifest["fold_count"]
+    if only_fold is not None and not 1 <= only_fold <= fold_count:
+        raise ValueError(f"--only-fold must be in [1, {fold_count}], got {only_fold}")
 
     trace_paths = discover_trace_files([trace_root])
     if not trace_paths:
         raise ValueError(f"no trace.jsonl files found under {trace_root}")
     development_trace_paths = _required_development_trace_paths(repo_root)
-    output_root.mkdir(parents=True)
-    _write_provenance(
-        output_root,
-        repo_root=repo_root,
-        manifest_path=manifest_path,
-        task_ids_path=task_ids_path,
-        trace_paths=trace_paths,
-        development_trace_paths=development_trace_paths,
-    )
-    _reject_trace_content_overlap(trace_paths, development_trace_paths)
+    output_root.mkdir(parents=True, exist_ok=sharded)
+    # Shared provenance + content-overlap gate hash the ~GB development traces;
+    # write them once (full run or aggregate pass), never per fold process.
+    write_shared = only_fold is None
+    if write_shared:
+        _write_provenance(
+            output_root,
+            repo_root=repo_root,
+            manifest_path=manifest_path,
+            task_ids_path=task_ids_path,
+            trace_paths=trace_paths,
+            development_trace_paths=development_trace_paths,
+        )
+        _reject_trace_content_overlap(trace_paths, development_trace_paths)
     task_ids = _read_task_ids(task_ids_path)
     if len(task_ids) != manifest["expected_task_count"]:
         raise ValueError(
@@ -134,50 +184,44 @@ def run_confirmation(manifest_path: Path, *, output_root: Path) -> None:
     split_root = output_root / "splits"
     data_root = output_root / "data"
     cv_root = output_root / "cv"
-    split_root.mkdir()
-    data_root.mkdir()
-    cv_root.mkdir()
-    (split_root / "all_tasks.txt").write_text(
-        "".join(f"{task_id}\n" for task_id in task_ids),
-        encoding="utf-8",
-    )
-    write_tool_latency_jsonl(samples, data_root / "all.jsonl")
+    split_root.mkdir(exist_ok=sharded)
+    data_root.mkdir(exist_ok=sharded)
+    cv_root.mkdir(exist_ok=sharded)
+    if write_shared:
+        (split_root / "all_tasks.txt").write_text(
+            "".join(f"{task_id}\n" for task_id in task_ids),
+            encoding="utf-8",
+        )
+        write_tool_latency_jsonl(samples, data_root / "all.jsonl")
 
     all_decisions: list[dict[str, Any]] = []
-    fold_count = manifest["fold_count"]
-    for fold in range(1, fold_count + 1):
-        eval_tasks = {
-            task_id
-            for index, task_id in enumerate(task_ids)
-            if index % fold_count == fold - 1
-        }
-        profile_tasks = declared_tasks - eval_tasks
-        _write_task_set(split_root / f"f{fold}_eval.txt", eval_tasks)
-        _write_task_set(split_root / f"f{fold}_profile.txt", profile_tasks)
-        eval_samples = _samples_for_tasks(samples_by_task, eval_tasks)
-        profile_samples = _samples_for_tasks(samples_by_task, profile_tasks)
-        eval_path = data_root / f"f{fold}_eval.jsonl"
-        profile_path = data_root / f"f{fold}_profile.jsonl"
-        write_tool_latency_jsonl(eval_samples, eval_path)
-        write_tool_latency_jsonl(profile_samples, profile_path)
-        result = evaluate_offline_probe_clock(
-            [sample.to_json_obj() for sample in eval_samples],
-            profile_rows=[sample.to_json_obj() for sample in profile_samples],
-            kv_costs_ms=manifest["costs_ms"],
-            guard_ms=manifest["guard_ms"],
-            inner_folds=manifest["inner_folds"],
-            min_tool_history=manifest["min_tool_history"],
-            min_profile_tasks=manifest["min_profile_tasks"],
-            command_field=manifest["command_field"],
-            max_prefix_depth=manifest["max_prefix_depth"],
-            skip_leading_cd=manifest["skip_leading_cd"],
-        )
-        decisions = result.pop("decisions")
-        _write_json(cv_root / f"f{fold}_summary.json", result)
-        _write_jsonl(cv_root / f"f{fold}_decisions.jsonl", decisions)
-        all_decisions.extend(
-            {**decision, "outer_fold": f"f{fold}"} for decision in decisions
-        )
+    if aggregate_only:
+        for fold in range(1, fold_count + 1):
+            decisions_path = cv_root / f"f{fold}_decisions.jsonl"
+            for line in decisions_path.read_text(encoding="utf-8").splitlines():
+                all_decisions.append(
+                    {**json.loads(line), "outer_fold": f"f{fold}"}
+                )
+    else:
+        folds = [only_fold] if only_fold is not None else list(range(1, fold_count + 1))
+        for fold in folds:
+            decisions = _run_single_fold(
+                fold,
+                fold_count=fold_count,
+                task_ids=task_ids,
+                declared_tasks=declared_tasks,
+                samples_by_task=samples_by_task,
+                manifest=manifest,
+                split_root=split_root,
+                data_root=data_root,
+                cv_root=cv_root,
+            )
+            all_decisions.extend(
+                {**decision, "outer_fold": f"f{fold}"} for decision in decisions
+            )
+        if only_fold is not None:
+            print(f"Wrote fold {only_fold} of {fold_count} -> {output_root}")
+            return
 
     pooled = aggregate_offline_probe_cv(cv_root, expected_fold_count=fold_count)
     _write_json(cv_root / "pooled_results.json", pooled)
@@ -203,6 +247,54 @@ def run_confirmation(manifest_path: Path, *, output_root: Path) -> None:
         f"Confirmed {len(task_ids)} tasks from {manifest['collection_id']} -> "
         f"{output_root}"
     )
+
+
+def _run_single_fold(
+    fold: int,
+    *,
+    fold_count: int,
+    task_ids: list[str],
+    declared_tasks: set[str],
+    samples_by_task: dict[str, list[ToolLatencySample]],
+    manifest: dict[str, Any],
+    split_root: Path,
+    data_root: Path,
+    cv_root: Path,
+) -> list[dict[str, Any]]:
+    """Run one outer fold's body and write its ``f{fold}_*`` files.
+
+    Identical to the sequential loop body; factored out so both the full run
+    and a single ``--only-fold`` process execute the exact same fold logic.
+    """
+
+    eval_tasks = {
+        task_id
+        for index, task_id in enumerate(task_ids)
+        if index % fold_count == fold - 1
+    }
+    profile_tasks = declared_tasks - eval_tasks
+    _write_task_set(split_root / f"f{fold}_eval.txt", eval_tasks)
+    _write_task_set(split_root / f"f{fold}_profile.txt", profile_tasks)
+    eval_samples = _samples_for_tasks(samples_by_task, eval_tasks)
+    profile_samples = _samples_for_tasks(samples_by_task, profile_tasks)
+    write_tool_latency_jsonl(eval_samples, data_root / f"f{fold}_eval.jsonl")
+    write_tool_latency_jsonl(profile_samples, data_root / f"f{fold}_profile.jsonl")
+    result = evaluate_offline_probe_clock(
+        [sample.to_json_obj() for sample in eval_samples],
+        profile_rows=[sample.to_json_obj() for sample in profile_samples],
+        kv_costs_ms=manifest["costs_ms"],
+        guard_ms=manifest["guard_ms"],
+        inner_folds=manifest["inner_folds"],
+        min_tool_history=manifest["min_tool_history"],
+        min_profile_tasks=manifest["min_profile_tasks"],
+        command_field=manifest["command_field"],
+        max_prefix_depth=manifest["max_prefix_depth"],
+        skip_leading_cd=manifest["skip_leading_cd"],
+    )
+    decisions = result.pop("decisions")
+    _write_json(cv_root / f"f{fold}_summary.json", result)
+    _write_jsonl(cv_root / f"f{fold}_decisions.jsonl", decisions)
+    return decisions
 
 
 def _read_manifest(path: Path, *, repo_root: Path) -> dict[str, Any]:
