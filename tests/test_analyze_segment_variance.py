@@ -23,9 +23,11 @@ from scripts.analyze_segment_variance import (
     Config,
     Segment,
     atom_key,
+    atom_trie_diagnostics,
     build_chains,
     cross_validated_predictions,
     fit_atom_identity,
+    fit_atom_trie,
     fit_chain_prefix,
     mae,
     r2_score,
@@ -192,11 +194,106 @@ def test_cross_validated_predictions_are_out_of_sample() -> None:
                    level, "cd && make")
         )
     cfg = Config(
-        fold_count=2, prefix_depth=4, min_prefix_evidence=1,
+        fold_count=2, prefix_depth=4, min_prefix_evidence=1, atom_depth=4,
         token_bin_count=2, min_atom_count=1, min_family_count=1,
         tail_percentile=90.0,
     )
     preds = cross_validated_predictions(chains, cfg)
+    assert "atom_trie" in preds
     for _name, (y_true, y_pred, fams) in preds.items():
         assert len(y_true) == len(chains)
         assert all(f == "cd>>make" for f in fams)
+
+
+def test_build_chains_tokenizes_each_segment_per_atom() -> None:
+    # Per-atom tokenization uses the same tokenizer as the chain trie, applied
+    # to each segment's own command_text (heads path-basenamed, args kept).
+    samples = [
+        SegmentLatencySample(
+            sample_id="s0", source_trace="tr", task_id="task-a", agent_id="ag",
+            action_id="a1", tool_name="exec", segment_index=0,
+            segment_command="cd /testbed", segment_ms=1.0, t_start_ms=0.0,
+            t_end_ms=1.0, parent_chain_command="cd /testbed && python3 -m pytest",
+            parent_total_ms=50.0, parent_raw_total_ms=50.0,
+        ),
+        SegmentLatencySample(
+            sample_id="s1", source_trace="tr", task_id="task-a", agent_id="ag",
+            action_id="a1", tool_name="exec", segment_index=1,
+            segment_command="/usr/bin/python3 -m pytest", segment_ms=49.0,
+            t_start_ms=1.0, t_end_ms=50.0,
+            parent_chain_command="cd /testbed && python3 -m pytest",
+            parent_total_ms=50.0, parent_raw_total_ms=50.0,
+        ),
+    ]
+    (chain,) = build_chains(samples)
+    assert chain.segments[0].tokens == ("cd", "/testbed")
+    assert chain.segments[1].tokens == ("python3", "-m", "pytest")
+    assert chain.segments[1].atom == "python3"
+    assert chain.segments[1].token_count == 3
+
+
+def test_fit_atom_trie_backs_off_deepest_to_verb_to_global() -> None:
+    # Two train chains, single python3 segment "python3 a.py" with durations
+    # 10 and 20: node "exec:python3 a.py" (depth 2) and "exec:python3" (depth 1)
+    # each carry [10, 20] -> median 15; global segment median = 15.
+    def seg(tokens: tuple[str, ...], dur: float) -> Segment:
+        return Segment(atom=tokens[0], duration_ms=dur, token_count=len(tokens),
+                       tokens=tokens)
+
+    train = [
+        _chain("t1", [seg(("python3", "a.py"), 10.0)], 10.0, "python3 a.py"),
+        _chain("t2", [seg(("python3", "a.py"), 20.0)], 20.0, "python3 a.py"),
+    ]
+    model = fit_atom_trie(train, max_depth=4, min_evidence=2)
+    # overhead = median(10 - 15, 20 - 15) = median(-5, 5) = 0.
+    # deepest node hit (depth 2): prediction 0 + 15 = 15.
+    deep = _chain("t9", [seg(("python3", "a.py"), 0.0)], 0.0, "python3 a.py")
+    assert model.predict(deep) == pytest.approx(15.0)
+    assert model.match_depth(deep, deep.segments[0]) == 2
+    # unseen args "python3 c.py": depth-2 key absent -> verb node (depth 1) = 15.
+    verb = _chain("t9", [seg(("python3", "c.py"), 0.0)], 0.0, "python3 c.py")
+    assert model.predict(verb) == pytest.approx(15.0)
+    assert model.match_depth(verb, verb.segments[0]) == 1
+    # unseen verb "grep": no key with evidence -> global-atom median, depth 0.
+    glob = _chain("t9", [seg(("grep",), 0.0)], 0.0, "grep")
+    assert model.predict(glob) == pytest.approx(15.0)
+    assert model.match_depth(glob, glob.segments[0]) == 0
+
+
+def test_atom_trie_diagnostics_depth_math_is_closed_form() -> None:
+    # Every task shares the "cd /t" segment (depth-2 node always in train) but
+    # each task's "make <task>" second token is unique, so a test task's own
+    # deep key is never in its training set -> it backs off to the verb node.
+    def seg(tokens: tuple[str, ...], dur: float) -> Segment:
+        return Segment(atom=tokens[0], duration_ms=dur, token_count=len(tokens),
+                       tokens=tokens)
+
+    chains = []
+    for task in ("t1", "t2", "t3", "t4"):
+        chains.append(
+            _chain(
+                task,
+                [seg(("cd", "/t"), 1.0), seg(("make", task), 5.0)],
+                6.0,
+                f"cd /t && make {task}",
+            )
+        )
+    cfg = Config(
+        fold_count=2, prefix_depth=4, min_prefix_evidence=1, atom_depth=4,
+        token_bin_count=2, min_atom_count=1, min_family_count=1,
+        tail_percentile=90.0,
+    )
+    diag = atom_trie_diagnostics(chains, cfg)
+    by_atom = {row["atom"]: row for row in diag["per_atom"]}
+    # cd always resolves to its shared depth-2 node.
+    assert by_atom["cd"]["mean_matched_depth"] == pytest.approx(2.0)
+    assert by_atom["cd"]["verb_level_fraction"] == pytest.approx(0.0)
+    # make always backs off to the verb node (depth 1); never global fallback
+    # because the "exec:make" verb node is populated by the other tasks.
+    assert by_atom["make"]["mean_matched_depth"] == pytest.approx(1.0)
+    assert by_atom["make"]["verb_level_fraction"] == pytest.approx(1.0)
+    assert by_atom["make"]["global_fallback_fraction"] == pytest.approx(0.0)
+    # Overall: 8 atom predictions, depths {2 (cd), 1 (make)} in equal share.
+    assert diag["overall"]["atom_prediction_count"] == 8
+    assert diag["overall"]["mean_matched_depth"] == pytest.approx(1.5)
+    assert diag["overall"]["verb_level_fraction"] == pytest.approx(0.5)

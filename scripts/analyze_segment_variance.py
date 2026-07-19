@@ -11,13 +11,26 @@ objection by observing each atom's duration directly; the remaining question
 is whether atoms + their arguments carry the variance, or whether
 chain-context / state-sharing dominates.
 
-Four out-of-sample models predict a chain's ``parent_total_ms`` on
+Five out-of-sample models predict a chain's ``parent_total_ms`` on
 task-grouped train/test folds:
 
 * ``atom_identity``     - global overhead + sum of per-atom TRAIN median
   durations (the additive model's dream case, now with direct observation).
 * ``atom_plus_args``    - same, conditioned additionally on a coarse
   per-segment argument-size bin (token count).
+* ``atom_trie``         - the model the advisor actually proposed: a PER-ATOM
+  command-prefix trie. It applies the chain trie's conditioning one level
+  down - each segment's own token stream yields nested prefix keys
+  (``verb``, ``verb arg1``, ...) up to ``--atom-depth`` (default 4); per key
+  node it collects observed SEGMENT durations, gated by the exploratory
+  ``--min-prefix-evidence`` knob (like ``chain_prefix_cdskip``, NOT a cert
+  literal). Each atom takes its deepest evidence-passing node's TRAIN median,
+  backing off deeper -> shallower -> verb -> global-atom-median; the chain
+  prediction sums the per-atom costs and adds the same train-residual overhead
+  intercept the other additive models get, for fairness. A per-model
+  diagnostic reports mean matched depth per atom and the verb-level fallback
+  fraction, exposing whether argument thinness stops evidence from
+  conditioning below the verb regardless of the MAE outcome.
 * ``chain_prefix_cert`` - the trie's conditioning unit, EXACTLY as certified:
   TRAIN median ``parent_total_ms`` at the deepest depth-capped command-prefix
   key with enough evidence, backing off to shallower keys, the tool, then
@@ -64,13 +77,14 @@ import json
 from pathlib import Path
 import statistics
 import subprocess
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 import numpy as np
 
 from trace_collect.command_features import (
     command_has_concurrent_segments,
     command_prefix_keys,
+    segment_prefix_keys,
     shell_command_heads,
     shell_command_prefix_tokens,
 )
@@ -111,6 +125,10 @@ class Segment:
     atom: str
     duration_ms: float
     token_count: int
+    # Normalized per-segment token stream (same tokenizer command_prefix_keys
+    # uses, applied PER ATOM) - feeds the atom_trie model's prefix keys.
+    # Defaults empty so non-trie fixtures need not supply it.
+    tokens: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -137,6 +155,22 @@ class Chain:
         return sum(seg.duration_ms for seg in self.segments)
 
 
+def _build_segment(sample: SegmentLatencySample) -> Segment:
+    """One segment sample with its atom, duration and normalized token stream.
+
+    The token stream is tokenized once (same tokenizer as the chain trie) and
+    reused for both ``token_count`` and the atom_trie prefix keys.
+    """
+
+    tokens = tuple(shell_command_prefix_tokens(sample.segment_command))
+    return Segment(
+        atom=atom_key(sample.segment_command),
+        duration_ms=sample.segment_ms,
+        token_count=len(tokens),
+        tokens=tokens,
+    )
+
+
 def build_chains(samples: Sequence[SegmentLatencySample]) -> list[Chain]:
     """Group per-segment samples into chains keyed by (trace, action)."""
 
@@ -147,14 +181,7 @@ def build_chains(samples: Sequence[SegmentLatencySample]) -> list[Chain]:
     for (source_trace, action_id), rows in grouped.items():
         rows.sort(key=lambda s: s.segment_index)
         first = rows[0]
-        segments = tuple(
-            Segment(
-                atom=atom_key(s.segment_command),
-                duration_ms=s.segment_ms,
-                token_count=segment_token_count(s.segment_command),
-            )
-            for s in rows
-        )
+        segments = tuple(_build_segment(s) for s in rows)
         chains.append(
             Chain(
                 task_id=first.task_id,
@@ -265,6 +292,71 @@ def fit_atom_plus_args(
         return overhead + sum_costs(chain)
 
     return predict
+
+
+@dataclass(frozen=True)
+class AtomTrieModel:
+    """Per-atom trie predictor plus a match-depth probe for the diagnostic."""
+
+    predict: Callable[[Chain], float]
+    match_depth: Callable[[Chain, Segment], int]
+
+
+def fit_atom_trie(
+    train: Sequence[Chain], *, max_depth: int, min_evidence: int
+) -> AtomTrieModel:
+    """Per-atom command-prefix trie: the chain trie applied ONE LEVEL DOWN.
+
+    Where ``fit_chain_prefix`` keys the whole chain command, this keys each
+    segment's own token stream: nested prefix keys ``verb``, ``verb arg1``, ...
+    up to ``max_depth``, each node collecting observed SEGMENT durations gated
+    by ``min_evidence`` (the exploratory sweep knob, like ``chain_prefix_cdskip``
+    - not a cert literal). Prediction per atom is the deepest evidence-passing
+    node's TRAIN median, backing off deeper -> shallower -> verb, then the
+    global segment median. The chain prediction sums the per-atom costs and
+    adds the same train-residual overhead intercept the other additive models
+    use (``fit_atom_identity``/``fit_atom_plus_args``), so the level bias is
+    treated identically across models - apples-to-apples.
+
+    Returns both the predictor and a ``match_depth(chain, seg)`` probe (the
+    depth of the node that served an atom: 1..max_depth for a prefix node, 0
+    for the global-atom fallback) for the headwind-#2 diagnostic.
+    """
+
+    by_key: dict[str, list[float]] = defaultdict(list)
+    all_durations: list[float] = []
+    for chain in train:
+        for seg in chain.segments:
+            for key in segment_prefix_keys(
+                chain.tool_name, list(seg.tokens), max_depth=max_depth
+            ):
+                by_key[key].append(seg.duration_ms)
+            all_durations.append(seg.duration_ms)
+    key_median = {k: _median(v) for k, v in by_key.items() if len(v) >= min_evidence}
+    global_median = _median(all_durations)
+
+    def seg_cost_depth(chain: Chain, seg: Segment) -> tuple[float, int]:
+        keys = segment_prefix_keys(
+            chain.tool_name, list(seg.tokens), max_depth=max_depth
+        )
+        for depth in range(len(keys), 0, -1):  # deepest key first
+            median = key_median.get(keys[depth - 1])
+            if median is not None:
+                return median, depth
+        return global_median, 0
+
+    def sum_costs(chain: Chain) -> float:
+        return sum(seg_cost_depth(chain, seg)[0] for seg in chain.segments)
+
+    overhead = _median([chain.parent_total_ms - sum_costs(chain) for chain in train])
+
+    def predict(chain: Chain) -> float:
+        return overhead + sum_costs(chain)
+
+    def match_depth(chain: Chain, seg: Segment) -> int:
+        return seg_cost_depth(chain, seg)[1]
+
+    return AtomTrieModel(predict=predict, match_depth=match_depth)
 
 
 def fit_chain_prefix(
@@ -382,6 +474,12 @@ _MODEL_FITTERS = {
     "atom_plus_args": lambda train, cfg: fit_atom_plus_args(
         train, bin_count=cfg.token_bin_count
     ),
+    # The advisor's proposal: per-atom command-prefix trie. Exploratory, so it
+    # uses the sweep knobs (cfg.atom_depth / cfg.min_prefix_evidence), NOT cert
+    # literals - same footing as chain_prefix_cdskip.
+    "atom_trie": lambda train, cfg: fit_atom_trie(
+        train, max_depth=cfg.atom_depth, min_evidence=cfg.min_prefix_evidence
+    ).predict,
     # Certified trie, exactly: skip_leading_cd=False, max_depth and
     # min_evidence are the frozen cert literals above (never cfg) - the
     # faithful rematch baseline for the atom-vs-chain question.
@@ -403,24 +501,34 @@ _MODEL_FITTERS = {
 }
 
 
+def _task_folds(
+    chains: Sequence[Chain], cfg: "Config"
+) -> Iterator[tuple[list[Chain], list[Chain]]]:
+    """Yield (train, test) chain splits for each task-grouped fold.
+
+    Empty-train/empty-test folds are skipped. Shared by the CV predictions and
+    the atom_trie diagnostic so both see exactly the same fold split.
+    """
+
+    rows = [{"task_id": chain.task_id} for chain in chains]
+    folds = balanced_task_folds(rows, fold_count=cfg.fold_count)
+    task_to_fold = {task: index for index, fold in enumerate(folds) for task in fold}
+    for test_index in range(cfg.fold_count):
+        train = [c for c in chains if task_to_fold[c.task_id] != test_index]
+        test = [c for c in chains if task_to_fold[c.task_id] == test_index]
+        if train and test:
+            yield train, test
+
+
 def cross_validated_predictions(
     chains: Sequence[Chain], cfg: "Config"
 ) -> dict[str, tuple[np.ndarray, np.ndarray, list[str]]]:
     """Task-grouped out-of-sample (y_true, y_pred, family) per model."""
 
-    rows = [{"task_id": chain.task_id} for chain in chains]
-    folds = balanced_task_folds(rows, fold_count=cfg.fold_count)
-    task_to_fold = {
-        task: index for index, fold in enumerate(folds) for task in fold
-    }
     collected: dict[str, tuple[list[float], list[float], list[str]]] = {
         name: ([], [], []) for name in _MODEL_FITTERS
     }
-    for test_index in range(cfg.fold_count):
-        train = [c for c in chains if task_to_fold[c.task_id] != test_index]
-        test = [c for c in chains if task_to_fold[c.task_id] == test_index]
-        if not train or not test:
-            continue
+    for train, test in _task_folds(chains, cfg):
         for name, fitter in _MODEL_FITTERS.items():
             predict = fitter(train, cfg)
             yt, yp, fam = collected[name]
@@ -432,6 +540,54 @@ def cross_validated_predictions(
         name: (np.asarray(yt), np.asarray(yp), fam)
         for name, (yt, yp, fam) in collected.items()
     }
+
+
+def atom_trie_diagnostics(chains: Sequence[Chain], cfg: "Config") -> dict[str, Any]:
+    """Out-of-sample match-depth accounting for the atom_trie model only.
+
+    For every test-fold atom, records the trie depth that served its prediction
+    (1..atom_depth for a prefix node, 0 for the global-atom fallback), using the
+    same folds as the CV predictions. Reports per-atom mean matched depth and
+    the verb-level fallback fraction (depth == 1): the direct test of whether
+    argument thinness (headwind #2) stops evidence from conditioning below the
+    verb, independent of the MAE outcome.
+    """
+
+    by_atom: dict[str, list[int]] = defaultdict(list)
+    for train, test in _task_folds(chains, cfg):
+        model = fit_atom_trie(
+            train, max_depth=cfg.atom_depth, min_evidence=cfg.min_prefix_evidence
+        )
+        for chain in test:
+            for seg in chain.segments:
+                by_atom[seg.atom].append(model.match_depth(chain, seg))
+    per_atom: list[dict[str, Any]] = []
+    all_depths: list[int] = []
+    for atom, depths in by_atom.items():
+        all_depths.extend(depths)
+        per_atom.append(
+            {
+                "atom": atom,
+                "count": len(depths),
+                "mean_matched_depth": float(np.mean(depths)),
+                "verb_level_fraction": float(np.mean([d == 1 for d in depths])),
+                "global_fallback_fraction": float(np.mean([d == 0 for d in depths])),
+            }
+        )
+    per_atom.sort(key=lambda row: -row["count"])
+    overall = {
+        "atom_prediction_count": len(all_depths),
+        "atom_depth": cfg.atom_depth,
+        "min_evidence": cfg.min_prefix_evidence,
+        "mean_matched_depth": float(np.mean(all_depths)) if all_depths else float("nan"),
+        "verb_level_fraction": float(np.mean([d == 1 for d in all_depths]))
+        if all_depths
+        else float("nan"),
+        "global_fallback_fraction": float(np.mean([d == 0 for d in all_depths]))
+        if all_depths
+        else float("nan"),
+    }
+    return {"overall": overall, "per_atom": per_atom}
 
 
 # --------------------------------------------------------------------------- #
@@ -658,6 +814,7 @@ class Config:
     fold_count: int
     prefix_depth: int
     min_prefix_evidence: int
+    atom_depth: int
     token_bin_count: int
     min_atom_count: int
     min_family_count: int
@@ -671,6 +828,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fold-count", type=int, default=5)
     parser.add_argument("--prefix-depth", type=int, default=4)
     parser.add_argument("--min-prefix-evidence", type=int, default=5)
+    parser.add_argument(
+        "--atom-depth",
+        type=int,
+        default=4,
+        help="Per-atom prefix depth budget for the atom_trie model (default 4).",
+    )
     parser.add_argument("--token-bin-count", type=int, default=3)
     parser.add_argument("--min-atom-count", type=int, default=10)
     parser.add_argument("--min-family-count", type=int, default=20)
@@ -715,6 +878,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         fold_count=args.fold_count,
         prefix_depth=args.prefix_depth,
         min_prefix_evidence=args.min_prefix_evidence,
+        atom_depth=args.atom_depth,
         token_bin_count=args.token_bin_count,
         min_atom_count=args.min_atom_count,
         min_family_count=args.min_family_count,
@@ -775,6 +939,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "atom_vocabulary": atom_vocabulary(all_chains),
         "model_metrics": model_metrics,
         "per_family_metrics": per_family_metrics,
+        "atom_trie_diagnostics": atom_trie_diagnostics(multi, cfg),
         "atom_stability": atom_stability(multi, min_count=cfg.min_atom_count),
         "family_variance": family_variance_shares(
             multi, min_count=cfg.min_family_count
@@ -877,6 +1042,33 @@ def render_markdown(results: dict[str, Any]) -> str:
             f"| {name} | {_fmt(block.get('r2'))} | {_fmt(block.get('mae_ms'))} | "
             f"{_fmt(block.get('tail_mae_ms'))} | {_fmt(block.get('tail_r2'))} | "
             f"{_fmt(block.get('middle_mae_ms'))} |"
+        )
+    lines.append("")
+    diag = results["atom_trie_diagnostics"]
+    overall = diag["overall"]
+    lines.append("## atom_trie match-depth diagnostic (headwind #2: argument thinness)")
+    lines.append("")
+    lines.append(
+        f"Per-atom prefix depth budget {overall['atom_depth']}, evidence gate "
+        f"{overall['min_evidence']}. Matched depth = trie level serving each "
+        "atom (0 = global-atom fallback, 1 = verb-only node, higher = "
+        "argument-conditioned). Over "
+        f"{overall['atom_prediction_count']} out-of-sample atom predictions: "
+        f"mean matched depth {_fmt(overall['mean_matched_depth'])}, verb-level "
+        f"{overall['verb_level_fraction']:.1%}, global fallback "
+        f"{overall['global_fallback_fraction']:.1%}."
+    )
+    lines.append("")
+    lines.append("| atom | atoms | mean depth | verb-level | global fallback |")
+    lines.append("| --- | --- | --- | --- | --- |")
+    for row in diag["per_atom"]:
+        if row["count"] < results["config"]["min_atom_count"]:
+            continue
+        lines.append(
+            f"| {row['atom']} | {row['count']} | "
+            f"{_fmt(row['mean_matched_depth'])} | "
+            f"{row['verb_level_fraction']:.1%} | "
+            f"{row['global_fallback_fraction']:.1%} |"
         )
     lines.append("")
     lines.append("## Atom-duration stability (lower CV = more stable across tasks)")

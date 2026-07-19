@@ -1,0 +1,2127 @@
+{
+  "provenance": {
+    "exploratory": true,
+    "final": true,
+    "replayed_on": "our_hardware",
+    "traces_dir": "traces/fresh-277-segtimeline",
+    "corpus_file_count": 277,
+    "git_sha": "714d38515eeb6039de8394fad5f098f312245e49",
+    "generated": "2026-07-19T15:42:55"
+  },
+  "config": {
+    "fold_count": 5,
+    "prefix_depth": 4,
+    "min_prefix_evidence": 5,
+    "atom_depth": 4,
+    "token_bin_count": 3,
+    "min_atom_count": 10,
+    "min_family_count": 20,
+    "tail_percentile": 90.0
+  },
+  "census": {
+    "trace_files": 277,
+    "tool_exec_count": 13410,
+    "timeline_present": 8953,
+    "telemetry_absent": 0,
+    "telemetry_coverage_fraction": 0.6676360924683072,
+    "concurrent_excluded": 4129,
+    "concurrent_excluded_fraction": 0.46118619457165194,
+    "duration_analysable": 4824
+  },
+  "reconciliation": {
+    "count": 4026,
+    "gap_ratio_median": 0.12631724706959419,
+    "gap_ratio_p10": 0.0020466895356717274,
+    "gap_ratio_p90": 0.6116509875544398,
+    "negative_gap_count": 0,
+    "negative_gap_fraction": 0.0
+  },
+  "chain_counts": {
+    "all_chains": 4824,
+    "multi_segment_chains": 4026,
+    "tasks": 277
+  },
+  "atom_vocabulary": [
+    {
+      "atom": "cd",
+      "count": 3501
+    },
+    {
+      "atom": "python3",
+      "count": 1469
+    },
+    {
+      "atom": "git",
+      "count": 959
+    },
+    {
+      "atom": "cat",
+      "count": 785
+    },
+    {
+      "atom": "__unparsed__",
+      "count": 645
+    },
+    {
+      "atom": "grep",
+      "count": 611
+    },
+    {
+      "atom": "echo",
+      "count": 455
+    },
+    {
+      "atom": "which",
+      "count": 257
+    },
+    {
+      "atom": "ls",
+      "count": 218
+    },
+    {
+      "atom": "python",
+      "count": 184
+    },
+    {
+      "atom": "pip3",
+      "count": 110
+    },
+    {
+      "atom": "find",
+      "count": 78
+    },
+    {
+      "atom": "pytest",
+      "count": 42
+    },
+    {
+      "atom": "bash",
+      "count": 34
+    },
+    {
+      "atom": "apt-get",
+      "count": 33
+    },
+    {
+      "atom": "[",
+      "count": 33
+    },
+    {
+      "atom": "pip",
+      "count": 30
+    },
+    {
+      "atom": "wc",
+      "count": 29
+    },
+    {
+      "atom": "sed",
+      "count": 26
+    },
+    {
+      "atom": "local",
+      "count": 22
+    },
+    {
+      "atom": "timeout",
+      "count": 22
+    },
+    {
+      "atom": "rm",
+      "count": 21
+    },
+    {
+      "atom": "head",
+      "count": 18
+    },
+    {
+      "atom": "source",
+      "count": 11
+    },
+    {
+      "atom": "conda",
+      "count": 11
+    },
+    {
+      "atom": "case",
+      "count": 11
+    },
+    {
+      "atom": "__conda_activate",
+      "count": 11
+    },
+    {
+      "atom": "__conda_hashr",
+      "count": 11
+    },
+    {
+      "atom": "hash",
+      "count": 11
+    },
+    {
+      "atom": "flake8",
+      "count": 8
+    },
+    {
+      "atom": "tail",
+      "count": 7
+    },
+    {
+      "atom": "mv",
+      "count": 6
+    },
+    {
+      "atom": "mkdir",
+      "count": 3
+    },
+    {
+      "atom": "touch",
+      "count": 3
+    },
+    {
+      "atom": "cp",
+      "count": 3
+    },
+    {
+      "atom": "true",
+      "count": 2
+    },
+    {
+      "atom": "awk",
+      "count": 1
+    },
+    {
+      "atom": "nosetests",
+      "count": 1
+    },
+    {
+      "atom": "sqlfluff",
+      "count": 1
+    },
+    {
+      "atom": "apt-cache",
+      "count": 1
+    },
+    {
+      "atom": "wget",
+      "count": 1
+    },
+    {
+      "atom": "ln",
+      "count": 1
+    },
+    {
+      "atom": "dvc",
+      "count": 1
+    },
+    {
+      "atom": "file",
+      "count": 1
+    },
+    {
+      "atom": "printf",
+      "count": 1
+    },
+    {
+      "atom": "rmdir",
+      "count": 1
+    },
+    {
+      "atom": "zope-testrunner",
+      "count": 1
+    }
+  ],
+  "model_metrics": {
+    "atom_identity": {
+      "count": 4026,
+      "r2": -0.002938106399223539,
+      "mae_ms": 1022.4250592399403,
+      "tail_percentile": 90.0,
+      "tail_threshold_ms": 962.15,
+      "tail_count": 403,
+      "tail_mae_ms": 9276.296099255584,
+      "tail_r2": -0.06622924675398179,
+      "middle_mae_ms": 104.31574951697488
+    },
+    "atom_plus_args": {
+      "count": 4026,
+      "r2": -0.0029904028536451577,
+      "mae_ms": 1022.4798980377547,
+      "tail_percentile": 90.0,
+      "tail_threshold_ms": 962.15,
+      "tail_count": 403,
+      "tail_mae_ms": 9273.202235732011,
+      "tail_r2": -0.06628393836585267,
+      "middle_mae_ms": 104.72083038918024
+    },
+    "atom_trie": {
+      "count": 4026,
+      "r2": 0.0009963529856583664,
+      "mae_ms": 974.302140958768,
+      "tail_percentile": 90.0,
+      "tail_threshold_ms": 962.15,
+      "tail_count": 403,
+      "tail_mae_ms": 8914.331862282877,
+      "tail_r2": -0.062056591192626964,
+      "middle_mae_ms": 91.10258873861441
+    },
+    "chain_prefix_cert": {
+      "count": 4026,
+      "r2": -0.0004975551221806374,
+      "mae_ms": 996.11130153999,
+      "tail_percentile": 90.0,
+      "tail_threshold_ms": 962.15,
+      "tail_count": 403,
+      "tail_mae_ms": 9059.825310173695,
+      "tail_r2": -0.063612493189527,
+      "middle_mae_ms": 99.15387800165608
+    },
+    "chain_prefix_cdskip": {
+      "count": 4026,
+      "r2": 0.0018934875893316105,
+      "mae_ms": 971.3515151515151,
+      "tail_percentile": 90.0,
+      "tail_threshold_ms": 962.15,
+      "tail_count": 403,
+      "tail_mae_ms": 8904.81029776675,
+      "tail_r2": -0.06111672175293137,
+      "middle_mae_ms": 88.88287330941208
+    }
+  },
+  "per_family_metrics": {
+    "atom_identity": {
+      "which>>python3>>ls": {
+        "count": 41,
+        "r2": -5398.733979739088,
+        "mae_ms": 208.2539634146342,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 14.4,
+        "tail_count": 5,
+        "tail_mae_ms": 209.0516,
+        "tail_r2": -5218.516605163457,
+        "middle_mae_ms": 208.14318055555555
+      },
+      "cd>>python3": {
+        "count": 1039,
+        "r2": -0.011078392143526683,
+        "mae_ms": 2302.93160346487,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2051.420000000001,
+        "tail_count": 104,
+        "tail_mae_ms": 19786.74141346154,
+        "tail_r2": -0.09885810759759295,
+        "middle_mae_ms": 358.2083732620321
+      },
+      "cd>>git": {
+        "count": 665,
+        "r2": -0.06069888199675111,
+        "mae_ms": 15.1235007518797,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.560000000000013,
+        "tail_count": 67,
+        "tail_mae_ms": 116.99005970149254,
+        "tail_r2": -0.6904544136746122,
+        "middle_mae_ms": 3.7103578595317726
+      },
+      "cd>>git>>git": {
+        "count": 57,
+        "r2": -0.03153422624478419,
+        "mae_ms": 8.408263157894735,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 24.83999999999999,
+        "tail_count": 6,
+        "tail_mae_ms": 51.39891666666667,
+        "tail_r2": -1.177846283862337,
+        "middle_mae_ms": 3.350539215686274
+      },
+      "cd>>git>>cat": {
+        "count": 102,
+        "r2": -0.02948544693267241,
+        "mae_ms": 2.3077352941176468,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 15.060000000000002,
+        "tail_count": 11,
+        "tail_mae_ms": 10.320727272727273,
+        "tail_r2": -6.639143337943873,
+        "middle_mae_ms": 1.3391318681318676
+      },
+      "echo>>cat": {
+        "count": 267,
+        "r2": -0.006234132509867818,
+        "mae_ms": 0.7861067415730336,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 28,
+        "tail_mae_ms": 2.293964285714286,
+        "tail_r2": -1.6918079389689713,
+        "middle_mae_ms": 0.6094539748953975
+      },
+      "cd>>pip3": {
+        "count": 87,
+        "r2": -0.08930990098942648,
+        "mae_ms": 2603.6337873563216,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 4084.1000000000013,
+        "tail_count": 9,
+        "tail_mae_ms": 20996.247944444443,
+        "tail_r2": -1.265363631936844,
+        "middle_mae_ms": 481.4090769230769
+      },
+      "which>>python3": {
+        "count": 34,
+        "r2": -844.8035803684097,
+        "mae_ms": 194.87714705882357,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 21.97,
+        "tail_count": 4,
+        "tail_mae_ms": 183.11950000000002,
+        "tail_r2": -7241.519735542245,
+        "middle_mae_ms": 196.44483333333338
+      },
+      "cd>>python": {
+        "count": 128,
+        "r2": -0.07027246905793794,
+        "mae_ms": 920.0207929687501,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2058.0299999999984,
+        "tail_count": 13,
+        "tail_mae_ms": 7169.166961538462,
+        "tail_r2": -0.7027338018695888,
+        "middle_mae_ms": 213.59557391304352
+      },
+      "cd>>ls": {
+        "count": 21,
+        "r2": 0.0037963506931436575,
+        "mae_ms": 0.6720476190476191,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.6,
+        "tail_count": 3,
+        "tail_mae_ms": 1.2211666666666667,
+        "tail_r2": -23.796962053571445,
+        "middle_mae_ms": 0.5805277777777778
+      },
+      "cd>>__unparsed__": {
+        "count": 521,
+        "r2": -0.06092338765754768,
+        "mae_ms": 460.0632341650672,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1004.4,
+        "tail_count": 53,
+        "tail_mae_ms": 3145.322613207547,
+        "tail_r2": -0.5369657661532499,
+        "middle_mae_ms": 155.9633472222222
+      },
+      "cd>>grep": {
+        "count": 288,
+        "r2": -0.006531094575789043,
+        "mae_ms": 3.632222222222222,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 9.73,
+        "tail_count": 29,
+        "tail_mae_ms": 26.9061724137931,
+        "tail_r2": -0.11003366232416334,
+        "middle_mae_ms": 1.0262586872586872
+      },
+      "cd>>cat": {
+        "count": 161,
+        "r2": -0.009273401229113132,
+        "mae_ms": 0.9050155279503105,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 17,
+        "tail_mae_ms": 2.794588235294118,
+        "tail_r2": -1.6933835401263209,
+        "middle_mae_ms": 0.6819409722222223
+      },
+      "cd>>echo>>cat": {
+        "count": 70,
+        "r2": -0.005960021682332117,
+        "mae_ms": 0.9539285714285717,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 9,
+        "tail_mae_ms": 3.116722222222222,
+        "tail_r2": -1.0989252279517459,
+        "middle_mae_ms": 0.6348278688524591
+      },
+      "cd>>pytest": {
+        "count": 28,
+        "r2": -0.15339402649411094,
+        "mae_ms": 15784.658374999999,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 41751.730000000054,
+        "tail_count": 3,
+        "tail_mae_ms": 123871.67416666668,
+        "tail_r2": -10.200855158931892,
+        "middle_mae_ms": 2814.216479999999
+      },
+      "which>>python3>>python3": {
+        "count": 30,
+        "r2": -1952.635114624041,
+        "mae_ms": 387.14578333333327,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.040000000000006,
+        "tail_count": 3,
+        "tail_mae_ms": 386.0878333333333,
+        "tail_r2": -1852.1562359340144,
+        "middle_mae_ms": 387.26333333333326
+      },
+      "cd>>__unparsed__>>__unparsed__": {
+        "count": 23,
+        "r2": -0.03462259088246622,
+        "mae_ms": 463.5915217391303,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1633.68,
+        "tail_count": 3,
+        "tail_mae_ms": 1683.6596666666665,
+        "tail_r2": -14.420015632094733,
+        "middle_mae_ms": 280.5813
+      },
+      "cd>>__unparsed__>>python3": {
+        "count": 27,
+        "r2": -0.14217601047667028,
+        "mae_ms": 962.1541851851852,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 3232.600000000004,
+        "tail_count": 3,
+        "tail_mae_ms": 6034.4905,
+        "tail_r2": -8.051192644194606,
+        "middle_mae_ms": 328.1121458333334
+      },
+      "cd>>pip": {
+        "count": 25,
+        "r2": -0.05942424189636353,
+        "mae_ms": 245.16812,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.440000000000001,
+        "tail_count": 3,
+        "tail_mae_ms": 2036.7108333333333,
+        "tail_r2": -0.8819279405492944,
+        "middle_mae_ms": 0.8668409090909089
+      }
+    },
+    "atom_plus_args": {
+      "which>>python3>>ls": {
+        "count": 41,
+        "r2": -5687.752108169117,
+        "mae_ms": 213.74823170731707,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 14.4,
+        "tail_count": 5,
+        "tail_mae_ms": 215.99120000000002,
+        "tail_r2": -5558.392613515056,
+        "middle_mae_ms": 213.43670833333329
+      },
+      "cd>>python3": {
+        "count": 1039,
+        "r2": -0.011141448539088383,
+        "mae_ms": 2301.236511549567,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2051.420000000001,
+        "tail_count": 104,
+        "tail_mae_ms": 19785.169769230768,
+        "tail_r2": -0.09893427012095035,
+        "middle_mae_ms": 356.4995502673797
+      },
+      "cd>>git": {
+        "count": 665,
+        "r2": -0.0606442394649096,
+        "mae_ms": 15.122132330827066,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.560000000000013,
+        "tail_count": 67,
+        "tail_mae_ms": 116.98274626865671,
+        "tail_r2": -0.6903827373594196,
+        "middle_mae_ms": 3.7096555183946487
+      },
+      "cd>>git>>git": {
+        "count": 57,
+        "r2": -0.03138049798845022,
+        "mae_ms": 8.411421052631578,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 24.83999999999999,
+        "tail_count": 6,
+        "tail_mae_ms": 51.39391666666666,
+        "tail_r2": -1.1774319666373882,
+        "middle_mae_ms": 3.3546568627450974
+      },
+      "cd>>git>>cat": {
+        "count": 102,
+        "r2": -0.030998458857139477,
+        "mae_ms": 2.3062303921568628,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 15.060000000000002,
+        "tail_count": 11,
+        "tail_mae_ms": 10.33359090909091,
+        "tail_r2": -6.656822823834596,
+        "middle_mae_ms": 1.3358901098901095
+      },
+      "echo>>cat": {
+        "count": 267,
+        "r2": -0.005691579743265951,
+        "mae_ms": 0.7852771535580524,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 28,
+        "tail_mae_ms": 2.3045000000000004,
+        "tail_r2": -1.704884879192286,
+        "middle_mae_ms": 0.6072928870292886
+      },
+      "cd>>pip3": {
+        "count": 87,
+        "r2": -0.08930957959468833,
+        "mae_ms": 2603.6355114942526,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 4084.1000000000013,
+        "tail_count": 9,
+        "tail_mae_ms": 20996.240166666666,
+        "tail_r2": -1.2653629944355003,
+        "middle_mae_ms": 481.4118974358974
+      },
+      "which>>python3": {
+        "count": 34,
+        "r2": -903.7719363757244,
+        "mae_ms": 201.27492647058827,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 21.97,
+        "tail_count": 4,
+        "tail_mae_ms": 191.765,
+        "tail_r2": -7963.8012100598735,
+        "middle_mae_ms": 202.54291666666666
+      },
+      "cd>>python": {
+        "count": 128,
+        "r2": -0.07027090488193677,
+        "mae_ms": 920.0204804687501,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2058.0299999999984,
+        "tail_count": 13,
+        "tail_mae_ms": 7169.161576923078,
+        "tail_r2": -0.7027318530391518,
+        "middle_mae_ms": 213.5958347826087
+      },
+      "cd>>ls": {
+        "count": 21,
+        "r2": 0.0006931659797676515,
+        "mae_ms": 0.6720476190476191,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.6,
+        "tail_count": 3,
+        "tail_mae_ms": 1.2111666666666663,
+        "tail_r2": -23.46406919642857,
+        "middle_mae_ms": 0.5821944444444446
+      },
+      "cd>>__unparsed__": {
+        "count": 521,
+        "r2": -0.060920937309702605,
+        "mae_ms": 460.06096928982726,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1004.4,
+        "tail_count": 53,
+        "tail_mae_ms": 3145.3146886792456,
+        "tail_r2": -0.536963103128943,
+        "middle_mae_ms": 155.96172329059831
+      },
+      "cd>>grep": {
+        "count": 288,
+        "r2": -0.0065134854124266894,
+        "mae_ms": 3.633923611111111,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 9.73,
+        "tail_count": 29,
+        "tail_mae_ms": 26.898931034482757,
+        "tail_r2": -0.11000526494937257,
+        "middle_mae_ms": 1.0289613899613899
+      },
+      "cd>>cat": {
+        "count": 161,
+        "r2": -0.010070247705504132,
+        "mae_ms": 0.9029875776397513,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 17,
+        "tail_mae_ms": 2.809411764705883,
+        "tail_r2": -1.7120552339330084,
+        "middle_mae_ms": 0.677923611111111
+      },
+      "cd>>echo>>cat": {
+        "count": 70,
+        "r2": -0.005156347549053253,
+        "mae_ms": 0.9515857142857144,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 9,
+        "tail_mae_ms": 3.127611111111111,
+        "tail_r2": -1.1047129072831812,
+        "middle_mae_ms": 0.6305327868852458
+      },
+      "cd>>pytest": {
+        "count": 28,
+        "r2": -0.15339364099315334,
+        "mae_ms": 15784.650160714284,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 41751.730000000054,
+        "tail_count": 3,
+        "tail_mae_ms": 123871.65416666666,
+        "tail_r2": -10.200851864924795,
+        "middle_mae_ms": 2814.20968
+      },
+      "which>>python3>>python3": {
+        "count": 30,
+        "r2": -2150.1923343644103,
+        "mae_ms": 405.75701666666663,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.040000000000006,
+        "tail_count": 3,
+        "tail_mae_ms": 411.6321666666666,
+        "tail_r2": -2099.4224246203767,
+        "middle_mae_ms": 405.10422222222223
+      },
+      "cd>>__unparsed__>>__unparsed__": {
+        "count": 23,
+        "r2": -0.03462357856411025,
+        "mae_ms": 463.59326086956514,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1633.68,
+        "tail_count": 3,
+        "tail_mae_ms": 1683.6596666666665,
+        "tail_r2": -14.420015632094733,
+        "middle_mae_ms": 280.5833
+      },
+      "cd>>__unparsed__>>python3": {
+        "count": 27,
+        "r2": -0.13756730679830853,
+        "mae_ms": 959.6979444444443,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 3232.600000000004,
+        "tail_count": 3,
+        "tail_mae_ms": 6019.973333333332,
+        "tail_r2": -8.019209517587408,
+        "middle_mae_ms": 327.16352083333334
+      },
+      "cd>>pip": {
+        "count": 25,
+        "r2": -0.0594202153465484,
+        "mae_ms": 245.16812,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.440000000000001,
+        "tail_count": 3,
+        "tail_mae_ms": 2036.700833333333,
+        "tail_r2": -0.8819207877979218,
+        "middle_mae_ms": 0.8682045454545453
+      }
+    },
+    "atom_trie": {
+      "which>>python3>>ls": {
+        "count": 41,
+        "r2": -0.031497883345038113,
+        "mae_ms": 1.8202500000000001,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 14.4,
+        "tail_count": 5,
+        "tail_mae_ms": 6.739,
+        "tail_r2": -5.414770110560424,
+        "middle_mae_ms": 1.1370902777777776
+      },
+      "cd>>python3": {
+        "count": 1039,
+        "r2": -0.008403069349346426,
+        "mae_ms": 2211.9327064485087,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2051.420000000001,
+        "tail_count": 104,
+        "tail_mae_ms": 19480.215134615384,
+        "tail_r2": -0.09616619515304059,
+        "middle_mae_ms": 291.1825754010695
+      },
+      "cd>>git": {
+        "count": 665,
+        "r2": -0.021722733106414482,
+        "mae_ms": 13.801784962406014,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.560000000000013,
+        "tail_count": 67,
+        "tail_mae_ms": 109.78516791044775,
+        "tail_r2": -0.6334791896154865,
+        "middle_mae_ms": 3.0477938963210707
+      },
+      "cd>>git>>git": {
+        "count": 57,
+        "r2": 0.09601255631939132,
+        "mae_ms": 7.5428728070175435,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 24.83999999999999,
+        "tail_count": 6,
+        "tail_mae_ms": 45.66425,
+        "tail_r2": -0.9027842664600436,
+        "middle_mae_ms": 3.0580049019607847
+      },
+      "cd>>git>>cat": {
+        "count": 102,
+        "r2": -0.01123825478570084,
+        "mae_ms": 2.3520269607843143,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 15.060000000000002,
+        "tail_count": 11,
+        "tail_mae_ms": 10.098022727272726,
+        "tail_r2": -6.347309858270944,
+        "middle_mae_ms": 1.4156978021978028
+      },
+      "echo>>cat": {
+        "count": 267,
+        "r2": -0.1179626982389721,
+        "mae_ms": 0.8885636704119854,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 28,
+        "tail_mae_ms": 1.9202857142857142,
+        "tail_r2": -1.182660177458823,
+        "middle_mae_ms": 0.7676924686192471
+      },
+      "cd>>pip3": {
+        "count": 87,
+        "r2": -0.0843655722257346,
+        "mae_ms": 2547.7184856321837,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 4084.1000000000013,
+        "tail_count": 9,
+        "tail_mae_ms": 20726.37897222222,
+        "tail_r2": -1.2587258336081892,
+        "middle_mae_ms": 450.1807371794872
+      },
+      "which>>python3": {
+        "count": 34,
+        "r2": 0.8477112999550996,
+        "mae_ms": 1.8940220588235301,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 21.97,
+        "tail_count": 4,
+        "tail_mae_ms": 3.503375000000003,
+        "tail_r2": -4.912834238190286,
+        "middle_mae_ms": 1.679441666666667
+      },
+      "cd>>python": {
+        "count": 128,
+        "r2": -0.07025092984910186,
+        "mae_ms": 921.7302402343751,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2058.0299999999984,
+        "tail_count": 13,
+        "tail_mae_ms": 7169.023173076924,
+        "tail_r2": -0.7026997647387605,
+        "middle_mae_ms": 215.5145173913043
+      },
+      "cd>>ls": {
+        "count": 21,
+        "r2": -0.22369909727426052,
+        "mae_ms": 0.7210357142857146,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.6,
+        "tail_count": 3,
+        "tail_mae_ms": 0.8206666666666669,
+        "tail_r2": -10.907983035714304,
+        "middle_mae_ms": 0.7044305555555558
+      },
+      "cd>>__unparsed__": {
+        "count": 521,
+        "r2": -0.09692185642859075,
+        "mae_ms": 517.8254620921306,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1004.4,
+        "tail_count": 53,
+        "tail_mae_ms": 3253.5749669811335,
+        "tail_r2": -0.5742117349873268,
+        "middle_mae_ms": 208.00767628205128
+      },
+      "cd>>grep": {
+        "count": 288,
+        "r2": 0.00921889861637426,
+        "mae_ms": 3.6425963541666673,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 9.73,
+        "tail_count": 29,
+        "tail_mae_ms": 25.087879310344828,
+        "tail_r2": -0.09142340479596456,
+        "middle_mae_ms": 1.2413870656370656
+      },
+      "cd>>cat": {
+        "count": 161,
+        "r2": -0.11254629059518018,
+        "mae_ms": 1.0316226708074538,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 17,
+        "tail_mae_ms": 2.4167499999999995,
+        "tail_r2": -1.2521506546625698,
+        "middle_mae_ms": 0.8681006944444448
+      },
+      "cd>>echo>>cat": {
+        "count": 70,
+        "r2": -0.018128312781927836,
+        "mae_ms": 0.9885250000000003,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 9,
+        "tail_mae_ms": 2.7609722222222217,
+        "tail_r2": -0.8775259358528988,
+        "middle_mae_ms": 0.7270163934426231
+      },
+      "cd>>pytest": {
+        "count": 28,
+        "r2": -0.15336039828265835,
+        "mae_ms": 15738.936026785714,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 41751.730000000054,
+        "tail_count": 3,
+        "tail_mae_ms": 123871.27316666667,
+        "tail_r2": -10.20078911419123,
+        "middle_mae_ms": 2763.0555700000004
+      },
+      "which>>python3>>python3": {
+        "count": 30,
+        "r2": 0.014774970355170725,
+        "mae_ms": 4.366983333333334,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.040000000000006,
+        "tail_count": 3,
+        "tail_mae_ms": 24.67741666666667,
+        "tail_r2": -7.796832774081745,
+        "middle_mae_ms": 2.110268518518519
+      },
+      "cd>>__unparsed__>>__unparsed__": {
+        "count": 23,
+        "r2": -0.3722173292131483,
+        "mae_ms": 450.1729456521739,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1633.68,
+        "tail_count": 3,
+        "tail_mae_ms": 1963.0434166666664,
+        "tail_r2": -19.602746551415308,
+        "middle_mae_ms": 223.24237500000004
+      },
+      "cd>>__unparsed__>>python3": {
+        "count": 27,
+        "r2": -0.08002204330871976,
+        "mae_ms": 986.2811851851852,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 3232.600000000004,
+        "tail_count": 3,
+        "tail_mae_ms": 5788.092416666666,
+        "tail_r2": -7.441213445706433,
+        "middle_mae_ms": 386.05478124999996
+      },
+      "cd>>pip": {
+        "count": 25,
+        "r2": -0.05927415712856243,
+        "mae_ms": 245.36453,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.440000000000001,
+        "tail_count": 3,
+        "tail_mae_ms": 2036.363583333333,
+        "tail_r2": -0.8816605638815733,
+        "middle_mae_ms": 1.1373863636363644
+      }
+    },
+    "chain_prefix_cert": {
+      "which>>python3>>ls": {
+        "count": 41,
+        "r2": -0.19762555820326266,
+        "mae_ms": 2.560975609756097,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 14.4,
+        "tail_count": 5,
+        "tail_mae_ms": 4.92,
+        "tail_r2": -2.8233892489515813,
+        "middle_mae_ms": 2.233333333333333
+      },
+      "cd>>python3": {
+        "count": 1039,
+        "r2": -0.01065407795744222,
+        "mae_ms": 2291.7699230028875,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2051.420000000001,
+        "tail_count": 104,
+        "tail_mae_ms": 19740.919711538467,
+        "tail_r2": -0.098445434060348,
+        "middle_mae_ms": 350.9019251336898
+      },
+      "cd>>git": {
+        "count": 665,
+        "r2": -0.05304907243013601,
+        "mae_ms": 15.079323308270677,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.560000000000013,
+        "tail_count": 67,
+        "tail_mae_ms": 116.07835820895522,
+        "tail_r2": -0.6797191452177023,
+        "middle_mae_ms": 3.7633779264214047
+      },
+      "cd>>git>>git": {
+        "count": 57,
+        "r2": -0.10055832523244912,
+        "mae_ms": 7.97719298245614,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 24.83999999999999,
+        "tail_count": 6,
+        "tail_mae_ms": 54.508333333333326,
+        "tail_r2": -1.3264335398453633,
+        "middle_mae_ms": 2.5029411764705882
+      },
+      "cd>>git>>cat": {
+        "count": 102,
+        "r2": -0.059158906392083876,
+        "mae_ms": 2.2544117647058823,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 15.060000000000002,
+        "tail_count": 11,
+        "tail_mae_ms": 10.631818181818181,
+        "tail_r2": -7.037827408192017,
+        "middle_mae_ms": 1.241758241758242
+      },
+      "echo>>cat": {
+        "count": 267,
+        "r2": -0.01733052081641917,
+        "mae_ms": 0.7674157303370787,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 28,
+        "tail_mae_ms": 2.467857142857142,
+        "tail_r2": -1.9636898274763017,
+        "middle_mae_ms": 0.5682008368200837
+      },
+      "cd>>pip3": {
+        "count": 87,
+        "r2": -0.08895874401269155,
+        "mae_ms": 2603.4396551724135,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 4084.1000000000013,
+        "tail_count": 9,
+        "tail_mae_ms": 20994.316666666666,
+        "tail_r2": -1.2646349220979074,
+        "middle_mae_ms": 481.4153846153848
+      },
+      "which>>python3": {
+        "count": 34,
+        "r2": 0.19959949719278602,
+        "mae_ms": 5.126470588235295,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 21.97,
+        "tail_count": 4,
+        "tail_mae_ms": 7.4,
+        "tail_r2": -18.982435129740505,
+        "middle_mae_ms": 4.823333333333334
+      },
+      "cd>>python": {
+        "count": 128,
+        "r2": -0.06796077729340433,
+        "mae_ms": 927.990234375,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2058.0299999999984,
+        "tail_count": 13,
+        "tail_mae_ms": 7146.449999999999,
+        "tail_r2": -0.6996738037110859,
+        "middle_mae_ms": 225.03391304347826
+      },
+      "cd>>ls": {
+        "count": 21,
+        "r2": -0.6141438741101541,
+        "mae_ms": 0.8190476190476188,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.6,
+        "tail_count": 3,
+        "tail_mae_ms": 0.6999999999999996,
+        "tail_r2": -9.553571428571427,
+        "middle_mae_ms": 0.8388888888888889
+      },
+      "cd>>__unparsed__": {
+        "count": 521,
+        "r2": 0.047547468615369626,
+        "mae_ms": 478.5889635316699,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1004.4,
+        "tail_count": 53,
+        "tail_mae_ms": 2998.7443396226417,
+        "tail_r2": -0.3770298471043363,
+        "middle_mae_ms": 193.18675213675212
+      },
+      "cd>>grep": {
+        "count": 288,
+        "r2": -0.012158071472936571,
+        "mae_ms": 3.6538194444444443,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 9.73,
+        "tail_count": 29,
+        "tail_mae_ms": 27.4103448275862,
+        "tail_r2": -0.11406204287860766,
+        "middle_mae_ms": 0.9938223938223939
+      },
+      "cd>>cat": {
+        "count": 161,
+        "r2": -0.006475891120032884,
+        "mae_ms": 0.8819875776397516,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 17,
+        "tail_mae_ms": 2.9264705882352935,
+        "tail_r2": -1.8595298141108145,
+        "middle_mae_ms": 0.640625
+      },
+      "cd>>echo>>cat": {
+        "count": 70,
+        "r2": -0.055930982436882326,
+        "mae_ms": 1.0085714285714285,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 9,
+        "tail_mae_ms": 3.0888888888888886,
+        "tail_r2": -1.1179007300093007,
+        "middle_mae_ms": 0.7016393442622949
+      },
+      "cd>>pytest": {
+        "count": 28,
+        "r2": -0.14517304916839202,
+        "mae_ms": 15720.117857142857,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 41751.730000000054,
+        "tail_count": 3,
+        "tail_mae_ms": 123436.86666666665,
+        "tail_r2": -10.129367889597823,
+        "middle_mae_ms": 2794.1079999999997
+      },
+      "which>>python3>>python3": {
+        "count": 30,
+        "r2": -1.7867583378941685,
+        "mae_ms": 11.796666666666669,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.040000000000006,
+        "tail_count": 3,
+        "tail_mae_ms": 34.73333333333334,
+        "tail_r2": -14.892921060601884,
+        "middle_mae_ms": 9.248148148148148
+      },
+      "cd>>__unparsed__>>__unparsed__": {
+        "count": 23,
+        "r2": -0.02524213500194672,
+        "mae_ms": 467.5913043478261,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1633.68,
+        "tail_count": 3,
+        "tail_mae_ms": 1673.4666666666665,
+        "tail_r2": -14.245944471984288,
+        "middle_mae_ms": 286.71
+      },
+      "cd>>__unparsed__>>python3": {
+        "count": 27,
+        "r2": -0.17320846391770384,
+        "mae_ms": 971.6074074074072,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 3232.600000000004,
+        "tail_count": 3,
+        "tail_mae_ms": 6114.599999999999,
+        "tail_r2": -8.265782614935857,
+        "middle_mae_ms": 328.73333333333335
+      },
+      "cd>>pip": {
+        "count": 25,
+        "r2": -0.059736795313277025,
+        "mae_ms": 245.09600000000003,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.440000000000001,
+        "tail_count": 3,
+        "tail_mae_ms": 2037.2666666666667,
+        "tail_r2": -0.8824831720758672,
+        "middle_mae_ms": 0.7090909090909093
+      }
+    },
+    "chain_prefix_cdskip": {
+      "which>>python3>>ls": {
+        "count": 41,
+        "r2": -0.09898688579333315,
+        "mae_ms": 2.3670731707317074,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 14.4,
+        "tail_count": 5,
+        "tail_mae_ms": 5.11,
+        "tail_r2": -3.070780118185283,
+        "middle_mae_ms": 1.9861111111111116
+      },
+      "cd>>python3": {
+        "count": 1039,
+        "r2": -0.00855152172786533,
+        "mae_ms": 2220.1984600577475,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2051.420000000001,
+        "tail_count": 104,
+        "tail_mae_ms": 19481.27932692308,
+        "tail_r2": -0.0963235270337488,
+        "middle_mae_ms": 300.24935828877
+      },
+      "cd>>git": {
+        "count": 665,
+        "r2": -0.02160012590578564,
+        "mae_ms": 13.828421052631578,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.560000000000013,
+        "tail_count": 67,
+        "tail_mae_ms": 109.97014925373134,
+        "tail_r2": -0.6334731088176011,
+        "middle_mae_ms": 3.0566889632107026
+      },
+      "cd>>git>>git": {
+        "count": 57,
+        "r2": -0.02450733827045326,
+        "mae_ms": 7.534210526315788,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 24.83999999999999,
+        "tail_count": 6,
+        "tail_mae_ms": 52.90833333333333,
+        "tail_r2": -1.178228140919256,
+        "middle_mae_ms": 2.196078431372549
+      },
+      "cd>>git>>cat": {
+        "count": 102,
+        "r2": -0.12128130760616118,
+        "mae_ms": 2.3176470588235296,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 15.060000000000002,
+        "tail_count": 11,
+        "tail_mae_ms": 10.727272727272727,
+        "tail_r2": -7.158852747297951,
+        "middle_mae_ms": 1.301098901098901
+      },
+      "echo>>cat": {
+        "count": 267,
+        "r2": -0.01733052081641917,
+        "mae_ms": 0.7674157303370787,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 28,
+        "tail_mae_ms": 2.467857142857142,
+        "tail_r2": -1.9636898274763017,
+        "middle_mae_ms": 0.5682008368200837
+      },
+      "cd>>pip3": {
+        "count": 87,
+        "r2": -0.0892921855527038,
+        "mae_ms": 2603.4758620689654,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 4084.1000000000013,
+        "tail_count": 9,
+        "tail_mae_ms": 20995.98333333333,
+        "tail_r2": -1.2653298471229122,
+        "middle_mae_ms": 481.26346153846157
+      },
+      "which>>python3": {
+        "count": 34,
+        "r2": -0.11945536165081427,
+        "mae_ms": 6.073529411764706,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 21.97,
+        "tail_count": 4,
+        "tail_mae_ms": 13.1625,
+        "tail_r2": -36.767797737857585,
+        "middle_mae_ms": 5.128333333333334
+      },
+      "cd>>python": {
+        "count": 128,
+        "r2": -0.07006244932771222,
+        "mae_ms": 924.5695312500001,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 2058.0299999999984,
+        "tail_count": 13,
+        "tail_mae_ms": 7166.484615384615,
+        "tail_r2": -0.7024010637684102,
+        "middle_mae_ms": 218.96173913043478
+      },
+      "cd>>ls": {
+        "count": 21,
+        "r2": -1.508551892094418,
+        "mae_ms": 1.0166666666666664,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.6,
+        "tail_count": 3,
+        "tail_mae_ms": 0.6666666666666666,
+        "tail_r2": -6.178571428571434,
+        "middle_mae_ms": 1.0749999999999997
+      },
+      "cd>>__unparsed__": {
+        "count": 521,
+        "r2": 0.02533185057648435,
+        "mae_ms": 458.9495201535509,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1004.4,
+        "tail_count": 53,
+        "tail_mae_ms": 3090.8009433962266,
+        "tail_r2": -0.40878340090030263,
+        "middle_mae_ms": 160.8979700854701
+      },
+      "cd>>grep": {
+        "count": 288,
+        "r2": 0.001675999174330145,
+        "mae_ms": 3.489409722222222,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 9.73,
+        "tail_count": 29,
+        "tail_mae_ms": 26.15172413793103,
+        "tail_r2": -0.10119049993499485,
+        "middle_mae_ms": 0.9519305019305019
+      },
+      "cd>>cat": {
+        "count": 161,
+        "r2": -0.017123874712883014,
+        "mae_ms": 0.8655279503105588,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 17,
+        "tail_mae_ms": 3.0323529411764705,
+        "tail_r2": -1.9946362289340547,
+        "middle_mae_ms": 0.6097222222222222
+      },
+      "cd>>echo>>cat": {
+        "count": 70,
+        "r2": -0.06093349798755954,
+        "mae_ms": 0.9742857142857141,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.1,
+        "tail_count": 9,
+        "tail_mae_ms": 3.355555555555555,
+        "tail_r2": -1.2853237126187311,
+        "middle_mae_ms": 0.6229508196721313
+      },
+      "cd>>pytest": {
+        "count": 28,
+        "r2": -0.14542455993055725,
+        "mae_ms": 15667.767857142857,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 41751.730000000054,
+        "tail_count": 3,
+        "tail_mae_ms": 123436.86666666665,
+        "tail_r2": -10.129367889597823,
+        "middle_mae_ms": 2735.4759999999997
+      },
+      "which>>python3>>python3": {
+        "count": 30,
+        "r2": -1.876149505421616,
+        "mae_ms": 12.066666666666666,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 30.040000000000006,
+        "tail_count": 3,
+        "tail_mae_ms": 35.1,
+        "tail_r2": -15.238752443624541,
+        "middle_mae_ms": 9.507407407407406
+      },
+      "cd>>__unparsed__>>__unparsed__": {
+        "count": 23,
+        "r2": -0.20369087495485383,
+        "mae_ms": 419.1521739130435,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 1633.68,
+        "tail_count": 3,
+        "tail_mae_ms": 1846.8666666666668,
+        "tail_r2": -17.351147463506358,
+        "middle_mae_ms": 204.99500000000003
+      },
+      "cd>>__unparsed__>>python3": {
+        "count": 27,
+        "r2": -0.07551766473032662,
+        "mae_ms": 987.5055555555555,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 3232.600000000004,
+        "tail_count": 3,
+        "tail_mae_ms": 5783.933333333334,
+        "tail_r2": -7.434262333115617,
+        "middle_mae_ms": 387.95208333333335
+      },
+      "cd>>pip": {
+        "count": 25,
+        "r2": -0.05973684318604522,
+        "mae_ms": 245.112,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 7.440000000000001,
+        "tail_count": 3,
+        "tail_mae_ms": 2037.3333333333333,
+        "tail_r2": -0.8824832599502741,
+        "middle_mae_ms": 0.7181818181818184
+      }
+    }
+  },
+  "atom_trie_diagnostics": {
+    "overall": {
+      "atom_prediction_count": 8893,
+      "atom_depth": 4,
+      "min_evidence": 5,
+      "mean_matched_depth": 2.004835263690543,
+      "verb_level_fraction": 0.07410322725739346,
+      "global_fallback_fraction": 0.07421567525019679
+    },
+    "per_atom": [
+      {
+        "atom": "cd",
+        "count": 3501,
+        "mean_matched_depth": 1.9934304484433019,
+        "verb_level_fraction": 0.006569551556698086,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "python3",
+        "count": 1350,
+        "mean_matched_depth": 2.5637037037037036,
+        "verb_level_fraction": 0.15925925925925927,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "git",
+        "count": 959,
+        "mean_matched_depth": 2.576642335766423,
+        "verb_level_fraction": 0.01981230448383733,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "cat",
+        "count": 664,
+        "mean_matched_depth": 1.8629518072289157,
+        "verb_level_fraction": 0.13704819277108435,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "__unparsed__",
+        "count": 624,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "echo",
+        "count": 451,
+        "mean_matched_depth": 1.7960088691796008,
+        "verb_level_fraction": 0.2039911308203991,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "grep",
+        "count": 294,
+        "mean_matched_depth": 1.9931972789115646,
+        "verb_level_fraction": 0.006802721088435374,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "which",
+        "count": 214,
+        "mean_matched_depth": 1.911214953271028,
+        "verb_level_fraction": 0.08878504672897196,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "ls",
+        "count": 189,
+        "mean_matched_depth": 2.248677248677249,
+        "verb_level_fraction": 0.25396825396825395,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "python",
+        "count": 161,
+        "mean_matched_depth": 2.813664596273292,
+        "verb_level_fraction": 0.055900621118012424,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "pip3",
+        "count": 96,
+        "mean_matched_depth": 3.0833333333333335,
+        "verb_level_fraction": 0.020833333333333332,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "find",
+        "count": 43,
+        "mean_matched_depth": 1.0465116279069768,
+        "verb_level_fraction": 0.9767441860465116,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "pytest",
+        "count": 34,
+        "mean_matched_depth": 1.2352941176470589,
+        "verb_level_fraction": 0.8823529411764706,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "[",
+        "count": 33,
+        "mean_matched_depth": 3.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "apt-get",
+        "count": 31,
+        "mean_matched_depth": 2.903225806451613,
+        "verb_level_fraction": 0.03225806451612903,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "pip",
+        "count": 30,
+        "mean_matched_depth": 3.1333333333333333,
+        "verb_level_fraction": 0.1,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "sed",
+        "count": 23,
+        "mean_matched_depth": 1.6521739130434783,
+        "verb_level_fraction": 0.34782608695652173,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "wc",
+        "count": 22,
+        "mean_matched_depth": 2.6363636363636362,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "timeout",
+        "count": 22,
+        "mean_matched_depth": 1.2727272727272727,
+        "verb_level_fraction": 0.8636363636363636,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "local",
+        "count": 22,
+        "mean_matched_depth": 2.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "head",
+        "count": 15,
+        "mean_matched_depth": 1.3333333333333333,
+        "verb_level_fraction": 0.7333333333333333,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "rm",
+        "count": 13,
+        "mean_matched_depth": 1.0,
+        "verb_level_fraction": 1.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "source",
+        "count": 11,
+        "mean_matched_depth": 1.9090909090909092,
+        "verb_level_fraction": 0.09090909090909091,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "conda",
+        "count": 11,
+        "mean_matched_depth": 2.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "case",
+        "count": 11,
+        "mean_matched_depth": 3.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "__conda_activate",
+        "count": 11,
+        "mean_matched_depth": 2.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "__conda_hashr",
+        "count": 11,
+        "mean_matched_depth": 1.0,
+        "verb_level_fraction": 1.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "hash",
+        "count": 11,
+        "mean_matched_depth": 2.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 0.0
+      },
+      {
+        "atom": "flake8",
+        "count": 8,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "mv",
+        "count": 5,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "tail",
+        "count": 4,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "touch",
+        "count": 3,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "cp",
+        "count": 3,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "true",
+        "count": 2,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "mkdir",
+        "count": 2,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "wget",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "printf",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "zope-testrunner",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "awk",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "bash",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "nosetests",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "sqlfluff",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "dvc",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      },
+      {
+        "atom": "rmdir",
+        "count": 1,
+        "mean_matched_depth": 0.0,
+        "verb_level_fraction": 0.0,
+        "global_fallback_fraction": 1.0
+      }
+    ]
+  },
+  "atom_stability": [
+    {
+      "atom": "case",
+      "task_count": 11,
+      "median_ms": 0.008000000000000007,
+      "cv_across_tasks": 0.10657152778967992
+    },
+    {
+      "atom": "conda",
+      "task_count": 11,
+      "median_ms": 0.013999999999999346,
+      "cv_across_tasks": 0.12921914767617587
+    },
+    {
+      "atom": "source",
+      "task_count": 11,
+      "median_ms": 4.316000000000001,
+      "cv_across_tasks": 0.1497293075472389
+    },
+    {
+      "atom": "__conda_activate",
+      "task_count": 11,
+      "median_ms": 0.014000000000000234,
+      "cv_across_tasks": 0.16061490557531666
+    },
+    {
+      "atom": "[",
+      "task_count": 11,
+      "median_ms": 0.005000000000009663,
+      "cv_across_tasks": 0.16798421022624996
+    },
+    {
+      "atom": "__conda_hashr",
+      "task_count": 11,
+      "median_ms": 0.027999999999991587,
+      "cv_across_tasks": 0.2829898348316766
+    },
+    {
+      "atom": "head",
+      "task_count": 14,
+      "median_ms": 1.0145,
+      "cv_across_tasks": 0.35940867968370627
+    },
+    {
+      "atom": "rm",
+      "task_count": 11,
+      "median_ms": 1.5859999999999999,
+      "cv_across_tasks": 0.36283552446775846
+    },
+    {
+      "atom": "apt-get",
+      "task_count": 16,
+      "median_ms": 4991.77725,
+      "cv_across_tasks": 0.37913137967693245
+    },
+    {
+      "atom": "cd",
+      "task_count": 277,
+      "median_ms": 0.07200000000000006,
+      "cv_across_tasks": 0.4254998958086398
+    },
+    {
+      "atom": "wc",
+      "task_count": 20,
+      "median_ms": 1.8125,
+      "cv_across_tasks": 0.4334452621974064
+    },
+    {
+      "atom": "cat",
+      "task_count": 275,
+      "median_ms": 1.3825,
+      "cv_across_tasks": 0.4568766376950834
+    },
+    {
+      "atom": "ls",
+      "task_count": 127,
+      "median_ms": 1.9140000000000001,
+      "cv_across_tasks": 0.6456700369920515
+    },
+    {
+      "atom": "local",
+      "task_count": 11,
+      "median_ms": 91.62950000000001,
+      "cv_across_tasks": 0.6528456572687455
+    },
+    {
+      "atom": "which",
+      "task_count": 167,
+      "median_ms": 1.488,
+      "cv_across_tasks": 0.655769756126411
+    },
+    {
+      "atom": "echo",
+      "task_count": 275,
+      "median_ms": 0.07099999999999995,
+      "cv_across_tasks": 0.950730339091185
+    },
+    {
+      "atom": "find",
+      "task_count": 18,
+      "median_ms": 5.9559999999999995,
+      "cv_across_tasks": 1.7059128547829066
+    },
+    {
+      "atom": "hash",
+      "task_count": 11,
+      "median_ms": 0.022999999999996135,
+      "cv_across_tasks": 1.7733583382788687
+    },
+    {
+      "atom": "pytest",
+      "task_count": 13,
+      "median_ms": 1013.9549999999999,
+      "cv_across_tasks": 1.7958691617643925
+    },
+    {
+      "atom": "git",
+      "task_count": 276,
+      "median_ms": 4.43575,
+      "cv_across_tasks": 2.3444587810276025
+    },
+    {
+      "atom": "__unparsed__",
+      "task_count": 139,
+      "median_ms": 118.554,
+      "cv_across_tasks": 2.4999533094839257
+    },
+    {
+      "atom": "python",
+      "task_count": 103,
+      "median_ms": 0.835,
+      "cv_across_tasks": 2.8195721951840054
+    },
+    {
+      "atom": "pip3",
+      "task_count": 56,
+      "median_ms": 0.635,
+      "cv_across_tasks": 2.9313021046206837
+    },
+    {
+      "atom": "pip",
+      "task_count": 27,
+      "median_ms": 0.42199999999999993,
+      "cv_across_tasks": 3.6509261721843553
+    },
+    {
+      "atom": "grep",
+      "task_count": 76,
+      "median_ms": 2.29075,
+      "cv_across_tasks": 4.2763329913443755
+    },
+    {
+      "atom": "python3",
+      "task_count": 236,
+      "median_ms": 121.69975000000001,
+      "cv_across_tasks": 5.505278091378893
+    }
+  ],
+  "family_variance": [
+    {
+      "family": "cd>>python3",
+      "chain_count": 1039,
+      "atoms": [
+        "cd",
+        "python3"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "python3",
+      "variance_shares": [
+        2.0560739005536796e-11,
+        0.9999999999794393
+      ],
+      "chain_cv_across_tasks": 4.293163415173267
+    },
+    {
+      "family": "cd>>git",
+      "chain_count": 665,
+      "atoms": [
+        "cd",
+        "git"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "git",
+      "variance_shares": [
+        1.743684045150464e-06,
+        0.9999982563159548
+      ],
+      "chain_cv_across_tasks": 1.8751035709987784
+    },
+    {
+      "family": "cd>>__unparsed__",
+      "chain_count": 521,
+      "atoms": [
+        "cd",
+        "__unparsed__"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "__unparsed__",
+      "variance_shares": [
+        6.612358233561271e-09,
+        0.9999999933876417
+      ],
+      "chain_cv_across_tasks": 2.2884782673041797
+    },
+    {
+      "family": "cd>>grep",
+      "chain_count": 288,
+      "atoms": [
+        "cd",
+        "grep"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "grep",
+      "variance_shares": [
+        4.479075433758361e-06,
+        0.9999955209245662
+      ],
+      "chain_cv_across_tasks": 2.492982410270676
+    },
+    {
+      "family": "echo>>cat",
+      "chain_count": 267,
+      "atoms": [
+        "echo",
+        "cat"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "cat",
+      "variance_shares": [
+        0.007489137972270454,
+        0.9925108620277296
+      ],
+      "chain_cv_across_tasks": 0.19442980605387192
+    },
+    {
+      "family": "cd>>cat",
+      "chain_count": 161,
+      "atoms": [
+        "cd",
+        "cat"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "cat",
+      "variance_shares": [
+        0.009374082557980879,
+        0.9906259174420191
+      ],
+      "chain_cv_across_tasks": 0.2264067529608973
+    },
+    {
+      "family": "cd>>python",
+      "chain_count": 128,
+      "atoms": [
+        "cd",
+        "python"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "python",
+      "variance_shares": [
+        2.087889025955605e-09,
+        0.9999999979121109
+      ],
+      "chain_cv_across_tasks": 2.9501903756627708
+    },
+    {
+      "family": "cd>>git>>cat",
+      "chain_count": 102,
+      "atoms": [
+        "cd",
+        "git",
+        "cat"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "git",
+      "variance_shares": [
+        0.0004987765734382595,
+        0.9843523028202791,
+        0.0151489206062827
+      ],
+      "chain_cv_across_tasks": 0.3170092935459899
+    },
+    {
+      "family": "cd>>pip3",
+      "chain_count": 87,
+      "atoms": [
+        "cd",
+        "pip3"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "pip3",
+      "variance_shares": [
+        1.3395011325514995e-10,
+        0.9999999998660499
+      ],
+      "chain_cv_across_tasks": 2.9074247146309
+    },
+    {
+      "family": "cd>>echo>>cat",
+      "chain_count": 70,
+      "atoms": [
+        "cd",
+        "echo",
+        "cat"
+      ],
+      "dominant_position": 2,
+      "dominant_atom": "cat",
+      "variance_shares": [
+        0.010491661077939375,
+        0.00022311210116170765,
+        0.9892852268208989
+      ],
+      "chain_cv_across_tasks": 0.2796021425993313
+    },
+    {
+      "family": "cd>>git>>git",
+      "chain_count": 57,
+      "atoms": [
+        "cd",
+        "git",
+        "git"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "git",
+      "variance_shares": [
+        9.790211170631499e-06,
+        0.5437352787470358,
+        0.45625493104179365
+      ],
+      "chain_cv_across_tasks": 1.34798980527757
+    },
+    {
+      "family": "which>>python3>>ls",
+      "chain_count": 41,
+      "atoms": [
+        "which",
+        "python3",
+        "ls"
+      ],
+      "dominant_position": 0,
+      "dominant_atom": "which",
+      "variance_shares": [
+        0.48792207027013096,
+        0.08788831851347004,
+        0.42418961121639903
+      ],
+      "chain_cv_across_tasks": 0.26159930067624243
+    },
+    {
+      "family": "which>>python3",
+      "chain_count": 34,
+      "atoms": [
+        "which",
+        "python3"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "python3",
+      "variance_shares": [
+        0.01058495709790801,
+        0.989415042902092
+      ],
+      "chain_cv_across_tasks": 0.5213227274471612
+    },
+    {
+      "family": "which>>python3>>python3",
+      "chain_count": 30,
+      "atoms": [
+        "which",
+        "python3",
+        "python3"
+      ],
+      "dominant_position": 2,
+      "dominant_atom": "python3",
+      "variance_shares": [
+        0.004214578605139332,
+        0.0026146386450826434,
+        0.993170782749778
+      ],
+      "chain_cv_across_tasks": 0.3723814879290084
+    },
+    {
+      "family": "cd>>pytest",
+      "chain_count": 28,
+      "atoms": [
+        "cd",
+        "pytest"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "pytest",
+      "variance_shares": [
+        4.413521515102192e-12,
+        0.9999999999955865
+      ],
+      "chain_cv_across_tasks": 2.500461310009458
+    },
+    {
+      "family": "cd>>__unparsed__>>python3",
+      "chain_count": 27,
+      "atoms": [
+        "cd",
+        "__unparsed__",
+        "python3"
+      ],
+      "dominant_position": 2,
+      "dominant_atom": "python3",
+      "variance_shares": [
+        7.476479218365037e-09,
+        1.836420517487575e-12,
+        0.9999999925216843
+      ],
+      "chain_cv_across_tasks": 1.402235964399822
+    },
+    {
+      "family": "cd>>pip",
+      "chain_count": 25,
+      "atoms": [
+        "cd",
+        "pip"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "pip",
+      "variance_shares": [
+        3.3861926529954033e-09,
+        0.9999999966138073
+      ],
+      "chain_cv_across_tasks": 4.01514094974209
+    },
+    {
+      "family": "cd>>__unparsed__>>__unparsed__",
+      "chain_count": 23,
+      "atoms": [
+        "cd",
+        "__unparsed__",
+        "__unparsed__"
+      ],
+      "dominant_position": 2,
+      "dominant_atom": "__unparsed__",
+      "variance_shares": [
+        4.080091329496434e-09,
+        5.676659590289777e-06,
+        0.9999943192603183
+      ],
+      "chain_cv_across_tasks": 2.0960744244296454
+    },
+    {
+      "family": "cd>>ls",
+      "chain_count": 21,
+      "atoms": [
+        "cd",
+        "ls"
+      ],
+      "dominant_position": 1,
+      "dominant_atom": "ls",
+      "variance_shares": [
+        0.0013316199329748686,
+        0.9986683800670251
+      ],
+      "chain_cv_across_tasks": 0.11167278801399949
+    }
+  ]
+}

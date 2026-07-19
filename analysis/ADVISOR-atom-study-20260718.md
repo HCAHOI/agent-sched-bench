@@ -1,11 +1,14 @@
 # Should tool-call prediction decompose chained commands into atoms?
 
 One-page summary for advisor discussion. Full tables:
-`segment-atom-study-2026-07-18.{md,json}`. EXPLORATORY study; commands
-re-executed on our hardware (H100 host, 8-core replay box) via trace replay
-of the fresh-277 corpus — structure analysis, not absolute-latency
-benchmarking. Code review-gated (3 rounds); instrumentation = bash xtrace
-wrap, documented in src/trace_collect/CLAUDE.md.
+`segment-atom-study-2026-07-19.{md,json}` (five models; supersedes the
+07-18 four-model run, whose numbers reproduce to the digit). EXPLORATORY
+study; commands re-executed on our hardware via trace replay of the
+fresh-277 corpus — structure analysis, not absolute-latency benchmarking.
+Code review-gated (4 rounds); instrumentation = bash xtrace wrap,
+documented in src/trace_collect/CLAUDE.md. UPDATED 2026-07-19: added the
+atom_trie model (per-atom argument-conditioned tries — the strong form of
+the atoms proposal), which materially revises the headline.
 
 ## The question
 
@@ -16,7 +19,8 @@ chain totals. This study removes that objection: we instrumented the shell
 (per-segment xtrace timing) and re-executed all 277 tasks' commands,
 observing 8,953 real per-segment timelines directly.
 
-## Headline result: atoms lose even with direct observation
+## Headline result: naive atoms lose; argument-conditioned atoms are
+## competitive; chain conditioning still (narrowly) wins
 
 Out-of-sample (task-grouped folds), predicting chain total duration,
 complete corpus (4,824 analysable chains):
@@ -25,12 +29,25 @@ complete corpus (4,824 analysable chains):
 |---|---|---|
 | atom_identity (sum of observed atom medians) | 1022 ms | 9276 ms |
 | atom_plus_args (+ token-count features) | 1022 ms | 9273 ms |
+| atom_trie (per-atom argument tries, summed) | 974 ms | 8914 ms |
 | chain_prefix_cert (the certified trie, exact frozen config) | 996 ms | 9060 ms |
 | **chain_prefix_cdskip (trie + cd-normalization)** | **971 ms** | **8905 ms** |
 
-Both chain models beat both atom models on every metric; argument features
-add nothing to atoms. (Pooled R² ≈ 0 for all models — heavy-tail outliers
-dominate SS_tot; MAE/tail-MAE ordering is the robust comparison.)
+Verb-identity atoms lose on every metric and argument features add nothing
+to them — but per-atom TRIES (each atom gets its own token-prefix
+conditioning and depth budget) close most of the gap: atom_trie beats the
+exact certified config and trails the cd-normalized trie by ~3 ms MAE.
+The frontier is now cd-skip vs atom-trie, and both wins share one cause:
+giving the depth budget to the load-bearing verb instead of the cd wrapper.
+(Pooled R² ~ 0 for all models — heavy-tail outliers dominate SS_tot;
+MAE/tail ordering is the robust comparison.)
+
+**Why atom_trie still can't overtake (the depth diagnostic):** the heavy,
+variable verbs almost never earn argument-conditioned nodes — pytest is
+served at bare verb level 88% of the time, find 98%, timeout 86% — while
+python3/git condition deep (source of atom_trie's edge over flat atoms).
+Argument thinness binds exactly where the tail lives. Measured, not argued:
+mean matched depth 2.005 over 8,893 out-of-sample atom predictions.
 
 ## Why atoms fail: the stability table (the mechanistic finding)
 
@@ -70,9 +87,19 @@ conditioning approximates and what atom decomposition throws away.
    remain the interesting future direction — as mid-call evidence, not as
    the fit-time unit.
 
-## Verdict
+## Verdict (revised 2026-07-19)
 
-The conditioning unit stays chain-prefix. The atoms question is now closed
-with direct measurement rather than argument; the two live follow-ups it
-produced are cd-normalization (method iteration, evidenced twice) and
-atom-boundary events as runtime signals (P4-era, joins the CPU-rate lever).
+The shipped conditioning unit stays chain-prefix (cd-skip variant now
+evidenced twice), but the question is sharper than "atoms lose": naive
+atoms lose; argument-conditioned atom tries are competitive and beaten
+only by argument thinness on the heavy verbs. Three live follow-ups:
+1. cd-normalization — method iteration, cheapest, evidenced twice.
+2. **Atom boundaries as runtime EVIDENCE** (not fit-time units): mid-call
+   survival re-conditioning at observed segment completions — recommended
+   next build in `atom-estimator-design-20260719.md`, with a pre-registered
+   2-day kill test on existing data (does boundary identity add decision
+   divergence beyond elapsed time?). Sidesteps verb instability, argument
+   thinness, and cross-atom state simultaneously; degrades exactly to the
+   certified policy on pipes.
+3. Stable-atom screening (certify the conditioning unit per command class)
+   — 1-day overlap diagnostic decides whether it lives.
