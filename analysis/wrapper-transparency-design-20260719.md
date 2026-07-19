@@ -16,6 +16,13 @@
 > question: (normalization + evidence-gate) as ONE joint policy
 > iteration through Stage-2 certified decision replay, in emergent-
 > screen form since it matches hardcoded at zero cost.
+>
+> **STANDING DIRECTIVE (project lead, 2026-07-19): the hardcoded
+> cd-skip rule is NOT a shippable method and never enters a shipped
+> policy or a headline claim. Its only legitimate roles are (a) an
+> oracle-baseline row that an emergent method must match, and (b) a
+> harness positive control. Any normalization that ships must be the
+> screen-learned form.**
 
 > **Status: FINAL, post-debate (Fable-5 adversarial debate 2026-07-19,
 > verdict PROCEED with 12 amendments, all incorporated below).**

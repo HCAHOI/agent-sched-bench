@@ -106,7 +106,9 @@ follow-ups were run on the full corpus and **both KILLED**
    ≤0.3ms) with cd as a passing positive control 5/5 folds. Live form
    of this follow-up: (normalization + evidence gate) as one joint
    policy iteration through certified decision replay, emergent-screen
-   variant.
+   variant ONLY — per project-lead directive, the hardcoded cd-skip
+   rule is not a shippable method; it serves solely as an oracle
+   baseline / positive control.
 2. Atom boundaries as runtime EVIDENCE — **KILLED at Stage 1**. Boundary
    identity flips 72.9% of re-check decisions vs elapsed-only, but the
    paired log-score gain is −0.0137 nats with a task-clustered 95% CI of
