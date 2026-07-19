@@ -96,8 +96,17 @@ only by argument thinness on the heavy verbs. The two pre-registered
 follow-ups were run on the full corpus and **both KILLED**
 (`boundary-evidence-stage1-2026-07-19.md`,
 `stable-atom-overlap-2026-07-19.md`):
-1. cd-normalization — method iteration, cheapest, evidenced twice.
-   **Still live; now the only surviving atom-study follow-up.**
+1. cd-normalization — **evidence REVISED by the knob-matched WTN grid
+   (`wrapper-transparency-stage1-2026-07-19.md`)**: the quoted 25ms MAE
+   win was confounded — it exists only jointly with a min_evidence=5
+   node gate (−21ms, CI [−28, −14] vs matched control); at the
+   certified min_evidence=1 the normalization alone is MAE-worse
+   (+25ms) though tail-better (~−135ms). An emergent transparency
+   screen (WTN) reproduces the hardcoded rule at zero cost (deltas
+   ≤0.3ms) with cd as a passing positive control 5/5 folds. Live form
+   of this follow-up: (normalization + evidence gate) as one joint
+   policy iteration through certified decision replay, emergent-screen
+   variant.
 2. Atom boundaries as runtime EVIDENCE — **KILLED at Stage 1**. Boundary
    identity flips 72.9% of re-check decisions vs elapsed-only, but the
    paired log-score gain is −0.0137 nats with a task-clustered 95% CI of

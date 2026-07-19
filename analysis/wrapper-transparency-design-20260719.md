@@ -1,5 +1,22 @@
 # Design spec — emergent wrapper-transparency normalization (WTN)
 
+> **OUTCOME (2026-07-19, full corpus, review-gated code,
+> `wrapper-transparency-stage1-2026-07-19.md`): K1 KILL / K2 pass /
+> K3 pass.** The screen itself is VALIDATED (cd emerges 5/5 folds plus
+> echo/git/ls/python3/which; mass-weighted stability 0.995) and WTN is
+> statistically indistinguishable from hardcoded cd-only (deltas
+> ≤0.3ms, CIs straddle 0) — the emergent form costs nothing. But at the
+> certified operating point (min_evidence=1) NO normalization beats
+> no-normalization on MAE (WTN vs off: +25ms, CI [−79, +185]) → KILL
+> as pre-registered. The de-confounding headline: cd-skip's quoted
+> 25ms MAE win exists ONLY jointly with the min_evidence=5 gate
+> (WTN vs off@me5: −21ms, CI [−28, −14], excludes zero); normalization
+> alone improves tail (~−135ms) at MAE cost. Census: beyond-leading
+> mass 6.9% → paragraph framing, as pre-committed. Live successor
+> question: (normalization + evidence-gate) as ONE joint policy
+> iteration through Stage-2 certified decision replay, in emergent-
+> screen form since it matches hardcoded at zero cost.
+
 > **Status: FINAL, post-debate (Fable-5 adversarial debate 2026-07-19,
 > verdict PROCEED with 12 amendments, all incorporated below).**
 > Motivated by the project lead's objection that cd-skip ("strip the

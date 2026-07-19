@@ -365,6 +365,7 @@ def fit_chain_prefix(
     max_depth: int,
     min_evidence: int,
     skip_leading_cd: bool,
+    key_fn: Callable[[Chain], Sequence[str]] | None = None,
 ) -> Callable[[Chain], float]:
     """Trie conditioning unit: TRAIN median parent_total_ms at the deepest
     depth-capped command-prefix key with >= ``min_evidence`` chains, backing
@@ -381,18 +382,30 @@ def fit_chain_prefix(
     ``--min-prefix-evidence`` sweep knobs, so it cannot drift off the cert.
     ``chain_prefix_cdskip`` is a deliberate deviation on all three axes,
     evaluated separately, not the certified one.
+
+    ``key_fn`` overrides the command-prefix key derivation for a whole run
+    (fit AND predict use the same callable, so backoff stays consistent). It
+    exists so the wrapper-transparency study can plug a data-driven key
+    normalization into this exact fitter instead of forking the backoff logic;
+    when ``None`` the default is the production ``command_prefix_keys`` at the
+    given ``max_depth``/``skip_leading_cd`` (the cert/cdskip behaviour above).
     """
+
+    if key_fn is None:
+
+        def key_fn(chain: Chain) -> Sequence[str]:
+            return command_prefix_keys(
+                chain.tool_name,
+                chain.parent_command,
+                max_depth=max_depth,
+                skip_leading_cd=skip_leading_cd,
+            )
 
     by_key: dict[str, list[float]] = defaultdict(list)
     by_tool: dict[str, list[float]] = defaultdict(list)
     all_totals: list[float] = []
     for chain in train:
-        for key in command_prefix_keys(
-            chain.tool_name,
-            chain.parent_command,
-            max_depth=max_depth,
-            skip_leading_cd=skip_leading_cd,
-        ):
+        for key in key_fn(chain):
             by_key[key].append(chain.parent_total_ms)
         by_tool[chain.tool_name].append(chain.parent_total_ms)
         all_totals.append(chain.parent_total_ms)
@@ -401,13 +414,7 @@ def fit_chain_prefix(
     global_median = _median(all_totals)
 
     def predict(chain: Chain) -> float:
-        keys = command_prefix_keys(
-            chain.tool_name,
-            chain.parent_command,
-            max_depth=max_depth,
-            skip_leading_cd=skip_leading_cd,
-        )
-        for key in reversed(keys):  # deepest first
+        for key in reversed(list(key_fn(chain))):  # deepest first
             if key in key_median:
                 return key_median[key]
         return tool_median.get(chain.tool_name, global_median)

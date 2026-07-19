@@ -1,0 +1,1800 @@
+{
+  "provenance": {
+    "exploratory": true,
+    "final": true,
+    "replayed_on": "our_hardware",
+    "traces_dir": "traces/fresh-277-segtimeline",
+    "corpus_file_count": 277,
+    "git_sha": "39c9f52aa9db75d10f7f98e1380a7298e3f35d72",
+    "generated": "2026-07-19T18:53:58"
+  },
+  "config": {
+    "fold_count": 5,
+    "prefix_depth": 4,
+    "grid_min_evidence": [
+      1,
+      5
+    ],
+    "primary_min_evidence": 1,
+    "k3_mass_agreement_floor": 0.9
+  },
+  "census": {
+    "multi_segment_chains": 4026,
+    "candidate_verb_classes": 28,
+    "chains_beyond_leading_segment": 541,
+    "chains_beyond_leading_fraction": 0.1343765524093393,
+    "beyond_leading_mass_fraction": 0.06901562590248735,
+    "chains_with_candidate_upper_bound": 4023,
+    "chains_with_candidate_upper_bound_fraction": 0.9992548435171386,
+    "affected_mass_fraction_upper_bound": 0.9999616105595452,
+    "newline_only_chains": 3,
+    "per_class": [
+      {
+        "verb_class": "cd",
+        "chains": 3488,
+        "tasks": 277
+      },
+      {
+        "verb_class": "echo",
+        "chains": 356,
+        "tasks": 274
+      },
+      {
+        "verb_class": "git",
+        "chains": 203,
+        "tasks": 125
+      },
+      {
+        "verb_class": "which",
+        "chains": 186,
+        "tasks": 161
+      },
+      {
+        "verb_class": "python3",
+        "chains": 148,
+        "tasks": 121
+      },
+      {
+        "verb_class": "ls",
+        "chains": 86,
+        "tasks": 73
+      },
+      {
+        "verb_class": "conda",
+        "chains": 22,
+        "tasks": 22
+      },
+      {
+        "verb_class": "python",
+        "chains": 16,
+        "tasks": 13
+      },
+      {
+        "verb_class": "cat",
+        "chains": 15,
+        "tasks": 9
+      },
+      {
+        "verb_class": "apt-get",
+        "chains": 15,
+        "tasks": 15
+      },
+      {
+        "verb_class": "pip3",
+        "chains": 12,
+        "tasks": 8
+      },
+      {
+        "verb_class": "source",
+        "chains": 11,
+        "tasks": 11
+      },
+      {
+        "verb_class": "find",
+        "chains": 10,
+        "tasks": 3
+      },
+      {
+        "verb_class": "wc",
+        "chains": 9,
+        "tasks": 9
+      },
+      {
+        "verb_class": "timeout",
+        "chains": 6,
+        "tasks": 3
+      },
+      {
+        "verb_class": "rm",
+        "chains": 5,
+        "tasks": 4
+      },
+      {
+        "verb_class": "pip",
+        "chains": 4,
+        "tasks": 4
+      },
+      {
+        "verb_class": "sed",
+        "chains": 3,
+        "tasks": 2
+      },
+      {
+        "verb_class": "grep",
+        "chains": 3,
+        "tasks": 3
+      },
+      {
+        "verb_class": "cp",
+        "chains": 3,
+        "tasks": 1
+      },
+      {
+        "verb_class": "EOF",
+        "chains": 2,
+        "tasks": 1
+      },
+      {
+        "verb_class": "mkdir",
+        "chains": 2,
+        "tasks": 2
+      },
+      {
+        "verb_class": "}",
+        "chains": 1,
+        "tasks": 1
+      },
+      {
+        "verb_class": "template",
+        "chains": 1,
+        "tasks": 1
+      },
+      {
+        "verb_class": "wget",
+        "chains": 1,
+        "tasks": 1
+      },
+      {
+        "verb_class": "printf",
+        "chains": 1,
+        "tasks": 1
+      },
+      {
+        "verb_class": "rmdir",
+        "chains": 1,
+        "tasks": 1
+      },
+      {
+        "verb_class": "mv",
+        "chains": 1,
+        "tasks": 1
+      }
+    ]
+  },
+  "grid": {
+    "min_evidence_values": [
+      1,
+      5
+    ],
+    "prefix_depth": 4,
+    "cell_metrics": {
+      "off@me1": {
+        "count": 4026,
+        "r2": -0.0004975551221806374,
+        "mae_ms": 996.11130153999,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 962.15,
+        "tail_count": 403,
+        "tail_mae_ms": 9059.825310173695,
+        "tail_r2": -0.063612493189527,
+        "middle_mae_ms": 99.15387800165608
+      },
+      "off@me5": {
+        "count": 4026,
+        "r2": -0.0005167801020169449,
+        "mae_ms": 995.1082836562346,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 962.15,
+        "tail_count": 403,
+        "tail_mae_ms": 9067.388833746898,
+        "tail_r2": -0.06368708052814331,
+        "middle_mae_ms": 97.19797129450731
+      },
+      "cd-only@me1": {
+        "count": 4026,
+        "r2": -0.0044074602565764565,
+        "mae_ms": 1020.2603949329358,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 962.15,
+        "tail_count": 403,
+        "tail_mae_ms": 8928.858312655086,
+        "tail_r2": -0.04699073378014229,
+        "middle_mae_ms": 140.55712117030083
+      },
+      "cd-only@me5": {
+        "count": 4026,
+        "r2": 0.0018934875893316105,
+        "mae_ms": 971.3515151515151,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 962.15,
+        "tail_count": 403,
+        "tail_mae_ms": 8904.81029776675,
+        "tail_r2": -0.06111672175293137,
+        "middle_mae_ms": 88.88287330941208
+      },
+      "WTN@me1": {
+        "count": 4026,
+        "r2": -0.004846537073959878,
+        "mae_ms": 1020.7348857426725,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 962.15,
+        "tail_count": 403,
+        "tail_mae_ms": 8924.166004962779,
+        "tail_r2": -0.047311002404850866,
+        "middle_mae_ms": 141.60633452939553
+      },
+      "WTN@me5": {
+        "count": 4026,
+        "r2": 0.0013711582768041186,
+        "mae_ms": 972.803949329359,
+        "tail_percentile": 90.0,
+        "tail_threshold_ms": 962.15,
+        "tail_count": 403,
+        "tail_mae_ms": 8912.725310173697,
+        "tail_r2": -0.06148245882310155,
+        "middle_mae_ms": 89.61645045542369
+      }
+    },
+    "pairwise_deltas": {
+      "WTN_vs_off@me1": {
+        "mean_delta_ms": 25.459089329040776,
+        "ci_low": -78.62292307072849,
+        "ci_high": 185.02635992246255,
+        "confidence": 0.95,
+        "tasks": 277
+      },
+      "WTN_vs_cd-only@me1": {
+        "mean_delta_ms": 0.30162127381933684,
+        "ci_low": -2.6939277121480067,
+        "ci_high": 2.748906249021016,
+        "confidence": 0.95,
+        "tasks": 277
+      },
+      "WTN_vs_off@me5": {
+        "mean_delta_ms": -21.028960876828908,
+        "ci_low": -28.0024863501943,
+        "ci_high": -14.055200829050456,
+        "confidence": 0.95,
+        "tasks": 277
+      },
+      "WTN_vs_cd-only@me5": {
+        "mean_delta_ms": 0.14315132803160183,
+        "ci_low": -1.8667443411203435,
+        "ci_high": 2.864687798451839,
+        "confidence": 0.95,
+        "tasks": 277
+      }
+    }
+  },
+  "screen": {
+    "config": {
+      "tolerance": 0.05,
+      "sensitivity_tolerances": [
+        0.02,
+        0.05,
+        0.1
+      ],
+      "min_tasks": 5,
+      "min_chains": 20,
+      "inner_folds": 5,
+      "min_evidence": 1
+    },
+    "per_fold": [
+      {
+        "fold": 0,
+        "degenerate": false,
+        "universe": [
+          "EOF",
+          "apt-get",
+          "cat",
+          "cd",
+          "conda",
+          "cp",
+          "echo",
+          "find",
+          "git",
+          "grep",
+          "ls",
+          "mkdir",
+          "pip",
+          "pip3",
+          "python",
+          "python3",
+          "rm",
+          "rmdir",
+          "sed",
+          "source",
+          "template",
+          "timeout",
+          "wc",
+          "which",
+          "}"
+        ],
+        "marginal_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "joint_ok": true,
+        "joint_stat_ms": -18.039580405334377,
+        "applied_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "fit_side_mae_ms": 784.1980285625582,
+        "per_class": [
+          {
+            "verb_class": "cd",
+            "stat_ms": -17.596842477719917,
+            "support_tasks": 222,
+            "support_chains": 2795,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "python3",
+            "stat_ms": -0.8371063940334587,
+            "support_tasks": 95,
+            "support_chains": 118,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "which",
+            "stat_ms": -0.7849813464392047,
+            "support_tasks": 129,
+            "support_chains": 149,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "git",
+            "stat_ms": -0.2774693317689634,
+            "support_tasks": 96,
+            "support_chains": 152,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "echo",
+            "stat_ms": 0.032332814290092944,
+            "support_tasks": 219,
+            "support_chains": 284,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "ls",
+            "stat_ms": 0.09774914912820667,
+            "support_tasks": 61,
+            "support_chains": 71,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "apt-get",
+            "stat_ms": -1.4241523309434159,
+            "support_tasks": 12,
+            "support_chains": 12,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "timeout",
+            "stat_ms": -1.2129948127132182,
+            "support_tasks": 1,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "python",
+            "stat_ms": -1.2053514334764337,
+            "support_tasks": 9,
+            "support_chains": 12,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cat",
+            "stat_ms": -0.19954690645261852,
+            "support_tasks": 9,
+            "support_chains": 15,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip3",
+            "stat_ms": -0.17863364722741346,
+            "support_tasks": 6,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "find",
+            "stat_ms": -0.1483860681845418,
+            "support_tasks": 3,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cp",
+            "stat_ms": -0.013885664600971024,
+            "support_tasks": 1,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rm",
+            "stat_ms": -0.0013198301927204704,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "EOF",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mkdir",
+            "stat_ms": 0.0,
+            "support_tasks": 2,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rmdir",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "template",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "}",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "sed",
+            "stat_ms": 0.0004178285428285432,
+            "support_tasks": 2,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "grep",
+            "stat_ms": 0.00042283749844491166,
+            "support_tasks": 2,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip",
+            "stat_ms": 0.00421921921921922,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wc",
+            "stat_ms": 0.004890541086193259,
+            "support_tasks": 4,
+            "support_chains": 4,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "source",
+            "stat_ms": 0.6046831596831599,
+            "support_tasks": 10,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "conda",
+            "stat_ms": 3.293517929767931,
+            "support_tasks": 18,
+            "support_chains": 18,
+            "support_ok": false,
+            "transparent": false
+          }
+        ],
+        "sensitivity_marginal": {
+          "0.020": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.050": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.100": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ]
+        }
+      },
+      {
+        "fold": 1,
+        "degenerate": false,
+        "universe": [
+          "EOF",
+          "apt-get",
+          "cat",
+          "cd",
+          "conda",
+          "cp",
+          "echo",
+          "find",
+          "git",
+          "grep",
+          "ls",
+          "mkdir",
+          "mv",
+          "pip",
+          "pip3",
+          "printf",
+          "python",
+          "python3",
+          "rm",
+          "rmdir",
+          "sed",
+          "source",
+          "template",
+          "timeout",
+          "wc",
+          "wget",
+          "which",
+          "}"
+        ],
+        "marginal_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "joint_ok": true,
+        "joint_stat_ms": -21.32676946143487,
+        "applied_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "fit_side_mae_ms": 1019.6076994722135,
+        "per_class": [
+          {
+            "verb_class": "cd",
+            "stat_ms": -19.141057514859916,
+            "support_tasks": 222,
+            "support_chains": 2787,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "which",
+            "stat_ms": -1.1655713450533167,
+            "support_tasks": 129,
+            "support_chains": 149,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "python3",
+            "stat_ms": -0.8222542627904957,
+            "support_tasks": 93,
+            "support_chains": 116,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "git",
+            "stat_ms": -0.20839462553065716,
+            "support_tasks": 100,
+            "support_chains": 161,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "echo",
+            "stat_ms": 0.05220288729225701,
+            "support_tasks": 219,
+            "support_chains": 296,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "ls",
+            "stat_ms": 0.6459040589498121,
+            "support_tasks": 61,
+            "support_chains": 71,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "timeout",
+            "stat_ms": -106.59739594062245,
+            "support_tasks": 3,
+            "support_chains": 6,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "python",
+            "stat_ms": -0.4358466158466159,
+            "support_tasks": 7,
+            "support_chains": 8,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cat",
+            "stat_ms": -0.1306699894331736,
+            "support_tasks": 9,
+            "support_chains": 15,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "apt-get",
+            "stat_ms": -0.042237200192853444,
+            "support_tasks": 13,
+            "support_chains": 13,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cp",
+            "stat_ms": -0.003909205105459622,
+            "support_tasks": 1,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "EOF",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mkdir",
+            "stat_ms": 0.0,
+            "support_tasks": 2,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip",
+            "stat_ms": 0.0,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rmdir",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "sed",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "template",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wget",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "}",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wc",
+            "stat_ms": 0.0014596296661514047,
+            "support_tasks": 7,
+            "support_chains": 7,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "find",
+            "stat_ms": 0.0035030302352106425,
+            "support_tasks": 2,
+            "support_chains": 9,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "grep",
+            "stat_ms": 0.0038292209021375716,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mv",
+            "stat_ms": 0.009403000472126468,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rm",
+            "stat_ms": 0.02069792538271286,
+            "support_tasks": 3,
+            "support_chains": 4,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip3",
+            "stat_ms": 0.0842220850682268,
+            "support_tasks": 4,
+            "support_chains": 4,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "printf",
+            "stat_ms": 0.08949433655093682,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "source",
+            "stat_ms": 3.6095007995008004,
+            "support_tasks": 9,
+            "support_chains": 9,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "conda",
+            "stat_ms": 3.7814143118219206,
+            "support_tasks": 16,
+            "support_chains": 16,
+            "support_ok": false,
+            "transparent": false
+          }
+        ],
+        "sensitivity_marginal": {
+          "0.020": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.050": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.100": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ]
+        }
+      },
+      {
+        "fold": 2,
+        "degenerate": false,
+        "universe": [
+          "apt-get",
+          "cat",
+          "cd",
+          "conda",
+          "cp",
+          "echo",
+          "find",
+          "git",
+          "grep",
+          "ls",
+          "mkdir",
+          "mv",
+          "pip",
+          "pip3",
+          "printf",
+          "python",
+          "python3",
+          "rm",
+          "rmdir",
+          "sed",
+          "source",
+          "timeout",
+          "wc",
+          "wget",
+          "which"
+        ],
+        "marginal_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "joint_ok": true,
+        "joint_stat_ms": -44.19952189106052,
+        "applied_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "fit_side_mae_ms": 1095.524844720497,
+        "per_class": [
+          {
+            "verb_class": "cd",
+            "stat_ms": -44.70847891601502,
+            "support_tasks": 221,
+            "support_chains": 2800,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "python3",
+            "stat_ms": -0.7137893490441382,
+            "support_tasks": 99,
+            "support_chains": 121,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "git",
+            "stat_ms": -0.2812411545927577,
+            "support_tasks": 97,
+            "support_chains": 161,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "echo",
+            "stat_ms": 0.00684055916456919,
+            "support_tasks": 218,
+            "support_chains": 274,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "which",
+            "stat_ms": 0.19507833505588779,
+            "support_tasks": 125,
+            "support_chains": 149,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "ls",
+            "stat_ms": 0.6390654123568742,
+            "support_tasks": 55,
+            "support_chains": 66,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "python",
+            "stat_ms": -0.7438289808482118,
+            "support_tasks": 13,
+            "support_chains": 16,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "conda",
+            "stat_ms": -0.7283811183505533,
+            "support_tasks": 17,
+            "support_chains": 17,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip3",
+            "stat_ms": -0.25363803181513667,
+            "support_tasks": 6,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cat",
+            "stat_ms": -0.19494998720235693,
+            "support_tasks": 6,
+            "support_chains": 11,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "apt-get",
+            "stat_ms": -0.05995597539715143,
+            "support_tasks": 10,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cp",
+            "stat_ms": -0.01972112754310605,
+            "support_tasks": 1,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "find",
+            "stat_ms": -0.01567062095353746,
+            "support_tasks": 3,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip",
+            "stat_ms": -0.011221719457013574,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mkdir",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rmdir",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wget",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "sed",
+            "stat_ms": 0.002913231624868452,
+            "support_tasks": 2,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "grep",
+            "stat_ms": 0.00439066207440006,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wc",
+            "stat_ms": 0.015080565760774298,
+            "support_tasks": 7,
+            "support_chains": 7,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mv",
+            "stat_ms": 0.029206369062260908,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "printf",
+            "stat_ms": 0.04182199217460091,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rm",
+            "stat_ms": 0.04362776970095449,
+            "support_tasks": 4,
+            "support_chains": 5,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "timeout",
+            "stat_ms": 0.10703083164280723,
+            "support_tasks": 3,
+            "support_chains": 6,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "source",
+            "stat_ms": 1.4481501279012585,
+            "support_tasks": 7,
+            "support_chains": 7,
+            "support_ok": false,
+            "transparent": false
+          }
+        ],
+        "sensitivity_marginal": {
+          "0.020": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.050": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.100": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ]
+        }
+      },
+      {
+        "fold": 3,
+        "degenerate": false,
+        "universe": [
+          "EOF",
+          "apt-get",
+          "cat",
+          "cd",
+          "conda",
+          "cp",
+          "echo",
+          "find",
+          "git",
+          "grep",
+          "ls",
+          "mkdir",
+          "mv",
+          "pip",
+          "pip3",
+          "printf",
+          "python",
+          "python3",
+          "rm",
+          "rmdir",
+          "sed",
+          "source",
+          "template",
+          "timeout",
+          "wc",
+          "wget",
+          "which",
+          "}"
+        ],
+        "marginal_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "joint_ok": true,
+        "joint_stat_ms": -49.141086197011376,
+        "applied_transparent": [
+          "cd",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "fit_side_mae_ms": 1078.112298136646,
+        "per_class": [
+          {
+            "verb_class": "cd",
+            "stat_ms": -47.747295916436215,
+            "support_tasks": 221,
+            "support_chains": 2783,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "which",
+            "stat_ms": -1.23672641532039,
+            "support_tasks": 134,
+            "support_chains": 154,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "python3",
+            "stat_ms": -0.8901973759899575,
+            "support_tasks": 99,
+            "support_chains": 123,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "echo",
+            "stat_ms": -0.5915388775247662,
+            "support_tasks": 220,
+            "support_chains": 292,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "git",
+            "stat_ms": -0.3553934552915581,
+            "support_tasks": 102,
+            "support_chains": 168,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "ls",
+            "stat_ms": -0.2755091550555808,
+            "support_tasks": 55,
+            "support_chains": 65,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "cat",
+            "stat_ms": -0.8802764234794951,
+            "support_tasks": 7,
+            "support_chains": 8,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "python",
+            "stat_ms": -0.7773389161115405,
+            "support_tasks": 11,
+            "support_chains": 13,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "conda",
+            "stat_ms": -0.3454880738472392,
+            "support_tasks": 17,
+            "support_chains": 17,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip3",
+            "stat_ms": -0.20482164780996515,
+            "support_tasks": 8,
+            "support_chains": 12,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cp",
+            "stat_ms": -0.05648541915511536,
+            "support_tasks": 1,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip",
+            "stat_ms": -0.01167420814479638,
+            "support_tasks": 4,
+            "support_chains": 4,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mv",
+            "stat_ms": -0.00907913801168874,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "find",
+            "stat_ms": -0.0052231100428126185,
+            "support_tasks": 3,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "EOF",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mkdir",
+            "stat_ms": 0.0,
+            "support_tasks": 2,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rmdir",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "template",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wget",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "}",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rm",
+            "stat_ms": 0.00012153880618213208,
+            "support_tasks": 3,
+            "support_chains": 4,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "sed",
+            "stat_ms": 0.0015121112547583112,
+            "support_tasks": 2,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "grep",
+            "stat_ms": 0.004718232326518607,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wc",
+            "stat_ms": 0.016169139105151303,
+            "support_tasks": 9,
+            "support_chains": 9,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "apt-get",
+            "stat_ms": 0.018784224362306194,
+            "support_tasks": 14,
+            "support_chains": 14,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "printf",
+            "stat_ms": 0.07813908707625136,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "source",
+            "stat_ms": 2.0821779270252123,
+            "support_tasks": 8,
+            "support_chains": 8,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "timeout",
+            "stat_ms": 30.454803221111987,
+            "support_tasks": 2,
+            "support_chains": 4,
+            "support_ok": false,
+            "transparent": false
+          }
+        ],
+        "sensitivity_marginal": {
+          "0.020": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.050": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.100": [
+            "cd",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ]
+        }
+      },
+      {
+        "fold": 4,
+        "degenerate": false,
+        "universe": [
+          "EOF",
+          "apt-get",
+          "cat",
+          "cd",
+          "conda",
+          "echo",
+          "find",
+          "git",
+          "grep",
+          "ls",
+          "mkdir",
+          "mv",
+          "pip",
+          "pip3",
+          "printf",
+          "python",
+          "python3",
+          "rm",
+          "sed",
+          "source",
+          "template",
+          "timeout",
+          "wc",
+          "wget",
+          "which",
+          "}"
+        ],
+        "marginal_transparent": [
+          "cd",
+          "conda",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "joint_ok": true,
+        "joint_stat_ms": -28.016326171436713,
+        "applied_transparent": [
+          "cd",
+          "conda",
+          "echo",
+          "git",
+          "ls",
+          "python3",
+          "which"
+        ],
+        "fit_side_mae_ms": 1164.9232464307881,
+        "per_class": [
+          {
+            "verb_class": "cd",
+            "stat_ms": -28.780255176346767,
+            "support_tasks": 222,
+            "support_chains": 2787,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "python3",
+            "stat_ms": -0.6620967845880618,
+            "support_tasks": 98,
+            "support_chains": 114,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "git",
+            "stat_ms": -0.25161062473878176,
+            "support_tasks": 105,
+            "support_chains": 170,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "echo",
+            "stat_ms": 0.04608213853467235,
+            "support_tasks": 220,
+            "support_chains": 278,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "which",
+            "stat_ms": 0.6246603341242324,
+            "support_tasks": 127,
+            "support_chains": 143,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "ls",
+            "stat_ms": 0.6673378586806626,
+            "support_tasks": 60,
+            "support_chains": 71,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "conda",
+            "stat_ms": 3.181327222434202,
+            "support_tasks": 20,
+            "support_chains": 20,
+            "support_ok": true,
+            "transparent": true
+          },
+          {
+            "verb_class": "apt-get",
+            "stat_ms": -1.130443695572115,
+            "support_tasks": 11,
+            "support_chains": 11,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "python",
+            "stat_ms": -0.4019889488639491,
+            "support_tasks": 12,
+            "support_chains": 15,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip3",
+            "stat_ms": -0.2291178541993637,
+            "support_tasks": 8,
+            "support_chains": 12,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "pip",
+            "stat_ms": -0.01072072072072072,
+            "support_tasks": 3,
+            "support_chains": 3,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "grep",
+            "stat_ms": -0.003880803880803881,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "EOF",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 2,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "find",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mkdir",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "template",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wget",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "}",
+            "stat_ms": 0.0,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "sed",
+            "stat_ms": 0.0057836854711854685,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "wc",
+            "stat_ms": 0.014382461175939438,
+            "support_tasks": 9,
+            "support_chains": 9,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "mv",
+            "stat_ms": 0.01683647761747922,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "rm",
+            "stat_ms": 0.03177652623293277,
+            "support_tasks": 3,
+            "support_chains": 4,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "cat",
+            "stat_ms": 0.03523121804078393,
+            "support_tasks": 5,
+            "support_chains": 11,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "printf",
+            "stat_ms": 0.07300048645249134,
+            "support_tasks": 1,
+            "support_chains": 1,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "source",
+            "stat_ms": 1.343092053092053,
+            "support_tasks": 10,
+            "support_chains": 10,
+            "support_ok": false,
+            "transparent": false
+          },
+          {
+            "verb_class": "timeout",
+            "stat_ms": 2.0994589875700043,
+            "support_tasks": 3,
+            "support_chains": 6,
+            "support_ok": false,
+            "transparent": false
+          }
+        ],
+        "sensitivity_marginal": {
+          "0.020": [
+            "cd",
+            "conda",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.050": [
+            "cd",
+            "conda",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ],
+          "0.100": [
+            "cd",
+            "conda",
+            "echo",
+            "git",
+            "ls",
+            "python3",
+            "which"
+          ]
+        }
+      }
+    ]
+  },
+  "kill_readout": {
+    "K1_reproduce_win": {
+      "primary_min_evidence": 1,
+      "wtn_vs_off": {
+        "mean_delta_ms": 25.459089329040776,
+        "ci_low": -78.62292307072849,
+        "ci_high": 185.02635992246255,
+        "confidence": 0.95,
+        "tasks": 277
+      },
+      "wtn_vs_cd_only": {
+        "mean_delta_ms": 0.30162127381933684,
+        "ci_low": -2.6939277121480067,
+        "ci_high": 2.748906249021016,
+        "confidence": 0.95,
+        "tasks": 277
+      },
+      "beats_off_ci_excludes_zero": false,
+      "not_worse_than_cd_only": true,
+      "killed": true
+    },
+    "K2_emergence_positive_control": {
+      "positive_control_class": "cd",
+      "candidate_present": true,
+      "per_fold_transparent": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "emerges_every_fold": true,
+      "killed": false
+    },
+    "K3_stability_mass_weighted": {
+      "mass_agreement_floor": 0.9,
+      "affected_chains": 4023,
+      "stable_chains": 4001,
+      "affected_mass_ms": 4284867.999999994,
+      "stable_mass_ms": 4263986.599999993,
+      "mass_agreement_fraction": 0.9951267110212026,
+      "count_agreement_fraction": 0.9945314441958737,
+      "mean_pairwise_jaccard_diagnostic": 0.9428571428571428,
+      "killed": false
+    },
+    "verdict": "KILL"
+  }
+}
