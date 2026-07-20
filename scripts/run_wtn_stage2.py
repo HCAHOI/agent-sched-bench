@@ -50,8 +50,11 @@ offline-gated-robust/manifest.json --final
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
+from dataclasses import dataclass
 import datetime as _dt
+import functools
 import json
 from pathlib import Path
 import sys
@@ -70,6 +73,7 @@ from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
     _read_manifest,
     _read_task_ids,
     _require_explicit_trace_task_ids,
+    resolve_worker_count,
 )
 from trace_collect.tool_latency_confirmation import (  # noqa: E402
     paired_task_cluster_bootstrap,
@@ -356,6 +360,83 @@ def compute_verdict(
     }
 
 
+@dataclass(frozen=True)
+class _FoldReplayConfig:
+    fold_count: int
+    screen: ScreenConfig
+    costs_ms: tuple[float, ...]
+    guard_ms: float
+    inner_folds: int
+    min_profile_tasks: int
+    command_field: str
+    max_prefix_depth: int
+    restore_cost_fraction: float
+    cert_min_tool_history: int
+    cert_skip_leading_cd: bool
+    pnew_min_tool_history: int
+
+
+def _run_fold_replay(
+    fold: int,
+    *,
+    samples_by_task: dict[str, list[ToolLatencySample]],
+    task_ids: Sequence[str],
+    cfg: _FoldReplayConfig,
+) -> tuple[int, ScreenResult, list[dict[str, Any]]]:
+    eval_tasks = {
+        task_id
+        for index, task_id in enumerate(task_ids)
+        if index % cfg.fold_count == fold - 1
+    }
+    profile_tasks = set(task_ids) - eval_tasks
+    eval_samples = [
+        row for task_id in sorted(eval_tasks) for row in samples_by_task[task_id]
+    ]
+    profile_samples = [
+        row for task_id in sorted(profile_tasks) for row in samples_by_task[task_id]
+    ]
+    screen = screen_transparency(
+        _chains_from_samples(profile_samples, command_field=cfg.command_field),
+        cfg.screen,
+    )
+    eval_rows = [sample.to_json_obj() for sample in eval_samples]
+    profile_rows = [sample.to_json_obj() for sample in profile_samples]
+    arm_kwargs = dict(
+        costs_ms=cfg.costs_ms,
+        guard_ms=cfg.guard_ms,
+        inner_folds=cfg.inner_folds,
+        min_profile_tasks=cfg.min_profile_tasks,
+        command_field=cfg.command_field,
+        max_prefix_depth=cfg.max_prefix_depth,
+        restore_cost_fraction=cfg.restore_cost_fraction,
+    )
+    p0 = _run_arm(
+        eval_rows,
+        profile_rows,
+        min_tool_history=cfg.cert_min_tool_history,
+        skip_leading_cd=cfg.cert_skip_leading_cd,
+        transparent_wrappers=frozenset(),
+        **arm_kwargs,
+    )
+    pnew = _run_arm(
+        eval_rows,
+        profile_rows,
+        min_tool_history=cfg.pnew_min_tool_history,
+        skip_leading_cd=False,
+        transparent_wrappers=screen.applied,
+        **arm_kwargs,
+    )
+    oracle = _run_arm(
+        eval_rows,
+        profile_rows,
+        min_tool_history=cfg.pnew_min_tool_history,
+        skip_leading_cd=True,
+        transparent_wrappers=frozenset(),
+        **arm_kwargs,
+    )
+    return fold, screen, _merge_fold_arms(p0, pnew, oracle, fold=f"f{fold}")
+
+
 def run_stage2(
     manifest_path: Path,
     *,
@@ -367,8 +448,10 @@ def run_stage2(
     seed: int,
     limit_tasks: int | None,
     final: bool,
+    workers: int = 1,
 ) -> dict[str, Any]:
     """Run the Stage-2 replay and return the full result payload."""
+    workers = resolve_worker_count(workers)
 
     repo_root = Path(__file__).resolve().parents[1]
     manifest = _read_manifest(manifest_path.resolve(), repo_root=repo_root)
@@ -417,67 +500,37 @@ def run_stage2(
         if limit_tasks < fold_count:
             raise ValueError(f"--limit-tasks must be >= fold_count ({fold_count})")
         task_ids = task_ids[:limit_tasks]
-    declared = set(task_ids)
-
+    fold_cfg = _FoldReplayConfig(
+        fold_count=fold_count,
+        screen=screen_cfg,
+        costs_ms=tuple(float(cost) for cost in costs_ms),
+        guard_ms=guard_ms,
+        inner_folds=inner_folds,
+        min_profile_tasks=min_profile_tasks,
+        command_field=command_field,
+        max_prefix_depth=max_prefix_depth,
+        restore_cost_fraction=restore_cost_fraction,
+        cert_min_tool_history=cert_min_tool_history,
+        cert_skip_leading_cd=cert_skip_leading_cd,
+        pnew_min_tool_history=pnew_min_tool_history,
+    )
+    worker = functools.partial(
+        _run_fold_replay,
+        samples_by_task=samples_by_task,
+        task_ids=task_ids,
+        cfg=fold_cfg,
+    )
+    folds = range(1, fold_count + 1)
+    if workers == 1:
+        per_fold = list(map(worker, folds))
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, fold_count)) as pool:
+            per_fold = list(pool.map(worker, folds))
     merged: list[dict[str, Any]] = []
     fold_screens: list[tuple[int, ScreenResult]] = []
-    for fold in range(1, fold_count + 1):
-        eval_tasks = {
-            task_id
-            for index, task_id in enumerate(task_ids)
-            if index % fold_count == fold - 1
-        }
-        profile_tasks = declared - eval_tasks
-        eval_samples = [
-            row for task_id in sorted(eval_tasks) for row in samples_by_task[task_id]
-        ]
-        profile_samples = [
-            row for task_id in sorted(profile_tasks) for row in samples_by_task[task_id]
-        ]
-        # Cross-fit: learn the transparent set on the FIT (profile) fold ONLY.
-        screen = screen_transparency(
-            _chains_from_samples(profile_samples, command_field=command_field),
-            screen_cfg,
-        )
+    for fold, screen, rows in per_fold:
         fold_screens.append((fold, screen))
-        transparent = screen.applied
-
-        eval_rows = [sample.to_json_obj() for sample in eval_samples]
-        profile_rows = [sample.to_json_obj() for sample in profile_samples]
-        arm_kwargs = dict(
-            costs_ms=costs_ms,
-            guard_ms=guard_ms,
-            inner_folds=inner_folds,
-            min_profile_tasks=min_profile_tasks,
-            command_field=command_field,
-            max_prefix_depth=max_prefix_depth,
-            restore_cost_fraction=restore_cost_fraction,
-        )
-        p0 = _run_arm(
-            eval_rows,
-            profile_rows,
-            min_tool_history=cert_min_tool_history,
-            skip_leading_cd=cert_skip_leading_cd,
-            transparent_wrappers=frozenset(),
-            **arm_kwargs,
-        )
-        pnew = _run_arm(
-            eval_rows,
-            profile_rows,
-            min_tool_history=pnew_min_tool_history,
-            skip_leading_cd=False,
-            transparent_wrappers=transparent,
-            **arm_kwargs,
-        )
-        oracle = _run_arm(
-            eval_rows,
-            profile_rows,
-            min_tool_history=pnew_min_tool_history,
-            skip_leading_cd=True,
-            transparent_wrappers=frozenset(),
-            **arm_kwargs,
-        )
-        merged.extend(_merge_fold_arms(p0, pnew, oracle, fold=f"f{fold}"))
+        merged.extend(rows)
 
     cert_kwargs = dict(
         costs_ms=costs_ms,
@@ -522,6 +575,7 @@ def run_stage2(
             "collection_id": manifest["collection_id"],
             "task_count": len(task_ids),
             "limit_tasks": limit_tasks,
+            "workers": workers,
             "git_sha": _git_sha(),
             "generated": _dt.datetime.now().isoformat(timespec="seconds"),
         },
@@ -704,6 +758,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Smoke only: cap tasks (subsets folds consistently). Rejected with "
         "--final.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=resolve_worker_count(),
+        help="CPU processes for independent folds; 1 is sequential.",
+    )
     parser.add_argument("--out-json", type=Path, default=None)
     parser.add_argument("--out-md", type=Path, default=None)
     parser.add_argument("--final", action="store_true")
@@ -740,6 +800,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         seed=args.seed,
         limit_tasks=args.limit_tasks,
         final=args.final,
+        workers=args.workers,
     )
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(results, indent=2, default=list), encoding="utf-8")

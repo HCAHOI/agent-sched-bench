@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -60,6 +61,15 @@ REQUIRED_EXCLUDED_TRACE_ROOTS = [
     "traces/swe-rebench/qwen3.7-max/20260624T162037",
     "traces/terminal-bench/zai-org-GLM-5.2/20260709T171830",
 ]
+
+
+def resolve_worker_count(workers: int | None = None) -> int:
+    """Return a valid CPU worker count, leaving one core for the OS."""
+
+    resolved = max(1, (os.cpu_count() or 1) - 1) if workers is None else workers
+    if resolved < 1:
+        raise ValueError(f"workers must be >= 1, got {resolved}")
+    return resolved
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -199,6 +199,7 @@ def test_enumerate_and_run_end_to_end() -> None:
     )
     assert nodes  # at least one selected node per fold
     results = run_adjudication(samples_by_task, task_ids, cfg)
+    assert run_adjudication(samples_by_task, task_ids, cfg, workers=2) == results
     assert results["collapse_confirmed"] is True
     assert results["verdict"] == "COLLAPSE CONFIRMED"
     assert results["max_value_gap"] <= 1e-6

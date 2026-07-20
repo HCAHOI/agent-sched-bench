@@ -204,6 +204,7 @@ def test_run_stage_one_identical_arms_kill() -> None:
         decision_tolerance_ms=1e-6,
     )
     results = run_stage_one(_homogeneous_corpus(), cfg)
+    assert run_stage_one(_homogeneous_corpus(), cfg, workers=2) == results
     # E and E+B are the same set on every event -> no decision ever changes and
     # the paired log-score gain is exactly zero.
     assert results["decision_divergence"]["pooled_divergence_fraction"] == pytest.approx(0.0)

@@ -77,9 +77,11 @@ offline-gated-robust/manifest.json --final
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass, field
 import datetime as _dt
+import functools
 import json
 from pathlib import Path
 import sys
@@ -94,6 +96,7 @@ from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
     _read_manifest,
     _read_task_ids,
     _require_explicit_trace_task_ids,
+    resolve_worker_count,
 )
 from trace_collect.tool_latency_dataset import (  # noqa: E402
     ToolLatencySample,
@@ -481,13 +484,35 @@ class AdjudicationResult:
     cells: list[NodeCellResult] = field(default_factory=list)
 
 
+def _adjudicate_node(
+    node: SelectedNode, *, cfg: AdjudicationConfig
+) -> list[NodeCellResult]:
+    return [
+        adjudicate_node_cell(
+            node.values,
+            node_key=node.node_key,
+            fold=node.fold,
+            prior_source=node.prior_source,
+            prior_group_key=node.prior_group_key,
+            kv_cost_ms=kv_cost_ms,
+            guard_ms=cfg.guard_ms,
+            restore_cost_fraction=cfg.restore_cost_fraction,
+            overhead_ms=cfg.overhead_ms,
+        )
+        for kv_cost_ms in cfg.costs_ms
+    ]
+
+
 def run_adjudication(
     samples_by_task: dict[str, list[ToolLatencySample]],
     task_ids: Sequence[str],
     cfg: AdjudicationConfig,
+    *,
+    workers: int = 1,
 ) -> dict[str, Any]:
     """Adjudicate every certified node x cell and apply the binding readout."""
 
+    workers = resolve_worker_count(workers)
     nodes = enumerate_selected_nodes(
         samples_by_task,
         task_ids,
@@ -498,23 +523,13 @@ def run_adjudication(
         min_tool_history=cfg.min_tool_history,
         min_profile_tasks=cfg.min_profile_tasks,
     )
-    cells: list[NodeCellResult] = []
-    for node in nodes:
-        for kv_cost_ms in cfg.costs_ms:
-            cells.append(
-                adjudicate_node_cell(
-                    node.values,
-                    node_key=node.node_key,
-                    fold=node.fold,
-                    prior_source=node.prior_source,
-                    prior_group_key=node.prior_group_key,
-                    kv_cost_ms=kv_cost_ms,
-                    guard_ms=cfg.guard_ms,
-                    restore_cost_fraction=cfg.restore_cost_fraction,
-                    overhead_ms=cfg.overhead_ms,
-                )
-            )
-    return summarize(cells, cfg)
+    worker = functools.partial(_adjudicate_node, cfg=cfg)
+    if workers == 1 or len(nodes) < 2:
+        per_node = list(map(worker, nodes))
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, len(nodes))) as pool:
+            per_node = list(pool.map(worker, nodes, chunksize=8))
+    return summarize([cell for cells in per_node for cell in cells], cfg)
 
 
 def summarize(cells: Sequence[NodeCellResult], cfg: AdjudicationConfig) -> dict[str, Any]:
@@ -685,6 +700,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Smoke only: cap tasks (subsets folds consistently). Rejected with "
         "--final.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=resolve_worker_count(),
+        help="CPU processes for deterministic per-node adjudication; 1 is sequential.",
+    )
     parser.add_argument("--out-json", type=Path, default=None)
     parser.add_argument("--out-md", type=Path, default=None)
     parser.add_argument("--final", action="store_true")
@@ -767,7 +788,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         overhead_ms=args.overhead_ms,
         tolerance_ms=args.tolerance_ms,
     )
-    results = run_adjudication(samples_by_task, task_ids, cfg)
+    results = run_adjudication(samples_by_task, task_ids, cfg, workers=args.workers)
     provenance = {
         "exploratory": True,
         "final": bool(args.final),
@@ -775,6 +796,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "collection_id": manifest["collection_id"],
         "task_count": len(task_ids),
         "limit_tasks": args.limit_tasks,
+        "workers": args.workers,
         "cost_count": len(cfg.costs_ms),
         "guard_ms": cfg.guard_ms,
         "restore_cost_fraction": cfg.restore_cost_fraction,

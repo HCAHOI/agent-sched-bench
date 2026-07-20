@@ -88,9 +88,11 @@ offline-gated-robust/manifest.json --final
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass
 import datetime as _dt
+import functools
 import json
 from pathlib import Path
 import sys
@@ -108,6 +110,9 @@ from scripts.adjudicate_k2_recheck import (  # noqa: E402
     _git_sha,
     _load_manifest_corpus,
     _row_group_keys,
+)
+from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
+    resolve_worker_count,
 )
 from trace_collect.tool_latency_dataset import ToolLatencySample  # noqa: E402
 from trace_collect.tool_latency_offline_probe import (  # noqa: E402
@@ -325,83 +330,107 @@ def _robust_swap_triggers(
     }
 
 
-def score_decisions(
+def _score_fold(
+    fold: int,
+    *,
     samples_by_task: dict[str, list[ToolLatencySample]],
     task_ids: Sequence[str],
     cfg: PrerestoreConfig,
 ) -> list[dict[str, Any]]:
-    """Cross-fitted per-(call, cost) pre-restore decision rows over the folds."""
-
     row_group_keys = _row_group_keys(
         cfg.command_field,
         max_prefix_depth=cfg.max_prefix_depth,
         skip_leading_cd=cfg.skip_leading_cd,
     )
     declared = list(task_ids)
+    eval_tasks = {
+        task_id
+        for index, task_id in enumerate(declared)
+        if index % cfg.fold_count == fold - 1
+    }
+    profile_tasks = set(declared) - eval_tasks
+    profile_rows = [
+        sample.to_json_obj()
+        for task_id in sorted(profile_tasks)
+        for sample in samples_by_task[task_id]
+    ]
+    eval_rows = [
+        sample.to_json_obj()
+        for task_id in sorted(eval_tasks)
+        for sample in samples_by_task[task_id]
+    ]
+    prior = build_latency_prior(profile_rows, row_group_keys=row_group_keys)
+    robust_g = (
+        _robust_swap_triggers(eval_rows, profile_rows, cfg)
+        if cfg.trigger_source == "robust"
+        else {}
+    )
     decisions: list[dict[str, Any]] = []
-    for fold in range(1, cfg.fold_count + 1):
-        eval_tasks = {
-            task_id
-            for index, task_id in enumerate(declared)
-            if index % cfg.fold_count == fold - 1
-        }
-        profile_tasks = set(declared) - eval_tasks
-        profile_rows = [
-            sample.to_json_obj()
-            for task_id in sorted(profile_tasks)
-            for sample in samples_by_task[task_id]
-        ]
-        eval_rows = [
-            sample.to_json_obj()
-            for task_id in sorted(eval_tasks)
-            for sample in samples_by_task[task_id]
-        ]
-        prior = build_latency_prior(profile_rows, row_group_keys=row_group_keys)
-        robust_g = (
-            _robust_swap_triggers(eval_rows, profile_rows, cfg)
-            if cfg.trigger_source == "robust"
-            else {}
-        )
-        start_cache: dict[tuple[int, float, float], float | None] = {}
-        for task_id in sorted(eval_tasks):
-            for sample in samples_by_task[task_id]:
-                row = sample.to_json_obj()
-                node = latency_prior_hierarchy(
-                    prior,
-                    str(row["tool_name"]),
-                    row_group_keys(row),
-                    min_tool_history=cfg.min_tool_history,
-                    min_profile_tasks=cfg.min_profile_tasks,
-                )[-1]
-                latency_ms = float(row["latency_ms"])
-                for kv_cost_ms in cfg.costs_ms:
-                    swap_trigger_ms = (
-                        robust_g[(str(row["sample_id"]), kv_cost_ms)]
-                        if cfg.trigger_source == "robust"
-                        else None
-                    )
-                    scored = _score_eval_call(
-                        node,
-                        latency_ms,
-                        kv_cost_ms=kv_cost_ms,
-                        guard_ms=cfg.guard_ms,
-                        restore_cost_fraction=cfg.restore_cost_fraction,
-                        swap_trigger_ms=swap_trigger_ms,
-                        start_cache=start_cache,
-                    )
-                    decisions.append(
-                        {
-                            "sample_id": str(row["sample_id"]),
-                            "task_id": task_id,
-                            "tool_name": str(row["tool_name"]),
-                            "outer_fold": f"f{fold}",
-                            "latency_ms": latency_ms,
-                            "prior_source": node.source,
-                            "prior_group_key": node.group_key,
-                            **scored,
-                        }
-                    )
+    start_cache: dict[tuple[int, float, float], float | None] = {}
+    for task_id in sorted(eval_tasks):
+        for sample in samples_by_task[task_id]:
+            row = sample.to_json_obj()
+            node = latency_prior_hierarchy(
+                prior,
+                str(row["tool_name"]),
+                row_group_keys(row),
+                min_tool_history=cfg.min_tool_history,
+                min_profile_tasks=cfg.min_profile_tasks,
+            )[-1]
+            latency_ms = float(row["latency_ms"])
+            for kv_cost_ms in cfg.costs_ms:
+                swap_trigger_ms = (
+                    robust_g[(str(row["sample_id"]), kv_cost_ms)]
+                    if cfg.trigger_source == "robust"
+                    else None
+                )
+                scored = _score_eval_call(
+                    node,
+                    latency_ms,
+                    kv_cost_ms=kv_cost_ms,
+                    guard_ms=cfg.guard_ms,
+                    restore_cost_fraction=cfg.restore_cost_fraction,
+                    swap_trigger_ms=swap_trigger_ms,
+                    start_cache=start_cache,
+                )
+                decisions.append(
+                    {
+                        "sample_id": str(row["sample_id"]),
+                        "task_id": task_id,
+                        "tool_name": str(row["tool_name"]),
+                        "outer_fold": f"f{fold}",
+                        "latency_ms": latency_ms,
+                        "prior_source": node.source,
+                        "prior_group_key": node.group_key,
+                        **scored,
+                    }
+                )
     return decisions
+
+
+def score_decisions(
+    samples_by_task: dict[str, list[ToolLatencySample]],
+    task_ids: Sequence[str],
+    cfg: PrerestoreConfig,
+    *,
+    workers: int = 1,
+) -> list[dict[str, Any]]:
+    """Cross-fitted per-(call, cost) pre-restore decision rows over the folds."""
+
+    workers = resolve_worker_count(workers)
+    worker = functools.partial(
+        _score_fold,
+        samples_by_task=samples_by_task,
+        task_ids=task_ids,
+        cfg=cfg,
+    )
+    folds = range(1, cfg.fold_count + 1)
+    if workers == 1:
+        per_fold = list(map(worker, folds))
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, cfg.fold_count)) as pool:
+            per_fold = list(pool.map(worker, folds))
+    return [row for rows in per_fold for row in rows]
 
 
 # --------------------------------------------------------------------------- #
@@ -541,10 +570,12 @@ def run_prerestore_accounting(
     samples_by_task: dict[str, list[ToolLatencySample]],
     task_ids: Sequence[str],
     cfg: PrerestoreConfig,
+    *,
+    workers: int = 1,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Score every fold's held-out calls and apply the frozen kill readout."""
 
-    decisions = score_decisions(samples_by_task, task_ids, cfg)
+    decisions = score_decisions(samples_by_task, task_ids, cfg, workers=workers)
     summary = summarize(decisions, cfg, task_count=len(task_ids))
     return summary, decisions
 
@@ -666,6 +697,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Smoke only: cap tasks (subsets folds consistently). Rejected with "
         "--final.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=resolve_worker_count(),
+        help="CPU processes for independent folds; 1 is sequential.",
+    )
     parser.add_argument("--out-json", type=Path, default=None)
     parser.add_argument("--out-md", type=Path, default=None)
     parser.add_argument("--final", action="store_true")
@@ -720,7 +757,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         trigger_source=args.trigger_source,
         inner_folds=manifest["inner_folds"],
     )
-    summary, decisions = run_prerestore_accounting(samples_by_task, task_ids, cfg)
+    summary, decisions = run_prerestore_accounting(
+        samples_by_task, task_ids, cfg, workers=args.workers
+    )
     provenance = {
         "exploratory": True,
         "offline_accounting": True,
@@ -730,6 +769,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "collection_id": manifest["collection_id"],
         "task_count": len(task_ids),
         "limit_tasks": args.limit_tasks,
+        "workers": args.workers,
         "guard_ms": cfg.guard_ms,
         "restore_cost_fraction": cfg.restore_cost_fraction,
         "git_sha": _git_sha(),

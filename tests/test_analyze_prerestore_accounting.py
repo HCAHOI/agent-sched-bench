@@ -202,6 +202,9 @@ def test_cross_fit_real_positive_start_from_fit_samples() -> None:
     }
     cfg = _cfg((kv,))
     decisions = score_decisions(samples_by_task, ["t0", "t1", "t2", "t3"], cfg)
+    assert score_decisions(
+        samples_by_task, ["t0", "t1", "t2", "t3"], cfg, workers=2
+    ) == decisions
     row = next(r for r in decisions if r["task_id"] == "t0")
     fit_node = _node({"t1": [5000.0, 200.0], "t3": [5000.0, 200.0]})
     expected_g = hazard_recheck_ms(

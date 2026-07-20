@@ -79,9 +79,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass
 import datetime as _dt
+import functools
 import json
 import math
 from pathlib import Path
@@ -97,6 +99,9 @@ from scipy.stats import gaussian_kde
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.analyze_segment_variance import Config, _task_folds, atom_key  # noqa: E402
+from scripts.run_offline_gated_robust_confirmation import (  # noqa: E402
+    resolve_worker_count,
+)
 from trace_collect.tool_latency_dataset import (
     SegmentLatencySample,
     extract_many_segment_latency_samples,
@@ -395,9 +400,89 @@ def _apply_proximity(
     return total[mask] - elapsed_ms
 
 
-def run_stage_one(chains: Sequence[TimedChain], cfg: StageOneConfig) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _StageOneFoldResult:
+    gains_by_task: dict[str, list[float]]
+    divergence_by_kv: dict[float, list[bool]]
+    event_total: int
+    event_supported: int
+    event_scored: int
+    thin_e: int
+    thin_eb: int
+
+
+def _run_stage_one_fold(
+    fold: tuple[Sequence[TimedChain], Sequence[TimedChain]],
+    *,
+    cfg: StageOneConfig,
+) -> _StageOneFoldResult:
+    train, test = fold
+    fit_totals, fit_nodes = _fit_index(train)
+    gains_by_task: dict[str, list[float]] = defaultdict(list)
+    divergence_by_kv: dict[float, list[bool]] = {kv: [] for kv in cfg.kv_costs_ms}
+    event_total = event_supported = event_scored = thin_e = thin_eb = 0
+    for chain in test:
+        for event in boundary_events(chain):
+            event_total += 1
+            e_res = elapsed_only_residuals(fit_totals, event.elapsed_ms)
+            node = fit_nodes.get((event.boundary_index, event.atom), [])
+            eb_res = _apply_proximity(
+                boundary_state_residuals(node, event.elapsed_ms),
+                node,
+                event.elapsed_ms,
+                cfg.proximity_bandwidth_ms,
+            )
+            if e_res.size < cfg.min_conditional_samples:
+                thin_e += 1
+                continue
+            if eb_res.size < cfg.min_conditional_samples:
+                thin_eb += 1
+                continue
+            event_supported += 1
+            for kv in cfg.kv_costs_ms:
+                k_e = hazard_decision_ms(
+                    e_res,
+                    kv_cost_ms=kv,
+                    restore_cost_fraction=cfg.restore_cost_fraction,
+                )
+                k_eb = hazard_decision_ms(
+                    eb_res,
+                    kv_cost_ms=kv,
+                    restore_cost_fraction=cfg.restore_cost_fraction,
+                )
+                divergence_by_kv[kv].append(
+                    not math.isclose(
+                        k_e,
+                        k_eb,
+                        abs_tol=cfg.decision_tolerance_ms,
+                        rel_tol=0.0,
+                    )
+                )
+            score_e = kde_log_score(e_res, event.residual_ms)
+            score_eb = kde_log_score(eb_res, event.residual_ms)
+            if score_e is not None and score_eb is not None:
+                event_scored += 1
+                gains_by_task[event.task_id].append(score_eb - score_e)
+    return _StageOneFoldResult(
+        gains_by_task=dict(gains_by_task),
+        divergence_by_kv=divergence_by_kv,
+        event_total=event_total,
+        event_supported=event_supported,
+        event_scored=event_scored,
+        thin_e=thin_e,
+        thin_eb=thin_eb,
+    )
+
+
+def run_stage_one(
+    chains: Sequence[TimedChain],
+    cfg: StageOneConfig,
+    *,
+    workers: int = 1,
+) -> dict[str, Any]:
     """Cross-fitted Stage-1 information test over task-grouped folds."""
 
+    workers = resolve_worker_count(workers)
     usable = analysable_chains(chains)
     fold_cfg = Config(
         fold_count=cfg.fold_count,
@@ -409,56 +494,27 @@ def run_stage_one(chains: Sequence[TimedChain], cfg: StageOneConfig) -> dict[str
         min_family_count=20,
         tail_percentile=90.0,
     )
+    worker = functools.partial(_run_stage_one_fold, cfg=cfg)
+    folds = list(_task_folds(usable, fold_cfg))
+    if workers == 1 or len(folds) < 2:
+        per_fold = list(map(worker, folds))
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, len(folds))) as pool:
+            per_fold = list(pool.map(worker, folds))
 
     gains_by_task: dict[str, list[float]] = defaultdict(list)
     divergence_by_kv: dict[float, list[bool]] = {kv: [] for kv in cfg.kv_costs_ms}
-    event_total = 0
-    event_supported = 0
-    event_scored = 0
-    thin_e = 0
-    thin_eb = 0
-
-    for train, test in _task_folds(usable, fold_cfg):
-        fit_totals, fit_nodes = _fit_index(train)
-        for chain in test:
-            for event in boundary_events(chain):
-                event_total += 1
-                e_res = elapsed_only_residuals(fit_totals, event.elapsed_ms)
-                node = fit_nodes.get((event.boundary_index, event.atom), [])
-                eb_res = _apply_proximity(
-                    boundary_state_residuals(node, event.elapsed_ms),
-                    node,
-                    event.elapsed_ms,
-                    cfg.proximity_bandwidth_ms,
-                )
-                if e_res.size < cfg.min_conditional_samples:
-                    thin_e += 1
-                    continue
-                if eb_res.size < cfg.min_conditional_samples:
-                    thin_eb += 1
-                    continue
-                event_supported += 1
-                for kv in cfg.kv_costs_ms:
-                    k_e = hazard_decision_ms(
-                        e_res,
-                        kv_cost_ms=kv,
-                        restore_cost_fraction=cfg.restore_cost_fraction,
-                    )
-                    k_eb = hazard_decision_ms(
-                        eb_res,
-                        kv_cost_ms=kv,
-                        restore_cost_fraction=cfg.restore_cost_fraction,
-                    )
-                    divergence_by_kv[kv].append(
-                        not math.isclose(
-                            k_e, k_eb, abs_tol=cfg.decision_tolerance_ms, rel_tol=0.0
-                        )
-                    )
-                score_e = kde_log_score(e_res, event.residual_ms)
-                score_eb = kde_log_score(eb_res, event.residual_ms)
-                if score_e is not None and score_eb is not None:
-                    event_scored += 1
-                    gains_by_task[event.task_id].append(score_eb - score_e)
+    event_total = event_supported = event_scored = thin_e = thin_eb = 0
+    for result in per_fold:
+        for task_id, gains in result.gains_by_task.items():
+            gains_by_task[task_id].extend(gains)
+        for kv, flags in result.divergence_by_kv.items():
+            divergence_by_kv[kv].extend(flags)
+        event_total += result.event_total
+        event_supported += result.event_supported
+        event_scored += result.event_scored
+        thin_e += result.thin_e
+        thin_eb += result.thin_eb
 
     per_kv = {
         f"{kv:.0f}": {
@@ -684,6 +740,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=1e-6,
         help="Two re-check times within this tolerance count as unchanged.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=resolve_worker_count(),
+        help="CPU processes for independent folds; 1 is sequential.",
+    )
     parser.add_argument("--out-json", type=Path, default=None)
     parser.add_argument("--out-md", type=Path, default=None)
     parser.add_argument("--final", action="store_true")
@@ -724,13 +786,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         bootstrap_seed=args.bootstrap_seed,
         decision_tolerance_ms=args.decision_tolerance_ms,
     )
-    results = run_stage_one(chains, cfg)
+    results = run_stage_one(chains, cfg, workers=args.workers)
     provenance = {
         "exploratory": True,
         "final": bool(args.final),
         "replayed_on": "our_hardware",
         "traces_dir": str(args.traces_dir),
         "corpus_file_count": len(files),
+        "workers": args.workers,
         "git_sha": _git_sha(),
         "generated": _dt.datetime.now().isoformat(timespec="seconds"),
         "operating_point": {

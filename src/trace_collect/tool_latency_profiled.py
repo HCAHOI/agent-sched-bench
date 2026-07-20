@@ -637,16 +637,25 @@ def hazard_recheck_ms(
     is_long = samples > threshold_ms
     best_k = threshold_ms
     best_benefit = -math.inf
-    for k in sorted(candidates):
-        window = samples - k
-        fires = samples > k
-        hidden_on_long = np.where(fires & is_long, np.minimum(kv_cost_ms, window), 0.0)
+    ordered_candidates = sorted(candidates)
+    # Keep temporary broadcast arrays near 64K elements (a few MiB total).
+    batch_size = max(1, 65_536 // samples.size)
+    for start in range(0, len(ordered_candidates), batch_size):
+        batch_candidates = ordered_candidates[start : start + batch_size]
+        candidate_column = np.asarray(batch_candidates, dtype=float)[:, None]
+        window = samples - candidate_column
+        fires = samples > candidate_column
+        hidden_on_long = np.where(
+            fires & is_long, np.minimum(kv_cost_ms, window), 0.0
+        )
         exposed = np.where(fires, np.maximum(0.0, kv_cost_ms - window), 0.0)
         restore = np.where(fires & ~is_long, restore_cost_ms, 0.0)
-        benefit = float(np.mean(hidden_on_long - exposed - restore))
-        if benefit >= best_benefit:
-            best_benefit = benefit
-            best_k = k
+        benefits = np.mean(hidden_on_long - exposed - restore, axis=1)
+        # Preserve the original ascending scan and latest-tie winner exactly.
+        for k, benefit in zip(batch_candidates, benefits, strict=True):
+            if benefit >= best_benefit:
+                best_benefit = float(benefit)
+                best_k = k
     return best_k
 
 
