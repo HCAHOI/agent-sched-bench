@@ -38,3 +38,5 @@ docs/
 .rpiv/
 figures/
 analysis/prerestore-accounting*-decisions.json.zst
+analysis/prior-calibration*-decisions.json.zst
+analysis/pressure-headroom*-decisions.json.zst
