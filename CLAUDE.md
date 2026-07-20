@@ -359,11 +359,23 @@ preserved, edge cases handled); consistency with existing conventions.
 the machinery while assuming its inputs is how a confident, wrong result gets
 produced. For every corpus or dataset a run reads, confirm against the
 committed manifest that defines it: the root path, the task/instance id list,
-and the expected count. Confirm no configured root appears in any manifest's
-exclusion list — a path taken from `excluded_trace_roots` is dev-exposed data
-that was deliberately withheld, and using it silently inverts the project's
-central discipline. A pipeline pointed at the wrong data passes every
-statistical check ever written for it.
+and the expected count.
+
+**Exclusion lists are scoped, not global.** `excluded_trace_roots` names data
+withheld from *that manifest's* corpus because it is development-exposed. The
+rule is: a root excluded by the manifest governing a run must not feed that
+run. It does NOT make the data unusable everywhere — those roots ARE the
+development corpora, and development-corpus comparison is a legitimate use of
+them. What must never happen is dev-exposed data reaching a held-out or
+certification run, or a superseded root being used where a canonical,
+manifest-defined corpus exists.
+
+For each input, confirm: which manifest governs this run; whether the root is
+excluded by *that* manifest; and whether a manifest-defined corpus supersedes
+the root in use. When a corpus has no manifest, say so in the artifact and
+state what stands in for the frozen id list — do not let absence of a manifest
+silently become absence of provenance. A pipeline pointed at the wrong data
+passes every statistical check ever written for it.
 
 **Iterate until clean:** 🔴 critical or 🟠 major → fix and re-review. 🟡 minor
 → may proceed, but still fix. Log what was reviewed and how issues were
