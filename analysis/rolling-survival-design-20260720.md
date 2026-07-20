@@ -1,117 +1,93 @@
-# Design spec — priced residual-time policies over certified latency priors
+# Priced residual-time policies over certified latency priors
 
-> **A0 OUTCOME (2026-07-20, full fresh-277, binding):** COLLAPSE
-> CONFIRMED. 670 certified prior nodes × 10 kv cells: max |k2−k1|
-> value gap 0.0 ms (tol 1e-6), induced-decision paired delta 0.0,
-> two-stage reduction validated call-by-call (not assumed), k=2
-> strictly dominated everywhere at 1ms/check overhead
-> (`adjudication-k2-recheck-2026-07-20.md`). Per the binding rule: D2
-> stays dead; the completeness subsection (A1) is live; A2 pre-restore
-> accounting is the next experiment.
+**Date:** 2026-07-20 · Estimator: frozen H1-certified config, unchanged
+· Existing data only · Zero GPU for everything below.
 
-> **A2 OUTCOME (2026-07-20, full corpus, review-gated:**
-> `prerestore-accounting-2026-07-20.md`): **SURVIVE — both headline
-> cells permutation-positive** (kv3500 net +164.8s/277 tasks, CI
-> [67.6, 266.4]; kv5000 +306.5s, CI [166.6, 449.9]; monotone in kv
-> from 2500 up; fire fraction 1.5%; hidden:wasted ≈ 2.9:1 at kv5000).
-> BINDING CAVEAT attached to the verdict: g was the optimistic
-> hazard clock — pre-restore is NOT actionable until re-confirmed
-> under the shipped robust-clock g (next lane), and GPU live
-> validation remains W10-11.
+## What this lane established
 
-> **A2 ROBUST RE-CONFIRMATION (2026-07-20, full corpus, review-gated:**
-> `prerestore-accounting-robust-2026-07-20.md`): **SURVIVE under the
-> SHIPPED robust clock too** — kv3500 net +156.2s/277 (CI [60.4,
-> 256.6]), kv5000 +317.9s (CI [181.0, 460.4]), permutation-positive,
-> same monotone kv>=2500 pattern, fire 1.4%. **The pre-registered
-> decision rule is therefore MET (SURVIVE under BOTH trigger
-> sources): pre-restore is ACTIONABLE as an offline-certified
-> mechanism.** Robustness note: the result is nearly invariant to the
-> trigger source (kv5000 even improves, +306→+318s), i.e. the gain
-> comes from the tail-overlap structure, not from an optimistic
-> trigger. Remaining gate: GPU live validation (W10-11) — the offline
-> accounting cannot price real transfer contention.
+**The re-check dimension is closed on both flanks.** Under the existing
+evaluation functional the policy space is one irreversible swap action
+with "call still alive at elapsed t" as the only runtime observable,
+and the replay accounting reduces every policy to a scalar
+`trigger_ms`. So any elapsed-adapted k-check policy is a plan
+computable at call start — it IS a single stopping time — and
+`hazard_recheck_ms` already optimizes that scalar exactly (piecewise
+linear, breakpoints at {L, L−kv}).
 
-> **Status: FINAL, post-debate (Fable-5 adversarial debate 2026-07-20,
-> verdict RESHAPE; all 10 amendments incorporated — the draft's D2
-> replay experiment is CUT as structurally degenerate).** Formerly
-> titled "rolling survival curves as the system primitive"; the
-> debate showed that framing over-claims (nothing queries a runtime
-> curve under the frozen estimator) and that the draft's centerpiece
-> experiment would have certified an identity.
+Verified rather than argued: an honestly-implemented k=2 dynamic
+program attains the k=1 optimum on all 670 certified prior nodes × 10
+kv cells, **max value gap 0.0 ms** (tol 1e-6), and is strictly
+dominated once per-check overhead is priced. The two-stage reduction
+was re-simulated call-by-call rather than assumed.
+→ `adjudication-k2-recheck-2026-07-20.md`
 
-**Date:** 2026-07-20 · **Estimator:** frozen H1-certified chain-prefix
-config, UNCHANGED. **Data:** existing corpora only.
+The other flank is measured: mid-call boundary identity (which
+sub-command finished) moves 72.9% of re-check decisions but its paired
+log-score gain is −0.0137 nats, CI [−0.41, +0.20] — churn without
+information. → `boundary-evidence-stage1-2026-07-19.md`
 
-## The debate's decisive finding (recorded as a claim to adjudicate)
+**Together these are a completeness result, not an absence:** within
+elapsed-adapted policies, one optimally-placed re-check captures
+everything available, and the one observable enrichment this setting
+offers adds nothing measurable. That is a paper subsection costing a
+lemma rather than a corpus.
 
-Under the existing evaluation functional the policy space is one
-irreversible swap action with "call still alive at elapsed t" as the
-only runtime observable; the replay accounting reduces every policy to
-a scalar `trigger_ms`. Any elapsed-adapted k-check policy is therefore
-a deterministic plan computable at call start — it IS a single
-stopping time — and `hazard_recheck_ms` already optimizes that scalar
-EXACTLY (piecewise-linear argument, breakpoints at {L, L−kv}). Hence
-k>1 re-checks have identical optimal value to k=1, and with per-check
-overhead priced (mandatory) are strictly dominated. Candidate C's
-measured kill closes the other flank: the only filtration enrichment
-we can observe (boundary identity) adds no information beyond elapsed
-time. **The re-check dimension is closed on both sides — by lemma
-(elapsed) and by measurement (boundary).**
+**Pre-restore works and cleared both of its gates.** Starting the KV
+restore before the tool call completes, so restore overlaps the call's
+tail, priced as an exact piecewise stopping-time optimizer (a
+`hazard_recheck_ms` analog with the restore-lead cost structure):
 
-## Work items (amended)
+| trigger source | kv3500 | kv5000 |
+|---|---|---|
+| hazard (optimistic screen) | +164.8 s/277 | +306.5 s/277 |
+| **shipped robust clock** | **+156.2 s/277** (CI [60.4, 256.6]) | **+317.9 s/277** (CI [181.0, 460.4]) |
 
-- **A0 — Adjudication check (half-day, first move).** Implement the
-  k=2 DP over the exact existing functional and verify on fresh-277
-  node/decision data that its induced decisions are identical to the
-  certified k=1 (or value-tied churn with zero paired delta). This
-  tests the collapse argument against implementation reality (e.g.
-  restore charging at the deadline boundary). If it FALSIFIES the
-  collapse (a real value gap), the original D2 replay experiment is
-  reinstated as spec'd in the draft (git history) and runs under the
-  H1 replay discipline. If it confirms, no replay is spent.
-- **A1 — Completeness subsection (paper artifact, zero data cost).**
-  "Within elapsed-adapted policies, one optimally-placed re-check
-  captures everything available (exact piecewise optimality); the one
-  observable filtration enrichment adds nothing measurable (C:
-  72.9% divergence, log-score gain CI [−0.41, +0.20])." Stated in one
-  sentence + the lemma; C's numbers are the empirical flank, not a
-  statistics-forward display.
-- **A2 — Pre-restore offline accounting (the first real experiment;
-  was D3).** Formulated per amendment 5 as an EXACT piecewise
-  stopping-time optimizer with the restore-lead cost structure (a
-  `hazard_recheck_ms` analog), NOT as runtime curve queries — the same
-  collapse applies to any elapsed-only consumer. **Pre-registered kill
-  (amendment 4, fixed before any code):** at rho=0.94, net seconds per
-  277 tasks (restore lead-time hidden minus wasted-restore charged)
-  positive with a task-clustered CI excluding zero in ≥1 kv cell
-  (3500/5000 headline family, Bonferroni over the cost panel);
-  otherwise pre-restore ships as an honest negative table. Offline
-  accounting only; GPU live validation remains W10-11 and is labeled
-  as such.
-- **Internal refactor (was D1, demoted per amendments 6-7):** the
-  sorted-sample residual accessor is ordinary code hygiene with a
-  property test (exact agreement with direct ECDF recomputation). No
-  primitive claim, no micro-benchmark in the paper plan. A runtime
-  query surface is justified only by exogenous-state consumers (live
-  scheduler admission, memory-pressure-conditioned pre-restore) —
-  W10-11, one future-work sentence.
+Both permutation-positive under the full Bonferroni panel; effect
+monotone in kv from 2500 up; fires on 1.4% of calls; hidden:wasted ≈
+3:1. The pre-registered rule (SURVIVE under both trigger sources) is
+met. The near-invariance to trigger source is the load-bearing
+robustness fact — the gain comes from tail-overlap structure, not from
+an optimistic trigger.
+→ `prerestore-accounting-2026-07-20.md`, `-robust-2026-07-20.md`
 
-## Framing rules (amendments 8-10)
+**Remaining gate:** GPU live validation. Offline accounting cannot
+price real transfer contention. Until that runs, pre-restore is
+certified offline, not shipped.
+
+## Framing rules for the paper
 
 Lead with **priced residual-time policies over certified latency
-priors**: the certified instantiation is the swap trigger; breadth =
-the completeness lemma + the pre-restore table. Do NOT claim an
-"online distribution prediction service" or a "living curve."
-Continuum contrast, corrected wording: conditional-residual
-expected-cost pricing vs frozen point-estimate TTL. Presentation is
-seconds-saved / X.Xx throughout.
+priors**. The certified instantiation is the swap trigger; breadth
+comes from the completeness result plus the pre-restore table.
+
+Do NOT claim an "online distribution prediction service" or a "living
+curve" — under a frozen estimator every elapsed-only consumer is a
+precomputed stopping time, and nothing queries a curve at runtime. The
+sorted-sample residual accessor is ordinary internal code with a
+property test, not a contribution; a runtime query surface is
+justified only by exogenous-state consumers (live scheduler admission,
+pressure-conditioned pre-restore), which are W10-11 future work.
+
+Continuum contrast, worded accurately: **conditional-residual
+expected-cost pricing vs a frozen point-estimate TTL**. Not "we added
+load awareness" — Continuum already carries a workload-level
+sliding-window load term.
+
+Presentation is seconds-saved / X.Xx throughout.
 
 ## Integrity rules
 
-Estimator frozen. A2's optimizer uses fit-fold information only,
-existing cross-fit discipline, priced overheads (zero-cost actions
-forbidden), documented config, no dataset constants, degenerate paths
-inherit existing conservative behavior. A0's outcome is binding either
-way: confirmation ⇒ D2 stays dead; falsification ⇒ D2 reinstated
-verbatim — no third reading.
+Estimator frozen; any estimator change is a separate pre-registered
+lane with its own gate. Optimizers use fit-fold information only under
+the existing cross-fit discipline. Overheads are priced — zero-cost
+actions are forbidden. Degenerate paths (thin nodes, ties) inherit the
+existing conservative behavior (deadline re-check).
+
+## Provenance note
+
+This spec originally proposed a "rolling survival primitive" plus a
+k>1 re-check replay experiment. A Fable-5 adversarial debate showed the
+k>1 experiment was structurally degenerate before any compute was
+spent, and the A0 adjudication then confirmed it on real nodes. Both
+were removed rather than annotated; the completeness result above is
+what that reasoning produced.
