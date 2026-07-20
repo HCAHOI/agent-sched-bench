@@ -79,7 +79,7 @@ without profiling the pipeline. Do not repeat that — profile first.
 | `scripts/run_wtn_stage2.py --final` | ~6 h |
 | `scripts/analyze_prerestore_accounting.py --final` | ~2–3 h |
 | `scripts/analyze_boundary_evidence_stage1.py --final` | ~2.5 h |
-| `scripts/analyze_pressure_headroom.py --final` | >75 min (est. was 15 min; wrong by >3x) |
+| `scripts/analyze_pressure_headroom.py --final` | >75 min (never observed to completion) |
 | `scripts/adjudicate_k2_recheck.py --final` | ~3 min |
 | `scripts/analyze_prior_calibration.py --final` | fast |
 
@@ -99,8 +99,12 @@ the picture differs per script — profile each.
 - Run the full test suite for every module touched, plus
   `tests/test_tool_latency_profiled.py`, `tests/test_tool_latency_confirmation.py`,
   `tests/test_analyze_prerestore_accounting.py`, `tests/test_adjudicate_k2_recheck.py`.
-- Do not touch `scripts/analyze_pressure_headroom.py` or its test — another
-  change is pending there.
+- Do not EDIT `scripts/analyze_pressure_headroom.py` or its test — another
+  change is pending there. You may and should PROFILE it; it is one of the
+  slow ones.
+- The machine should be otherwise idle while you measure. No analysis runs
+  are in flight right now; keep it that way while timing, or the before/after
+  numbers are meaningless.
 - Report measured before/after wall-clock per script and the artifact-diff
   result explicitly. If identity cannot be proven for some change, say so and
   leave it out.
