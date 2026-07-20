@@ -325,6 +325,25 @@ its answer sharpens the paper's conditioning-spectrum text either way); A is
 deferred entirely unless C dies at Stage 1, in which case A's Stage-1 CV
 test is the next cheapest falsification.
 
+## Candidate A Stage-1 amendments (pre-registered 2026-07-20, before A code exists)
+
+Two amendments from the WTN arc's measured lessons
+(`wrapper-transparency-design-20260719.md`):
+1. **Emergent state vocabulary.** The original sketch named heavy verbs
+   (apt-get-update-done, pip-install-done, pytest-run-count). Named
+   tokens in method logic are forbidden (project-lead directive). The
+   state vocabulary is instead derived per fit fold: the top-k verb
+   classes by fit-fold median duration above the action-relevance
+   floor (k and floor documented config), plus the structural
+   cwd-changed bit. Any named verb may appear only as a harness
+   positive control.
+2. **Dual duration-source consistency.** WTN's screen flipped verdicts
+   between replayed and original timings (cd 5/5 vs 4/5). A's Stage-1
+   conditional-CV test therefore runs on BOTH sources; KILL unless the
+   CV reduction of the fit-fold-selected heavy verbs survives the
+   paired bootstrap on BOTH. A signal that exists on only one duration
+   source is a hardware artifact, not session-state information.
+
 ## Kill criteria, restated up front (the pre-registration seeds)
 
 | Candidate | Cheap kill (before full replay) | Final kill |
