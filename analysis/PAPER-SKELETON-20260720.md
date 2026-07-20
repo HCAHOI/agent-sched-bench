@@ -93,8 +93,10 @@ enrichments available in this setting add nothing measurable.
 - Structural negative: this corpus cannot speak to multi-tenant
   contention (occupancy is a harness flag, cloud collection had no
   shared KV) — so contention claims may ONLY come from the harness.
-- (Pending) footprint pricing screen: if headroom < banked
-  pre-restore effect, C3 gains one more closed axis.
+- **Self-footprint pricing closed:** kv3500 headroom +8.75 s/277,
+  simultaneous CI [−85.00, 101.90], whose upper bound is below the
+  frozen +156 s/277 pre-restore bar. This does not close real
+  multi-tenant pressure, which only the harness can measure.
 
 **Why this is a contribution and not an absence:** it tells a builder
 which enrichments not to implement, each backed by a proof or a
@@ -107,9 +109,9 @@ measurement rather than an untested design choice.
 | Multi-tenant harness (W5-7) | C1 | MANDATORY, not started |
 | Head-to-heads incl. ThunderAgent/Continuum (W8-9) | C1, C2 | not started |
 | Live pre-restore validation | C1 | behind W8 cut line — promote |
-| Online gate (W3-4) | C2 | not started |
-| Calibration final run | C1, C2 | in review |
-| Footprint pricing screen | C3 (if drops) | in review |
+| Online gate (W3-4) | C2 | implemented; corpus discipline review/final replay pending |
+| Calibration final run | C1, C2 | banked |
+| Footprint pricing screen | C3 | DROP; self-footprint axis closed |
 | TraceLab replay | C1 external validity | not started |
 | Candidate A (parked) | would be C2 | PARKED |
 
