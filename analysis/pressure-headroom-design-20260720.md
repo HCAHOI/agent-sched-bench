@@ -1,5 +1,42 @@
 # Design spec — λ-oracle pressure headroom screen
 
+> **STATUS: PARKED, BLOCKED, NO VALID RESULT (2026-07-20).** The lane
+> is unfinished and its scripts must not be run for findings until the
+> two blocking issues below are fixed and re-reviewed.
+>
+> **Blocker 1 — the ceiling guarantee is FALSE (technical).**
+> `hazard_recheck_ms` restricts its trigger search to `k <= believed
+> price`, so a HIGHER fixed price buys a LARGER search domain. When the
+> fixed λ̄ exceeds the per-call λ_i, the fixed-price arm reaches
+> triggers the footprint arm structurally cannot. Measured: violated on
+> 9.2% of random nodes (worst gap 261 ms/call), and on the real corpus
+> λ̄ > λ_i on 87.8% of calls at kv3500. Therefore reported "headroom"
+> is NOT an upper bound, and a negative value is confounded with a
+> search-domain artifact rather than meaning "a constant price is
+> already optimal". Fixing this requires both arms to optimize over a
+> common trigger domain — a code change, not a wording change.
+>
+> **Blocker 2 — the kill criterion was amended mid-flight (process,
+> my error).** This spec shipped with a two-way criterion (DROP if
+> headroom below the banked bar). On 2026-07-20 I (the coordinating
+> session) issued a three-way POWER RULE adding an UNDERPOWERED state
+> and requiring the CI upper bound below the bar for DROP. The
+> statistics are sound and non-inferiority framing is the right call —
+> it tightens PROCEED as well as loosening DROP. But I issued it AFTER
+> partial (smoke) headroom numbers had been reported to me, and it was
+> recorded only in the implementation docstring as "pre-registered
+> before any full-corpus number existed". That phrasing is literally
+> true and materially misleading: partial numbers existed and I knew
+> them. It should have been an explicit, dated amendment to this spec —
+> which is what this note now is. Anyone using this lane must treat the
+> power rule as an amendment made with partial information visible,
+> not as an untouched pre-registration.
+>
+> No full-corpus run was performed. Nothing from this lane may be
+> cited. The multi-tenant CONTENTION axis remains a structural
+> negative on this corpus (that finding is independent of both
+> blockers and stands — see the λ-honesty section).
+
 > **Status: FINAL (Fable-5 debate 2026-07-20: DEFER pressure-
 > conditioning as a headline experiment; PROCEED on the multi-tenant
 > harness that was never optional; RUN this screen first).** The
