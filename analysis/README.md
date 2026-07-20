@@ -20,8 +20,7 @@ anything that sounds like a good idea.
 | Doc | Status |
 |---|---|
 | `rolling-survival-design-20260720.md` | Priced residual-time policies. A0 lemma CONFIRMED; A2 pre-restore SURVIVED both trigger gates. Remaining: GPU live validation. |
-| `curve-calibration-design-20260720.md` | Descriptive calibration lane. Run complete — see result below. |
-| `pressure-headroom-design-20260720.md` | **PARKED/BLOCKED**, no valid result. Carries the honest record of both blockers. Nothing in it is citable. |
+| `pressure-headroom-design-20260720.md` | Footprint pricing screen. UNPARKED 2026-07-20; ceiling blocker under repair, then re-review. Carries the dated amendment recording the mid-flight criterion change. Nothing citable until it clears. |
 | `fresh-corpus-preregistration-20260716.md` | LOCKED confirmatory protocol (N=277). H1/H2 decision rules. |
 
 ## Results (frozen, citable)
