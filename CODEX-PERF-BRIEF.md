@@ -79,7 +79,7 @@ without profiling the pipeline. Do not repeat that — profile first.
 | `scripts/run_wtn_stage2.py --final` | ~6 h |
 | `scripts/analyze_prerestore_accounting.py --final` | ~2–3 h |
 | `scripts/analyze_boundary_evidence_stage1.py --final` | ~2.5 h |
-| `scripts/analyze_pressure_headroom.py --final` | >75 min (measured; an earlier ~15 min estimate was wrong) |
+| `scripts/analyze_pressure_headroom.py --final` | >75 min (est. was 15 min; wrong by >3x) |
 | `scripts/adjudicate_k2_recheck.py --final` | ~3 min |
 | `scripts/analyze_prior_calibration.py --final` | fast |
 
@@ -89,13 +89,6 @@ Common invocation:
 `analyze_boundary_evidence_stage1.py` is known to be genuinely
 hazard-dominated (py-spy showed ~1.1 events/s inside `hazard_recheck_ms`), so
 the picture differs per script — profile each.
-
-**Gotcha when measuring these runs:** `pgrep -f <script> | head -1` returns the
-shell wrapper, not the interpreter. The wrapper shows 0% CPU and 4 MB RSS,
-which looks exactly like a hung job. Match the actual `python` process
-(`pgrep -f` then filter on the command starting with `python`, or check RSS is
-in the hundreds of MB) before concluding a run is stuck. Misreading this cost
-one full 74-minute run.
 
 ## Rules
 
