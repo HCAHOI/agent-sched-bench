@@ -1,0 +1,6 @@
+[06:08:00] STEP 8 START (sharded x5 folds)
+analysis/fresh-corpus-certification-20260717/chain_B_sharded.sh: line 24: 1478781 Killed                  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 python "$script" "$@" --only-fold "$f" > "$B/step${n}_fold${f}.log" 2>&1
+analysis/fresh-corpus-certification-20260717/chain_B_sharded.sh: line 24: 1478783 Killed                  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 python "$script" "$@" --only-fold "$f" > "$B/step${n}_fold${f}.log" 2>&1
+[06:08:35] STEP 8 fold 1 FAILED (see step8_fold1.log)
+[06:15:25] STEP 8 RESUME (folds 1,3,4 mem-gated maxc=2)
+[06:20:53] STEP 8 RESUME (folds 1,3,4 mem-gated maxc=2)

@@ -9,6 +9,16 @@
 > stays dead; the completeness subsection (A1) is live; A2 pre-restore
 > accounting is the next experiment.
 
+> **A2 OUTCOME (2026-07-20, full corpus, review-gated:**
+> `prerestore-accounting-2026-07-20.md`): **SURVIVE — both headline
+> cells permutation-positive** (kv3500 net +164.8s/277 tasks, CI
+> [67.6, 266.4]; kv5000 +306.5s, CI [166.6, 449.9]; monotone in kv
+> from 2500 up; fire fraction 1.5%; hidden:wasted ≈ 2.9:1 at kv5000).
+> BINDING CAVEAT attached to the verdict: g was the optimistic
+> hazard clock — pre-restore is NOT actionable until re-confirmed
+> under the shipped robust-clock g (next lane), and GPU live
+> validation remains W10-11.
+
 > **Status: FINAL, post-debate (Fable-5 adversarial debate 2026-07-20,
 > verdict RESHAPE; all 10 amendments incorporated — the draft's D2
 > replay experiment is CUT as structurally degenerate).** Formerly

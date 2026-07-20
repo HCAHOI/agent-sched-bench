@@ -1,0 +1,1703 @@
+{
+  "baseline_trigger_field": "dacd_trigger_ms",
+  "bootstrap": {
+    "bit_generator": "PCG64",
+    "conditional_on_fitted_outer_policies": true,
+    "confidence_level": 0.9875,
+    "pointwise_method": "percentile",
+    "replicates": 50000,
+    "seed": 0,
+    "simultaneous_family_size": 10,
+    "simultaneous_method": "bonferroni_percentile",
+    "simultaneous_tail_probability": 0.0006249999999999977,
+    "unit": "task_id"
+  },
+  "corpus": "terminal",
+  "costs_ms": [
+    500.0,
+    1000.0,
+    1500.0,
+    2000.0,
+    2500.0,
+    3000.0,
+    3500.0,
+    4000.0,
+    4500.0,
+    5000.0
+  ],
+  "fold_paired_delta_ms_by_cost": {
+    "f1": {
+      "1000.0": 0.0,
+      "1500.0": 0.0,
+      "2000.0": 0.0,
+      "2500.0": 0.0,
+      "3000.0": 0.0,
+      "3500.0": 0.0,
+      "4000.0": 0.0,
+      "4500.0": 0.0,
+      "500.0": 0.0,
+      "5000.0": 0.0
+    },
+    "f2": {
+      "1000.0": 0.0,
+      "1500.0": 0.0,
+      "2000.0": 0.0,
+      "2500.0": 0.0,
+      "3000.0": 0.0,
+      "3500.0": 0.0,
+      "4000.0": 0.0,
+      "4500.0": 0.0,
+      "500.0": 0.0,
+      "5000.0": 0.0
+    },
+    "f3": {
+      "1000.0": 0.0,
+      "1500.0": 0.0,
+      "2000.0": 0.0,
+      "2500.0": 0.0,
+      "3000.0": 0.0,
+      "3500.0": 0.0,
+      "4000.0": 0.0,
+      "4500.0": 0.0,
+      "500.0": 0.0,
+      "5000.0": 0.0
+    },
+    "f4": {
+      "1000.0": 0.0,
+      "1500.0": 0.0,
+      "2000.0": 0.0,
+      "2500.0": 0.0,
+      "3000.0": 0.0,
+      "3500.0": 0.0,
+      "4000.0": 0.0,
+      "4500.0": 0.0,
+      "500.0": 0.0,
+      "5000.0": 0.0
+    },
+    "f5": {
+      "1000.0": 0.0,
+      "1500.0": 0.0,
+      "2000.0": 0.0,
+      "2500.0": 0.0,
+      "3000.0": 0.0,
+      "3500.0": 0.0,
+      "4000.0": 0.0,
+      "4500.0": 0.0,
+      "500.0": 0.0,
+      "5000.0": 0.0
+    }
+  },
+  "global_family_interpretation": {
+    "corpus_count": 4,
+    "costs_per_corpus": 10,
+    "global_confidence_level": 0.95,
+    "global_family_size": 40,
+    "stored_direction": "deadline_minus_dacd"
+  },
+  "points": {
+    "1000.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 1000.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 1000.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "1500.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 1500.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 1500.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "2000.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 2000.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 2000.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "2500.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 2500.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 2500.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "3000.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 3000.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 3000.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "3500.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 3500.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 3500.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "4000.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 4000.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 4000.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "4500.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 4500.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 4500.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "500.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 500.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 500.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    },
+    "5000.0": {
+      "baseline_early_fire_count": 0,
+      "baseline_early_short_fire_count": 0,
+      "kv_cost_ms": 5000.0,
+      "largest_negative_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "largest_positive_task": {
+        "paired_delta_ms": 0.0,
+        "task_id": "acl-permissions-inheritance"
+      },
+      "paired_delta_ms": 0.0,
+      "paired_delta_normalized": 0.0,
+      "pointwise_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_interval_ms": {
+        "high": 0.0,
+        "low": 0.0
+      },
+      "simultaneous_label": "inconclusive",
+      "threshold_ms": 5000.0,
+      "treatment_early_fire_count": 0,
+      "treatment_early_short_fire_count": 0
+    }
+  },
+  "sample_count": 2959,
+  "schema_version": 1,
+  "task_contributions": [
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "acl-permissions-inheritance"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "amuse-install"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "analyze-access-logs"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "ancient-puzzle"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "blind-maze-explorer-5x5"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "broken-networking"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "build-pov-ray"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "build-tcc-qemu"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "cartpole-rl-training"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "circuit-fibsqrt"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "classifier-debug"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "compile-compcert"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "configure-git-webserver"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "create-bucket"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "db-wal-recovery"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "decommissioning-service-with-sensitive-data"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "deterministic-tarball"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "dna-assembly"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "dna-insert"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "download-youtube"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "enemy-grid-escape"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "extract-elf"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "extract-moves-from-video"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "extract-safely"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "feal-differential-cryptanalysis"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "fibonacci-server"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "find-restaurant"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "fix-code-vulnerability"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "fix-ocaml-gc"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "flood-monitoring-basic"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "form-filling"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "gcc-compiler-optimization"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "get-bitcoin-nodes"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "git-leak-recovery"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "git-workflow-hack"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "hdfs-deployment"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "hello-world"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "hf-model-inference"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "huarong-dao-solver"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "hydra-debug-slurm-mode"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "incompatible-python-fasttext"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "install-windows-3.11"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "install-windows-xp"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "llm-inference-batching-scheduler"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "logistic-regression-divergence"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "mailman"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "make-mips-interpreter"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "matlab-python-conversion"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "mixed-integer-programming"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "mnist-learning-fix"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "movie-helper"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "mteb-leaderboard"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "multi-source-data-merger"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "npm-conflict-resolution"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "oom"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "path-tracing"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "path-tracing-reverse"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "play-zork"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "play-zork-easy"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "png-generation"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "predicate-pushdown-bench"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "predict-customer-churn"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "prove-plus-comm"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "puzzle-solver"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "pytorch-model-cli"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "qemu-alpine-ssh"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "query-optimize"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "recover-accuracy-log"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "recover-obfuscated-files"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "sam-cell-seg"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "schedule-vacation"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "security-celery-redis-rce"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "setup-custom-dev-env"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "shell-deobfuscation"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "simple-sheets-put"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "sqlite-db-truncate"
+    },
+    {
+      "outer_fold": "f2",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "sqlite-with-gcov"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "tmux-advanced-workflow"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "tune-mjcf"
+    },
+    {
+      "outer_fold": "f3",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "vul-flask"
+    },
+    {
+      "outer_fold": "f4",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "vulnerable-secret"
+    },
+    {
+      "outer_fold": "f5",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "wasm-pipeline"
+    },
+    {
+      "outer_fold": "f1",
+      "paired_delta_ms_by_cost": {
+        "1000.0": 0.0,
+        "1500.0": 0.0,
+        "2000.0": 0.0,
+        "2500.0": 0.0,
+        "3000.0": 0.0,
+        "3500.0": 0.0,
+        "4000.0": 0.0,
+        "4500.0": 0.0,
+        "500.0": 0.0,
+        "5000.0": 0.0
+      },
+      "task_id": "weighted-max-sat-solver"
+    }
+  ],
+  "task_count": 83,
+  "treatment_trigger_field": "deadline_trigger_ms"
+}

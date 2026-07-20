@@ -1,0 +1,58 @@
+{
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+  "bytes_per_token": 98304,
+  "conditions": {
+    "idle": [
+      {
+        "tokens": 8192,
+        "MiB": 768.0,
+        "swap_out_ms": 14.955,
+        "swap_in_ms": 13.976,
+        "out_GBps": 53.85,
+        "in_GBps": 57.62,
+        "rho": 0.9345
+      },
+      {
+        "tokens": 32768,
+        "MiB": 3072.0,
+        "swap_out_ms": 59.795,
+        "swap_in_ms": 55.877,
+        "out_GBps": 53.87,
+        "in_GBps": 57.65,
+        "rho": 0.9345
+      },
+      {
+        "tokens": 65536,
+        "MiB": 6144.0,
+        "swap_out_ms": 119.341,
+        "swap_in_ms": 111.952,
+        "out_GBps": 53.98,
+        "in_GBps": 57.55,
+        "rho": 0.9381
+      },
+      {
+        "tokens": 131072,
+        "MiB": 12288.0,
+        "swap_out_ms": 238.19,
+        "swap_in_ms": 224.314,
+        "out_GBps": 54.1,
+        "in_GBps": 57.44,
+        "rho": 0.9417
+      },
+      {
+        "tokens": 294912,
+        "MiB": 27648.0,
+        "swap_out_ms": 535.023,
+        "swap_in_ms": 505.207,
+        "out_GBps": 54.19,
+        "in_GBps": 57.38,
+        "rho": 0.9443
+      }
+    ]
+  },
+  "sustained": [],
+  "notes": [
+    "vLLM load FAILED:\nTraceback (most recent call last):\n  File \"/root/e5_rigorous.py\", line 151, in main\n    llm = LLM(model=MODEL, dtype=\"auto\", gpu_memory_utilization=0.55,\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/entrypoints/llm.py\", line 349, in __init__\n    self.llm_engine = LLMEngine.from_engine_args(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/v1/engine/llm_engine.py\", line 179, in from_engine_args\n    return cls(\n           ^^^^\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/v1/engine/llm_engine.py\", line 105, in __init__\n    self.engine_core = EngineCoreClient.make_client(\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py\", line 103, in make_client\n    return SyncMPClient(vllm_config, executor_class, log_stats)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/tracing/otel.py\", line 178, in sync_wrapper\n    return func(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py\", line 786, in __init__\n    super().__init__(\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/v1/engine/core_client.py\", line 573, in __init__\n    with launch_core_engines(\n         ^^^^^^^^^^^^^^^^^^^^\n  File \"/root/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/contextlib.py\", line 144, in __exit__\n    next(self.gen)\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/v1/engine/utils.py\", line 1213, in launch_core_engines\n    wait_for_engine_startup(\n  File \"/root/agent-sched-bench/.venv/lib/python3.12/site-packages/vllm/v1/engine/utils.py\", line 1272, in wait_for_engine_startup\n    raise RuntimeError(\nRuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}\n"
+  ],
+  "device": "NVIDIA H100 80GB HBM3"
+}

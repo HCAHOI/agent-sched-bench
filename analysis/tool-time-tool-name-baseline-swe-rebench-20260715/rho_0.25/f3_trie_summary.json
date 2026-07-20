@@ -1,0 +1,676 @@
+{
+  "calibration": {
+    "accepted_early_decision_count": 774,
+    "accepted_task_count": 78,
+    "candidate_guard_count": 542,
+    "eligible_early_decision_count": 12788,
+    "probe_decision_count": 33940,
+    "probe_objective_normalized": 79.97017688940441,
+    "probe_task_count": 80,
+    "selected_guard_normalized": 0.08799426695879768,
+    "worst_accepted_task_normalized_delta": -11.175416328793482
+  },
+  "command_field": "command",
+  "guard_ms": 0,
+  "inner_folds": 4,
+  "kv_costs_ms": [
+    500.0,
+    1000.0,
+    1500.0,
+    2000.0,
+    2500.0,
+    3000.0,
+    3500.0,
+    4000.0,
+    4500.0,
+    5000.0
+  ],
+  "max_prefix_depth": 4,
+  "min_profile_tasks": 1,
+  "min_tool_history": 1,
+  "points": {
+    "1000.0": {
+      "band_count": 59,
+      "call_count": 1246,
+      "deadline_headroom_ms": 61651.05199813843,
+      "kv_cost_ms": 1000.0,
+      "oracle_ms": 158000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6098034683662125,
+          "net_saved_ms": 96348.94800186157,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 29813.132762908936,
+          "captured_fraction_of_deadline_headroom": 0.014755243972604661,
+          "delta_vs_deadline_ms": 909.6763134002686,
+          "early_trigger_count": 170,
+          "early_trigger_on_short_count": 27,
+          "net_fraction_of_oracle": 0.6155609133877332,
+          "net_saved_ms": 97258.62431526184,
+          "short_exposure_penalty_ms": 28903.456449508667
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 816.0467147827148,
+          "captured_fraction_of_deadline_headroom": 0.013236541605281215,
+          "delta_vs_deadline_ms": 816.0467147827148,
+          "early_trigger_count": 124,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6149683209914195,
+          "net_saved_ms": 97164.99471664429,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 2905.306339263916,
+          "captured_fraction_of_deadline_headroom": 0.04712500833483981,
+          "delta_vs_deadline_ms": 2905.306339263916,
+          "early_trigger_count": 7,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6281914831716803,
+          "net_saved_ms": 99254.25434112549,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "robust_clock": {
+          "band_gain_ms": 816.0467147827148,
+          "captured_fraction_of_deadline_headroom": 0.013236541605281215,
+          "delta_vs_deadline_ms": 816.0467147827148,
+          "early_trigger_count": 128,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6149683209914195,
+          "net_saved_ms": 97164.99471664429,
+          "short_exposure_penalty_ms": 0.0
+        }
+      },
+      "positive_count": 158,
+      "task_count": 20,
+      "threshold_ms": 1000.0
+    },
+    "1500.0": {
+      "band_count": 53,
+      "call_count": 1246,
+      "deadline_headroom_ms": 95429.34465408325,
+      "kv_cost_ms": 1500.0,
+      "oracle_ms": 193500.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.5068250922269599,
+          "net_saved_ms": 98070.65534591675,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 29529.932975769043,
+          "captured_fraction_of_deadline_headroom": 0.1136754888042908,
+          "delta_vs_deadline_ms": 10847.97739982605,
+          "early_trigger_count": 132,
+          "early_trigger_on_short_count": 12,
+          "net_fraction_of_oracle": 0.5628869909340714,
+          "net_saved_ms": 108918.6327457428,
+          "short_exposure_penalty_ms": 18681.955575942993
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 4012.8703117370605,
+          "captured_fraction_of_deadline_headroom": 0.04205069547824205,
+          "delta_vs_deadline_ms": 4012.8703117370605,
+          "early_trigger_count": 118,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.5275634400912341,
+          "net_saved_ms": 102083.52565765381,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 4987.800598144531,
+          "captured_fraction_of_deadline_headroom": -0.01723993524783743,
+          "delta_vs_deadline_ms": -1645.195722579956,
+          "early_trigger_count": 18,
+          "early_trigger_on_short_count": 4,
+          "net_fraction_of_oracle": 0.49832278875109454,
+          "net_saved_ms": 96425.45962333679,
+          "short_exposure_penalty_ms": 6632.996320724487
+        },
+        "robust_clock": {
+          "band_gain_ms": 4012.8703117370605,
+          "captured_fraction_of_deadline_headroom": 0.04205069547824205,
+          "delta_vs_deadline_ms": 4012.8703117370605,
+          "early_trigger_count": 118,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.5275634400912341,
+          "net_saved_ms": 102083.52565765381,
+          "short_exposure_penalty_ms": 0.0
+        }
+      },
+      "positive_count": 129,
+      "task_count": 20,
+      "threshold_ms": 1500.0
+    },
+    "2000.0": {
+      "band_count": 32,
+      "call_count": 1246,
+      "deadline_headroom_ms": 74452.3663520813,
+      "kv_cost_ms": 2000.0,
+      "oracle_ms": 198000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6239779477167611,
+          "net_saved_ms": 123547.6336479187,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 17883.686542510986,
+          "captured_fraction_of_deadline_headroom": -0.32662427910133224,
+          "delta_vs_deadline_ms": -24317.95048713684,
+          "early_trigger_count": 111,
+          "early_trigger_on_short_count": 19,
+          "net_fraction_of_oracle": 0.5011600159635448,
+          "net_saved_ms": 99229.68316078186,
+          "short_exposure_penalty_ms": 42201.63702964783
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 6146.482467651367,
+          "captured_fraction_of_deadline_headroom": 0.001862884962436001,
+          "delta_vs_deadline_ms": 138.69619369506836,
+          "early_trigger_count": 24,
+          "early_trigger_on_short_count": 3,
+          "net_fraction_of_oracle": 0.6246784335435039,
+          "net_saved_ms": 123686.32984161377,
+          "short_exposure_penalty_ms": 6007.786273956299
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 3925.3673553466797,
+          "captured_fraction_of_deadline_headroom": -0.02243022577813236,
+          "delta_vs_deadline_ms": -1669.9833869934082,
+          "early_trigger_count": 5,
+          "early_trigger_on_short_count": 3,
+          "net_fraction_of_oracle": 0.6155436881864914,
+          "net_saved_ms": 121877.6502609253,
+          "short_exposure_penalty_ms": 5595.350742340088
+        },
+        "robust_clock": {
+          "band_gain_ms": 6671.98371887207,
+          "captured_fraction_of_deadline_headroom": 0.008921105902461406,
+          "delta_vs_deadline_ms": 664.1974449157715,
+          "early_trigger_count": 86,
+          "early_trigger_on_short_count": 3,
+          "net_fraction_of_oracle": 0.6273324802668407,
+          "net_saved_ms": 124211.83109283447,
+          "short_exposure_penalty_ms": 6007.786273956299
+        }
+      },
+      "positive_count": 99,
+      "task_count": 20,
+      "threshold_ms": 2000.0
+    },
+    "2500.0": {
+      "band_count": 31,
+      "call_count": 1246,
+      "deadline_headroom_ms": 110004.70924377441,
+      "kv_cost_ms": 2500.0,
+      "oracle_ms": 232500.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.5268614656181746,
+          "net_saved_ms": 122495.29075622559,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 17091.08257293701,
+          "captured_fraction_of_deadline_headroom": 0.09470875330991013,
+          "delta_vs_deadline_ms": 10418.408870697021,
+          "early_trigger_count": 91,
+          "early_trigger_on_short_count": 3,
+          "net_fraction_of_oracle": 0.5716718263523553,
+          "net_saved_ms": 132913.6996269226,
+          "short_exposure_penalty_ms": 6672.67370223999
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 3,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.5268614656181746,
+          "net_saved_ms": 122495.29075622559,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 4666.260242462158,
+          "captured_fraction_of_deadline_headroom": -0.018239341511566993,
+          "delta_vs_deadline_ms": -2006.413459777832,
+          "early_trigger_count": 6,
+          "early_trigger_on_short_count": 3,
+          "net_fraction_of_oracle": 0.5182317303073022,
+          "net_saved_ms": 120488.87729644775,
+          "short_exposure_penalty_ms": 6672.67370223999
+        },
+        "robust_clock": {
+          "band_gain_ms": 417.96112060546875,
+          "captured_fraction_of_deadline_headroom": 0.003799483890087394,
+          "delta_vs_deadline_ms": 417.96112060546875,
+          "early_trigger_count": 77,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.5286591478573379,
+          "net_saved_ms": 122913.25187683105,
+          "short_exposure_penalty_ms": 0.0
+        }
+      },
+      "positive_count": 93,
+      "task_count": 20,
+      "threshold_ms": 2500.0
+    },
+    "3000.0": {
+      "band_count": 18,
+      "call_count": 1246,
+      "deadline_headroom_ms": 64123.682498931885,
+      "kv_cost_ms": 3000.0,
+      "oracle_ms": 228000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.7187557785134566,
+          "net_saved_ms": 163876.31750106812,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 16232.733249664307,
+          "captured_fraction_of_deadline_headroom": -0.3233769362189367,
+          "delta_vs_deadline_ms": -20736.119985580444,
+          "early_trigger_count": 83,
+          "early_trigger_on_short_count": 11,
+          "net_fraction_of_oracle": 0.6278078838398582,
+          "net_saved_ms": 143140.19751548767,
+          "short_exposure_penalty_ms": 36968.85323524475
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 4,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.7187557785134566,
+          "net_saved_ms": 163876.31750106812,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 4282.957077026367,
+          "captured_fraction_of_deadline_headroom": -0.06919776584429696,
+          "delta_vs_deadline_ms": -4437.215566635132,
+          "early_trigger_count": 6,
+          "early_trigger_on_short_count": 3,
+          "net_fraction_of_oracle": 0.6992943067299692,
+          "net_saved_ms": 159439.10193443298,
+          "short_exposure_penalty_ms": 8720.172643661499
+        },
+        "robust_clock": {
+          "band_gain_ms": 714.7712707519531,
+          "captured_fraction_of_deadline_headroom": 0.01114675955742029,
+          "delta_vs_deadline_ms": 714.7712707519531,
+          "early_trigger_count": 63,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.721890740227281,
+          "net_saved_ms": 164591.08877182007,
+          "short_exposure_penalty_ms": 0.0
+        }
+      },
+      "positive_count": 76,
+      "task_count": 20,
+      "threshold_ms": 3000.0
+    },
+    "3500.0": {
+      "band_count": 18,
+      "call_count": 1246,
+      "deadline_headroom_ms": 59663.869857788086,
+      "kv_cost_ms": 3500.0,
+      "oracle_ms": 245000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.7564740005804568,
+          "net_saved_ms": 185336.1301422119,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 27814.831256866455,
+          "captured_fraction_of_deadline_headroom": -0.4827976528026504,
+          "delta_vs_deadline_ms": -28805.57632446289,
+          "early_trigger_count": 80,
+          "early_trigger_on_short_count": 14,
+          "net_fraction_of_oracle": 0.6389002196642817,
+          "net_saved_ms": 156530.55381774902,
+          "short_exposure_penalty_ms": 56620.407581329346
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 1,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.7564740005804568,
+          "net_saved_ms": 185336.1301422119,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 5852.6129722595215,
+          "captured_fraction_of_deadline_headroom": -0.040734353043316865,
+          "delta_vs_deadline_ms": -2430.3691387176514,
+          "early_trigger_count": 4,
+          "early_trigger_on_short_count": 2,
+          "net_fraction_of_oracle": 0.7465541265448745,
+          "net_saved_ms": 182905.76100349426,
+          "short_exposure_penalty_ms": 8282.982110977173
+        },
+        "robust_clock": {
+          "band_gain_ms": 1388.2360458374023,
+          "captured_fraction_of_deadline_headroom": -0.11997931671157724,
+          "delta_vs_deadline_ms": -7158.430337905884,
+          "early_trigger_count": 56,
+          "early_trigger_on_short_count": 2,
+          "net_fraction_of_oracle": 0.7272559175685961,
+          "net_saved_ms": 178177.69980430603,
+          "short_exposure_penalty_ms": 8546.666383743286
+        }
+      },
+      "positive_count": 70,
+      "task_count": 20,
+      "threshold_ms": 3500.0
+    },
+    "4000.0": {
+      "band_count": 19,
+      "call_count": 1246,
+      "deadline_headroom_ms": 75197.01910018921,
+      "kv_cost_ms": 4000.0,
+      "oracle_ms": 268000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.719414107835115,
+          "net_saved_ms": 192802.9808998108,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 9105.576038360596,
+          "captured_fraction_of_deadline_headroom": -0.18778549814644718,
+          "delta_vs_deadline_ms": -14120.909690856934,
+          "early_trigger_count": 68,
+          "early_trigger_on_short_count": 5,
+          "net_fraction_of_oracle": 0.6667241463020667,
+          "net_saved_ms": 178682.07120895386,
+          "short_exposure_penalty_ms": 23226.48572921753
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 2589.569091796875,
+          "captured_fraction_of_deadline_headroom": -0.031185650787311232,
+          "delta_vs_deadline_ms": -2345.0679779052734,
+          "early_trigger_count": 53,
+          "early_trigger_on_short_count": 1,
+          "net_fraction_of_oracle": 0.7106638541862146,
+          "net_saved_ms": 190457.91292190552,
+          "short_exposure_penalty_ms": 4934.637069702148
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": -0.05954734666729833,
+          "delta_vs_deadline_ms": -4477.782964706421,
+          "early_trigger_count": 3,
+          "early_trigger_on_short_count": 1,
+          "net_fraction_of_oracle": 0.7027059624444193,
+          "net_saved_ms": 188325.19793510437,
+          "short_exposure_penalty_ms": 4477.782964706421
+        },
+        "robust_clock": {
+          "band_gain_ms": 2589.569091796875,
+          "captured_fraction_of_deadline_headroom": -0.031185650787311232,
+          "delta_vs_deadline_ms": -2345.0679779052734,
+          "early_trigger_count": 53,
+          "early_trigger_on_short_count": 1,
+          "net_fraction_of_oracle": 0.7106638541862146,
+          "net_saved_ms": 190457.91292190552,
+          "short_exposure_penalty_ms": 4934.637069702148
+        }
+      },
+      "positive_count": 67,
+      "task_count": 20,
+      "threshold_ms": 4000.0
+    },
+    "4500.0": {
+      "band_count": 19,
+      "call_count": 1246,
+      "deadline_headroom_ms": 87254.11558151245,
+      "kv_cost_ms": 4500.0,
+      "oracle_ms": 288000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6970343208975263,
+          "net_saved_ms": 200745.88441848755,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 4332.642555236816,
+          "captured_fraction_of_deadline_headroom": -0.06378682885746631,
+          "delta_vs_deadline_ms": -5565.6633377075195,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 2,
+          "net_fraction_of_oracle": 0.6777091009749306,
+          "net_saved_ms": 195180.22108078003,
+          "short_exposure_penalty_ms": 9898.305892944336
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 3,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6970343208975263,
+          "net_saved_ms": 200745.88441848755,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": -0.05275147119457671,
+          "delta_vs_deadline_ms": -4602.782964706421,
+          "early_trigger_count": 3,
+          "early_trigger_on_short_count": 1,
+          "net_fraction_of_oracle": 0.6810524356034067,
+          "net_saved_ms": 196143.10145378113,
+          "short_exposure_penalty_ms": 4602.782964706421
+        },
+        "robust_clock": {
+          "band_gain_ms": 2775.9857177734375,
+          "captured_fraction_of_deadline_headroom": 0.03181495450698967,
+          "delta_vs_deadline_ms": 2775.9857177734375,
+          "early_trigger_count": 52,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.7066731601953506,
+          "net_saved_ms": 203521.870136261,
+          "short_exposure_penalty_ms": 0.0
+        }
+      },
+      "positive_count": 64,
+      "task_count": 20,
+      "threshold_ms": 4500.0
+    },
+    "500.0": {
+      "band_count": 48,
+      "call_count": 1246,
+      "deadline_headroom_ms": 25480.14259338379,
+      "kv_cost_ms": 500.0,
+      "oracle_ms": 103000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.7526199748215167,
+          "net_saved_ms": 77519.85740661621,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 4652.290344238281,
+          "captured_fraction_of_deadline_headroom": -0.09664959768867767,
+          "delta_vs_deadline_ms": -2462.6455307006836,
+          "early_trigger_count": 194,
+          "early_trigger_on_short_count": 16,
+          "net_fraction_of_oracle": 0.7287107949118012,
+          "net_saved_ms": 75057.21187591553,
+          "short_exposure_penalty_ms": 7114.935874938965
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 76.08652114868164,
+          "captured_fraction_of_deadline_headroom": 0.0029861104925071485,
+          "delta_vs_deadline_ms": 76.08652114868164,
+          "early_trigger_count": 42,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.7533586789103388,
+          "net_saved_ms": 77595.94392776489,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 86.65895462036133,
+          "captured_fraction_of_deadline_headroom": -0.06060319338378297,
+          "delta_vs_deadline_ms": -1544.1780090332031,
+          "early_trigger_count": 16,
+          "early_trigger_on_short_count": 7,
+          "net_fraction_of_oracle": 0.7376279553163398,
+          "net_saved_ms": 75975.67939758301,
+          "short_exposure_penalty_ms": 1630.8369636535645
+        },
+        "robust_clock": {
+          "band_gain_ms": 3504.788875579834,
+          "captured_fraction_of_deadline_headroom": 0.01774558828912459,
+          "delta_vs_deadline_ms": 452.160120010376,
+          "early_trigger_count": 180,
+          "early_trigger_on_short_count": 5,
+          "net_fraction_of_oracle": 0.7570098788992873,
+          "net_saved_ms": 77972.01752662659,
+          "short_exposure_penalty_ms": 3052.628755569458
+        }
+      },
+      "positive_count": 206,
+      "task_count": 20,
+      "threshold_ms": 500.0
+    },
+    "5000.0": {
+      "band_count": 24,
+      "call_count": 1246,
+      "deadline_headroom_ms": 111231.39905929565,
+      "kv_cost_ms": 5000.0,
+      "oracle_ms": 310000.0,
+      "policies": {
+        "deadline_only": {
+          "band_gain_ms": 0.0,
+          "captured_fraction_of_deadline_headroom": 0.0,
+          "delta_vs_deadline_ms": 0.0,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "net_fraction_of_oracle": 0.6411890352925946,
+          "net_saved_ms": 198768.60094070435,
+          "short_exposure_penalty_ms": 0.0
+        },
+        "mean_hazard": {
+          "band_gain_ms": 23210.322856903076,
+          "captured_fraction_of_deadline_headroom": 0.004234055363797333,
+          "delta_vs_deadline_ms": 470.9599018096924,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 4,
+          "net_fraction_of_oracle": 0.6427082607823034,
+          "net_saved_ms": 199239.56084251404,
+          "short_exposure_penalty_ms": 22739.362955093384
+        },
+        "offline_gated_robust_clock": {
+          "band_gain_ms": 13414.700508117676,
+          "captured_fraction_of_deadline_headroom": 0.06751205391920855,
+          "delta_vs_deadline_ms": 7509.460210800171,
+          "early_trigger_count": 36,
+          "early_trigger_on_short_count": 1,
+          "net_fraction_of_oracle": 0.6654131004887243,
+          "net_saved_ms": 206278.06115150452,
+          "short_exposure_penalty_ms": 5905.240297317505
+        },
+        "offline_probe_guard": {
+          "band_gain_ms": 10363.030910491943,
+          "captured_fraction_of_deadline_headroom": 0.0498581057552698,
+          "delta_vs_deadline_ms": 5545.7868576049805,
+          "early_trigger_count": 15,
+          "early_trigger_on_short_count": 1,
+          "net_fraction_of_oracle": 0.6590786703171269,
+          "net_saved_ms": 204314.38779830933,
+          "short_exposure_penalty_ms": 4817.244052886963
+        },
+        "robust_clock": {
+          "band_gain_ms": 19144.729614257812,
+          "captured_fraction_of_deadline_headroom": 0.06421868016315625,
+          "delta_vs_deadline_ms": 7143.133640289307,
+          "early_trigger_count": 52,
+          "early_trigger_on_short_count": 2,
+          "net_fraction_of_oracle": 0.6642314018741731,
+          "net_saved_ms": 205911.73458099365,
+          "short_exposure_penalty_ms": 12001.595973968506
+        }
+      },
+      "positive_count": 62,
+      "task_count": 20,
+      "threshold_ms": 5000.0
+    }
+  },
+  "policies": [
+    "deadline_only",
+    "mean_hazard",
+    "robust_clock",
+    "offline_probe_guard",
+    "offline_gated_robust_clock"
+  ],
+  "profile_row_count": 3394,
+  "profile_task_count": 80,
+  "restore_cost_fraction": 0.25,
+  "robust_calibration": {
+    "accepted_early_decision_count": 5080,
+    "accepted_task_count": 79,
+    "candidate_guard_count": 224,
+    "eligible_early_decision_count": 10360,
+    "probe_decision_count": 33940,
+    "probe_objective_normalized": 48.430447657524596,
+    "probe_task_count": 80,
+    "selected_guard_normalized": 0.0004885161125807177,
+    "worst_accepted_task_normalized_delta": -3.4941446781158447
+  },
+  "row_count": 1246,
+  "skip_leading_cd": false
+}

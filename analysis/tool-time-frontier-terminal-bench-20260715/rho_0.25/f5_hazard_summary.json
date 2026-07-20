@@ -1,0 +1,244 @@
+{
+  "calibration_edge_stride": 1,
+  "calibration_guard": {
+    "accepted_early_decision_count": 0,
+    "accepted_task_count": 0,
+    "candidate_guard_count": 14312,
+    "eligible_early_decision_count": 17285,
+    "probe_decision_count": 25610,
+    "probe_objective_normalized": 0.0,
+    "probe_task_count": 67,
+    "selected_guard_normalized": null,
+    "worst_accepted_task_normalized_delta": null
+  },
+  "cv_folds": 5,
+  "guard_ms": 0,
+  "hazard_calibration": {
+    "bin_count": 10,
+    "checkpoints": [
+      {
+        "count": 398,
+        "edge_ms": 0.0,
+        "observed_exceed_fraction": 1.0,
+        "predicted_survival_mean": 1.0
+      },
+      {
+        "count": 398,
+        "edge_ms": 0.5279064178466797,
+        "observed_exceed_fraction": 0.9974874371859297,
+        "predicted_survival_mean": 0.9955297051257191
+      },
+      {
+        "count": 398,
+        "edge_ms": 1.357861669264536,
+        "observed_exceed_fraction": 0.9773869346733668,
+        "predicted_survival_mean": 0.9768557996109086
+      },
+      {
+        "count": 398,
+        "edge_ms": 3.4926423519885397,
+        "observed_exceed_fraction": 0.8693467336683417,
+        "predicted_survival_mean": 0.86417168565552
+      },
+      {
+        "count": 398,
+        "edge_ms": 8.983647506237647,
+        "observed_exceed_fraction": 0.7537688442211056,
+        "predicted_survival_mean": 0.7203391708126499
+      },
+      {
+        "count": 398,
+        "edge_ms": 23.107411060963592,
+        "observed_exceed_fraction": 0.5829145728643216,
+        "predicted_survival_mean": 0.6116101040741766
+      },
+      {
+        "count": 398,
+        "edge_ms": 59.43604149312424,
+        "observed_exceed_fraction": 0.5276381909547738,
+        "predicted_survival_mean": 0.5103024250347736
+      },
+      {
+        "count": 398,
+        "edge_ms": 152.87922212714867,
+        "observed_exceed_fraction": 0.4748743718592965,
+        "predicted_survival_mean": 0.4553692656235032
+      },
+      {
+        "count": 398,
+        "edge_ms": 393.23036950409653,
+        "observed_exceed_fraction": 0.41959798994974873,
+        "predicted_survival_mean": 0.37219246892663743
+      },
+      {
+        "count": 398,
+        "edge_ms": 1011.4528406726416,
+        "observed_exceed_fraction": 0.39195979899497485,
+        "predicted_survival_mean": 0.28992761985975857
+      },
+      {
+        "count": 398,
+        "edge_ms": 2601.622174286563,
+        "observed_exceed_fraction": 0.16834170854271358,
+        "predicted_survival_mean": 0.11092934166239228
+      },
+      {
+        "count": 398,
+        "edge_ms": 6691.7978432275395,
+        "observed_exceed_fraction": 0.022613065326633167,
+        "predicted_survival_mean": 0.04930805449381066
+      },
+      {
+        "count": 398,
+        "edge_ms": 17212.398793804336,
+        "observed_exceed_fraction": 0.007537688442211055,
+        "predicted_survival_mean": 0.022442708312873108
+      },
+      {
+        "count": 398,
+        "edge_ms": 44273.10555066983,
+        "observed_exceed_fraction": 0.002512562814070352,
+        "predicted_survival_mean": 0.01178226018006984
+      },
+      {
+        "count": 398,
+        "edge_ms": 113877.67031090958,
+        "observed_exceed_fraction": 0.0,
+        "predicted_survival_mean": 0.006470075150669359
+      },
+      {
+        "count": 398,
+        "edge_ms": 292911.9977951048,
+        "observed_exceed_fraction": 0.0,
+        "predicted_survival_mean": 0.0037892678957313383
+      }
+    ],
+    "edge_stride": 1,
+    "median_edge_ms": 393.23036950409653,
+    "reliability_bins": [
+      {
+        "bin_index": 0,
+        "count": 179,
+        "observed_exceed_rate": 0.01675977653631285,
+        "predicted_survival_mean": 0.026188882908220336
+      },
+      {
+        "bin_index": 1,
+        "count": 32,
+        "observed_exceed_rate": 0.40625,
+        "predicted_survival_mean": 0.13831461428085087
+      },
+      {
+        "bin_index": 2,
+        "count": 15,
+        "observed_exceed_rate": 0.4,
+        "predicted_survival_mean": 0.25017259732191416
+      },
+      {
+        "bin_index": 3,
+        "count": 6,
+        "observed_exceed_rate": 0.5,
+        "predicted_survival_mean": 0.3455142741801341
+      },
+      {
+        "bin_index": 4,
+        "count": 5,
+        "observed_exceed_rate": 0.2,
+        "predicted_survival_mean": 0.42884065568093527
+      },
+      {
+        "bin_index": 5,
+        "count": 3,
+        "observed_exceed_rate": 0.6666666666666666,
+        "predicted_survival_mean": 0.5718428434116825
+      },
+      {
+        "bin_index": 6,
+        "count": 12,
+        "observed_exceed_rate": 0.5833333333333334,
+        "predicted_survival_mean": 0.6768116379733738
+      },
+      {
+        "bin_index": 7,
+        "count": 44,
+        "observed_exceed_rate": 0.8181818181818182,
+        "predicted_survival_mean": 0.755382250275457
+      },
+      {
+        "bin_index": 8,
+        "count": 87,
+        "observed_exceed_rate": 0.9770114942528736,
+        "predicted_survival_mean": 0.8514003641301734
+      },
+      {
+        "bin_index": 9,
+        "count": 15,
+        "observed_exceed_rate": 0.7333333333333333,
+        "predicted_survival_mean": 0.9268618783045397
+      }
+    ]
+  },
+  "inner_folds": 4,
+  "kv_costs_ms": [
+    500.0,
+    1000.0,
+    1500.0,
+    2000.0,
+    2500.0,
+    3000.0,
+    3500.0,
+    4000.0,
+    4500.0,
+    5000.0
+  ],
+  "l2_grid": [
+    0.0001,
+    0.001,
+    0.01,
+    0.1,
+    1.0,
+    10.0
+  ],
+  "l2_penalty": null,
+  "l2_selected_on_full_profile": false,
+  "model_family": "gbm",
+  "num_intervals": 16,
+  "outer_grid_edges_ms": [
+    0.0,
+    0.5279064178466797,
+    1.357861669264536,
+    3.4926423519885397,
+    8.983647506237647,
+    23.107411060963592,
+    59.43604149312424,
+    152.87922212714867,
+    393.23036950409653,
+    1011.4528406726416,
+    2601.622174286563,
+    6691.7978432275395,
+    17212.398793804336,
+    44273.10555066983,
+    113877.67031090958,
+    292911.9977951048
+  ],
+  "profile_row_count": 2561,
+  "profile_task_count": 67,
+  "reliability_bin_count": 10,
+  "restore_cost_fraction": 0.25,
+  "restore_cost_fractions": [
+    0.0,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "row_count": 398,
+  "spec": {
+    "command_field": "command",
+    "max_prefix_depth": 4,
+    "skip_leading_cd": false,
+    "use_command_prefix": true,
+    "use_task_aggregates": true,
+    "use_tool_identity": true,
+    "use_within_task_history": true
+  }
+}

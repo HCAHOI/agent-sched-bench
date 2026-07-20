@@ -75,6 +75,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--replicates", type=int, default=50_000)
     parser.add_argument("--confidence-level", type=float, default=0.95)
     parser.add_argument("--output-root", required=True, type=Path)
+    shard = parser.add_mutually_exclusive_group()
+    shard.add_argument(
+        "--only-fold",
+        type=int,
+        default=None,
+        help="Run ONLY this outer fold's fit/eval (write its folds/f{N}_* and "
+        "rho_*/f{N}_* files) and exit before any cross-fold aggregation. Lets K "
+        "folds run as K concurrent processes into one output root.",
+    )
+    shard.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help="Skip the fit phase; read the folds/f*_* and rho_*/f*_* files the "
+        "fold processes wrote, then run the cross-fold aggregation + bootstrap "
+        "and write the top-level frontier results.",
+    )
     return parser
 
 
@@ -104,7 +120,11 @@ def main() -> None:
         feature_set=args.feature_set,
         ensemble_members=args.ensemble_members,
         tool_name_trie=args.tool_name_trie,
+        only_fold=args.only_fold,
+        aggregate_only=args.aggregate_only,
     )
+    if args.only_fold is not None:
+        return
     print(
         f"Frontier over {result['task_count']} tasks x "
         f"{len(result['restore_cost_fractions'])} fractions -> {args.output_root}"

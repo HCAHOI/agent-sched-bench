@@ -568,6 +568,8 @@ def run_hazard_model_confirmation(
     feature_set: str = "full",
     model_family: str = "logistic",
     ensemble_members: int = 0,
+    only_fold: int | None = None,
+    aggregate_only: bool = False,
 ) -> dict[str, Any]:
     """Score the learned hazard clock against the refit gated policies.
 
@@ -598,19 +600,33 @@ def run_hazard_model_confirmation(
     contrast is fit and scored at the same restore cost. The feature spec
     mirrors the frozen trie config from the manifest. ``l2_penalty=None``
     selects the penalty per fold on that fold's profile rows.
+
+    Orchestration modes leave the numerics untouched. The bare call fits every
+    fold then aggregates. ``only_fold=N`` fits just fold N (the heavy GBM/logistic
+    fit), writes its ``rho_*/f{N}_*`` files, and returns before any cross-fold
+    merge, so K folds can run as K concurrent processes into one output root.
+    ``aggregate_only`` skips the fit phase, reads the ``rho_*/f*_*`` files those
+    processes wrote (in fold order), and runs the merge + bootstrap. The fit is
+    seeded per fold with the same ``seed`` and never advances a shared RNG, so a
+    fold's outputs are identical whether fit alone or in the loop.
     """
 
     _validate_fractions(restore_cost_fractions)
     if num_intervals < 2:
         raise ValueError("num_intervals must be at least 2")
+    if only_fold is not None and aggregate_only:
+        raise ValueError("only_fold and aggregate_only are mutually exclusive")
+    sharded = only_fold is not None or aggregate_only
     confirmation_root = confirmation_root.resolve()
     mode_b_root = mode_b_root.resolve()
     gated_b1_root = gated_b1_root.resolve()
     output_root = output_root.resolve()
-    if output_root.exists():
+    if output_root.exists() and not sharded:
         raise FileExistsError(f"refusing to mix stale output: {output_root}")
     manifest = _read_frozen_manifest(confirmation_root)
     fold_count = manifest["fold_count"]
+    if only_fold is not None and not 1 <= only_fold <= fold_count:
+        raise ValueError(f"only_fold must be in [1, {fold_count}], got {only_fold}")
     costs = [float(cost) for cost in manifest["costs_ms"]]
     if model_family not in ("logistic", "gbm"):
         raise ValueError(
@@ -631,7 +647,7 @@ def run_hazard_model_confirmation(
     active_comparisons = HAZARD_COMPARISONS + (
         HAZARD_ENSEMBLE_COMPARISONS if ensemble_on else ()
     )
-    output_root.mkdir(parents=True)
+    output_root.mkdir(parents=True, exist_ok=sharded)
     comparisons: dict[str, dict[str, Any]] = {
         name: {
             "treatment_trigger_field": treatment_field,
@@ -648,9 +664,95 @@ def run_hazard_model_confirmation(
     grid_l2_choices: dict[str, list[dict[str, Any]]] = {}
     calibrations_by_fraction: dict[str, list[dict[str, Any]]] = {}
     decisions_by_fraction: dict[str, list[dict[str, Any]]] = {}
+
+    # --- Fit phase: fit each requested fold once (folds outermost, model fit
+    # once per fold: inner_folds inner fits + 1 outer fit) and write its
+    # per-fraction summary + hazard decisions. The full run and each --only-fold
+    # process run this. The fit is fraction-independent (rho never enters any
+    # fit), so a fold's written files are byte-identical whether it runs alone
+    # in its own process or inside the sequential loop.
+    if not aggregate_only:
+        fit_folds = (
+            [only_fold] if only_fold is not None else list(range(1, fold_count + 1))
+        )
+        for fold in fit_folds:
+            fold_name = f"f{fold}"
+            eval_rows = list(
+                read_tool_latency_jsonl(
+                    confirmation_root / "data" / f"{fold_name}_eval.jsonl"
+                )
+            )
+            profile_rows = list(
+                read_tool_latency_jsonl(
+                    confirmation_root / "data" / f"{fold_name}_profile.jsonl"
+                )
+            )
+            overlap = {str(row["task_id"]) for row in eval_rows} & {
+                str(row["task_id"]) for row in profile_rows
+            }
+            if overlap:
+                raise AssertionError(
+                    f"fold {fold_name} profile and eval tasks overlap: "
+                    f"{sorted(overlap)}"
+                )
+            fold_result = evaluate_hazard_model_clock(
+                eval_rows,
+                profile_rows=profile_rows,
+                kv_costs_ms=costs,
+                guard_ms=manifest["guard_ms"],
+                inner_folds=manifest["inner_folds"],
+                spec=spec,
+                num_intervals=num_intervals,
+                restore_cost_fractions=restore_cost_fractions,
+                l2_penalty=l2_penalty,
+                model_family=model_family,
+                seed=seed,
+                ensemble_members=ensemble_members,
+            )
+            shared = {
+                field: value
+                for field, value in fold_result.items()
+                if field != "by_restore_cost_fraction"
+            }
+            for fraction in restore_cost_fractions:
+                key = fraction_key(fraction)
+                fraction_root = output_root / f"rho_{key}"
+                # Shared across folds (and across concurrent --only-fold procs),
+                # so tolerate a pre-existing dir in every mode.
+                fraction_root.mkdir(exist_ok=True)
+                per_fraction = fold_result["by_restore_cost_fraction"][key]
+                summary = {
+                    **shared,
+                    "restore_cost_fraction": fraction,
+                    "calibration_guard": per_fraction["calibration_guard"],
+                }
+                if "ensemble_calibration_guard" in per_fraction:
+                    summary["ensemble_calibration_guard"] = per_fraction[
+                        "ensemble_calibration_guard"
+                    ]
+                _write_json(fraction_root / f"{fold_name}_summary.json", summary)
+                _write_jsonl(
+                    fraction_root / f"{fold_name}_hazard_decisions.jsonl",
+                    per_fraction["decisions"],
+                )
+        if only_fold is not None:
+            print(f"Fit hazard fold {only_fold} of {fold_count} -> {output_root}")
+            return {
+                "schema_version": 1,
+                "mode": "hazard_model_confirmation",
+                "only_fold": only_fold,
+                "fold_count": fold_count,
+                "restore_cost_fractions": restore_cost_fractions,
+            }
+
+    # --- Aggregate phase: read every fold's written summary + hazard decisions
+    # in fold order, rebuild the per-fold diagnostics, merge each row against the
+    # Mode B and gated-B1 decisions, then bootstrap the paired contrasts. Reads
+    # back what the fit phase wrote so the sharded and full paths share one merge
+    # path (JSON float round-trips exactly, so the reload is byte-preserving).
     for fraction in restore_cost_fractions:
         key = fraction_key(fraction)
-        (output_root / f"rho_{key}").mkdir()
+        (output_root / f"rho_{key}").mkdir(exist_ok=True)
         gated_lookups[key] = _load_gated_within_task(
             gated_b1_root / f"rho_{key}_decisions.jsonl"
         )
@@ -658,82 +760,42 @@ def run_hazard_model_confirmation(
         grid_l2_choices[key] = []
         calibrations_by_fraction[key] = []
         decisions_by_fraction[key] = []
-
-    # Folds outermost so the model is fit exactly once per fold (inner_folds
-    # inner fits + 1 outer fit); every fraction reuses that fold's cached masses.
     for fold in range(1, fold_count + 1):
         fold_name = f"f{fold}"
-        eval_rows = list(
-            read_tool_latency_jsonl(
-                confirmation_root / "data" / f"{fold_name}_eval.jsonl"
-            )
-        )
-        profile_rows = list(
-            read_tool_latency_jsonl(
-                confirmation_root / "data" / f"{fold_name}_profile.jsonl"
-            )
-        )
-        overlap = {str(row["task_id"]) for row in eval_rows} & {
-            str(row["task_id"]) for row in profile_rows
-        }
-        if overlap:
-            raise AssertionError(
-                f"fold {fold_name} profile and eval tasks overlap: "
-                f"{sorted(overlap)}"
-            )
-        fold_result = evaluate_hazard_model_clock(
-            eval_rows,
-            profile_rows=profile_rows,
-            kv_costs_ms=costs,
-            guard_ms=manifest["guard_ms"],
-            inner_folds=manifest["inner_folds"],
-            spec=spec,
-            num_intervals=num_intervals,
-            restore_cost_fractions=restore_cost_fractions,
-            l2_penalty=l2_penalty,
-            model_family=model_family,
-            seed=seed,
-            ensemble_members=ensemble_members,
-        )
-        shared = {
-            field: value
-            for field, value in fold_result.items()
-            if field != "by_restore_cost_fraction"
-        }
         for fraction in restore_cost_fractions:
             key = fraction_key(fraction)
-            per_fraction = fold_result["by_restore_cost_fraction"][key]
-            hazard_rows = per_fraction["decisions"]
-            summary = {
-                **shared,
-                "restore_cost_fraction": fraction,
-                "calibration_guard": per_fraction["calibration_guard"],
-            }
-            if "ensemble_calibration_guard" in per_fraction:
-                summary["ensemble_calibration_guard"] = per_fraction[
-                    "ensemble_calibration_guard"
-                ]
             fraction_root = output_root / f"rho_{key}"
-            _write_json(fraction_root / f"{fold_name}_summary.json", summary)
-            _write_jsonl(
-                fraction_root / f"{fold_name}_hazard_decisions.jsonl", hazard_rows
+            summary = json.loads(
+                (fraction_root / f"{fold_name}_summary.json").read_text(
+                    encoding="utf-8"
+                )
             )
+            hazard_rows = [
+                json.loads(line)
+                for line in (fraction_root / f"{fold_name}_hazard_decisions.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
             hazard_guards[key].append(
-                {"fold": fold_name, **per_fraction["calibration_guard"]}
+                {"fold": fold_name, **summary["calibration_guard"]}
             )
             grid_l2_choices[key].append(
                 {
                     "fold": fold_name,
-                    "l2_penalty": shared["l2_penalty"],
-                    "l2_selected_on_full_profile": shared[
+                    "l2_penalty": summary["l2_penalty"],
+                    "l2_selected_on_full_profile": summary[
                         "l2_selected_on_full_profile"
                     ],
-                    "num_intervals": shared["num_intervals"],
-                    "grid_edges_ms": shared["outer_grid_edges_ms"],
+                    "num_intervals": summary["num_intervals"],
+                    "grid_edges_ms": summary["outer_grid_edges_ms"],
                 }
             )
             calibrations_by_fraction[key].append(
-                {"fold": fold_name, "hazard_calibration": shared["hazard_calibration"]}
+                {
+                    "fold": fold_name,
+                    "hazard_calibration": summary["hazard_calibration"],
+                }
             )
             decisions_by_fraction[key].extend(
                 _merge_hazard_rows(

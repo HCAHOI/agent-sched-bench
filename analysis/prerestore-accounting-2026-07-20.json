@@ -1,0 +1,328 @@
+{
+ "provenance": {
+  "exploratory": true,
+  "offline_accounting": true,
+  "live_validation": "W10-11 (GPU)",
+  "final": true,
+  "manifest": "analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json",
+  "collection_id": "swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277",
+  "task_count": 277,
+  "limit_tasks": null,
+  "guard_ms": 0.0,
+  "restore_cost_fraction": 0.94,
+  "git_sha": "4b2332b520a3ed91b845df8921ad073a9435e151",
+  "generated": "2026-07-20T06:32:24"
+ },
+ "config": {
+  "fold_count": 5,
+  "command_field": "command",
+  "max_prefix_depth": 4,
+  "skip_leading_cd": false,
+  "min_tool_history": 1,
+  "min_profile_tasks": 1,
+  "costs_ms": [
+   500.0,
+   1000.0,
+   1500.0,
+   2000.0,
+   2500.0,
+   3000.0,
+   3500.0,
+   4000.0,
+   4500.0,
+   5000.0
+  ],
+  "guard_ms": 0.0,
+  "restore_cost_fraction": 0.94,
+  "replicates": 50000,
+  "confidence_level": 0.95,
+  "seed": 0
+ },
+ "verdict": "SURVIVE",
+ "survive_positive_headline_costs_ms": [
+  3500.0,
+  5000.0
+ ],
+ "kill_criterion": "net positive with a task-clustered permutation CI excluding zero (Bonferroni over the full cost family) in >=1 headline kv cell (3500, 5000)",
+ "task_count": 277,
+ "call_count": 13410,
+ "headline_costs_ms": [
+  3500.0,
+  5000.0
+ ],
+ "cells": [
+  {
+   "kv_cost_ms": 500.0,
+   "threshold_ms": 500.0,
+   "restore_cost_ms": 470.0,
+   "headline": false,
+   "net_ms_per_277": -19755.36989212036,
+   "net_seconds_per_277": -19.75536989212036,
+   "mean_ms_per_task": -71.31902488130095,
+   "p90_ms_per_task": 146.1159896850586,
+   "hidden_lead_ms_total": 16434.63010787964,
+   "wasted_restore_ms_total": 36190.0,
+   "prerestore_fire_fraction": 0.01029082774049217,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": -37542.063432693474,
+    "high": -5055.486419916152
+   },
+   "simultaneous_interval_ms": {
+    "low": -46745.09317433833,
+    "high": 355.4819451093834
+   },
+   "simultaneous_label": "inconclusive",
+   "permutation_label": "inconclusive",
+   "permutation_p_positive": 0.996120077598448,
+   "permutation_p_harmful": 0.003899922001559969
+  },
+  {
+   "kv_cost_ms": 1000.0,
+   "threshold_ms": 1000.0,
+   "restore_cost_ms": 940.0,
+   "headline": false,
+   "net_ms_per_277": -19248.85301589966,
+   "net_seconds_per_277": -19.24885301589966,
+   "mean_ms_per_task": -69.4904441007208,
+   "p90_ms_per_task": 610.5874919891357,
+   "hidden_lead_ms_total": 51251.14698410034,
+   "wasted_restore_ms_total": 70500.0,
+   "prerestore_fire_fraction": 0.012080536912751677,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": -55138.25149273871,
+    "high": 10231.744854211824
+   },
+   "simultaneous_interval_ms": {
+    "low": -72931.87512750625,
+    "high": 21017.800134873472
+   },
+   "simultaneous_label": "inconclusive",
+   "permutation_label": "inconclusive",
+   "permutation_p_positive": 0.8659026819463611,
+   "permutation_p_harmful": 0.13411731765364693
+  },
+  {
+   "kv_cost_ms": 1500.0,
+   "threshold_ms": 1500.0,
+   "restore_cost_ms": 1410.0,
+   "headline": false,
+   "net_ms_per_277": 7881.305952072144,
+   "net_seconds_per_277": 7.881305952072143,
+   "mean_ms_per_task": 28.452368058022177,
+   "p90_ms_per_task": 1080.5874919891357,
+   "hidden_lead_ms_total": 98121.30595207214,
+   "wasted_restore_ms_total": 90240.0,
+   "prerestore_fire_fraction": 0.013870246085011185,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": -25816.621247291547,
+    "high": 41698.93738222122
+   },
+   "simultaneous_interval_ms": {
+    "low": -41533.29914608001,
+    "high": 56758.28565385351
+   },
+   "simultaneous_label": "inconclusive",
+   "permutation_label": "inconclusive",
+   "permutation_p_positive": 0.32809343813123737,
+   "permutation_p_harmful": 0.6719265614687706
+  },
+  {
+   "kv_cost_ms": 2000.0,
+   "threshold_ms": 2000.0,
+   "restore_cost_ms": 1880.0,
+   "headline": false,
+   "net_ms_per_277": 27853.8551902771,
+   "net_seconds_per_277": 27.8538551902771,
+   "mean_ms_per_task": 100.55543389991733,
+   "p90_ms_per_task": 1389.6609115600586,
+   "hidden_lead_ms_total": 114333.8551902771,
+   "wasted_restore_ms_total": 86480.0,
+   "prerestore_fire_fraction": 0.011782252050708427,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": -9240.610097169872,
+    "high": 66676.35501074794
+   },
+   "simultaneous_interval_ms": {
+    "low": -24932.119252109525,
+    "high": 84982.79214103229
+   },
+   "simultaneous_label": "inconclusive",
+   "permutation_label": "inconclusive",
+   "permutation_p_positive": 0.07893842123157536,
+   "permutation_p_harmful": 0.9210815783684326
+  },
+  {
+   "kv_cost_ms": 2500.0,
+   "threshold_ms": 2500.0,
+   "restore_cost_ms": 2350.0,
+   "headline": false,
+   "net_ms_per_277": 87172.33901023865,
+   "net_seconds_per_277": 87.17233901023864,
+   "mean_ms_per_task": 314.7015848745078,
+   "p90_ms_per_task": 1951.4623165130615,
+   "hidden_lead_ms_total": 192922.33901023865,
+   "wasted_restore_ms_total": 105750.0,
+   "prerestore_fire_fraction": 0.014093959731543624,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": 39503.89509677887,
+    "high": 136740.68775773048
+   },
+   "simultaneous_interval_ms": {
+    "low": 19329.89004611969,
+    "high": 159381.79187738898
+   },
+   "simultaneous_label": "positive",
+   "permutation_label": "positive",
+   "permutation_p_positive": 0.0001399972000559989,
+   "permutation_p_harmful": 0.999880002399952
+  },
+  {
+   "kv_cost_ms": 3000.0,
+   "threshold_ms": 3000.0,
+   "restore_cost_ms": 2820.0,
+   "headline": false,
+   "net_ms_per_277": 133317.92632102966,
+   "net_seconds_per_277": 133.31792632102966,
+   "mean_ms_per_task": 481.29215278350057,
+   "p90_ms_per_task": 2395.7754802703857,
+   "hidden_lead_ms_total": 248937.92632102966,
+   "wasted_restore_ms_total": 115620.0,
+   "prerestore_fire_fraction": 0.015063385533184192,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": 74985.81577610971,
+    "high": 194008.49454426765
+   },
+   "simultaneous_interval_ms": {
+    "low": 50819.670480489745,
+    "high": 221859.95483758496
+   },
+   "simultaneous_label": "positive",
+   "permutation_label": "positive",
+   "permutation_p_positive": 1.999960000799984e-05,
+   "permutation_p_harmful": 1.0
+  },
+  {
+   "kv_cost_ms": 3500.0,
+   "threshold_ms": 3500.0,
+   "restore_cost_ms": 3290.0,
+   "headline": true,
+   "net_ms_per_277": 164765.1537322998,
+   "net_seconds_per_277": 164.7651537322998,
+   "mean_ms_per_task": 594.8200495750896,
+   "p90_ms_per_task": 2681.636466979981,
+   "hidden_lead_ms_total": 289785.1537322998,
+   "wasted_restore_ms_total": 125020.0,
+   "prerestore_fire_fraction": 0.014914243102162566,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": 97219.3193500042,
+    "high": 234902.02592110634
+   },
+   "simultaneous_interval_ms": {
+    "low": 67624.41678013802,
+    "high": 266402.9900505306
+   },
+   "simultaneous_label": "positive",
+   "permutation_label": "positive",
+   "permutation_p_positive": 1.999960000799984e-05,
+   "permutation_p_harmful": 1.0
+  },
+  {
+   "kv_cost_ms": 4000.0,
+   "threshold_ms": 4000.0,
+   "restore_cost_ms": 3760.0,
+   "headline": false,
+   "net_ms_per_277": 197067.7828502655,
+   "net_seconds_per_277": 197.0677828502655,
+   "mean_ms_per_task": 711.4360391706335,
+   "p90_ms_per_task": 2875.5031719207764,
+   "hidden_lead_ms_total": 332427.7828502655,
+   "wasted_restore_ms_total": 135360.0,
+   "prerestore_fire_fraction": 0.014615958240119313,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": 122025.66154551507,
+    "high": 275614.52855086327
+   },
+   "simultaneous_interval_ms": {
+    "low": 89354.30403606892,
+    "high": 309831.7582560302
+   },
+   "simultaneous_label": "positive",
+   "permutation_label": "positive",
+   "permutation_p_positive": 1.999960000799984e-05,
+   "permutation_p_harmful": 1.0
+  },
+  {
+   "kv_cost_ms": 4500.0,
+   "threshold_ms": 4500.0,
+   "restore_cost_ms": 4230.0,
+   "headline": false,
+   "net_ms_per_277": 248660.20800590515,
+   "net_seconds_per_277": 248.66020800590516,
+   "mean_ms_per_task": 897.6902816097659,
+   "p90_ms_per_task": 3322.582798004151,
+   "hidden_lead_ms_total": 396710.20800590515,
+   "wasted_restore_ms_total": 148050.0,
+   "prerestore_fire_fraction": 0.0145413870246085,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": 162773.4124712944,
+    "high": 337796.44571757317
+   },
+   "simultaneous_interval_ms": {
+    "low": 124687.47621655467,
+    "high": 376515.30154490494
+   },
+   "simultaneous_label": "positive",
+   "permutation_label": "positive",
+   "permutation_p_positive": 1.999960000799984e-05,
+   "permutation_p_harmful": 1.0
+  },
+  {
+   "kv_cost_ms": 5000.0,
+   "threshold_ms": 5000.0,
+   "restore_cost_ms": 4700.0,
+   "headline": true,
+   "net_ms_per_277": 306467.05265045166,
+   "net_seconds_per_277": 306.46705265045165,
+   "mean_ms_per_task": 1106.3792514456738,
+   "p90_ms_per_task": 3739.2739772796635,
+   "hidden_lead_ms_total": 470967.05265045166,
+   "wasted_restore_ms_total": 164500.0,
+   "prerestore_fire_fraction": 0.014690529455630126,
+   "call_count": 13410,
+   "pointwise_interval_ms": {
+    "low": 209222.00941920283,
+    "high": 407030.1188480854
+   },
+   "simultaneous_interval_ms": {
+    "low": 166565.10987567902,
+    "high": 449918.56060218846
+   },
+   "simultaneous_label": "positive",
+   "permutation_label": "positive",
+   "permutation_p_positive": 1.999960000799984e-05,
+   "permutation_p_harmful": 1.0
+  }
+ ],
+ "permutation_config": {
+  "method": "paired_signflip_randomization",
+  "draws": 50000,
+  "seed": 0,
+  "bit_generator": "PCG64",
+  "simultaneous_method": "bonferroni_signflip",
+  "simultaneous_family_size": 10,
+  "simultaneous_tail_probability": 0.0025000000000000022,
+  "exact_test_floor_p_value": 4.118046071574423e-84,
+  "monte_carlo_floor_p_value": 1.999960000799984e-05,
+  "min_achievable_p_value": 1.999960000799984e-05
+ },
+ "decisions_archived_at": "analysis/prerestore-accounting-2026-07-20-decisions.json.zst (local, not committed; 134100 rows)"
+}

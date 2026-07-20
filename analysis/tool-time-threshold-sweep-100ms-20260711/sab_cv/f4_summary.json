@@ -1,0 +1,2321 @@
+{
+  "command_field": "command",
+  "guard_ms": 0.0,
+  "kv_costs_ms": [
+    500.0,
+    600.0,
+    700.0,
+    800.0,
+    900.0,
+    1000.0,
+    1100.0,
+    1200.0,
+    1300.0,
+    1400.0,
+    1500.0,
+    1600.0,
+    1700.0,
+    1800.0,
+    1900.0,
+    2000.0,
+    2100.0,
+    2200.0,
+    2300.0,
+    2400.0,
+    2500.0,
+    2600.0,
+    2700.0,
+    2800.0,
+    2900.0,
+    3000.0,
+    3100.0,
+    3200.0,
+    3300.0,
+    3400.0,
+    3500.0,
+    3600.0,
+    3700.0,
+    3800.0,
+    3900.0,
+    4000.0,
+    4100.0,
+    4200.0,
+    4300.0,
+    4400.0,
+    4500.0,
+    4600.0,
+    4700.0,
+    4800.0,
+    4900.0,
+    5000.0
+  ],
+  "max_prefix_depth": 4,
+  "min_profile_tasks": 1,
+  "min_tool_history": 1,
+  "points": [
+    {
+      "absorbed_if_oracle_ms": 41500.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 500.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 38141.327142715454,
+          "absorbed_on_long_ms_total": 38141.327142715454,
+          "deadline_trigger_count": 83,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 3358.672857284546,
+          "hidden_fraction_of_oracle": 0.9190681239208544,
+          "mean_fired_trigger_ms": 500.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 34782.65428543091,
+          "trigger_count": 83
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 38748.76022338867,
+          "absorbed_on_long_ms_total": 38635.08152961731,
+          "deadline_trigger_count": 23,
+          "early_trigger_count": 63,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 4251.239776611328,
+          "hidden_fraction_of_oracle": 0.9309658199907785,
+          "mean_fired_trigger_ms": 454.39253851424814,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 34383.84175300598,
+          "trigger_count": 86
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 38662.2793674469,
+          "absorbed_on_long_ms_total": 38571.988344192505,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 65,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 3837.7206325531006,
+          "hidden_fraction_of_oracle": 0.9294455022696989,
+          "mean_fired_trigger_ms": 470.8330827600816,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 34734.267711639404,
+          "trigger_count": 85
+        }
+      },
+      "positive_count": 83,
+      "row_count": 355,
+      "threshold_ms": 500.0
+    },
+    {
+      "absorbed_if_oracle_ms": 48000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 600.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 44369.99435424805,
+          "absorbed_on_long_ms_total": 44369.99435424805,
+          "deadline_trigger_count": 80,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 3630.005645751953,
+          "hidden_fraction_of_oracle": 0.9243748823801676,
+          "mean_fired_trigger_ms": 600.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 40739.988708496094,
+          "trigger_count": 80
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 45755.53855895996,
+          "absorbed_on_long_ms_total": 45461.493825912476,
+          "deadline_trigger_count": 24,
+          "early_trigger_count": 62,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 5844.461441040039,
+          "hidden_fraction_of_oracle": 0.9471144547065099,
+          "mean_fired_trigger_ms": 498.527007324751,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 39617.03238487244,
+          "trigger_count": 86
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 45607.906913757324,
+          "absorbed_on_long_ms_total": 45355.86271286011,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 4,
+          "exposed_ms_total": 4792.093086242676,
+          "hidden_fraction_of_oracle": 0.9449138065179189,
+          "mean_fired_trigger_ms": 523.2968642598107,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 40563.76962661743,
+          "trigger_count": 84
+        }
+      },
+      "positive_count": 80,
+      "row_count": 355,
+      "threshold_ms": 600.0
+    },
+    {
+      "absorbed_if_oracle_ms": 54600.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 700.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 50364.88318443298,
+          "absorbed_on_long_ms_total": 50364.88318443298,
+          "deadline_trigger_count": 78,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 4235.116815567017,
+          "hidden_fraction_of_oracle": 0.9224337579566481,
+          "mean_fired_trigger_ms": 700.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 46129.76636886597,
+          "trigger_count": 78
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 52733.1907749176,
+          "absorbed_on_long_ms_total": 52037.19353675842,
+          "deadline_trigger_count": 24,
+          "early_trigger_count": 61,
+          "early_trigger_on_short_count": 7,
+          "exposed_ms_total": 6766.8092250823975,
+          "hidden_fraction_of_oracle": 0.9530621526878832,
+          "mean_fired_trigger_ms": 551.3767079746021,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 45270.384311676025,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 52605.10492324829,
+          "absorbed_on_long_ms_total": 51964.04194831848,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 6194.895076751709,
+          "hidden_fraction_of_oracle": 0.951722380005833,
+          "mean_fired_trigger_ms": 566.7254357110886,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 45769.14687156677,
+          "trigger_count": 84
+        }
+      },
+      "positive_count": 78,
+      "row_count": 355,
+      "threshold_ms": 700.0
+    },
+    {
+      "absorbed_if_oracle_ms": 59200.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 800.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 55931.417083740234,
+          "absorbed_on_long_ms_total": 55931.417083740234,
+          "deadline_trigger_count": 74,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 3268.5829162597656,
+          "hidden_fraction_of_oracle": 0.9447874507388553,
+          "mean_fired_trigger_ms": 800.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 52662.83416748047,
+          "trigger_count": 74
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 59727.52614021301,
+          "absorbed_on_long_ms_total": 58138.01307678223,
+          "deadline_trigger_count": 22,
+          "early_trigger_count": 62,
+          "early_trigger_on_short_count": 10,
+          "exposed_ms_total": 7472.473859786987,
+          "hidden_fraction_of_oracle": 0.9820610317024024,
+          "mean_fired_trigger_ms": 576.8250743548075,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 50665.53921699524,
+          "trigger_count": 84
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 59557.83529281616,
+          "absorbed_on_long_ms_total": 58046.91643714905,
+          "deadline_trigger_count": 19,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 9,
+          "exposed_ms_total": 6842.164707183838,
+          "hidden_fraction_of_oracle": 0.9805222371140042,
+          "mean_fired_trigger_ms": 606.2399502260139,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 51204.75172996521,
+          "trigger_count": 83
+        }
+      },
+      "positive_count": 74,
+      "row_count": 355,
+      "threshold_ms": 800.0
+    },
+    {
+      "absorbed_if_oracle_ms": 65700.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 900.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 59866.33462905884,
+          "absorbed_on_long_ms_total": 59866.33462905884,
+          "deadline_trigger_count": 73,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 5833.665370941162,
+          "hidden_fraction_of_oracle": 0.9112075286005912,
+          "mean_fired_trigger_ms": 900.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 54032.669258117676,
+          "trigger_count": 73
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 66735.3090763092,
+          "absorbed_on_long_ms_total": 64832.81059265137,
+          "deadline_trigger_count": 22,
+          "early_trigger_count": 63,
+          "early_trigger_on_short_count": 12,
+          "exposed_ms_total": 9764.690923690796,
+          "hidden_fraction_of_oracle": 0.9868007700555763,
+          "mean_fired_trigger_ms": 575.9953964457792,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 55068.11966896057,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 66145.99814414978,
+          "absorbed_on_long_ms_total": 64454.89683151245,
+          "deadline_trigger_count": 18,
+          "early_trigger_count": 65,
+          "early_trigger_on_short_count": 10,
+          "exposed_ms_total": 8554.00185585022,
+          "hidden_fraction_of_oracle": 0.9810486580138882,
+          "mean_fired_trigger_ms": 628.7551650081772,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 55900.89497566223,
+          "trigger_count": 83
+        }
+      },
+      "positive_count": 73,
+      "row_count": 355,
+      "threshold_ms": 900.0
+    },
+    {
+      "absorbed_if_oracle_ms": 72000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1000.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 62518.03755760193,
+          "absorbed_on_long_ms_total": 62518.03755760193,
+          "deadline_trigger_count": 72,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 9481.962442398071,
+          "hidden_fraction_of_oracle": 0.8683060771889157,
+          "mean_fired_trigger_ms": 1000.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 53036.07511520386,
+          "trigger_count": 72
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 73522.80974388123,
+          "absorbed_on_long_ms_total": 71148.1740474701,
+          "deadline_trigger_count": 22,
+          "early_trigger_count": 63,
+          "early_trigger_on_short_count": 13,
+          "exposed_ms_total": 11477.190256118774,
+          "hidden_fraction_of_oracle": 0.9881690839926401,
+          "mean_fired_trigger_ms": 600.7012787987204,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 59670.98379135132,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 72630.17439842224,
+          "absorbed_on_long_ms_total": 70474.82252120972,
+          "deadline_trigger_count": 18,
+          "early_trigger_count": 65,
+          "early_trigger_on_short_count": 11,
+          "exposed_ms_total": 10369.825601577759,
+          "hidden_fraction_of_oracle": 0.978816979461246,
+          "mean_fired_trigger_ms": 649.2370927190207,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 60104.99691963196,
+          "trigger_count": 83
+        }
+      },
+      "positive_count": 72,
+      "row_count": 355,
+      "threshold_ms": 1000.0
+    },
+    {
+      "absorbed_if_oracle_ms": 79200.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1100.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 64247.302865982056,
+          "absorbed_on_long_ms_total": 64247.302865982056,
+          "deadline_trigger_count": 72,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 14952.697134017944,
+          "hidden_fraction_of_oracle": 0.8112033190149249,
+          "mean_fired_trigger_ms": 1100.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 49294.60573196411,
+          "trigger_count": 72
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 79944.66562271118,
+          "absorbed_on_long_ms_total": 77570.02992630005,
+          "deadline_trigger_count": 22,
+          "early_trigger_count": 63,
+          "early_trigger_on_short_count": 13,
+          "exposed_ms_total": 13555.334377288818,
+          "hidden_fraction_of_oracle": 0.9794195697765158,
+          "mean_fired_trigger_ms": 625.4071611516616,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 64014.69554901123,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 78560.42618751526,
+          "absorbed_on_long_ms_total": 76405.07431030273,
+          "deadline_trigger_count": 18,
+          "early_trigger_count": 65,
+          "early_trigger_on_short_count": 11,
+          "exposed_ms_total": 12739.573812484741,
+          "hidden_fraction_of_oracle": 0.9647105342209942,
+          "mean_fired_trigger_ms": 687.8197158675596,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 63665.50049781799,
+          "trigger_count": 83
+        }
+      },
+      "positive_count": 72,
+      "row_count": 355,
+      "threshold_ms": 1100.0
+    },
+    {
+      "absorbed_if_oracle_ms": 85200.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1200.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 65543.74761581421,
+          "absorbed_on_long_ms_total": 65543.74761581421,
+          "deadline_trigger_count": 71,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 19656.25238418579,
+          "hidden_fraction_of_oracle": 0.7692928123921855,
+          "mean_fired_trigger_ms": 1200.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 45887.49523162842,
+          "trigger_count": 71
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 85880.90343475342,
+          "absorbed_on_long_ms_total": 82829.53090667725,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 14,
+          "exposed_ms_total": 16119.096565246582,
+          "hidden_fraction_of_oracle": 0.9721775928013762,
+          "mean_fired_trigger_ms": 647.8302203907687,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 66710.43434143066,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 84059.85698699951,
+          "absorbed_on_long_ms_total": 81235.65492630005,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 66,
+          "early_trigger_on_short_count": 12,
+          "exposed_ms_total": 15540.143013000488,
+          "hidden_fraction_of_oracle": 0.9534701282429583,
+          "mean_fired_trigger_ms": 705.9641659977924,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 65695.51191329956,
+          "trigger_count": 83
+        }
+      },
+      "positive_count": 71,
+      "row_count": 355,
+      "threshold_ms": 1200.0
+    },
+    {
+      "absorbed_if_oracle_ms": 89700.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1300.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 66756.04667663574,
+          "absorbed_on_long_ms_total": 66756.04667663574,
+          "deadline_trigger_count": 69,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 22943.953323364258,
+          "hidden_fraction_of_oracle": 0.7442145671865746,
+          "mean_fired_trigger_ms": 1300.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 43812.093353271484,
+          "trigger_count": 69
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 91339.12105560303,
+          "absorbed_on_long_ms_total": 86688.06762695312,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 16,
+          "exposed_ms_total": 19160.878944396973,
+          "hidden_fraction_of_oracle": 0.9664221586059434,
+          "mean_fired_trigger_ms": 670.1831615672392,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 67527.18868255615,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 89308.48155021667,
+          "absorbed_on_long_ms_total": 84900.37188529968,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 66,
+          "early_trigger_on_short_count": 14,
+          "exposed_ms_total": 18591.518449783325,
+          "hidden_fraction_of_oracle": 0.9464924401928616,
+          "mean_fired_trigger_ms": 724.036455154419,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 66308.85343551636,
+          "trigger_count": 83
+        }
+      },
+      "positive_count": 69,
+      "row_count": 355,
+      "threshold_ms": 1300.0
+    },
+    {
+      "absorbed_if_oracle_ms": 96600.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1400.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 67870.88980674744,
+          "absorbed_on_long_ms_total": 67870.88980674744,
+          "deadline_trigger_count": 69,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 28729.110193252563,
+          "hidden_fraction_of_oracle": 0.7025972029684,
+          "mean_fired_trigger_ms": 1400.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 39141.77961349487,
+          "trigger_count": 69
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 96573.98009300232,
+          "absorbed_on_long_ms_total": 91922.92666435242,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 16,
+          "exposed_ms_total": 22426.01990699768,
+          "hidden_fraction_of_oracle": 0.9515830917634825,
+          "mean_fired_trigger_ms": 692.5361027437098,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 69496.90675735474,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 94415.32979011536,
+          "absorbed_on_long_ms_total": 90007.22012519836,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 66,
+          "early_trigger_on_short_count": 14,
+          "exposed_ms_total": 21784.670209884644,
+          "hidden_fraction_of_oracle": 0.9317517611304178,
+          "mean_fired_trigger_ms": 742.1087443110455,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 68222.54991531372,
+          "trigger_count": 83
+        }
+      },
+      "positive_count": 69,
+      "row_count": 355,
+      "threshold_ms": 1400.0
+    },
+    {
+      "absorbed_if_oracle_ms": 99000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1500.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 69134.67526435852,
+          "absorbed_on_long_ms_total": 69134.67526435852,
+          "deadline_trigger_count": 66,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 29865.32473564148,
+          "hidden_fraction_of_oracle": 0.6983300531753386,
+          "mean_fired_trigger_ms": 1500.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 39269.35052871704,
+          "trigger_count": 66
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 101527.55403518677,
+          "absorbed_on_long_ms_total": 93951.99966430664,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 19,
+          "exposed_ms_total": 25972.445964813232,
+          "hidden_fraction_of_oracle": 0.949010097619259,
+          "mean_fired_trigger_ms": 714.8890439201804,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 67979.55369949341,
+          "trigger_count": 85
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 87352.80537605286,
+          "absorbed_on_long_ms_total": 81100.40616989136,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 64,
+          "early_trigger_on_short_count": 15,
+          "exposed_ms_total": 34147.19462394714,
+          "hidden_fraction_of_oracle": 0.8191960219180945,
+          "mean_fired_trigger_ms": 981.6607133841809,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 46953.211545944214,
+          "trigger_count": 81
+        }
+      },
+      "positive_count": 66,
+      "row_count": 355,
+      "threshold_ms": 1500.0
+    },
+    {
+      "absorbed_if_oracle_ms": 100800.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1600.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 70506.24303817749,
+          "absorbed_on_long_ms_total": 70506.24303817749,
+          "deadline_trigger_count": 63,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 30293.75696182251,
+          "hidden_fraction_of_oracle": 0.6994666968073163,
+          "mean_fired_trigger_ms": 1600.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 40212.48607635498,
+          "trigger_count": 63
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 91886.98196411133,
+          "absorbed_on_long_ms_total": 84479.19344902039,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 59,
+          "early_trigger_on_short_count": 17,
+          "exposed_ms_total": 36113.01803588867,
+          "hidden_fraction_of_oracle": 0.8380872365974245,
+          "mean_fired_trigger_ms": 991.1084711551666,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 48366.175413131714,
+          "trigger_count": 80
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 72482.54289627075,
+          "absorbed_on_long_ms_total": 72467.2869682312,
+          "deadline_trigger_count": 18,
+          "early_trigger_count": 47,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 31517.457103729248,
+          "hidden_fraction_of_oracle": 0.7189214977007063,
+          "mean_fired_trigger_ms": 1515.192166841947,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 40949.82986450195,
+          "trigger_count": 65
+        }
+      },
+      "positive_count": 63,
+      "row_count": 355,
+      "threshold_ms": 1600.0
+    },
+    {
+      "absorbed_if_oracle_ms": 95200.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1700.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 72248.81982803345,
+          "absorbed_on_long_ms_total": 72248.81982803345,
+          "deadline_trigger_count": 56,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 22951.180171966553,
+          "hidden_fraction_of_oracle": 0.7589161746642169,
+          "mean_fired_trigger_ms": 1700.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 49297.639656066895,
+          "trigger_count": 56
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 77062.68362998962,
+          "absorbed_on_long_ms_total": 74792.24996566772,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 42,
+          "early_trigger_on_short_count": 7,
+          "exposed_ms_total": 30037.316370010376,
+          "hidden_fraction_of_oracle": 0.7856328777906274,
+          "mean_fired_trigger_ms": 1544.5823593745156,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 44754.93359565735,
+          "trigger_count": 63
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 75445.68090438843,
+          "absorbed_on_long_ms_total": 74792.24996566772,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 45,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 29954.319095611572,
+          "hidden_fraction_of_oracle": 0.7856328777906274,
+          "mean_fired_trigger_ms": 1580.373324886445,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 44837.93087005615,
+          "trigger_count": 62
+        }
+      },
+      "positive_count": 56,
+      "row_count": 355,
+      "threshold_ms": 1700.0
+    },
+    {
+      "absorbed_if_oracle_ms": 95400.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1800.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 74369.24557685852,
+          "absorbed_on_long_ms_total": 74369.24557685852,
+          "deadline_trigger_count": 53,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 21030.75442314148,
+          "hidden_fraction_of_oracle": 0.7795518404282864,
+          "mean_fired_trigger_ms": 1800.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 53338.49115371704,
+          "trigger_count": 53
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 78498.30093383789,
+          "absorbed_on_long_ms_total": 77087.04600334167,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 42,
+          "early_trigger_on_short_count": 10,
+          "exposed_ms_total": 34901.69906616211,
+          "hidden_fraction_of_oracle": 0.8080403145004369,
+          "mean_fired_trigger_ms": 1616.5279653337266,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 42185.346937179565,
+          "trigger_count": 63
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 75669.79274749756,
+          "absorbed_on_long_ms_total": 75669.79274749756,
+          "deadline_trigger_count": 28,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 19730.20725250244,
+          "hidden_fraction_of_oracle": 0.7931844103511274,
+          "mean_fired_trigger_ms": 1715.0937314303417,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 55939.58549499512,
+          "trigger_count": 53
+        }
+      },
+      "positive_count": 53,
+      "row_count": 355,
+      "threshold_ms": 1800.0
+    },
+    {
+      "absorbed_if_oracle_ms": 93100.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 1900.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 76689.47429656982,
+          "absorbed_on_long_ms_total": 76689.47429656982,
+          "deadline_trigger_count": 49,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 16410.525703430176,
+          "hidden_fraction_of_oracle": 0.8237322695657339,
+          "mean_fired_trigger_ms": 1900.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 60278.94859313965,
+          "trigger_count": 49
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 78664.88556861877,
+          "absorbed_on_long_ms_total": 78463.25268745422,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 30,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 18235.114431381226,
+          "hidden_fraction_of_oracle": 0.8427846690381764,
+          "mean_fired_trigger_ms": 1753.5785759196563,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 60228.138256073,
+          "trigger_count": 51
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 78468.7472820282,
+          "absorbed_on_long_ms_total": 78463.25268745422,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 33,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 16531.2527179718,
+          "hidden_fraction_of_oracle": 0.8427846690381764,
+          "mean_fired_trigger_ms": 1780.6079416275024,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 61931.99996948242,
+          "trigger_count": 50
+        }
+      },
+      "positive_count": 49,
+      "row_count": 355,
+      "threshold_ms": 1900.0
+    },
+    {
+      "absorbed_if_oracle_ms": 96000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2000.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 79087.19277381897,
+          "absorbed_on_long_ms_total": 79087.19277381897,
+          "deadline_trigger_count": 48,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 16912.80722618103,
+          "hidden_fraction_of_oracle": 0.823824924727281,
+          "mean_fired_trigger_ms": 2000.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 62174.38554763794,
+          "trigger_count": 48
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 81700.86002349854,
+          "absorbed_on_long_ms_total": 81321.6917514801,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 30,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 20299.139976501465,
+          "hidden_fraction_of_oracle": 0.8471009557445844,
+          "mean_fired_trigger_ms": 1820.5937264012355,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 61022.55177497864,
+          "trigger_count": 51
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 81404.72173690796,
+          "absorbed_on_long_ms_total": 81321.6917514801,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 33,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 18595.27826309204,
+          "hidden_fraction_of_oracle": 0.8471009557445844,
+          "mean_fired_trigger_ms": 1842.9633951187134,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 62726.41348838806,
+          "trigger_count": 50
+        }
+      },
+      "positive_count": 48,
+      "row_count": 355,
+      "threshold_ms": 2000.0
+    },
+    {
+      "absorbed_if_oracle_ms": 92400.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2100.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 81751.06654167175,
+          "absorbed_on_long_ms_total": 81751.06654167175,
+          "deadline_trigger_count": 44,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 10648.933458328247,
+          "hidden_fraction_of_oracle": 0.8847518023990449,
+          "mean_fired_trigger_ms": 2100.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 71102.1330833435,
+          "trigger_count": 44
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 85400.86002349854,
+          "absorbed_on_long_ms_total": 84600.6902217865,
+          "deadline_trigger_count": 21,
+          "early_trigger_count": 30,
+          "early_trigger_on_short_count": 7,
+          "exposed_ms_total": 21699.139976501465,
+          "hidden_fraction_of_oracle": 0.9155918855171699,
+          "mean_fired_trigger_ms": 1857.8486283620198,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 62901.550245285034,
+          "trigger_count": 51
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 85004.72173690796,
+          "absorbed_on_long_ms_total": 84600.6902217865,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 33,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 19995.27826309204,
+          "hidden_fraction_of_oracle": 0.9155918855171699,
+          "mean_fired_trigger_ms": 1862.1634883880615,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 64605.41195869446,
+          "trigger_count": 50
+        }
+      },
+      "positive_count": 44,
+      "row_count": 355,
+      "threshold_ms": 2100.0
+    },
+    {
+      "absorbed_if_oracle_ms": 96800.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2200.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 84351.06654167175,
+          "absorbed_on_long_ms_total": 84351.06654167175,
+          "deadline_trigger_count": 44,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 12448.933458328247,
+          "hidden_fraction_of_oracle": 0.871395315513138,
+          "mean_fired_trigger_ms": 2200.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 71902.1330833435,
+          "trigger_count": 44
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 87459.24773216248,
+          "absorbed_on_long_ms_total": 86963.1094455719,
+          "deadline_trigger_count": 14,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 11540.752267837524,
+          "hidden_fraction_of_oracle": 0.898379229809627,
+          "mean_fired_trigger_ms": 1982.910754945543,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 75422.35717773438,
+          "trigger_count": 45
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 86963.1094455719,
+          "absorbed_on_long_ms_total": 86963.1094455719,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 27,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 9836.8905544281,
+          "hidden_fraction_of_oracle": 0.898379229809627,
+          "mean_fired_trigger_ms": 1994.749274037101,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 77126.2188911438,
+          "trigger_count": 44
+        }
+      },
+      "positive_count": 44,
+      "row_count": 355,
+      "threshold_ms": 2200.0
+    },
+    {
+      "absorbed_if_oracle_ms": 96600.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2300.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 86990.31643867493,
+          "absorbed_on_long_ms_total": 86990.31643867493,
+          "deadline_trigger_count": 42,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 9609.683561325073,
+          "hidden_fraction_of_oracle": 0.9005208741063657,
+          "mean_fired_trigger_ms": 2300.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 77380.63287734985,
+          "trigger_count": 42
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 88507.47275352478,
+          "absorbed_on_long_ms_total": 87843.96500587463,
+          "deadline_trigger_count": 14,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 14992.52724647522,
+          "hidden_fraction_of_oracle": 0.9093578157958037,
+          "mean_fired_trigger_ms": 2073.320452372233,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 72851.43775939941,
+          "trigger_count": 45
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 87749.04623031616,
+          "absorbed_on_long_ms_total": 87720.31202316284,
+          "deadline_trigger_count": 18,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 11150.953769683838,
+          "hidden_fraction_of_oracle": 0.9080777642149362,
+          "mean_fired_trigger_ms": 2126.170810433321,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 76569.358253479,
+          "trigger_count": 43
+        }
+      },
+      "positive_count": 42,
+      "row_count": 355,
+      "threshold_ms": 2300.0
+    },
+    {
+      "absorbed_if_oracle_ms": 98400.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2400.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 89660.59498786926,
+          "absorbed_on_long_ms_total": 89660.59498786926,
+          "deadline_trigger_count": 41,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 8739.405012130737,
+          "hidden_fraction_of_oracle": 0.9111849084133055,
+          "mean_fired_trigger_ms": 2400.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 80921.18997573853,
+          "trigger_count": 41
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 91994.42100524902,
+          "absorbed_on_long_ms_total": 91230.91325759888,
+          "deadline_trigger_count": 12,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 13605.578994750977,
+          "hidden_fraction_of_oracle": 0.9271434274146227,
+          "mean_fired_trigger_ms": 2072.9143305258317,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 77625.3342628479,
+          "trigger_count": 44
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 91119.3247795105,
+          "absorbed_on_long_ms_total": 91090.59057235718,
+          "deadline_trigger_count": 17,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 9680.675220489502,
+          "hidden_fraction_of_oracle": 0.9257173838654185,
+          "mean_fired_trigger_ms": 2162.5082106817335,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 81409.91535186768,
+          "trigger_count": 42
+        }
+      },
+      "positive_count": 41,
+      "row_count": 355,
+      "threshold_ms": 2400.0
+    },
+    {
+      "absorbed_if_oracle_ms": 102500.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2500.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 92360.59498786926,
+          "absorbed_on_long_ms_total": 92360.59498786926,
+          "deadline_trigger_count": 41,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 10139.405012130737,
+          "hidden_fraction_of_oracle": 0.9010789754914075,
+          "mean_fired_trigger_ms": 2500.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 82221.18997573853,
+          "trigger_count": 41
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 94698.28271865845,
+          "absorbed_on_long_ms_total": 94630.91325759888,
+          "deadline_trigger_count": 12,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 12801.717281341553,
+          "hidden_fraction_of_oracle": 0.9232284220253549,
+          "mean_fired_trigger_ms": 2126.1271155157756,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 81829.19597625732,
+          "trigger_count": 43
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 93375.17738342285,
+          "absorbed_on_long_ms_total": 93375.17738342285,
+          "deadline_trigger_count": 16,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 9124.822616577148,
+          "hidden_fraction_of_oracle": 0.9109773403260766,
+          "mean_fired_trigger_ms": 2303.770757303005,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 84250.3547668457,
+          "trigger_count": 41
+        }
+      },
+      "positive_count": 41,
+      "row_count": 355,
+      "threshold_ms": 2500.0
+    },
+    {
+      "absorbed_if_oracle_ms": 106600.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2600.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 95060.59498786926,
+          "absorbed_on_long_ms_total": 95060.59498786926,
+          "deadline_trigger_count": 41,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 11539.405012130737,
+          "hidden_fraction_of_oracle": 0.89175042202504,
+          "mean_fired_trigger_ms": 2600.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 83521.18997573853,
+          "trigger_count": 41
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 97459.37051773071,
+          "absorbed_on_long_ms_total": 97392.00105667114,
+          "deadline_trigger_count": 12,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 14340.629482269287,
+          "hidden_fraction_of_oracle": 0.9136210230456955,
+          "mean_fired_trigger_ms": 2185.108341172684,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 83051.37157440186,
+          "trigger_count": 43
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 96453.23433876038,
+          "absorbed_on_long_ms_total": 96453.23433876038,
+          "deadline_trigger_count": 16,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 10146.765661239624,
+          "hidden_fraction_of_oracle": 0.9048145810390279,
+          "mean_fired_trigger_ms": 2371.7603648581157,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 86306.46867752075,
+          "trigger_count": 41
+        }
+      },
+      "positive_count": 41,
+      "row_count": 355,
+      "threshold_ms": 2600.0
+    },
+    {
+      "absorbed_if_oracle_ms": 108000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2700.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 97550.23651123047,
+          "absorbed_on_long_ms_total": 97550.23651123047,
+          "deadline_trigger_count": 40,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 10449.763488769531,
+          "hidden_fraction_of_oracle": 0.9032429306595414,
+          "mean_fired_trigger_ms": 2700.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 87100.47302246094,
+          "trigger_count": 40
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 100741.20326042175,
+          "absorbed_on_long_ms_total": 100269.04101371765,
+          "deadline_trigger_count": 12,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 15358.796739578247,
+          "hidden_fraction_of_oracle": 0.9284170464233116,
+          "mean_fired_trigger_ms": 2192.085085358731,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 84910.2442741394,
+          "trigger_count": 43
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 99735.06708145142,
+          "absorbed_on_long_ms_total": 99643.19653511047,
+          "deadline_trigger_count": 16,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 10964.932918548584,
+          "hidden_fraction_of_oracle": 0.9226221901399118,
+          "mean_fired_trigger_ms": 2407.6444230428556,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 88678.26361656189,
+          "trigger_count": 41
+        }
+      },
+      "positive_count": 40,
+      "row_count": 355,
+      "threshold_ms": 2700.0
+    },
+    {
+      "absorbed_if_oracle_ms": 112000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2800.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 99950.23651123047,
+          "absorbed_on_long_ms_total": 99950.23651123047,
+          "deadline_trigger_count": 40,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 12049.763488769531,
+          "hidden_fraction_of_oracle": 0.8924128259931292,
+          "mean_fired_trigger_ms": 2800.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 87900.47302246094,
+          "trigger_count": 40
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 103688.38315010071,
+          "absorbed_on_long_ms_total": 103292.91777610779,
+          "deadline_trigger_count": 12,
+          "early_trigger_count": 30,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 13911.616849899292,
+          "hidden_fraction_of_oracle": 0.9222581944295338,
+          "mean_fired_trigger_ms": 2209.6749464670816,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 89381.3009262085,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 102247.45516777039,
+          "absorbed_on_long_ms_total": 102247.45516777039,
+          "deadline_trigger_count": 16,
+          "early_trigger_count": 24,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 9752.544832229614,
+          "hidden_fraction_of_oracle": 0.9129237068550927,
+          "mean_fired_trigger_ms": 2505.338020324707,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 92494.91033554077,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 40,
+      "row_count": 355,
+      "threshold_ms": 2800.0
+    },
+    {
+      "absorbed_if_oracle_ms": 116000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 2900.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 102209.70993041992,
+          "absorbed_on_long_ms_total": 102209.70993041992,
+          "deadline_trigger_count": 40,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 13790.290069580078,
+          "hidden_fraction_of_oracle": 0.8811181890553441,
+          "mean_fired_trigger_ms": 2900.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 88419.41986083984,
+          "trigger_count": 40
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 106956.04200363159,
+          "absorbed_on_long_ms_total": 106560.57662963867,
+          "deadline_trigger_count": 11,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 14843.957996368408,
+          "hidden_fraction_of_oracle": 0.9186256606003333,
+          "mean_fired_trigger_ms": 2212.825926144918,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 91716.61863327026,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 104434.60488319397,
+          "absorbed_on_long_ms_total": 104434.60488319397,
+          "deadline_trigger_count": 16,
+          "early_trigger_count": 24,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 11565.39511680603,
+          "hidden_fraction_of_oracle": 0.9002983179585687,
+          "mean_fired_trigger_ms": 2688.13960313797,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 92869.20976638794,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 40,
+      "row_count": 355,
+      "threshold_ms": 2900.0
+    },
+    {
+      "absorbed_if_oracle_ms": 120000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3000.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 104227.12016105652,
+          "absorbed_on_long_ms_total": 104227.12016105652,
+          "deadline_trigger_count": 40,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 15772.879838943481,
+          "hidden_fraction_of_oracle": 0.868559334675471,
+          "mean_fired_trigger_ms": 3000.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 88454.24032211304,
+          "trigger_count": 40
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 111028.44214439392,
+          "absorbed_on_long_ms_total": 110632.976770401,
+          "deadline_trigger_count": 11,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 14971.55785560608,
+          "hidden_fraction_of_oracle": 0.921941473086675,
+          "mean_fired_trigger_ms": 2161.9641951152257,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 95661.41891479492,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 107628.8537979126,
+          "absorbed_on_long_ms_total": 107628.8537979126,
+          "deadline_trigger_count": 15,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 12371.146202087402,
+          "hidden_fraction_of_oracle": 0.896907114982605,
+          "mean_fired_trigger_ms": 2723.2833802700043,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 95257.7075958252,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 40,
+      "row_count": 355,
+      "threshold_ms": 3000.0
+    },
+    {
+      "absorbed_if_oracle_ms": 120900.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3100.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 106127.30212211609,
+          "absorbed_on_long_ms_total": 106127.30212211609,
+          "deadline_trigger_count": 39,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 14772.697877883911,
+          "hidden_fraction_of_oracle": 0.877810604814856,
+          "mean_fired_trigger_ms": 3100.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 91354.60424423218,
+          "trigger_count": 39
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 114278.67131233215,
+          "absorbed_on_long_ms_total": 113068.40782165527,
+          "deadline_trigger_count": 10,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 15921.328687667847,
+          "hidden_fraction_of_oracle": 0.9352225626274216,
+          "mean_fired_trigger_ms": 2160.8487004325502,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 97147.07913398743,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 110828.8537979126,
+          "absorbed_on_long_ms_total": 110333.5117816925,
+          "deadline_trigger_count": 15,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 13171.146202087402,
+          "hidden_fraction_of_oracle": 0.9126014208576717,
+          "mean_fired_trigger_ms": 2758.2833802700043,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 97162.3655796051,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 39,
+      "row_count": 355,
+      "threshold_ms": 3100.0
+    },
+    {
+      "absorbed_if_oracle_ms": 121600.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3200.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 107836.9601726532,
+          "absorbed_on_long_ms_total": 107836.9601726532,
+          "deadline_trigger_count": 38,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 13763.039827346802,
+          "hidden_fraction_of_oracle": 0.8868171066830033,
+          "mean_fired_trigger_ms": 3200.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 94073.9203453064,
+          "trigger_count": 38
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 117578.67131233215,
+          "absorbed_on_long_ms_total": 115381.26168251038,
+          "deadline_trigger_count": 10,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 4,
+          "exposed_ms_total": 16821.328687667847,
+          "hidden_fraction_of_oracle": 0.9488590598890656,
+          "mean_fired_trigger_ms": 2158.467748051598,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 98559.93299484253,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 113965.67530632019,
+          "absorbed_on_long_ms_total": 112802.64325141907,
+          "deadline_trigger_count": 15,
+          "early_trigger_count": 25,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 14034.32469367981,
+          "hidden_fraction_of_oracle": 0.9276533162123278,
+          "mean_fired_trigger_ms": 2793.2833802700043,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 98768.31855773926,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 38,
+      "row_count": 355,
+      "threshold_ms": 3200.0
+    },
+    {
+      "absorbed_if_oracle_ms": 125400.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3300.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 109633.17995071411,
+          "absorbed_on_long_ms_total": 109633.17995071411,
+          "deadline_trigger_count": 38,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 15766.820049285889,
+          "hidden_fraction_of_oracle": 0.8742677827010694,
+          "mean_fired_trigger_ms": 3300.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 93866.35990142822,
+          "trigger_count": 38
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 119565.82102775574,
+          "absorbed_on_long_ms_total": 117368.41139793396,
+          "deadline_trigger_count": 10,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 4,
+          "exposed_ms_total": 19034.178972244263,
+          "hidden_fraction_of_oracle": 0.9359522440026632,
+          "mean_fired_trigger_ms": 2261.133908090137,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 98334.2324256897,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 116876.04522705078,
+          "absorbed_on_long_ms_total": 115713.01317214966,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 15123.954772949219,
+          "hidden_fraction_of_oracle": 0.9227513012133146,
+          "mean_fired_trigger_ms": 2853.575381040573,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 100589.05839920044,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 38,
+      "row_count": 355,
+      "threshold_ms": 3300.0
+    },
+    {
+      "absorbed_if_oracle_ms": 129200.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3400.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 111233.17995071411,
+          "absorbed_on_long_ms_total": 111233.17995071411,
+          "deadline_trigger_count": 38,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 17966.82004928589,
+          "hidden_fraction_of_oracle": 0.8609379253151247,
+          "mean_fired_trigger_ms": 3400.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 93266.35990142822,
+          "trigger_count": 38
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 121999.36060905457,
+          "absorbed_on_long_ms_total": 120076.59392356873,
+          "deadline_trigger_count": 9,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 17400.639390945435,
+          "hidden_fraction_of_oracle": 0.9293854018852069,
+          "mean_fired_trigger_ms": 2322.49692707527,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 102675.95453262329,
+          "trigger_count": 41
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 118748.65207672119,
+          "absorbed_on_long_ms_total": 117585.62002182007,
+          "deadline_trigger_count": 9,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 17251.34792327881,
+          "hidden_fraction_of_oracle": 0.9101054181255424,
+          "mean_fired_trigger_ms": 3017.143135070801,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 100334.27209854126,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 38,
+      "row_count": 355,
+      "threshold_ms": 3400.0
+    },
+    {
+      "absorbed_if_oracle_ms": 133000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3500.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 112833.17995071411,
+          "absorbed_on_long_ms_total": 112833.17995071411,
+          "deadline_trigger_count": 38,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 20166.82004928589,
+          "hidden_fraction_of_oracle": 0.8483697740655196,
+          "mean_fired_trigger_ms": 3500.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 92666.35990142822,
+          "trigger_count": 38
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 125155.63821792603,
+          "absorbed_on_long_ms_total": 123232.87153244019,
+          "deadline_trigger_count": 9,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 18344.361782073975,
+          "hidden_fraction_of_oracle": 0.9265629438529337,
+          "mean_fired_trigger_ms": 2315.179853904538,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 104888.50975036621,
+          "trigger_count": 41
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 121648.65207672119,
+          "absorbed_on_long_ms_total": 120485.62002182007,
+          "deadline_trigger_count": 9,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 18351.34792327881,
+          "hidden_fraction_of_oracle": 0.9059069174572938,
+          "mean_fired_trigger_ms": 3037.143135070801,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 102134.27209854126,
+          "trigger_count": 40
+        }
+      },
+      "positive_count": 38,
+      "row_count": 355,
+      "threshold_ms": 3500.0
+    },
+    {
+      "absorbed_if_oracle_ms": 133200.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3600.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 114219.82460021973,
+          "absorbed_on_long_ms_total": 114219.82460021973,
+          "deadline_trigger_count": 37,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 18980.175399780273,
+          "hidden_fraction_of_oracle": 0.8575061906923402,
+          "mean_fired_trigger_ms": 3600.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 95239.64920043945,
+          "trigger_count": 37
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 128323.87871742249,
+          "absorbed_on_long_ms_total": 126401.11203193665,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 15676.121282577515,
+          "hidden_fraction_of_oracle": 0.9489572975370619,
+          "mean_fired_trigger_ms": 2275.5593502521515,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 110724.99074935913,
+          "trigger_count": 40
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 124195.41277885437,
+          "absorbed_on_long_ms_total": 123032.38072395325,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 16204.58722114563,
+          "hidden_fraction_of_oracle": 0.9236665219516009,
+          "mean_fired_trigger_ms": 3017.782540199084,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 106827.79350280762,
+          "trigger_count": 39
+        }
+      },
+      "positive_count": 37,
+      "row_count": 355,
+      "threshold_ms": 3600.0
+    },
+    {
+      "absorbed_if_oracle_ms": 136900.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3700.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 115519.82460021973,
+          "absorbed_on_long_ms_total": 115519.82460021973,
+          "deadline_trigger_count": 37,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 21380.175399780273,
+          "hidden_fraction_of_oracle": 0.8438263301696108,
+          "mean_fired_trigger_ms": 3700.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 94139.64920043945,
+          "trigger_count": 37
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 133187.78858184814,
+          "absorbed_on_long_ms_total": 130223.2841014862,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 35,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 25912.211418151855,
+          "hidden_fraction_of_oracle": 0.9512292483673207,
+          "mean_fired_trigger_ms": 2173.1968524844146,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 104311.07268333435,
+          "trigger_count": 43
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 127389.76464271545,
+          "absorbed_on_long_ms_total": 126226.73258781433,
+          "deadline_trigger_count": 7,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 16910.235357284546,
+          "hidden_fraction_of_oracle": 0.9220360305903165,
+          "mean_fired_trigger_ms": 2979.8579240456606,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 109316.49723052979,
+          "trigger_count": 39
+        }
+      },
+      "positive_count": 37,
+      "row_count": 355,
+      "threshold_ms": 3700.0
+    },
+    {
+      "absorbed_if_oracle_ms": 136800.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3800.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 116834.02724266052,
+          "absorbed_on_long_ms_total": 116834.02724266052,
+          "deadline_trigger_count": 36,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 19965.972757339478,
+          "hidden_fraction_of_oracle": 0.8540499067445945,
+          "mean_fired_trigger_ms": 3800.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 96868.05448532104,
+          "trigger_count": 36
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 136487.78858184814,
+          "absorbed_on_long_ms_total": 132231.5074443817,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 35,
+          "early_trigger_on_short_count": 7,
+          "exposed_ms_total": 26912.211418151855,
+          "hidden_fraction_of_oracle": 0.9666045865817376,
+          "mean_fired_trigger_ms": 2163.8945269030196,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 105319.29602622986,
+          "trigger_count": 43
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 130189.76464271545,
+          "absorbed_on_long_ms_total": 128011.77849769592,
+          "deadline_trigger_count": 7,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 18010.235357284546,
+          "hidden_fraction_of_oracle": 0.9357586147492392,
+          "mean_fired_trigger_ms": 2976.9585621662627,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 110001.54314041138,
+          "trigger_count": 39
+        }
+      },
+      "positive_count": 36,
+      "row_count": 355,
+      "threshold_ms": 3800.0
+    },
+    {
+      "absorbed_if_oracle_ms": 140400.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 3900.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 118100.20928382874,
+          "absorbed_on_long_ms_total": 118100.20928382874,
+          "deadline_trigger_count": 36,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 22299.790716171265,
+          "hidden_fraction_of_oracle": 0.841169581793652,
+          "mean_fired_trigger_ms": 3900.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 95800.41856765747,
+          "trigger_count": 36
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 139048.04830551147,
+          "absorbed_on_long_ms_total": 135189.4121646881,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 34,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 24751.951694488525,
+          "hidden_fraction_of_oracle": 0.9628875510305421,
+          "mean_fired_trigger_ms": 2212.4207053865707,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 110437.46047019958,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 132989.76464271545,
+          "absorbed_on_long_ms_total": 130811.77849769592,
+          "deadline_trigger_count": 7,
+          "early_trigger_count": 32,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 19110.235357284546,
+          "hidden_fraction_of_oracle": 0.9317078240576633,
+          "mean_fired_trigger_ms": 2989.779074986776,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 111701.54314041138,
+          "trigger_count": 39
+        }
+      },
+      "positive_count": 36,
+      "row_count": 355,
+      "threshold_ms": 3900.0
+    },
+    {
+      "absorbed_if_oracle_ms": 144000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4000.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 119300.20928382874,
+          "absorbed_on_long_ms_total": 119300.20928382874,
+          "deadline_trigger_count": 36,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 24699.790716171265,
+          "hidden_fraction_of_oracle": 0.828473675582144,
+          "mean_fired_trigger_ms": 4000.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 94600.41856765747,
+          "trigger_count": 36
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 142248.04830551147,
+          "absorbed_on_long_ms_total": 138389.4121646881,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 34,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 25751.951694488525,
+          "hidden_fraction_of_oracle": 0.9610375844770007,
+          "mean_fired_trigger_ms": 2209.6818912596927,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 112637.46047019958,
+          "trigger_count": 42
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 131862.79320716858,
+          "absorbed_on_long_ms_total": 130699.76115226746,
+          "deadline_trigger_count": 7,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 20137.20679283142,
+          "hidden_fraction_of_oracle": 0.9076372302240796,
+          "mean_fired_trigger_ms": 3498.7760844983554,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 110562.55435943604,
+          "trigger_count": 38
+        }
+      },
+      "positive_count": 36,
+      "row_count": 355,
+      "threshold_ms": 4000.0
+    },
+    {
+      "absorbed_if_oracle_ms": 147600.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4100.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 120438.09747695923,
+          "absorbed_on_long_ms_total": 120438.09747695923,
+          "deadline_trigger_count": 36,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 27161.90252304077,
+          "hidden_fraction_of_oracle": 0.8159762701691005,
+          "mean_fired_trigger_ms": 4100.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 93276.19495391846,
+          "trigger_count": 36
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 142353.2284259796,
+          "absorbed_on_long_ms_total": 139509.54637527466,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 33,
+          "early_trigger_on_short_count": 5,
+          "exposed_ms_total": 25746.771574020386,
+          "hidden_fraction_of_oracle": 0.9451866285587714,
+          "mean_fired_trigger_ms": 2458.585391393522,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 113762.77480125427,
+          "trigger_count": 41
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 134462.79320716858,
+          "absorbed_on_long_ms_total": 133299.76115226746,
+          "deadline_trigger_count": 7,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 21337.20679283142,
+          "hidden_fraction_of_oracle": 0.9031149129557415,
+          "mean_fired_trigger_ms": 3514.565558182566,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 111962.55435943604,
+          "trigger_count": 38
+        }
+      },
+      "positive_count": 36,
+      "row_count": 355,
+      "threshold_ms": 4100.0
+    },
+    {
+      "absorbed_if_oracle_ms": 147000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4200.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 121444.95840072632,
+          "absorbed_on_long_ms_total": 121444.95840072632,
+          "deadline_trigger_count": 35,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 25555.04159927368,
+          "hidden_fraction_of_oracle": 0.8261561795967777,
+          "mean_fired_trigger_ms": 4200.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 95889.91680145264,
+          "trigger_count": 35
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 144994.93832588196,
+          "absorbed_on_long_ms_total": 140164.10655975342,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 33,
+          "early_trigger_on_short_count": 6,
+          "exposed_ms_total": 27205.061674118042,
+          "hidden_fraction_of_oracle": 0.9534973235357376,
+          "mean_fired_trigger_ms": 2516.2025975018014,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 112959.04488563538,
+          "trigger_count": 41
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 136150.3462791443,
+          "absorbed_on_long_ms_total": 134151.17049217224,
+          "deadline_trigger_count": 7,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 23449.653720855713,
+          "hidden_fraction_of_oracle": 0.9125929965453894,
+          "mean_fired_trigger_ms": 3626.837158203125,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 110701.51677131653,
+          "trigger_count": 38
+        }
+      },
+      "positive_count": 35,
+      "row_count": 355,
+      "threshold_ms": 4200.0
+    },
+    {
+      "absorbed_if_oracle_ms": 150500.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4300.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 122544.95840072632,
+          "absorbed_on_long_ms_total": 122544.95840072632,
+          "deadline_trigger_count": 35,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 27955.04159927368,
+          "hidden_fraction_of_oracle": 0.814252215287218,
+          "mean_fired_trigger_ms": 4300.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 94589.91680145264,
+          "trigger_count": 35
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 145387.69359588623,
+          "absorbed_on_long_ms_total": 141598.5996246338,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 30,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 18012.30640411377,
+          "hidden_fraction_of_oracle": 0.9408544825557063,
+          "mean_fired_trigger_ms": 2662.65734622353,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 123586.29322052002,
+          "trigger_count": 38
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 138409.56258773804,
+          "absorbed_on_long_ms_total": 136410.386800766,
+          "deadline_trigger_count": 7,
+          "early_trigger_count": 31,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 24990.437412261963,
+          "hidden_fraction_of_oracle": 0.9063813076462857,
+          "mean_fired_trigger_ms": 3667.972283614309,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 111419.94938850403,
+          "trigger_count": 38
+        }
+      },
+      "positive_count": 35,
+      "row_count": 355,
+      "threshold_ms": 4300.0
+    },
+    {
+      "absorbed_if_oracle_ms": 154000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4400.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 123495.92909812927,
+          "absorbed_on_long_ms_total": 123495.92909812927,
+          "deadline_trigger_count": 35,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 30504.070901870728,
+          "hidden_fraction_of_oracle": 0.80192161752032,
+          "mean_fired_trigger_ms": 4400.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 92991.85819625854,
+          "trigger_count": 35
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 148287.69359588623,
+          "absorbed_on_long_ms_total": 144498.5996246338,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 30,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 18912.30640411377,
+          "hidden_fraction_of_oracle": 0.9383025949651544,
+          "mean_fired_trigger_ms": 2670.552083065635,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 125586.29322052002,
+          "trigger_count": 38
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 140406.72507286072,
+          "absorbed_on_long_ms_total": 138407.54928588867,
+          "deadline_trigger_count": 14,
+          "early_trigger_count": 24,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 26793.274927139282,
+          "hidden_fraction_of_oracle": 0.8987503200382382,
+          "mean_fired_trigger_ms": 3716.3493557980187,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 111614.27435874939,
+          "trigger_count": 38
+        }
+      },
+      "positive_count": 35,
+      "row_count": 355,
+      "threshold_ms": 4400.0
+    },
+    {
+      "absorbed_if_oracle_ms": 157500.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4500.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 124395.92909812927,
+          "absorbed_on_long_ms_total": 124395.92909812927,
+          "deadline_trigger_count": 35,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 33104.07090187073,
+          "hidden_fraction_of_oracle": 0.7898154228452652,
+          "mean_fired_trigger_ms": 4500.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 91291.85819625854,
+          "trigger_count": 35
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 150651.36003494263,
+          "absorbed_on_long_ms_total": 146862.2660636902,
+          "deadline_trigger_count": 8,
+          "early_trigger_count": 30,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 20348.639965057373,
+          "hidden_fraction_of_oracle": 0.9324588321504139,
+          "mean_fired_trigger_ms": 2741.9600047563254,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 126513.62609863281,
+          "trigger_count": 38
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 141895.10416984558,
+          "absorbed_on_long_ms_total": 139895.92838287354,
+          "deadline_trigger_count": 14,
+          "early_trigger_count": 24,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 29104.89583015442,
+          "hidden_fraction_of_oracle": 0.8882281167166574,
+          "mean_fired_trigger_ms": 3814.0730669623927,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 110791.03255271912,
+          "trigger_count": 38
+        }
+      },
+      "positive_count": 35,
+      "row_count": 355,
+      "threshold_ms": 4500.0
+    },
+    {
+      "absorbed_if_oracle_ms": 156400.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4600.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 125369.2090511322,
+          "absorbed_on_long_ms_total": 125369.2090511322,
+          "deadline_trigger_count": 34,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 31030.790948867798,
+          "hidden_fraction_of_oracle": 0.801593408255321,
+          "mean_fired_trigger_ms": 4600.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 94338.4181022644,
+          "trigger_count": 34
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 150878.82227897644,
+          "absorbed_on_long_ms_total": 147088.64970207214,
+          "deadline_trigger_count": 9,
+          "early_trigger_count": 29,
+          "early_trigger_on_short_count": 4,
+          "exposed_ms_total": 23921.17772102356,
+          "hidden_fraction_of_oracle": 0.9404645121615866,
+          "mean_fired_trigger_ms": 2881.3976363131874,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 123167.47198104858,
+          "trigger_count": 38
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 131945.23239135742,
+          "absorbed_on_long_ms_total": 131273.68092536926,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 16,
+          "early_trigger_on_short_count": 2,
+          "exposed_ms_total": 33654.76760864258,
+          "hidden_fraction_of_oracle": 0.8393457859678342,
+          "mean_fired_trigger_ms": 4299.75901444753,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 97618.91331672668,
+          "trigger_count": 36
+        }
+      },
+      "positive_count": 34,
+      "row_count": 355,
+      "threshold_ms": 4600.0
+    },
+    {
+      "absorbed_if_oracle_ms": 159800.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4700.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 126369.2090511322,
+          "absorbed_on_long_ms_total": 126369.2090511322,
+          "deadline_trigger_count": 34,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 33430.7909488678,
+          "hidden_fraction_of_oracle": 0.7907960516341189,
+          "mean_fired_trigger_ms": 4700.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 92938.4181022644,
+          "trigger_count": 34
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 152672.434091568,
+          "absorbed_on_long_ms_total": 148883.34012031555,
+          "deadline_trigger_count": 10,
+          "early_trigger_count": 27,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 21227.565908432007,
+          "hidden_fraction_of_oracle": 0.9316854826052288,
+          "mean_fired_trigger_ms": 3013.754075282329,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 127655.77421188354,
+          "trigger_count": 37
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 133563.16084861755,
+          "absorbed_on_long_ms_total": 132892.68798828125,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 15,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 30936.839151382446,
+          "hidden_fraction_of_oracle": 0.831618823456078,
+          "mean_fired_trigger_ms": 4362.844606127058,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 101955.8488368988,
+          "trigger_count": 35
+        }
+      },
+      "positive_count": 34,
+      "row_count": 355,
+      "threshold_ms": 4700.0
+    },
+    {
+      "absorbed_if_oracle_ms": 163200.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4800.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 127369.2090511322,
+          "absorbed_on_long_ms_total": 127369.2090511322,
+          "deadline_trigger_count": 34,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 35830.7909488678,
+          "hidden_fraction_of_oracle": 0.7804485848721336,
+          "mean_fired_trigger_ms": 4800.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 91538.4181022644,
+          "trigger_count": 34
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 155102.12469100952,
+          "absorbed_on_long_ms_total": 151313.03071975708,
+          "deadline_trigger_count": 10,
+          "early_trigger_count": 27,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 22497.87530899048,
+          "hidden_fraction_of_oracle": 0.927163178429884,
+          "mean_fired_trigger_ms": 3047.875026754431,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 128815.1554107666,
+          "trigger_count": 37
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 135092.85144805908,
+          "absorbed_on_long_ms_total": 134422.37858772278,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 15,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 32907.14855194092,
+          "hidden_fraction_of_oracle": 0.8236665354639876,
+          "mean_fired_trigger_ms": 4430.3438976832795,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 101515.23003578186,
+          "trigger_count": 35
+        }
+      },
+      "positive_count": 34,
+      "row_count": 355,
+      "threshold_ms": 4800.0
+    },
+    {
+      "absorbed_if_oracle_ms": 166600.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 4900.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 128369.2090511322,
+          "absorbed_on_long_ms_total": 128369.2090511322,
+          "deadline_trigger_count": 34,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 38230.7909488678,
+          "hidden_fraction_of_oracle": 0.7705234636922701,
+          "mean_fired_trigger_ms": 4900.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 90138.4181022644,
+          "trigger_count": 34
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 157602.12469100952,
+          "absorbed_on_long_ms_total": 153813.03071975708,
+          "deadline_trigger_count": 10,
+          "early_trigger_count": 27,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 23697.87530899048,
+          "hidden_fraction_of_oracle": 0.9232474833118672,
+          "mean_fired_trigger_ms": 3066.7939456733498,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 130115.1554107666,
+          "trigger_count": 37
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 136692.85144805908,
+          "absorbed_on_long_ms_total": 136022.37858772278,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 15,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 34807.14855194092,
+          "hidden_fraction_of_oracle": 0.8164608558686841,
+          "mean_fired_trigger_ms": 4481.772469111851,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 101215.23003578186,
+          "trigger_count": 35
+        }
+      },
+      "positive_count": 34,
+      "row_count": 355,
+      "threshold_ms": 4900.0
+    },
+    {
+      "absorbed_if_oracle_ms": 170000.0,
+      "guard_ms": 0.0,
+      "kv_cost_ms": 5000.0,
+      "policies": {
+        "deadline_only": {
+          "absorbed_ms_total": 129369.2090511322,
+          "absorbed_on_long_ms_total": 129369.2090511322,
+          "deadline_trigger_count": 34,
+          "early_trigger_count": 0,
+          "early_trigger_on_short_count": 0,
+          "exposed_ms_total": 40630.7909488678,
+          "hidden_fraction_of_oracle": 0.7609953473596012,
+          "mean_fired_trigger_ms": 5000.0,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 88738.4181022644,
+          "trigger_count": 34
+        },
+        "mean_hazard": {
+          "absorbed_ms_total": 158951.11870765686,
+          "absorbed_on_long_ms_total": 156313.03071975708,
+          "deadline_trigger_count": 10,
+          "early_trigger_count": 27,
+          "early_trigger_on_short_count": 3,
+          "exposed_ms_total": 26048.88129234314,
+          "hidden_fraction_of_oracle": 0.919488415998571,
+          "mean_fired_trigger_ms": 3147.929404232953,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 130264.14942741394,
+          "trigger_count": 37
+        },
+        "robust_clock": {
+          "absorbed_ms_total": 138292.85144805908,
+          "absorbed_on_long_ms_total": 137622.37858772278,
+          "deadline_trigger_count": 20,
+          "early_trigger_count": 15,
+          "early_trigger_on_short_count": 1,
+          "exposed_ms_total": 36707.14855194092,
+          "hidden_fraction_of_oracle": 0.8095434034571928,
+          "mean_fired_trigger_ms": 4533.201040540423,
+          "missed_ms_total": 0.0,
+          "net_saved_ms": 100915.23003578186,
+          "trigger_count": 35
+        }
+      },
+      "positive_count": 34,
+      "row_count": 355,
+      "threshold_ms": 5000.0
+    }
+  ],
+  "policies": [
+    "deadline_only",
+    "mean_hazard",
+    "robust_clock"
+  ],
+  "profile_row_count": 1375,
+  "profile_task_count": 82,
+  "profile_trace_count": 82,
+  "row_count": 355,
+  "skip_leading_cd": false
+}

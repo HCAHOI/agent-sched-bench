@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "collection_id": "swe-rebench-qwen3.7-max-seed42-offset50-100-complete-v2",
+  "trace_root": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2",
+  "task_ids_file": "/home/chiyu/workspace/agent-sched-bench/analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/task_ids.txt",
+  "expected_task_count": 100,
+  "freshness_attestation": {
+    "not_used_for_method_development": true,
+    "not_smoke_or_synthetic": true,
+    "complete_fixed_task_set": true
+  },
+  "excluded_trace_roots": [
+    "traces/swe-rebench/qwen3.7-max/20260624T162037",
+    "traces/terminal-bench/zai-org-GLM-5.2/20260709T171830",
+    "traces/science-agent-bench-verified/qwen3.7-max/20260710T165110"
+  ],
+  "fold_count": 5,
+  "inner_folds": 4,
+  "costs_ms": [
+    500,
+    1000,
+    1500,
+    2000,
+    2500,
+    3000,
+    3500,
+    4000,
+    4500,
+    5000
+  ],
+  "guard_ms": 0,
+  "min_tool_history": 1,
+  "min_profile_tasks": 1,
+  "command_field": "command",
+  "max_prefix_depth": 4,
+  "skip_leading_cd": false,
+  "bootstrap": {
+    "replicates": 50000,
+    "confidence_level": 0.95,
+    "seed": 0,
+    "family_method": "bonferroni_percentile"
+  },
+  "collection_lineage": {
+    "composition_file": "/home/chiyu/workspace/agent-sched-bench/traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2/composition.json",
+    "composition_sha256": "01d8138fa749334966f3fe11300f6503fc0ebabe177a6e2398d4ff1b9b524cf5",
+    "original_trace_count": 94,
+    "replacement_trace_count": 6
+  },
+  "frozen_trace_inventory": {
+    "file": "/home/chiyu/workspace/agent-sched-bench/analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/pre_run_trace_inventory.sha256",
+    "sha256": "33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e",
+    "trace_count": 100,
+    "required_post_run_byte_comparison": true
+  },
+  "review_gate": {
+    "reviewer": "/root/swe100_confirmation_review",
+    "verdict": "APPROVE",
+    "critical_findings": 0,
+    "major_findings": 0,
+    "minor_findings": 2,
+    "focused_tests": "49 passed"
+  }
+}

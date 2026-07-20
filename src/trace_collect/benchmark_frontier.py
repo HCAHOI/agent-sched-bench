@@ -28,6 +28,7 @@ Output payloads keep ``schema_version`` 1 with additive keys only.
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -153,6 +154,8 @@ def run_benchmark_frontier(
     feature_set: str = "full",
     ensemble_members: int = 0,
     tool_name_trie: bool = False,
+    only_fold: int | None = None,
+    aggregate_only: bool = False,
 ) -> dict[str, Any]:
     """Fold a target corpus and bootstrap the gated trie vs gated hazard frontier.
 
@@ -164,6 +167,20 @@ def run_benchmark_frontier(
     restore fraction, the per-fold decisions are joined, and the contrasts in
     :data:`FRONTIER_COMPARISONS` (plus :data:`FRONTIER_ENSEMBLE_COMPARISONS`
     when ``ensemble_members >= 2``) are bootstrapped per fraction.
+
+    Orchestration modes leave the numerics untouched. The bare call fits every
+    fold then aggregates. ``only_fold=N`` runs just fold N's fit/eval (the heavy
+    per-fold hazard fit plus the per-fraction trie refits), writes its
+    ``folds/f{N}_*`` splits and ``rho_*/f{N}_*`` summaries/decisions, and returns
+    before any cross-fold aggregation, so K folds can run as K concurrent
+    processes into one output root. ``aggregate_only`` skips the fit phase,
+    reconstructs the per-fold accumulators by reading the ``folds/f*_*`` and
+    ``rho_*/f*_*`` files those processes wrote (in fold order, re-stamping
+    exactly as the loop did), then runs the cross-fold aggregation + bootstrap +
+    provenance/summary writes. The hazard fit is seeded per fold with the same
+    ``seed`` and never advances a shared RNG, so a fold's outputs are identical
+    whether fit alone or in the loop, and the per-fraction bootstrap clusters by
+    task over the fold-ordered pooled decisions (order-preserved on read-back).
     """
 
     _validate_fractions(restore_cost_fractions)
@@ -181,9 +198,14 @@ def run_benchmark_frontier(
         raise ValueError(
             f"ensemble_members must be 0 or >= 2, got {ensemble_members}"
         )
+    if only_fold is not None and aggregate_only:
+        raise ValueError("only_fold and aggregate_only are mutually exclusive")
+    if only_fold is not None and not 1 <= only_fold <= fold_count:
+        raise ValueError(f"only_fold must be in [1, {fold_count}], got {only_fold}")
+    sharded = only_fold is not None or aggregate_only
     ensemble_on = ensemble_members >= 2
     output_root = output_root.resolve()
-    if output_root.exists():
+    if output_root.exists() and not sharded:
         raise FileExistsError(f"refusing to mix stale output: {output_root}")
 
     costs = [float(cost) for cost in kv_costs_ms]
@@ -212,9 +234,9 @@ def run_benchmark_frontier(
         + (FRONTIER_ENSEMBLE_COMPARISONS if ensemble_on else ())
     )
 
-    output_root.mkdir(parents=True)
+    output_root.mkdir(parents=True, exist_ok=sharded)
     folds_root = output_root / "folds"
-    folds_root.mkdir()
+    folds_root.mkdir(exist_ok=sharded)
     comparisons: dict[str, dict[str, Any]] = {
         name: {
             "treatment_trigger_field": treatment_field,
@@ -230,147 +252,118 @@ def run_benchmark_frontier(
     decisions_by_fraction: dict[str, list[dict[str, Any]]] = {}
     for fraction in restore_cost_fractions:
         key = fraction_key(fraction)
-        (output_root / f"rho_{key}").mkdir()
+        (output_root / f"rho_{key}").mkdir(exist_ok=sharded)
         trie_calibrations_by_fraction[key] = []
         hazard_guards[key] = []
         ensemble_guards[key] = []
         decisions_by_fraction[key] = []
 
-    fold_task_sets: list[dict[str, Any]] = []
-    for fold in range(1, fold_count + 1):
-        fold_name = f"f{fold}"
-        eval_tasks = {
-            task_id
-            for index, task_id in enumerate(task_ids)
-            if index % fold_count == fold - 1
-        }
-        profile_tasks = set(task_ids) - eval_tasks
-        # Modulo folds guarantee disjointness, but the guard is only causally
-        # clean if profile (fit) and eval (apply) tasks are disjoint, so verify.
-        overlap = eval_tasks & profile_tasks
-        if overlap:
-            raise AssertionError(
-                f"fold {fold_name} profile and eval tasks overlap: {sorted(overlap)}"
-            )
-        if not eval_tasks or not profile_tasks:
-            raise AssertionError(
-                f"fold {fold_name} has an empty eval or profile split"
-            )
-        _write_task_set(folds_root / f"{fold_name}_eval.txt", eval_tasks)
-        _write_task_set(folds_root / f"{fold_name}_profile.txt", profile_tasks)
-        fold_task_sets.append(
-            {
-                "fold": fold_name,
-                "eval_tasks": sorted(eval_tasks),
-                "profile_tasks": sorted(profile_tasks),
-            }
+    # --- Fit phase: run each requested fold's fit/eval once and write its
+    # folds/f{N}_* splits + rho_*/f{N}_* summaries and decisions. The full run
+    # and each --only-fold process run this; the aggregate pass skips it and
+    # reads the files back. A fold's hazard fit is seeded with the same ``seed``
+    # and shares no RNG across folds, and the trie refits are deterministic, so
+    # a fold's written files are byte-identical whether it runs alone or in the
+    # sequential loop.
+    if not aggregate_only:
+        fit_folds = (
+            [only_fold] if only_fold is not None else list(range(1, fold_count + 1))
         )
-        eval_rows = _rows_for_tasks(rows_by_task, eval_tasks)
-        profile_rows = _rows_for_tasks(rows_by_task, profile_tasks)
-
-        # Hazard model: one rho-amortized fit per fold covers every fraction.
-        fold_hazard = evaluate_hazard_model_clock(
-            eval_rows,
-            profile_rows=profile_rows,
-            kv_costs_ms=costs,
-            guard_ms=guard_ms,
-            inner_folds=inner_folds,
-            spec=spec,
-            num_intervals=num_intervals,
-            restore_cost_fractions=restore_cost_fractions,
-            model_family=model_family,
-            seed=seed,
-            ensemble_members=ensemble_members,
-        )
-        hazard_shared = {
-            field: value
-            for field, value in fold_hazard.items()
-            if field != "by_restore_cost_fraction"
-        }
-        for fraction in restore_cost_fractions:
-            key = fraction_key(fraction)
-            fraction_root = output_root / f"rho_{key}"
-            # Empirical trie: refit per fraction (its fits carry rho).
-            trie_result = evaluate_offline_probe_clock(
-                eval_rows,
-                profile_rows=profile_rows,
-                kv_costs_ms=costs,
+        for fold in fit_folds:
+            _fit_single_fold(
+                fold,
+                fold_count=fold_count,
+                task_ids=task_ids,
+                rows_by_task=rows_by_task,
+                costs=costs,
                 guard_ms=guard_ms,
                 inner_folds=inner_folds,
+                spec=spec,
+                num_intervals=num_intervals,
+                restore_cost_fractions=restore_cost_fractions,
+                model_family=model_family,
+                seed=seed,
+                ensemble_members=ensemble_members,
+                ensemble_on=ensemble_on,
                 min_tool_history=min_tool_history,
                 min_profile_tasks=min_profile_tasks,
                 command_field=command_field,
                 max_prefix_depth=max_prefix_depth,
                 skip_leading_cd=skip_leading_cd,
-                restore_cost_fraction=fraction,
+                tool_name_trie=tool_name_trie,
+                folds_root=folds_root,
+                output_root=output_root,
             )
-            trie_decisions = trie_result.pop("decisions")
-            per_fraction = fold_hazard["by_restore_cost_fraction"][key]
-            hazard_rows = per_fraction["decisions"]
-            merged = _merge_trie_hazard_rows(
-                trie_decisions,
-                hazard_rows,
-                fold_name=fold_name,
-                ensemble_on=ensemble_on,
-            )
-            tool_name_result: dict[str, Any] | None = None
-            if tool_name_trie:
-                # Second empirical trie on the SAME fold split, conditioned on
-                # tool identity only (command_field=None disables prefix
-                # grouping, leaving tool + global back-off nodes) — Continuum's
-                # P(tau, f). Refit per fraction like the full trie.
-                tool_name_result = evaluate_offline_probe_clock(
-                    eval_rows,
-                    profile_rows=profile_rows,
-                    kv_costs_ms=costs,
-                    guard_ms=guard_ms,
-                    inner_folds=inner_folds,
-                    min_tool_history=min_tool_history,
-                    min_profile_tasks=min_profile_tasks,
-                    command_field=None,
-                    max_prefix_depth=max_prefix_depth,
-                    skip_leading_cd=skip_leading_cd,
-                    restore_cost_fraction=fraction,
-                )
-                merged = _merge_tool_name_rows(
-                    merged,
-                    tool_name_result.pop("decisions"),
-                    fold_name=fold_name,
-                )
-            decisions_by_fraction[key].extend(merged)
-
-            _write_json(fraction_root / f"{fold_name}_trie_summary.json", trie_result)
-            if tool_name_result is not None:
-                _write_json(
-                    fraction_root / f"{fold_name}_tool_name_trie_summary.json",
-                    tool_name_result,
-                )
-            hazard_summary = {
-                **hazard_shared,
-                "restore_cost_fraction": fraction,
-                "calibration_guard": per_fraction["calibration_guard"],
+        if only_fold is not None:
+            print(f"Fit frontier fold {only_fold} of {fold_count} -> {output_root}")
+            return {
+                "schema_version": 1,
+                "mode": "benchmark_frontier",
+                "only_fold": only_fold,
+                "fold_count": fold_count,
+                "restore_cost_fractions": restore_cost_fractions,
             }
-            if "ensemble_calibration_guard" in per_fraction:
-                hazard_summary["ensemble_calibration_guard"] = per_fraction[
-                    "ensemble_calibration_guard"
-                ]
-            _write_json(
-                fraction_root / f"{fold_name}_hazard_summary.json", hazard_summary
+
+    # --- Aggregate phase: read every fold's written splits, summaries, and
+    # merged decisions in fold order, rebuild the per-fold accumulators exactly
+    # as the sequential loop did, then bootstrap the paired contrasts. Reads
+    # back what the fit phase wrote so the sharded and full paths share one
+    # aggregation path (JSON round-trips floats exactly, so the reload is
+    # byte-preserving).
+    fold_task_sets: list[dict[str, Any]] = []
+    for fold in range(1, fold_count + 1):
+        fold_name = f"f{fold}"
+        eval_tasks = (
+            (folds_root / f"{fold_name}_eval.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        profile_tasks = (
+            (folds_root / f"{fold_name}_profile.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        fold_task_sets.append(
+            {
+                "fold": fold_name,
+                "eval_tasks": eval_tasks,
+                "profile_tasks": profile_tasks,
+            }
+        )
+        for fraction in restore_cost_fractions:
+            key = fraction_key(fraction)
+            fraction_root = output_root / f"rho_{key}"
+            trie_summary = json.loads(
+                (fraction_root / f"{fold_name}_trie_summary.json").read_text(
+                    encoding="utf-8"
+                )
             )
-            _write_jsonl(fraction_root / f"{fold_name}_decisions.jsonl", merged)
+            hazard_summary = json.loads(
+                (fraction_root / f"{fold_name}_hazard_summary.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            merged = [
+                json.loads(line)
+                for line in (fraction_root / f"{fold_name}_decisions.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            decisions_by_fraction[key].extend(merged)
             trie_calibrations_by_fraction[key].append(
                 {
                     "fold": fold_name,
-                    "calibration": trie_result["calibration"],
-                    "robust_calibration": trie_result["robust_calibration"],
+                    "calibration": trie_summary["calibration"],
+                    "robust_calibration": trie_summary["robust_calibration"],
                 }
             )
             hazard_guards[key].append(
-                {"fold": fold_name, **per_fraction["calibration_guard"]}
+                {"fold": fold_name, **hazard_summary["calibration_guard"]}
             )
             if ensemble_on:
                 ensemble_guards[key].append(
-                    {"fold": fold_name, **per_fraction["ensemble_calibration_guard"]}
+                    {"fold": fold_name, **hazard_summary["ensemble_calibration_guard"]}
                 )
 
     expected_row_count = len(rows) * len(costs)
@@ -444,6 +437,152 @@ def run_benchmark_frontier(
         encoding="utf-8",
     )
     return result
+
+
+def _fit_single_fold(
+    fold: int,
+    *,
+    fold_count: int,
+    task_ids: list[str],
+    rows_by_task: dict[str, list[dict[str, Any]]],
+    costs: list[float],
+    guard_ms: float,
+    inner_folds: int,
+    spec: Any,
+    num_intervals: int,
+    restore_cost_fractions: list[float],
+    model_family: str,
+    seed: int,
+    ensemble_members: int,
+    ensemble_on: bool,
+    min_tool_history: int,
+    min_profile_tasks: int,
+    command_field: str | None,
+    max_prefix_depth: int,
+    skip_leading_cd: bool,
+    tool_name_trie: bool,
+    folds_root: Path,
+    output_root: Path,
+) -> None:
+    """Run one outer fold's fit/eval and write its ``f{fold}_*`` files.
+
+    Identical to the sequential loop body, minus the in-memory accumulation the
+    aggregate phase rebuilds from disk; factored out so both the full run and a
+    single ``--only-fold`` process execute the exact same fold logic.
+    """
+
+    fold_name = f"f{fold}"
+    eval_tasks = {
+        task_id
+        for index, task_id in enumerate(task_ids)
+        if index % fold_count == fold - 1
+    }
+    profile_tasks = set(task_ids) - eval_tasks
+    # Modulo folds guarantee disjointness, but the guard is only causally
+    # clean if profile (fit) and eval (apply) tasks are disjoint, so verify.
+    overlap = eval_tasks & profile_tasks
+    if overlap:
+        raise AssertionError(
+            f"fold {fold_name} profile and eval tasks overlap: {sorted(overlap)}"
+        )
+    if not eval_tasks or not profile_tasks:
+        raise AssertionError(
+            f"fold {fold_name} has an empty eval or profile split"
+        )
+    _write_task_set(folds_root / f"{fold_name}_eval.txt", eval_tasks)
+    _write_task_set(folds_root / f"{fold_name}_profile.txt", profile_tasks)
+    eval_rows = _rows_for_tasks(rows_by_task, eval_tasks)
+    profile_rows = _rows_for_tasks(rows_by_task, profile_tasks)
+
+    # Hazard model: one rho-amortized fit per fold covers every fraction.
+    fold_hazard = evaluate_hazard_model_clock(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=costs,
+        guard_ms=guard_ms,
+        inner_folds=inner_folds,
+        spec=spec,
+        num_intervals=num_intervals,
+        restore_cost_fractions=restore_cost_fractions,
+        model_family=model_family,
+        seed=seed,
+        ensemble_members=ensemble_members,
+    )
+    hazard_shared = {
+        field: value
+        for field, value in fold_hazard.items()
+        if field != "by_restore_cost_fraction"
+    }
+    for fraction in restore_cost_fractions:
+        key = fraction_key(fraction)
+        fraction_root = output_root / f"rho_{key}"
+        # Empirical trie: refit per fraction (its fits carry rho).
+        trie_result = evaluate_offline_probe_clock(
+            eval_rows,
+            profile_rows=profile_rows,
+            kv_costs_ms=costs,
+            guard_ms=guard_ms,
+            inner_folds=inner_folds,
+            min_tool_history=min_tool_history,
+            min_profile_tasks=min_profile_tasks,
+            command_field=command_field,
+            max_prefix_depth=max_prefix_depth,
+            skip_leading_cd=skip_leading_cd,
+            restore_cost_fraction=fraction,
+        )
+        trie_decisions = trie_result.pop("decisions")
+        per_fraction = fold_hazard["by_restore_cost_fraction"][key]
+        hazard_rows = per_fraction["decisions"]
+        merged = _merge_trie_hazard_rows(
+            trie_decisions,
+            hazard_rows,
+            fold_name=fold_name,
+            ensemble_on=ensemble_on,
+        )
+        tool_name_result: dict[str, Any] | None = None
+        if tool_name_trie:
+            # Second empirical trie on the SAME fold split, conditioned on
+            # tool identity only (command_field=None disables prefix
+            # grouping, leaving tool + global back-off nodes) — Continuum's
+            # P(tau, f). Refit per fraction like the full trie.
+            tool_name_result = evaluate_offline_probe_clock(
+                eval_rows,
+                profile_rows=profile_rows,
+                kv_costs_ms=costs,
+                guard_ms=guard_ms,
+                inner_folds=inner_folds,
+                min_tool_history=min_tool_history,
+                min_profile_tasks=min_profile_tasks,
+                command_field=None,
+                max_prefix_depth=max_prefix_depth,
+                skip_leading_cd=skip_leading_cd,
+                restore_cost_fraction=fraction,
+            )
+            merged = _merge_tool_name_rows(
+                merged,
+                tool_name_result.pop("decisions"),
+                fold_name=fold_name,
+            )
+
+        _write_json(fraction_root / f"{fold_name}_trie_summary.json", trie_result)
+        if tool_name_result is not None:
+            _write_json(
+                fraction_root / f"{fold_name}_tool_name_trie_summary.json",
+                tool_name_result,
+            )
+        hazard_summary = {
+            **hazard_shared,
+            "restore_cost_fraction": fraction,
+            "calibration_guard": per_fraction["calibration_guard"],
+        }
+        if "ensemble_calibration_guard" in per_fraction:
+            hazard_summary["ensemble_calibration_guard"] = per_fraction[
+                "ensemble_calibration_guard"
+            ]
+        _write_json(
+            fraction_root / f"{fold_name}_hazard_summary.json", hazard_summary
+        )
+        _write_jsonl(fraction_root / f"{fold_name}_decisions.jsonl", merged)
 
 
 def _merge_trie_hazard_rows(

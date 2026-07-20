@@ -64,9 +64,9 @@ for OpenClaw; YAML path or literal `none`), `--skip N`, `--sample N`,
 `--top-p`, `--top-k`, `--repetition-penalty`.
 
 Supported providers live in `src/llm_call/providers.py`: `openrouter`,
-`dashscope`, `openai`, `siliconflow`, and `deepseek`. Use `--api-base` and
-`--api-key` for OpenAI-compatible gateways when the built-in provider URL or env
-var is not enough.
+`dashscope`, `openai`, `siliconflow`, `deepseek`, and `pioneer`. Use
+`--api-base` and `--api-key` for OpenAI-compatible gateways when the built-in
+provider URL or env var is not enough.
 
 ## Trace Simulate
 
