@@ -14,6 +14,7 @@ from scripts.analyze_pressure_headroom import (
     footprint_growth_stats,
     load_kv_footprint_tokens,
     pressure_price_ms,
+    main,
     realized_utilities_ms,
     sample_footprint_tokens,
     score_decisions,
@@ -22,7 +23,10 @@ from scripts.analyze_pressure_headroom import (
 )
 from trace_collect.tool_latency_dataset import ToolLatencySample
 from trace_collect.tool_latency_profiled import LatencyPriorNode, hazard_recheck_ms
-from trace_collect.tool_latency_utility_clock import trigger_policy_utility_ms
+from trace_collect.tool_latency_utility_clock import (
+    trigger_policy_utility_ms,
+    utility_matrix,
+)
 
 _RHO = 0.94
 
@@ -172,6 +176,7 @@ def test_footprint_priced_dominates_any_constant_lambda_per_call(kv: float) -> N
         footprint_priced = believed_trigger_ms(
             node,
             believed_price_ms=true_price,
+            domain_max_ms=kv,
             guard_ms=0.0,
             restore_cost_fraction=_RHO,
         )
@@ -194,6 +199,7 @@ def test_footprint_priced_dominates_any_constant_lambda_per_call(kv: float) -> N
             fixed = believed_trigger_ms(
                 node,
                 believed_price_ms=believed,
+                domain_max_ms=kv,
                 guard_ms=0.0,
                 restore_cost_fraction=_RHO,
             )
@@ -222,6 +228,7 @@ def _node_expected_total(
         trigger = believed_trigger_ms(
             node,
             believed_price_ms=price if believed is None else believed,
+            domain_max_ms=3500.0,
             guard_ms=0.0,
             restore_cost_fraction=_RHO,
         )
@@ -362,14 +369,35 @@ def test_fixed_lambda_ties_resolve_to_the_status_quo() -> None:
     assert chosen == pytest.approx(kv)
 
 
+def test_trigger_cache_distinguishes_tool_prior_nodes() -> None:
+    # Tool-level prior nodes share metadata but have different sample lists.
+    # Aliasing them makes the first tool's trigger leak into later tools.
+    fast = _node({"fast": [100.0, 200.0, 300.0, 400.0]})
+    slow = _node({"slow": [100.0, 1000.0, 5000.0, 9000.0]})
+    chosen, _ = select_fixed_lambda_ms(
+        [(fast, 200.0, 500.0), (slow, 1000.0, 500.0)],
+        candidates=np.asarray([500.0, 1500.0, 3500.0, 7000.0]),
+        kv_cost_ms=3500.0,
+        guard_ms=0.0,
+        restore_cost_fraction=_RHO,
+    )
+    assert chosen == 500.0
+
+
 # --------------------------------------------------------------------------- #
 # Trigger reuses the certified optimizer under the certified price semantics.
 # --------------------------------------------------------------------------- #
-def test_believed_trigger_matches_hazard_recheck_at_that_price() -> None:
+def test_believed_trigger_matches_hazard_recheck_on_its_own_domain() -> None:
+    # When the common domain coincides with the believed price's own threshold,
+    # the local optimizer must reproduce the certified one exactly.
     node = _node({"a": [200.0, 4800.0], "b": [900.0, 6000.0]})
     price = 2750.0
     assert believed_trigger_ms(
-        node, believed_price_ms=price, guard_ms=0.0, restore_cost_fraction=_RHO
+        node,
+        believed_price_ms=price,
+        domain_max_ms=price,
+        guard_ms=0.0,
+        restore_cost_fraction=_RHO,
     ) == pytest.approx(
         hazard_recheck_ms(
             node.values,
@@ -383,8 +411,73 @@ def test_believed_trigger_matches_hazard_recheck_at_that_price() -> None:
 def test_empty_node_inherits_conservative_deadline() -> None:
     empty = _node({"a": []})
     assert believed_trigger_ms(
-        empty, believed_price_ms=1000.0, guard_ms=25.0, restore_cost_fraction=_RHO
+        empty,
+        believed_price_ms=1000.0,
+        domain_max_ms=1025.0,
+        guard_ms=25.0,
+        restore_cost_fraction=_RHO,
     ) == pytest.approx(1025.0)
+
+
+def test_trigger_domain_does_not_widen_with_the_believed_price() -> None:
+    # The defect: a higher believed price used to buy a larger search domain.
+    # Both arms must stay inside the common domain regardless of belief.
+    node = _node({"a": [200.0, 4800.0], "b": [900.0, 6000.0]})
+    domain = 3500.0
+    for believed in (350.0, 3500.0, 35000.0):
+        trigger = believed_trigger_ms(
+            node,
+            believed_price_ms=believed,
+            domain_max_ms=domain,
+            guard_ms=0.0,
+            restore_cost_fraction=_RHO,
+        )
+        assert 0.0 <= trigger <= domain
+
+
+def test_footprint_arm_is_never_beaten_on_the_common_domain() -> None:
+    # Ports the reviewer's random-node probe. Under the OLD code this failed on
+    # ~9.2% of nodes (worst 261 ms/call) because lambda_bar > lambda_i bought a
+    # wider domain. On a common domain the footprint arm optimizes the true-price
+    # objective over exactly the set the fixed arm draws from, so it cannot lose.
+    rng = np.random.default_rng(0)
+    for _ in range(600):
+        size = int(rng.integers(2, 12))
+        values = (rng.lognormal(mean=6.0, sigma=2.0, size=size) + 1.0).tolist()
+        node = _node({"a": values[: size // 2 or 1], "b": values[size // 2 or 1 :]})
+        kv = float(rng.choice([500.0, 1500.0, 3500.0, 5000.0]))
+        domain = kv  # guard 0 at the certified operating point
+        true_price = kv * float(rng.uniform(0.1, 5.0))
+        fixed_lambda = kv * float(rng.uniform(0.1, 5.0))
+        triggers = [
+            believed_trigger_ms(
+                node,
+                believed_price_ms=price,
+                domain_max_ms=domain,
+                guard_ms=0.0,
+                restore_cost_fraction=_RHO,
+            )
+            for price in (true_price, fixed_lambda)
+        ]
+        # Node-expected utility at the TRUE price, the quantity the bound is over.
+        footprint_value, fixed_value = (
+            float(
+                np.mean(
+                    utility_matrix(
+                        np.asarray(node.values, dtype=float),
+                        np.asarray([trigger], dtype=float),
+                        threshold_ms=true_price,
+                        kv_cost_ms=true_price,
+                        restore_cost_ms=_RHO * true_price,
+                    )
+                )
+            )
+            for trigger in triggers
+        )
+        assert footprint_value >= fixed_value - 1e-9, (
+            f"ceiling violated: footprint {footprint_value} < fixed {fixed_value} "
+            f"(kv={kv}, true={true_price}, fixed={fixed_lambda})"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -395,6 +488,7 @@ def _decisions_with_headroom(per_task_ms: dict[str, float], kv: float) -> list[d
         {
             "sample_id": f"{task}:0",
             "task_id": task,
+            "outer_fold": "f1",
             "kv_cost_ms": kv,
             "headroom_ms": ms,
             "footprint_priced_utility_ms": ms,
@@ -609,3 +703,14 @@ def test_scoring_and_certificate_are_deterministic() -> None:
     second = score_decisions(samples, ["t0", "t1", "t2", "t3"], footprints, cfg)
     assert first == second
     assert summarize(first, cfg, task_count=4) == summarize(second, cfg, task_count=4)
+
+
+def test_final_rejects_a_different_manifest_even_if_it_claims_277_tasks(
+    tmp_path: Path,
+) -> None:
+    other_manifest = tmp_path / "manifest.json"
+    other_manifest.write_text(
+        json.dumps({"expected_task_count": 277}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="--final requires the frozen manifest"):
+        main(["--manifest", str(other_manifest), "--final"])

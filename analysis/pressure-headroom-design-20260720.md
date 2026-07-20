@@ -4,10 +4,17 @@
 > the λ source and the arm semantics changed during the lane; the old
 > title described neither.
 
-> **STATUS (2026-07-20): UNPARKED. Ceiling blocker FIXED and
-> independently verified. Awaiting a final wording clearance, then
-> `--final`.** No full-corpus run has completed; nothing from this lane
-> may be cited until one does under a cleared review.
+> **STATUS (2026-07-20): COMPLETE.** The reviewed full-corpus run produced
+> **DROP**: headline kv3500 headroom 8.75 s/277, simultaneous CI
+> [-85.00, 101.90] s/277, whose upper bound is below the frozen 156 s/277 bar.
+> The self-footprint pricing direction is closed; the contention axis remains
+> unscreenable on this corpus.
+>
+> **Mandatory review audit.** The first whole-diff review found tool-prior cache
+> aliasing and an under-pinned final manifest; both were fixed with regressions.
+> Re-review found contradictory POWER RULE provenance/UNDERPOWERED wording; all
+> occurrences were corrected, then re-read clean with no remaining
+> critical/major/minor findings before `--final`.
 
 ## Defect history (retained deliberately — this lane shipped two)
 

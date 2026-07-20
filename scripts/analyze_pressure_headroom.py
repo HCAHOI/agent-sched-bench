@@ -42,6 +42,12 @@ price is linear in ``prompt_tokens`` by construction. In this corpus it covers
 13410/13410 calls and spans 1912..85189 tokens, growing a median 13.4x within
 every one of the 277 tasks.
 
+``prompt_tokens`` counts the context the emitting llm_call READ, so it excludes
+that call's own completion tokens: the footprint is a LOWER BOUND on resident
+KV at the decision instant. The shortfall is small enough not to disturb the
+map (median 0.60% of the prompt, p90 3.2%), and it is a uniform slight
+under-pricing rather than a bias between arms.
+
 Map (config, documented, NOT fitted to outcomes)::
 
     lambda_i = kv_cost_ms * tokens_i / reference_tokens
@@ -53,15 +59,24 @@ on no outcome.
 
 Arms (the ONLY difference is what price the policy BELIEVED)
 ------------------------------------------------------------
+Both arms optimize their trigger over a COMMON DOMAIN ``[0, kv_cost_ms +
+guard_ms]`` -- the panel cell's own threshold, i.e. the SHIPPED price. This is
+load-bearing, not incidental: ``hazard_recheck_ms`` derives its search domain
+from the price it is given, so letting each arm use its own believed price
+would hand the higher-priced arm a strictly larger search domain and the
+"headroom" would measure search-domain size rather than pricing (see
+``believed_trigger_ms``). The domain is config, identical across arms, and
+outcome-independent; the believed price enters ONLY the objective.
+
 Every call's realized utility is always scored at its TRUE price ``lambda_i``
 -- that is physics, the swap really costs that. What differs is the trigger:
 
 * **Footprint-priced:** the trigger is optimized for the call's own ``lambda_i``.
 * **Fixed-price (status quo):** the trigger is optimized for ONE constant
   ``lambda_bar``, selected on FIT FOLDS ONLY by maximizing the same certified
-  utility functional (``hazard_recheck_ms`` for the trigger,
-  ``trigger_policy_utility_ms`` / ``utility_matrix`` for the score) that the
-  shipped policy uses. This is what the certified policy does TODAY.
+  utility functional (``utility_matrix``, the shared
+  ``hidden_on_long - exposed - rho*restore`` accounting) that the shipped policy
+  uses. This is what the certified policy does TODAY.
 
 ``headroom = footprint_priced - fixed_price``, in seconds per 277 tasks, with a
 task-clustered CI and a permutation label from the certified engine.
@@ -102,9 +117,15 @@ frozen certified policy at rho=0.94, permutation per kv cell, full H1 discipline
 -- exactly as A2 required its robust-clock re-confirmation. The number this
 script prints must NEVER be quoted as a certified gain.
 
-Pre-registered kill criterion (FROZEN before code, spec section "Pre-registered
-kill criterion") and POWER RULE (pre-registered 2026-07-20, before any
-full-corpus number existed). Three-way verdict at the headline kv cell against
+Two criteria with DIFFERENT provenance -- do not conflate them:
+
+* The BAR (DROP/PROCEED against the banked pre-restore effect) was FROZEN
+  BEFORE CODE, spec section "Pre-registered kill criterion".
+* The three-way POWER RULE below is an AMENDMENT dated 2026-07-20, made by the
+  coordinating session with partial (smoke) numbers already visible. It is NOT
+  pre-registration. Recorded in ``analysis/pressure-headroom-design-20260720.md``.
+
+Three-way verdict at the headline kv cell against
 the banked pre-restore effect (``--banked-seconds-per-277``, default 156.0
 s/277 at kv3500), read off the task-clustered SIMULTANEOUS CI:
 
@@ -113,8 +134,8 @@ s/277 at kv3500), read off the task-clustered SIMULTANEOUS CI:
 * **DROP** (direction CLOSED, becomes a C3 sentence) iff the CI UPPER bound is
   BELOW the bar. Only then has the screen actually demonstrated the headroom is
   under the bar.
-* **UNDERPOWERED** (direction NOT closed) iff the point estimate is below the
-  bar but the CI spans it. Non-inferiority framing: a direction may only be
+* **UNDERPOWERED** (direction NOT closed) otherwise: neither the PROCEED nor the
+  DROP criterion is met. Non-inferiority framing: a direction may only be
   closed if the screen could have detected the effect it is compared against.
   Such a result MUST NOT be cited as evidence of absent headroom and MUST NOT be
   recorded as a closed axis -- it is future work contingent on a corpus with
@@ -141,9 +162,12 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+import functools
 from dataclasses import dataclass
 import datetime as _dt
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Sequence
@@ -168,7 +192,6 @@ from trace_collect.tool_latency_dataset import (  # noqa: E402
 from trace_collect.tool_latency_profiled import (  # noqa: E402
     LatencyPriorNode,
     build_latency_prior,
-    hazard_recheck_ms,
     latency_prior_hierarchy,
 )
 from trace_collect.tool_latency_utility_clock import utility_matrix  # noqa: E402
@@ -184,6 +207,11 @@ from trace_collect.tool_latency_confirmation import (  # noqa: E402
 # Headline cell for the frozen kill readout: the banked pre-restore effect the
 # spec names is quoted at kv3500, so the comparison must be made in that cell.
 _HEADLINE_COST_MS = 3500.0
+_CERTIFIED_TASK_COUNT = 277
+_FROZEN_MANIFEST = Path(
+    "analysis/fresh-corpus-certification-20260717/"
+    "offline-gated-robust/manifest.json"
+)
 
 # The already-banked pre-restore effect the direction must beat to be worth
 # chasing (spec: "~156 s/277 at kv3500"). Exposed as a flag so the frozen number
@@ -350,23 +378,55 @@ def believed_trigger_ms(
     node: LatencyPriorNode,
     *,
     believed_price_ms: float,
+    domain_max_ms: float,
     guard_ms: float,
     restore_cost_fraction: float,
 ) -> float:
-    """Certified k=1 optimal trigger for a policy that believes the price.
+    """Optimal trigger under a believed price, over a COMMON trigger domain.
 
-    Reuses ``hazard_recheck_ms`` verbatim under the certified price semantics
-    (``threshold = price + guard``, ``restore = rho * price``). Empty/thin nodes
-    fall back to the deadline inside the optimizer -- conservative by
-    construction, no special-casing here.
+    Why this is not ``hazard_recheck_ms``. That optimizer derives its candidate
+    domain from the same ``threshold_ms`` it uses for the long/short split
+    (``tool_latency_profiled`` :630-636 restricts candidates to
+    ``k < threshold``), so a HIGHER believed price silently buys a LARGER search
+    domain. With ``lambda_bar > lambda_i`` -- the common case here, 87.8% of
+    calls at kv3500 -- the fixed-price arm could reach triggers the
+    footprint-priced arm structurally could not, and beat it for reasons that
+    have nothing to do with pricing. That made the reported "headroom" not a
+    bound at all (violated on 9.2% of random nodes, worst 261 ms/call).
+
+    The fix: ``domain_max_ms`` is supplied by the CALLER and is identical across
+    arms -- the panel cell's own threshold (``kv_cost_ms + guard_ms``), i.e. the
+    SHIPPED price, which is config and outcome-independent. The believed price
+    then enters ONLY the objective, never the search domain, so the comparison
+    isolates the pricing difference. Each arm still attains its exact optimum
+    over that domain: the grid carries the endpoints plus that arm's own
+    piecewise-linear breakpoints (``L`` and ``L - believed_price``), which is
+    the same exactness argument ``hazard_recheck_ms`` makes.
+
+    Objective and tie-breaking mirror ``hazard_recheck_ms`` (utility via the
+    shared ``utility_matrix``; ties resolve to the LATEST trigger). Empty nodes
+    return the deadline, conservative by construction.
     """
 
-    return hazard_recheck_ms(
-        node.values,
+    if not node.values:
+        return domain_max_ms
+    grid = {0.0, domain_max_ms}
+    for value in node.values:
+        if 0.0 < value < domain_max_ms:
+            grid.add(float(value))
+        edge = value - believed_price_ms
+        if 0.0 < edge < domain_max_ms:
+            grid.add(float(edge))
+    candidates = np.asarray(sorted(grid), dtype=float)
+    mean_utility = utility_matrix(
+        np.asarray(node.values, dtype=float),
+        candidates,
         threshold_ms=believed_price_ms + guard_ms,
         kv_cost_ms=believed_price_ms,
         restore_cost_ms=restore_cost_fraction * believed_price_ms,
-    )
+    ).mean(axis=0)
+    best = float(np.max(mean_utility))
+    return float(candidates[np.flatnonzero(mean_utility >= best - 1e-12)[-1]])
 
 
 def realized_utilities_ms(
@@ -435,6 +495,7 @@ def select_fixed_lambda_ms(
     conservative.
     """
 
+    domain_max_ms = kv_cost_ms + guard_ms
     trigger_cache: dict[tuple[int, float], float] = {}
     totals = np.zeros(len(candidates), dtype=float)
     for node, latency_ms, true_price_ms in fit_calls:
@@ -446,6 +507,7 @@ def select_fixed_lambda_ms(
                 trigger = believed_trigger_ms(
                     node,
                     believed_price_ms=float(believed),
+                    domain_max_ms=domain_max_ms,
                     guard_ms=guard_ms,
                     restore_cost_fraction=restore_cost_fraction,
                 )
@@ -467,13 +529,19 @@ def select_fixed_lambda_ms(
 # --------------------------------------------------------------------------- #
 # Cross-fitted scoring over the certified folds.
 # --------------------------------------------------------------------------- #
-def score_decisions(
+def _score_fold(
+    fold: int,
     samples_by_task: dict[str, list[ToolLatencySample]],
     task_ids: Sequence[str],
     footprints: dict[tuple[str, int], float],
     cfg: PressureHeadroomConfig,
 ) -> list[dict[str, Any]]:
-    """Per-(call, cost) footprint_priced vs best-fixed rows over the certified folds."""
+    """Decision rows for one outer fold.
+
+    Folds share no state (prior, fit anchors and the trigger caches are all
+    built here), so this is the unit ``score_decisions`` may evaluate in any
+    order.
+    """
 
     row_group_keys = _row_group_keys(
         cfg.command_field,
@@ -482,130 +550,167 @@ def score_decisions(
     )
     declared = list(task_ids)
     decisions: list[dict[str, Any]] = []
-    for fold in range(1, cfg.fold_count + 1):
-        eval_tasks = {
-            task_id
-            for index, task_id in enumerate(declared)
-            if index % cfg.fold_count == fold - 1
-        }
-        profile_tasks = set(declared) - eval_tasks
-        profile_rows = [
-            sample.to_json_obj()
-            for task_id in sorted(profile_tasks)
-            for sample in samples_by_task[task_id]
-        ]
-        prior = build_latency_prior(profile_rows, row_group_keys=row_group_keys)
+    eval_tasks = {
+        task_id
+        for index, task_id in enumerate(declared)
+        if index % cfg.fold_count == fold - 1
+    }
+    profile_tasks = set(declared) - eval_tasks
+    profile_rows = [
+        sample.to_json_obj()
+        for task_id in sorted(profile_tasks)
+        for sample in samples_by_task[task_id]
+    ]
+    prior = build_latency_prior(profile_rows, row_group_keys=row_group_keys)
 
-        def node_for(sample: ToolLatencySample) -> LatencyPriorNode:
-            row = sample.to_json_obj()
-            return latency_prior_hierarchy(
-                prior,
-                str(row["tool_name"]),
-                row_group_keys(row),
-                min_tool_history=cfg.min_tool_history,
-                min_profile_tasks=cfg.min_profile_tasks,
-            )[-1]
+    def node_for(sample: ToolLatencySample) -> LatencyPriorNode:
+        row = sample.to_json_obj()
+        return latency_prior_hierarchy(
+            prior,
+            str(row["tool_name"]),
+            row_group_keys(row),
+            min_tool_history=cfg.min_tool_history,
+            min_profile_tasks=cfg.min_profile_tasks,
+        )[-1]
 
-        # Fit-fold anchor and selection set: PROFILE tasks only.
-        fit_samples = [
-            sample for task_id in sorted(profile_tasks) for sample in samples_by_task[task_id]
-        ]
-        fit_tokens = np.asarray(
-            [sample_footprint_tokens(s, footprints) for s in fit_samples], dtype=float
+    # Fit-fold anchor and selection set: PROFILE tasks only.
+    fit_samples = [
+        sample for task_id in sorted(profile_tasks) for sample in samples_by_task[task_id]
+    ]
+    fit_tokens = np.asarray(
+        [sample_footprint_tokens(s, footprints) for s in fit_samples], dtype=float
+    )
+    reference_tokens = float(np.mean(fit_tokens))
+    fit_nodes = [node_for(s) for s in fit_samples]
+
+    for kv_cost_ms in cfg.costs_ms:
+        fit_prices = np.asarray(
+            [
+                pressure_price_ms(
+                    float(tok),
+                    kv_cost_ms=kv_cost_ms,
+                    reference_tokens=reference_tokens,
+                )
+                for tok in fit_tokens
+            ],
+            dtype=float,
         )
-        reference_tokens = float(np.mean(fit_tokens))
-        fit_nodes = [node_for(s) for s in fit_samples]
-
-        for kv_cost_ms in cfg.costs_ms:
-            fit_prices = np.asarray(
-                [
-                    pressure_price_ms(
-                        float(tok),
-                        kv_cost_ms=kv_cost_ms,
-                        reference_tokens=reference_tokens,
-                    )
-                    for tok in fit_tokens
-                ],
-                dtype=float,
-            )
-            candidates = fixed_lambda_candidates(
-                fit_prices, kv_cost_ms=kv_cost_ms, grid=cfg.fixed_lambda_grid
-            )
-            fixed_lambda_ms, _ = select_fixed_lambda_ms(
-                list(zip(fit_nodes, (s.latency_ms for s in fit_samples), fit_prices)),
-                candidates=candidates,
-                kv_cost_ms=kv_cost_ms,
-                guard_ms=cfg.guard_ms,
-                restore_cost_fraction=cfg.restore_cost_fraction,
-            )
-            fixed_trigger_cache: dict[int, float] = {}
-            for task_id in sorted(eval_tasks):
-                for sample in samples_by_task[task_id]:
-                    node = node_for(sample)
-                    tokens = sample_footprint_tokens(sample, footprints)
-                    true_price_ms = pressure_price_ms(
-                        tokens,
-                        kv_cost_ms=kv_cost_ms,
-                        reference_tokens=reference_tokens,
-                    )
-                    footprint_priced_trigger = believed_trigger_ms(
+        candidates = fixed_lambda_candidates(
+            fit_prices, kv_cost_ms=kv_cost_ms, grid=cfg.fixed_lambda_grid
+        )
+        fixed_lambda_ms, _ = select_fixed_lambda_ms(
+            list(zip(fit_nodes, (s.latency_ms for s in fit_samples), fit_prices)),
+            candidates=candidates,
+            kv_cost_ms=kv_cost_ms,
+            guard_ms=cfg.guard_ms,
+            restore_cost_fraction=cfg.restore_cost_fraction,
+        )
+        # COMMON trigger domain for both arms: the panel cell's own
+        # threshold (the shipped price). Identical across arms and
+        # outcome-independent, so no arm gets a wider search than the other.
+        domain_max_ms = kv_cost_ms + cfg.guard_ms
+        fixed_trigger_cache: dict[int, float] = {}
+        for task_id in sorted(eval_tasks):
+            for sample in samples_by_task[task_id]:
+                node = node_for(sample)
+                tokens = sample_footprint_tokens(sample, footprints)
+                true_price_ms = pressure_price_ms(
+                    tokens,
+                    kv_cost_ms=kv_cost_ms,
+                    reference_tokens=reference_tokens,
+                )
+                footprint_priced_trigger = believed_trigger_ms(
+                    node,
+                    believed_price_ms=true_price_ms,
+                    domain_max_ms=domain_max_ms,
+                    guard_ms=cfg.guard_ms,
+                    restore_cost_fraction=cfg.restore_cost_fraction,
+                )
+                node_key = id(node.values)
+                fixed_trigger = fixed_trigger_cache.get(node_key)
+                if fixed_trigger is None:
+                    fixed_trigger = believed_trigger_ms(
                         node,
-                        believed_price_ms=true_price_ms,
+                        believed_price_ms=fixed_lambda_ms,
+                        domain_max_ms=domain_max_ms,
                         guard_ms=cfg.guard_ms,
                         restore_cost_fraction=cfg.restore_cost_fraction,
                     )
-                    fixed_trigger = fixed_trigger_cache.get(id(node.values))
-                    if fixed_trigger is None:
-                        fixed_trigger = believed_trigger_ms(
-                            node,
-                            believed_price_ms=fixed_lambda_ms,
-                            guard_ms=cfg.guard_ms,
-                            restore_cost_fraction=cfg.restore_cost_fraction,
-                        )
-                        fixed_trigger_cache[id(node.values)] = fixed_trigger
-                    footprint_priced_ms, fixed_ms = realized_utilities_ms(
-                        sample.latency_ms,
-                        np.asarray([footprint_priced_trigger, fixed_trigger], dtype=float),
-                        true_price_ms=true_price_ms,
-                        guard_ms=cfg.guard_ms,
-                        restore_cost_fraction=cfg.restore_cost_fraction,
-                    )
-                    decisions.append(
-                        {
-                            "sample_id": sample.sample_id,
-                            "task_id": task_id,
-                            "tool_name": sample.tool_name,
-                            "outer_fold": f"f{fold}",
-                            "latency_ms": sample.latency_ms,
-                            "prior_source": node.source,
-                            "prior_group_key": node.group_key,
-                            "kv_cost_ms": kv_cost_ms,
-                            "footprint_tokens": tokens,
-                            "reference_tokens": reference_tokens,
-                            "true_price_ms": true_price_ms,
-                            "fixed_lambda_ms": fixed_lambda_ms,
-                            "footprint_priced_trigger_ms": footprint_priced_trigger,
-                            "fixed_trigger_ms": fixed_trigger,
-                            "footprint_priced_utility_ms": float(footprint_priced_ms),
-                            "fixed_utility_ms": float(fixed_ms),
-                            "headroom_ms": float(footprint_priced_ms - fixed_ms),
-                            "footprint_priced_fired": sample.latency_ms > footprint_priced_trigger,
-                            "fixed_fired": sample.latency_ms > fixed_trigger,
-                            # EARLY fires (strictly before the call's deadline)
-                            # are the decisions the policy actually adds over
-                            # deadline_only -- the rate the headroom scales
-                            # against, and the one the spec quotes.
-                            "footprint_priced_fired_early": (
-                                sample.latency_ms > footprint_priced_trigger
-                                and footprint_priced_trigger < true_price_ms + cfg.guard_ms
-                            ),
-                            "fixed_fired_early": (
-                                sample.latency_ms > fixed_trigger
-                                and fixed_trigger < true_price_ms + cfg.guard_ms
-                            ),
-                        }
-                    )
+                    fixed_trigger_cache[node_key] = fixed_trigger
+                footprint_priced_ms, fixed_ms = realized_utilities_ms(
+                    sample.latency_ms,
+                    np.asarray([footprint_priced_trigger, fixed_trigger], dtype=float),
+                    true_price_ms=true_price_ms,
+                    guard_ms=cfg.guard_ms,
+                    restore_cost_fraction=cfg.restore_cost_fraction,
+                )
+                decisions.append(
+                    {
+                        "sample_id": sample.sample_id,
+                        "task_id": task_id,
+                        "tool_name": sample.tool_name,
+                        "outer_fold": f"f{fold}",
+                        "latency_ms": sample.latency_ms,
+                        "prior_source": node.source,
+                        "prior_group_key": node.group_key,
+                        "kv_cost_ms": kv_cost_ms,
+                        "footprint_tokens": tokens,
+                        "reference_tokens": reference_tokens,
+                        "true_price_ms": true_price_ms,
+                        "fixed_lambda_ms": fixed_lambda_ms,
+                        "footprint_priced_trigger_ms": footprint_priced_trigger,
+                        "fixed_trigger_ms": fixed_trigger,
+                        "footprint_priced_utility_ms": float(footprint_priced_ms),
+                        "fixed_utility_ms": float(fixed_ms),
+                        "headroom_ms": float(footprint_priced_ms - fixed_ms),
+                        "footprint_priced_fired": sample.latency_ms > footprint_priced_trigger,
+                        "fixed_fired": sample.latency_ms > fixed_trigger,
+                        # EARLY fires (strictly before the call's deadline)
+                        # are the decisions the policy actually adds over
+                        # deadline_only -- the rate the headroom scales
+                        # against, and the one the spec quotes.
+                        "footprint_priced_fired_early": (
+                            sample.latency_ms > footprint_priced_trigger
+                            and footprint_priced_trigger < true_price_ms + cfg.guard_ms
+                        ),
+                        "fixed_fired_early": (
+                            sample.latency_ms > fixed_trigger
+                            and fixed_trigger < true_price_ms + cfg.guard_ms
+                        ),
+                    }
+                )
     return decisions
+
+
+def score_decisions(
+    samples_by_task: dict[str, list[ToolLatencySample]],
+    task_ids: Sequence[str],
+    footprints: dict[tuple[str, int], float],
+    cfg: PressureHeadroomConfig,
+    *,
+    workers: int = 1,
+) -> list[dict[str, Any]]:
+    """Per-(call, cost) footprint_priced vs best-fixed rows over the certified folds.
+
+    ``workers`` only changes how the (independent) folds are evaluated; rows
+    are always concatenated in ascending fold order, so the output does not
+    depend on the worker count or on completion order. The certified
+    bootstrap/permutation engine downstream stays sequential.
+    """
+
+    worker = functools.partial(
+        _score_fold,
+        samples_by_task=samples_by_task,
+        task_ids=task_ids,
+        footprints=footprints,
+        cfg=cfg,
+    )
+    folds = range(1, cfg.fold_count + 1)
+    if workers <= 1:
+        return [row for fold in folds for row in worker(fold)]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {fold: pool.submit(worker, fold) for fold in folds}
+        return [row for fold in folds for row in futures[fold].result()]
 
 
 # --------------------------------------------------------------------------- #
@@ -704,7 +809,11 @@ def summarize(
             f"headroom {headroom_ms} != footprint_priced {footprint_priced_total} - fixed "
             f"{fixed_total}"
         )
-        selected = sorted({float(r["fixed_lambda_ms"]) for r in rows})
+        # Per-FOLD lambda_bar. Deduping across folds would silently collapse
+        # folds that selected the same value and skew the mean (4 folds at 3000
+        # + 1 at 6000 must read 3600, not 4500).
+        by_fold = {str(r["outer_fold"]): float(r["fixed_lambda_ms"]) for r in rows}
+        selected = [by_fold[f] for f in sorted(by_fold)]
         cells.append(
             {
                 "kv_cost_ms": cost,
@@ -713,7 +822,7 @@ def summarize(
                 "headroom_seconds_per_277": headroom_ms / 1000.0,
                 "footprint_priced_seconds_per_277": footprint_priced_total / 1000.0,
                 "best_fixed_seconds_per_277": fixed_total / 1000.0,
-                "fixed_lambda_ms_by_fold": selected,
+                "fixed_lambda_ms_by_fold": by_fold,
                 "mean_fixed_lambda_ms": float(np.mean(selected)),
                 "footprint_priced_fire_fraction": (
                     sum(1 for r in rows if r["footprint_priced_fired"]) / len(rows)
@@ -755,8 +864,11 @@ def summarize(
     headroom_s = headline["headroom_seconds_per_277"]
     ci_excludes_zero = headline["permutation_label"] == "positive"
     exceeds_banked = headroom_s > cfg.banked_seconds_per_277
-    # POWER RULE (pre-registered 2026-07-20, before any full-corpus number
-    # existed). Non-inferiority framing: a direction may only be CLOSED if the
+    # POWER RULE -- an AMENDMENT dated 2026-07-20, made with partial (smoke)
+    # numbers visible, NOT pre-registration. Recorded in
+    # analysis/pressure-headroom-design-20260720.md. The bar it compares against
+    # WAS frozen before code.
+    # Non-inferiority framing: a direction may only be CLOSED if the
     # screen could actually have detected the effect it is compared against, so
     # DROP requires the CI upper bound to sit BELOW the bar -- a point estimate
     # below the bar with a CI spanning it is UNDERPOWERED, not evidence of
@@ -798,9 +910,9 @@ def summarize(
             "simultaneous CI (Bonferroni over the full cost family). PROCEED iff "
             "the CI LOWER bound exceeds the bar with the permutation CI "
             "excluding zero. DROP (direction closed) iff the CI UPPER bound is "
-            "BELOW the bar. Otherwise UNDERPOWERED: the point estimate is below "
-            "the bar but the CI spans it, so the corpus cannot resolve an effect "
-            "of the size we care about and the direction is NOT closed"
+            "BELOW the bar. Otherwise UNDERPOWERED: neither the PROCEED nor "
+            "DROP criterion is met at the frozen evidence discipline, so the "
+            "direction is NOT closed"
         ),
         "power_rule": {
             "bar_seconds_per_277": bar_s,
@@ -833,15 +945,25 @@ def summarize(
     }
 
 
+def _default_workers() -> int:
+    """Leave one core for the OS; the scoring stage is CPU-bound."""
+
+    return max(1, min(8, (os.cpu_count() or 1) - 1))
+
+
 def run_pressure_headroom(
     samples_by_task: dict[str, list[ToolLatencySample]],
     task_ids: Sequence[str],
     footprints: dict[tuple[str, int], float],
     cfg: PressureHeadroomConfig,
+    *,
+    workers: int = 1,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Score every fold's held-out calls and apply the frozen kill readout."""
 
-    decisions = score_decisions(samples_by_task, task_ids, footprints, cfg)
+    decisions = score_decisions(
+        samples_by_task, task_ids, footprints, cfg, workers=workers
+    )
     summary = summarize(decisions, cfg, task_count=len(task_ids))
     summary["footprint_growth"] = footprint_growth_stats(
         samples_by_task, task_ids, footprints
@@ -907,6 +1029,14 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
         f"replayed over the frozen manifest ({provenance['collection_id']}); no "
         f"GPU. Generated {provenance['generated']} (git {provenance['git_sha']})."
     )
+    if provenance["limit_tasks"] is not None:
+        lines.append(">")
+        lines.append(
+            "> **SUBSET SMOKE ONLY.** This run used "
+            f"{provenance['task_count']} tasks. Its headroom is NOT a per-277 "
+            "result and MUST NOT be compared with the 156 s/277 banked bar; "
+            "the verdict below is non-binding."
+        )
     lines.append("")
     lines.append(f"**Verdict: {results['verdict']}**")
     lines.append("")
@@ -916,7 +1046,26 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
     lines.append("")
     lines.append(_NO_DEPLOYMENT_LICENSE)
     lines.append("")
-    lines.append(f"Kill criterion (frozen before code): {results['kill_criterion']}.")
+    lines.append(
+        "> **Criterion provenance (two different things).** The BAR -- DROP/"
+        "PROCEED against the banked pre-restore effect "
+        f"({results['banked_seconds_per_277']:.0f} s/277 at kv"
+        f"{results['headline_cost_ms']:.0f}) -- WAS frozen before code. The "
+        "three-way POWER RULE (DROP / UNDERPOWERED / PROCEED) was NOT: it is an "
+        "AMENDMENT dated 2026-07-20, made by the coordinating session with "
+        "partial smoke numbers already visible, recorded in "
+        "`analysis/pressure-headroom-design-20260720.md`. Read the verdict with "
+        "that distinction in mind."
+    )
+    lines.append("")
+    lines.append(
+        "> **Ceiling scope.** The bound is over triggers `<= the panel cell's "
+        "threshold` -- both arms search that one common domain, which is the "
+        "SHIPPED policy's own domain. It is not a claim about triggers beyond "
+        "the deadline."
+    )
+    lines.append("")
+    lines.append(f"Criterion: {results['kill_criterion']}.")
     lines.append("")
     lines.append(
         f"Headline kv{results['headline_cost_ms']:.0f}: headroom "
@@ -963,12 +1112,12 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
         )
     else:
         lines.append(
-            "**UNDERPOWERED -- the direction is NOT closed.** The point estimate "
-            "is below the banked bar but the CI spans it, so this corpus cannot "
-            "resolve an effect of the size we care about. Under the "
-            "pre-registered non-inferiority rule a direction may only be closed "
-            "when the screen could actually have detected the effect it is "
-            "compared against, and this run could not."
+            "**UNDERPOWERED -- the direction is NOT closed.** Neither the "
+            "PROCEED nor DROP criterion is met at the frozen evidence "
+            "discipline, so this corpus cannot resolve the decision. Under the "
+            "amended non-inferiority rule a direction may only be closed when "
+            "the screen could actually have detected the effect it is compared "
+            "against, and this run could not."
         )
         lines.append("")
         lines.append(
@@ -1063,10 +1212,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=Path(
-            "analysis/fresh-corpus-certification-20260717/"
-            "offline-gated-robust/manifest.json"
-        ),
+        default=_FROZEN_MANIFEST,
     )
     parser.add_argument(
         "--banked-seconds-per-277",
@@ -1088,6 +1234,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=21,
         help="Fit-fold quantile resolution for the constant-lambda candidate set "
         "(the panel cell is always included).",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=_default_workers(),
+        help="Processes used for the deterministic per-fold scoring stage. "
+        "1 forces the sequential path. Results are independent of this: the "
+        "certified bootstrap/permutation engine always runs sequentially.",
     )
     parser.add_argument("--replicates", type=int, default=50000)
     parser.add_argument("--confidence-level", type=float, default=0.95)
@@ -1125,6 +1279,12 @@ def _write_decisions_zst(path: Path, decisions: list[dict[str, Any]]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    frozen_manifest = Path(__file__).resolve().parents[1] / _FROZEN_MANIFEST
+    if args.final and args.manifest.resolve() != frozen_manifest.resolve():
+        raise ValueError(
+            f"--final requires the frozen manifest {_FROZEN_MANIFEST}, "
+            f"not {args.manifest}"
+        )
     default_json, default_md = _default_output_paths(args.final)
     out_json = args.out_json or default_json
     out_md = args.out_md or default_md
@@ -1133,6 +1293,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     samples_by_task, task_ids, manifest = _load_manifest_corpus(
         args.manifest, limit_tasks=args.limit_tasks, final=args.final
     )
+    if args.final and (
+        len(task_ids) != _CERTIFIED_TASK_COUNT
+        or manifest["expected_task_count"] != _CERTIFIED_TASK_COUNT
+    ):
+        raise ValueError(
+            f"--final requires the frozen {_CERTIFIED_TASK_COUNT}-task corpus; "
+            f"manifest expects {manifest['expected_task_count']} and loaded "
+            f"{len(task_ids)}"
+        )
     footprints = load_kv_footprint_tokens(
         discover_trace_files([Path(manifest["trace_root"])])
     )
@@ -1154,7 +1323,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         secondary_banked_seconds_per_277=args.secondary_banked_seconds_per_277,
     )
     summary, decisions = run_pressure_headroom(
-        samples_by_task, task_ids, footprints, cfg
+        samples_by_task, task_ids, footprints, cfg, workers=args.workers
     )
     provenance = {
         "exploratory": True,

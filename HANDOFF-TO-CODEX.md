@@ -24,31 +24,38 @@ O(N log N) `hazard_recheck_ms` is **not** byte-identical (13/30,000 tie-break
 divergences); the byte-identical batched version bought 6% because hazard is
 not the bottleneck. Details in `CODEX-PERF-BRIEF.md`.
 
-## 2. Probe — footprint pricing screen
+## 2. Probe — footprint pricing screen COMPLETE
 
-`scripts/analyze_pressure_headroom.py`, 288 insertions **uncommitted**.
-Question: does per-call KV-footprint pricing beat the single fixed `kv_cost`
-the certified policy applies across a 44× spread of real footprints?
+`scripts/analyze_pressure_headroom.py` and
+`tests/test_analyze_pressure_headroom.py` remain uncommitted with the reviewed
+method, parallel fold scoring, fail-closed final-manifest pin, and subset
+warning.
 
-The uncommitted diff is two things:
-- **Reviewed and cleared** (md5 `a4164442`): ceiling-bug fix (both arms
-  optimize over a common trigger domain `[0, kv+guard]`), three-way POWER RULE
-  verdict, kv5000 secondary row, mechanism figure, per-fold λ̄, wording.
-- **Unreviewed, unattributed**: `ProcessPoolExecutor` parallelism (import
-  :165, `_score_fold`, fan-out ~:706, `--workers` ~:1229). Landed 11:53, after
-  the review cleared the file.
+Acceleration was measured post-fix on the same 50-task subset:
+- workers=1: 76.33 s
+- workers=8: 51.38 s (**1.49×**)
+- JSON was identical after removing only `provenance`; `.json.zst` sidecars
+  were byte-identical.
 
-**The full-corpus result has never been produced.** Two attempts died: one
-killed on a wrong-PID misdiagnosis, one ran single-core for 86 min and was
-killed.
+Mandatory review found and fixed two major correctness issues before the run:
+tool-level prior caches aliased distinct nodes, and `--final` accepted any
+self-consistent 277-task manifest. Re-review then found contradictory POWER
+RULE provenance/UNDERPOWERED wording; it was corrected and the gate was
+declared clean. Relevant suite: 118 passed.
 
-Verdict rule is pre-registered three-way: `DROP` only if the kv3500 CI upper
-bound < 156 s/277; `UNDERPOWERED` if the CI spans it; `PROCEED` if the CI lower
-bound exceeds it. A PROCEED does not license deployment — it triggers a
-separate certified decision replay. Spec:
-`analysis/pressure-headroom-design-20260720.md` (read the amendment block at
-the top; the three-way rule was added after partial numbers were visible and
-that is recorded deliberately).
+The reviewed full-corpus run completed in 2215.90 s:
+- artifact: `analysis/pressure-headroom-2026-07-20.{json,md}`
+- sidecar: `analysis/pressure-headroom-2026-07-20-decisions.json.zst`
+- corpus: 277 tasks, 13,410 calls, 10 kv cells, 134,100 decision rows
+- headline kv3500: 8.75 s/277, simultaneous CI [-85.00, 101.90] s/277,
+  permutation inconclusive, fixed λ̄ 5740 ms, early-fire fraction 0.0595
+- frozen bar: 156 s/277; CI upper bound is below it
+- verdict: **DROP**, direction closed for self-footprint pricing
+- kv5000 secondary: -31.11 s/277, inconclusive, non-binding
+
+This result does not bound multi-tenant contention; that axis remains a
+structural negative on this corpus. DROP does not trigger a certified decision
+replay.
 
 ## 3. Online gate (W3-4) — built, statistics verified, corpus fix unreviewed
 
@@ -81,25 +88,18 @@ anticonservative at 0.0109).
 3. `--final` requires both surviving dev corpora (ScienceAgentBench is retired,
    corpus deleted). `replay_online_gate.py` is single-core.
 
-## 4. Verify — what to do, in order
+## 4. Next
 
-1. **Equivalence check on the parallelism** (never run): same subset,
-   `--workers 1` vs `--workers 8`, diff JSON excluding `provenance`, plus the
-   `.json.zst` sidecar. Byte-identical or revert the parallelism.
-2. **Apply two queued changes** not yet in the file: a `--final` assertion that
-   `len(task_ids) == manifest["expected_task_count"]` (277), and a subset-run
-   render stating the headroom is NOT per-277 and cannot be compared against
-   the 156 s bar.
-3. **Review the whole diff as one unit** — none of it is committed.
-4. **Run `--final --workers 8`** and report the three-way verdict.
+1. Commit the reviewed pressure-headroom code, tests, design status, and final
+   JSON/Markdown artifact; keep the decisions sidecar local/gitignored.
+2. Re-review the online-gate corpus fix as part of the complete online-gate
+   diff. The old 50-task result remains retracted.
+3. Measure/profile `replay_online_gate.py` before adding parallelism; preserve
+   task-order and RNG semantics exactly if it is parallelized.
+4. Re-measure the canonical 100-task SWE-ReBench development corpus and the
+   pinned 83-task Terminal-Bench corpus before restating any certification,
+   effective-n, or attainability claim.
+5. Run online gate `--final` only after its mandatory review gate is clean.
 
-Invocation:
-```
-python scripts/analyze_pressure_headroom.py \
-  --manifest analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json \
-  --final --workers 8
-```
-
-Two rules that apply to all of the above: verify inputs against the manifest
-that defines them (a lane recently ran on a superseded 50-trace root taken from
-`excluded_trace_roots`), and a review the author commissions is not a review.
+Two rules still apply: verify inputs against the manifest or pinned task list
+that defines them, and a review the author commissions is not a review.
