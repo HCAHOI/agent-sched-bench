@@ -1,52 +1,55 @@
-# analysis/ — INDEX (single entry point)
+# analysis/ — INDEX
 
-**Read this first.** One line per artifact; read only what your task needs.
-Nothing has been moved — all paths referenced by handoffs/provenance are stable.
+**Read `HANDOFF-20260720.md` first.** Everything else is here because
+something still depends on it. Superseded plans and killed-lane design
+docs were deleted (recoverable from git) — their outcomes live in
+`CLOSED-QUESTIONS.md`, which is the file to read before proposing
+anything that sounds like a good idea.
 
-## ACTIVE (read for any new work)
-
-| Doc | What |
-|---|---|
-| `HANDOFF-20260720.md` | **CURRENT STATE — read first.** Pre-restore SURVIVED both trigger gates (first new mechanism); C/B/WTN killed; k>1 re-check collapse confirmed; standing directives; lead decisions pending. Supersedes `HANDOFF-20260719.md`. |
-| `ROADMAP-mlsys2027-20260717.md` | THE execution plan to MLSys 2027: thesis, keep/kill/modify, 13-week schedule w/ deliverables + go/no-go gates. Start here for "what next". |
-| `HANDOFF-tool-time-campaign-20260716.md` | THE campaign handoff: problem, rho=0.94 discipline, architecture seam, 12-finding arc, thesis, code map. |
-| `HANDOFF-fresh-cert-20260717.md` | In-flight fresh-corpus certification: state, how to finish/verify, gotchas. Note: run migrated to remote 216.81.248.101 (28c/78GB), fold-sharded (byte-identical, review-APPROVEd). |
-| `fresh-corpus-preregistration-20260716.md` | LOCKED confirmatory protocol + amendments (N=277, concurrency=2). H1/H2 decision rules. |
-| `related-work-synthesis-20260715.md` | Continuum + ThunderAgent vs us; conditioning spectrum; P1-P4 proposals. Basis for the MLSys 2027 direction. |
-| `fresh-corpus-certification-20260717/` | The running confirmation's output root (`$B`). Verdict artifacts per handoff §3. |
-
-## REFERENCE (read on demand)
+## Start here (4 files, in this order)
 
 | Doc | What |
 |---|---|
-| `tool-time-mechanism-analysis-20260715.md` | Why gates win: all divergence on exec; zero per-tool headroom; disjoint gates → union. |
-| `tool-time-formulation-critique-20260714.md` | Running log/critique + full execution order of the campaign. |
-| `tool-time-method-report-20260714.md` | Early method report (partly superseded by the campaign handoff). |
+| `HANDOFF-20260720.md` | Current state: what is banked, what is running, what is parked, standing directives. |
+| `PAPER-SKELETON-20260720.md` | The three contributions and the one object they share. Any new work must map to C1/C2/C3 or it does not run. |
+| `CLOSED-QUESTIONS.md` | Settled questions with the reason each died. Do not re-open without new data. |
+| `ROADMAP-mlsys2027-20260717.md` | 13-week schedule, go/no-go gates, W8 cut line. |
 
-## RESULT DIRS (dev-exposed sensitivity record — dated, frozen; findings.md/summary.md inside each)
+## Live specs (work in progress or pending a gate)
 
-All on dev corpora (SWE-ReBench-100 / Terminal-Bench / ScienceAgentBench). Sensitivity
-only — NEVER quote as certified. Finding numbers refer to campaign handoff §4.
+| Doc | Status |
+|---|---|
+| `rolling-survival-design-20260720.md` | Priced residual-time policies. A0 lemma CONFIRMED; A2 pre-restore SURVIVED both trigger gates. Remaining: GPU live validation. |
+| `curve-calibration-design-20260720.md` | Descriptive calibration lane. Run complete — see result below. |
+| `pressure-headroom-design-20260720.md` | **PARKED/BLOCKED**, no valid result. Carries the honest record of both blockers. Nothing in it is citable. |
+| `fresh-corpus-preregistration-20260716.md` | LOCKED confirmatory protocol (N=277). H1/H2 decision rules. |
 
-- `tool-time-offline-probe-20260711/`, `tool-time-offline-gated-robust-20260711/`, `tool-time-threshold-sweep-100ms-20260711/` — earliest probe/gate iterations (superseded).
-- `tool-time-offline-gated-robust-confirmation-20260712/`, `...-swe-rebench-100-20260713/` — frozen dev confirmation runs (pipeline template for the fresh run).
-- `tool-time-dacd-20260714/` — DACD variant (rejected).
-- `tool-time-restore-cost-sweep-20260714/` — F1: rho=0 manufactures success (finding 1).
-- `tool-time-restore-cost-mode-b-20260714/` — Mode-B refit; +118s vs deadline (finding 2).
-- `tool-time-within-task-baseline-20260714/`, `tool-time-within-task-gated-20260714/` — B1 within-task history (finding 3: can't self-certify at rho=0.94).
-- `tool-time-transfer-terminal-bench-20260714/`, `tool-time-transfer-science-agent-bench-20260714/` — E2: priors don't transfer; gate bounds damage (finding 4).
-- `tool-time-hazard-model-{full,cross-task,within-task}-20260714/`, `tool-time-hazard-model-gbm-full-20260715/` — learned hazard arc (finding 5: GBM wins low-rho, loses to trie at 0.94).
-- `tool-time-hazard-ensemble-gbm-20260715/` — ensemble REFUTED (finding 6).
-- `tool-time-gate-union-20260715/`, `tool-time-gate-union-terminal-bench-20260715/` — naive OR union (finding 8: wins SWE, fails TB).
-- `tool-time-certified-union-{swe-rebench,terminal-bench,tb-lcb}-20260715/` — certified union (finding 9: the keeper).
-- `tool-time-rho-measurement-20260715/` — rho=0.94 measured, H100 (finding 10).
-- `tool-time-tool-name-baseline-{swe-rebench,terminal-bench}-20260715/`, `tool-time-frontier-terminal-bench-20260715/` — P1 Continuum-class baseline (finding 11).
-- `tool-time-recompute-restore-swe-rebench-20260715/`, `tool-time-prefill-cost-20260716/` — P2 reload-vs-recompute (finding 12).
-- `tool-time-gate-robustness-swe-rebench-20260716/` — Phase 0 gate calibration (percentile cert ~2.7x anticonservative → permutation cert).
-- `tool-time-power-mde-swe-rebench-20260716/` — Phase 0b power/MDE (drove N=277 extension).
+## Results (frozen, citable)
 
-## Bulk data note
+| Artifact | Finding |
+|---|---|
+| `fresh-corpus-certification-20260717/` | **H1 CERTIFIED** (+66.7 s @kv3500, +150.6 s @kv5000 vs deadline, rho=0.94). H2 honest negative. The certified baseline everything else is measured against. |
+| `prerestore-accounting-2026-07-20.md` + `-robust-` | **Pre-restore SURVIVED both trigger sources** (+156.2 / +317.9 s per 277 tasks). First new mechanism to clear its gates. Offline; GPU validation outstanding. |
+| `prior-calibration-2026-07-20.md` | Priors are well-calibrated (all four quantiles cover nominal) and sharper than pooled (+18.0%) and tool-name (+15.4%) baselines. |
+| `adjudication-k2-recheck-2026-07-20.md` | k>1 re-checks collapse to k=1 exactly (0.0 ms gap, 6700 cells). |
+| `boundary-evidence-stage1-2026-07-19.md` | Boundary identity: 72.9% decision churn, zero information. |
+| `stable-atom-overlap-2026-07-19.md` | Stable-atom screen is a one-atom trick (0.19% reachable mass). |
+| `wrapper-transparency-stage1/stage2-2026-07-19.md` | Normalization: accuracy gain, utility regression. The accuracy≠utility evidence. |
+| `segment-atom-study-2026-07-19.md` | Five-model atom comparison; why decomposition loses. |
+| `tb-sizing-memo-20260720.md` | TB vs SWE opportunity mass; model confound documented. Basis for dropping TB. |
 
-`rho_*_decisions.jsonl` files inside result dirs are multi-GB reproducible
-intermediates — never read them into context; read `findings.md`/`summary.md`/
-aggregate JSONs instead.
+## Reference
+
+| Doc | What |
+|---|---|
+| `HANDOFF-tool-time-campaign-20260716.md` | Original campaign handoff: problem framing, architecture seam, code map. |
+| `related-work-synthesis-20260715.md` | Continuum + ThunderAgent positioning; the conditioning spectrum. |
+| `tool-time-mechanism-analysis-20260715.md` | Why gates win: divergence concentrates on exec; disjoint gates → union. |
+
+## Result directories (`tool-time-*/`)
+
+Frozen provenance for the 12-finding dev-corpus arc (protocol.md,
+results.md, review.md, per-fold decisions inside each). **Dev-exposed
+sensitivity record — never quote as certified.** Kept for
+reproducibility; not reading material. The certified results are in
+`fresh-corpus-certification-20260717/`.

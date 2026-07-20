@@ -2,7 +2,7 @@
 """Candidate B overlap diagnostic: would a stable-atom gate fire where the
 chain-prefix trie is weak, or only where it is already strong?
 
-Pre-registered in ``analysis/atom-estimator-design-20260719.md`` (Candidate B
+Pre-registered in ``analysis/CLOSED-QUESTIONS.md`` (Candidate B
 falsification, "Diagnostic before any replay"). Candidate B pools a heavy,
 cross-task-stable atom's samples across every chain context and lets that node
 fire when a call contains the atom. Its ONLY route to union gain is firing on

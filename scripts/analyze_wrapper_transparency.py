@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """WTN Stage-1 harness: emergent wrapper-transparency normalization.
 
-Pre-registered in ``analysis/wrapper-transparency-design-20260719.md`` (FINAL,
+Pre-registered in ``analysis/CLOSED-QUESTIONS.md`` (FINAL,
 post-debate). The question: cd-skip ("strip the literal leading ``cd X &&``")
 is a hardcoded rule, not a method. WTN generalizes it -- candidate wrapper
 positions come from shell STRUCTURE (every non-final segment class, keyed by

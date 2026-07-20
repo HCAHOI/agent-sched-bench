@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """WTN Stage-2: certified decision replay of a joint policy vs the frozen cert.
 
-Pre-registered in ``analysis/wrapper-transparency-design-20260719.md``, section
+Pre-registered in ``analysis/CLOSED-QUESTIONS.md``, section
 "Stage-2 pre-registration". Drives THREE arms through the EXISTING offline-probe
 confirmation machinery (``trace_collect.tool_latency_offline_probe``) on the
 frozen fresh-277 manifest, differing ONLY by configuration -- no pipeline fork,

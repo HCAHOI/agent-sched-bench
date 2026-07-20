@@ -6,8 +6,9 @@ GPU/vLLM tooling was removed from it — see src/trace_collect/CLAUDE.md; do
 NOT re-add `--vllm-*/--kv-*/--gpu-*` CLI flags). Everything below is
 committed and pushed to origin (HEAD e0ecc3c at write time).
 
-Companion running log with more detail: `analysis/tool-time-formulation-
-critique-20260714.md` (the critique + full execution order). Related work:
+Companion running log (`tool-time-formulation-critique-20260714.md`) was
+deleted 2026-07-20 in the doc cleanup; recover from git if the full
+execution order is ever needed. Related work:
 `analysis/related-work-synthesis-20260715.md`. Mechanism drill-down:
 `analysis/tool-time-mechanism-analysis-20260715.md`. Memory:
 `kv-swap-eval-state`, `rho-operating-point-directive`.

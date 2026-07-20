@@ -2,7 +2,7 @@
 """Candidate C Stage-1 kill test: does atom-boundary identity add information
 beyond elapsed time alone, for the residual-survival re-check decision?
 
-Pre-registered in ``analysis/atom-estimator-design-20260719.md`` (Candidate C,
+Pre-registered in ``analysis/CLOSED-QUESTIONS.md`` (Candidate C,
 "Stage 1 (2 days, the kill switch)"). The estimator machinery is NOT
 reinvented here: the conditional residual sample sets feed the EXISTING
 ``hazard_recheck_ms`` optimizer from

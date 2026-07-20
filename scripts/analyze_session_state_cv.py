@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Candidate A Stage-1 kill test: session-state-conditioned duration CV.
 
-Pre-registered in ``analysis/atom-estimator-design-20260719.md`` (Candidate A,
+Pre-registered in ``analysis/CLOSED-QUESTIONS.md`` (Candidate A,
 "Session-state-conditioned nodes") INCLUDING the section "Candidate A Stage-1
 amendments (pre-registered 2026-07-20)" which overrides the original sketch on
 two points and is implemented verbatim here:
