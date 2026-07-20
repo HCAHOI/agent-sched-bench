@@ -1,113 +1,142 @@
-# Design spec — λ-oracle pressure headroom screen
+# Design spec — footprint-pricing headroom screen
 
-> **STATUS: PARKED, BLOCKED, NO VALID RESULT (2026-07-20).** The lane
-> is unfinished and its scripts must not be run for findings until the
-> two blocking issues below are fixed and re-reviewed.
->
-> **Blocker 1 — the ceiling guarantee is FALSE (technical).**
-> `hazard_recheck_ms` restricts its trigger search to `k <= believed
-> price`, so a HIGHER fixed price buys a LARGER search domain. When the
-> fixed λ̄ exceeds the per-call λ_i, the fixed-price arm reaches
-> triggers the footprint arm structurally cannot. Measured: violated on
-> 9.2% of random nodes (worst gap 261 ms/call), and on the real corpus
-> λ̄ > λ_i on 87.8% of calls at kv3500. Therefore reported "headroom"
-> is NOT an upper bound, and a negative value is confounded with a
-> search-domain artifact rather than meaning "a constant price is
-> already optimal". Fixing this requires both arms to optimize over a
-> common trigger domain — a code change, not a wording change.
->
-> **Blocker 2 — the kill criterion was amended mid-flight (process,
-> my error).** This spec shipped with a two-way criterion (DROP if
-> headroom below the banked bar). On 2026-07-20 I (the coordinating
-> session) issued a three-way POWER RULE adding an UNDERPOWERED state
-> and requiring the CI upper bound below the bar for DROP. The
-> statistics are sound and non-inferiority framing is the right call —
-> it tightens PROCEED as well as loosening DROP. But I issued it AFTER
-> partial (smoke) headroom numbers had been reported to me, and it was
-> recorded only in the implementation docstring as "pre-registered
-> before any full-corpus number existed". That phrasing is literally
-> true and materially misleading: partial numbers existed and I knew
-> them. It should have been an explicit, dated amendment to this spec —
-> which is what this note now is. Anyone using this lane must treat the
-> power rule as an amendment made with partial information visible,
-> not as an untouched pre-registration.
->
-> No full-corpus run was performed. Nothing from this lane may be
-> cited. The multi-tenant CONTENTION axis remains a structural
-> negative on this corpus (that finding is independent of both
-> blockers and stands — see the λ-honesty section).
+> Formerly "λ-oracle pressure headroom screen". Retitled because both
+> the λ source and the arm semantics changed during the lane; the old
+> title described neither.
 
-> **Status: FINAL (Fable-5 debate 2026-07-20: DEFER pressure-
-> conditioning as a headline experiment; PROCEED on the multi-tenant
-> harness that was never optional; RUN this screen first).** The
-> screen bounds the value of EVERY pressure-aware policy — online or
-> not — before any GPU hour is committed to the direction.
+> **STATUS (2026-07-20): UNPARKED. Ceiling blocker FIXED and
+> independently verified. Awaiting a final wording clearance, then
+> `--final`.** No full-corpus run has completed; nothing from this lane
+> may be cited until one does under a cleared review.
 
-**Date:** 2026-07-20 · Zero GPU, existing data, ~half a day.
+## Defect history (retained deliberately — this lane shipped two)
 
-## The structural observation that makes this cheap
+**Blocker 1 — the ceiling guarantee was FALSE. FIXED 2026-07-20.**
+`hazard_recheck_ms` confines its trigger search to `k <= believed
+price`, so a HIGHER believed price bought a LARGER search domain. When
+the fixed λ̄ exceeded the per-call λ_i, the fixed-price arm reached
+triggers the footprint arm structurally could not, and could beat it
+at the true price — violated on 9.2% of random nodes (worst 261
+ms/call), with λ̄ > λ_i on 87.8% of real calls at kv3500. "Headroom"
+was therefore not a bound and a negative value was confounded with a
+search-domain artifact.
+*Fix:* both arms now optimize the same functional over a COMMON domain
+`[0, kv_cost_ms + guard_ms]` (the panel cell's threshold); the believed
+price enters only the objective, never the domain. *Independent
+verification* (reviewer's own seed, 4000 nodes, three distribution
+families): 0 ceiling violations, 0 triggers outside the common domain,
+and **0.000000 ms shortfall against a dense 20,001-point brute-force
+scan of the continuum** — i.e. the arm is an exact maximizer, not
+merely best-on-its-own-grid. Probe power confirmed by reintroducing the
+bug: 328/4000 violations. The bound is scoped to triggers `<=` the
+panel threshold, which is the shipped policy's own domain.
 
-In `tool_latency_utility_clock.py`: `threshold_ms = kv_cost_ms +
-guard_ms` and `restore_cost_ms = restore_cost_fraction * kv_cost_ms`.
-So `kv_cost_ms` IS the price of the swap action, and the existing kv
-sweep (500…5000) is already a STATIC memory-pressure sweep. A
-pressure-conditioned policy is the same policy with `kv_cost_ms`
-replaced by a time-varying λ(t). Its ceiling is therefore measurable
-offline today.
+**Blocker 2 — the kill criterion was amended mid-flight (process; the
+coordinating session's error).** This spec shipped with a two-way
+criterion (DROP if headroom below the banked bar). On 2026-07-20 the
+coordinating session issued a three-way POWER RULE adding an
+UNDERPOWERED state and requiring the CI upper bound below the bar for
+DROP. The statistics are sound — non-inferiority framing tightens
+PROCEED as well as loosening DROP — but it was issued AFTER partial
+(smoke) headroom numbers were visible, and was recorded only in the
+implementation docstring as "pre-registered before any full-corpus
+number existed". That phrasing is literally true and materially
+misleading. **Treat the power rule as a dated amendment made with
+partial information visible, not as an untouched pre-registration.**
 
-## The screen
+## What this screen actually tests
 
-Over the certified fresh-277 decision corpus at rho=0.94:
+`threshold_ms = kv_cost_ms + guard_ms` and `restore_cost_ms =
+restore_cost_fraction * kv_cost_ms`, so **`kv_cost_ms` IS the price of
+the swap action** and the existing kv sweep is already a static
+memory-pressure sweep. A pressure-conditioned policy is the same policy
+with `kv_cost_ms` replaced by a per-call λ.
 
-- **Clairvoyant arm:** each call priced at the REALIZED λ at its own
-  decision instant. This is an ORACLE — analysis only, never a
-  shippable policy (hindsight rule); labeled as such in every artifact.
-- **Best-fixed arm:** the single best constant λ over the same run,
-  selected on FIT FOLDS only under the existing cross-fit discipline.
-- **Headroom = clairvoyant − best-fixed**, seconds per 277 tasks,
-  task-clustered CI, permutation label per the certified engine.
+The λ originally specified (replayed concurrent occupancy) **does not
+exist in this corpus** and pricing off it was refused — see the
+λ-honesty section. The replacement λ is per-call resident KV footprint
+from `llm_call.data.prompt_tokens` (all 13,410 calls; 1.9k→85k tokens,
+44× spread; median 13.4× growth within a task). KV bytes are linear in
+resident tokens, so this IS the price per call, and it is known at call
+start (an agent's context is frozen while a tool call runs).
 
-Headroom upper-bounds every pressure-aware policy, because no online
-policy can beat the clairvoyant one.
+**Consequence: this is NOT a test of time-varying pressure. It is a
+test of PER-CALL FOOTPRINT-AWARE PRICING** — the certified policy today
+charges one fixed `kv_cost` across a 44× spread of real footprints. The
+arm uses no hindsight and is implementable, so a positive result is a
+directly shippable policy iteration, not headroom for a hypothetical
+future policy.
 
-## λ trajectory (must be honest, and stated)
+## Arms
 
-λ(t) is derived from the replayed concurrent occupancy of the existing
-corpus — the number of simultaneously in-flight calls at each decision
-instant, mapped to a price by a documented monotone map (the kv panel
-supplies the range; the map is config, not a fitted constant). The map
-is NOT tuned to outcomes. If no defensible occupancy signal exists in
-the corpus, the screen reports that and returns a structural negative
-rather than inventing a load model — synthetic load on frozen traces
-is forbidden.
+- **footprint-priced:** each call priced at its own λ_i.
+- **fixed-price (status quo):** the single best constant λ̄, selected on
+  FIT FOLDS only; the shipped panel cell is always a candidate, so this
+  baseline is never worse than what ships today.
+- **Headroom = footprint-priced − fixed-price**, seconds per 277 tasks,
+  task-clustered CI, permutation label from the certified engine.
 
-## Pre-registered kill criterion (frozen before code)
+Conservative by construction: λ̄ is chosen on realized fit-fold totals
+(a stronger baseline), so headroom is a lower bound and a small
+negative value is a legitimate "constant price is already effectively
+optimal" outcome.
 
-**DROP the pressure-conditioning direction** (to one future-work
-sentence) if headroom is below the already-banked pre-restore effect
-(~156 s/277 at kv3500) — do not chase something smaller than what is
-already held. **PROCEED to the live arm** (on the mandatory W5-7
-harness) only if headroom materially exceeds it, with the CI
-excluding zero.
+## Decision rule (two parts, different provenance — state both)
 
-Mandatory reporting either way: the clairvoyant gap in seconds, the
-fire fraction it scales against (currently 1.4-1.5%), and the
-best-fixed λ selected.
+- **The bar — FROZEN BEFORE CODE:** compare against the banked
+  pre-restore effect (~156 s/277 at kv3500). Do not chase something
+  smaller than what is already held. Exposed as
+  `--banked-seconds-per-277` so it is auditable.
+- **The three-way POWER RULE — DATED AMENDMENT (2026-07-20, partial
+  numbers visible):**
+  - **PROCEED** iff the CI lower bound exceeds the bar and the
+    permutation CI excludes zero.
+  - **DROP** iff the CI **upper** bound is below the bar. Only this
+    closes the direction.
+  - **UNDERPOWERED** otherwise. The direction is NOT closed; it may not
+    be cited as evidence of absent headroom and may not serve as a
+    closed axis in the paper's characterization contribution.
 
-## Why a null here is publishable (and de-risks running it)
+Mandatory reporting: headroom with CI, the early-fire fraction it
+scales against, the per-fold λ̄ selected, and the within-task footprint
+growth distribution (the mechanism figure). Panel coherence
+(non-monotonicity across the kv panel) is reported as a DESCRIPTIVE
+secondary indicator only and cannot move the verdict.
 
-If headroom is small, the finding is: *even with an oracle view of
-instantaneous memory price, the swap decision remains essentially
-precomputable at call start* — A0's completeness lemma extended to
-the pressure axis. That strengthens A1 rather than producing nothing,
-and it is a claim neither Continuum (workload-level sliding-window
-load term) nor ThunderAgent (memoryless decay) can make.
+**A SURVIVE does not license deployment.** It triggers a separate
+certified decision replay (paired vs the frozen certified policy at
+rho=0.94, permutation per kv cell, full H1 discipline) — exactly as
+pre-restore required its robust-clock re-confirmation.
+
+## λ-honesty: why occupancy was refused (structural negative)
+
+Measured over all 277 tasks / 13,410 calls: within-task overlap exists
+(336 adjacent pairs) but is a timestamp artifact (max 22 ms, median 1.2
+ms, 100% under 50 ms, all on back-to-back fast reads) — the agent is
+strictly sequential. Cross-task co-occupancy is exactly the collection
+harness's worker count (peak 2, median 2, mean 1.59). The apparent
+occupancy tail (3–9) is sub-millisecond `read_file` bursts colliding at
+tick boundaries: mean latency ~2 ms, **zero** calls above any headline
+threshold. Collection ran against a cloud provider, so no shared KV
+cache existed to contend for.
+
+Pricing λ off that would dress a `--concurrency 2` flag as physics on a
+near-binary signal and would have manufactured headroom ≈ 0 — a false
+negative caused by the corpus lacking pressure variation rather than by
+the direction lacking value.
+
+**Therefore: the multi-tenant CONTENTION axis is a STRUCTURAL NEGATIVE
+on this corpus and this screen does not bound it. Contention claims may
+come only from the W5-7 harness.** This finding is independent of both
+blockers and stands regardless of the screen's verdict.
 
 ## Integrity rules
 
-Clairvoyant arm is oracle-only and never proposed as deployable.
-Best-fixed λ selected on fit folds only. Certified stats engine reused
-verbatim (50000 draws, conf 0.95, seed 0, Bonferroni over the cost
-family). No estimator changes. Degenerate paths inherit conservative
-behavior. Every artifact states the oracle status adjacent to the
-verdict, as A2 does with its trigger-source caveat.
+Footprint λ̄ and reference tokens are fit-fold only. Certified stats
+engine reused verbatim (50000 draws, conf 0.95, seed 0, Bonferroni over
+the cost family). No estimator changes. `prompt_tokens` excludes the
+emitting call's completion tokens, so the footprint is a LOWER BOUND on
+resident KV (median 0.60%, p90 3.2% understatement) — uniform
+under-pricing, not a between-arm bias. Degenerate paths inherit
+conservative behavior. Every artifact states the arm semantics and the
+amendment provenance adjacent to the verdict.
