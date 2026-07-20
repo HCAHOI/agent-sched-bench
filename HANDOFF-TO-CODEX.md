@@ -57,49 +57,50 @@ This result does not bound multi-tenant contention; that axis remains a
 structural negative on this corpus. DROP does not trigger a certified decision
 replay.
 
-## 3. Online gate (W3-4) — built, statistics verified, corpus fix unreviewed
+## 3. Online gate (W3-4) — review gate clear; profile before final
 
-Three untracked files: `src/trace_collect/tool_latency_online_gate.py`,
-`scripts/replay_online_gate.py`, `tests/test_tool_latency_online_gate.py`.
-41 tests pass in ~15 s.
+The unit is `src/trace_collect/tool_latency_online_gate.py`,
+`scripts/replay_online_gate.py`, `tests/test_tool_latency_online_gate.py`, and
+the `.gitignore` sidecar rule. Targeted suite: **50 passed**. A reduced dev
+smoke emitted only SWE-ReBench-100 and Terminal-Bench-83.
 
-**What it is:** a sign-symmetry test martingale with predictable Kelly bets,
-thresholded by Ville's inequality — an anytime-valid stopping rule tested
-against the offline permutation gate on the same paired-delta statistic, at the
-same Bonferroni tail (0.0025).
+**What it is:** a conditional-sign-symmetry test martingale with predictable,
+directional absolute-Kelly bets, thresholded by Ville's inequality. It
+replay-compares the incremental C2 conditioning pair
+`offline_gated_robust_trigger_ms` vs `robust_trigger_ms` on exactly the same
+cross-fitted task deltas and Bonferroni tail as the frozen offline permutation
+gate. It is explicitly not the banked H1 certified-union-vs-deadline pair.
 
-**Independently verified and sound.** A reviewer regenerated the null
-false-certification rate across four adversarial nulls it built itself (Cauchy,
-heteroscedastic, sign-dependent magnitude): exit rates 0.0015–0.0037 against
-nominal 0.005. It also wrote a peeking off-by-one and confirmed the
-predictability guard fails on it (and that the off-by-one is genuinely
-anticonservative at 0.0109).
+**Corpus discipline now enforced:**
 
-**Open, in order:**
-1. A corpus fix was just applied and is **not re-reviewed**. The lane had been
-   pointed at `traces/swe-rebench/qwen3.7-max/20260624T162037` — a superseded
-   50-trace root listed in `excluded_trace_roots` — instead of the
-   manifest-defined 100-task corpus `offline-gated-confirm-100-v2`.
-   Terminal-Bench now uses a task-id list derived from
-   `analysis/tool-time-frontier-terminal-bench-20260715/folds`.
-2. **RETRACTED pending re-measurement:** "zero certifications, effective n
-   1–19, e-value threshold 400 unreachable." Measured on 50 tasks of the wrong
-   corpus. Re-measure at n=100 before restating it anywhere.
-3. `--final` requires both surviving dev corpora (ScienceAgentBench is retired,
-   corpus deleted). `replay_online_gate.py` is single-core.
+- Development/profile runs open only the manifest-defined SWE-ReBench-100 and
+  pinned Terminal-Bench-83 outcomes.
+- `--final` has no corpus override. It scores both development corpora first,
+  preflights the exact pinned fresh-277 identity before opening its outcomes,
+  then scores fresh-277 last as a reused certified-reference row.
+- Results print only after the sidecar, Markdown, and JSON completion anchor
+  publish successfully. Same-path rerun failures cannot leave a stale JSON
+  anchor over mixed-run artifacts.
+
+**Review audit:** five independent review rounds found and fixed corpus leakage,
+sticky-lifecycle/revocation reporting, directional lag/order-sensitivity
+omissions, trigger-pair provenance, and fail-closed publication defects. The
+final review reported **CLEAR: no critical, major, or minor defects**.
+
+The old 50-task claim ("zero certifications, effective n 1–19, threshold 400
+unreachable") remains **RETRACTED**. It used a superseded trace root and must not
+be restated.
 
 ## 4. Next
 
-1. Commit the reviewed pressure-headroom code, tests, design status, and final
-   JSON/Markdown artifact; keep the decisions sidecar local/gitignored.
-2. Re-review the online-gate corpus fix as part of the complete online-gate
-   diff. The old 50-task result remains retracted.
-3. Measure/profile `replay_online_gate.py` before adding parallelism; preserve
-   task-order and RNG semantics exactly if it is parallelized.
-4. Re-measure the canonical 100-task SWE-ReBench development corpus and the
-   pinned 83-task Terminal-Bench corpus before restating any certification,
-   effective-n, or attainability claim.
-5. Run online gate `--final` only after its mandatory review gate is clean.
+1. Measure/profile the full canonical development replay single-core before
+   changing performance code.
+2. Parallelize only the measured bottleneck; preserve task order, per-seed RNG,
+   stable aggregation, and prove workers=1/8 JSON/sidecar identity.
+3. Re-review any performance change.
+4. Run `--final` only after equivalence proof, then report SWE-100/TB-83
+   development diagnostics separately from the fresh-277 certified-reference
+   row.
 
 Two rules still apply: verify inputs against the manifest or pinned task list
 that defines them, and a review the author commissions is not a review.
