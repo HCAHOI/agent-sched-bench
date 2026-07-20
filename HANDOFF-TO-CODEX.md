@@ -57,12 +57,11 @@ This result does not bound multi-tenant contention; that axis remains a
 structural negative on this corpus. DROP does not trigger a certified decision
 replay.
 
-## 3. Online gate (W3-4) — review gate clear; profile before final
+## 3. Online gate (W3-4) — review and performance gates clear
 
-The unit is `src/trace_collect/tool_latency_online_gate.py`,
-`scripts/replay_online_gate.py`, `tests/test_tool_latency_online_gate.py`, and
-the `.gitignore` sidecar rule. Targeted suite: **50 passed**. A reduced dev
-smoke emitted only SWE-ReBench-100 and Terminal-Bench-83.
+The reviewed corpus/statistics unit landed in `d9bba39`. The performance-only
+outer-fold parallelism is ready for its phase commit. Related suite: **133
+passed**; ruff clean.
 
 **What it is:** a conditional-sign-symmetry test martingale with predictable,
 directional absolute-Kelly bets, thresholded by Ville's inequality. It
@@ -87,20 +86,24 @@ sticky-lifecycle/revocation reporting, directional lag/order-sensitivity
 omissions, trigger-pair provenance, and fail-closed publication defects. The
 final review reported **CLEAR: no critical, major, or minor defects**.
 
+**Performance evidence:** a full canonical dev profile spent 1314.52 of
+1333.66 sampled seconds in `cross_fitted_decisions` (1336.64 s wall), so only
+the five independent outer folds were parallelized. On the same
+50-task-per-corpus performance subset at the full statistical discipline,
+workers=1 took 351.61 s and workers=8 took 92.99 s (**3.78x**). JSON was exact
+after removing provenance, the zstd sidecar was byte-identical, and Markdown
+differed only in generated time. Independent performance review: **CLEAR**.
+
 The old 50-task claim ("zero certifications, effective n 1–19, threshold 400
 unreachable") remains **RETRACTED**. It used a superseded trace root and must not
 be restated.
 
 ## 4. Next
 
-1. Measure/profile the full canonical development replay single-core before
-   changing performance code.
-2. Parallelize only the measured bottleneck; preserve task order, per-seed RNG,
-   stable aggregation, and prove workers=1/8 JSON/sidecar identity.
-3. Re-review any performance change.
-4. Run `--final` only after equivalence proof, then report SWE-100/TB-83
-   development diagnostics separately from the fresh-277 certified-reference
-   row.
+1. Commit the reviewed performance change.
+2. Run `uv run python scripts/replay_online_gate.py --final --workers 8`.
+3. Report SWE-100/TB-83 development diagnostics separately from the fresh-277
+   certified-reference row; keep the old wrong-root 50-task result retracted.
 
 Two rules still apply: verify inputs against the manifest or pinned task list
 that defines them, and a review the author commissions is not a review.

@@ -391,6 +391,56 @@ def test_ordered_task_deltas_reject_a_missing_task() -> None:
         _ordered_task_deltas(offline, ["a", "missing"], 3500.0)
 
 
+def test_outer_fold_parallelism_is_byte_order_equivalent() -> None:
+    from scripts.replay_online_gate import ReplayConfig, cross_fitted_decisions
+    from trace_collect.tool_latency_dataset import ToolLatencySample
+
+    samples = {
+        f"task-{index}": [
+            ToolLatencySample(
+                sample_id=f"task-{index}:0",
+                source_trace=f"/tmp/task-{index}/trace.jsonl",
+                task_id=f"task-{index}",
+                agent_id="agent",
+                instance_id=f"task-{index}",
+                iteration=0,
+                action_id=f"action-{index}",
+                tool_name="exec",
+                tool_call_id=f"call-{index}",
+                tool_ts_start=0.0,
+                tool_ts_end=latency_ms / 1000.0,
+                latency_ms=latency_ms,
+                success=True,
+                reported_duration_ms=None,
+                tool_args={"command": "echo ok"},
+            )
+        ]
+        for index, latency_ms in enumerate([100.0, 300.0, 700.0, 1200.0, 2500.0])
+    }
+    task_ids = sorted(samples)
+    cfg = ReplayConfig(
+        fold_count=5,
+        inner_folds=4,
+        command_field="command",
+        max_prefix_depth=4,
+        skip_leading_cd=False,
+        min_tool_history=1,
+        min_profile_tasks=1,
+        costs_ms=(500.0,),
+        guard_ms=0.0,
+        restore_cost_fraction=0.94,
+        replicates=10,
+        confidence_level=0.95,
+        seed=0,
+        order_seeds=(0,),
+    )
+    serial = cross_fitted_decisions(samples, task_ids, cfg, workers=1)
+    parallel = cross_fitted_decisions(samples, task_ids, cfg, workers=8)
+    assert parallel == serial
+    with pytest.raises(ValueError, match="workers must be positive"):
+        cross_fitted_decisions(samples, task_ids, cfg, workers=0)
+
+
 def test_order_sensitivity_reports_a_lag_spread_not_a_verdict_flip() -> None:
     """Order may move the LAG; on a clear effect it must not move the verdict."""
 

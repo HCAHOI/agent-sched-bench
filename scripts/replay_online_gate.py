@@ -84,15 +84,17 @@ row. Emits JSON + MD to ``analysis/`` (``-PARTIAL`` unless ``--final``), plus a
 gitignored zstd per-task decisions sidecar.
 
 Usage (full corpus -- run by the main session, not the smoke):
-  uv run python scripts/replay_online_gate.py --final
+  uv run python scripts/replay_online_gate.py --final --workers 8
 """
 
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 from dataclasses import dataclass
 import datetime as _dt
+import functools
 import json
 import os
 from pathlib import Path
@@ -367,54 +369,70 @@ def _reject_superseded_roots(trace_roots: dict[str, Path], repo_root: Path) -> N
 # --------------------------------------------------------------------------- #
 # Cross-fitted decisions (the certified pipeline, called unmodified).
 # --------------------------------------------------------------------------- #
-def cross_fitted_decisions(
+def _score_fold(
+    fold: int,
     samples_by_task: dict[str, list[ToolLatencySample]],
     task_ids: Sequence[str],
     cfg: ReplayConfig,
 ) -> list[dict[str, Any]]:
-    """Per (call, cost) gated-robust decisions over the outer folds.
-
-    Same outer-fold construction as the certified confirmation and
-    ``analyze_prerestore_accounting``: fold ``f`` evaluates the tasks at stride
-    positions ``f - 1`` and profiles on the rest, so no task is ever scored
-    against a prior fitted on itself.
-    """
+    """Score one independent outer fold."""
 
     declared = list(task_ids)
-    decisions: list[dict[str, Any]] = []
-    for fold in range(1, cfg.fold_count + 1):
-        eval_tasks = {
-            task_id
-            for index, task_id in enumerate(declared)
-            if index % cfg.fold_count == fold - 1
-        }
-        profile_tasks = set(declared) - eval_tasks
-        profile_rows = [
-            sample.to_json_obj()
-            for task_id in sorted(profile_tasks)
-            for sample in samples_by_task[task_id]
-        ]
-        eval_rows = [
-            sample.to_json_obj()
-            for task_id in sorted(eval_tasks)
-            for sample in samples_by_task[task_id]
-        ]
-        result = evaluate_offline_probe_clock(
-            eval_rows,
-            profile_rows=profile_rows,
-            kv_costs_ms=cfg.costs_ms,
-            guard_ms=cfg.guard_ms,
-            inner_folds=cfg.inner_folds,
-            min_tool_history=cfg.min_tool_history,
-            min_profile_tasks=cfg.min_profile_tasks,
-            command_field=cfg.command_field,
-            max_prefix_depth=cfg.max_prefix_depth,
-            skip_leading_cd=cfg.skip_leading_cd,
-            restore_cost_fraction=cfg.restore_cost_fraction,
-        )
-        for row in result["decisions"]:
-            decisions.append({**row, "outer_fold": f"f{fold}"})
-    return decisions
+    eval_tasks = {
+        task_id
+        for index, task_id in enumerate(declared)
+        if index % cfg.fold_count == fold - 1
+    }
+    profile_tasks = set(declared) - eval_tasks
+    profile_rows = [
+        sample.to_json_obj()
+        for task_id in sorted(profile_tasks)
+        for sample in samples_by_task[task_id]
+    ]
+    eval_rows = [
+        sample.to_json_obj()
+        for task_id in sorted(eval_tasks)
+        for sample in samples_by_task[task_id]
+    ]
+    result = evaluate_offline_probe_clock(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=cfg.costs_ms,
+        guard_ms=cfg.guard_ms,
+        inner_folds=cfg.inner_folds,
+        min_tool_history=cfg.min_tool_history,
+        min_profile_tasks=cfg.min_profile_tasks,
+        command_field=cfg.command_field,
+        max_prefix_depth=cfg.max_prefix_depth,
+        skip_leading_cd=cfg.skip_leading_cd,
+        restore_cost_fraction=cfg.restore_cost_fraction,
+    )
+    return [{**row, "outer_fold": f"f{fold}"} for row in result["decisions"]]
+
+
+def cross_fitted_decisions(
+    samples_by_task: dict[str, list[ToolLatencySample]],
+    task_ids: Sequence[str],
+    cfg: ReplayConfig,
+    *,
+    workers: int = 1,
+) -> list[dict[str, Any]]:
+    """Per-(call, cost) decisions, concatenated in ascending outer-fold order."""
+
+    if workers < 1:
+        raise ValueError("workers must be positive")
+    worker = functools.partial(
+        _score_fold,
+        samples_by_task=samples_by_task,
+        task_ids=task_ids,
+        cfg=cfg,
+    )
+    folds = range(1, cfg.fold_count + 1)
+    if workers == 1:
+        return [row for fold in folds for row in worker(fold)]
+    with ProcessPoolExecutor(max_workers=min(workers, cfg.fold_count)) as pool:
+        futures = {fold: pool.submit(worker, fold) for fold in folds}
+        return [row for fold in folds for row in futures[fold].result()]
 
 
 # --------------------------------------------------------------------------- #
@@ -858,6 +876,12 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _default_workers() -> int:
+    """Leave one core for the OS; outer-fold scoring is CPU-bound."""
+
+    return max(1, min(8, (os.cpu_count() or 1) - 1))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--replicates", type=int, default=50000)
@@ -869,6 +893,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Number of seeded task-order permutations for the lag sensitivity "
         "sweep (seeds 0..n-1).",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=_default_workers(),
+        help="CPU processes for independent outer folds; results remain in fold order.",
     )
     parser.add_argument(
         "--limit-tasks",
@@ -919,12 +949,14 @@ def _limit(task_ids: list[str], limit_tasks: int | None, fold_count: int) -> lis
 
 
 def _score_corpus(
-    corpus: dict[str, Any], cfg: ReplayConfig
+    corpus: dict[str, Any], cfg: ReplayConfig, *, workers: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Score one pinned corpus and split public summary from replay trace."""
 
     task_ids = corpus["task_ids"]
-    decisions = cross_fitted_decisions(corpus["samples_by_task"], task_ids, cfg)
+    decisions = cross_fitted_decisions(
+        corpus["samples_by_task"], task_ids, cfg, workers=workers
+    )
     comparison = compare_gates(decisions, task_ids, cfg)
     rendered = {
         key: value
@@ -1120,7 +1152,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     rendered: list[dict[str, Any]] = []
     for corpus in corpora:
         print(f"{corpus['name']}: scoring {len(corpus['task_ids'])} tasks ...")
-        rendered_row, sidecar_row = _score_corpus(corpus, cfg)
+        rendered_row, sidecar_row = _score_corpus(corpus, cfg, workers=args.workers)
         rendered.append(rendered_row)
         sidecar.append(sidecar_row)
 
@@ -1158,7 +1190,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "task_ids": fresh_task_ids,
         }
         print(f"{fresh['name']}: scoring {len(fresh_task_ids)} tasks ...")
-        rendered_row, sidecar_row = _score_corpus(fresh, cfg)
+        rendered_row, sidecar_row = _score_corpus(fresh, cfg, workers=args.workers)
         rendered.append(rendered_row)
         sidecar.append(sidecar_row)
 
@@ -1178,6 +1210,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "family_size": len(cfg.costs_ms),
         "one_sided_tail": (1.0 - cfg.confidence_level) / (2.0 * len(cfg.costs_ms)),
         "order_seed_count": args.order_seeds,
+        "workers": args.workers,
         "cs_method": "sign_symmetry_test_martingale",
         "cs_reference": "Ville 1939; Ramdas et al. Statist. Sci. 2023",
         "bet_rule": BET_RULE,
