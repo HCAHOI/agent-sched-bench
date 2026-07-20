@@ -7,6 +7,7 @@ Nothing has been moved — all paths referenced by handoffs/provenance are stabl
 
 | Doc | What |
 |---|---|
+| `HANDOFF-20260720.md` | **CURRENT STATE — read first.** Pre-restore SURVIVED both trigger gates (first new mechanism); C/B/WTN killed; k>1 re-check collapse confirmed; standing directives; lead decisions pending. Supersedes `HANDOFF-20260719.md`. |
 | `ROADMAP-mlsys2027-20260717.md` | THE execution plan to MLSys 2027: thesis, keep/kill/modify, 13-week schedule w/ deliverables + go/no-go gates. Start here for "what next". |
 | `HANDOFF-tool-time-campaign-20260716.md` | THE campaign handoff: problem, rho=0.94 discipline, architecture seam, 12-finding arc, thesis, code map. |
 | `HANDOFF-fresh-cert-20260717.md` | In-flight fresh-corpus certification: state, how to finish/verify, gotchas. Note: run migrated to remote 216.81.248.101 (28c/78GB), fold-sharded (byte-identical, review-APPROVEd). |
