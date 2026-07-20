@@ -6,17 +6,18 @@ confidence sequence over task-clustered paired regret; replay-validate against
 the offline permutation gate". Serves C2 in ``analysis/PAPER-SKELETON-20260720.md``
 -- certification decides what conditioning ships.
 
-WHAT THIS DOES AND DOES NOT SHOW. It shows that an anytime-valid gate applied to
-the frozen cross-fitted deltas reproduces the offline verdict, and reaches it
-after N tasks rather than only at the end of the corpus. It does NOT show a
-prospective deployment. The deltas are cross-fitted: fold ``f``'s eval tasks are
-scored against a prior fitted on the OTHER folds, so the delta for the task at
-replay position 0 was produced using tasks that arrive later in that same replay
-order. Task ``i``'s delta is therefore not computable at the moment task ``i``
-arrives. The type-I guarantee is unaffected -- the gate's bets are predictable
-with respect to the delta sequence it is fed, under the same sign-symmetry null
-on the same cross-fitted quantity the offline gate already assumes -- but the
-"could have been decided online" reading requires a PREQUENTIAL variant (prior
+WHAT THIS DOES AND DOES NOT SHOW. This is a retrospective comparison: it reads
+an anytime-valid gate after every task in the frozen cross-fitted delta sequence
+and compares those states with the offline end-of-corpus verdict. The final
+replay does NOT establish earlier offline-verdict reproduction or prospective
+deployment. The deltas are cross-fitted: fold ``f``'s eval tasks are scored
+against a prior fitted on the OTHER folds, so the delta for the task at replay
+position 0 was produced using tasks that arrive later in that same replay order.
+Task ``i``'s delta is therefore not computable at the moment task ``i`` arrives.
+The type-I guarantee is unaffected -- the gate's bets are predictable with
+respect to the delta sequence it is fed, under the same sign-symmetry null on
+the same cross-fitted quantity the offline gate already assumes -- but reading
+an observed early crossing prospectively requires a PREQUENTIAL variant (prior
 frozen on a burn-in prefix, never refit on later tasks). That is future work and
 is not claimed here.
 
@@ -867,10 +868,10 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
     )
     lines.append("")
     lines.append(
-        "**Scope.** The deltas are cross-fitted, so this replay shows an "
-        "anytime-valid gate reproducing the offline verdict earlier, NOT a "
-        "prospective online deployment -- a prequential variant (prior frozen "
-        "on a burn-in prefix) is future work."
+        "**Scope.** This is a retrospective replay of cross-fitted deltas "
+        "against the offline verdict. It does NOT establish earlier "
+        "offline-verdict reproduction or prospective online deployment; a "
+        "prequential variant (prior frozen on a burn-in prefix) is future work."
     )
     lines.append("")
     return "\n".join(lines)

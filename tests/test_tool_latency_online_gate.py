@@ -661,7 +661,7 @@ def test_replay_no_longer_exposes_an_interval() -> None:
 
 
 def test_markdown_renders_from_a_comparison() -> None:
-    from scripts.replay_online_gate import render_markdown
+    from scripts.replay_online_gate import build_parser, render_markdown
 
     results = {
         "corpora": [
@@ -686,6 +686,13 @@ def test_markdown_renders_from_a_comparison() -> None:
     assert "NOT RUN" in rendered
     assert "no traces on disk" in rendered
     assert BET_RULE in rendered
+    assert "does NOT establish earlier offline-verdict reproduction" in rendered
+    assert "reproducing the offline verdict earlier" not in rendered
+    help_text = build_parser().format_help()
+    assert (
+        "does not establish earlier offline-verdict reproduction" in help_text.lower()
+    )
+    assert "reproduces the offline verdict" not in help_text.lower()
 
 
 def test_guard_rejects_the_superseded_swe_rebench_root() -> None:

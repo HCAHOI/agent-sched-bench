@@ -17,7 +17,7 @@ Merged (`fb51797`), identity proven — byte-identical artifacts after dropping
 | `adjudicate_k2_recheck` | parallel, 1.12× |
 | `analyze_pressure_headroom` | parallel code present, **UNREVIEWED** — see §2 |
 | `analyze_prior_calibration` | single-core |
-| `replay_online_gate` | single-core |
+| `replay_online_gate` | parallel, 3.78× |
 
 Speedups measured on a 50-task subset. Dead ends, don't repeat: an exact
 O(N log N) `hazard_recheck_ms` is **not** byte-identical (13/30,000 tie-break
@@ -57,11 +57,11 @@ This result does not bound multi-tenant contention; that axis remains a
 structural negative on this corpus. DROP does not trigger a certified decision
 replay.
 
-## 3. Online gate (W3-4) — review and performance gates clear
+## 3. Online gate (W3-4) — COMPLETE, mixed/negative result
 
-The reviewed corpus/statistics unit landed in `d9bba39`. The performance-only
-outer-fold parallelism is ready for its phase commit. Related suite: **133
-passed**; ruff clean.
+The reviewed corpus/statistics unit landed in `d9bba39`; reviewed outer-fold
+parallelism landed in `6b84dba`. The final replay completed with
+`--final --workers 8`. Related suite before final: **133 passed**; ruff clean.
 
 **What it is:** a conditional-sign-symmetry test martingale with predictable,
 directional absolute-Kelly bets, thresholded by Ville's inequality. It
@@ -94,16 +94,33 @@ workers=1 took 351.61 s and workers=8 took 92.99 s (**3.78x**). JSON was exact
 after removing provenance, the zstd sidecar was byte-identical, and Markdown
 differed only in generated time. Independent performance review: **CLEAR**.
 
+**Final replay (commit `6b84dba`, `--final --workers 8`):**
+
+- SWE-100 development: 9/10 agreement, all nine concordances null; kv500 is
+  offline harmful / online continue.
+- TB-83 development: 10/10 agreement, all null.
+- fresh-277 reused reference: 7/10 agreement; concordant harmful at kv2500 and
+  kv3000, concordant null at five cells, and offline-inconclusive /
+  online-harmful disagreements at kv1500, kv2000, kv3500.
+- No online positive certification on any corpus/cell; no revocation/lapse.
+
+This is a mixed/negative characterization. It does not show earlier offline-gate
+reproduction on development data and must not be sold as a shippable online
+replacement. It leaves the paper's C2 claim resting on the banked WTN and
+offline permutation-gate evidence.
+
 The old 50-task claim ("zero certifications, effective n 1–19, threshold 400
 unreachable") remains **RETRACTED**. It used a superseded trace root and must not
 be restated.
 
 ## 4. Next
 
-1. Commit the reviewed performance change.
-2. Run `uv run python scripts/replay_online_gate.py --final --workers 8`.
-3. Report SWE-100/TB-83 development diagnostics separately from the fresh-277
-   certified-reference row; keep the old wrong-root 50-task result retracted.
+1. Commit the final JSON/Markdown and these status updates; keep the decisions
+   sidecar local/gitignored.
+2. Move to the C1 critical path: W5-7 real multi-tenant harness with live
+   pre-restore, then W8-9 head-to-heads.
+3. Keep the old wrong-root 50-task result retracted. The later 50-task-per-corpus
+   run is performance validation only.
 
 Two rules still apply: verify inputs against the manifest or pinned task list
 that defines them, and a review the author commissions is not a review.

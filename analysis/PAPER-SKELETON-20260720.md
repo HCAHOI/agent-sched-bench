@@ -70,6 +70,12 @@ demonstrably prevents a real regression.
 - Calibration lane supplies the complement: the shipped prior is
   honest where the policy reads it (PIT/coverage/CRPS skill vs pooled
   and tool-name baselines; decision-band Brier).
+- The W3-4 anytime-gate replay is a **limitation, not supporting evidence**:
+  SWE-100 and TB-83 development agreement was null-only (plus one
+  offline-harmful/online-continue disagreement); the reused fresh-277 reference
+  had two concordant-harmful and three additional online-harmful cells. No
+  online positive certification occurred. Do not present it as a validated
+  online replacement for the offline permutation gate.
 
 **Contrast:** Continuum conditions on a frozen point TTL;
 ThunderAgent assumes memoryless decay. Neither certifies its
@@ -109,7 +115,7 @@ measurement rather than an untested design choice.
 | Multi-tenant harness (W5-7) | C1 | MANDATORY, not started |
 | Head-to-heads incl. ThunderAgent/Continuum (W8-9) | C1, C2 | not started |
 | Live pre-restore validation | C1 | behind W8 cut line — promote |
-| Online gate (W3-4) | C2 | implemented; corpus discipline review/final replay pending |
+| Online gate (W3-4) | C2 | complete; mixed/negative limitation, not a shipped replacement |
 | Calibration final run | C1, C2 | banked |
 | Footprint pricing screen | C3 | DROP; self-footprint axis closed |
 | TraceLab replay | C1 external validity | not started |
