@@ -115,3 +115,67 @@ def test_make_row_command_prefix_keys_reads_tool_args() -> None:
     assert row_keys({"tool_name": "exec", "tool_args": {"path": "/x"}}) == ()
     assert row_keys({"tool_name": "exec", "tool_args": {"command": 3}}) == ()
     assert row_keys({"tool_args": {"command": "ls"}}) == ()
+
+
+# --------------------------------------------------------------------------- #
+# Learned wrapper-transparency hook (transparent_wrappers).
+# --------------------------------------------------------------------------- #
+_HOOK_COMMANDS = [
+    "cd /w && pip install -e . && python3 foo.py",
+    "make -j2 all",
+    "conda activate env && python run.py",
+    "make && cd /w",
+    "echo 'unbalanced",  # untokenizable
+    "cd /a && python x",
+]
+
+
+@pytest.mark.parametrize("command", _HOOK_COMMANDS)
+def test_empty_transparent_wrappers_is_byte_identical(command: str) -> None:
+    # The empty-set default MUST reproduce the frozen keys byte-for-byte at
+    # every layer, so the certified P_0 path is untouched.
+    assert shell_command_prefix_tokens(
+        command, transparent_wrappers=frozenset()
+    ) == shell_command_prefix_tokens(command)
+    assert command_prefix_keys(
+        "exec", command, max_depth=4, transparent_wrappers=frozenset()
+    ) == command_prefix_keys("exec", command, max_depth=4)
+    row = {"tool_name": "exec", "tool_args": {"command": command}}
+    empty = make_row_command_prefix_keys(
+        "command", max_depth=4, transparent_wrappers=frozenset()
+    )
+    base = make_row_command_prefix_keys("command", max_depth=4)
+    assert empty(row) == base(row)
+
+
+def test_transparent_wrappers_drop_only_nonfinal_matches() -> None:
+    # A transparent verb in a NON-FINAL segment is dropped; the final segment
+    # is never a candidate even if its head matches.
+    assert shell_command_prefix_tokens(
+        "cd /w && make x", transparent_wrappers=frozenset({"cd"})
+    ) == ["make", "x"]
+    assert shell_command_prefix_tokens(
+        "make && cd /w", transparent_wrappers=frozenset({"cd"})
+    ) == ["make", "&&", "cd", "/w"]
+    # Mid-chain wrapper beyond the leading segment is reachable (unlike cd-skip).
+    assert shell_command_prefix_tokens(
+        "cd /w && pip install && python x", transparent_wrappers=frozenset({"pip"})
+    ) == ["cd", "/w", "&&", "python", "x"]
+
+
+def test_transparent_wrappers_support_consolidation() -> None:
+    # Dropping the task-specific cd dir collapses two commands onto one key.
+    a = command_prefix_keys(
+        "exec", "cd /a && python x", max_depth=4, transparent_wrappers=frozenset({"cd"})
+    )
+    b = command_prefix_keys(
+        "exec", "cd /b && python x", max_depth=4, transparent_wrappers=frozenset({"cd"})
+    )
+    assert a == b == ("exec:python", "exec:python x")
+
+
+def test_transparent_wrappers_reject_invalid_set() -> None:
+    with pytest.raises(ValueError, match="transparent_wrappers must be non-empty"):
+        make_row_command_prefix_keys(
+            "command", max_depth=4, transparent_wrappers=frozenset({""})
+        )

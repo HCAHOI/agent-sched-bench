@@ -104,11 +104,17 @@ follow-ups were run on the full corpus and **both KILLED**
    (+25ms) though tail-better (~−135ms). An emergent transparency
    screen (WTN) reproduces the hardcoded rule at zero cost (deltas
    ≤0.3ms) with cd as a passing positive control 5/5 folds. Live form
-   of this follow-up: (normalization + evidence gate) as one joint
-   policy iteration through certified decision replay, emergent-screen
-   variant ONLY — per project-lead directive, the hardcoded cd-skip
-   rule is not a shippable method; it serves solely as an oracle
-   baseline / positive control.
+   of this follow-up was the joint policy (emergent screen + evidence
+   gate) through the Stage-2 certified decision replay — now **KILLED**
+   (`wrapper-transparency-stage2-2026-07-19.md`): screen inconsistent
+   across duration sources (cd 4/5 folds on original timings; apt-get
+   wrongly pooled every fold), no cell certified, directionally
+   harmful on utility (−59.6s/277 tasks at kv3500). Key lesson:
+   Stage-1's MAE gain did not transfer to decision utility — the
+   utility mass sits in heavy prefix nodes the normalization destroys.
+   This follow-up is CLOSED; the shipped estimator remains the
+   H1-certified config, cd-skip remains oracle-baseline only (standing
+   directive).
 2. Atom boundaries as runtime EVIDENCE — **KILLED at Stage 1**. Boundary
    identity flips 72.9% of re-check decisions vs elapsed-only, but the
    paired log-score gain is −0.0137 nats with a task-clustered 95% CI of

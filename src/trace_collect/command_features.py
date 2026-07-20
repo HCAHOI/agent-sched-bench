@@ -71,6 +71,7 @@ def shell_command_prefix_tokens(
     command: str,
     *,
     skip_leading_cd: bool = False,
+    transparent_wrappers: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Normalized token stream of a shell command for prefix-tree keys.
 
@@ -85,12 +86,72 @@ def shell_command_prefix_tokens(
     negligible cost that never defines the workload - the same spirit as the
     env-assignment and redirection stripping, not a command class. Commands
     consisting only of ``cd`` segments are kept unchanged.
+
+    ``transparent_wrappers`` generalizes ``skip_leading_cd`` from the single
+    hardcoded ``cd`` token to a caller-supplied SET of wrapper verbs learned
+    upstream (the wrapper-transparency screen): every non-final sequential
+    segment whose head verb is in the set is dropped, at any position. An
+    empty set (the default) is a no-op, so the returned stream is
+    byte-identical to the un-normalized key - callers pass the empty default
+    to reproduce the frozen behaviour exactly. No token spelling is hardcoded
+    here; the set is data.
     """
 
     tokens = _normalized_tokens(command)
     if skip_leading_cd:
         tokens = _skip_leading_cd_segments(tokens)
-    return [token for token, _ in tokens]
+    stream = [token for token, _ in tokens]
+    if transparent_wrappers:
+        stream = _drop_transparent_wrappers(stream, transparent_wrappers)
+    return stream
+
+
+def _drop_transparent_wrappers(
+    tokens: list[str],
+    transparent_wrappers: frozenset[str],
+) -> list[str]:
+    """Drop non-final sequential segments whose head verb is transparent.
+
+    Splits the normalized token stream at sequential separators (``&&``,
+    ``;``, ``;;``, ``||``), removes every NON-FINAL segment whose first token
+    is in ``transparent_wrappers``, and rebuilds the stream preserving each
+    kept segment's following separator. The final segment is never a wrapper
+    candidate (a wrapper wraps something), so the stream never empties;
+    commands whose wrappers all drop collapse onto the same normalized key
+    (support consolidation). An empty set or an untokenizable command returns
+    ``tokens`` unchanged.
+    """
+
+    if not transparent_wrappers or not tokens:
+        return tokens
+    spans: list[tuple[list[str], str | None]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token in _SEQUENTIAL_SEPARATOR_TOKENS:
+            spans.append((current, token))
+            current = []
+        else:
+            current.append(token)
+    spans.append((current, None))
+    non_empty = [index for index, (seg, _) in enumerate(spans) if seg]
+    if not non_empty:
+        return tokens
+    final_index = non_empty[-1]
+    kept: list[tuple[list[str], str | None]] = []
+    for index, (seg, sep) in enumerate(spans):
+        if not seg:
+            continue
+        if index != final_index and seg[0] in transparent_wrappers:
+            continue  # drop this transparent non-final wrapper segment
+        kept.append((seg, sep))
+    if not kept:
+        return tokens
+    out: list[str] = []
+    for position, (seg, sep) in enumerate(kept):
+        out.extend(seg)
+        if position < len(kept) - 1:
+            out.append(sep if sep is not None else "&&")
+    return out
 
 
 def command_prefix_keys(
@@ -99,12 +160,17 @@ def command_prefix_keys(
     *,
     max_depth: int,
     skip_leading_cd: bool = False,
+    transparent_wrappers: frozenset[str] = frozenset(),
 ) -> tuple[str, ...]:
     """Nested prefix-node keys for one command, ordered general -> specific."""
 
     if max_depth < 1:
         raise ValueError(f"max_depth must be >= 1, got {max_depth}")
-    tokens = shell_command_prefix_tokens(command, skip_leading_cd=skip_leading_cd)
+    tokens = shell_command_prefix_tokens(
+        command,
+        skip_leading_cd=skip_leading_cd,
+        transparent_wrappers=transparent_wrappers,
+    )
     if not tokens:
         return ()
     depth = min(len(tokens), max_depth)
@@ -118,15 +184,24 @@ def make_row_command_prefix_keys(
     *,
     max_depth: int,
     skip_leading_cd: bool = False,
+    transparent_wrappers: frozenset[str] = frozenset(),
 ) -> Callable[[dict[str, Any]], tuple[str, ...]]:
     """Row-level prefix-key function reading the command from ``tool_args``.
 
     Rows without a parseable ``tool_args`` dict or without a string command
     under ``command_field`` yield no keys (tool-level grouping).
+
+    ``transparent_wrappers`` (default empty = frozen behaviour) threads a
+    learned wrapper-transparency set into the key derivation, generalizing
+    ``skip_leading_cd`` (see ``shell_command_prefix_tokens``). It is validated
+    at this config boundary so a misconfigured set fails fast.
     """
 
     if max_depth < 1:
         raise ValueError(f"max_depth must be >= 1, got {max_depth}")
+    if not all(isinstance(wrapper, str) and wrapper for wrapper in transparent_wrappers):
+        raise ValueError("transparent_wrappers must be non-empty strings")
+    transparent_wrappers = frozenset(transparent_wrappers)
 
     def row_keys(row: dict[str, Any]) -> tuple[str, ...]:
         tool_args = row.get("tool_args")
@@ -143,6 +218,7 @@ def make_row_command_prefix_keys(
             command,
             max_depth=max_depth,
             skip_leading_cd=skip_leading_cd,
+            transparent_wrappers=transparent_wrappers,
         )
 
     return row_keys

@@ -239,6 +239,7 @@ def evaluate_offline_probe_clock(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
+    transparent_wrappers: frozenset[str] = frozenset(),
     restore_cost_fraction: float = 0.0,
 ) -> dict[str, Any]:
     """Learn a profile-only guard and evaluate it on disjoint outer tasks.
@@ -247,6 +248,12 @@ def evaluate_offline_probe_clock(
     (inner-fold probe scoring, guard selection, outer triggers, and the
     pooled summary), so refit and evaluation always share one utility. The
     0.0 default reproduces the frozen restore-zero certification exactly.
+
+    ``transparent_wrappers`` threads a learned wrapper-transparency set into
+    the command-prefix keying (see command_features); the empty default is a
+    no-op that reproduces the frozen certification keys byte-for-byte. It is
+    a fit-time key normalization only - every downstream stage (guard
+    selection, triggers, summary) is unchanged.
     """
     kv_costs = normalized_positive_floats(kv_costs_ms, label="kv cost")
     validate_restore_cost(restore_cost_fraction, label="restore_cost_fraction")
@@ -280,6 +287,7 @@ def evaluate_offline_probe_clock(
                 command_field=command_field,
                 max_prefix_depth=max_prefix_depth,
                 skip_leading_cd=skip_leading_cd,
+                transparent_wrappers=transparent_wrappers,
                 restore_cost_fraction=restore_cost_fraction,
             )
         )
@@ -306,6 +314,7 @@ def evaluate_offline_probe_clock(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        transparent_wrappers=transparent_wrappers,
         restore_cost_fraction=restore_cost_fraction,
     )
     scored_rows = _score_clock_rows(
@@ -318,6 +327,7 @@ def evaluate_offline_probe_clock(
         command_field=command_field,
         max_prefix_depth=max_prefix_depth,
         skip_leading_cd=skip_leading_cd,
+        transparent_wrappers=transparent_wrappers,
         restore_cost_fraction=restore_cost_fraction,
     )
     scored_by_key = {
@@ -857,6 +867,7 @@ def _score_clock_rows(
     command_field: str | None,
     max_prefix_depth: int,
     skip_leading_cd: bool,
+    transparent_wrappers: frozenset[str] = frozenset(),
     restore_cost_fraction: float = 0.0,
 ) -> list[dict[str, Any]]:
     row_group_keys = (
@@ -864,6 +875,7 @@ def _score_clock_rows(
             command_field,
             max_depth=max_prefix_depth,
             skip_leading_cd=skip_leading_cd,
+            transparent_wrappers=transparent_wrappers,
         )
         if command_field is not None
         else None

@@ -67,7 +67,6 @@ from dataclasses import dataclass, field
 import datetime as _dt
 import json
 from pathlib import Path
-import subprocess
 import sys
 from typing import Any, Callable, Sequence
 
@@ -106,38 +105,12 @@ _K2_POSITIVE_CONTROL_CLASS = "cd"
 _PREFIX_DEPTH = 4
 _GRID_MIN_EVIDENCE = (1, 5)
 
-# Sequential separators whose sides run one after another (mirrors
-# command_features._SEQUENTIAL_SEPARATOR_TOKENS). A wrapper "segment" is a run
-# of tokens between these; concurrent parents (`|`, `&`, loops) are already
-# excluded upstream by skip_concurrent, so only sequential splits appear here.
-_SEQUENTIAL_SEPARATORS = frozenset({"&&", ";", ";;", "||"})
-
-
 # --------------------------------------------------------------------------- #
 # Structural candidate extraction + data-driven key normalization (no token
 # names). A candidate is any non-final segment's verb; normalization drops the
-# non-final segments whose verb is in a data-selected transparent set.
+# non-final segments whose verb is in a data-selected transparent set (applied
+# by the production key derivation in command_features).
 # --------------------------------------------------------------------------- #
-def _segment_spans(tokens: Sequence[str]) -> list[tuple[list[str], str | None]]:
-    """Split a normalized token stream into (segment_tokens, separator) spans.
-
-    The separator is the sequential operator that FOLLOWED the segment (or
-    ``None`` for the last). Segments keep every non-separator token, so a
-    rebuilt stream can reproduce the production key vocabulary exactly.
-    """
-
-    spans: list[tuple[list[str], str | None]] = []
-    current: list[str] = []
-    for token in tokens:
-        if token in _SEQUENTIAL_SEPARATORS:
-            spans.append((current, token))
-            current = []
-        else:
-            current.append(token)
-    spans.append((current, None))
-    return spans
-
-
 def candidate_classes(command: str) -> list[str]:
     """Verb classes of the NON-FINAL segments of a sequential chain command.
 
@@ -147,8 +120,9 @@ def candidate_classes(command: str) -> list[str]:
     no candidates. Verbs may repeat (e.g. ``cd .. && cd sub && make``).
 
     Uses ``shell_command_segments`` (which drops grouping parens) so a bare
-    ``(`` can never surface as a spurious verb class; ``_segment_spans`` is kept
-    only for key reconstruction, where paren tokens must be preserved verbatim.
+    ``(`` can never surface as a spurious verb class; key reconstruction is
+    delegated to ``command_features.shell_command_prefix_tokens`` (the
+    production drop), which preserves paren tokens verbatim.
     """
 
     verbs = [seg[0] for seg in shell_command_segments(command) if seg]
@@ -175,37 +149,16 @@ def beyond_leading_candidates(command: str) -> list[str]:
 def normalized_key_tokens(command: str, transparent: frozenset[str]) -> list[str]:
     """Token stream with non-final segments whose verb is transparent removed.
 
-    Empty ``transparent`` (or an untokenizable command) returns the production
-    token stream unchanged, so the WTN key is IDENTICAL to the no-normalization
-    key on the degenerate path -- the spec's "degrade to the unmodified config"
-    guarantee. The final segment is never dropped (it is not a candidate), so
-    the stream never empties; chains whose wrappers all drop collapse onto the
-    same normalized key (support consolidation).
+    Delegates to the PRODUCTION key normalization
+    (``command_features.shell_command_prefix_tokens(transparent_wrappers=...)``)
+    so the screen learns transparency against the exact same key derivation the
+    shipped prior uses - no forked segment-split logic to drift. Empty
+    ``transparent`` (or an untokenizable command) returns the production token
+    stream unchanged, so the WTN key is IDENTICAL to the no-normalization key on
+    the degenerate path.
     """
 
-    tokens = shell_command_prefix_tokens(command)
-    if not transparent or not tokens:
-        return tokens
-    spans = _segment_spans(tokens)
-    non_empty = [index for index, (seg, _) in enumerate(spans) if seg]
-    if not non_empty:
-        return tokens
-    final_index = non_empty[-1]
-    kept: list[tuple[list[str], str | None]] = []
-    for index, (seg, sep) in enumerate(spans):
-        if not seg:
-            continue
-        if index != final_index and seg[0] in transparent:
-            continue  # drop this transparent non-final wrapper segment
-        kept.append((seg, sep))
-    if not kept:
-        return tokens
-    out: list[str] = []
-    for position, (seg, sep) in enumerate(kept):
-        out.extend(seg)
-        if position < len(kept) - 1:
-            out.append(sep if sep is not None else "&&")
-    return out
+    return shell_command_prefix_tokens(command, transparent_wrappers=transparent)
 
 
 def wtn_prefix_keys(

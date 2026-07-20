@@ -1,6 +1,23 @@
 # Design spec — emergent wrapper-transparency normalization (WTN)
 
-> **OUTCOME (2026-07-19, full corpus, review-gated code,
+> **STAGE-2 OUTCOME (2026-07-20, full corpus, review-gated code,
+> `wrapper-transparency-stage2-2026-07-19.md`): KILL, both branches.**
+> (i) Screen inconsistency across duration sources: cd transparent 5/5
+> folds on replayed timings (Stage-1) but 4/5 on original timings, and
+> apt-get — the class carrying H1's certified mass — was marked
+> transparent every fold, a confidently wrong pooling where it matters
+> most. (ii) No headline cell certified positive; the joint policy was
+> directionally HARMFUL on decision utility (paired delta −59.6s/277
+> tasks at kv3500, p_harm=0.008 > Bonferroni 0.0025 → inconclusive;
+> oracle row also negative). **Lesson, now a standing principle:
+> estimator-accuracy gains (Stage-1's −21ms MAE) do NOT imply decision-
+> utility gains at the operating point — the utility mass sits in a few
+> heavy prefix nodes that normalization + evidence-gating destroy. The
+> replay gate exists precisely because of this. Shipped estimator stays
+> the H1-certified config, unchanged. WTN closes as an honest negative:
+> one ablation row + the accuracy-vs-utility divergence finding.**
+
+> **STAGE-1 OUTCOME (2026-07-19, full corpus, review-gated code,
 > `wrapper-transparency-stage1-2026-07-19.md`): K1 KILL / K2 pass /
 > K3 pass.** The screen itself is VALIDATED (cd emerges 5/5 folds plus
 > echo/git/ls/python3/which; mass-weighted stability 0.995) and WTN is
