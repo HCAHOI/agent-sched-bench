@@ -50,7 +50,38 @@ separate certified decision replay. Spec:
 the top; the three-way rule was added after partial numbers were visible and
 that is recorded deliberately).
 
-## 3. Verify — what to do, in order
+## 3. Online gate (W3-4) — built, statistics verified, corpus fix unreviewed
+
+Three untracked files: `src/trace_collect/tool_latency_online_gate.py`,
+`scripts/replay_online_gate.py`, `tests/test_tool_latency_online_gate.py`.
+41 tests pass in ~15 s.
+
+**What it is:** a sign-symmetry test martingale with predictable Kelly bets,
+thresholded by Ville's inequality — an anytime-valid stopping rule tested
+against the offline permutation gate on the same paired-delta statistic, at the
+same Bonferroni tail (0.0025).
+
+**Independently verified and sound.** A reviewer regenerated the null
+false-certification rate across four adversarial nulls it built itself (Cauchy,
+heteroscedastic, sign-dependent magnitude): exit rates 0.0015–0.0037 against
+nominal 0.005. It also wrote a peeking off-by-one and confirmed the
+predictability guard fails on it (and that the off-by-one is genuinely
+anticonservative at 0.0109).
+
+**Open, in order:**
+1. A corpus fix was just applied and is **not re-reviewed**. The lane had been
+   pointed at `traces/swe-rebench/qwen3.7-max/20260624T162037` — a superseded
+   50-trace root listed in `excluded_trace_roots` — instead of the
+   manifest-defined 100-task corpus `offline-gated-confirm-100-v2`.
+   Terminal-Bench now uses a task-id list derived from
+   `analysis/tool-time-frontier-terminal-bench-20260715/folds`.
+2. **RETRACTED pending re-measurement:** "zero certifications, effective n
+   1–19, e-value threshold 400 unreachable." Measured on 50 tasks of the wrong
+   corpus. Re-measure at n=100 before restating it anywhere.
+3. `--final` requires both surviving dev corpora (ScienceAgentBench is retired,
+   corpus deleted). `replay_online_gate.py` is single-core.
+
+## 4. Verify — what to do, in order
 
 1. **Equivalence check on the parallelism** (never run): same subset,
    `--workers 1` vs `--workers 8`, diff JSON excluding `provenance`, plus the
