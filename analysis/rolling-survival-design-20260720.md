@@ -1,5 +1,14 @@
 # Design spec — priced residual-time policies over certified latency priors
 
+> **A0 OUTCOME (2026-07-20, full fresh-277, binding):** COLLAPSE
+> CONFIRMED. 670 certified prior nodes × 10 kv cells: max |k2−k1|
+> value gap 0.0 ms (tol 1e-6), induced-decision paired delta 0.0,
+> two-stage reduction validated call-by-call (not assumed), k=2
+> strictly dominated everywhere at 1ms/check overhead
+> (`adjudication-k2-recheck-2026-07-20.md`). Per the binding rule: D2
+> stays dead; the completeness subsection (A1) is live; A2 pre-restore
+> accounting is the next experiment.
+
 > **Status: FINAL, post-debate (Fable-5 adversarial debate 2026-07-20,
 > verdict RESHAPE; all 10 amendments incorporated — the draft's D2
 > replay experiment is CUT as structurally degenerate).** Formerly
