@@ -1,6 +1,6 @@
-# CLAUDE.md - Python MLSys Research Project
+# CLAUDE.md — Python MLSys Research Project
 
-> This file provides authoritative instructions for AI agents working on this codebase.
+> Authoritative instructions for AI agents working on this codebase.
 > All rules here take precedence over default agent behaviors.
 
 ---
@@ -8,7 +8,8 @@
 ## Project Overview
 
 This is an **academic research project** in Machine Learning Systems (MLSys).
-The goal is to produce **publishable, reproducible, and scientifically rigorous** results.
+The goal is to produce **publishable, reproducible, and scientifically rigorous**
+results.
 
 **Primary constraints:**
 - Results must be obtained through legitimate, generalizable methods
@@ -32,11 +33,29 @@ own Python (≥3.11) in-container — see
 
 ---
 
+## The Research Loop
+
+**measure → diagnose → improve → ship**, run at maximum iteration speed.
+Sequencing discipline — diagnose on data you have, validate the improvement
+on data it has not touched — replaces prohibition. Any process step that
+slows the loop without changing a decision should be deleted.
+
+---
+
 ## Research Integrity & Taste (CRITICAL)
 
-> These principles are NON-NEGOTIABLE. Violating them compromises the scientific validity of our work.
+> These principles are NON-NEGOTIABLE. Violating them compromises the
+> scientific validity of our work.
 
-### 1. No Benchmark Gaming
+### 1. The artifact is the system, not the claim
+
+Measurement exists to find mechanisms and guide the next build. An evaluation
+that ends at "works / doesn't work" without answering WHY and WHAT TO CHANGE
+is half a result. Mechanism analysis and case studies are the primary product
+of an evaluation, not an optional appendix. When a result is negative or flips
+between settings, the required response is a diagnosis, not just a verdict.
+
+### 2. No benchmark gaming
 
 - **MUST NOT** add tricks that only work on specific datasets
 - **MUST NOT** tune hyperparameters to overfit evaluation benchmarks
@@ -48,55 +67,103 @@ own Python (≥3.11) in-container — see
 # ❌ FORBIDDEN: Dataset-specific magic numbers
 if dataset_name == "HotpotQA":
     threshold = 0.73  # "tuned" to this specific benchmark
-    
+
 # ✅ CORRECT: Generalizable approach
 threshold = config.get("threshold", 0.5)  # documented, configurable
 ```
 
-### 2. No Hindsight Contamination
+A method component that must be named by token or dataset is not a method.
+If a hand-written rule outperforms, it may serve as an **oracle baseline** or
+a **harness positive control** — never as the shipped mechanism. What ships
+must be learned or derived from data by a stated, general procedure.
 
-- **MUST NOT** use information that would not be available at inference time
-- **MUST NOT** leak ground truth labels into feature engineering
-- **MUST NOT** use "oracle" signals in the actual workflow (only for analysis)
+### 3. No hindsight contamination
+
+- **MUST NOT** use information unavailable at inference time
+- **MUST NOT** leak ground truth into feature engineering
+- **MUST NOT** use "oracle" signals in the workflow (analysis only)
 - **MUST NOT** design methods around post-hoc observations of test data
 
 ```python
 # ❌ FORBIDDEN: Using future/oracle information
 def extract_features(query, ground_truth_answer):  # GT leaked!
     similarity_to_answer = compute_sim(query, ground_truth_answer)
-    
+
 # ✅ CORRECT: Only use available information
 def extract_features(query, retrieved_context):
-    # Only information available at inference time
+    ...
 ```
 
-### 3. No Unjustified Complexity
+**Pre-registration and amendments.** Decision criteria are fixed before the
+numbers exist. If a criterion must change after any number — including a
+partial, smoke, or subset number — that is an **amendment**: date it, record
+what was already visible when it was made, and say so wherever the criterion
+is reported. An amendment made openly is legitimate; an amendment described
+as a pre-registration is not, even when the statement is literally true.
+
+### 4. Match statistical rigor to the decision being made
+
+Systems effects are often small, heavy-tailed, and cluster-correlated, so some
+protection against shipping a harmful change is warranted — but the dose must
+match the decision. The right instrument is usually a single uncertainty
+estimate at the granularity of the actual deployment decision (e.g. one
+cluster-aware interval or test per configuration that would really ship).
+
+Avoid imported ritual from experimental natural science: multiple-comparison
+ceremonies over parameter sweeps no deployment faces, protocol lock-in that
+forbids learning from your own data, or procedures that convert "consistently
+positive everywhere" into "no conclusion." A method that destroys information
+is not conservative; it is broken. Explore freely, label exploration honestly,
+and validate improvements on data that has not shaped them.
+
+**Accuracy is not utility.** A change that improves an estimator's error
+metric can still degrade the decision the estimator feeds. Gate on the
+decision, at the operating point, not on the fit statistic.
+
+### 5. Physical honesty outranks inferential ceremony
+
+Measure real constants on real hardware instead of assuming them. Charge every
+cost the mechanism actually incurs — nothing is free just because it is
+inconvenient to count. Evaluate on real workloads at realistic scale. Report
+absolute numbers next to real baselines rather than only relative
+improvements. Publish the settings where the method loses. An objective
+function that omits a real cost will manufacture success and waste months.
+
+- **MUST** use realistic data scales and distributions
+- **MUST** test on held-out data never seen during development
+- **MUST** include failure cases and limitations in analysis
+- **MUST NOT** introduce mocks, simulations, stubs, or bypasses to avoid
+  running real operations — even "temporarily." If a component is slow,
+  expensive, or inconvenient, that is not a justification for faking it.
+  Plan and wait for approval before implementing.
+- Toy examples are for debugging only, never for final evaluation
+
+### 6. Held-out data is a consumable
+
+The moment a verdict is read from held-out data, that data is
+development-exposed. Budget freshness like money: reserve untouched data for
+the single decision that needs it, know which corpora are already spent, and
+never plan experiments requiring data or funds the project does not have.
+
+### 7. No unjustified complexity
 
 - **MUST NOT** add hyperparameters without clear justification
 - **MUST NOT** hardcode values that should be configurable
-- **MUST NOT** add components "just in case" or "for future use"
+- **MUST NOT** add components "just in case"
 - Every design choice must have a documented rationale
 - Prefer simple baselines that work over complex methods that barely beat them
 
 ```python
 # ❌ FORBIDDEN: Unexplained magic
-alpha = 0.7823  # Where does this come from?
-beta = 1.2 if len(x) > 100 else 0.8  # Why these thresholds?
+alpha = 0.7823
+beta = 1.2 if len(x) > 100 else 0.8
 
 # ✅ CORRECT: Justified and documented
-# Alpha controls exploration-exploitation tradeoff (see Section 3.2 of paper)
+# Alpha controls exploration-exploitation tradeoff (see Section 3.2)
 alpha = config.exploration_weight  # Default: 0.5, tuned on validation set
 ```
 
-### 4. Real Workloads, Real Results, No Synthetic 
-
-- **MUST** use realistic data scales and distributions
-- **MUST** test on held-out data that was never seen during development
-- **MUST** include failure cases and limitations in analysis
-- **MUST** not introduce mocks, simulations, stubs, or bypasses to avoid running real operations — even "temporarily" or "for testing." If a component is slow, expensive, or inconvenient to run, that is not a justification for faking it.plan and wait for approval before implementing.
-- Toy examples are for debugging only, never for final evaluation
-
-### 5. Completeness Over Shortcuts
+### 8. Completeness over shortcuts
 
 - **MUST** implement full pipelines, not hacky shortcuts
 - **MUST** handle edge cases properly (empty inputs, missing data, etc.)
@@ -115,129 +182,62 @@ def process_trace(trace):
         "intermediate_steps": trace["steps"],
         "metadata": trace["metadata"],
         "timing": trace["timing"],
-        # Preserve fields for downstream analysis
     }
 ```
 
-### 6. Use Established Tools
+### 9. Use established tools
 
 - **MUST** use mature, well-tested libraries for standard operations
 - **MUST NOT** reimplement standard algorithms without justification
-- For agent tracing: use established frameworks (LangSmith, Weights & Biases, etc.)
-- For experiment tracking: use proper tools (MLflow, Hydra, etc.)
-- For data processing: use battle-tested libraries (pandas, polars, etc.)
+- Agent tracing: established frameworks. Experiment tracking: proper tools.
+  Data processing: battle-tested libraries.
 
-```python
-# ❌ FORBIDDEN: Reinventing the wheel
-def my_json_parser(text):  # Why not use json.loads?
-    ...
+### 10. Speak the audience's currency
 
-# ✅ CORRECT: Use established tools
-import json
-from langsmith import traceable
-
-@traceable  # Proper tracing with established tool
-def run_agent(query):
-    ...
-```
+Systems venues read multipliers and native units: end-to-end latency,
+percentile tails, throughput, resource footprint. Robustness mechanisms are
+sold as features demonstrated in native units (what breaks without it, and by
+how much), not as statistical guarantees. Keep inferential detail to a short
+methods note and an appendix.
 
 ---
 
-## Code Quality Standards
+## Runtime, Cost, and Patience
 
-### 1. Correctness First
+Two rules that look opposed and are not: **never cut scope to save time**, and
+**never accept avoidable slowness**. Patience applies to work that is
+genuinely expensive. It is not a license to leave a pipeline unprofiled.
 
-- Code must produce correct results before any optimization
-- All assumptions must be validated with assertions or checks
-- Edge cases must panic explicitly or be handled by designed fallback mechanisms, not silently ignored
-- Type hints are required for all function signatures
+### Velocity is a correctness property
 
-```python
-def compute_metric(predictions: list[float], labels: list[float]) -> float:
-    """Compute evaluation metric.
-    
-    Args:
-        predictions: Model predictions, must be same length as labels
-        labels: Ground truth labels
-        
-    Returns:
-        Metric value in range [0, 1]
-        
-    Raises:
-        ValueError: If inputs have mismatched lengths or are empty
-    """
-    if len(predictions) != len(labels):
-        raise ValueError(f"Length mismatch: {len(predictions)} vs {len(labels)}")
-    if not predictions:
-        raise ValueError("Empty input")
-    ...
-```
+Time-to-insight is part of research quality. Before launching any long
+computation:
 
-### 2. Simplicity
+- Estimate wall-clock time and say it out loud; re-estimate when evidence
+  contradicts the estimate.
+- **Profile before enduring.** If a run is slow, measure where the time goes
+  before accepting the duration as inherent. Attribute expected cost to each
+  component; any component consuming a large share must justify itself.
+- **Parallelize everything provably independent** (folds, shards, corpora,
+  configurations). **Sequential-by-default is a bug.** Check
+  memory-footprint × concurrency against the machine before launch.
+- Instrument long runs with progress signals so "slow" and "stuck" are
+  distinguishable without attaching a profiler.
+- Optimizations to numerically load-bearing code must be proven
+  **byte-identical** on real artifacts, not merely "tests pass." Floating-point
+  reassociation changes results; a faster path that alters a tie-break is a
+  behavior change requiring its own decision and re-runs.
 
-- Generated code must stay simple and readable
-- Comments must be concise and add value (not repeat the code)
-- Avoid over-complex abstractions; prefer explicit over implicit
-- One function should do one thing
+### Do not alter scope due to runtime
 
-```python
-# ❌ Over-commented
-# This function adds two numbers together by taking the first number
-# and the second number and using the + operator to add them
-def add(a, b):
-    return a + b  # Return the sum of a and b
-
-# ✅ Appropriately commented
-def compute_f1(precision: float, recall: float) -> float:
-    """Harmonic mean of precision and recall."""
-    if precision + recall == 0:
-        return 0.0
-    return 2 * precision * recall / (precision + recall)
-```
-
-### 3. No Code Duplication
-
-- **MUST NOT** duplicate same/similar logic across files
-- If you find yourself copying code, extract to a shared utility
-- Before implementing, check if similar functionality already exists
-- Generalize existing implementations when extending functionality
-
-### 4. Configuration Management
-
-- All configurable values in config files, not hardcoded
-- Use hierarchical configuration (Hydra, OmegaConf, or similar)
-- Separate: data config, model config, experiment config
-- Log full config with every experiment run
-
-```python
-# ❌ FORBIDDEN
-learning_rate = 0.001
-batch_size = 32
-
-# ✅ CORRECT
-@dataclass
-class TrainingConfig:
-    learning_rate: float = 0.001
-    batch_size: int = 32
-    
-config = TrainingConfig(**load_yaml("configs/training.yaml"))
-```
-
----
-## Be Patient — Do Not Alter Scope Due to Runtime
-
-**Long-running operations are expected in MLSys research.** Do not let execution time influence your decisions.
-
-**MUST NOT** take any of the following actions without explicit human approval:
+**MUST NOT**, without explicit human approval:
 
 - Cancel a download/process because it's "taking too long"
-- Substitute a smaller dataset, model, or subset "to save time"  
+- Substitute a smaller dataset, model, or subset "to save time"
 - Reduce epochs, iterations, or sample size for "quick testing"
 - Skip preprocessing steps that seem "expensive"
 - Use cached/stale results instead of recomputing
-- Switch to a "lighter" alternative (e.g., smaller model, fewer features)
-
-**Expected timescales you should wait for:**
+- Switch to a "lighter" alternative
 
 | Operation | Normal Duration |
 |-----------|-----------------|
@@ -247,12 +247,58 @@ config = TrainingConfig(**load_yaml("configs/training.yaml"))
 | Full evaluation pipeline | Minutes to hours |
 | Hyperparameter search | Hours to days |
 
-**If you believe the runtime is genuinely problematic:**
+If runtime is genuinely problematic: report the expected duration, explain the
+concern, **wait for approval**, and never silently substitute.
 
-1. Report the expected duration to the human
-2. Explain why you think it may be an issue
-3. **Wait for explicit approval** before changing anything
-4. Never silently make substitutions
+---
+
+## Code Quality Standards
+
+### 1. Correctness first
+
+- Correct results before any optimization
+- Validate assumptions with assertions or checks
+- Edge cases must panic explicitly or be handled by designed fallback, never
+  silently ignored
+- Type hints required on all function signatures
+
+```python
+def compute_metric(predictions: list[float], labels: list[float]) -> float:
+    """Compute evaluation metric.
+
+    Raises:
+        ValueError: If inputs have mismatched lengths or are empty
+    """
+    if len(predictions) != len(labels):
+        raise ValueError(f"Length mismatch: {len(predictions)} vs {len(labels)}")
+    if not predictions:
+        raise ValueError("Empty input")
+```
+
+### 2. Simplicity
+
+- Generated code must stay simple and readable
+- Comments must add value, not repeat the code
+- Avoid over-complex abstractions; prefer explicit over implicit
+- One function does one thing
+
+### 3. No code duplication
+
+- **MUST NOT** duplicate same/similar logic across files
+- Extract to a shared utility instead of copying
+- Check whether similar functionality already exists before implementing
+- Generalize existing implementations when extending functionality
+
+### 4. Configuration management
+
+All configurable values in config files, not hardcoded. Hierarchical config.
+Separate data / model / experiment config. Log full config with every run.
+
+**Every configuration flag has an owner.** Never inherit a template, default,
+or previous invocation unexamined. Each parameter on a launched command line
+must have a stated reason to be there. Parameters that contradict known
+physical reality or a standing decision must be flagged and approved before
+launch, even if they look like harmless plumbing.
 
 ---
 
@@ -285,53 +331,88 @@ and `configs/benchmarks/<slug>.yaml`.
 
 ---
 
-## Mandatory Review Gate for Vibe Coding
+## Mandatory Review Gate
 
-Before proceeding to any of the following milestones, you **MUST** spawn a separate sub-agent to conduct a rigorous code review:
+Before completing a major module, committing a significant refactor, running
+any experiment that produces results for analysis, or touching the evaluation
+pipeline, the work **MUST** pass an independent review.
 
-**Trigger points:**
-- Completing a major module or feature
-- Before committing a significant refactor
-- Before running any experiment that will produce results for analysis
-- Before any code that touches the evaluation pipeline
+**The gate has three requirements. All are necessary.**
 
-**Review process:**
+1. **Independent.** The reviewer is spawned by the coordinator, not by the
+   author, and is not briefed by the author. An author who commissions and
+   frames its own review has not passed the gate — it has selected its own
+   examiner. Self-identified findings are useful input; they are not a gate.
+2. **Fresh context.** The reviewer did not write the code. Authors develop
+   tunnel vision: they are convinced the implementation is correct because
+   they wrote it with that intent.
+3. **Frozen target.** The author stops writing before the review begins and
+   does not resume until findings arrive. Reviewing a moving file produces
+   withdrawn findings and wasted round trips.
 
-1. **Spawn a dedicated reviewer sub-agent** with a fresh context (not the one that wrote the code — the author is blind to their own mistakes) and ordered to be strict and have good research taste.
+**The reviewer must check:** correctness (does the logic do what it claims);
+research integrity (hindsight leakage, dataset-specific tricks, unjustified
+magic numbers, criteria amended after seeing numbers); completeness (fields
+preserved, edge cases handled); consistency with existing conventions.
 
-2. **The reviewer must check:**
-   - Correctness: Does the logic actually do what it claims?
-   - Research integrity: Any hindsight leakage? Benchmark-specific tricks? Unjustified magic numbers?
-   - Completeness: Are all fields preserved? Edge cases handled?
-   - Consistency: Does it match existing conventions and documentation?
+**Iterate until clean:** 🔴 critical or 🟠 major → fix and re-review. 🟡 minor
+→ may proceed, but still fix. Log what was reviewed and how issues were
+resolved; this is the audit trail.
 
-3. **Iterate until clean:**
-   - If the reviewer finds 🔴 critical or 🟠 major issues → fix and re-review
-   - If only 🟡 minor issues remain → may proceed (but still fix them)
-   - If clean → proceed to experiment/commit
+**Verify claims rather than accepting summaries.** "Tests pass" is not proof of
+equivalence; a test covers the inputs its author imagined. When a claim is
+load-bearing, check it against the real artifact — regenerate and diff.
 
-4. **Document the review:**
-   - Log what was reviewed
-   - Log issues found and how they were resolved
-   - This creates an audit trail
+**Non-negotiable:** no experiment result is valid if the code that produced it
+did not pass this gate. Running experiments on unreviewed code wastes compute
+on potentially meaningless results.
 
-**Why this matters:**
+---
 
-The agent that writes code develops "tunnel vision" — it becomes convinced its implementation is correct because it wrote it with that intent. A fresh sub-agent has no such bias. It reads the code as-is and catches:
-- Logic errors the author was blind to
-- Subtle hindsight contamination that "felt natural" while writing
-- Hardcoded values that the author "meant to make configurable later"
-- Missing edge cases the author didn't think of
+## Records and Documents
 
-**Non-negotiable rule:**
+**Rewrite documents; do not append to them.** A specification states what is
+true now. Stacking status banners, "OUTCOME" blocks, and amendment notes on
+top of a stale body produces a changelog that a reader must diff to
+understand, and it is how a directory becomes misleading. When findings change
+what a document says, rewrite the document.
 
-No experiment results are valid if the code that produced them was not reviewed through this gate. Running experiments on unreviewed code is wasting compute on potentially meaningless results.
+History belongs in a document only when the history itself is load-bearing:
+an integrity record (a criterion amended after numbers were visible), a defect
+that shipped, or a decision whose reasoning constrains future work. Everything
+else is noise that costs the next reader time.
+
+- One index that maps the directory; keep it current.
+- One file recording settled questions and why each died, so closed questions
+  are not silently re-opened.
+- Frozen result artifacts are evidence — do not delete them to reduce clutter.
+- Superseded plans and design docs for abandoned work should be deleted;
+  version control retains them.
+- Coined shorthand is not vocabulary. Write plain language in anything a
+  collaborator or reviewer will read.
+
+---
+
+## Delegation and Coordination
+
+When work is split across agents:
+
+- **Explicit file ownership.** Each lane owns a stated set of files. An agent
+  that needs to edit a file it does not own must surface that, not edit it.
+  Two agents reasoning about one file — two writers, or a writer and a reader
+  — is the failure mode; concurrent lanes on disjoint files are safe.
+- **No lane-to-lane negotiation.** All coordination routes through the
+  coordinator, so conflicting reports become a decision rather than a loop.
+- **Decide what is yours.** If the answer is derivable from facts already in
+  hand, derive it and report the decision. Escalate only what genuinely
+  requires the human: spending money, irreversible actions, changes of goal.
+  A queue of questions is not delegation; it moves work onto the human.
+- **Spawning a lane is not progress.** Progress is a result that passed the
+  gate. Count delivered results, not lanes started.
 
 ---
 
 ## Done Criteria (Pre-Commit Checklist)
-
-Before finalizing any change:
 
 ### Scope Verification
 - [ ] Modified files stay within requested scope
@@ -339,7 +420,7 @@ Before finalizing any change:
 - [ ] No changes to unrelated modules
 
 ### Functional Verification
-- [ ] Run relevant test command(s) - report what was run
+- [ ] Run relevant test command(s) — report what was run
 - [ ] Verify at least one representative output is generated
 - [ ] Check no regressions in existing functionality
 
@@ -352,10 +433,13 @@ Before finalizing any change:
 ### Research Integrity
 - [ ] No benchmark-specific tricks introduced
 - [ ] No hindsight/oracle information leakage
+- [ ] Criteria unchanged since numbers appeared, or the change is recorded
+      as a dated amendment
 - [ ] All design choices are justified
 - [ ] Generalizable to other datasets/settings
 
 ### Documentation
+- [ ] Affected documents rewritten, not annotated
 - [ ] Changelog updated if behavior changed
 - [ ] Docstrings for new public functions
 - [ ] Config changes documented
@@ -388,7 +472,8 @@ Types: feat, fix, refactor, docs, test, config
 - Modify files outside the scope of current task
 - Make "improvements" that weren't requested
 - Simplify by removing functionality (simplify implementation, not behavior)
-- Add unnecessary exception handling - this is a research project, not a production system, we should let the code fail fast so that we can quickly find unaligned behavior
+- Add unnecessary exception handling — this is a research project; let code
+  fail fast so unaligned behavior surfaces quickly
 
 ### When Uncertain
 1. First: Check existing code for precedent
