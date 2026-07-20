@@ -89,7 +89,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import datetime as _dt
 import json
 from pathlib import Path
@@ -110,6 +110,9 @@ from scripts.adjudicate_k2_recheck import (  # noqa: E402
     _row_group_keys,
 )
 from trace_collect.tool_latency_dataset import ToolLatencySample  # noqa: E402
+from trace_collect.tool_latency_offline_probe import (  # noqa: E402
+    evaluate_offline_probe_clock,
+)
 from trace_collect.tool_latency_profiled import (  # noqa: E402
     LatencyPriorNode,
     build_latency_prior,
@@ -205,6 +208,9 @@ def prerestore_start_ms(
 # --------------------------------------------------------------------------- #
 # Per-eval-call scoring over the certified folds.
 # --------------------------------------------------------------------------- #
+_TRIGGER_SOURCES = ("hazard", "robust")
+
+
 @dataclass(frozen=True)
 class PrerestoreConfig:
     fold_count: int
@@ -219,6 +225,18 @@ class PrerestoreConfig:
     replicates: int
     confidence_level: float
     seed: int
+    # Swap trigger the pre-restore start is clamped to (s >= g). "hazard" =
+    # hazard_recheck_ms (optimistic screen); "robust" = the SHIPPED offline-gated
+    # robust clock's per-call trigger, reproduced via evaluate_offline_probe_clock.
+    trigger_source: str = "hazard"
+    inner_folds: int = 5  # only used by the robust source's offline probe
+
+    def __post_init__(self) -> None:
+        if self.trigger_source not in _TRIGGER_SOURCES:
+            raise ValueError(
+                f"trigger_source must be one of {_TRIGGER_SOURCES}, got "
+                f"{self.trigger_source!r}"
+            )
 
 
 def _score_eval_call(
@@ -228,29 +246,33 @@ def _score_eval_call(
     kv_cost_ms: float,
     guard_ms: float,
     restore_cost_fraction: float,
-    trigger_cache: dict[tuple[int, float], tuple[float, float | None]],
+    swap_trigger_ms: float | None,
+    start_cache: dict[tuple[int, float, float], float | None],
 ) -> dict[str, Any]:
-    """Score one held-out call at one kv cell against its fit-fold node."""
+    """Score one held-out call at one kv cell against its fit-fold node.
+
+    ``swap_trigger_ms`` is the swap trigger the pre-restore start is clamped to;
+    ``None`` means the hazard source (compute ``hazard_recheck_ms`` here, the
+    unchanged default). The robust source passes the shipped robust trigger.
+    """
 
     threshold_ms = kv_cost_ms + guard_ms
     restore_cost_ms = restore_cost_fraction * kv_cost_ms
-    # id(node.values) keys distinct fit nodes: safe because the cache is per-fold
-    # and the prior's node lists stay alive for the fold (same pattern as A0).
-    cache_key = (id(node.values), kv_cost_ms)
-    cached = trigger_cache.get(cache_key)
-    if cached is None:
+    if swap_trigger_ms is None:
         swap_trigger_ms = hazard_recheck_ms(
             node.values,
             threshold_ms=threshold_ms,
             kv_cost_ms=kv_cost_ms,
             restore_cost_ms=restore_cost_ms,
         )
-        start_ms = prerestore_start_ms(
+    # s* depends only on (fit node, cost, swap-trigger lower bound). id(node.values)
+    # is safe: the cache is per-fold and the prior's node lists stay alive (as A0).
+    cache_key = (id(node.values), kv_cost_ms, swap_trigger_ms)
+    if cache_key not in start_cache:
+        start_cache[cache_key] = prerestore_start_ms(
             node, swap_trigger_ms=swap_trigger_ms, restore_cost_ms=restore_cost_ms
         )
-        trigger_cache[cache_key] = (swap_trigger_ms, start_ms)
-    else:
-        swap_trigger_ms, start_ms = cached
+    start_ms = start_cache[cache_key]
     hidden_ms, wasted_ms = prerestore_components(
         latency_ms, start_ms, restore_cost_ms=restore_cost_ms
     )
@@ -265,6 +287,41 @@ def _score_eval_call(
         "wasted_restore_ms": wasted_ms,
         "utility_ms": hidden_ms - wasted_ms,
         "fired": fired,
+    }
+
+
+def _robust_swap_triggers(
+    eval_rows: list[dict[str, Any]],
+    profile_rows: list[dict[str, Any]],
+    cfg: PrerestoreConfig,
+) -> dict[tuple[str, float], float]:
+    """Per (sample_id, kv) shipped robust swap trigger from the certified pipeline.
+
+    Reuses ``evaluate_offline_probe_clock`` verbatim (no reimplementation); the
+    ``offline_gated_robust_trigger_ms`` field already falls back to the deadline
+    (threshold) when the robust clock does not gate an early swap, so pre-restore
+    inherits that conservatively (``s >= g`` with ``g == threshold``, no earlier
+    trigger invented).
+    """
+
+    result = evaluate_offline_probe_clock(
+        eval_rows,
+        profile_rows=profile_rows,
+        kv_costs_ms=cfg.costs_ms,
+        guard_ms=cfg.guard_ms,
+        inner_folds=cfg.inner_folds,
+        min_tool_history=cfg.min_tool_history,
+        min_profile_tasks=cfg.min_profile_tasks,
+        command_field=cfg.command_field,
+        max_prefix_depth=cfg.max_prefix_depth,
+        skip_leading_cd=cfg.skip_leading_cd,
+        restore_cost_fraction=cfg.restore_cost_fraction,
+    )
+    return {
+        (str(d["sample_id"]), float(d["kv_cost_ms"])): float(
+            d["offline_gated_robust_trigger_ms"]
+        )
+        for d in result["decisions"]
     }
 
 
@@ -294,8 +351,18 @@ def score_decisions(
             for task_id in sorted(profile_tasks)
             for sample in samples_by_task[task_id]
         ]
+        eval_rows = [
+            sample.to_json_obj()
+            for task_id in sorted(eval_tasks)
+            for sample in samples_by_task[task_id]
+        ]
         prior = build_latency_prior(profile_rows, row_group_keys=row_group_keys)
-        trigger_cache: dict[tuple[int, float], tuple[float, float | None]] = {}
+        robust_g = (
+            _robust_swap_triggers(eval_rows, profile_rows, cfg)
+            if cfg.trigger_source == "robust"
+            else {}
+        )
+        start_cache: dict[tuple[int, float, float], float | None] = {}
         for task_id in sorted(eval_tasks):
             for sample in samples_by_task[task_id]:
                 row = sample.to_json_obj()
@@ -308,13 +375,19 @@ def score_decisions(
                 )[-1]
                 latency_ms = float(row["latency_ms"])
                 for kv_cost_ms in cfg.costs_ms:
+                    swap_trigger_ms = (
+                        robust_g[(str(row["sample_id"]), kv_cost_ms)]
+                        if cfg.trigger_source == "robust"
+                        else None
+                    )
                     scored = _score_eval_call(
                         node,
                         latency_ms,
                         kv_cost_ms=kv_cost_ms,
                         guard_ms=cfg.guard_ms,
                         restore_cost_fraction=cfg.restore_cost_fraction,
-                        trigger_cache=trigger_cache,
+                        swap_trigger_ms=swap_trigger_ms,
+                        start_cache=start_cache,
                     )
                     decisions.append(
                         {
@@ -449,6 +522,7 @@ def summarize(
     verdict = "SURVIVE" if survive_costs else "KILL"
     return {
         "verdict": verdict,
+        "trigger_source": cfg.trigger_source,
         "survive_positive_headline_costs_ms": survive_costs,
         "kill_criterion": (
             "net positive with a task-clustered permutation CI excluding zero "
@@ -491,16 +565,33 @@ def render_markdown(results: dict[str, Any], provenance: dict[str, Any]) -> str:
         f"Generated {provenance['generated']} (git {provenance['git_sha']})."
     )
     lines.append("")
-    lines.append(f"**Verdict: {results['verdict']}**")
+    source = results["trigger_source"]
+    lines.append(f"**Verdict: {results['verdict']}** (trigger source: `{source}`)")
+    lines.append("")
+    if source == "hazard":
+        lines.append(
+            "> Swap-trigger asymmetry: the swap trigger `g` here is "
+            "`hazard_recheck_ms`, the earlier-firing OPTIMISTIC analog of the "
+            "SHIPPED robust clock (which fires later or falls back to the "
+            "deadline). An earlier `g` only widens the pre-restore window, so a "
+            "**KILL is conservative/strong** (pre-restore fails even given its "
+            "best shot), whereas a **SURVIVE is optimistic-screen-only until "
+            "re-confirmed under `--trigger-source robust`**."
+        )
+    else:
+        lines.append(
+            "> Swap trigger `g` here is the SHIPPED offline-gated robust clock "
+            "(`offline_gated_robust_trigger_ms`), reproduced via the certified "
+            "`evaluate_offline_probe_clock` pipeline; deadline fallbacks inherit "
+            "conservatively (no earlier trigger invented). This is the "
+            "re-confirmation run: a **KILL here renders any hazard-source SURVIVE "
+            "optimistic-screen-only**."
+        )
     lines.append("")
     lines.append(
-        "> Swap-trigger asymmetry: the swap trigger `g` here is "
-        "`hazard_recheck_ms`, the earlier-firing optimistic analog of the "
-        "SHIPPED robust clock (which fires later or falls back to the deadline). "
-        "An earlier `g` only widens the pre-restore window, so a **KILL is "
-        "conservative/strong** (pre-restore fails even given its best shot), "
-        "whereas any **SURVIVE must be re-confirmed under the shipped robust-clock "
-        "`g` (W10-11 GPU validation) before pre-restore is acted on**."
+        "> Pre-registered decision rule: pre-restore is ACTIONABLE only under "
+        "SURVIVE from BOTH trigger sources (hazard optimistic screen AND robust "
+        "shipped-clock re-confirmation). GPU live validation remains W10-11."
     )
     lines.append("")
     lines.append(f"Kill criterion (frozen): {results['kill_criterion']}.")
@@ -557,6 +648,14 @@ def build_parser() -> argparse.ArgumentParser:
             "offline-gated-robust/manifest.json"
         ),
     )
+    parser.add_argument(
+        "--trigger-source",
+        choices=_TRIGGER_SOURCES,
+        default="hazard",
+        help="Swap trigger g the pre-restore start is clamped to. hazard "
+        "(default, unchanged): hazard_recheck_ms optimistic screen. robust: the "
+        "SHIPPED offline-gated robust clock (re-confirmation).",
+    )
     parser.add_argument("--replicates", type=int, default=50000)
     parser.add_argument("--confidence-level", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=0)
@@ -573,16 +672,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _default_output_paths(final: bool) -> tuple[Path, Path]:
+def _default_output_paths(final: bool, trigger_source: str) -> tuple[Path, Path]:
     today = _dt.date.today().isoformat()
     suffix = "" if final else "-PARTIAL"
-    stem = f"analysis/prerestore-accounting-{today}{suffix}"
+    # Keep the committed hazard filename stable; robust gets its own artifact.
+    src = "" if trigger_source == "hazard" else f"-{trigger_source}"
+    stem = f"analysis/prerestore-accounting{src}-{today}{suffix}"
     return Path(f"{stem}.json"), Path(f"{stem}.md")
+
+
+def _write_decisions_zst(path: Path, decisions: list[dict[str, Any]]) -> None:
+    """Write per-call decisions to a zstd sidecar (kept local, not committed)."""
+
+    import subprocess
+
+    data = json.dumps(decisions, default=list).encode("utf-8")
+    # ponytail: shell out to the zstd CLI (no `zstandard` dep installed); "-"
+    # reads the JSON from stdin.
+    subprocess.run(
+        ["zstd", "-q", "-f", "-o", str(path), "-"], input=data, check=True
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    default_json, default_md = _default_output_paths(args.final)
+    default_json, default_md = _default_output_paths(args.final, args.trigger_source)
     out_json = args.out_json or default_json
     out_md = args.out_md or default_md
     print(_banner(args.final))
@@ -603,6 +717,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         replicates=args.replicates,
         confidence_level=args.confidence_level,
         seed=args.seed,
+        trigger_source=args.trigger_source,
+        inner_folds=manifest["inner_folds"],
     )
     summary, decisions = run_prerestore_accounting(samples_by_task, task_ids, cfg)
     provenance = {
@@ -619,15 +735,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         "git_sha": _git_sha(),
         "generated": _dt.datetime.now().isoformat(timespec="seconds"),
     }
+    # Main JSON carries only summary+cells; per-call decisions go to a local zst
+    # sidecar (not committed) to keep the committed artifact small.
+    decisions_path = out_json.with_name(out_json.stem + "-decisions.json.zst")
     payload = {
         "provenance": provenance,
         "config": cfg.__dict__,
+        "decisions_sidecar": decisions_path.name,
         **summary,
-        "decisions": decisions,
     }
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(payload, indent=2, default=list), encoding="utf-8")
     out_md.write_text(render_markdown(summary, provenance), encoding="utf-8")
+    _write_decisions_zst(decisions_path, decisions)
 
     print(
         f"verdict={summary['verdict']} "
@@ -641,6 +761,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
     print(f"wrote {out_json}")
     print(f"wrote {out_md}")
+    print(f"wrote {decisions_path}")
 
 
 if __name__ == "__main__":

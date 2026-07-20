@@ -6,6 +6,7 @@ import pytest
 from scripts.analyze_prerestore_accounting import (
     PrerestoreConfig,
     _expected_prerestore_utility,
+    _robust_swap_triggers,
     prerestore_components,
     prerestore_start_ms,
     score_decisions,
@@ -134,7 +135,13 @@ def _sample(task_id: str, sample_id: str, latency_ms: float) -> ToolLatencySampl
     )
 
 
-def _cfg(costs_ms: tuple[float, ...], *, fold_count: int = 2) -> PrerestoreConfig:
+def _cfg(
+    costs_ms: tuple[float, ...],
+    *,
+    fold_count: int = 2,
+    trigger_source: str = "hazard",
+    inner_folds: int = 2,
+) -> PrerestoreConfig:
     return PrerestoreConfig(
         fold_count=fold_count,
         command_field="command",
@@ -148,6 +155,8 @@ def _cfg(costs_ms: tuple[float, ...], *, fold_count: int = 2) -> PrerestoreConfi
         replicates=2000,
         confidence_level=0.95,
         seed=0,
+        trigger_source=trigger_source,
+        inner_folds=inner_folds,
     )
 
 
@@ -204,10 +213,92 @@ def test_cross_fit_real_positive_start_from_fit_samples() -> None:
     assert expected_start is not None and expected_start > 0.0  # real positive s*
     assert row["swap_trigger_ms"] == pytest.approx(expected_g)
     assert row["prerestore_start_ms"] == pytest.approx(expected_start)
-    # Eval latency 4500 lands in the window (expected_start, expected_start+R):
-    # hidden == 4500 - s*, no waste.
     assert row["hidden_lead_ms"] == pytest.approx(4500.0 - expected_start)
     assert row["wasted_restore_ms"] == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Robust trigger source (shipped offline-gated robust clock).
+# --------------------------------------------------------------------------- #
+def _fold_rows(samples_by_task, task_ids, fold, fold_count):
+    eval_tasks = {t for i, t in enumerate(task_ids) if i % fold_count == fold - 1}
+    profile = [t for t in task_ids if t not in eval_tasks]
+    to = lambda tasks: [s.to_json_obj() for t in sorted(tasks) for s in samples_by_task[t]]
+    return to(eval_tasks), to(profile)
+
+
+def _hetero_corpus() -> tuple[dict[str, list], list[str]]:
+    # Mixed short/long: the robust clock falls back to the deadline everywhere.
+    task_ids = [f"t{i}" for i in range(6)]
+    samples = {
+        "t0": [_sample("t0", "t0:0", 8000.0), _sample("t0", "t0:1", 300.0)],
+        "t1": [_sample("t1", "t1:0", 200.0)],
+        "t2": [_sample("t2", "t2:0", 5000.0), _sample("t2", "t2:1", 400.0)],
+        "t3": [_sample("t3", "t3:0", 150.0)],
+        "t4": [_sample("t4", "t4:0", 6000.0), _sample("t4", "t4:1", 250.0)],
+        "t5": [_sample("t5", "t5:0", 350.0)],
+    }
+    return samples, task_ids
+
+
+def _band_corpus() -> tuple[dict[str, list], list[str]]:
+    # Calls in the (kv, 2kv) band: hazard and the robust clock both fire early but
+    # at different times (hazard 400ms, robust 450ms) -> a genuine differ case.
+    task_ids = [f"t{i}" for i in range(6)]
+    samples = {
+        "t0": [_sample("t0", "t0:0", 1500.0), _sample("t0", "t0:1", 1600.0)],
+        "t1": [_sample("t1", "t1:0", 1400.0)],
+        "t2": [_sample("t2", "t2:0", 1700.0), _sample("t2", "t2:1", 1550.0)],
+        "t3": [_sample("t3", "t3:0", 1450.0)],
+        "t4": [_sample("t4", "t4:0", 1650.0), _sample("t4", "t4:1", 1500.0)],
+        "t5": [_sample("t5", "t5:0", 1480.0)],
+    }
+    return samples, task_ids
+
+
+def test_robust_source_uses_shipped_clock_and_differs_from_hazard() -> None:
+    kv = 1000.0
+    samples_by_task, task_ids = _band_corpus()
+    hz = _cfg((kv,), fold_count=2, trigger_source="hazard")
+    rb = _cfg((kv,), fold_count=2, trigger_source="robust", inner_folds=2)
+    hz_dec = score_decisions(samples_by_task, task_ids, hz)
+    rb_dec = score_decisions(samples_by_task, task_ids, rb)
+
+    # Plumbing: each robust decision's swap trigger IS the shipped clock's trigger.
+    reproduced: dict[tuple[str, float], float] = {}
+    for fold in (1, 2):
+        eval_rows, profile_rows = _fold_rows(samples_by_task, task_ids, fold, 2)
+        reproduced.update(_robust_swap_triggers(eval_rows, profile_rows, rb))
+    for d in rb_dec:
+        key = (d["sample_id"], d["kv_cost_ms"])
+        assert d["swap_trigger_ms"] == pytest.approx(reproduced[key])
+
+    # Source matters: hazard fires earlier than the (deadline-falling-back) robust
+    # clock on >= 1 call, so the accounting follows the selected source.
+    hz_g = {(d["sample_id"], d["kv_cost_ms"]): d["swap_trigger_ms"] for d in hz_dec}
+    assert any(
+        abs(d["swap_trigger_ms"] - hz_g[(d["sample_id"], d["kv_cost_ms"])]) > 1e-9
+        for d in rb_dec
+    )
+
+
+def test_robust_no_swap_fallback_inherits_no_earlier_trigger() -> None:
+    # Where the robust clock falls back to the deadline (g == threshold), the
+    # pre-restore start must never precede it (no earlier trigger invented).
+    kv = 1000.0
+    samples_by_task, task_ids = _hetero_corpus()
+    rb = _cfg((kv,), fold_count=2, trigger_source="robust", inner_folds=2)
+    rb_dec = score_decisions(samples_by_task, task_ids, rb)
+    fell_back = [d for d in rb_dec if d["swap_trigger_ms"] == pytest.approx(d["threshold_ms"])]
+    assert fell_back  # this small heterogeneous corpus does fall back
+    for d in fell_back:
+        start = d["prerestore_start_ms"]
+        assert start is None or start >= d["threshold_ms"] - 1e-9
+
+
+def test_config_rejects_unknown_trigger_source() -> None:
+    with pytest.raises(ValueError, match="trigger_source"):
+        _cfg((3500.0, 5000.0), trigger_source="bogus")
 
 
 # --------------------------------------------------------------------------- #

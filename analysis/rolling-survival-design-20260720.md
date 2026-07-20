@@ -19,6 +19,19 @@
 > under the shipped robust-clock g (next lane), and GPU live
 > validation remains W10-11.
 
+> **A2 ROBUST RE-CONFIRMATION (2026-07-20, full corpus, review-gated:**
+> `prerestore-accounting-robust-2026-07-20.md`): **SURVIVE under the
+> SHIPPED robust clock too** — kv3500 net +156.2s/277 (CI [60.4,
+> 256.6]), kv5000 +317.9s (CI [181.0, 460.4]), permutation-positive,
+> same monotone kv>=2500 pattern, fire 1.4%. **The pre-registered
+> decision rule is therefore MET (SURVIVE under BOTH trigger
+> sources): pre-restore is ACTIONABLE as an offline-certified
+> mechanism.** Robustness note: the result is nearly invariant to the
+> trigger source (kv5000 even improves, +306→+318s), i.e. the gain
+> comes from the tail-overlap structure, not from an optimistic
+> trigger. Remaining gate: GPU live validation (W10-11) — the offline
+> accounting cannot price real transfer contention.
+
 > **Status: FINAL, post-debate (Fable-5 adversarial debate 2026-07-20,
 > verdict RESHAPE; all 10 amendments incorporated — the draft's D2
 > replay experiment is CUT as structurally degenerate).** Formerly
