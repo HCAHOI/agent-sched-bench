@@ -134,7 +134,7 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
         iteration=0,
         messages=msgs_after_tool,
         tool_calls=[stub_tc],
-        usage={"prompt_tokens": 100, "completion_tokens": 20},
+        usage={"prompt_tokens": 100, "completion_tokens": 20, "cached_tokens": 80},
         response=_StubResponse(content="", finish_reason="tool_calls"),
     )
     await hook.after_iteration(ctx_after)
@@ -173,6 +173,13 @@ async def _drive_emits_llm_call_action(tmp_path: Path) -> None:
     assert llm["data"]["messages_in"] == msgs_in
     assert llm["data"]["prompt_tokens"] == 100
     assert llm["data"]["completion_tokens"] == 20
+    assert llm["data"]["cached_tokens"] == 80
+    assert llm["data"]["raw_response"]["usage"]["cached_tokens"] == 80
+    assert llm["data"]["raw_response"]["choices"][0]["message"]["tool_calls"][0][
+        "id"
+    ] == stub_tc.id
+    llm_event = next(r for r in records if r.get("event") == "llm_call_end")
+    assert llm_event["data"]["cached_tokens"] == 80
     assert llm["iteration"] == 0
     assert llm["ts_start"] <= llm["ts_end"]
 

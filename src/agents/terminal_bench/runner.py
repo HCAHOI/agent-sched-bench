@@ -217,7 +217,7 @@ class TerminalBenchRunner:
         )
         return AttemptResult(
             success=success,
-            exit_status="completed" if success else "failed",
+            exit_status="completed",
             trace_path=normalized_trace,
             model_patch="",
             error=None if success else "Terminal-Bench task did not resolve",

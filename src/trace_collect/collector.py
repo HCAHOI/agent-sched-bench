@@ -23,7 +23,7 @@ from harness.container_image_prep import (
     prune_dangling_images,
     remove_image,
 )
-from llm_call import UnifiedProvider
+from llm_call import create_provider
 from trace_collect.attempt_pipeline import (
     AttemptContext,
     AttemptResult,
@@ -83,7 +83,8 @@ def _prepare_collect_model_backend(
     generation_config: dict[str, Any],
 ) -> _CollectModelBackend:
     """Build the cloud/OpenAI-compatible model-provider path."""
-    provider = UnifiedProvider(
+    provider = create_provider(
+        provider_name=provider_name,
         api_key=api_key,
         api_base=api_base,
         default_model=model,
@@ -228,6 +229,80 @@ def write_results_jsonl(results: list[CollectedTaskResult], results_path: Path) 
     with open(results_path, "w", encoding="utf-8") as f:
         for result in results:
             f.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
+
+
+def load_terminal_results(run_dir: Path) -> dict[str, CollectedTaskResult]:
+    """Rebuild resume-terminal result rows from canonical attempt artifacts."""
+    collected: dict[str, CollectedTaskResult] = {}
+    if not run_dir.exists():
+        return collected
+    for instance_dir in run_dir.iterdir():
+        if not instance_dir.is_dir():
+            continue
+        attempt_dirs = sorted(
+            (
+                path
+                for path in instance_dir.glob("attempt_*")
+                if path.name.removeprefix("attempt_").isdigit()
+            ),
+            key=lambda path: int(path.name.removeprefix("attempt_")),
+        )
+        for attempt_dir in attempt_dirs:
+            manifest_path = attempt_dir / "run_manifest.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not _is_resume_terminal_manifest(manifest):
+                continue
+            results_path = attempt_dir / "results.json"
+            try:
+                payload = json.loads(results_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    f"terminal attempt lacks valid results.json: {attempt_dir}"
+                ) from exc
+            instance_id = payload.get("instance_id")
+            if instance_id != instance_dir.name:
+                raise ValueError(
+                    f"attempt instance mismatch at {attempt_dir}: "
+                    f"{instance_id!r} != {instance_dir.name!r}"
+                )
+            success = payload.get("success")
+            if not isinstance(success, bool):
+                raise ValueError(f"attempt success is not boolean: {results_path}")
+            summary = manifest.get("result_summary")
+            if not isinstance(summary, dict):
+                raise ValueError(f"attempt result_summary is not an object: {manifest_path}")
+            collected[instance_id] = CollectedTaskResult(
+                instance_id=instance_id,
+                attempt_dir=attempt_dir,
+                success=success,
+                model_patch=str(payload.get("model_patch") or ""),
+                exit_status=summary.get("exit_status"),
+                error=summary.get("error"),
+                elapsed_s=payload.get("total_time"),
+                n_iterations=payload.get("n_iterations"),
+            )
+    return collected
+
+
+def write_merged_results_jsonl(
+    tasks: list[dict[str, Any]],
+    prior_results: dict[str, CollectedTaskResult],
+    current_results: list[CollectedTaskResult],
+    results_path: Path,
+) -> None:
+    """Write one ordered row per selected task across interrupted invocations."""
+    merged = dict(prior_results)
+    merged.update((result.instance_id, result) for result in current_results)
+    task_ids = list(dict.fromkeys(task["instance_id"] for task in tasks))
+    missing = [instance_id for instance_id in task_ids if instance_id not in merged]
+    if missing:
+        raise RuntimeError(f"results index missing selected tasks: {missing}")
+    write_results_jsonl([merged[instance_id] for instance_id in task_ids], results_path)
 
 
 def _select_tasks(
@@ -456,6 +531,9 @@ async def _run_scaffold_tasks(
     completed = load_completed_ids(run_dir)
     if completed:
         logger.info("Resuming: %d tasks already terminal", len(completed))
+    prior_results = load_terminal_results(run_dir)
+    if completed != prior_results.keys():
+        raise RuntimeError("terminal manifests and reconstructed results disagree")
 
     results: list[CollectedTaskResult] = []
     total = len(tasks)
@@ -574,7 +652,9 @@ async def _run_scaffold_tasks(
                 container_executable=container_executable,
                 run_dir=run_dir,
             )
-        write_results_jsonl(results, run_dir / "results.jsonl")
+        write_merged_results_jsonl(
+            tasks, prior_results, results, run_dir / "results.jsonl"
+        )
         logger.info("Results written to %s", run_dir / "results.jsonl")
         return run_dir
 
@@ -692,7 +772,7 @@ async def _run_scaffold_tasks(
                     run_dir=run_dir,
                 )
 
-    write_results_jsonl(results, run_dir / "results.jsonl")
+    write_merged_results_jsonl(tasks, prior_results, results, run_dir / "results.jsonl")
     logger.info("Results written to %s", run_dir / "results.jsonl")
     return run_dir
 
@@ -1165,7 +1245,8 @@ async def _run_openclaw_in_task_container(
             assert agent is not None
             return await extract_container_patch(agent, base_commit=base_commit)
 
-        provider = UnifiedProvider(
+        provider = create_provider(
+            provider_name=provider_name,
             api_key=api_key,
             api_base=api_base,
             default_model=model,

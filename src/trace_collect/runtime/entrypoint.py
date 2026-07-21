@@ -13,7 +13,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from llm_call import UnifiedProvider, resolve_llm_config
+from llm_call import create_provider, resolve_llm_config
 from trace_collect.trace_data import trace_summary_totals
 
 
@@ -130,7 +130,8 @@ async def _run_openclaw(request: dict[str, Any]) -> dict[str, Any]:
         model=request.get("model"),
         environ={},
     )
-    provider = UnifiedProvider(
+    provider = create_provider(
+        provider_name=llm_config.name,
         api_key=llm_config.api_key,
         api_base=llm_config.api_base,
         default_model=llm_config.model,

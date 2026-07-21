@@ -222,8 +222,8 @@ def test_perform_task_runs_host_session_with_container_tools(
         FakeContainerAgent,
     )
     monkeypatch.setattr(
-        "agents.terminal_bench.openclaw_agent.UnifiedProvider",
-        FakeProvider,
+        "agents.terminal_bench.openclaw_agent.create_provider",
+        lambda **kwargs: FakeProvider(**kwargs),
     )
     monkeypatch.setattr(
         "agents.terminal_bench.openclaw_agent.SessionRunner",

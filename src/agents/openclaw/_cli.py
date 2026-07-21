@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from llm_call import UnifiedProvider, add_llm_config_arguments, resolve_llm_config
+from llm_call import add_llm_config_arguments, create_provider, resolve_llm_config
 from llm_call.config import (
     nonnegative_float_arg,
     positive_float_arg,
@@ -167,13 +167,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-tokens",
         type=int,
         default=4096,
-        help="Max tokens per LLM call (default: 4096).",
+        help=(
+            "Max tokens per LLM call (default: 4096; Codex requires the default "
+            "as a context-budget reserve)."
+        ),
     )
     parser.add_argument(
         "--temperature",
         type=nonnegative_float_arg,
         default=0.1,
-        help="Sampling temperature (default: 0.1).",
+        help="Sampling temperature (default: 0.1; unsupported by Codex).",
     )
     parser.add_argument(
         "--top-p",
@@ -227,7 +230,7 @@ def _resolve_llm_config(args: argparse.Namespace):
             model=args.model,
             environ=os.environ,
         )
-        if not config.api_key:
+        if not config.api_key and config.name != "codex":
             print(
                 f"ERROR: Set {config.env_key} or pass --api-key.",
                 file=sys.stderr,
@@ -237,6 +240,36 @@ def _resolve_llm_config(args: argparse.Namespace):
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
+
+
+def _provider_generation_kwargs(
+    args: argparse.Namespace, provider_name: str
+) -> dict[str, Any]:
+    if provider_name == "codex":
+        unsupported = [
+            name
+            for name, value in {
+                "max_tokens": args.max_tokens if args.max_tokens != 4096 else None,
+                "temperature": args.temperature if args.temperature != 0.1 else None,
+                "top_p": args.top_p,
+                "top_k": args.top_k,
+                "repetition_penalty": args.repetition_penalty,
+            }.items()
+            if value is not None
+        ]
+        if unsupported:
+            raise ValueError(
+                "Codex Responses does not support generation setting(s): "
+                + ", ".join(unsupported)
+            )
+        return {"max_tokens": args.max_tokens}
+    return {
+        "max_tokens": args.max_tokens,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "top_k": args.top_k,
+        "repetition_penalty": args.repetition_penalty,
+    }
 
 
 def _resolve_repo_root() -> Path | None:
@@ -361,15 +394,17 @@ def _run_sync(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    provider = UnifiedProvider(
+    try:
+        generation_kwargs = _provider_generation_kwargs(args, llm_config.name)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    provider = create_provider(
+        provider_name=llm_config.name,
         api_key=llm_config.api_key,
         api_base=llm_config.api_base,
         default_model=llm_config.model,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        repetition_penalty=args.repetition_penalty,
+        **generation_kwargs,
     )
 
     trace_file = _resolve_trace_output(args, session_id, llm_config.model)
@@ -453,6 +488,11 @@ def _run_async(args: argparse.Namespace) -> int:
 
     llm_config = _resolve_llm_config(args)
     session_id = args.session_id or f"oc-{uuid.uuid4().hex[:8]}"
+    try:
+        _provider_generation_kwargs(args, llm_config.name)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     workspace = Path(args.workspace).expanduser().resolve()
     workspace.mkdir(parents=True, exist_ok=True)
 

@@ -185,7 +185,7 @@ def test_run_openclaw_in_task_container_runs_openclaw_on_host_with_container_too
         FakeContainerAgent,
     )
     monkeypatch.setattr(
-        "trace_collect.collector.UnifiedProvider",
+        "trace_collect.collector.create_provider",
         lambda **kwargs: (provider_seen.update(kwargs), SimpleNamespace())[1],
     )
 
@@ -385,7 +385,7 @@ def test_run_openclaw_in_task_container_completed_without_patch_is_not_success(
         FakeContainerAgent,
     )
     monkeypatch.setattr(
-        "trace_collect.collector.UnifiedProvider",
+        "trace_collect.collector.create_provider",
         lambda **kwargs: SimpleNamespace(),
     )
 
