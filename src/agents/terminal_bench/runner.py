@@ -185,7 +185,7 @@ class TerminalBenchRunner:
                 f"{completed.stderr.strip() or completed.stdout.strip()}"
             )
 
-        success = self._extract_success(tb_run_path)
+        success, failure_mode = self._extract_trial_result(tb_run_path)
         traces = sorted(tb_run_path.glob(f"**/agent-logs/{self.TRACE_FILENAME}"))
         if not traces:
             raise RuntimeError(
@@ -198,6 +198,7 @@ class TerminalBenchRunner:
             tb_run_path=tb_run_path,
             tb_process_logs=tb_process_logs,
         )
+        summary["tb_failure_mode"] = failure_mode
         normalized_trace = (
             run_root / f"{attempt_ctx.instance_id}-terminal-bench-trace.jsonl"
         )
@@ -208,12 +209,17 @@ class TerminalBenchRunner:
             prompt_template=prompt_template,
             tb_version=proof["tb_version"],
         )
+        failed = failure_mode not in {"none", "unset"}
         return AttemptResult(
             success=success,
-            exit_status="completed",
+            exit_status="error" if failed else "completed",
             trace_path=normalized_trace,
             model_patch="",
-            error=None if success else "Terminal-Bench task did not resolve",
+            error=(
+                f"Terminal-Bench agent failed: {failure_mode}"
+                if failed
+                else (None if success else "Terminal-Bench task did not resolve")
+            ),
             summary=summary,
             runtime_proof=proof,
         )
@@ -330,6 +336,7 @@ class TerminalBenchRunner:
         command = [
             "tb",
             "run",
+            "--cleanup",
             "--dataset-path",
             str(dataset_root),
             "--task-id",
@@ -781,16 +788,17 @@ class TerminalBenchRunner:
             "T_BENCH_TASK_AGENT_LOGS_PATH": str((trial_path / "agent-logs").resolve()),
         }
 
-    def _extract_success(self, tb_run_path: Path) -> bool:
+    def _extract_trial_result(self, tb_run_path: Path) -> tuple[bool, str]:
         results_path = tb_run_path / "results.json"
         if not results_path.exists():
             raise RuntimeError(f"terminal-bench results.json missing at {results_path}")
         payload = json.loads(results_path.read_text(encoding="utf-8"))
         results = payload.get("results") or []
-        if not results:
-            return False
+        if not results or not isinstance(results[0], dict):
+            raise RuntimeError(f"terminal-bench results are empty at {results_path}")
         first = results[0]
-        return bool(first.get("is_resolved"))
+        failure_mode = str(first.get("failure_mode") or "unset")
+        return bool(first.get("is_resolved")), failure_mode
 
     def _augment_trace_metadata(
         self,

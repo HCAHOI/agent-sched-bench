@@ -69,6 +69,7 @@ def test_build_tb_command_uses_agent_import_path() -> None:
     )
     joined = " ".join(cmd)
     assert "tb run" in joined
+    assert "--cleanup" in cmd
     assert TerminalBenchRunner.AGENT_IMPORT_PATH in joined
     assert "--dataset-path /tmp/dataset" in joined
     assert "--task-id hello-world" in joined
@@ -223,15 +224,29 @@ def test_build_tb_command_forwards_mcp_config_path(tmp_path: Path) -> None:
     assert kwargs["mcp_config_path"] == str(mcp_config.resolve())
 
 
-def test_extract_success_reads_terminal_bench_results(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("is_resolved", "failure_mode"),
+    [(True, "unset"), (False, "unknown_agent_error")],
+)
+def test_extract_trial_result_reads_terminal_bench_results(
+    tmp_path: Path,
+    is_resolved: bool,
+    failure_mode: str,
+) -> None:
     runner = _make_runner()
     run_path = tmp_path / "tb-run"
     run_path.mkdir()
     (run_path / "results.json").write_text(
-        json.dumps({"results": [{"is_resolved": True}]}),
+        json.dumps(
+            {
+                "results": [
+                    {"is_resolved": is_resolved, "failure_mode": failure_mode}
+                ]
+            }
+        ),
         encoding="utf-8",
     )
-    assert runner._extract_success(run_path) is True
+    assert runner._extract_trial_result(run_path) == (is_resolved, failure_mode)
 
 
 def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> None:
@@ -285,9 +300,19 @@ def test_augment_trace_metadata_stamps_terminal_bench_fields(tmp_path: Path) -> 
     assert summary["bridge_bootstrap_timeout_sec"] == 60.0
 
 
+@pytest.mark.parametrize(
+    ("is_resolved", "failure_mode", "exit_status"),
+    [
+        (True, "none", "completed"),
+        (False, "unknown_agent_error", "error"),
+    ],
+)
 def test_run_openclaw_task_publishes_terminal_bench_container_name(
     tmp_path: Path,
     monkeypatch,
+    is_resolved: bool,
+    failure_mode: str,
+    exit_status: str,
 ) -> None:
     runner = _make_runner()
     ctx = _make_ctx(tmp_path)
@@ -324,7 +349,16 @@ def test_run_openclaw_task_publishes_terminal_bench_container_name(
         tb_run_path = ctx.attempt_dir / "_terminal_bench_run" / "hello-world"
         tb_run_path.mkdir(parents=True)
         (tb_run_path / "results.json").write_text(
-            json.dumps({"results": [{"is_resolved": True}]}),
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "is_resolved": is_resolved,
+                            "failure_mode": failure_mode,
+                        }
+                    ]
+                }
+            ),
             encoding="utf-8",
         )
         trace_path = (
@@ -354,7 +388,9 @@ def test_run_openclaw_task_publishes_terminal_bench_container_name(
         prompt_template="default",
     )
 
-    assert result.success is True
+    assert result.success is is_resolved
+    assert result.exit_status == exit_status
+    assert result.summary["tb_failure_mode"] == failure_mode
     assert ctx.container_id == "hello-world-1-of-1-hello-world"
     metadata = json.loads(result.trace_path.read_text(encoding="utf-8").splitlines()[0])
     assert metadata["execution_environment"] == "container"
