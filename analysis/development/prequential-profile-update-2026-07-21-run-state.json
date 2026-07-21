@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-07-21T19:05:03+02:00",
-  "status": "running_remote_primary",
+  "updated_at": "2026-07-22T01:00:14+02:00",
+  "status": "completed_copied_integrity_verified_independently_reviewed",
   "remote": {
     "host": "Ubuntu@216.81.248.2",
     "repo": "/home/Ubuntu/agent-sched-bench",
@@ -61,9 +61,52 @@
     "Prefer an exact prefix-sum scorer before introducing sampling",
     "Stop the same-trace/repo direction on a negative single-order primary result"
   ],
+  "completion": {
+    "remote_exit_code": 0,
+    "wall_time": "7h12m",
+    "copied_to_local": true,
+    "total_artifact_size": "35M",
+    "output_sha256": {
+      "prequential-profile-update-2026-07-21.json": "425857e90845a5ee9a6825795edbbc9b091be08d1c7035c355874673e42f7815",
+      "prequential-profile-update-2026-07-21.md": "47de33272ff1fe52195d96b99dcfab1e282b43a19fcfaaf7601234e2c7f4462f",
+      "prequential-profile-update-2026-07-21-records.jsonl.zst": "fa78a151949d201fd46510c9a740f45eca24bb32ad3be8662f7c22be09fbc5e7",
+      "prequential-profile-update-2026-07-21-f1-records.jsonl.zst": "8da1c3a40b57565f2a13bc2a20cf8aed3a92d28ddc74206440a19c3c65c7e038",
+      "prequential-profile-update-2026-07-21-f2-records.jsonl.zst": "0cd525102a95d38ffe6aa9837131b26476b4467cf9d8c33100aebedee0388e0b",
+      "prequential-profile-update-2026-07-21-f3-records.jsonl.zst": "e2e0625ad253077f9ddfde1b8284279acbcb5e5d17972ad48d76ed4f8a24ccf5",
+      "prequential-profile-update-2026-07-21-f4-records.jsonl.zst": "8691e9ef65cdcf0ba2a3ca4dd03d607acda9ba4b69dac2a5c20473993706f6b1",
+      "prequential-profile-update-2026-07-21-f5-records.jsonl.zst": "17db295f1a99d389f7e56940f5d4e314b98a2071a68f8e8728881cd30da13d5b"
+    },
+    "integrity": {
+      "remote_local_hashes_match": true,
+      "all_sidecars_decompress": true,
+      "all_internal_hashes_match": true,
+      "all_internal_record_counts_match": true,
+      "fold_test_task_counts": [56, 56, 55, 55, 55],
+      "folds_pairwise_disjoint": true,
+      "held_out_task_union_count": 277,
+      "input_trace_counts": {"initialization": 100, "development": 277},
+      "source_snapshot_file_count": 175,
+      "source_snapshot_hash_failures": 0
+    }
+  },
   "review": {
     "scheduler": "CLEAN - SAFE TO COMMIT AND RUN 25 WORKERS",
     "real_data_equivalence_sha256": "b2a884bcde16a2fcd893c2152c7a18229faf70095b376bf19ca71c3127e1bdaa",
-    "focused_tests": "33 passed"
+    "focused_tests": "33 passed",
+    "result_integrity": "CLEAN under the development-only bound",
+    "result_reviewer": "PrimaryResultReview",
+    "result_review_confidence": 0.995,
+    "call_vs_task_null_resolution": "Genuine realized-path null, not a parallelization collapse: call state differs from task state on 13030/13410 calls, but only one kv3500 trigger changes and that 558.91 ms call reaches neither the 3319.03 ms call trigger nor the 3500 ms task trigger; kv5000 has no changed triggers.",
+    "timing_conclusion": "Update p50/p95/p99/max is 0.0715/0.1541/0.5130/2.5922 ms, but call score p50/p95/p99/max is 5846/15990/16725/18019 ms summed over the two cost panels. Readiness excludes score time; the current scorer is not deployment-ready.",
+    "same_history_design_review": "APPROVE after revision; SameHistoryDesignReview, confidence 0.98",
+    "same_trace_followup": "DROP without rerun: prior within-task B1 was -398 s near rho=1 and the primary call arm has zero realized utility delta.",
+    "same_repo_followup": "One arm only. For outer fold H, fit deadline-relative select_probe_guard on H's four warmup folds; each calibration task is excluded from its own Initialization100-plus-warmup same-repo prior. Score H from Initialization100 plus H's warmup tasks. Require at least two distinct prior tasks after exclusion. Join only H's stored warmup_snapshot baseline; guarded-off and unsupported calls fall back exactly. Repository identity is parsed from the inference-time owner__repository-final_numeric_issue task ID with casefolding and fail-closed fallback. DROP if either headline cost has negative paired utility; otherwise KEEP for mechanism work only. No CI, p-value, or deployment claim.",
+    "same_repo_code_review_round_1": "BLOCKED; SameRepoCodeReview found missing live-vs-frozen trace-inventory comparison, non-staged three-file publication, and missing same-run timing environment. Fixed with declared inventory equality checks before and after scoring, staged publication with rollback, full timing environment, end-of-run manifest/task/source verification, and removal of hardcoded review stamps.",
+    "same_repo_code_review_round_1_verification": "All 100 initialization and 277 development traces match the declared inventories; Ruff clean; 54 focused tests passed.",
+    "same_repo_code_review_round_2": "BLOCKED; SameRepoCodeReview2 found that final validation only rehashed startup-discovered paths and that Path.replace could clobber a destination created after the precheck. Fixed by rediscovering and fully reloading both corpora before publication, comparing fresh and startup inventories, rechecking declarations, and publishing staged files with atomic no-overwrite hard links plus rollback.",
+    "same_repo_code_review_round_2_verification": "Fresh final rediscovery matches all 100 initialization and 277 development traces; atomic interleaving-writer regression added; Ruff clean; 55 focused tests passed.",
+    "same_repo_code_review_round_3": "Initially blocked shared fixed staging paths under concurrent invocations. Fixed all three staging paths with per-invocation PID+UUID ownership; the zstd writer temp and cleanup glob inherit the token, and the records hard link elects one publisher.",
+    "same_repo_code_review_final": "CLEAN - SAFE TO COMMIT AND RUN; SameRepoCodeReview3, confidence 0.99. No findings remain.",
+    "same_repo_code_review_final_verification": "All 100/277 startup and freshly rediscovered final traces match; five fold baseline key sets match exactly; Ruff clean; 55 focused tests passed."
   }
 }

@@ -1,0 +1,34 @@
+schema_version: 1
+protocol_date: "2026-07-21"
+status: development_only_post_primary_followup
+primary_result:
+  file: analysis/development/prequential-profile-update-2026-07-21.json
+  sha256: 425857e90845a5ee9a6825795edbbc9b091be08d1c7035c355874673e42f7815
+primary_sidecars:
+  initialization: fa78a151949d201fd46510c9a740f45eca24bb32ad3be8662f7c22be09fbc5e7
+  outer_fold_1: 8da1c3a40b57565f2a13bc2a20cf8aed3a92d28ddc74206440a19c3c65c7e038
+  outer_fold_2: 0cd525102a95d38ffe6aa9837131b26476b4467cf9d8c33100aebedee0388e0b
+  outer_fold_3: e2e0625ad253077f9ddfde1b8284279acbcb5e5d17972ad48d76ed4f8a24ccf5
+  outer_fold_4: 8691e9ef65cdcf0ba2a3ca4dd03d607acda9ba4b69dac2a5c20473993706f6b1
+  outer_fold_5: 17db295f1a99d389f7e56940f5d4e314b98a2071a68f8e8728881cd30da13d5b
+trace_inventories:
+  initialization:
+    file: analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/pre_run_trace_inventory.sha256
+    sha256: 33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e
+    trace_count: 100
+  development:
+    file: analysis/development/prequential-profile-update-fresh277-pre-run-traces.sha256
+    sha256: b51c3c59653122c4224a199cf369551d1e50e8dd81daba57959ad7b9949bf190
+    trace_count: 277
+arm: same_repo
+baseline: warmup_snapshot
+score_kv_costs_ms: [3500, 5000]
+restore_cost_fraction: 0.94
+minimum_distinct_prior_tasks: 2
+guard_objective: candidate_vs_deadline
+repository_identity: swe_rebench_task_id_owner_repo_final_numeric_issue
+fallback: exact_outer_fold_warmup_snapshot
+verdict_rule: drop_if_either_cost_paired_delta_is_negative_otherwise_keep_mechanism_only
+outputs:
+  json: analysis/development/same-repo-history-2026-07-21.json
+  markdown: analysis/development/same-repo-history-2026-07-21.md
