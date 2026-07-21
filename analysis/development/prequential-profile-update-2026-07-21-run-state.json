@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-07-22T01:00:14+02:00",
+  "updated_at": "2026-07-22T01:21:04+02:00",
   "status": "completed_copied_integrity_verified_independently_reviewed",
   "remote": {
     "host": "Ubuntu@216.81.248.2",
@@ -107,6 +107,25 @@
     "same_repo_code_review_round_2_verification": "Fresh final rediscovery matches all 100 initialization and 277 development traces; atomic interleaving-writer regression added; Ruff clean; 55 focused tests passed.",
     "same_repo_code_review_round_3": "Initially blocked shared fixed staging paths under concurrent invocations. Fixed all three staging paths with per-invocation PID+UUID ownership; the zstd writer temp and cleanup glob inherit the token, and the records hard link elects one publisher.",
     "same_repo_code_review_final": "CLEAN - SAFE TO COMMIT AND RUN; SameRepoCodeReview3, confidence 0.99. No findings remain.",
-    "same_repo_code_review_final_verification": "All 100/277 startup and freshly rediscovered final traces match; five fold baseline key sets match exactly; Ruff clean; 55 focused tests passed."
+    "same_repo_code_review_final_verification": "All 100/277 startup and freshly rediscovered final traces match; five fold baseline key sets match exactly; Ruff clean; 55 focused tests passed.",
+    "same_repo_result": "DROP. same_repo versus exact warmup_snapshot is -9759.884672164917 ms at kv3500 (0 positive / 2 negative / 275 zero tasks) and +7818.561506271362 ms at kv5000 (2 / 2 / 273). The frozen either-negative rule binds at kv3500.",
+    "same_repo_result_artifacts": {
+      "json": {
+        "file": "analysis/development/same-repo-history-2026-07-21.json",
+        "sha256": "0aee659c95b61e027889227b082f15b8d126e411cf93bbed10d65861d8629486"
+      },
+      "markdown": {
+        "file": "analysis/development/same-repo-history-2026-07-21.md",
+        "sha256": "92e0c4e118b9ec77c42a2379cc3f9e22ab7d6e7c0e79da88e371180790764966"
+      },
+      "records": {
+        "file": "analysis/development/same-repo-history-2026-07-21-records.jsonl.zst",
+        "sha256": "888b01d727811cd8ac57f25cde7b00394effad0022ad866a85a63c369c07d7ab",
+        "record_count": 135294
+      }
+    },
+    "same_repo_result_integrity": "135294 valid records: 107280 fit decisions, 26820 unique test decisions, 247 guard objectives, complete metadata; 174 source and 377 input hashes clean; 56/56/55/55/55 held-out tasks partition all 277; 26704 exact fallbacks and 116 valid overrides; stored summaries and DROP verdict recomputed exactly.",
+    "same_repo_result_review": "CLEAN under the development-only bound; SameRepoResultReview, confidence 0.998. No findings.",
+    "same_repo_result_interpretation": "Repository history is supported for only 61/277 tasks and changes 87/29 calls across seven tasks. At kv3500 the only two nonzero task deltas are both harmful (-6895.74 ms spdx tools-python; -2864.14 ms Faker). At kv5000 the positive net is mixed (+2/-2 tasks) and concentrated in Faker and DVC. This is too sparse and cost-inconsistent to justify the added conditioning. Close the same_repo arm; do not rescue it with post-hoc guard or cost tuning."
   }
 }
