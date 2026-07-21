@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from scripts.aggregate_offline_probe_cv import main as aggregate_main
-from scripts.evaluate_offline_probe_clock import main as offline_probe_main
+from scripts.exploration.aggregate_offline_probe_cv import main as aggregate_main
+from scripts.exploration.evaluate_offline_probe_clock import main as offline_probe_main
 from trace_collect.tool_latency_offline_probe import (
     aggregate_offline_probe_cv,
     evaluate_offline_probe_clock,

@@ -241,6 +241,7 @@ def evaluate_offline_probe_clock(
     skip_leading_cd: bool = False,
     transparent_wrappers: frozenset[str] = frozenset(),
     restore_cost_fraction: float = 0.0,
+    include_calibration_trace: bool = False,
 ) -> dict[str, Any]:
     """Learn a profile-only guard and evaluate it on disjoint outer tasks.
 
@@ -269,28 +270,29 @@ def evaluate_offline_probe_clock(
     profile_folds = _balanced_task_folds(profile_list, fold_count=inner_folds)
     probe_decisions: list[dict[str, Any]] = []
     all_profile_tasks = set().union(*profile_folds)
-    for held_out_tasks in profile_folds:
+    for inner_fold, held_out_tasks in enumerate(profile_folds, 1):
         inner_profile = [
             row for row in profile_list if str(row["task_id"]) not in held_out_tasks
         ]
         inner_eval = [
             row for row in profile_list if str(row["task_id"]) in held_out_tasks
         ]
-        probe_decisions.extend(
-            _score_clock_rows(
-                inner_eval,
-                profile_rows=inner_profile,
-                kv_costs=kv_costs,
-                guard_ms=guard_ms,
-                min_tool_history=min_tool_history,
-                min_profile_tasks=min_profile_tasks,
-                command_field=command_field,
-                max_prefix_depth=max_prefix_depth,
-                skip_leading_cd=skip_leading_cd,
-                transparent_wrappers=transparent_wrappers,
-                restore_cost_fraction=restore_cost_fraction,
-            )
+        fold_decisions = _score_clock_rows(
+            inner_eval,
+            profile_rows=inner_profile,
+            kv_costs=kv_costs,
+            guard_ms=guard_ms,
+            min_tool_history=min_tool_history,
+            min_profile_tasks=min_profile_tasks,
+            command_field=command_field,
+            max_prefix_depth=max_prefix_depth,
+            skip_leading_cd=skip_leading_cd,
+            transparent_wrappers=transparent_wrappers,
+            restore_cost_fraction=restore_cost_fraction,
         )
+        for row in fold_decisions:
+            row["calibration_inner_fold"] = inner_fold
+        probe_decisions.extend(fold_decisions)
     if {str(row["task_id"]) for row in profile_list} != all_profile_tasks:
         raise AssertionError("inner folds do not cover every profile task")
     calibration = select_probe_guard(
@@ -426,6 +428,22 @@ def evaluate_offline_probe_clock(
         "robust_calibration": robust_calibration,
         "points": summary["points"],
         "decisions": decisions,
+        **(
+            {
+                "calibration_trace": {
+                    "folds": [
+                        {
+                            "inner_fold": inner_fold,
+                            "task_ids": sorted(task_ids),
+                        }
+                        for inner_fold, task_ids in enumerate(profile_folds, 1)
+                    ],
+                    "probe_decisions": probe_decisions,
+                }
+            }
+            if include_calibration_trace
+            else {}
+        ),
     }
 
 
@@ -602,9 +620,7 @@ def _validate_fold_output(
     config = {field: summary[field] for field in config_fields}
     # Folds fitted at different restore costs must never be pooled; summaries
     # written before the field existed were fitted at restore zero.
-    config["restore_cost_fraction"] = float(
-        summary.get("restore_cost_fraction", 0.0)
-    )
+    config["restore_cost_fraction"] = float(summary.get("restore_cost_fraction", 0.0))
     costs = [float(cost) for cost in config["kv_costs_ms"]]
     if not costs or len(costs) != len(set(costs)):
         raise ValueError(f"{fold} summary has invalid kv_costs_ms")
