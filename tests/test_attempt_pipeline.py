@@ -493,6 +493,34 @@ def test_run_attempt_max_iterations_writes_exhausted_manifest(
     )
 
 
+def test_run_attempt_unresolved_trace_is_resume_terminal(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path)
+    trace_source = tmp_path / "scratch" / "trace.jsonl"
+    _write_trace(trace_source)
+
+    async def inner(ctx: AttemptContext) -> AttemptResult:
+        return AttemptResult(
+            success=False,
+            exit_status="completed",
+            trace_path=trace_source,
+            error="Terminal-Bench task did not resolve",
+        )
+
+    asyncio.run(
+        run_attempt(
+            ctx,
+            inner=inner,
+            min_free_disk_gb=0.001,
+            container_executable="docker",
+        )
+    )
+
+    manifest = json.loads((ctx.attempt_dir / "run_manifest.json").read_text())
+    assert manifest["status"] == "completed"
+    assert manifest["result_summary"]["exit_code"] == 1
+    assert manifest["result_summary"]["exit_status"] == "completed"
+
+
 def test_run_attempt_error_exit_status_writes_error_manifest(
     tmp_path: Path,
 ) -> None:

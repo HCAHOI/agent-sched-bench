@@ -61,12 +61,16 @@ Key flags: `--benchmark <slug>`, `--scaffold openclaw`, `--mcp-config` (required
 for OpenClaw; YAML path or literal `none`), `--skip N`, `--sample N`,
 `--instance-ids a,b,c`, `--concurrency N`, `--run-id <path>`,
 `--prompt-template <name>`, and provider sampling flags `--temperature`,
-`--top-p`, `--top-k`, `--repetition-penalty`.
+`--top-p`, `--top-k`, `--repetition-penalty`. Codex rejects sampling controls
+because its subscription endpoint does not support them.
 
 Supported providers live in `src/llm_call/providers.py`: `openrouter`,
-`dashscope`, `openai`, `siliconflow`, `deepseek`, and `pioneer`. Use
-`--api-base` and `--api-key` for OpenAI-compatible gateways when the built-in
-provider URL or env var is not enough.
+`dashscope`, `openai`, `siliconflow`, `deepseek`, `pioneer`, and `codex`. Codex
+uses the ChatGPT subscription credentials written by `codex login`; optional
+`CODEX_ACCESS_TOKEN` and `CODEX_ACCOUNT_ID` environment variables override the
+local `~/.codex/auth.json`. Use `--api-base` and `--api-key` for
+OpenAI-compatible gateways when the built-in provider URL or env var is not
+enough.
 
 ## Trace Simulate
 

@@ -11,6 +11,7 @@ from llm_call.config import (
     resolve_llm_config,
 )
 from llm_call.openclaw import UnifiedProvider
+from llm_call.providers import create_provider
 from llm_call.openai_compat import create_async_openai_client, uses_openrouter
 from llm_call.provider_base import (
     GenerationSettings,
@@ -28,6 +29,7 @@ __all__ = [
     "UnifiedProvider",
     "add_llm_config_arguments",
     "create_async_openai_client",
+    "create_provider",
     "provider_choices",
     "resolve_llm_config",
     "uses_openrouter",

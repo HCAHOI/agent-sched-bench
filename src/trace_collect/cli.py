@@ -383,7 +383,15 @@ def _run_collect(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
-    if not provider_config.api_key:
+    if provider_config.name == "codex":
+        try:
+            from llm_call.codex import load_codex_credentials
+
+            load_codex_credentials(provider_config.api_key)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif not provider_config.api_key:
         print(
             f"ERROR: Set {provider_config.env_key} or pass --api-key.",
             file=sys.stderr,

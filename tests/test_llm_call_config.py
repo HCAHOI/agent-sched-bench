@@ -142,6 +142,21 @@ def test_resolve_llm_config_supports_pioneer() -> None:
     assert resolved.env_key == "PIONEER_API_KEY"
 
 
+def test_resolve_llm_config_supports_codex_subscription() -> None:
+    resolved = resolve_llm_config(
+        provider="codex",
+        api_base=None,
+        api_key=None,
+        model="gpt-5.5",
+        environ={},
+    )
+
+    assert resolved.name == "codex"
+    assert resolved.api_base == "https://chatgpt.com/backend-api/codex"
+    assert resolved.api_key == ""
+    assert resolved.env_key == "CODEX_ACCESS_TOKEN"
+
+
 def test_uses_openrouter_matches_base_url() -> None:
     assert uses_openrouter("https://openrouter.ai/api/v1") is True
     assert uses_openrouter("https://api.openai.com/v1") is False

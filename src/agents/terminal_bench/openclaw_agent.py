@@ -20,7 +20,7 @@ from terminal_bench.agents.installed_agents.abstract_installed_agent import (
 from terminal_bench.terminal.tmux_session import TmuxSession
 
 from agents.openclaw._session_runner import SessionRunner
-from llm_call import UnifiedProvider
+from llm_call import create_provider
 from llm_call.config import validate_cloud_api_base
 from trace_collect.openclaw_host_runtime import (
     _update_trace_metadata,
@@ -95,7 +95,7 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 f"env_key must be a valid shell environment name: {env_key!r}"
             )
         self._api_key = api_key or os.environ.get(env_key, "")
-        if not self._api_key:
+        if not self._api_key and provider_name != "codex":
             raise ValueError(
                 f"missing API key for TerminalBenchOpenClawAgent env_key={env_key!r}"
             )
@@ -215,7 +215,8 @@ class TerminalBenchOpenClawAgent(AbstractInstalledAgent):
                 deadline,
             )
             runtime_label = container_runtime_label(proof)
-            provider = UnifiedProvider(
+            provider = create_provider(
+                provider_name=self._provider_name,
                 api_key=self._api_key,
                 api_base=self._api_base,
                 default_model=self._model_name,

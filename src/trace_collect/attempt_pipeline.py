@@ -781,12 +781,10 @@ async def run_attempt(
         status = "error"
     elif result is not None and result.exit_status == "max_iterations":
         status = "exhausted"
-    elif result is not None and (
-        not result.success
-        or (
-            result.exit_status is not None
-            and result.exit_status in _ERROR_EXIT_STATUSES
-        )
+    elif (
+        result is not None
+        and result.exit_status is not None
+        and result.exit_status in _ERROR_EXIT_STATUSES
     ):
         status = "error"
     success = bool(result.success) if result is not None else False
@@ -873,6 +871,7 @@ async def run_attempt(
         "repo": ctx.task.get("repo"),
         "docker_image": replay_source_image,
         "success": success,
+        "model_patch": result.model_patch if result is not None else "",
         "scaffold": ctx.scaffold,
         "prompt_template": ctx.prompt_template,
         "agent_runtime_mode": ctx.agent_runtime_mode,
@@ -950,13 +949,13 @@ async def run_attempt(
         manifest.setdefault("artifacts", {}).update(artifact_paths)
         results_payload["artifacts"] = artifact_paths
 
-    attempt_layout.write_run_manifest(ctx.attempt_dir, manifest)
     attempt_layout.write_results_json(ctx.attempt_dir, results_payload)
     attempt_layout.write_resources_json(
         ctx.attempt_dir, samples, summary=resources_summary
     )
     attempt_layout.write_tool_calls_json(ctx.attempt_dir, tool_calls)
     attempt_layout.write_container_stdout(ctx.attempt_dir, ctx.container_stdout)
+    attempt_layout.write_run_manifest(ctx.attempt_dir, manifest)
 
     if artifact_error is not None:
         raise artifact_error

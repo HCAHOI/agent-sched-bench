@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from trace_collect.collector import load_completed_ids
+from trace_collect.collector import (
+    CollectedTaskResult,
+    load_completed_ids,
+    load_terminal_results,
+    write_merged_results_jsonl,
+)
 
 
 def _write_manifest(
@@ -31,6 +36,18 @@ def _write_manifest(
         result_summary["exit_status"] = exit_status
     (attempt_dir / "run_manifest.json").write_text(
         json.dumps(payload),
+        encoding="utf-8",
+    )
+    (attempt_dir / "results.json").write_text(
+        json.dumps(
+            {
+                "instance_id": instance_id,
+                "success": status == "completed",
+                "model_patch": "",
+                "total_time": 1.0,
+                "n_iterations": 1,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -84,3 +101,28 @@ def test_load_completed_ids_does_not_treat_error_manifests_as_terminal(
     )
 
     assert load_completed_ids(run_dir) == set()
+
+
+def test_resume_rebuilds_and_merges_complete_results_index(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    _write_manifest(run_dir, "task-a", status="completed", exit_status="completed")
+    prior = load_terminal_results(run_dir)
+    current = CollectedTaskResult(
+        instance_id="task-b",
+        attempt_dir=run_dir / "task-b" / "attempt_1",
+        success=False,
+        exit_status="error",
+        error="retryable infrastructure failure",
+    )
+
+    results_path = run_dir / "results.jsonl"
+    write_merged_results_jsonl(
+        [{"instance_id": "task-b"}, {"instance_id": "task-a"}],
+        prior,
+        [current],
+        results_path,
+    )
+
+    rows = [json.loads(line) for line in results_path.read_text().splitlines()]
+    assert [row["instance_id"] for row in rows] == ["task-b", "task-a"]
+    assert rows[1]["success"] is True

@@ -194,6 +194,7 @@ class TraceCollectorHook(AgentHook):
         usage = context.usage or {}
         prompt_tokens = usage.get("prompt_tokens", 0)
         completion_tokens = usage.get("completion_tokens", 0)
+        cached_tokens = usage.get("cached_tokens", 0)
         self._shared.total_tokens += prompt_tokens + completion_tokens
 
         llm_ts_end = (
@@ -211,10 +212,12 @@ class TraceCollectorHook(AgentHook):
             context=context,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
         )
         llm_event_data = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
             "llm_latency_ms": round(llm_call_time_ms, 2),
             "llm_call_time_ms": round(llm_call_time_ms, 2),
             "llm_wall_latency_ms": round(llm_wall_latency_ms, 2),
@@ -229,6 +232,7 @@ class TraceCollectorHook(AgentHook):
             "raw_response": resp_dict,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
             "llm_latency_ms": round(llm_call_time_ms, 2),
             "llm_call_time_ms": round(llm_call_time_ms, 2),
             "llm_wall_latency_ms": round(llm_wall_latency_ms, 2),
@@ -594,6 +598,7 @@ class TraceCollectorHook(AgentHook):
             "openrouter_metadata_refetch_error",
             "openrouter_metadata_initial_fetch_status",
             "openrouter_metadata_initial_fetch_ms",
+            "codex_metadata",
             "openrouter_metadata",
         ):
             if key in extra:
@@ -606,6 +611,7 @@ class TraceCollectorHook(AgentHook):
         context: AgentHookContext,
         prompt_tokens: int,
         completion_tokens: int,
+        cached_tokens: int,
     ) -> dict[str, Any]:
         resp = context.response
         message: dict[str, Any] = {
@@ -616,13 +622,13 @@ class TraceCollectorHook(AgentHook):
             message["reasoning_content"] = resp.reasoning_content
         if context.tool_calls:
             tool_calls = []
-            for idx, tc in enumerate(context.tool_calls):
+            for tc in context.tool_calls:
                 arguments = tc.arguments
                 if not isinstance(arguments, str):
                     arguments = json.dumps(arguments, ensure_ascii=False)
                 tool_calls.append(
                     {
-                        "id": f"call_{context.iteration}_{idx}",
+                        "id": tc.id,
                         "type": "function",
                         "function": {
                             "name": tc.name,
@@ -641,6 +647,7 @@ class TraceCollectorHook(AgentHook):
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
+                "cached_tokens": cached_tokens,
             },
         }
         if resp and resp.extra:
@@ -650,6 +657,9 @@ class TraceCollectorHook(AgentHook):
             generation_id = resp.extra.get("openrouter_generation_id")
             if generation_id is not None:
                 raw_response["openrouter_generation_id"] = generation_id
+            codex_metadata = resp.extra.get("codex_metadata")
+            if codex_metadata is not None:
+                raw_response["codex_metadata"] = codex_metadata
         return raw_response
 
     async def write_summary(
