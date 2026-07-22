@@ -356,18 +356,20 @@ def robust_utility_trigger_stats(
     ]
     if not curves:
         return RobustUtilityTriggerStats(threshold_ms, 0.0)
-    future_best = [np.maximum.accumulate(curve[::-1])[::-1] for curve in curves]
-    for index, candidate in enumerate(candidates[:-1]):
-        advantages = [
-            float(curve[index] - max(0.0, future[index + 1]))
-            for curve, future in zip(curves, future_best, strict=True)
-        ]
-        minimum_advantage = min(advantages)
-        if minimum_advantage > 0.0:
-            return RobustUtilityTriggerStats(
-                trigger_ms=float(candidate),
-                normalized_advantage=minimum_advantage / kv_cost_ms,
-            )
+    curve_matrix = np.asarray(curves)
+    future_best = np.maximum.accumulate(curve_matrix[:, ::-1], axis=1)[:, ::-1]
+    minimum_advantages = np.min(
+        curve_matrix[:, :-1] - np.maximum(future_best[:, 1:], 0.0),
+        axis=0,
+    )
+    positive = np.flatnonzero(minimum_advantages > 0.0)
+    if positive.size:
+        index = int(positive[0])
+        minimum_advantage = float(minimum_advantages[index])
+        return RobustUtilityTriggerStats(
+            trigger_ms=float(candidates[index]),
+            normalized_advantage=minimum_advantage / kv_cost_ms,
+        )
     return RobustUtilityTriggerStats(threshold_ms, 0.0)
 
 
