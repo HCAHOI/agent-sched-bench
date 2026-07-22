@@ -1,23 +1,20 @@
 # P4 EVICTION DESIGN — pause/resume selective KV offload on vLLM 0.11.2
-# Lane B design study (read-only). All file:line refs are vLLM tag v0.11.2.
-# Companion to spike/SPIKE_NOTE_W1.md (proven transfer path) and
-# analysis/ROADMAP-mlsys2027-20260717.md (P4 scope, W2 go/descope).
+# Design study. All file:line refs are vLLM tag v0.11.2.
+# Companion to spike/README.md and analysis/ROADMAP.md.
 
 ## Summary
 
-The central hypothesis LARGELY HOLDS. vLLM v1's preemption +
-KV-connector rescheduling already supplies ~80% of eviction+resume; the
-only net-new upstream work is (a) a way to force-preempt a NAMED request
-on external command and (b) a HOLD state so the victim is not
-immediately rescheduled. Both are small, co-located with the
-scheduler-side connector, and ride on machinery that already exists for
-P/D disaggregation. Estimated lane-C surface: ~70-100 net-new LoC, one
-upstream file meaningfully patched (v1/core/sched/scheduler.py) plus the
-existing connector module. Build estimate ~10.5 working days (~2 wk),
-well inside the roadmap W5-7 window and the 6-8 wk P4 budget.
+vLLM v1's preemption and KV-connector rescheduling supply most of the
+eviction/resume path. The required integration is a named external
+force-preempt command plus a HOLD state so the victim is not immediately
+rescheduled. Both are co-located with the scheduler-side connector and
+reuse P/D-disaggregation machinery. The original implementation estimate
+was ~70-100 net-new lines in one upstream scheduler file plus the connector,
+or ~10.5 working days.
 
-**W2 verdict: GO** for connector + minimal-scheduler-patch P4. The
-single-tenant descope fallback is NOT required on current evidence.
+**Design verdict:** the connector plus minimal scheduler integration is
+feasible. This estimate is not a live-system result; the current launch and
+correctness gates are in `analysis/ROADMAP.md`.
 
 ## Root cause of the W1 gap (why the spike only copied, never evicted)
 
@@ -276,9 +273,9 @@ Net-new total: ~70-100 LoC; upstream footprint ~1 file. Genuinely small
   ------------------------------------------------------------
   Total                                                  ~10.5 d (~2 wk)
 
-Fits roadmap W5-7. The SPIKE_NOTE "largest schedule risk" is REAL but
-BOUNDED: a ~1-file, ~70-100 LoC fork patch on existing PD-disaggregation
-machinery, not a from-scratch swap subsystem.
+The estimate is bounded to a roughly one-file, 70-100-line scheduler
+integration over existing P/D-disaggregation machinery, not a from-scratch
+swap subsystem. Live readiness is governed by the current roadmap gates.
 
 ## Trade-offs
 

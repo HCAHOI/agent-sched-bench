@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from trace_collect.tool_latency_offline_probe import evaluate_offline_probe_clock
 from trace_collect.tool_latency_prequential import evaluate_prequential_updates
 
@@ -105,34 +107,45 @@ def test_frozen_arm_reproduces_existing_offline_gated_robust_trigger() -> None:
     assert len(trace["probe_decisions"]) == len(_profile())
 
 
-def test_call_updates_publish_only_after_measured_delay_and_task_is_batch() -> None:
+def test_task_updates_publish_only_after_task_boundary() -> None:
     rows = [
         _row("e0a", "e0", 1000.0, start=0.0),
-        # 0.05 ms after e0a ends: too soon for its measured 0.10 ms update.
         _row("e0b", "e0", 10.0, start=1.00005),
         _row("e0c", "e0", 10.0, start=2.0),
         _row("e1a", "e1", 10.0, start=0.0),
     ]
     runtimes = {str(row["sample_id"]): 0.10 for row in rows}
-    call = _evaluate(rows, mode="call", runtimes=runtimes, task_order=["e0", "e1"])
-    task = _evaluate(rows, mode="task", runtimes=runtimes, task_order=["e0", "e1"])
+    task = _evaluate(
+        rows,
+        mode="task",
+        runtimes=runtimes,
+        task_order=["e0", "e1"],
+        selected_guard=0.0,
+    )
 
-    call_versions = {
-        row["sample_id"]: row["model_version"] for row in call["decisions"]
-    }
-    task_versions = {
+    assert {
         row["sample_id"]: row["model_version"] for row in task["decisions"]
-    }
-    assert call_versions == {"e0a": 0, "e0b": 0, "e0c": 2, "e1a": 3}
-    assert task_versions == {"e0a": 0, "e0b": 0, "e0c": 0, "e1a": 3}
-    assert call["call_update_readiness"] == {
-        "eligible_update_count": 2,
-        "ready_before_next_eligible_call_count": 1,
-        "fraction": 0.5,
-    }
-    assert call["final_model_version"] == task["final_model_version"] == 4
-    assert call["final_model_state_hash"] == task["final_model_state_hash"]
-    assert len(call["updates"]) == len(task["updates"]) == 4
+    } == {"e0a": 0, "e0b": 0, "e0c": 0, "e1a": 3}
+    assert {
+        row["sample_id"]: row["trigger_ms"] for row in task["decisions"]
+    } == {"e0a": 300.0, "e0b": 300.0, "e0c": 300.0, "e1a": 300.0}
+    assert task["final_model_version"] == 4
+    assert task["final_model_state_hash"] == (
+        "d8ac57d20c583c0488899c7ec4acfe18923de9c534e812c91073b8dc7ed85bfd"
+    )
+    assert [row["sample_id"] for row in task["updates"]] == [
+        "e0a",
+        "e0b",
+        "e0c",
+        "e1a",
+    ]
+    assert all(row["published_ts"] is None for row in task["updates"])
+
+
+def test_call_update_mode_is_not_supported() -> None:
+    rows = [_row("e0a", "e0", 10.0, start=0.0)]
+    with pytest.raises(ValueError, match="unknown update mode"):
+        _evaluate(rows, mode="call", runtimes={"e0a": 0.1}, task_order=["e0"])
 
 
 def test_same_start_calls_share_one_model_snapshot() -> None:
@@ -142,8 +155,9 @@ def test_same_start_calls_share_one_model_snapshot() -> None:
         _row("e0c", "e0", 10.0, start=1.0),
     ]
     runtimes = {str(row["sample_id"]): 0.01 for row in rows}
-    result = _evaluate(rows, mode="call", runtimes=runtimes, task_order=["e0"])
+    result = _evaluate(rows, mode="task", runtimes=runtimes, task_order=["e0"])
     versions = {row["sample_id"]: row["model_version"] for row in result["decisions"]}
-    assert versions["e0a"] == versions["e0b"] == 0
-    assert versions["e0c"] == 2
+    hashes = {row["sample_id"]: row["model_state_hash"] for row in result["decisions"]}
+    assert versions == {"e0a": 0, "e0b": 0, "e0c": 0}
+    assert len(set(hashes.values())) == 1
     assert math.isfinite(result["updates"][0]["update_runtime_ms"])

@@ -106,7 +106,6 @@ def evaluate_utility_clock_policy(
     command_field: str | None = None,
     max_prefix_depth: int = 4,
     skip_leading_cd: bool = False,
-    transparent_wrappers: frozenset[str] = frozenset(),
     restore_cost_fraction: float = 0.0,
 ) -> dict[str, Any]:
     """Evaluate fixed-deadline, mean-hazard, and robust-clock triggers.
@@ -114,10 +113,6 @@ def evaluate_utility_clock_policy(
     ``restore_cost_fraction`` charges each fire on a short call a swap-back
     of that fraction of its kv cost; swap-in scales with the swapped KV
     footprint the same way swap-out does, so the knob is dimensionless.
-
-    ``transparent_wrappers`` threads a learned wrapper-transparency set into
-    the command-prefix keying (see command_features); the empty default is a
-    no-op reproducing the frozen keys byte-for-byte.
     """
 
     kv_costs = normalized_positive_floats(kv_costs_ms, label="kv cost")
@@ -136,7 +131,6 @@ def evaluate_utility_clock_policy(
             command_field,
             max_depth=max_prefix_depth,
             skip_leading_cd=skip_leading_cd,
-            transparent_wrappers=transparent_wrappers,
         )
         if command_field is not None
         else None

@@ -5,15 +5,17 @@ import pytest
 
 from scripts.certification.analyze_prerestore_accounting import (
     PrerestoreConfig,
-    _expected_prerestore_utility,
     _robust_swap_triggers,
     prerestore_components,
-    prerestore_start_ms,
     score_decisions,
     summarize,
 )
 from trace_collect.tool_latency_dataset import ToolLatencySample
 from trace_collect.tool_latency_profiled import LatencyPriorNode, hazard_recheck_ms
+from trace_collect.tool_latency_prerestore import (
+    _expected_prerestore_utility,
+    prerestore_start_ms,
+)
 
 
 # --------------------------------------------------------------------------- #

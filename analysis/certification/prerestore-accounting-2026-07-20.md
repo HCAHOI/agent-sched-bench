@@ -2,11 +2,11 @@
 
 > **FINAL - complete corpus**
 >
-> EXPLORATORY, OFFLINE ACCOUNTING. Restore lead-time overlap priced on original-trace latencies via the frozen manifest (swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277); GPU live validation remains W10-11. Generated 2026-07-20T06:32:24 (git 4b2332b520a3ed91b845df8921ad073a9435e151).
+> EXPLORATORY, OFFLINE ACCOUNTING. Restore lead-time overlap priced on original-trace latencies via the frozen manifest (swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277); GPU live validation remains required before deployment. Generated 2026-07-20T06:32:24 (git 4b2332b520a3ed91b845df8921ad073a9435e151).
 
 **Verdict: SURVIVE**
 
-> Swap-trigger asymmetry: the swap trigger `g` here is `hazard_recheck_ms`, the earlier-firing optimistic analog of the SHIPPED robust clock (which fires later or falls back to the deadline). An earlier `g` only widens the pre-restore window, so a **KILL is conservative/strong** (pre-restore fails even given its best shot), whereas any **SURVIVE must be re-confirmed under the shipped robust-clock `g` (W10-11 GPU validation) before pre-restore is acted on**.
+> Swap-trigger asymmetry: the swap trigger `g` here is `hazard_recheck_ms`, the earlier-firing optimistic analog of the SHIPPED robust clock (which fires later or falls back to the deadline). An earlier `g` only widens the pre-restore window, so a **KILL is conservative/strong** (pre-restore fails even given its best shot), whereas any **SURVIVE must be re-confirmed under the shipped robust-clock `g` and then validated live on GPU before pre-restore is acted on**.
 
 Kill criterion (frozen): net positive with a task-clustered permutation CI excluding zero (Bonferroni over the full cost family) in >=1 headline kv cell (3500, 5000).
 

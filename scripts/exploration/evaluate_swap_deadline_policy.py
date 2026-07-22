@@ -132,20 +132,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Drop leading 'cd <dir> &&' segments before building prefix keys",
     )
     parser.add_argument(
-        "--segment-costs",
-        action="store_true",
-        help=(
-            "Fit an additive per-segment cost model on the profile split and "
-            "key rows by their dominant segment (needs --command-field)"
-        ),
-    )
-    parser.add_argument(
-        "--segment-fit",
-        default="nnls",
-        choices=["nnls", "lad"],
-        help="Segment-cost estimator: nnls (squared error) or lad (median regression)",
-    )
-    parser.add_argument(
         "--recheck",
         default="threshold",
         choices=["threshold", "hazard"],
@@ -174,8 +160,6 @@ def main() -> None:
         command_field=args.command_field,
         max_prefix_depth=args.max_prefix_depth,
         skip_leading_cd=args.skip_leading_cd,
-        segment_costs=args.segment_costs,
-        segment_fit=args.segment_fit,
         recheck=args.recheck,
     )
     payload = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

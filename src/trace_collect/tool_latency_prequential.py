@@ -1,20 +1,14 @@
-"""Development-only prequential updates for the latency-prefix profile.
+"""Development-only task-boundary updates for the latency-prefix profile.
 
-The initial profile and its gate are fitted offline.  Evaluation then compares
-three information schedules over a task-disjoint stream:
-
-* ``frozen`` never changes the initial profile;
-* ``task`` publishes every observation only after its logical task resolves;
-* ``call`` publishes an observation after the tool returns and a measured
-  single-worker update finishes.
-
-A decision reads only fully published versions.  Calls with the same start time
-share one snapshot, and an observation can never update its own decision.
+The initial profile and its gate are fitted offline. Evaluation compares a
+``frozen`` profile with ``task`` updates published only after each logical task
+resolves. Calls with the same start time share one audited model snapshot, and
+an observation can never update its own task's decisions.
 """
 
 from __future__ import annotations
 
-from bisect import bisect_left, insort
+from bisect import insort
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
@@ -38,8 +32,8 @@ from trace_collect.tool_latency_utility_clock import (
     robust_utility_trigger_stats,
 )
 
-UpdateMode = Literal["frozen", "task", "call"]
-_UPDATE_MODES = frozenset({"frozen", "task", "call"})
+UpdateMode = Literal["frozen", "task"]
+_UPDATE_MODES = frozenset({"frozen", "task"})
 
 
 @dataclass(frozen=True)
@@ -236,7 +230,7 @@ def evaluate_prequential_updates(
     skip_leading_cd: bool,
     restore_cost_fraction: float,
 ) -> dict[str, Any]:
-    """Score one frozen or causally evolving profile over a task stream."""
+    """Score one frozen or task-boundary-updated profile over a task stream."""
 
     if update_mode not in _UPDATE_MODES:
         raise ValueError(f"unknown update mode: {update_mode!r}")
@@ -272,22 +266,10 @@ def evaluate_prequential_updates(
 
     decisions: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
-    readiness_eligible = 0
-    readiness_ready = 0
     trigger_cache: dict[tuple[Any, ...], tuple[float, float]] = {}
 
     for task_position, task_id in enumerate(task_order):
         task_rows = rows_by_task[task_id]
-        publication = (
-            _publication_times(task_rows, runtime_by_sample)
-            if update_mode == "call"
-            else {}
-        )
-        if update_mode == "call":
-            eligible, ready = _next_call_readiness(task_rows, publication)
-            readiness_eligible += eligible
-            readiness_ready += ready
-        pending: list[dict[str, Any]] = []
         row_index = 0
         ordered = _rows_by_start(task_rows)
         while row_index < len(ordered):
@@ -298,42 +280,9 @@ def evaluate_prequential_updates(
                 and float(ordered[row_index]["tool_ts_start"]) == start_ts
             ):
                 row_index += 1
-            bucket = ordered[bucket_start:row_index]
-
-            if update_mode == "call":
-                ready_rows = [
-                    row
-                    for row in pending
-                    if publication[str(row["sample_id"])] <= start_ts
-                ]
-                pending = [
-                    row
-                    for row in pending
-                    if publication[str(row["sample_id"])] > start_ts
-                ]
-                for row in sorted(
-                    ready_rows,
-                    key=lambda item: (
-                        publication[str(item["sample_id"])],
-                        str(item["sample_id"]),
-                    ),
-                ):
-                    update = profile.observe(row)
-                    updates.append(
-                        {
-                            **update,
-                            "arm": update_mode,
-                            "task_position": task_position,
-                            "published_ts": publication[str(row["sample_id"])],
-                            "update_runtime_ms": runtime_by_sample[
-                                str(row["sample_id"])
-                            ],
-                        }
-                    )
-
             snapshot_version = profile.version
             snapshot_hash = profile.state_hash
-            for row in bucket:
+            for row in ordered[bucket_start:row_index]:
                 decisions.extend(
                     _score_row(
                         row,
@@ -352,28 +301,8 @@ def evaluate_prequential_updates(
                         trigger_cache=trigger_cache,
                     )
                 )
-            if update_mode == "call":
-                pending.extend(bucket)
 
-        if update_mode == "call":
-            for row in sorted(
-                pending,
-                key=lambda item: (
-                    publication[str(item["sample_id"])],
-                    str(item["sample_id"]),
-                ),
-            ):
-                update = profile.observe(row)
-                updates.append(
-                    {
-                        **update,
-                        "arm": update_mode,
-                        "task_position": task_position,
-                        "published_ts": publication[str(row["sample_id"])],
-                        "update_runtime_ms": runtime_by_sample[str(row["sample_id"])],
-                    }
-                )
-        elif update_mode == "task":
+        if update_mode == "task":
             for row in _rows_by_completion(task_rows):
                 update = profile.observe(row)
                 updates.append(
@@ -396,13 +325,6 @@ def evaluate_prequential_updates(
         "final_profile_task_count": profile.task_count,
         "final_model_version": profile.version,
         "final_model_state_hash": profile.state_hash,
-        "call_update_readiness": {
-            "eligible_update_count": readiness_eligible,
-            "ready_before_next_eligible_call_count": readiness_ready,
-            "fraction": (
-                readiness_ready / readiness_eligible if readiness_eligible else None
-            ),
-        },
         "decisions": decisions,
         "updates": updates,
     }
@@ -502,43 +424,6 @@ def _score_row(
     for decision in output:
         decision["score_panel_runtime_ms"] = elapsed_ms
     return output
-
-
-def _publication_times(
-    rows: Sequence[dict[str, Any]],
-    runtime_by_sample: Mapping[str, float],
-) -> dict[str, float]:
-    """Single-worker asynchronous publication times in trace-clock seconds."""
-
-    publication: dict[str, float] = {}
-    worker_available = -math.inf
-    for row in _rows_by_completion(rows):
-        sample_id = str(row["sample_id"])
-        tool_end = float(row["tool_ts_end"])
-        start = max(tool_end, worker_available)
-        finish = start + runtime_by_sample[sample_id] / 1000.0
-        publication[sample_id] = finish
-        worker_available = finish
-    return publication
-
-
-def _next_call_readiness(
-    rows: Sequence[dict[str, Any]],
-    publication: Mapping[str, float],
-) -> tuple[int, int]:
-    starts = sorted({float(row["tool_ts_start"]) for row in rows})
-    eligible = 0
-    ready = 0
-    for row in rows:
-        own_start = float(row["tool_ts_start"])
-        end = float(row["tool_ts_end"])
-        index = max(bisect_left(starts, end), bisect_left(starts, own_start) + 1)
-        if index >= len(starts):
-            continue
-        eligible += 1
-        if publication[str(row["sample_id"])] <= starts[index]:
-            ready += 1
-    return eligible, ready
 
 
 def _rows_by_task(

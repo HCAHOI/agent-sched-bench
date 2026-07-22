@@ -134,7 +134,7 @@ the direction lacking value.
 
 **Therefore: the multi-tenant CONTENTION axis is a STRUCTURAL NEGATIVE
 on this corpus and this screen does not bound it. Contention claims may
-come only from the W5-7 harness.** This finding is independent of both
+come only from the live W5 harness.** This finding is independent of both
 blockers and stands regardless of the screen's verdict.
 
 ## Integrity rules

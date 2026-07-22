@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "path": "swe-rebench-init100-task-ids.txt",
+      "workload": "swe-rebench-100-development",
+      "task_count": 100,
+      "sha256": "fadf54855c91559bcb166db475320c7f34d03a167baa0d5979a81506749736b8",
+      "source": {
+        "commit": "ed5c3d8e107d6a4cba18ed67a79896f7774a47d4",
+        "path": "analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/task_ids.txt"
+      }
+    },
+    {
+      "path": "terminal-bench-fold-1-task-ids.txt",
+      "workload": "terminal-bench-83-development",
+      "fold": 1,
+      "task_count": 17,
+      "sha256": "6663d82fb3a866e121fc91025ac91b98ae55567b022dce41be898fccf2f7c961",
+      "source": {
+        "commit": "d15239cdfb5a636dd8cd4d77b78992f456a831ec",
+        "path": "analysis/tool-time-frontier-terminal-bench-20260715/folds/f1_eval.txt"
+      }
+    },
+    {
+      "path": "terminal-bench-fold-2-task-ids.txt",
+      "workload": "terminal-bench-83-development",
+      "fold": 2,
+      "task_count": 17,
+      "sha256": "43118b088caa2baa2cf797c8e639bd5f37783af55f6e709dabaca764f513768c",
+      "source": {
+        "commit": "d15239cdfb5a636dd8cd4d77b78992f456a831ec",
+        "path": "analysis/tool-time-frontier-terminal-bench-20260715/folds/f2_eval.txt"
+      }
+    },
+    {
+      "path": "terminal-bench-fold-3-task-ids.txt",
+      "workload": "terminal-bench-83-development",
+      "fold": 3,
+      "task_count": 17,
+      "sha256": "4c0b71f79121e17eab0ff481d3e1c81c5084f2853c4b8d4ee11a91add3ec5777",
+      "source": {
+        "commit": "d15239cdfb5a636dd8cd4d77b78992f456a831ec",
+        "path": "analysis/tool-time-frontier-terminal-bench-20260715/folds/f3_eval.txt"
+      }
+    },
+    {
+      "path": "terminal-bench-fold-4-task-ids.txt",
+      "workload": "terminal-bench-83-development",
+      "fold": 4,
+      "task_count": 16,
+      "sha256": "936fbebd33361f574bb768d33e4a755ec8fd213cc5b591c85a657d7cc520db19",
+      "source": {
+        "commit": "d15239cdfb5a636dd8cd4d77b78992f456a831ec",
+        "path": "analysis/tool-time-frontier-terminal-bench-20260715/folds/f4_eval.txt"
+      }
+    },
+    {
+      "path": "terminal-bench-fold-5-task-ids.txt",
+      "workload": "terminal-bench-83-development",
+      "fold": 5,
+      "task_count": 16,
+      "sha256": "4cf6fee0d97f4255a31c82c15970408a75ec18aec6ed1c73417a2bf1306c8ac1",
+      "source": {
+        "commit": "d15239cdfb5a636dd8cd4d77b78992f456a831ec",
+        "path": "analysis/tool-time-frontier-terminal-bench-20260715/folds/f5_eval.txt"
+      }
+    },
+    {
+      "path": "swe-rebench-fresh277-task-ids.txt",
+      "workload": "swe-rebench-277-development-exposed",
+      "task_count": 277,
+      "sha256": "e1c1b4b45a202c067baf1cf723c7a59208d374d7a4baab6abdc46774903f7541",
+      "source": {
+        "commit": "ed5c3d8e107d6a4cba18ed67a79896f7774a47d4",
+        "path": "analysis/fresh-corpus-certification-20260717/offline-gated-robust/task_ids.txt"
+      }
+    }
+  ]
+}

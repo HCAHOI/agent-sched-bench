@@ -13,7 +13,69 @@ import json
 import platform
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Sequence, runtime_checkable
+
+
+def continuum_priority(
+    program_index: int,
+    stride: int,
+    *,
+    ttl_hit: bool,
+    preempted: bool = False,
+) -> int:
+    """Continuum priority tuple encoded as one integer (smaller runs first)."""
+    if stride <= 0 or not 0 <= program_index < stride:
+        raise ValueError("program_index must be in [0, stride)")
+    category = -1 if preempted else (0 if ttl_hit else 1)
+    return category * stride + program_index
+
+
+def thunderagent_reasoning_pauses(
+    candidates: Sequence[tuple[str, int]],
+    *,
+    required_tokens: int,
+    capacity_tokens: int,
+    buffer_per_program: int,
+) -> list[str]:
+    """Mirror the pinned overflow loop: mark every REASONING candidate."""
+    if min(required_tokens, capacity_tokens, buffer_per_program) < 0:
+        raise ValueError("capacity accounting inputs must be >= 0")
+    if len({program_id for program_id, _ in candidates}) != len(candidates):
+        raise ValueError("reasoning candidates must have unique program ids")
+    if any(not program_id or tokens < 0 for program_id, tokens in candidates):
+        raise ValueError("reasoning candidates need non-empty ids and tokens >= 0")
+    if required_tokens <= capacity_tokens:
+        return []
+    return [
+        program_id
+        for program_id, _ in sorted(candidates, key=lambda item: (item[1], item[0]))
+    ]
+
+
+def thunderagent_resume_admissions(
+    candidates: Sequence[tuple[str, int]],
+    *,
+    capacity_tokens: int,
+    buffer_per_program: int,
+) -> list[str]:
+    """Select the maximal small-first fit, then BFD-order admitted programs."""
+    if min(capacity_tokens, buffer_per_program) < 0:
+        raise ValueError("capacity accounting inputs must be >= 0")
+    if len({program_id for program_id, _ in candidates}) != len(candidates):
+        raise ValueError("resume candidates must have unique program ids")
+    if any(not program_id or tokens < 0 for program_id, tokens in candidates):
+        raise ValueError("resume candidates need non-empty ids and tokens >= 0")
+    selected: list[tuple[str, int]] = []
+    remaining = capacity_tokens
+    for candidate in sorted(candidates, key=lambda item: (item[1], item[0])):
+        required = candidate[1] + buffer_per_program
+        if required <= remaining:
+            selected.append(candidate)
+            remaining -= required
+    return [
+        program_id
+        for program_id, _ in sorted(selected, key=lambda item: (-item[1], item[0]))
+    ]
 
 
 def gbps(bytes_moved: int, milliseconds: float) -> float:
@@ -127,7 +189,9 @@ class FakeTransferBackend:
         )
         nbytes = len(block_ids) * self.bytes_per_block
         ms = (nbytes / (rate_gbps * 1e9)) * 1000.0
-        return TransferTiming(bytes_moved=nbytes, milliseconds=ms, num_blocks=len(block_ids))
+        return TransferTiming(
+            bytes_moved=nbytes, milliseconds=ms, num_blocks=len(block_ids)
+        )
 
     # Dedicated per-request retained buffers (pause-save survives eviction and
     # is NOT recycled into the shared staging pool until the resume-load frees
@@ -213,7 +277,9 @@ def chunk_ranges(
     if bytes_per_block <= 0:
         raise ValueError(f"bytes_per_block must be > 0, got {bytes_per_block}")
     per_chunk = max(1, chunk_bytes // bytes_per_block)
-    return [(i, min(i + per_chunk, num_blocks)) for i in range(0, num_blocks, per_chunk)]
+    return [
+        (i, min(i + per_chunk, num_blocks)) for i in range(0, num_blocks, per_chunk)
+    ]
 
 
 def validate_block_ids(num_blocks_in_dim: int, block_ids: list[int]) -> None:
@@ -323,7 +389,9 @@ def cdiv(a: int, b: int) -> int:
     return -(-a // b)
 
 
-def assert_saved_covers_tokens(num_tokens: int, block_count: int, block_size: int) -> None:
+def assert_saved_covers_tokens(
+    num_tokens: int, block_count: int, block_size: int
+) -> None:
     """Fail fast unless ``block_count`` blocks exactly cover ``num_tokens``.
 
     The pause instant's invariant (memo Q4): the KV we save must be exactly the
@@ -345,7 +413,9 @@ def assert_saved_covers_tokens(num_tokens: int, block_count: int, block_size: in
         )
 
 
-def resume_load_block_ids(new_block_ids: list[int], saved_block_count: int) -> list[int]:
+def resume_load_block_ids(
+    new_block_ids: list[int], saved_block_count: int
+) -> list[int]:
     """Slice the scheduler's full prefix block set down to the saved blocks.
 
     v0.11.2's ``update_state_after_alloc`` hands the connector the FULL prefix
@@ -385,6 +455,226 @@ def matched_tokens_delta(saved_tokens: int, num_local_computed: int) -> int:
     if saved_tokens < 0 or num_local_computed < 0:
         raise ValueError("token counts must be >= 0")
     return max(0, saved_tokens - num_local_computed)
+
+
+@dataclass(frozen=True)
+class RetainedPrefix:
+    """One finished turn whose prompt KV is still reusable."""
+
+    program_id: str
+    request_id: str
+    num_tokens: int
+    resident_tokens: int
+    block_ids: tuple[int, ...]
+    block_hashes: tuple[object, ...]
+    created_at: float
+    expires_at: float | None
+    action: str
+    policy: str
+    program_arrival_s: float = 0.0
+
+    @property
+    def block_count(self) -> int:
+        return len(self.block_ids)
+
+
+@dataclass(frozen=True)
+class RetentionMatch:
+    """Side-effect-free prefix lookup result for a follow-up request."""
+
+    source: str
+    record: RetainedPrefix | None
+    local_blocks: int = 0
+
+    @property
+    def external_blocks(self) -> int:
+        if self.source not in {"resident", "host"} or self.record is None:
+            return 0
+        return self.record.block_count - self.local_blocks
+
+
+@dataclass
+class FinishedRetentionBook:
+    """Scheduler-side lifecycle for finished-turn GPU and host prefixes."""
+
+    resident: dict[str, RetainedPrefix] = field(default_factory=dict)
+    host: dict[str, RetainedPrefix] = field(default_factory=dict)
+
+    def register(self, record: RetainedPrefix) -> None:
+        if record.action not in {"offload", "release", "pressure"}:
+            raise ValueError(f"unsupported retention action {record.action!r}")
+        if not record.program_id or not record.request_id:
+            raise ValueError("program_id and request_id must be non-empty")
+        if record.num_tokens <= 0:
+            raise ValueError("retained token count must be > 0")
+        if record.resident_tokens < record.num_tokens:
+            raise ValueError(
+                "resident token capacity cannot be smaller than reusable KV"
+            )
+        if not record.block_ids or len(record.block_ids) != len(record.block_hashes):
+            raise ValueError(
+                "retained block ids and hashes must be non-empty and aligned"
+            )
+        if record.program_id in self.resident or record.program_id in self.host:
+            raise ValueError(
+                f"program {record.program_id!r} already has an unconsumed prefix"
+            )
+        self.resident[record.program_id] = record
+
+    def due(
+        self, now: float, *, waiting_program_ids: set[str] | None = None
+    ) -> list[RetainedPrefix]:
+        """Expired timer-based records whose program is not already waiting."""
+        waiting_program_ids = waiting_program_ids or set()
+        return sorted(
+            (
+                record
+                for record in self.resident.values()
+                if record.expires_at is not None
+                and record.expires_at <= now
+                and record.program_id not in waiting_program_ids
+            ),
+            key=lambda record: (record.expires_at, record.program_id),
+        )
+
+    def move_to_host(self, program_id: str) -> RetainedPrefix:
+        record = self.resident.pop(program_id)
+        if record.action != "offload":
+            raise ValueError(
+                f"cannot move {record.action!r} retention for {program_id!r} to host"
+            )
+        self.host[program_id] = record
+        return record
+
+    def drop(self, program_id: str) -> RetainedPrefix | None:
+        record = self.resident.pop(program_id, None)
+        return record if record is not None else self.host.pop(program_id, None)
+
+    def match(
+        self,
+        program_id: str,
+        block_hashes: list[object] | tuple[object, ...],
+        *,
+        num_local_tokens: int,
+        block_size: int,
+    ) -> RetentionMatch:
+        """Match a follow-up prompt without mutating retained state."""
+        if num_local_tokens < 0 or block_size <= 0:
+            raise ValueError("num_local_tokens must be >= 0 and block_size must be > 0")
+        source = "resident" if program_id in self.resident else "host"
+        record = self.resident.get(program_id) or self.host.get(program_id)
+        if record is None:
+            return RetentionMatch("none", None)
+        prefix = tuple(block_hashes[: record.block_count])
+        if prefix != record.block_hashes:
+            return RetentionMatch("mismatch", record)
+        local_blocks = min(num_local_tokens // block_size, record.block_count)
+        return RetentionMatch(source, record, local_blocks)
+
+    def continuum_pressure_evictions(
+        self,
+        *,
+        active_tokens: int,
+        waiting_tokens: int,
+        capacity_tokens: int,
+        shared_tokens: int = 0,
+        protected_program_ids: set[str] | None = None,
+    ) -> list[RetainedPrefix]:
+        """Unpin latest-arriving Continuum programs until capacity fits."""
+        if min(active_tokens, waiting_tokens, capacity_tokens, shared_tokens) < 0:
+            raise ValueError("capacity accounting inputs must be >= 0")
+        all_retained = [
+            record
+            for record in self.resident.values()
+            if record.policy == "continuum" and record.action == "release"
+        ]
+        candidates = [
+            record
+            for record in all_retained
+            if protected_program_ids is None
+            or record.program_id not in protected_program_ids
+        ]
+        required = max(
+            0,
+            active_tokens
+            + waiting_tokens
+            + sum(record.resident_tokens for record in all_retained)
+            - shared_tokens,
+        )
+        evicted: list[RetainedPrefix] = []
+        for record in sorted(
+            candidates,
+            key=lambda item: (
+                -item.program_arrival_s,
+                -item.created_at,
+                item.program_id,
+            ),
+        ):
+            if required <= capacity_tokens:
+                break
+            required -= record.resident_tokens
+            evicted.append(record)
+        return evicted
+
+    def pressure_evictions(
+        self,
+        *,
+        reasoning_tokens: int,
+        reasoning_programs: int,
+        capacity_tokens: int,
+        buffer_per_program: int,
+        shared_tokens: int = 0,
+        reasoning_program_ids: set[str] | None = None,
+        waiting_tokens: int = 0,
+        waiting_programs: int = 0,
+    ) -> list[RetainedPrefix]:
+        """ThunderAgent's smallest-ACTING-first capacity rule."""
+        if (
+            min(
+                reasoning_tokens,
+                reasoning_programs,
+                capacity_tokens,
+                buffer_per_program,
+                shared_tokens,
+                waiting_tokens,
+                waiting_programs,
+            )
+            < 0
+        ):
+            raise ValueError("capacity accounting inputs must be >= 0")
+        acting = sorted(
+            (
+                record
+                for record in self.resident.values()
+                if record.action == "pressure"
+                and (
+                    reasoning_program_ids is None
+                    or record.program_id not in reasoning_program_ids
+                )
+            ),
+            key=lambda record: (
+                record.resident_tokens,
+                record.created_at,
+                record.program_id,
+            ),
+        )
+        acting_tokens = sum(record.resident_tokens for record in acting)
+        required = max(
+            0,
+            reasoning_tokens
+            + waiting_tokens
+            + acting_tokens
+            - shared_tokens
+            + (reasoning_programs + len(acting) + waiting_programs)
+            * buffer_per_program,
+        )
+        evicted: list[RetainedPrefix] = []
+        for record in acting:
+            if required <= capacity_tokens:
+                break
+            required -= record.resident_tokens + buffer_per_program
+            evicted.append(record)
+        return evicted
 
 
 @dataclass
@@ -500,7 +790,9 @@ class SavedKVRegistry:
     saved: dict[str, tuple[int, int]] = field(default_factory=dict)
     resume_blocks: dict[str, list[int]] = field(default_factory=dict)
 
-    def register(self, request_id: str, num_tokens_saved: int, block_count: int) -> None:
+    def register(
+        self, request_id: str, num_tokens_saved: int, block_count: int
+    ) -> None:
         if num_tokens_saved <= 0 or block_count <= 0:
             raise ValueError("saved token/block counts must be > 0")
         self.saved[request_id] = (num_tokens_saved, block_count)
@@ -508,7 +800,9 @@ class SavedKVRegistry:
     def is_saved(self, request_id: str) -> bool:
         return request_id in self.saved
 
-    def matched_tokens(self, request_id: str, num_local_computed: int) -> tuple[int, bool]:
+    def matched_tokens(
+        self, request_id: str, num_local_computed: int
+    ) -> tuple[int, bool]:
         """Return ``(delta, load_async)`` for a resuming request, else ``(0, False)``.
 
         Only known (previously paused) request_ids match; everything else falls

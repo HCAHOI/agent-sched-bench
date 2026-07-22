@@ -137,21 +137,6 @@ def build_parser() -> argparse.ArgumentParser:
             "so the depth budget indexes the workload (needs --command-field)"
         ),
     )
-    parser.add_argument(
-        "--segment-costs",
-        action="store_true",
-        help=(
-            "Fit an additive per-segment cost model on the profile split; key "
-            "rows by their dominant segment and deduct the other segments' "
-            "costs from the threshold (needs --command-field)"
-        ),
-    )
-    parser.add_argument(
-        "--segment-fit",
-        default="nnls",
-        choices=["nnls", "lad"],
-        help="Segment-cost estimator: nnls (squared error) or lad (median regression)",
-    )
     parser.add_argument("--output", type=Path, default=None, help="Write summary JSON")
     parser.add_argument(
         "--decisions-output",
@@ -180,8 +165,6 @@ def main() -> None:
             command_field=args.command_field,
             max_prefix_depth=args.max_prefix_depth,
             skip_leading_cd=args.skip_leading_cd,
-            segment_costs=args.segment_costs,
-            segment_fit=args.segment_fit,
         )
 
     summary_payload = {

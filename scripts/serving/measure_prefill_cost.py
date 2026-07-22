@@ -45,16 +45,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-# Reuse the KV-layout helpers from the rho script (same scripts dir) so the
-# prefill curve and the swap curve are reported against one KV byte layout.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from measure_kv_swap_cost import (  # noqa: E402
+# Reuse the KV-layout helpers from the rho script so the prefill curve and the
+# swap curve are reported against one KV byte layout.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.serving.measure_kv_swap_cost import (  # noqa: E402
     _device_info,
     derive_kv_layout,
     load_model_config,
@@ -83,6 +82,10 @@ def _parse_int_list(text: str, *, label: str) -> list[int]:
     return sorted(values)
 
 
+def _optional_string(value: str) -> str | None:
+    return None if value.lower() == "none" else value
+
+
 def measure_prefill(
     model: str,
     *,
@@ -101,6 +104,10 @@ def measure_prefill(
 
     if not torch.cuda.is_available():
         raise RuntimeError("no CUDA device available for prefill measurement")
+    if len(context_lengths) < 3:
+        raise ValueError(
+            "quadratic prefill fit requires at least three context lengths"
+        )
 
     max_ctx = max(context_lengths)
     if max_ctx + 1 > max_model_len:  # +1 for the single generated token
@@ -176,6 +183,10 @@ def measure_prefill(
     ss_res = float(np.sum(residuals**2))
     ss_tot = float(np.sum((pref - pref.mean()) ** 2))
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+    qa, qb, qc = np.polyfit(ctx, pref, 2)
+    quadratic_residuals = pref - (qa * ctx**2 + qb * ctx + qc)
+    quadratic_ss_res = float(np.sum(quadratic_residuals**2))
+    quadratic_r_squared = 1.0 - quadratic_ss_res / ss_tot if ss_tot > 0 else None
     overhead_floor_ms = float(min(pref))  # prefill at the smallest context
     return {
         "points": points,
@@ -188,6 +199,12 @@ def measure_prefill(
                 "adopt slope_ms_per_token as the P2 recompute rate; prefill is "
                 "super-linear so a linear rate under-charges long context"
             ),
+        },
+        "quadratic_fit": {
+            "coefficients": [float(qa), float(qb), float(qc)],
+            "coefficient_order": ["context_tokens^2", "context_tokens", "intercept"],
+            "r_squared": quadratic_r_squared,
+            "note": "Continuum online prefill-reload estimator",
         },
         "overhead_floor_ms": overhead_floor_ms,
         "min_context_tokens": int(min(ctx)),
@@ -208,7 +225,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Dtype name for the reported per-token KV byte layout "
         "(e.g. float8_e4m3fn, bfloat16).",
     )
-    p.add_argument("--quantization", default="fp8")
+    p.add_argument(
+        "--quantization",
+        type=_optional_string,
+        default="fp8",
+        help="vLLM quantization mode, or 'none' for an unquantized model.",
+    )
     p.add_argument(
         "--context-sweep",
         default=",".join(str(c) for c in DEFAULT_CONTEXT_SWEEP),
@@ -268,6 +290,7 @@ def main() -> None:
         "device": _device_info(),
         "points": result["points"],
         "linear_fit": result["linear_fit"],
+        "quadratic_fit": result["quadratic_fit"],
         "overhead_floor_ms": result["overhead_floor_ms"],
         "min_context_tokens": result["min_context_tokens"],
         "vocab_size": result["vocab_size"],

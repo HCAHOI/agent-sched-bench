@@ -1,17 +1,30 @@
-# Configuration Directory Map
+# Configuration map
 
-`dev/cpu-only` keeps only configuration used by cloud-provider trace collection,
-cloud timing replay, prompts, MCP, and benchmark plugins.
+| Directory | Role |
+|---|---|
+| `benchmarks/` | Benchmark plugins loaded as `configs/benchmarks/<slug>.yaml`. |
+| `prompts/` | Benchmark-specific prompt templates. |
+| `mcp/` | MCP server definitions passed through the trace-collection CLI. |
+| `simulate/` | Curated replay and static-export configuration. |
+| `trace_collect/` | Trace-collection configuration and compatibility examples. |
+| `experiments/` | Development replay configuration; completed-task profile update is the retained adaptive lane. |
+| `serving/` | Live-system development configuration. |
 
-## Directory inventory
+## W5 multi-tenant configuration
 
-| Directory | Lifecycle | Current role |
-| --- | --- | --- |
-| `benchmarks/` | `active-runtime` | Benchmark plugin YAMLs loaded as `configs/benchmarks/<slug>.yaml` by `trace_collect.cli`. |
-| `prompts/` | `active-runtime` | Prompt templates resolved as `configs/prompts/<benchmark_slug>/<template>.md`. |
-| `mcp/` | `active-runtime` | MCP server YAMLs passed through `--mcp-config`, e.g. OpenClaw `context7.yaml`. |
-| `simulate/` | `curated-replay` | Replay manifests for simulation/static export flows. |
-| `trace_collect/` | `legacy-compatibility` | Older trace collection/simulation configs retained for compatibility checks. |
+`serving/w5_multitenant.yaml` is the single current W5 matrix definition. It
+owns policies, load levels, workload/task-list inputs, model settings, transfer
+settings, and the runtime restore-cost fraction. Input task lists live under
+`analysis/serving/w5-multitenant/inputs/`.
 
-Removed from this branch: local-HF recording/KV-policy/sparse-attention configs
-and GPU recording campaign manifests.
+The file is not launch-ready and has no associated result. Before a GPU run:
+
+- generate
+  `analysis/serving/w5-multitenant/prefill_result_llama31_8b.json` on the target
+  hardware;
+- resolve the development trigger table's `rho=1.0` metadata against the
+  configured runtime `restore_cost_fraction: 0.94`;
+- pass the focused CPU tests and independent serving-code review.
+
+Do not infer a result from the presence of the config, and do not silently
+substitute another prefill profile, trigger table, task set, or `rho` value.

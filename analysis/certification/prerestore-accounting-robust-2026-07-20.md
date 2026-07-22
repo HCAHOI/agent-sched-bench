@@ -2,13 +2,13 @@
 
 > **FINAL - complete corpus**
 >
-> EXPLORATORY, OFFLINE ACCOUNTING. Restore lead-time overlap priced on original-trace latencies via the frozen manifest (swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277); GPU live validation remains W10-11. Generated 2026-07-20T09:39:34 (git ed5c3d8e107d6a4cba18ed67a79896f7774a47d4).
+> EXPLORATORY, OFFLINE ACCOUNTING. Restore lead-time overlap priced on original-trace latencies via the frozen manifest (swe-rebench-qwen3.7-max-fresh-seed42-skip150-n277); GPU live validation remains required before deployment. Generated 2026-07-20T09:39:34 (git ed5c3d8e107d6a4cba18ed67a79896f7774a47d4).
 
 **Verdict: SURVIVE** (trigger source: `robust`)
 
 > Swap trigger `g` here is the SHIPPED offline-gated robust clock (`offline_gated_robust_trigger_ms`), reproduced via the certified `evaluate_offline_probe_clock` pipeline; deadline fallbacks inherit conservatively (no earlier trigger invented). This is the re-confirmation run: a **KILL here renders any hazard-source SURVIVE optimistic-screen-only**.
 
-> Pre-registered decision rule: pre-restore is ACTIONABLE only under SURVIVE from BOTH trigger sources (hazard optimistic screen AND robust shipped-clock re-confirmation). GPU live validation remains W10-11.
+> Pre-registered decision rule: pre-restore is ACTIONABLE offline only under SURVIVE from BOTH trigger sources (hazard optimistic screen AND robust shipped-clock re-confirmation). GPU live validation remains required before deployment.
 
 Kill criterion (frozen): net positive with a task-clustered permutation CI excluding zero (Bonferroni over the full cost family) in >=1 headline kv cell (3500, 5000).
 

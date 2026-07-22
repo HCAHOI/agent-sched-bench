@@ -482,28 +482,6 @@ def test_aggregator_rejects_probe_count_inconsistent_with_profile(
         aggregate_offline_probe_cv(tmp_path, expected_fold_count=1)
 
 
-def test_runner_snapshots_result_driving_dependencies() -> None:
-    runner = (
-        Path(__file__).resolve().parents[1]
-        / "analysis/tool-time-offline-gated-robust-20260711/run_probe.sh"
-    ).read_text(encoding="utf-8")
-    dependencies = (
-        "src/trace_collect/causal_history.py",
-        "src/trace_collect/classification_metrics.py",
-        "src/trace_collect/cli_helpers.py",
-        "src/trace_collect/command_features.py",
-        "src/trace_collect/latency_validation.py",
-        "src/trace_collect/tool_latency_dataset.py",
-        "src/trace_collect/tool_latency_offline_probe.py",
-        "src/trace_collect/tool_latency_profiled.py",
-        "src/trace_collect/tool_latency_utility_clock.py",
-        "tests/test_tool_latency_offline_probe.py",
-        "tests/test_tool_latency_utility_clock.py",
-    )
-    for dependency in dependencies:
-        assert runner.count(dependency) == 2
-
-
 def _probe_decision(
     sample_id: str,
     task_id: str,

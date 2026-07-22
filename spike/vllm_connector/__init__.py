@@ -10,6 +10,7 @@ from __future__ import annotations
 from .control import ControlState, OffloadControl, OffloadPhase
 from .core import (
     FakeTransferBackend,
+    FinishedRetentionBook,
     OffloadedBlocks,
     PauseBook,
     PauseResult,
@@ -17,6 +18,8 @@ from .core import (
     SavedKVRegistry,
     SaveConfirmationReader,
     SpikeReport,
+    RetainedPrefix,
+    RetentionMatch,
     TransferBackend,
     TransferTiming,
     assert_saved_covers_tokens,
@@ -38,6 +41,7 @@ __all__ = [
     "OffloadControl",
     "OffloadPhase",
     "FakeTransferBackend",
+    "FinishedRetentionBook",
     "OffloadedBlocks",
     "PauseBook",
     "PauseResult",
@@ -45,6 +49,8 @@ __all__ = [
     "SavedKVRegistry",
     "SaveConfirmationReader",
     "SpikeReport",
+    "RetainedPrefix",
+    "RetentionMatch",
     "TransferBackend",
     "TransferTiming",
     "assert_saved_covers_tokens",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare frozen, task-batch, and latency-aware per-call profile updates.
+"""Compare frozen baselines with completed-task profile updates.
 
 SWE-ReBench-100 initializes one prefix profile and fixed robust-clock gate.
 Five parallel Fresh-277 lanes each warm up on four folds and score the held-out
@@ -95,13 +95,12 @@ from trace_collect.tool_latency_prequential import (  # noqa: E402
 if _source_tree_hashes() != _SOURCE_HASHES_AT_IMPORT:
     raise RuntimeError("local source tree changed while imports were loading")
 
-_DYNAMIC_ARMS = ("task", "call")
+_DYNAMIC_ARMS = ("task",)
 _PANEL_NAMES = (
     "frozen_100",
     "fresh4_static",
     "warmup_snapshot",
     "task",
-    "call",
 )
 _INITIAL_MANIFEST = (
     "analysis/tool-time-offline-gated-robust-confirmation-"
@@ -124,22 +123,22 @@ _INITIAL_INVENTORY = {
 }
 _DEVELOPMENT_INVENTORY = {
     "file": (
-        "analysis/development/prequential-profile-update-fresh277-pre-run-traces.sha256"
+        "analysis/results/prequential-task-update-20260721/"
+        "prequential-profile-update-fresh277-pre-run-traces.sha256"
     ),
     "sha256": "b51c3c59653122c4224a199cf369551d1e50e8dd81daba57959ad7b9949bf190",
     "trace_count": 277,
 }
 _OUTER_FOLDS = 5
 _OUTPUTS = {
-    "json": "analysis/development/prequential-profile-update-2026-07-21.json",
-    "markdown": "analysis/development/prequential-profile-update-2026-07-21.md",
+    "json": "analysis/results/prequential-task-update-task-only/prequential-task-update.json",
+    "markdown": "analysis/results/prequential-task-update-task-only/prequential-task-update.md",
 }
 _PAIR_FIELDS = {
     "frozen_100_vs_deadline": ("threshold_ms", "frozen_100_trigger_ms"),
     "fresh4_static_vs_deadline": ("threshold_ms", "fresh4_static_trigger_ms"),
     "warmup_snapshot_vs_deadline": ("threshold_ms", "warmup_snapshot_trigger_ms"),
     "task_vs_deadline": ("threshold_ms", "task_trigger_ms"),
-    "call_vs_deadline": ("threshold_ms", "call_trigger_ms"),
     "fresh4_static_vs_frozen_100": (
         "frozen_100_trigger_ms",
         "fresh4_static_trigger_ms",
@@ -149,16 +148,10 @@ _PAIR_FIELDS = {
         "warmup_snapshot_trigger_ms",
     ),
     "task_vs_frozen_100": ("frozen_100_trigger_ms", "task_trigger_ms"),
-    "call_vs_frozen_100": ("frozen_100_trigger_ms", "call_trigger_ms"),
     "task_vs_warmup_snapshot": (
         "warmup_snapshot_trigger_ms",
         "task_trigger_ms",
     ),
-    "call_vs_warmup_snapshot": (
-        "warmup_snapshot_trigger_ms",
-        "call_trigger_ms",
-    ),
-    "call_vs_task": ("task_trigger_ms", "call_trigger_ms"),
 }
 _DYNAMIC_FIELDS = (
     "trigger_ms",
@@ -371,7 +364,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             [
                 {
                     "record_type": "run_metadata",
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "status": "development_only_exploratory",
                     "certificate": False,
                     "run_started": run_started,
@@ -497,7 +490,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         ],
     ]
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "protocol": {
             "date": config["protocol_date"],
             "status": config["status"],
@@ -506,9 +499,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             "causal_contract": (
                 "SWE-ReBench-100 initializes one profile and fixed robust gate. "
                 "Each Fresh-277 outer lane causally warms up on four folds, then "
-                "scores its held-out fold exactly once. The held-out task and call "
-                "arms continue past-only updates; warmup_snapshot freezes at test "
-                "entry; fresh4_static is a same-gate matched reference."
+                "scores its held-out fold exactly once. The held-out task arm "
+                "publishes completed observations only at task boundaries; "
+                "warmup_snapshot freezes at test entry; fresh4_static is a "
+                "same-gate matched reference."
             ),
             "primary_order": "one global PCG64 seed-0 permutation, filtered per fold",
             "inference": (
@@ -908,17 +902,19 @@ def _finalize_fold(
     )
 
     warmup_task_final = _final_state(warmup_panels["task"])
-    warmup_call_final = _final_state(warmup_panels["call"])
-    if warmup_task_final != warmup_call_final:
-        raise AssertionError("warmup task and call arms ended in different states")
     base_profile = context["base_profile"]
     if warmup_task_final[:2] != (
         len(base_profile),
         len({str(row["task_id"]) for row in base_profile}),
     ):
         raise AssertionError("warmup final state differs from batch profile")
-    if _final_state(dynamic["task"]) != _final_state(dynamic["call"]):
-        raise AssertionError("test task and call arms ended in different states")
+    test_task_final = _final_state(dynamic["task"])
+    expected_test_rows = len(base_profile) + len(context["test_rows"])
+    expected_test_tasks = len(
+        {str(row["task_id"]) for row in [*base_profile, *context["test_rows"]]}
+    )
+    if test_task_final[:2] != (expected_test_rows, expected_test_tasks):
+        raise AssertionError("test final state differs from completed-task profile")
 
     warmup_benchmarks = benchmarks["warmup"]
     test_benchmarks = benchmarks["test"]
@@ -929,7 +925,7 @@ def _finalize_fold(
             [
                 {
                     "record_type": "fold_metadata",
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "outer_fold": outer_fold,
                     "fold_count": _OUTER_FOLDS,
                     "status": "development_only_exploratory",
@@ -1012,7 +1008,6 @@ def _finalize_fold(
         writer.abort()
         raise
 
-    readiness = dynamic["call"]["call_update_readiness"]
     run_summary = {
         "order_run": "primary",
         "test_task_order": context["primary_test_order"],
@@ -1022,8 +1017,6 @@ def _finalize_fold(
             [benchmark.to_json_obj() for benchmark in test_benchmarks],
             decisions,
             panels=_PANEL_NAMES,
-            readiness_eligible=int(readiness["eligible_update_count"]),
-            readiness_ready=int(readiness["ready_before_next_eligible_call_count"]),
         ),
     }
     return {
@@ -1041,11 +1034,6 @@ def _finalize_fold(
                         "frozen_100_trigger_ms",
                         "task_trigger_ms",
                     ),
-                    "call_vs_frozen_100": (
-                        "frozen_100_trigger_ms",
-                        "call_trigger_ms",
-                    ),
-                    "call_vs_task": ("task_trigger_ms", "call_trigger_ms"),
                 },
             ),
         },
@@ -1113,26 +1101,9 @@ def _aggregate_fold_run(
                 ),
             }
         comparisons[comparison] = by_cost
-    eligible = sum(
-        int(run["timing"]["call_update_readiness"]["eligible_update_count"])
-        for run in runs
-    )
-    ready = sum(
-        int(
-            run["timing"]["call_update_readiness"][
-                "ready_before_next_eligible_call_count"
-            ]
-        )
-        for run in runs
-    )
     return {
         "order_run": run_name,
         "point_estimates": comparisons,
-        "call_update_readiness": {
-            "eligible_update_count": eligible,
-            "ready_before_next_eligible_call_count": ready,
-            "fraction": ready / eligible if eligible else None,
-        },
         "fold_runs": runs,
     }
 
@@ -1170,7 +1141,7 @@ def _load_config(path: Path) -> tuple[dict[str, Any], str]:
             f"missing={sorted(required - set(payload))}, "
             f"unexpected={sorted(set(payload) - required)}"
         )
-    if type(payload["schema_version"]) is not int or payload["schema_version"] != 2:
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != 3:
         raise ValueError("unsupported experiment config schema")
     if payload["protocol_date"] != "2026-07-21":
         raise ValueError("protocol_date must be 2026-07-21")
@@ -1502,7 +1473,7 @@ def _trigger_change_summary(
     decisions: Sequence[Mapping[str, Any]], *, costs: Sequence[float]
 ) -> dict[str, Any]:
     output: dict[str, Any] = {}
-    for arm in ("task", "call"):
+    for arm in _DYNAMIC_ARMS:
         by_cost: dict[str, Any] = {}
         for cost in costs:
             rows = [row for row in decisions if float(row["kv_cost_ms"]) == cost]
@@ -1529,8 +1500,6 @@ def _timing_summary(
     decisions: Sequence[Mapping[str, Any]],
     *,
     panels: Sequence[str],
-    readiness_eligible: int,
-    readiness_ready: int,
 ) -> dict[str, Any]:
     update_ms = np.asarray([float(row["runtime_ms"]) for row in benchmarks])
     score_by_arm: dict[str, list[float]] = defaultdict(list)
@@ -1549,17 +1518,7 @@ def _timing_summary(
             arm: _distribution(np.asarray(values, dtype=float))
             for arm, values in score_by_arm.items()
         },
-        "call_update_readiness": {
-            "eligible_update_count": readiness_eligible,
-            "ready_before_next_eligible_call_count": readiness_ready,
-            "fraction": (
-                readiness_ready / readiness_eligible if readiness_eligible else None
-            ),
-            "scheduler": (
-                "one serial updater within each agent task; completed observations "
-                "synchronize at task resolution"
-            ),
-        },
+        "task_update_publication": "all observations publish after task resolution",
     }
 
 
@@ -1583,7 +1542,7 @@ def _render_markdown(result: Mapping[str, Any]) -> str:
     provenance = result["provenance"]
     primary = result["primary"]["run"]
     lines = [
-        f"# Five-fold prequential profile-update screen ({protocol['date']})",
+        f"# Five-fold completed-task profile-update screen ({protocol['date']})",
         "",
         "**DEVELOPMENT-ONLY / EXPLORATORY. This is not an online activation gate, "
         "deployment certificate, or unopened-stream result.**",
@@ -1597,8 +1556,8 @@ def _render_markdown(result: Mapping[str, Any]) -> str:
         "",
         "Each Fresh-277 task is scored exactly once in its held-out fold. Its lane "
         "first consumes the other four folds. `warmup snapshot` freezes at test "
-        "entry; `task` and `call` continue past-only updates inside the held-out "
-        "fold. `fresh4 static` is a same-100-derived-gate matched reference.",
+        "entry; `task` publishes past observations only after each completed task. "
+        "`fresh4 static` is a same-100-derived-gate matched reference.",
         "",
         "Positive utility delta favors the treatment named by the comparison.",
         "",
@@ -1616,48 +1575,36 @@ def _render_markdown(result: Mapping[str, Any]) -> str:
                 f"{point['positive_task_count']} / {point['negative_task_count']} / "
                 f"{point['zero_task_count']} |"
             )
-    readiness = primary["call_update_readiness"]
-    readiness_fraction = (
-        "n/a" if readiness["fraction"] is None else f"{readiness['fraction']:.4f}"
-    )
     lines.extend(
         [
             "",
             "## Timing and publication",
             "",
-            "Ready before the next within-task causally eligible tool call: "
-            f"{readiness['ready_before_next_eligible_call_count']}/"
-            f"{readiness['eligible_update_count']} ({readiness_fraction}).",
+            "All observations publish after their logical task resolves.",
             "",
-            "| Fold | update p50 / p95 / p99 / max ms | call readiness |",
-            "|---:|---:|---:|",
+            "| Fold | update p50 / p95 / p99 / max ms |",
+            "|---:|---:|",
         ]
     )
     for fold in result["folds"]:
-        timing = fold["runs"][0]["timing"]
-        update = timing["update_runtime_ms"]
-        fold_readiness = timing["call_update_readiness"]
-        fraction = fold_readiness["fraction"]
+        update = fold["runs"][0]["timing"]["update_runtime_ms"]
         lines.append(
             f"| {fold['outer_fold']} | {update['p50']:.4f} / "
             f"{update['p95']:.4f} / {update['p99']:.4f} / "
-            f"{update['max']:.4f} | "
-            f"{fold_readiness['ready_before_next_eligible_call_count']}/"
-            f"{fold_readiness['eligible_update_count']} "
-            f"({'n/a' if fraction is None else f'{fraction:.4f}'}) |"
+            f"{update['max']:.4f} |"
         )
     lines.extend(
         [
             "",
-            "Host timing drives this replay's publication schedule but is not a "
-            "deployment-latency guarantee.",
+            "Host update timing is a mechanism measurement, not a deployment-latency "
+            "guarantee.",
             "",
             "No bootstrap CI or sign-flip p-value is reported: held-out-fold updates "
             "make later task decisions path-dependent.",
             "",
             "Complete calibration, fold membership, decisions, update timings, "
-            "publication timestamps, model versions/state hashes, and input/source "
-            "hashes are stored in:",
+            "task-boundary publication markers, model versions/state hashes, and "
+            "input/source hashes are stored in:",
             "",
         ]
     )

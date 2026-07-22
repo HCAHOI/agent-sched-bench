@@ -1,388 +1,116 @@
-# W1 spike — vLLM connector selective KV offload
+# Live serving development
 
-**Goal (roadmap W1-2):** de-risk the P4 long pole — offload one real agent
-request's KV blocks to host memory *mid tool-call* through vLLM's connector
-layer, restore on completion, and **measure** the offload-path latency +
-co-tenant interference. Output feeds the end-of-W2 go/descope decision on the
-6-8 week P4 integration.
+`spike/` contains the isolated vLLM serving implementation. It does not add GPU
+or vLLM dependencies to the base trace-collection package.
 
-This package is standalone. It does **not** touch `src/trace_collect/` and adds
-no CLI flags there. The base install stays GPU-free; vLLM/torch load only via
-the `serving-spike` extra and are imported only in
-`spike/vllm_connector/gpu.py` + `spike/run_spike.py`.
+## Layout
 
-## The vLLM seam we target (and its limits)
+- `vllm_connector/` — selective KV transfer plus pause/evict/resume integration
+  for vLLM `>=0.11,<0.12`.
+- `run_spike.py` — focused transfer, pause/resume, and trigger-integration
+  diagnostics.
+- `multitenant.py` — workload loading, policy planning, accounting, and report
+  helpers for the multi-tenant harness.
+- `run_multitenant.py` — one workload/policy/load execution from the W5 config.
+- [`P4_EVICTION_DESIGN.md`](P4_EVICTION_DESIGN.md) — implementation contract and
+  known connector/scheduler limits.
 
-**Pinned version: `vllm>=0.11,<0.12`** — 0.11.0 is the release that introduced
-the v1 KV-connector interface `KVConnectorBase_V1` and the built-in
-`OffloadingConnector`.
+The custom connector uses vLLM's scheduler and worker connector seams. Copying
+KV alone does not free blocks; the pause path saves KV, waits for worker
+confirmation, preempts to release blocks, then reallocates and restores before
+resuming.
 
-Entry points used (verified against `v0.11.0`):
-
-- `vllm.distributed.kv_transfer.kv_connector.v1.base.KVConnectorBase_V1`
-  — abstract base. Scheduler-process methods: `get_num_new_matched_tokens`,
-  `update_state_after_alloc`, `build_connector_meta`. Worker-process methods:
-  `register_kv_caches`, `start_load_kv`, `wait_for_layer_load`,
-  `save_kv_layer`, `wait_for_save`.
-  Source: <https://github.com/vllm-project/vllm/blob/v0.11.0/vllm/distributed/kv_transfer/kv_connector/v1/base.py>
-- `vllm.config.KVTransferConfig` (`kv_connector`, `kv_role`,
-  `kv_connector_extra_config`) + `KVConnectorFactory.register_connector(name,
-  module_path, class_name)` to load a custom connector by import path.
-  Docs: <https://docs.vllm.ai/en/latest/features/kv_offloading_usage/>
-- Comparison point — the built-in `OffloadingConnector`
-  (`kv_connector="OffloadingConnector"`, `CPUOffloadingSpec`): offloads
-  *completed* blocks to CPU automatically as a prefix-cache tier. **This is
-  NOT what P4 needs** — it is throughput-oriented prefix reuse, not
-  externally-triggered per-request offload during a tool call. LMCache plugs in
-  the same way (`kv_connector="LMCacheConnectorV1"`) and is likewise
-  block-completion / prefix driven, not command driven.
-  Blog: <https://vllm-project.github.io/2026/01/08/kv-offloading-connector.html>
-
-### Why a custom connector, and what it does NOT do (the honest finding)
-
-**vLLM 0.11 exposes no public API to say "offload request R's resident KV now,
-pause R, restore later" on external command.** Every offload-relevant hook
-fires on the scheduler's own lifecycle (block completion, preemption under
-memory pressure, prefix match) — the trigger is internal and the victim is
-chosen by the scheduler, not a caller. `OffloadingConnectorScheduler` does
-offload-on-preemption + reload-on-resume, but the trigger is GPU memory
-pressure, not a tool-call signal.
-
-The closest public seam, which this spike exercises:
-
-1. `build_connector_meta(scheduler_output)` runs in the scheduler **every
-   step**. Our `SelectiveOffloadConnector` reads an out-of-band control file
-   (`OffloadControl`) there and, for the target request whose block ids it
-   tracked in `update_state_after_alloc`, emits connector metadata directing
-   the worker to copy those blocks.
-2. `start_load_kv` runs in the **worker** (where the paged KV tensors live) and
-   executes the copy GPU↔pinned-host via `CudaBlockTransfer`, timed with CUDA
-   events. This is byte-for-byte the operation vLLM's own preemption-swap uses.
-
-**Limit this spike deliberately measures around:** emitting offload metadata
-*copies* the blocks; it does **not** by itself evict them from vLLM's block
-pool or pause the request's generation. Making the offload actually *free* GPU
-memory (the point of P4) additionally requires scheduler-level block eviction +
-request pause/resume — the machinery `OffloadingConnectorScheduler` owns on the
-preemption path. So this spike measures the **transfer path** (latency,
-bandwidth, interference) — the long-pole systems risk — and flags the
-eviction/pause + external-trigger wiring as net-new P4 work not covered by any
-public API. That gap is the primary input to the W2 go/descope call.
-
-**Layout assumption to verify on the box:** `CudaBlockTransfer` defaults to the
-block index on dim 0 (`tensor[block_id]`), the standard v1 layout, but every
-shape/index computation runs through `tensor.movedim(block_dim, 0)`, so a
-different layout is `--block-dim N` on the driver (threaded through
-`kv_connector_extra_config["block_dim"]` into the connector and
-`CudaBlockTransfer`), not a code change. Confirm the real dim against the
-running model's cache shape before trusting byte counts — `begin` bounds
--checks every block id against that dim's size (`validate_block_ids`) and
-raises rather than corrupting an out-of-range block.
-
-VRAM note: staged mode pre-allocates a contiguous device gather buffer of
-`--staging-max-blocks` blocks per layer OUTSIDE vLLM's gpu_memory_utilization
-reservation (~2 MB/block). The default (128) costs ~256 MB; raise it only
-with matching headroom or a lower `--gpu-memory-utilization`.
-
-## Setup (GPU box, the moment it is rented)
+## Setup
 
 ```bash
-bash scripts/setup/benchmark_server.sh          # base env (no GPU deps)
+bash scripts/setup/benchmark_server.sh
 source .venv/bin/activate
-uv pip install -e '.[serving-spike]'            # pulls vllm 0.11.x + torch/CUDA
+uv pip install -e '.[serving-spike]'
 ```
 
-## Run
+## Transfer defaults
+
+The current transfer mode is `staged`. It gathers paged blocks into a contiguous
+device buffer and copies through pinned host memory on a dedicated CUDA stream.
+
+There is one staged-buffer capacity default: **128 blocks**.
+
+- `run_spike.py`: `--staging-max-blocks 128`
+- W5 config: `serving.transfer_max_blocks: 128`
+
+The buffer is allocated outside vLLM's `gpu_memory_utilization` reservation and
+is approximately 2 MB per block for the reference layout. A transfer wider than
+the configured capacity fails fast. Raise the value only with measured VRAM
+headroom. `strided` remains an explicit diagnostic baseline, not the default.
+
+`run_spike.py` defaults `--block-dim 0`; the W5 Llama-3.1-8B config explicitly
+uses `block_dim: 1`. Verify the real cache layout on the target vLLM build before
+trusting byte counts.
+
+## Focused GPU diagnostics
+
+Transfer-only diagnostic; blocks are copied but not freed:
 
 ```bash
 PYTHONPATH=src:. python spike/run_spike.py \
-    --model meta-llama/Llama-3.1-8B \
-    --num-load 8 --repetitions 6 --tool-duration-s 3.0 \
-    --seed 0 --output spike_note.json
+  --scenario offload --model meta-llama/Llama-3.1-8B \
+  --num-load 8 --output offload_note.json
 ```
 
-`--num-load` co-running requests generate token load; one `agent-*` request is
-offloaded mid-stream on even repetitions (odd reps are the no-offload control
-window for the interference baseline). Latencies come back via a JSONL the
-worker appends (`--control-dir`), since the connector runs in a separate
-process from the driver.
-
-### Transfer-path knobs (P4 lane A)
-
-The default run uses the improved **staged** transfer path. Knobs:
-
-- `--transfer-mode {strided,staged}` — `staged` (default) pre-allocates one
-  pinned host staging buffer + a contiguous device gather buffer per layer and
-  moves blocks with batched `index_select` + a large `copy_` on a **dedicated
-  CUDA stream** (event-timed, off the forward-pass critical path). `strided`
-  is the W1 baseline: a per-block Python loop bracketed by full
-  `torch.cuda.synchronize()` — kept only to A/B against.
-- `--staging-max-blocks N` (default 512) — staged buffer capacity in blocks; a
-  transfer wider than this fails fast (W1 requests held ~97 blocks).
-- `--chunk-bytes B` (default 0 = off) — cap bytes per copy op as a rate limiter
-  so co-tenant work can slip between chunks, trimming the ITL tail at the
-  offload moment.
-
-### A/B the improvement in one session
-
-Run both paths back to back on the rented box, then diff the two `summary`
-blocks (bandwidth + interference):
-
-```bash
-for MODE in strided staged; do
-  PYTHONPATH=src:. python spike/run_spike.py \
-      --model meta-llama/Llama-3.1-8B \
-      --num-load 8 --repetitions 6 --tool-duration-s 3.0 --seed 0 \
-      --block-dim 1 --transfer-mode "$MODE" \
-      --output "spike_note_${MODE}.json" || exit 1
-done
-```
-
-`run_spike.py` exits nonzero if the engine dies mid-run (so a broken run never
-looks clean); `|| exit 1` aborts the sweep on the first failure.
-
-**Expected bandwidth math.** W1 baseline (strided) measured ~2.8 GB/s offload —
-~8× below the Gen4 x16 pinned-DMA ceiling (~25 GB/s). Two effects cost that 8×:
-(1) each of the 97 blocks is a separate small `copy_` (per-copy launch + DMA
-setup overhead dominates a ~2 MB block), and (2) after `movedim(block_dim=1,0)`
-every per-block source view is **strided**, so the DMA can't run as one
-contiguous descriptor. Staged fixes both: `index_select` gathers all 97 blocks
-into one **contiguous** device buffer in a single kernel, then one (or a few,
-under `--chunk-bytes`) large pinned `copy_` moves the whole ~203 MB as
-back-to-back full-width DMA bursts. With per-copy overhead amortized over one
-large contiguous transfer, effective bandwidth should approach the pinned-DMA
-ceiling — **~20+ GB/s on Gen4 x16** (a ~7–8× offload-latency drop, 72 ms →
-~10 ms), with the remaining gap to 25 GB/s being fixed DMA-setup + gather-kernel
-time. Confirm the realized number on the box; it is the header result of lane A.
-
-## Pause / evict scenario (P4 lane C)
-
-The default `--scenario offload` only *copies* KV (blocks stay resident). The P4
-scenario actually **evicts**: save the agent request's KV host-side, free its GPU
-blocks, hold it out of every queue for the tool call, then reallocate + reload +
-resume. It injects a custom scheduler by config — **no forked vLLM file**
-(`scheduler_cls` is a v0.11.2 seam; see `scheduler.py` module docstring for the
-evidence and `P4_EVICTION_DESIGN.md` implementation appendix).
+Pause/evict/resume diagnostic:
 
 ```bash
 PYTHONPATH=src:. python spike/run_spike.py \
-    --model meta-llama/Llama-3.1-8B \
-    --scenario pause --num-load 8 --tool-duration-s 3.0 \
-    --block-dim 1 --seed 0 --output pause_note.json
+  --scenario pause --model meta-llama/Llama-3.1-8B \
+  --num-load 8 --block-dim 1 --output pause_note.json
 ```
 
-Flow: N load requests + one agent request; at ~0.5 s the driver writes a PAUSE to
-the control file → `PausableScheduler` registers the save with the connector and
-marks the request "pausing" (blocks NOT yet freed) → the worker saves the KV
-synchronously into a dedicated pinned buffer and appends a `pause_saved`
-confirmation → the scheduler `force_preempt`s (frees blocks, holds the request)
-→ after `tool_duration_s` the driver writes RESUME → the stock resume gate
-consults the connector's `get_num_new_matched_tokens`, reallocates, and the
-worker loads the saved KV back → generation continues.
+The pause report includes `pause_to_freed_ms`, `resume_to_first_token_ms`,
+`blocks_freed`, and a greedy token-identity check against an uninterrupted run.
+The identity claim is limited to the supported deterministic decoding path.
 
-Extra JSON (`pause` block): `pause_to_freed_ms`, `resume_to_first_token_ms`,
-`blocks_freed` (from the scheduler's `pause_events.jsonl`), and `identical`.
+The `certified` scenario is an integration diagnostic over real recorded tool
+durations. Its accounting is not a new certificate and its static trigger table
+only approximates the full certified union.
 
-**What the logit-identity check proves.** The driver runs the *same* prompt+seed
-twice under greedy decoding — once uninterrupted, once through pause/resume — and
-compares the two continuations token-for-token. `identical: true` means loading
-the saved KV is **bit-faithful**, not merely close: the resumed logits match the
-uninterrupted run exactly. This is the one GPU-only unknown the design memo flags
-(risk #2). Greedy only — seeded random sampling loses the per-request RNG offset
-across the eviction (documented gap); spec decode is off in this config.
+## W5 multi-tenant harness
 
-## Certified scenario (P4 integration — closes the loop)
+The single matrix definition is
+[`../configs/serving/w5_multitenant.yaml`](../configs/serving/w5_multitenant.yaml).
+Task selections are self-owned under
+`../analysis/serving/w5-multitenant/inputs/`.
 
-`--scenario certified` wires the **certified trigger** (the fresh-corpus
-validated offline policy) to the **validated PAUSE mechanism**. It replays REAL
-tool calls and, at each call, fires the pause at the certified per-command-group
-trigger — demonstrating the whole system end to end.
-
-### 1. Export a deployment trigger table
-
-From a certified-union decisions JSONL (e.g. `rho_0.94_decisions.jsonl` from the
-fresh-cert artifacts), pick one kv-cost cell and export a small
-`{group_key -> trigger_ms}` table:
+One cell is invoked as:
 
 ```bash
-python scripts/export_trigger_table.py \
-    --decisions .../certified-union-loo-lcb/rho_0.94_decisions.jsonl \
-    --kv-cost-ms 5000 --deadline-ms 5000 \
-    --max-prefix-depth 4 --restore-cost-fraction 0.94 \
-    --output trigger_table_kv5000.json
+PYTHONPATH=src:. python spike/run_multitenant.py \
+  --config configs/serving/w5_multitenant.yaml \
+  --workload swe-rebench-100-development \
+  --policy deadline --load 2 \
+  --output w5-cell.json
 ```
 
-The flags MUST match the offline fit (the fresh cert used `max_prefix_depth=4`,
-`skip_leading_cd=False`, `guard_ms=0` so `deadline==kv_cost`).
-`--restore-cost-fraction` is REQUIRED (no default) and must equal the rho the
-decisions file was fit/scored at — it is validated against the fraction encoded
-in the decisions filename (`rho_<fraction>_decisions...`) and **rejected if
-0.0**: scoring restore-free manufactures early-fire wins by never charging a
-misfire's swap-back cost (campaign finding F1), so a sub-operating-point
-fraction is forbidden here without explicit human approval outside this
-script; the measured system operating point is rho=0.94 (see the rho
-directive). Fold policy: each group's trigger is the median over its outer
-folds of the per-fold median trigger; groups that never beat the deadline are
-dropped (they fall back to the deadline). Lookup follows the production trie's
-deepest-first prefix-backoff ORDER — it reuses
-`trace_collect.command_features.command_prefix_keys` — but not its per-call
-support gating (`min_tool_history`/`min_profile_tasks`), which is applied at
-fit time only; see `lookup_trigger`'s docstring for the bounded divergence
-this implies.
+W5 is development work and has no result. Do not launch it until both blockers
+are resolved:
 
-> **This table is a deployment DEMO table derived from eval artifacts — it is
-> not itself a certified object.** The certified claim is H1 (certified-union vs
-> deadline) on the held-out eval. A static per-group table drops the per-row GBM
-> hazard component of the union (collapsed by median), so its firing decisions
-> only approximate the certified rule.
+1. `analysis/serving/w5-multitenant/prefill_result_llama31_8b.json` is missing
+   and must be measured on the target hardware.
+2. The development trigger table encodes `rho=1.0`, while runtime accounting is
+   configured for the measured `rho=0.94`. Regenerate the table or approve an
+   explicit policy contract; do not silently relabel it.
 
-### 2. Run the certified scenario (GPU box)
+A live smoke must also prove real memory pressure, co-tenant admission into
+freed blocks, faithful resume, and complete request/policy/input provenance
+before any matrix run.
 
-```bash
-PYTHONPATH=src:. python spike/run_spike.py \
-    --model meta-llama/Llama-3.1-8B --scenario certified \
-    --trigger-table trigger_table_kv5000.json \
-    --trace-root traces/swe-rebench \
-    --replay-limit 10 --num-load 8 --block-dim 1 --seed 0 \
-    --output certified_note.json
-```
-
-Flow: engine + N load co-tenants + one pausable agent request. The K real tool
-calls are replayed sequentially; at each call start we look up its group trigger
-`k`. If the REAL duration `> k`, at `t=k` we issue PAUSE (the validated control
-path: evict the agent's KV, free blocks for co-tenants) and at `t=duration`
-RESUME — otherwise no action (the call ends before the trigger, exactly the
-policy semantics). Durations are the observed `latency_ms` from the traces via
-the production extractor — never synthetic.
-
-### What the numbers do and do not claim
-
-- **`mechanism`** (`pause_to_freed_ms`, `blocks_freed`, `resume_to_first_token_ms`)
-  and **`identical`** are measured LIVE — mechanism-in-the-loop timing and K-cycle
-  logit-identity, measured truthfully on the GPU.
-- **`accounting`** (`kv_saved_ms`, `delta_vs_deadline_ms`, `delta_vs_never_ms`,
-  correct-fire / misfire counts) is accounting over the real replayed durations
-  using the same utility functional the offline cert scores with
-  (`trigger_policy_utility_ms`), charged at the table's restore-cost fraction
-  (`restore_cost_ms = restore_cost_fraction * kv_cost_ms`, read from the
-  table's metadata — `run_certified` fails fast if that fraction is 0.0, the
-  exact restore-free setup that manufactures early-fire wins). These are
-  **demo / integration numbers** — they do not re-certify anything; the
-  certified claim remains H1 on the eval.
-
-CPU-testable core (table build/load/lookup/backoff + fold policy, replay
-selection + determinism, per-call fire/no-fire + accounting) lives in
-`spike/{trigger_table,tool_replay,certified_replay}.py` and is unit tested in
-`tests/test_certified_trigger_integration.py` (no vllm/GPU).
-
-**GPU-session checklist for this scenario:**
-1. Export a table (step 1) and confirm `group_key_count > 0` in its metadata.
-2. Boot with `--scenario certified` and a small `--replay-limit` (~10);
-   confirm the engine resolves `PausableScheduler` (same seam as `--scenario
-   pause`).
-3. Confirm `mechanism.blocks_freed` has one entry per fired call and each
-   `pause_to_freed_ms > 0` — the pause seam fired for every fired call
-   (`run_certified` fails fast otherwise).
-4. **`identical: true`** — K sequential pause/resume cycles on one request stay
-   bit-faithful to the uninterrupted run (memo risk #2 at K > 1). Raise
-   `--max-tokens` if the agent runs out of tokens before the last call.
-5. Cross-check `accounting.delta_vs_deadline_ms` against a hand recomputation
-   from `per_call` for a couple of fired calls.
-6. Watch a co-tenant admitted into the freed blocks during a fired pause window
-   (multi-tenant admission is the remaining P4 build-plan row).
-
-## CPU tests (no GPU)
+## CPU verification
 
 ```bash
 PYTHONPATH=src:. python -m pytest \
-    tests/test_vllm_connector_spike_logic.py \
-    tests/test_certified_trigger_integration.py -q
+  tests/test_vllm_connector_spike_logic.py \
+  tests/test_certified_trigger_integration.py \
+  tests/test_multitenant.py -q
 ```
 
-Covers control channel, timing math, ITL stats, fake backend, report schema, and
-the certified-trigger integration (table/lookup/fold policy, replay selection,
-per-call accounting) — everything the driver depends on except the CUDA copy and
-vLLM orchestration.
-
-## Output schema (`spike_note.json`)
-
-```jsonc
-{
-  "model": "...", "vllm_version": "0.11.x",
-  "kv_seam": "KVConnectorBase_V1.build_connector_meta + worker start_load_kv",
-  "num_load_requests": 8,
-  "env": {"host": "...", "python": "...",
-          "torch": "...", "gpu": "...", "cuda": "...",
-          "driver_version": "...", "pcie_link_width": "...", "pcie_link_gen": "..."},
-  "repetitions": [{"repetition": 0, "seed": ..., "tool_duration_s": 3.0,
-                   "num_blocks": ..., "bytes_moved": ...,
-                   "offload_ms": ..., "restore_ms": ...,
-                   "offload_gbps": ..., "restore_gbps": ...}, ...],
-  "itl_with_offload_ms": [...], "itl_without_offload_ms": [...],
-  "summary": {"offload_ms": {"median":..,"p99":..},
-              "restore_ms": {"median":..,"p99":..},
-              "offload_gbps_median": .., "restore_gbps_median": ..,
-              "bytes_moved": ..,
-              "interference": {"with_offload": {...}, "without_offload": {...}}}
-}
-```
-
-`host`/`python` come from `core.env_info()` (always present). `torch`/`gpu`/
-`cuda`/`driver_version`/`pcie_link_width`/`pcie_link_gen` come from
-`run_spike._gpu_env_info()` and are best-effort: each is present only if the
-corresponding probe (torch import, `nvidia-smi`) succeeds on the box.
-
-## W1 spike-note skeleton (fill from the run, name commit + box)
-
-> **Commit:** `<sha>` · **Box:** `<host / GPU / PCIe gen·width from nvidia-smi>`
-> · **vLLM:** `<version>` · **Model:** Llama-3.1-8B
->
-> **Seam reached:** custom `KVConnectorBase_V1` — `build_connector_meta`
-> (scheduler) → worker `start_load_kv` CUDA copy. Connector fired on N/M
-> offload triggers under `--num-load=8` load. `[yes/no + evidence]`
->
-> **Measured offload path** (`summary`): offload `<median>/<p99> ms`, restore
-> `<median>/<p99> ms`, `<bytes_moved>` B/event, `<offload_gbps>/<restore_gbps>`
-> GB/s effective. Cross-check vs raw-memcpy ceiling from
-> `scripts/measure_kv_swap_cost.py` — connector overhead = `<Δ>`.
->
-> **Interference:** load-request ITL p99 `<with>` vs `<without>` ms
-> (`Δ = <x>×`). Relates to the Fig-7a exogeneity concern (offload perturbs
-> co-tenant latency?): `[quantify]`.
->
-> **W2 go/descope decision reads from:**
-> - Did the connector seam fire externally at all? `[yes → seam exists]`
-> - Is offload+restore latency ≪ tool-call duration (µs–ms vs seconds)?
->   `[yes → hiding cost is viable]`
-> - **Gap to real P4:** block eviction + request pause/resume + trigger wiring
->   are NOT in any public 0.11 API — estimate `<weeks>` to build on top of the
->   proven transfer path. `[drives 6-8wk realistic? / descope to single-tenant
->   selective-offload validation per roadmap go/no-go]`
-
-## Known risks to the 6-8 week P4 estimate
-
-1. **No public external-offload trigger** (above): P4 must add scheduler-side
-   eviction + pause/resume, not just a connector. Largest schedule risk.
-2. **Connector fires only when the request is scheduled.** A request that is
-   not being forward-passed may not hit `start_load_kv`; driving the copy on an
-   idle/paused request may need the preemption path or a scheduler patch —
-   verify on the box, this is exactly what the spike surfaces. Related liveness
-   gap: a request can finish or get preempted out between the driver's trigger
-   and the step that would execute it, and vLLM reassigns its freed block ids
-   to other requests. `SelectiveOffloadConnector` prunes its `request_id ->
-   block_ids` table from `scheduler_output.finished_req_ids` at the top of
-   every `build_connector_meta` call and refuses (logs + no-ops) a directive
-   for an untracked/finished target, rather than risking offload/restore
-   against reassigned blocks — verify `finished_req_ids` is the field v0.11
-   actually exposes on `SchedulerOutput` on the box; if the attribute name
-   drifted, the guard degrades to "directive silently dropped" (still safe,
-   but worth confirming the field resolves).
-3. **Process split:** connector runs in scheduler/worker processes, hence the
-   file-based control + JSONL timing channel instead of an in-process object.
-   Metadata (`SelectiveOffloadMeta.directives`) crosses the same boundary via
-   vLLM's own `bind_connector_metadata` / scheduler-output plumbing — confirm
-   on the box that a step's metadata reliably reaches the worker that executes
-   it before trusting a "0 directives fired" reading as "seam absent" rather
-   than "delivery dropped."
-4. **KV layout drift** across vLLM versions (`block_dim`, default 0); pinned
-   `<0.12`.
+These tests cover control and accounting logic without claiming to validate CUDA
+copy behavior or live vLLM scheduling.

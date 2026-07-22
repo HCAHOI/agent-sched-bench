@@ -62,12 +62,18 @@ from pathlib import Path
 from typing import Any
 
 from .control import OffloadControl, OffloadPhase
-from .core import PauseBook, SaveConfirmationReader, guard_pause_trigger
+from .core import (
+    PauseBook,
+    SaveConfirmationReader,
+    continuum_priority,
+    guard_pause_trigger,
+)
 
 logger = logging.getLogger(__name__)
 
 try:
     from vllm.v1.core.sched.scheduler import Scheduler
+    from vllm.v1.core.sched.request_queue import PriorityRequestQueue
     from vllm.v1.request import RequestStatus
 
     HAVE_VLLM = True
@@ -75,6 +81,7 @@ except ImportError:  # pragma: no cover - exercised only off-GPU
     HAVE_VLLM = False
     Scheduler = object  # type: ignore[assignment,misc]
     RequestStatus = None  # type: ignore[assignment]
+    PriorityRequestQueue = object  # type: ignore[assignment,misc]
 
 
 class PausableScheduler(Scheduler):  # type: ignore[misc,valid-type]
@@ -158,7 +165,9 @@ class PausableScheduler(Scheduler):  # type: ignore[misc,valid-type]
             or self._pause.is_pausing(req_id)
             or self._pause.is_paused(req_id)
         ):
-            logger.warning("pause skipped for %r: not a running, unpaused request", req_id)
+            logger.warning(
+                "pause skipped for %r: not a running, unpaused request", req_id
+            )
             return
         n_c_t = req.num_computed_tokens
         # Fetch the request's CURRENT block ids from the scheduler's own
@@ -177,7 +186,9 @@ class PausableScheduler(Scheduler):  # type: ignore[misc,valid-type]
         )
         self._pause.mark_pausing(req_id, n_c_t)
         self._pause_blocks[req_id] = block_count
-        self._record_event("pausing", req_id, num_computed_tokens=n_c_t, block_count=block_count)
+        self._record_event(
+            "pausing", req_id, num_computed_tokens=n_c_t, block_count=block_count
+        )
 
     def _confirm_saves(self) -> None:
         for req_id in self._confirm.poll():
@@ -224,3 +235,121 @@ class PausableScheduler(Scheduler):  # type: ignore[misc,valid-type]
         row = {"phase": phase, "request_id": req_id, "t": time.perf_counter(), **fields}
         with open(self._events_path, "a") as f:
             f.write(json.dumps(row) + "\n")
+
+
+class _ContinuumPriorityQueue(PriorityRequestQueue):  # type: ignore[misc,valid-type]
+    def __init__(self, stride: int):
+        super().__init__()
+        self._stride = stride
+
+    def prepend_request(self, request: Any) -> None:
+        if request.status == RequestStatus.PREEMPTED:
+            request.priority = continuum_priority(
+                request.priority % self._stride,
+                self._stride,
+                ttl_hit=False,
+                preempted=True,
+            )
+        super().prepend_request(request)
+
+
+class RetentionScheduler(Scheduler):  # type: ignore[misc,valid-type]
+    """Scheduler hook for timer expiry and ThunderAgent capacity eviction."""
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        extra = self.vllm_config.kv_transfer_config.kv_connector_extra_config
+        stride = int(extra.get("continuum_priority_stride", 0))
+        if stride:
+            if not isinstance(self.waiting, PriorityRequestQueue):
+                raise ValueError("Continuum requires vLLM priority scheduling")
+            self.waiting = _ContinuumPriorityQueue(stride)
+
+    def _free_request(self, request: Any) -> dict[str, Any] | None:
+        params = super()._free_request(request)
+        keep_blocks = self.connector.take_retained_block_count(request.request_id)
+        if keep_blocks is None:
+            return params
+        for manager in self.kv_cache_manager.coordinator.single_type_managers:
+            blocks = manager.req_to_blocks[request.request_id]
+            if len(blocks) < keep_blocks:
+                raise ValueError(
+                    f"request {request.request_id!r} has {len(blocks)} blocks; "
+                    f"cannot retain {keep_blocks}"
+                )
+            suffix = blocks[keep_blocks:]
+            for block in suffix:
+                manager.block_pool._maybe_evict_cached_block(block)
+            manager.req_to_blocks[request.request_id] = blocks[:keep_blocks]
+            manager.num_cached_block[request.request_id] = min(
+                manager.num_cached_block.get(request.request_id, 0),
+                keep_blocks,
+            )
+            manager.block_pool.free_blocks(reversed(suffix))
+        return params
+
+    def has_requests(self) -> bool:
+        connector = self.connector
+        return super().has_requests() or (
+            connector is not None and connector.has_due_retention()
+        )
+
+    def schedule(self) -> Any:
+        connector = self.connector
+        if connector is not None:
+            connector.release_requested_programs()
+            connector.release_retention_due(
+                connector.matching_resident_program_ids(list(self.waiting))
+            )
+            num_gpu_blocks = self.cache_config.num_gpu_blocks
+            if num_gpu_blocks is None or num_gpu_blocks <= 0:
+                raise ValueError("vLLM did not configure a positive GPU block count")
+            block_pool = self.kv_cache_manager.block_pool
+            running = list(self.running)
+            waiting = list(self.waiting)
+            ordered_waiting = connector.order_thunder_waiting(
+                waiting,
+                capacity_tokens=connector.thunder_resume_capacity_tokens(
+                    running,
+                    free_tokens=block_pool.get_num_free_blocks() * self.block_size,
+                ),
+            )
+            if ordered_waiting != waiting:
+                self.waiting.remove_requests(waiting)
+                for request in ordered_waiting:
+                    self.waiting.add_request(request)
+            requests = list(self.requests.values())
+            active_block_ids = {
+                request.request_id: tuple(
+                    self.kv_cache_manager.get_block_ids(request.request_id)[0]
+                )
+                for request in requests
+                if not request.is_finished()
+            }
+            connector.release_retention_for_pressure(
+                requests,
+                capacity_tokens=num_gpu_blocks * self.block_size,
+                active_block_ids=active_block_ids,
+                waiting_request=self.waiting.peek_request() if self.waiting else None,
+            )
+            for block_ids in connector.take_prefix_invalidations():
+                for block_id in block_ids:
+                    block_pool._maybe_evict_cached_block(block_pool.blocks[block_id])
+            waiting = list(self.waiting)
+            ordered_waiting = connector.order_thunder_waiting(
+                waiting,
+                capacity_tokens=connector.thunder_resume_capacity_tokens(
+                    running,
+                    free_tokens=block_pool.get_num_free_blocks() * self.block_size,
+                ),
+            )
+            if ordered_waiting != waiting:
+                self.waiting.remove_requests(waiting)
+                for request in ordered_waiting:
+                    self.waiting.add_request(request)
+            waiting = list(self.waiting)
+            if connector.refresh_continuum_priorities(waiting):
+                self.waiting.remove_requests(waiting)
+                for request in waiting:
+                    self.waiting.add_request(request)
+        return super().schedule()

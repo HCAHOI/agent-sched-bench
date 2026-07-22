@@ -20,7 +20,7 @@ from scripts.exploration.analyze_prequential_profile_updates import (
 )
 
 
-def test_frozen_prequential_config_loads() -> None:
+def test_task_only_prequential_config_loads() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     config, digest = _load_config(
         repo_root / "configs/experiments/prequential_profile_update.yaml"
@@ -28,18 +28,32 @@ def test_frozen_prequential_config_loads() -> None:
     assert config["task_order_seed"] == 0
     assert "order_sensitivity" not in config
     assert config["score_kv_costs_ms"] == [3500, 5000]
+    assert config["schema_version"] == 3
     assert config["outer_folds"] == 5
     assert config["arms"] == [
         "frozen_100",
         "fresh4_static",
         "warmup_snapshot",
         "task",
-        "call",
     ]
     assert config["initialization_trace_inventory"]["trace_count"] == 100
     assert config["development_trace_inventory"]["trace_count"] == 277
-    assert config["outputs"]["json"].startswith("analysis/development/")
+    assert config["outputs"]["json"].endswith(
+        "prequential-task-update-task-only/prequential-task-update.json"
+    )
     assert len(digest) == 64
+
+
+def test_historical_five_arm_config_is_preserved_exactly() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    frozen = (
+        repo_root
+        / "analysis/results/prequential-task-update-20260721/prequential_profile_update.yaml"
+    ).read_bytes()
+    assert hashlib.sha256(frozen).hexdigest() == (
+        "f0b49926af9a4d8cf5029e53df24f27e700ee003876d9738555fd7b60b30bf20"
+    )
+    assert b"  - call\n" in frozen
 
 
 def test_workers_cli_accepts_remote_pool_size() -> None:
@@ -59,7 +73,6 @@ def test_adaptive_point_estimates_are_descriptive_per_order() -> None:
             "fresh4_static_trigger_ms": 100.0,
             "warmup_snapshot_trigger_ms": 100.0,
             "task_trigger_ms": 50.0,
-            "call_trigger_ms": 50.0,
         },
         {
             "sample_id": "b",
@@ -72,7 +85,6 @@ def test_adaptive_point_estimates_are_descriptive_per_order() -> None:
             "fresh4_static_trigger_ms": 100.0,
             "warmup_snapshot_trigger_ms": 100.0,
             "task_trigger_ms": 100.0,
-            "call_trigger_ms": 100.0,
         },
     ]
     points = _paired_point_estimates(rows, costs=[100.0])
@@ -117,23 +129,18 @@ def test_fold_aggregation_pools_tasks_instead_of_averaging_folds() -> None:
                     {
                         "order_run": "primary",
                         "point_estimates": point_estimates,
-                        "timing": {
-                            "call_update_readiness": {
-                                "eligible_update_count": task_count,
-                                "ready_before_next_eligible_call_count": task_count - 1,
-                            }
-                        },
+                        "timing": {},
                     }
                 ]
             }
         )
     combined = _aggregate_fold_run(folds, run_name="primary", costs=[3500.0, 5000.0])
-    point = combined["point_estimates"]["call_vs_task"]["3500.0"]
+    point = combined["point_estimates"]["task_vs_warmup_snapshot"]["3500.0"]
     assert point["task_count"] == 277
     assert point["paired_delta_ms"] == sum(
         fold * task_count for fold, task_count in enumerate((56, 56, 55, 55, 55), 1)
     )
-    assert combined["call_update_readiness"]["eligible_update_count"] == 277
+    assert "call_update_readiness" not in combined
 
 
 def test_cost_split_reassembles_sample_major_panel_and_sums_cpu_time() -> None:
@@ -145,11 +152,6 @@ def test_cost_split_reassembles_sample_major_panel_and_sums_cpu_time() -> None:
         "final_profile_task_count": 2,
         "final_model_version": 0,
         "final_model_state_hash": "abc",
-        "call_update_readiness": {
-            "eligible_update_count": 0,
-            "ready_before_next_eligible_call_count": 0,
-            "fraction": None,
-        },
         "updates": [],
     }
     outputs = [

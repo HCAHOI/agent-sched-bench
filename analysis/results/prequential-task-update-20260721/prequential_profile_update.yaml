@@ -1,0 +1,45 @@
+schema_version: 2
+protocol_date: "2026-07-21"
+status: development_only_exploratory
+initialization_manifest: analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/manifest.json
+development_manifest: analysis/fresh-corpus-certification-20260717/offline-gated-robust/manifest.json
+initialization_trace_inventory:
+  file: analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/pre_run_trace_inventory.sha256
+  sha256: 33273824002bc347bf267686aca6e20b7d72404a92435872f770776454c2ed0e
+  trace_count: 100
+development_trace_inventory:
+  file: analysis/development/prequential-profile-update-fresh277-pre-run-traces.sha256
+  sha256: b51c3c59653122c4224a199cf369551d1e50e8dd81daba57959ad7b9949bf190
+  trace_count: 277
+outer_folds: 5
+arms:
+  - frozen_100
+  - fresh4_static
+  - warmup_snapshot
+  - task
+  - call
+fit_kv_costs_ms:
+  - 500
+  - 1000
+  - 1500
+  - 2000
+  - 2500
+  - 3000
+  - 3500
+  - 4000
+  - 4500
+  - 5000
+score_kv_costs_ms:
+  - 3500
+  - 5000
+guard_ms: 0
+restore_cost_fraction: 0.94
+min_tool_history: 1
+min_profile_tasks: 1
+command_field: command
+max_prefix_depth: 4
+skip_leading_cd: false
+task_order_seed: 0
+outputs:
+  json: analysis/development/prequential-profile-update-2026-07-21.json
+  markdown: analysis/development/prequential-profile-update-2026-07-21.md

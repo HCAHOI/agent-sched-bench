@@ -1,0 +1,55 @@
+seed: 0
+policies: [deadline, ours, continuum, thunderagent]
+load_levels: [2, 4, 8]
+trigger_table: analysis/serving/w5-multitenant/trigger_table_swe100_rho1_kv5000.json
+continuum_prefill_profile: analysis/serving/w5-multitenant/prefill_result_llama31_8b.json
+continuum_queue_window: 100
+restore_cost_fraction: 0.94
+prerestore_min_tool_history: 1
+prerestore_min_profile_tasks: 1
+
+serving:
+  model: meta-llama/Llama-3.1-8B
+  kv_cache_dtype: auto
+  quantization: null
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.90
+  max_model_len: 131072
+  max_num_seqs: 32
+  enforce_eager: true
+  transfer_mode: staged
+  block_size: 16
+  block_dim: 1
+  transfer_max_blocks: 128
+  transfer_chunk_bytes: 0
+  gpu_sample_interval_s: 0.5
+
+workloads:
+  - name: swe-rebench-100-development
+    corpus_role: development
+    replay_trace_root: traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2
+    profile_trace_root: traces/swe-rebench/qwen3.7-max/offline-gated-confirm-100-v2
+    task_ids_file: analysis/serving/w5-multitenant/inputs/swe-rebench-init100-task-ids.txt
+    expected_task_count: 100
+    deadline_ms: 5000.0
+
+  - name: terminal-bench-83-development
+    corpus_role: development
+    replay_trace_root: traces/terminal-bench/zai-org-GLM-5.2/20260709T171830
+    profile_trace_root: traces/terminal-bench/zai-org-GLM-5.2/20260709T171830
+    task_ids_file:
+      - analysis/serving/w5-multitenant/inputs/terminal-bench-fold-1-task-ids.txt
+      - analysis/serving/w5-multitenant/inputs/terminal-bench-fold-2-task-ids.txt
+      - analysis/serving/w5-multitenant/inputs/terminal-bench-fold-3-task-ids.txt
+      - analysis/serving/w5-multitenant/inputs/terminal-bench-fold-4-task-ids.txt
+      - analysis/serving/w5-multitenant/inputs/terminal-bench-fold-5-task-ids.txt
+    expected_task_count: 83
+    deadline_ms: 5000.0
+
+  - name: swe-rebench-277-development-exposed
+    corpus_role: development_exposed
+    replay_trace_root: traces/swe-rebench/qwen3.7-max/fresh-seed42-skip150-n200
+    profile_trace_root: traces/swe-rebench/qwen3.7-max/20260624T162037
+    task_ids_file: analysis/serving/w5-multitenant/inputs/swe-rebench-fresh277-task-ids.txt
+    expected_task_count: 277
+    deadline_ms: 5000.0
