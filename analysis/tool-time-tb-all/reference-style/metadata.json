@@ -1,0 +1,1993 @@
+{
+  "cohorts": [
+    {
+      "benchmark": "terminal-bench",
+      "contributing_trace_count": 235,
+      "corpus_sha256": "4ef7acdbed8d6e429c84a921581c9547b82d7f683a7a7a79c27d478519bdcfa9",
+      "cpu_aligned_call_count": 372,
+      "cpu_aligned_exec_call_count": 372,
+      "cpu_alignment_exclusion_counts_all_tools": {
+        "call_shorter_than_cpu_threshold": 2743
+      },
+      "cpu_alignment_exclusion_counts_exec": {
+        "call_shorter_than_cpu_threshold": 1558
+      },
+      "excluded_tool_counts": {},
+      "expected_trace_count": 239,
+      "label": "Terminal-Bench All",
+      "model": "gpt-5.6-sol",
+      "resource_sample_gap_seconds": {
+        "count": 31400,
+        "max": 2.5469608306884766,
+        "p50": 2.005641222000122,
+        "p95": 2.0080149173736572
+      },
+      "resource_trace_count": 239,
+      "roots": [
+        "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/canonical"
+      ],
+      "scaffold": "openclaw",
+      "tool_call_count": 3115,
+      "tool_execution_environment": "task_container",
+      "tool_runtime": "ContainerAgent",
+      "trace_count": 239,
+      "traces": [
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/3d-model-format-legacy/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/3d-model-format-legacy/attempt_1/resources.json",
+          "resources_sha256": "8e28e2def812269d80c0cbbe50a0656687c99762cf865dcb6aab78f2d5a39d65",
+          "sha256": "cbf76dc6d4eadc0fd451cd02048149b55000ce04f72054716811a930537b45b5",
+          "task_id": "3d-model-format-legacy"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/accelerate-maximal-square/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/accelerate-maximal-square/attempt_1/resources.json",
+          "resources_sha256": "60429063895f74e0fe780c87cfab7c9f5e2cf075d8a84e3488ddffe93e49bfe3",
+          "sha256": "d6e3f18557d6572d192ccd5d60edadd14c8c9590dc72a193bf17905cf7a7a726",
+          "task_id": "accelerate-maximal-square"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/acl-permissions-inheritance/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/acl-permissions-inheritance/attempt_1/resources.json",
+          "resources_sha256": "83010ab7090691f17524efbeefa594000033bcc11dbb13cdede9df4b33c55b93",
+          "sha256": "328461be7a480caf3c8dc09d5a8309af943317daffb528b66dac6ac95b334ffe",
+          "task_id": "acl-permissions-inheritance"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/adaptive-rejection-sampler/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/adaptive-rejection-sampler/attempt_1/resources.json",
+          "resources_sha256": "1c7914ba8e7603cfbb6cdb5170958e45ed888f2d660b54e7688642d8d9a9b3b0",
+          "sha256": "8d95ee6741780afd3ec98777b5faa2a067220b2c47536e98a3ee512edde6be1f",
+          "task_id": "adaptive-rejection-sampler"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/add-benchmark-lm-eval-harness/attempt_2/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/add-benchmark-lm-eval-harness/attempt_2/resources.json",
+          "resources_sha256": "8f33609ec56501287133285fdddbcfe1cde6aa7b31d3996c4073801c708d846c",
+          "sha256": "e9c31077460e9bf7d78c6400f2929c81514f3990608634a54cf7d7885a5ea3f7",
+          "task_id": "add-benchmark-lm-eval-harness"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/aimo-airline-departures/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/aimo-airline-departures/attempt_1/resources.json",
+          "resources_sha256": "140e0864328173ea6ccade9ae97ab065b95c29ab6047473baca8dc8961f241ae",
+          "sha256": "f28cc03577b34dbe9b0a88116db163a4ee025205c3a91ea42a63a418ae14af93",
+          "task_id": "aimo-airline-departures"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/amuse-install/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/amuse-install/attempt_1/resources.json",
+          "resources_sha256": "faba7d93d3595e93fef31cce6666f40f105d21621d634dc47d6c03c48e3ee7af",
+          "sha256": "993f8c8a4ae7b875f4d677d324493e758b8543ecccef6c3054a3a25508249c23",
+          "task_id": "amuse-install"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/analyze-access-logs/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/analyze-access-logs/attempt_1/resources.json",
+          "resources_sha256": "7a25cfaaddb2ace649938997f263b1a4d0d485eec174bbefdf154add120f3650",
+          "sha256": "eede6a849a145eb2a23769d805f47cbc9d4d78bb6c3032f47d9fa56040200697",
+          "task_id": "analyze-access-logs"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/ancient-puzzle/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/ancient-puzzle/attempt_1/resources.json",
+          "resources_sha256": "85b69d5094b42770497992edf33d615f4a3eca72e5c98b6754c10acae679bb4e",
+          "sha256": "87d1f94682c9b9d847877de5e8f0810a30cd3d3bd73f7de7e5ed827675b64cc3",
+          "task_id": "ancient-puzzle"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/assign-seats/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/assign-seats/attempt_1/resources.json",
+          "resources_sha256": "9645494b38e1f6f933920032f5d3a811b345e05f97b19dbcccb5e7cf26161a98",
+          "sha256": "577d179c87ae4440ff6a5dae819ca20e1996e1612a955b04a6a9d80f09b7f3fc",
+          "task_id": "assign-seats"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/attention-mil/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/attention-mil/attempt_1/resources.json",
+          "resources_sha256": "8da36a5f31a94943c06530b0fb5943000c23493180533c280291d8999103d41a",
+          "sha256": "c61bfc363e3542de502914f48ef89aad58ff2b095b03bc97022edaf2be8ff917",
+          "task_id": "attention-mil"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/audio-synth-stft-peaks/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/audio-synth-stft-peaks/attempt_1/resources.json",
+          "resources_sha256": "a2332e28a402f8512ddf08014baad29fe787bbe17ef04a976f6358fd894312de",
+          "sha256": "4d0fa1cf46504ea9202dcb93b34c4c995ba89ee78ebe6da36981ac47606cfb2b",
+          "task_id": "audio-synth-stft-peaks"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/bank-trans-filter/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/bank-trans-filter/attempt_1/resources.json",
+          "resources_sha256": "9c6963343408906bdc7335177ea5ecb13173c158d39623bf7333ec57d3654c60",
+          "sha256": "145b2831c9ef8e916abfffa4f8835d147a2ffcd362d64449a552463ada7f703f",
+          "task_id": "bank-trans-filter"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/blind-maze-explorer-5x5/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/blind-maze-explorer-5x5/attempt_1/resources.json",
+          "resources_sha256": "3c3651d8164769a5fe1ba17d703b0433ebb7b6406fd7846645caa5ff05dd9412",
+          "sha256": "0321bf0632c2b7acacd72663a561f7e720c9af18b52f70802c698eec5d4c53f9",
+          "task_id": "blind-maze-explorer-5x5"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/blind-maze-explorer-algorithm/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/blind-maze-explorer-algorithm/attempt_1/resources.json",
+          "resources_sha256": "f37cbc4109e0a6b1edb7b0850e32e169c7b7aa1930304ef2d034a5076b139153",
+          "sha256": "b5425d607e87582937a5cf314aa76d450837bc13d3c56342a44196ca904c1f05",
+          "task_id": "blind-maze-explorer-algorithm"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/bn-fit-modify/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/bn-fit-modify/attempt_1/resources.json",
+          "resources_sha256": "78b549470f2ef6d97e8bce0013a31475b37d75679c0119c0f20d03fca10bdd51",
+          "sha256": "493c6796d8fa7ae743572de564a8b3c63c0007e6c6537baa0cfd45d98cf256e8",
+          "task_id": "bn-fit-modify"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/break-filter-js-from-html/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/break-filter-js-from-html/attempt_1/resources.json",
+          "resources_sha256": "fa334dc48c49f9d53048e6f6b7c69952015cea99530f659552b074d242c44607",
+          "sha256": "e0a9f38d4ef2a0a1ce2833e1bd48921d9b146332e61c70784856d1f8a9858bc3",
+          "task_id": "break-filter-js-from-html"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/broken-networking/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/broken-networking/attempt_1/resources.json",
+          "resources_sha256": "cb97b2845d1131e3637762320aa7c4da1c0b3c62fde4a801bcaec4793d9e1f44",
+          "sha256": "91ec46b1d032fbe4c229803af8d424531d9c0383e53a7f32838dd7523ac6321a",
+          "task_id": "broken-networking"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/broken-python/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/broken-python/attempt_1/resources.json",
+          "resources_sha256": "afc7659ec47ac428d7abb555d3bf7f3da2a19b721da0e89a666174a59444dc39",
+          "sha256": "6bbf7da7ddbd3f345a7aa3cca76684e08ed630f3292a2513b1083e62175238eb",
+          "task_id": "broken-python"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-cython-ext/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-cython-ext/attempt_1/resources.json",
+          "resources_sha256": "6dd7a7fe559ae5d3108f486ff46b61b75ef11ab90720cbccb41527b830d1670d",
+          "sha256": "578c6ee26c611719f368d00f1aee73a92f20c7f25fb56df9d3e93ca2c447cd75",
+          "task_id": "build-cython-ext"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-initramfs-qemu/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-initramfs-qemu/attempt_1/resources.json",
+          "resources_sha256": "38d166b4a80c1362e298b75e79f7aedbb395aea284cf3c581c77b57098ca8b6d",
+          "sha256": "b1185405f986dacb5aaaf959920de67dbfa377e841bcd1144ca968461a52d166",
+          "task_id": "build-initramfs-qemu"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-linux-kernel-qemu/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-linux-kernel-qemu/attempt_1/resources.json",
+          "resources_sha256": "604901e0dcfaa45727d05397d37d1592738b2d7e519c5cb3703a961d6e9af4cb",
+          "sha256": "8a536249d3bab3683c424aa75c1230b7e3d073b2b325da5032fd1414257d9895",
+          "task_id": "build-linux-kernel-qemu"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-pmars/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-pmars/attempt_1/resources.json",
+          "resources_sha256": "824b818275ae5a0e43bbd6b39710b460ef7838c37d5f2dcb711a5c0e7f0fb143",
+          "sha256": "6df56c2c54e9dc213ef804fe9922cc436bcb42cf3969c7e314f2a549f9d91795",
+          "task_id": "build-pmars"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/build-pov-ray/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/build-pov-ray/attempt_1/resources.json",
+          "resources_sha256": "b248e41de062b66330c9957355970414ba0f020b4023b787c9fbf0295144d41d",
+          "sha256": "260e992b7ac520732b826990a4a3caec38c416dfdfcfd032e1c3d4e5ce7b5ef7",
+          "task_id": "build-pov-ray"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-stp/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/build-stp/attempt_1/resources.json",
+          "resources_sha256": "55546942c17c6ef48db36c7e66ac26c222f28d0c476a07a388e21cb9c94bcc97",
+          "sha256": "8c5b743e820dc2cdcd7b9895b4ebe223cc9e3438dced0fed6017f938dd0534cb",
+          "task_id": "build-stp"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/build-tcc-qemu/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/build-tcc-qemu/attempt_1/resources.json",
+          "resources_sha256": "b253ebcbfd49ca759299d3fb3e3ca693d81aed09948d8b3a2238d9a0e3ee384c",
+          "sha256": "470bbabcf84d886c79eb234813958c136e8723d4cb1c0f38f54a9f86f129bbab",
+          "task_id": "build-tcc-qemu"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/caffe-cifar-10/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/caffe-cifar-10/attempt_1/resources.json",
+          "resources_sha256": "a8d670931be240b06e0f6b108319de95995f5a9da3abcc94be08979d82b35b7d",
+          "sha256": "765ee9437ef6cbb1ea035201d5852fa68aa5a4f8ba8510f4a7e6a6144267af2a",
+          "task_id": "caffe-cifar-10"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cancel-async-tasks/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cancel-async-tasks/attempt_1/resources.json",
+          "resources_sha256": "764735fcdc515209d2dd464a4bf93abaa145cb79537a7db1c1b631104ff83098",
+          "sha256": "e82ae75c7efbf9619fa4a8dc073bbdbafebfcab17ef00e30f0b695e4022c2aa0",
+          "task_id": "cancel-async-tasks"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/cartpole-rl-training/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/cartpole-rl-training/attempt_1/resources.json",
+          "resources_sha256": "2cda9029dcd029d92f2b9e201206fecc410a87b4f036c9ddaaf4a43d4c60b119",
+          "sha256": "5ad134fbb0b48e662fc6eb266137ea4edb0a6e25e9eec91bcedc21d9b12d33df",
+          "task_id": "cartpole-rl-training"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/catch-me-if-you-can/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/catch-me-if-you-can/attempt_1/resources.json",
+          "resources_sha256": "0e4dcb3bd8151bc2f23be621051ca29d330b4455042f72588bc2b8f9e55ea986",
+          "sha256": "cab936111a846a643a946170e1be6132fc2870b0fdfe17445aa194d1c164f107",
+          "task_id": "catch-me-if-you-can"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/causal-inference-r/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/causal-inference-r/attempt_1/resources.json",
+          "resources_sha256": "1b3c47fe6802be2216cab04ddcff6b5efb4b33d6c851d596d3f9b2f3ac1152fa",
+          "sha256": "9c56a1928bbbd56d8ea26c0421c6ccc5c82ff0fe5423bdd96b0f2d6dd043fc4f",
+          "task_id": "causal-inference-r"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/chem-property-targeting/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/chem-property-targeting/attempt_1/resources.json",
+          "resources_sha256": "9d3f1dbb8a323b4b0d63cb1ca756cd57f3e328167941151d776a338b21a6e30a",
+          "sha256": "6862c6ac0a400f71ed52c05016362de58080be103b7df98c3ccc1e57704fce96",
+          "task_id": "chem-property-targeting"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/chem-rf/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/chem-rf/attempt_1/resources.json",
+          "resources_sha256": "60ac005fa101933b8e313a59134b145a85273d5bc402faef4f14ec910eacf3e4",
+          "sha256": "f2c631565b228e959c1e397499e7d728560027a68557491ea3dac2f7de30313c",
+          "task_id": "chem-rf"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/chess-best-move/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/chess-best-move/attempt_1/resources.json",
+          "resources_sha256": "839fa9e7ba46b021135edf4bf36c2eb2cb1a308ad777c1e62903ed8217360c0b",
+          "sha256": "3eb995a093c23bfb8260ea852857c71d538878603d7a592a654a2333d53237a8",
+          "task_id": "chess-best-move"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/circuit-fibsqrt/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/circuit-fibsqrt/attempt_1/resources.json",
+          "resources_sha256": "8778324677b92a3e0a14abc87c0a7f49af631c84857d14fdd9b206503fa564b3",
+          "sha256": "a64b4688c334d0f3b709f822bd86aa734ce68871bcdf3330874aaa6681290c41",
+          "task_id": "circuit-fibsqrt"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/classifier-debug/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/classifier-debug/attempt_1/resources.json",
+          "resources_sha256": "30348d0bc06fa1685515a352ad04c6dfda8d5c6d86569f1c71251a19e40accb4",
+          "sha256": "9572a0217a94c66af3454fa16f836e26feb95758f96f217ba78e01c69e2bbfb5",
+          "task_id": "classifier-debug"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cobol-modernization/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cobol-modernization/attempt_1/resources.json",
+          "resources_sha256": "dd97c46965c369a785de0706921e19930ee3369f4d542e08986745f10ee6e2cb",
+          "sha256": "29ebf093ba67feb85fe49bced635c977a257b491e3672cfad6fe61e817b33fb6",
+          "task_id": "cobol-modernization"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/code-from-image/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/code-from-image/attempt_1/resources.json",
+          "resources_sha256": "14d2e5537dad60dcf2b2124226c8a3a452f73a210954c6bce8ba74a4296e2939",
+          "sha256": "40f28cbc850d7409fdaa4a49acfabb676c6722863db03534ec3ea33873ba6f4c",
+          "task_id": "code-from-image"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/compile-compcert/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/compile-compcert/attempt_1/resources.json",
+          "resources_sha256": "93178484fae3734388cd4379dfb4bcf79a1875f6e03b251cfa9c2271612b1dbb",
+          "sha256": "d24839df1aca076f81938ab9f50a468bbbfc4fecb585d98f6ace86dec6bbedd8",
+          "task_id": "compile-compcert"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/conda-env-conflict-resolution/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/conda-env-conflict-resolution/attempt_1/resources.json",
+          "resources_sha256": "c67cd656b7efc3c7fa9745bf3aaac3d7c899e0e4877efc7fdec4ac309384010d",
+          "sha256": "b4d46030e6ad14703f9bbb44133dec36303d1d2507c8eb8118b4063957029307",
+          "task_id": "conda-env-conflict-resolution"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/configure-git-webserver/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/configure-git-webserver/attempt_1/resources.json",
+          "resources_sha256": "bbbf99fd8aee70373bc7f40bd4d53d4fa9e98906a2f8689f9781c1906f9dc8ec",
+          "sha256": "abb555ef3872deaddfadf472f078351f80a5513d166262c985f4013934ba347c",
+          "task_id": "configure-git-webserver"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/constraints-scheduling/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/constraints-scheduling/attempt_1/resources.json",
+          "resources_sha256": "4870cd22fbac747a63fe944a0033d80419f69de1df4f6314a15150569f536e88",
+          "sha256": "d0176e7915d6a66f473741428bd70d308c5af70ae3c3251027e5e48b8714b5d4",
+          "task_id": "constraints-scheduling"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/count-call-stack/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/count-call-stack/attempt_1/resources.json",
+          "resources_sha256": "3c3e4927056fef4242ad664c9af53aaf218c0059a33129755f294bfc9d8bc7b1",
+          "sha256": "fb1b719bbdc173080b25b99ac44155d913b327e883023d34dfbce4ce10851d4a",
+          "task_id": "count-call-stack"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/count-dataset-tokens/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/count-dataset-tokens/attempt_1/resources.json",
+          "resources_sha256": "23443d828df4465539f9f3414483ff046dc03a4dd644d63dc9a3d41bcc665e83",
+          "sha256": "3f01068cf9ad7d6cfaa20dbcb5d6951ba02a2140134b0730992e10bbd0141d18",
+          "task_id": "count-dataset-tokens"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/countdown-game/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/countdown-game/attempt_1/resources.json",
+          "resources_sha256": "2ece097f7a8329f90297f74db39c83662f3da4f01d44debe2dc3b0a481b442c1",
+          "sha256": "96e9e70ea04562ed414c82e22fed89b41c930548480142e2d5f620052fe5c459",
+          "task_id": "countdown-game"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-smoke-cpp-compatibility-20260721/cpp-compatibility/attempt_2/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-smoke-cpp-compatibility-20260721/cpp-compatibility/attempt_2/resources.json",
+          "resources_sha256": "9958c8099d8db8c231e694b75bfbb8588c48494f4724449a9da279c3c8278b67",
+          "sha256": "9dde386be72589c404dae8eaffcbef02c52e814f1c6961fc802c55050e3bfae9",
+          "task_id": "cpp-compatibility"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cprofiling-python/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cprofiling-python/attempt_1/resources.json",
+          "resources_sha256": "b161b4a7bc5b47d752c84082fb22c241b111d039b3a3ae84275cfb7a671e40c1",
+          "sha256": "c69d1bc60fdb1b2be709b7974a6687006885841d7d9b966d037e569cf4a385b5",
+          "task_id": "cprofiling-python"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/crack-7z-hash/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/crack-7z-hash/attempt_1/resources.json",
+          "resources_sha256": "70f47d3b121acd18cf5c2db88d0afc274543fc4a8c5146033c7608ce3eedb895",
+          "sha256": "20bb9e6ea82bab5f429057c0583a5c3f59978a4dcf3dbc26d90b064612edb421",
+          "task_id": "crack-7z-hash"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/create-bucket/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/create-bucket/attempt_1/resources.json",
+          "resources_sha256": "42b630978f68a6812436fcc7ff3f62181e09752355808942853d889862d89269",
+          "sha256": "2c12e2fd1bd1a59112aa5d9fb047971457d952c5c32f68e7e69423b1c2fe6787",
+          "task_id": "create-bucket"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cron-broken-network/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cron-broken-network/attempt_1/resources.json",
+          "resources_sha256": "2c1ba55a34cea589d7e736dd80b01068e2c64ac5f8baff8251f3e43a9c1dd3b0",
+          "sha256": "d3c4579fa0cf23444e1b6de9d52c2af9a098bb5e0c5264b7d20d7870cdf71707",
+          "task_id": "cron-broken-network"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cross-entropy-method/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/cross-entropy-method/attempt_1/resources.json",
+          "resources_sha256": "108518cb03b81f445e962ea1a11618e258ad2cfb75cc75bbe10464767964ec85",
+          "sha256": "fc363288b384bae69ffad1799b3c52edb0deb60de3fe07cf2b934fb4ffbb9f92",
+          "task_id": "cross-entropy-method"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/csv-to-parquet/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/csv-to-parquet/attempt_1/resources.json",
+          "resources_sha256": "0fbf1ff339c4871c64689ce302681b6e97d167bdeaa401632f9b55e85b04b362",
+          "sha256": "b34e790bc7d79b47be9f22dd9dffd0d741bd6c2b568130f238d65344bb939bf7",
+          "task_id": "csv-to-parquet"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/custom-memory-heap-crash/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/custom-memory-heap-crash/attempt_1/resources.json",
+          "resources_sha256": "58d80578cc9d934062819a76813e8184dd9d458e3b2a2f19fc74ee757167d8db",
+          "sha256": "1f6fd87f3863ffd16f7861ac5166d7090a785e37c37f6006e537c70c33c45ca8",
+          "task_id": "custom-memory-heap-crash"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/db-wal-recovery/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/db-wal-recovery/attempt_1/resources.json",
+          "resources_sha256": "9c7ae8f358b9d67936339519a9b546c09fae32f92a11b7aecc4bf47b7e57406d",
+          "sha256": "29cfb5c0294f364846d380fce8abddfe7f3cafa9c8e92a961cb62d9b5dbccc8c",
+          "task_id": "db-wal-recovery"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/debug-long-program/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/debug-long-program/attempt_1/resources.json",
+          "resources_sha256": "67ed9b594dbaf7591e8ebf4455448e3d92c094a834f54b1747445af128642d45",
+          "sha256": "35cc842f0d762507aa4d1e4201061ee1f23c09fb662ff9882fec2398eb6153bf",
+          "task_id": "debug-long-program"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/decommissioning-service-with-sensitive-data/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/decommissioning-service-with-sensitive-data/attempt_1/resources.json",
+          "resources_sha256": "f1cbcf1a6b0398d54e6df38c9d83092ecff031705322c75cc74c4bf370edd0fb",
+          "sha256": "f9c968944e2e4ed6eda5f768f7e61b5a0f3e69ee635b293032f8005b59f9086d",
+          "task_id": "decommissioning-service-with-sensitive-data"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/deterministic-tarball/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/deterministic-tarball/attempt_1/resources.json",
+          "resources_sha256": "fe300cec8ac6f10aee333440881be3449ed57d23c9d4a518903e75891e48687c",
+          "sha256": "09f851bfed0dbde44fbd54dbebc9a71cefee30339f0551257324119206ed3a33",
+          "task_id": "deterministic-tarball"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/distribution-search/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/distribution-search/attempt_1/resources.json",
+          "resources_sha256": "ae36c7dedd6959d63dbad66d1cf2e46a968d36a296f68e8c2283f1f1d2155e00",
+          "sha256": "f9a1ca35fd7a9f31842a99a25ad5f5dbf901e68caa95fa20eec2fbde5db0034a",
+          "task_id": "distribution-search"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/dna-assembly/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/dna-assembly/attempt_1/resources.json",
+          "resources_sha256": "bc788551749260926e8d718d2768bbf8bd194fcb50fad98bda6144097d32f5bf",
+          "sha256": "76ee2fc93765417ddde9cbb77d7a0fcef6ac792fdc432e412fca4c4e271ef870",
+          "task_id": "dna-assembly"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/dna-insert/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/dna-insert/attempt_1/resources.json",
+          "resources_sha256": "02ee375a5cf84488049a8ae69c7f1c39ee2fa1542a049937a469336bdc6a2834",
+          "sha256": "7e3e22a96ab06662a7f3906aef1e9b083fcd55984de6f409d9debab7e00e39bb",
+          "task_id": "dna-insert"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/download-youtube/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/download-youtube/attempt_1/resources.json",
+          "resources_sha256": "9096c76e0ed8b78606ce8172004360461816f68cefa5f56e395ce760c44ee70c",
+          "sha256": "6254a1f498a44cab3cad822033c8fc09be4dd3bc596e49e5308664ac66f82ac3",
+          "task_id": "download-youtube"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/enemy-grid-escape/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/enemy-grid-escape/attempt_1/resources.json",
+          "resources_sha256": "1e5bea79e12bf25341fda9d7092838a8221f9b72b2f5c40ab38b7fc75610b54d",
+          "sha256": "c2df6e59095a9dda12c9dd6bde7b5b6601722b5a4dc48f3320a2e4c1e9ac4d91",
+          "task_id": "enemy-grid-escape"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/extract-elf/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/extract-elf/attempt_1/resources.json",
+          "resources_sha256": "a0e7231260a8a60b5df35eba72173c521943858ea5c8839422040ae5b1599e8c",
+          "sha256": "03f054242d156793fd706dc8415b2ac3cd5cd31cf002bc081d3f467b552dc6b8",
+          "task_id": "extract-elf"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/extract-moves-from-video/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/extract-moves-from-video/attempt_1/resources.json",
+          "resources_sha256": "602a89f5318c6f8150e866f0639a29e15b2e6d300cd411632b69d24aef51df67",
+          "sha256": "64654672e0cdd1a8571654c492572d89d9ee2ef0803aabdeda5930690758e286",
+          "task_id": "extract-moves-from-video"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/extract-safely/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/extract-safely/attempt_1/resources.json",
+          "resources_sha256": "f2c45d2561ed38af3e3a9e77c2be58ed0c90f601515d332673bff77fe865d5a2",
+          "sha256": "52a8418b20593277ffce6118c7f51c1a43e3dcf3551b34ba9cdf22df0b477383",
+          "task_id": "extract-safely"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/feal-differential-cryptanalysis/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/feal-differential-cryptanalysis/attempt_1/resources.json",
+          "resources_sha256": "bcded65f0512d698044af77a0cea920c25e2470ef356e7c15139531b05a9b1c2",
+          "sha256": "50aa36adc77c0836e7ab3df4f6069eb15a599b5d9c7bfd85d7d5acf6e476008e",
+          "task_id": "feal-differential-cryptanalysis"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/feal-linear-cryptanalysis/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/feal-linear-cryptanalysis/attempt_1/resources.json",
+          "resources_sha256": "b528d6c67295733966791a12901f639baedd2328c7dd14317050903b28b38b71",
+          "sha256": "30e069edca4e8bf7c6381b86971437d16e7813f9c135a7238828fa997faecbcf",
+          "task_id": "feal-linear-cryptanalysis"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/fibonacci-server/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/fibonacci-server/attempt_1/resources.json",
+          "resources_sha256": "0f5daa0852d1a0348a59a804f784c0f02a2a0d96315032ea4bf220df14217608",
+          "sha256": "bf30977572b061f5cdc3224f946cee91c27ecf3b673fc1c40706a5fd8ce7b5e6",
+          "task_id": "fibonacci-server"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/filter-js-from-html/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/filter-js-from-html/attempt_1/resources.json",
+          "resources_sha256": "f9c3d9fbf38ba5e761bf8f8883c49a576189fdaec9a598278c8333d8db2c7700",
+          "sha256": "2b14f9883f98ca916c088003a5a08c935e04ff05dc9e881777e3bfd3341c41f5",
+          "task_id": "filter-js-from-html"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/financial-document-processor/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/financial-document-processor/attempt_1/resources.json",
+          "resources_sha256": "ceb7cc46946fda5858b5f1ed0f427598c0be6a0770e746140bcdf40c0ac304ec",
+          "sha256": "d3b7c7684344d3bd0204b3b65934912849a75f43043afb4ce90abe9d5e130c40",
+          "task_id": "financial-document-processor"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-repair4-20260722/find-official-code/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-repair4-20260722/find-official-code/attempt_1/resources.json",
+          "resources_sha256": "1cec3df8c6f5fb97f00268fc7ac28cb69713a75e26a2b62a9f5ec83bbb9d6a70",
+          "sha256": "2863c7a06ee2a218afedf48dbba984aebc9c926f2e9f1fa965b3739905cffe2d",
+          "task_id": "find-official-code"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/find-restaurant/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/find-restaurant/attempt_1/resources.json",
+          "resources_sha256": "1ce6569292e9cbab7575c62e2426abe1e5c94fbf66766adac9074b0aae310ec9",
+          "sha256": "949c50bc6f90a3f76426026b72c36b7ce1e4a651679ba3597a3f3163004645d1",
+          "task_id": "find-restaurant"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/fix-code-vulnerability/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/fix-code-vulnerability/attempt_1/resources.json",
+          "resources_sha256": "15eb84d16ae03054ab78a15eead784d9a8be23362ae65235f339215e6c1a6d8c",
+          "sha256": "2fe5daf90acca7e4c58b05f4d28f572b1fabec13c3fe79babf89fd376e14834f",
+          "task_id": "fix-code-vulnerability"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fix-git/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fix-git/attempt_1/resources.json",
+          "resources_sha256": "64070c3b1de95ffa1c869909d29946c6d1595546c5b95a5360d047ff6477d995",
+          "sha256": "de4e7a43e5e7f6d169b1e56deab176c460acb23940ab321dc0b4b7f3a80456bc",
+          "task_id": "fix-git"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/fix-ocaml-gc/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/fix-ocaml-gc/attempt_1/resources.json",
+          "resources_sha256": "e81ddba54552b448ae285ef07c8043dd81b1389a8fb80c3eac9d6f2e12cf8c0a",
+          "sha256": "f4a71e17c38f6d99e1efb2bd044ef3fde69376d58ed49098e1a283b0b6ea6969",
+          "task_id": "fix-ocaml-gc"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fix-pandas-version/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fix-pandas-version/attempt_1/resources.json",
+          "resources_sha256": "69b5c390cc49f44cf319465bb1788ca10a03efef272362c35a47ef6ec0456746",
+          "sha256": "99845f3178072103acd4bc5ed2555d00eb28316a10ec6b1ebdec0383771a7b41",
+          "task_id": "fix-pandas-version"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fix-permissions/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fix-permissions/attempt_1/resources.json",
+          "resources_sha256": "1b989d76b061197b05d175b558f38ca6b8b6e0d3876b2f4dcf5ca313cdba01a9",
+          "sha256": "163c77694fd9b8aff2a7e2800a7e8fe1444c4fb0be9be37a88926aee03cecc29",
+          "task_id": "fix-permissions"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/flood-monitoring-basic/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/flood-monitoring-basic/attempt_1/resources.json",
+          "resources_sha256": "7e7781f07f8fa29b590f42942c361dd7e67336ae546c76259cd93e9b68e15d3b",
+          "sha256": "cbde61b1c7e52d7b007824cf1aa13c76a06c7187a4d2732a3abd2c53df8758cd",
+          "task_id": "flood-monitoring-basic"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fmri-encoding-r/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/fmri-encoding-r/attempt_1/resources.json",
+          "resources_sha256": "9ee1f52d1fe36560d7d8b94d1d6f6290e60b6d4c8b1bbc54e5b9b2e5935d418f",
+          "sha256": "4ee5b00c13fe2709a9f9875d6cd2495a98ecfec4b1c2751012e97caa8b9bf13d",
+          "task_id": "fmri-encoding-r"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/form-filling/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/form-filling/attempt_1/resources.json",
+          "resources_sha256": "4ea77b591a81aaaf612086a135fffb9a1213da3c21ca74eb0718d895bfaeb258",
+          "sha256": "dc614e121b26dfc5837fd2c92b250b8f447228849a71ca6fa9ec8783f9d39350",
+          "task_id": "form-filling"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/gcc-compiler-optimization/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/gcc-compiler-optimization/attempt_1/resources.json",
+          "resources_sha256": "3ac14c229129e364ded3241791ef25571a8f13cc5c32295d6a0f53ffa4b606f1",
+          "sha256": "6dee8b637957f8927e2cd5a58e30ee5a6f43b101a9ee3c71699465cdcf61f32a",
+          "task_id": "gcc-compiler-optimization"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/gcode-to-text/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/gcode-to-text/attempt_1/resources.json",
+          "resources_sha256": "3f3f14b734197b8c91851820cbdc4ba8c2cfd3ffa73561d85cf62029c4c1950a",
+          "sha256": "5e1ee5e8ad9ff733c35f1a5c122aca84eaa61443898cc4cdceea88bd41d8e6a4",
+          "task_id": "gcode-to-text"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/get-bitcoin-nodes/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/get-bitcoin-nodes/attempt_1/resources.json",
+          "resources_sha256": "64a94327fb9df66ed649c1940f5813535371f04a0f1bfa5719816bf82511d981",
+          "sha256": "a4094cda2ebd21c9a35a5e3a73c309c231f72132766644587e6b209aab4334e4",
+          "task_id": "get-bitcoin-nodes"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/git-leak-recovery/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/git-leak-recovery/attempt_1/resources.json",
+          "resources_sha256": "897f07e1f791d850d021ff7f7f05b8946b40d240b5974fba4878d83ce017d64d",
+          "sha256": "644af5c909d88c1c7145eadb2376e171c0df5269ea8bc608d9254e5dd7c7d8c2",
+          "task_id": "git-leak-recovery"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/git-multibranch/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/git-multibranch/attempt_1/resources.json",
+          "resources_sha256": "16d383a9c7fbcd52331fcde9332b167f08de078db6da7a98d40296b602408a9c",
+          "sha256": "c33d70b77472671d96e76958dddc2350ab286427ec510d9df797919ea2a8a1e1",
+          "task_id": "git-multibranch"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/git-workflow-hack/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/git-workflow-hack/attempt_1/resources.json",
+          "resources_sha256": "ece8c5f954270170b3786b74fdd55cdb783358d7467bf9b6774c415bbe24e001",
+          "sha256": "e0b96f398a9d8987a47728ff4ce4fd6258a562490162de1a990f061cd202722e",
+          "task_id": "git-workflow-hack"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/gomoku-planner/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/gomoku-planner/attempt_1/resources.json",
+          "resources_sha256": "5d0e532f835620d4760893298123563f95057dbc99923dffc97ed3cae640b1b9",
+          "sha256": "7e782b66b9a199d51792d8da495894981917ac99f6ee1620ab3ab30c082bade5",
+          "task_id": "gomoku-planner"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/gpt2-codegolf/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/gpt2-codegolf/attempt_1/resources.json",
+          "resources_sha256": "9141a74c3ab5d1452311c75a014e447b5a2d2338ad58e4dcd5dd73aa86bc50f0",
+          "sha256": "9f77badbccb1ca7d282682c54e3a17f6eb64ad7ce082b191da859f4147844416",
+          "task_id": "gpt2-codegolf"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/grid-pattern-transform/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/grid-pattern-transform/attempt_1/resources.json",
+          "resources_sha256": "05e05c1a4d6eb4259d5f84055c8f4ea1a85d344b88e727f96ea0379fdb345082",
+          "sha256": "2d924d33216afe22cd272a50c6933f5b1afdb1fff843e99189e0adc0702b0b53",
+          "task_id": "grid-pattern-transform"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hdfs-deployment/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hdfs-deployment/attempt_1/resources.json",
+          "resources_sha256": "29ccebb36883fefa2488ff24c8baf135dd98d427c1e3e128b4a19c6a22ee4f77",
+          "sha256": "089913f3b5cf973fa2fdabaa101b45c53e687a98fe2dbcfdcb53c08432aa2da7",
+          "task_id": "hdfs-deployment"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hello-world/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hello-world/attempt_1/resources.json",
+          "resources_sha256": "81c6fde8c8d5777dcf9e8102b0da4adbed71a30a1a7e002e978b94ffec2091cb",
+          "sha256": "39d98591bcdccc90850ac426b147f860f0653906321bbaebdb03e33f7d30fb77",
+          "task_id": "hello-world"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/heterogeneous-dates/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/heterogeneous-dates/attempt_1/resources.json",
+          "resources_sha256": "386fbcef61a8f4a604de61b29a7c3f50ec8f454922cb6dc029633d94dd1dd8ab",
+          "sha256": "190767da71644f3830a5783df01c99c5be5af8a15f3d8f4da78b8480e9e4bde3",
+          "task_id": "heterogeneous-dates"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/hf-lora-adapter/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/hf-lora-adapter/attempt_1/resources.json",
+          "resources_sha256": "8e185c4c1de6155a3927e8698615b7ce1a39670c80f11baf0eb337f6a63d9365",
+          "sha256": "6dd3924ab8c234ce9c9bf041b639eae207eb3536a2d01e9b231362a1323b7954",
+          "task_id": "hf-lora-adapter"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hf-model-inference/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hf-model-inference/attempt_1/resources.json",
+          "resources_sha256": "c631e4820f635ba2113ceb43980941e39f614593921f697b9daace06cf691952",
+          "sha256": "da089dd5c3684344ffc514b8485e9ac54e5c79f989a97ad0cafa5c47efe687b7",
+          "task_id": "hf-model-inference"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-repair4-20260722/hf-train-lora-adapter/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-repair4-20260722/hf-train-lora-adapter/attempt_1/resources.json",
+          "resources_sha256": "f4ec53619fc0761d8e1011b72517dde4fa3be7e9d2eb7b33e8421d85da2e5cf8",
+          "sha256": "3a15223e44c66ea27371a6ab6a9ec77e4e1126657c3be547025ac7badca9b9dd",
+          "task_id": "hf-train-lora-adapter"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/home-server-https/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/home-server-https/attempt_1/resources.json",
+          "resources_sha256": "09beb91676a262a9f85f0ca38f8634e8a744c20d4dcc2ec0c960f5d8d5e50c5c",
+          "sha256": "e90e0baeff87c1ff7065e395042e3e0eaf5f369b406f3c240cf9bc9863530992",
+          "task_id": "home-server-https"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/html-finance-verify/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/html-finance-verify/attempt_1/resources.json",
+          "resources_sha256": "9dd9ecd789469311bc6909b802cfce772786b2636c3fc74bf18ab6a2612477c0",
+          "sha256": "c74cde1cf7dd6f0aeba7bdcc0659f679e8ecf235376d0502a2ab803858610923",
+          "task_id": "html-finance-verify"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/huarong-dao-solver/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/huarong-dao-solver/attempt_1/resources.json",
+          "resources_sha256": "0f9388518a18861481181228719b8c790dac0a5fad03893c9a6643ebcd1be49e",
+          "sha256": "7fd7d2b39f9962d59d0fe342f6d93f318b751f2b7d5fe77839cdeb0570c1b9db",
+          "task_id": "huarong-dao-solver"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hydra-debug-slurm-mode/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/hydra-debug-slurm-mode/attempt_1/resources.json",
+          "resources_sha256": "58e9f45bd0f618d9e9b707f2f386f107a0fae5d85dfbfed83e8d362096df776e",
+          "sha256": "54d4481650550b053098278aa51c3a46d4cfa0e0cc6c30876780523c5ee78cce",
+          "task_id": "hydra-debug-slurm-mode"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/ilp-solver/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/ilp-solver/attempt_1/resources.json",
+          "resources_sha256": "3ff7a0414f6d0a606b24586624ee667ef03e2e60a0bdf602de72db763831aa9d",
+          "sha256": "7a64c40da95bddab11ef28215d5c423c6aa9f16b2799c7a071cbb0bb9339feab",
+          "task_id": "ilp-solver"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/implement-eigenvectors-from-eigenvalues-research-paper/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/implement-eigenvectors-from-eigenvalues-research-paper/attempt_1/resources.json",
+          "resources_sha256": "e9383592f2b62a7a7c44e95b5766f06ecb8f384dcf5b8c13e14c68e2631ed807",
+          "sha256": "c1b2ac5e2c764874ce3d50ed46c580ee2981c7d0542aee03ea0f9f6271bf6ec8",
+          "task_id": "implement-eigenvectors-from-eigenvalues-research-paper"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/incompatible-python-fasttext/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/incompatible-python-fasttext/attempt_1/resources.json",
+          "resources_sha256": "5b6a8c5619f2c3f09707e4f726b7d557f940f9696760f75fea2401fe55d3aaf5",
+          "sha256": "f01d9f44f51916172a6bbcffbeda8d477d7cf0a72bc94fa52701914cab7dfb92",
+          "task_id": "incompatible-python-fasttext"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/install-klee-minimal/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/install-klee-minimal/attempt_1/resources.json",
+          "resources_sha256": "863fe1fb49bbe29f000e1e8467a2ba30d4d0995cb0ee97ca52151684b2fd4b95",
+          "sha256": "9a9b9a19a622ebb30771305c1c29e3d4cc22cb80d9a9c6465c51065c8b2f6d8f",
+          "task_id": "install-klee-minimal"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/install-windows-3.11/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/install-windows-3.11/attempt_1/resources.json",
+          "resources_sha256": "1aeccd9a0140985735b605eddfae27fee0d3f780287f045ea6f73893c15a30c7",
+          "sha256": "60e7ffb1b5138094ce2a16939cfab88103d54bc3ab8ff77b53729d78516def62",
+          "task_id": "install-windows-3.11"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-2h-timeouts-20260722/install-windows-xp/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-2h-timeouts-20260722/install-windows-xp/attempt_1/resources.json",
+          "resources_sha256": "14159581baf890499065621fe8942ed11f828015e8d69488bfa47ec640c0ed2b",
+          "sha256": "f6439fdc0067e4e4cbb3545c5ca8a55bf12baa49cb968e1df1fff27bfb964782",
+          "task_id": "install-windows-xp"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/interactive-maze-game/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/interactive-maze-game/attempt_1/resources.json",
+          "resources_sha256": "8836a2ba3723d7159e329a3f7cd51280197ba3d9a2cdac1dcb3ceb653e933024",
+          "sha256": "2268db19817d747310b662ca338cf885916ca6b3110f8667fec44fccfb2f9550",
+          "task_id": "interactive-maze-game"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/intrusion-detection/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/intrusion-detection/attempt_1/resources.json",
+          "resources_sha256": "c4829a34089391b51be5b10e60debe9493f6621cfa1298358b9ca052ee6fe12c",
+          "sha256": "176188771398951b4c8c37137eeb5e149aafda13b04c3fcd40927aa7f1ce9e80",
+          "task_id": "intrusion-detection"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/jq-data-processing/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/jq-data-processing/attempt_1/resources.json",
+          "resources_sha256": "f1c21fa18b119630e9f250713adc37b40582a0b1550ac94bba78c8c2c49d0e36",
+          "sha256": "7e68e1f3d75090ad5489073900389d07533db9b87f5973a22012fe847138d7df",
+          "task_id": "jq-data-processing"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/jsonl-aggregator/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/jsonl-aggregator/attempt_1/resources.json",
+          "resources_sha256": "46a3df8b84bca223615563f52409164c3e65da058cf8600e9843bbf402569e28",
+          "sha256": "0b3a252a3b6b935a669fb28236af761f3dff1017114bb1adab6eaa2dc0be4d13",
+          "task_id": "jsonl-aggregator"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/jupyter-notebook-server/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/jupyter-notebook-server/attempt_1/resources.json",
+          "resources_sha256": "bdc4111dca4948a7d20dedad03a2dded1fbff4b0c249ad1f1525aab5f6ee5270",
+          "sha256": "9d3911726eed3da96c34cf86cd0cca6fc0bf41d04af690591ed7033c9a8f2dcc",
+          "task_id": "jupyter-notebook-server"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/kv-store-grpc/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/kv-store-grpc/attempt_1/resources.json",
+          "resources_sha256": "2653e14f3bdd08dbf223c27a4238fa0fb506060a79c21f401b5fc8c441d0b75d",
+          "sha256": "93a7d13e1cf0c26f4847749e8f74ebd5d36b3344502ea42cce0074a3cfe61945",
+          "task_id": "kv-store-grpc"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/large-scale-text-editing/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/large-scale-text-editing/attempt_1/resources.json",
+          "resources_sha256": "8541863af4efaab58ff31e38d517bc1144c88fe5bc22509f8866c24ce2125d43",
+          "sha256": "34c4ad4d5b770f545a536200be3ec81dc649bdf4e813d4414dc6941472f863d5",
+          "task_id": "large-scale-text-editing"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/largest-eigenval/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/largest-eigenval/attempt_1/resources.json",
+          "resources_sha256": "972b07d596da8a8f6eac654237ab362d2a6ab88323e5f56afeafe0acc9fb8581",
+          "sha256": "fe568777506212550f2bc1f4c3f72162dcc14c4d9ec66952a0ec1c9dbf30f0f3",
+          "task_id": "largest-eigenval"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/lean4-proof/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/lean4-proof/attempt_1/resources.json",
+          "resources_sha256": "c18a6c8e916a1b7bc8dadf306974eceb964c4d0b6b1b4a215a6016fd6c1d209c",
+          "sha256": "3dd8dafebe89eacdb113a944dd2a9ca1381375b79569956922dd376f1c93640e",
+          "task_id": "lean4-proof"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/llm-inference-batching-scheduler/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/llm-inference-batching-scheduler/attempt_1/resources.json",
+          "resources_sha256": "6f7a4b1d13ec01fbccb6b3f71a0dd14257d9fec3d3a0b0efc7d72e3320cbb8c6",
+          "sha256": "95d1ad3a00d78ac153a41777de5a381edc4afa1d5eb1df95cbe185b5f39f1666",
+          "task_id": "llm-inference-batching-scheduler"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/llm-spec-decoding/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/llm-spec-decoding/attempt_1/resources.json",
+          "resources_sha256": "e2378a52f9bd61d6a1139aed712f8700d0f9722389309ee7bdcac86b5d00cc80",
+          "sha256": "00fb4db2a60ed0351bbab010c170acd9dec9e6883a934fdcc392270e1dfaa8e0",
+          "task_id": "llm-spec-decoding"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/log-summary/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/log-summary/attempt_1/resources.json",
+          "resources_sha256": "77ba14dc779f516a510d90e636f91a700ac5fb5415e3fdec18f7403a42eb6ac4",
+          "sha256": "3be29619269e19d08a08c896bc37cac2a91fdb696cff7a0f6482103e7e219d15",
+          "task_id": "log-summary"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/log-summary-date-ranges/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/log-summary-date-ranges/attempt_1/resources.json",
+          "resources_sha256": "9d00a9d9c3d08b641d8c19386e54455657290770392dab4267bd5e885d5a3879",
+          "sha256": "6ab00664174526dc0ada0b376a515452994e41ac267e1da4a2e1cd21347dea27",
+          "task_id": "log-summary-date-ranges"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/logistic-regression-divergence/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/logistic-regression-divergence/attempt_1/resources.json",
+          "resources_sha256": "311f3bb56935738fdcd78eb3f02a84553117efd946977f5fecc30f91bddfd201",
+          "sha256": "6a10e9964d45a025a8978741b860e3c319bfe0c3aa06dc0c2ef41083bf389a51",
+          "task_id": "logistic-regression-divergence"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/magsac-install/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/magsac-install/attempt_1/resources.json",
+          "resources_sha256": "82f58d3b6ba59ad33b50254255dd2ac7ff1e8ea3898dd51b01f03aa45f75268a",
+          "sha256": "972f212c4c33d79d1e866db2257535622938bb2eeceee5404f4c830173872c5b",
+          "task_id": "magsac-install"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mahjong-winninghand/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mahjong-winninghand/attempt_1/resources.json",
+          "resources_sha256": "d44c9bbd1bef7df43b2fddf0abba96b5a89e5ae3dc11c095de47f7d9fd6ce95d",
+          "sha256": "8daa82f3173edbd51755de3be27d5e9b0b3453784726ea5e79c54d9c968e325c",
+          "task_id": "mahjong-winninghand"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mailman/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mailman/attempt_1/resources.json",
+          "resources_sha256": "b4645d1e6814ca1ab5e9b698c7c5489da60252a5a012250499e5fb1ead26b563",
+          "sha256": "010e4a3a2ce094edd76e6c2456e36d6bbb0013f5299f003bc7c53a70a941552e",
+          "task_id": "mailman"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/make-doom-for-mips/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/make-doom-for-mips/attempt_1/resources.json",
+          "resources_sha256": "8c09bcc4516affe6f364129b22e2eb37e98f40791f0fd9a53e7de950a184b22f",
+          "sha256": "df46f8b65364517ff9751bfd26dd82d26ba5653ff88f6801ee5ddaba31246a3f",
+          "task_id": "make-doom-for-mips"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/make-mips-interpreter/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/make-mips-interpreter/attempt_1/resources.json",
+          "resources_sha256": "6c61f33d477d54838bef25ebd65389cbfa181310ded2dcca9106eae13a7a402f",
+          "sha256": "4f71aff754d0aaaf37de2bfb991d165aa99c7ee1560fc469ea594b2e405233c1",
+          "task_id": "make-mips-interpreter"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/matlab-python-conversion/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/matlab-python-conversion/attempt_1/resources.json",
+          "resources_sha256": "88c7fe694ec6395e066efaeedfcb64a45805fe09177fcef3389b31204e06d84a",
+          "sha256": "6c7aba51bb431199df5929e40c365e59c4aefd7ba31c531062272a7eafee9afa",
+          "task_id": "matlab-python-conversion"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mcmc-sampling-stan/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mcmc-sampling-stan/attempt_1/resources.json",
+          "resources_sha256": "a1b74c424483b31dc6e44e50613584baef23a9f14b880007557d1fe0d1701939",
+          "sha256": "c0367f479cf3149a7d3bef1b66539fa111e6d687b08cee3d888edb4546171d73",
+          "task_id": "mcmc-sampling-stan"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/merge-diff-arc-agi-task/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/merge-diff-arc-agi-task/attempt_1/resources.json",
+          "resources_sha256": "96d261da89a03df29cc4f63bf49dcaae0e848d36d13e7c38b4332b453b70044e",
+          "sha256": "f5d10cd7a23cd0d57ee313b4a900a221512d7ecd0b2444874b8eb53447dee660",
+          "task_id": "merge-diff-arc-agi-task"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mixed-integer-programming/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mixed-integer-programming/attempt_1/resources.json",
+          "resources_sha256": "44a6625afbad91f63a57ccbe5626bacda631319615a5d697d56862c5d16ca667",
+          "sha256": "55aee1886b36c3e378b6ee2076b6047a3870778fab7e7af5c1edbe720c26538a",
+          "task_id": "mixed-integer-programming"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mlflow-register/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mlflow-register/attempt_1/resources.json",
+          "resources_sha256": "b0d7b800aeb22c75f8cdfce9d2b3cfe39f4fe8dee936a59069b1ec48dec5f523",
+          "sha256": "c36832a6c683d568c83d44dd8287c3dde6a81798b6aa491ed4fd90722fb6da27",
+          "task_id": "mlflow-register"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mnist-learning-fix/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mnist-learning-fix/attempt_1/resources.json",
+          "resources_sha256": "358a1d3eeb0a216ec3933921b3bedaceb9947ebd1916fddef5fdfea8958dab0e",
+          "sha256": "1c3c3459ded1f9692979942a9ee16ec62fe55c5303a54bb845552ce443ba4416",
+          "task_id": "mnist-learning-fix"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/model-extraction-relu-logits/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/model-extraction-relu-logits/attempt_1/resources.json",
+          "resources_sha256": "243406cd24f6bbf174138516ebb4d7e597791f66a06d65c7d33dc7ab33ff7a2b",
+          "sha256": "cac2aaa3f6ee7c271c413cb984e36176f6901c85b75916e521709df4795cd7c7",
+          "task_id": "model-extraction-relu-logits"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/modernize-fortran-build/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/modernize-fortran-build/attempt_1/resources.json",
+          "resources_sha256": "00df26b9668caec5a44eeebf2eef02449f122bd6785756554b74bf04af39d05c",
+          "sha256": "e7e7c66686ffa1fb242840e2198ed41b7739dabd21c14e59e437055548a3eeba",
+          "task_id": "modernize-fortran-build"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/modernize-scientific-stack/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/modernize-scientific-stack/attempt_1/resources.json",
+          "resources_sha256": "a17e95be9aea86cc1317ae702a77fb1c14529c6935437ad5eff7e7eb21322a15",
+          "sha256": "67b93502171e7b504d9fbf6a50127c1b113228805d8a6a7c1540e06d4b8bc70c",
+          "task_id": "modernize-scientific-stack"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/movie-helper/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/movie-helper/attempt_1/resources.json",
+          "resources_sha256": "73c1be6e905da7b9fdb0a2ce2fba30861a30e15be0acdc9f44a3104c954b06ee",
+          "sha256": "c8ff61148638ad8f7cb0fa0b0e1edc991fb883d54f7b93373c9f925328f3b625",
+          "task_id": "movie-helper"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mteb-eval/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mteb-eval/attempt_1/resources.json",
+          "resources_sha256": "48a102552e0e15d00b23a02dd6fbc32aa433078cf8df217128bd73236f162764",
+          "sha256": "971100efbacd683aeaed74f85b551cac9d31a5d85a25a39caa1cb62aaf17d417",
+          "task_id": "mteb-eval"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mteb-leaderboard/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/mteb-leaderboard/attempt_1/resources.json",
+          "resources_sha256": "c15febdcbcf2425bf8ae9cdc699a05b2ef35383c1cce34f2de1651cbb4bcc6c3",
+          "sha256": "62e54fb0b67b1efa7c9b40724605ddd7742c4ef6a3282fb4c58e416f314717b8",
+          "task_id": "mteb-leaderboard"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mteb-retrieve/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/mteb-retrieve/attempt_1/resources.json",
+          "resources_sha256": "9a9679466dea0ca2486b69f6f8dd3343b1dab28d555d8a2a8c83db4f85acec50",
+          "sha256": "716bd7843bca033e8222baae9681aa1fab9419c1eccbf045054bd70f4973b3c4",
+          "task_id": "mteb-retrieve"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/multi-source-data-merger/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/multi-source-data-merger/attempt_1/resources.json",
+          "resources_sha256": "fbb0787180ed1c0ed66d1372d563f908cc4b4a6b4475a26fb997f60ba6d5bc28",
+          "sha256": "c46dbfc2d68c734ff184d9fb9585c5ea48d6495bc6d44ef65a99921e11f0596f",
+          "task_id": "multi-source-data-merger"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/multistep-definite-integral/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/multistep-definite-integral/attempt_1/resources.json",
+          "resources_sha256": "7ba51d0a171765358bffaca0c87c0a889eb6d4681fb6c75c2b5157695754f2c3",
+          "sha256": "9a7d120187cc1ec438a13e91a2e0f7a8a5789e9385adaa6dc3eb391d935e8b52",
+          "task_id": "multistep-definite-integral"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/neuron-to-jaxley-conversion/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/neuron-to-jaxley-conversion/attempt_1/resources.json",
+          "resources_sha256": "8aedc9ad95ef6235a35b0a53cd3d385d74c02d9cce2b50ff885b37b8abd6dc6a",
+          "sha256": "2fe47301d1bd7916942956949fb57c7fc0b93d3641a746766b91ca5918e2261c",
+          "task_id": "neuron-to-jaxley-conversion"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/new-encrypt-command/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/new-encrypt-command/attempt_1/resources.json",
+          "resources_sha256": "538ecc2d02e5c8dbedf58ca6daaa9fc8a474afad1784413dfbb9f96999084fa6",
+          "sha256": "013ce689e11dbf58c903ed050db55653b4ce0e0863c236e38dedb373ad8e4b38",
+          "task_id": "new-encrypt-command"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/nginx-request-logging/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/nginx-request-logging/attempt_1/resources.json",
+          "resources_sha256": "8ee974844b6ff41cff83fbc1e342aff13bbb5b91ac5ef2e7bcb321cf3a73354a",
+          "sha256": "d9c58540cb5759159614216b6f415c44a7f6509a7f27920641c10d0395b6fbe4",
+          "task_id": "nginx-request-logging"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/npm-conflict-resolution/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/npm-conflict-resolution/attempt_1/resources.json",
+          "resources_sha256": "973a83b2a0e40499f8da55df3ec4356bb09087d0a6e8b01382175df000d7a981",
+          "sha256": "24ebea4feb81136a3466702a527c0830f652b4795ba2ab5c5238cced88a1b820",
+          "task_id": "npm-conflict-resolution"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/ode-solver-rk4/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/ode-solver-rk4/attempt_1/resources.json",
+          "resources_sha256": "212697ed384990bea05975f8994029657d8d2a04aad2f9bf3bfdac226b5734e1",
+          "sha256": "2a099d7c71e931df1cd4d5f6116d172a6d68145b0f2de3926ad1d8d5febc6621",
+          "task_id": "ode-solver-rk4"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/oom/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/oom/attempt_1/resources.json",
+          "resources_sha256": "ca551e13c5759947398ea7000f3df4e357f7ff03a12658381c8b0cfdd9a1f122",
+          "sha256": "9f4f26148bd33101a4b3da75f09dd9e017cb5dbbfc7931312b853334c8eca3ef",
+          "task_id": "oom"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/openssl-selfsigned-cert/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/openssl-selfsigned-cert/attempt_1/resources.json",
+          "resources_sha256": "4dc0a46ccba5c902f56a63ef810ce492629aba8bb55a47382e72f00453d9b553",
+          "sha256": "aa86a60f2e25480bf9a4489abcb43ff6d0e1d67bc260e9261385262688b6a50d",
+          "task_id": "openssl-selfsigned-cert"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/optimal-transport/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/optimal-transport/attempt_1/resources.json",
+          "resources_sha256": "ac24f9c2b011d6365df649c83b06c61b9b6ecdcd1744f07d60baf67f97dc710f",
+          "sha256": "c0f6753be7481ddafd4e394204820a7961b41ad76364260ff645c2f85e18d63b",
+          "task_id": "optimal-transport"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/organization-json-generator/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/organization-json-generator/attempt_1/resources.json",
+          "resources_sha256": "bc5305acd338935067a2a0aea58d49be3880a08fd69068502061329c50bd5622",
+          "sha256": "dce57b1e6cdd76d2214327e69172958f462df2362baf3e889a1ff2eb5cbbb65f",
+          "task_id": "organization-json-generator"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/overfull-hbox/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/overfull-hbox/attempt_1/resources.json",
+          "resources_sha256": "39db4f7ea5048f83862fdb5e8823f7a8a1292c7ddf6136dce4bb96eb541951cc",
+          "sha256": "52eaba20905fb7b442a79271572e19c25c3df81c3f0368c1b1e605fbc7b9b47c",
+          "task_id": "overfull-hbox"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pandas-etl/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pandas-etl/attempt_1/resources.json",
+          "resources_sha256": "925e87177097efae899fc52e068bd94aac1ad7c684d69af3d5c634fdb742888f",
+          "sha256": "7c7d1d449da3f617b6e74af3b8bc37475fb74981960ec5fd35c1aacb16ceb55a",
+          "task_id": "pandas-etl"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pandas-sql-query/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pandas-sql-query/attempt_1/resources.json",
+          "resources_sha256": "8913d2ededfef9217448bc3511ace081e618eebc8e77fdbf01c74550615fa433",
+          "sha256": "60a8c98a35774a8631ce5e2b71dff67d970597a7b288198d7d3ee0b0148a6aac",
+          "task_id": "pandas-sql-query"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/parallel-particle-simulator/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/parallel-particle-simulator/attempt_1/resources.json",
+          "resources_sha256": "ba9b582077e95aefe21b96892b13f3b8a5cbd011e474981171844d43bc4d066d",
+          "sha256": "74132fdc8e3a74158b27dbd49c81b36334e74fe7a84fb14f42443a5e3d9c9976",
+          "task_id": "parallel-particle-simulator"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/parallelize-compute-squares/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/parallelize-compute-squares/attempt_1/resources.json",
+          "resources_sha256": "57e36ddb727b597931b8ca7a861f0ad52d7f2751f0041ca5beee8460729a46a0",
+          "sha256": "5a76447b03201413b2d4bdfc3e2ece898c35be812d0d035cc831ebcd0bf434cc",
+          "task_id": "parallelize-compute-squares"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/parallelize-graph/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/parallelize-graph/attempt_1/resources.json",
+          "resources_sha256": "4026ce5c2948ec9af46a96ed4851af24537caa103a8a3277715d9b0c49cbc158",
+          "sha256": "3833e7a0b45ac3689f125eab481f82e2a2c0904a1781e30cb9ee3463d39ad902",
+          "task_id": "parallelize-graph"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-2h-timeouts-20260721/password-recovery/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-2h-timeouts-20260721/password-recovery/attempt_1/resources.json",
+          "resources_sha256": "88c114e1543c70b7260f16d357328f151d4c4b6d126ab546e6fd871d3d35d9a7",
+          "sha256": "30711fadfef0f9f0c4911a18c5e813a2581149f0b47f1d9a5cea92060e54a1f5",
+          "task_id": "password-recovery"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/path-tracing/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/path-tracing/attempt_1/resources.json",
+          "resources_sha256": "ba011890afa05b5a3f3e2284d6aff51f939b1dd5ef342f19989479c49696899b",
+          "sha256": "99e050c50cb3644243890dd22d586a5e48bc916e37898e70dd30c7fb7dec262b",
+          "task_id": "path-tracing"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/path-tracing-reverse/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/path-tracing-reverse/attempt_1/resources.json",
+          "resources_sha256": "0d2efea04db8204e26a330849abae3c9ab23f2cf3050f9dd4272e7d810475b4d",
+          "sha256": "c340f20691680c3c1a088186410e84457140dc8c54eff1bf85fdee76ca2d5077",
+          "task_id": "path-tracing-reverse"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/pcap-to-netflow/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/pcap-to-netflow/attempt_1/resources.json",
+          "resources_sha256": "5426572c24bfa607d1ee6c0f6f1137bcc5a578c1fb09e7b0d29100aebf27da07",
+          "sha256": "30e662e347b35bcbbf8b1d9cfb23f3613d780abf09d9974f23d44c263656fa4a",
+          "task_id": "pcap-to-netflow"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/play-lord/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/play-lord/attempt_1/resources.json",
+          "resources_sha256": "1bbc3b21505dd8d4f4a1eb33ac70fdc8da3be88fce2ee2974adb8152e0a86f7f",
+          "sha256": "272cbeccfad9d59f3ac1b9ea9eda0211959e58743425882f05b20b655280e70d",
+          "task_id": "play-lord"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/play-zork/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/play-zork/attempt_1/resources.json",
+          "resources_sha256": "bbc21e206bf57fcaeaab9e5d4e7526fc2715a6bc7a900a1dda7f053a2c7d68d7",
+          "sha256": "b44366a7bac7bd1aecc24306077aeb1ed5805b5f657e8c513e19335446b551a2",
+          "task_id": "play-zork"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/play-zork-easy/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/play-zork-easy/attempt_1/resources.json",
+          "resources_sha256": "2c3c5e9771b83ff85c8cd4c658827b385f860f7d216054023eb8b06ccb847d8a",
+          "sha256": "fde5b0817b1164d9e45e9b70722c72af944ca34bbeb43caac85c42c7001e1bdb",
+          "task_id": "play-zork-easy"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/png-generation/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/png-generation/attempt_1/resources.json",
+          "resources_sha256": "08dc7a29e64e78edc62aae19c238dc7e0865a543915c59eb8642f2b49a267277",
+          "sha256": "5fe4d98793da2cd50c5524a9933f5929f86009b4cecf23ca2a30c000a646aea0",
+          "task_id": "png-generation"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/polyglot-c-py/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/polyglot-c-py/attempt_1/resources.json",
+          "resources_sha256": "dcd35ef8015f1534f6eaea7c63d10fbceda73c0f9614140c68dbec22b8ed6a7e",
+          "sha256": "4ffadc98d9caba3819263a90fbcd7a796270b742c857792c0b22e2a8df3527b1",
+          "task_id": "polyglot-c-py"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/polyglot-rust-c/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/polyglot-rust-c/attempt_1/resources.json",
+          "resources_sha256": "c1f394e796ca47c832cc7af4037c2923b869f7d1962d96c768c9314aa9edec9f",
+          "sha256": "cc372a88f2ebebb95d1e09f71b44acf52c50b5ad41421a3b0ebae0dcbb687b33",
+          "task_id": "polyglot-rust-c"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/port-compressor/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/port-compressor/attempt_1/resources.json",
+          "resources_sha256": "eed7296135b7b0e22ebf843e3c24d2caa6b1a69e6b25fed58e783fe89fbe70b6",
+          "sha256": "e01d466bfe2e672725b4656df18673923706b190189700b62f45845752787bfc",
+          "task_id": "port-compressor"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/portfolio-optimization/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/portfolio-optimization/attempt_1/resources.json",
+          "resources_sha256": "6bdecd75f48362e1459b2dcfd8968cdfebaba80db679339ded905b7c585b34e0",
+          "sha256": "48bc67b2961c3ac48d981948f47eec18c2131c19244a449f44b8526322a459c8",
+          "task_id": "portfolio-optimization"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/postgres-csv-clean/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/postgres-csv-clean/attempt_1/resources.json",
+          "resources_sha256": "47992dbba5a10414a60c2385155060e46c706fe87e2e26dbef4cbc3f17293fa7",
+          "sha256": "29698d5b3bc7c3f5c7a54ef45b3af5e576c58b6615c5ce011ad53ff4d6814121",
+          "task_id": "postgres-csv-clean"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-repair3-20260722/predicate-pushdown-bench/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-repair3-20260722/predicate-pushdown-bench/attempt_1/resources.json",
+          "resources_sha256": "31198f287b6ec8544b73a910c70ca047d6a3ee1b032412b5d76b9a773f5f106c",
+          "sha256": "f9763b3a6aa05d511e8edd5db00f532aaf9140a33f22432ad7cbbdb5bb45c9c8",
+          "task_id": "predicate-pushdown-bench"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/predict-customer-churn/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/predict-customer-churn/attempt_1/resources.json",
+          "resources_sha256": "96ae4b385ee435330028614f5f47b61e75d289027048da21f587e6f5d3c5daaf",
+          "sha256": "aa84dc5178af7421054a85e9a9508b23360f89a810b961b446c8a80069cde359",
+          "task_id": "predict-customer-churn"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/privilege-escalation/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/privilege-escalation/attempt_1/resources.json",
+          "resources_sha256": "ae8b452517bc9496e8d8607875d634a604477e9c6dcb5220bf6b50c27549330e",
+          "sha256": "3d119f2a0c8171ffd6db426a9e56bc365d63d4cba006c042a9a3f18a11aec14d",
+          "task_id": "privilege-escalation"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/processing-pipeline/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/processing-pipeline/attempt_1/resources.json",
+          "resources_sha256": "c98b5ac89523b280175a36a96ffe26b4c0125174ed5498f46ccf3b8f8f589717",
+          "sha256": "0a6ae5b22a40819777f0fca0315acb9424c9ce3fe2cf412abedcb9fe1698b314",
+          "task_id": "processing-pipeline"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/protein-assembly/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/protein-assembly/attempt_1/resources.json",
+          "resources_sha256": "acef64f9f75543f1ffcedc975c4f48c5fa3c7227575e832b7cfffbf8fca1b805",
+          "sha256": "b59a324f84a5f9cd92cafef5e5452f6ec82bdf8ba60791517af773ff4377dd1e",
+          "task_id": "protein-assembly"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/protocol-analysis-rs/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/protocol-analysis-rs/attempt_1/resources.json",
+          "resources_sha256": "b7efedf32ffb85ab25b1ef2614175e84702c899ffaf2008272ed4b5b6de477ec",
+          "sha256": "636adec3e5ef284e017b22e85a12405560e4bdbb9b48b13cc1c81ebe403158e2",
+          "task_id": "protocol-analysis-rs"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/prove-plus-comm/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/prove-plus-comm/attempt_1/resources.json",
+          "resources_sha256": "615f578f969656288363854805382d555272976269d718f6b72512e1e866db0b",
+          "sha256": "8272faff0f734358d2e793d96e203706ad554fcc2bc7fa701e4f1a1e7bca4e97",
+          "task_id": "prove-plus-comm"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-repair3-20260722/puzzle-solver/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-repair3-20260722/puzzle-solver/attempt_1/resources.json",
+          "resources_sha256": "678c25b607880f8bcc3bb621aa022f9baf9c013aa75e0c0708f2e45046e342de",
+          "sha256": "cba71da3e8091c3868e2ac873c4356ecc2154ec5f161fe6f1298c2fb80f72717",
+          "task_id": "puzzle-solver"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pypi-server/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pypi-server/attempt_1/resources.json",
+          "resources_sha256": "989b32c32089514300f78192186ff6ac28404bd070b43d3bf8e336ab6c0a21c8",
+          "sha256": "9c4d7b162aec39cb6c52f6d6281a5894c2499ee08b73e522dac90da6fdb2cbb9",
+          "task_id": "pypi-server"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/pytorch-model-cli/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/pytorch-model-cli/attempt_1/resources.json",
+          "resources_sha256": "4346bea75eeca7845521bd4c3c13599a50e37a73d3ffeb6269d3235c16fb6349",
+          "sha256": "bf8564f4281df067a5205ca37f2e74989ebe178f75317cb184aa1a10547a45aa",
+          "task_id": "pytorch-model-cli"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pytorch-model-recovery/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/pytorch-model-recovery/attempt_1/resources.json",
+          "resources_sha256": "508d8ae9e4249241e48f85a4dddabf1b3e397b8c9258be14455aa3dcaa329950",
+          "sha256": "46e0452e5c4ba2947051b3800aa57c2a746d062c77b7dbfe730a04e061be2873",
+          "task_id": "pytorch-model-recovery"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/qemu-alpine-ssh/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/qemu-alpine-ssh/attempt_1/resources.json",
+          "resources_sha256": "d315b7ece73f57a8dc997df88d399242b87a5e3d9ff31478848c02ae933e65ad",
+          "sha256": "c25628f3383151f0d38311cfe2ca6baf1d0c00cadd343febd00b1d30072cfe8e",
+          "task_id": "qemu-alpine-ssh"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/qemu-startup/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/qemu-startup/attempt_1/resources.json",
+          "resources_sha256": "167d7aa1f6e9b4b5e11414c322e7c688c41ec5a934dd564ed77bcc48eafae27d",
+          "sha256": "983036022eb1e6dd499c380ec0f2bae9324a6c072cd8651adc3599db2a8e908e",
+          "task_id": "qemu-startup"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-repair3-20260722/query-optimize/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-c1-repair3-20260722/query-optimize/attempt_1/resources.json",
+          "resources_sha256": "190b678e1ecca181d5e19dd3c15a5cbeff3a52ad5c18dd0621c4af5f7f2adde8",
+          "sha256": "1decc88b6f6bb9362e8dd88941bc263ef0ab3c66ec55969444c0ec4eeda6aea5",
+          "task_id": "query-optimize"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/raman-fitting/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/raman-fitting/attempt_1/resources.json",
+          "resources_sha256": "709da38cf37fb251ec74c1ed35f19a4012875240477a85131a2f2c69c74d745f",
+          "sha256": "451254902b6c1db55f7fc95d7ab0f40b95f4ce5e6fe9fbed3a9f77da232b243b",
+          "task_id": "raman-fitting"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/rare-mineral-allocation/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/rare-mineral-allocation/attempt_1/resources.json",
+          "resources_sha256": "12fc50b5d9336d2176d9af8b3dede14c75048851968c96f74b653fefcb91dbae",
+          "sha256": "dcc70c1f59db4f41379d55cf6617009d7d0ae9b0ab26b4d1faaa934bfe105ef5",
+          "task_id": "rare-mineral-allocation"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/recover-accuracy-log/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/recover-accuracy-log/attempt_1/resources.json",
+          "resources_sha256": "1dbc6cda477836b5c2a035695cddc8b54db24cf968c211b8f5c6203fafb762ea",
+          "sha256": "fa72fe9165866658d1a38d9c90298bbb2645fe706d82457e8bef33af86837148",
+          "task_id": "recover-accuracy-log"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/recover-obfuscated-files/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/recover-obfuscated-files/attempt_1/resources.json",
+          "resources_sha256": "69b6a0c81793fa926113d0d5d336c7c9f5d553222ab42862c8fcfadd1fa297a8",
+          "sha256": "686084ab03ebf52d664c9886aaa3737b091154ef8d0c7a6223e303a9960c686f",
+          "task_id": "recover-obfuscated-files"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/regex-chess/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/regex-chess/attempt_1/resources.json",
+          "resources_sha256": "a43113d6aeb0ed779ae8fe2fe3fe717c469384211f242fbf444a8d3cc3183af7",
+          "sha256": "de74d46204048ae48ecba20d89026d2777fe3a280ba00890d12c177fc16536c7",
+          "task_id": "regex-chess"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/regex-log/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/regex-log/attempt_1/resources.json",
+          "resources_sha256": "3d7c74ef675b087f90dcaf190ff3b8ce3561371dfadb3a0951760fcc610ec903",
+          "sha256": "1c37906457dcbf6dc3eb68cf831421f758bf4099f3dc5dc07cb5d7a72940926b",
+          "task_id": "regex-log"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/reshard-c4-data/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/reshard-c4-data/attempt_1/resources.json",
+          "resources_sha256": "673f13e87a06cda2296c6451adad3703d8b9dc16d3611f1fd21635902c6652c4",
+          "sha256": "e3878e50c5b3f9998d3b817343ff41c8fc324292bf1a9348bc5c341ef15f5bbf",
+          "task_id": "reshard-c4-data"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/reverse-engineering/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/reverse-engineering/attempt_1/resources.json",
+          "resources_sha256": "556f014b446a2b1fb387c51ff80271ea0cb1c059123eefa22a1ef71bfa7fe0e4",
+          "sha256": "61235d04176e557de78c0a24b94c2464e72211df4888695c028a246cd487e28b",
+          "task_id": "reverse-engineering"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/rstan-to-pystan/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/rstan-to-pystan/attempt_1/resources.json",
+          "resources_sha256": "e4897ed3fffc9c535b1b6e60cd653470f8eb59072ecaf9153ce53fbeae95117a",
+          "sha256": "b82313a548ae7f834c82f1a255497fbbce29244899b97bb587e3705707fe4be5",
+          "task_id": "rstan-to-pystan"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/run-pdp11-code/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/run-pdp11-code/attempt_1/resources.json",
+          "resources_sha256": "5296b9a5668859066fcf3ec403fdeb7cd1a5692af54ad9a9b23aeab1031931c2",
+          "sha256": "9751986d998abb74fbb1b6ae61378fd5642ab4866f92bb2cc3150ebb4d9f4e51",
+          "task_id": "run-pdp11-code"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sam-cell-seg/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sam-cell-seg/attempt_1/resources.json",
+          "resources_sha256": "2e156d189303328d934d547e77df1b4189c318b602428b63ea3b5a03270bc8d7",
+          "sha256": "f6775e151c16db44ad471047cca8b982fdd30a15dd1e6aea098dddf04f306854",
+          "task_id": "sam-cell-seg"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sanitize-git-repo/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sanitize-git-repo/attempt_1/resources.json",
+          "resources_sha256": "99a98064a64a15befbdce3d22188dfe14c05b440e23dab01ef831cda2088e95b",
+          "sha256": "4343b00a4484c056ab3c4bc0e98eae8d442f44c6cc154c0c75b17de71a184688",
+          "task_id": "sanitize-git-repo"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/schedule-vacation/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/schedule-vacation/attempt_1/resources.json",
+          "resources_sha256": "8a79a8d3b7906694474fcc36ed87b41f529327d222b85082a7999837195e2161",
+          "sha256": "d8cff9f1b23a8472b64c7d7e40eeb0e3e24aa17fc8ae367f89057c161dd748d8",
+          "task_id": "schedule-vacation"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/schemelike-metacircular-eval/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/schemelike-metacircular-eval/attempt_1/resources.json",
+          "resources_sha256": "125ee77305419f35a1f1bd5e71f6bea412bd33a3ecd1aadbdecd73ce98f44aa7",
+          "sha256": "6468ff3542e429d1be8663f477dfce1fa8ea55f092fe7dd2d1c46b5c75bd8cbd",
+          "task_id": "schemelike-metacircular-eval"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/security-celery-redis-rce/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/security-celery-redis-rce/attempt_1/resources.json",
+          "resources_sha256": "1d0667899b5d977d9ea8398ee814a09858c9b0908215152b2d2b3f4fc0d14e90",
+          "sha256": "a4a8fa83f7a8d9c235305cc0ce80e4fa0d545cb1ccabf0584d66c5f64dda42bc",
+          "task_id": "security-celery-redis-rce"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/security-vulhub-minio/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/security-vulhub-minio/attempt_1/resources.json",
+          "resources_sha256": "b89df7cdb30b6f47464e099df86514d6874ff2538dc26188c5994a9329d72525",
+          "sha256": "cdbabd59da3c689e11246ccec5bdea0e1fdaa15b23464cb8b176574a4e6a29f5",
+          "task_id": "security-vulhub-minio"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/setup-custom-dev-env/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/setup-custom-dev-env/attempt_1/resources.json",
+          "resources_sha256": "7eebd6d951e7e83ab5b040b25aa49227dbacb6493b7104000b11e6f98137425f",
+          "sha256": "8ee4ac8631343e83f773a688436047531441f9e45d58520a0d1dac48330bf329",
+          "task_id": "setup-custom-dev-env"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sha-puzzle/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sha-puzzle/attempt_1/resources.json",
+          "resources_sha256": "07b842a586b3fa87f934906aa2814dc52a0b79d288eeb7607f4b2f9b70f03bf6",
+          "sha256": "a2170adfdb227a4e2616e8aa779367d5f395b8a889d6487a0a9ccc7bf0f01dab",
+          "task_id": "sha-puzzle"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/shell-deobfuscation/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/shell-deobfuscation/attempt_1/resources.json",
+          "resources_sha256": "86ea9c71f0a5d6da58fb29b6ec84b49dbafde0f7f08bf57961dd9dc274c4cf42",
+          "sha256": "3ff30569f4c50e64978c8046a6375adda069822b632679ef7bdb93798c0a5670",
+          "task_id": "shell-deobfuscation"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/simple-sheets-put/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/simple-sheets-put/attempt_1/resources.json",
+          "resources_sha256": "6a7805a0252cc4b89224c4d6ded6819acfb8b18014d920b3e85d5e7368e34981",
+          "sha256": "14f971e60e8748a92d928b589c26f7875f1e0ab38c55d9d24eaa503150a38a59",
+          "task_id": "simple-sheets-put"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/simple-web-scraper/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/simple-web-scraper/attempt_1/resources.json",
+          "resources_sha256": "6e926cea1d621706b54124cea2000c32726ed780ad5a07252736abf9537eaa36",
+          "sha256": "fa2328b7b29cf92bf86a169f30cc4ad023d3386b69870ecc547bd6cc35fe90be",
+          "task_id": "simple-web-scraper"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/slurm-simple-node-monitoring/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/slurm-simple-node-monitoring/attempt_1/resources.json",
+          "resources_sha256": "6f7773b0d5ea6fda5bdaeeaa49708d42762f2412e46935b15903f5325cdcfcea",
+          "sha256": "332dfef566ae153abc30241cda0141bd724c7874089c97bb803482814ebeefdc",
+          "task_id": "slurm-simple-node-monitoring"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/solana-data/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/solana-data/attempt_1/resources.json",
+          "resources_sha256": "0fa0fdd4846c11ad19336a4611ce91cd9a64f49ff69ac9be2687b185e70c0ace",
+          "sha256": "36d4dc34d320691e20a9b9503be38ffdb3589c93eaa8d2d13d447a5d0f749a59",
+          "task_id": "solana-data"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/solve-maze-challenge/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/solve-maze-challenge/attempt_1/resources.json",
+          "resources_sha256": "51eb34517391246d3881a40586218d83c351239e126ef49247ab6a815f4cbec9",
+          "sha256": "638210c5f7d507135af38cdf7616e705a0bb1dbe7670abc729a08c99836c0dde",
+          "task_id": "solve-maze-challenge"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/solve-sudoku/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/solve-sudoku/attempt_1/resources.json",
+          "resources_sha256": "8c4a33e15ce39a795ccae08793576ca1401e989656283dec72ba78af5224fa1b",
+          "sha256": "37096befa4183e91b11afb68e565794dae5010d0e06a4d0fab4742d5d388271a",
+          "task_id": "solve-sudoku"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sparql-professors-universities/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sparql-professors-universities/attempt_1/resources.json",
+          "resources_sha256": "d963adf4321ece9149c46d462b874b36df10740dbfdff6d1d1fec5dea1b58421",
+          "sha256": "e45d33aa447ea074a454e3df008337171ab070f2e350cc7c4a4313d14f7c056a",
+          "task_id": "sparql-professors-universities"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sparql-university/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sparql-university/attempt_1/resources.json",
+          "resources_sha256": "805eb222eb8d9e1f7b50b2c8270d52a18d7da5549e09b9bcce77d9e0b9746e70",
+          "sha256": "a8673ec15c543d7b14f921775d20f6e0dc89531e4ac059b791d6f2770cddb12a",
+          "task_id": "sparql-university"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/speech-to-text/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/speech-to-text/attempt_1/resources.json",
+          "resources_sha256": "73f0690942a8036899ac91b07b1d50410aabd5adcc760120d4387fc3839cf19e",
+          "sha256": "91de493e540b9a92f01c4a80a36dd5c4ccd9953a168235839d2a51c3036d7e95",
+          "task_id": "speech-to-text"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/spinning-up-rl/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/spinning-up-rl/attempt_1/resources.json",
+          "resources_sha256": "372a3fa31bc0c5207c10ca5fa2f48600f5c2a7c731809b75dc42e1af707a9d69",
+          "sha256": "3daf7b370f6f76c77e949af4d924cb84e2f8afef0b443d484a5efd8f8862adaa",
+          "task_id": "spinning-up-rl"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/spring-messaging-vul/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/spring-messaging-vul/attempt_1/resources.json",
+          "resources_sha256": "a8906bf98de2f6c7e32799a393a323444aeb7ca6ecd4d0b1c6aa80d264f9d13f",
+          "sha256": "a00a76372c8557bc53a5dd13c0221329408cbdaec8dfe9ac0db64f93a9059041",
+          "task_id": "spring-messaging-vul"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sql-injection-attack/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sql-injection-attack/attempt_1/resources.json",
+          "resources_sha256": "4018184b4eeec869fc855d23f870f3a22df3d121845d4105f8b9c80b8ee4fdf0",
+          "sha256": "9f150712d4fcc95b819736316c5f08147219427a2eb3458421a61b53953c8ae0",
+          "task_id": "sql-injection-attack"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sqlite-db-truncate/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sqlite-db-truncate/attempt_1/resources.json",
+          "resources_sha256": "c903f2f7faa31781faf3314c431702e7bcf8aba210fb2ed2b7ad4f16dbaba55c",
+          "sha256": "0b6b2cff08e9e854e671e3827c69e4da7544e280f129ed0c34cab44bde1c8d17",
+          "task_id": "sqlite-db-truncate"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sqlite-with-gcov/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/sqlite-with-gcov/attempt_1/resources.json",
+          "resources_sha256": "7a8e334be2c7653c3b10b75f0714bfc11d7e1ea8b7c26398e1bb63fa124f9dc2",
+          "sha256": "5456bdce95c26519f5bb0d4d1939bb5079ce52950cc0cbef72b8ea26f4e17e40",
+          "task_id": "sqlite-with-gcov"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/stable-parallel-kmeans/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/stable-parallel-kmeans/attempt_1/resources.json",
+          "resources_sha256": "befefffb46107f381db9be2574f38763e35fd283dad1293a583362262e39e80d",
+          "sha256": "76b466edcb0b7ef3e1649e77e1bb0cb3c4614ad8b4505569089eed6c748120db",
+          "task_id": "stable-parallel-kmeans"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sudo-llvm-ir/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/sudo-llvm-ir/attempt_1/resources.json",
+          "resources_sha256": "a05b408f3ec5b5b578d683f3fa70a2075061ef4ce01423156129ead33585e8a5",
+          "sha256": "094877951fd4ef8ce41406dc351e13de31496f97be511956855075f9d6c18062",
+          "task_id": "sudo-llvm-ir"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-astropy-1/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-astropy-1/attempt_1/resources.json",
+          "resources_sha256": "8d0031aa448e8a1a0021cffc1221df631815c367b1315d214a9c3aabd350c51f",
+          "sha256": "098941dc426a9f9263cbba28cd4f7281f35954429907d786445637b531d8ec20",
+          "task_id": "swe-bench-astropy-1"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-astropy-2/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-astropy-2/attempt_1/resources.json",
+          "resources_sha256": "3aa79e92c30e362549a202e98c77e14aff4e7043f69e7e10947f7ca844bade05",
+          "sha256": "db95694e183092ddb67757db2a5593208eaa661f6fcef14cb1a74c87e0de41c4",
+          "task_id": "swe-bench-astropy-2"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-fsspec/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-fsspec/attempt_1/resources.json",
+          "resources_sha256": "7b8de321a5dfe73c967134f316925534c840476892e27f759a3450c9ef464978",
+          "sha256": "672cdefd3a2cfb6833d6e0006d9d9dbc76dedf4397c01425f83131b714b51919",
+          "task_id": "swe-bench-fsspec"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-langcodes/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/swe-bench-langcodes/attempt_1/resources.json",
+          "resources_sha256": "96d48f2142c409c79f2b21560bc8224bea62be11343336b8dd0acce08773c888",
+          "sha256": "873dbb54a1fa528b27e45ad92a855286a5f082d82f67e49351305b84d0c66e1d",
+          "task_id": "swe-bench-langcodes"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/tmux-advanced-workflow/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/tmux-advanced-workflow/attempt_1/resources.json",
+          "resources_sha256": "67c2c3e64b4af882fb882f0dbe8d0fc7744bb333752283134107b6bcd3adfcb2",
+          "sha256": "3a1bf00366f2c976c8494da975ffb2cdeb9ccbec533404c59def2ae4f41298a4",
+          "task_id": "tmux-advanced-workflow"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/torch-pipeline-parallelism/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/torch-pipeline-parallelism/attempt_1/resources.json",
+          "resources_sha256": "95893364502eb8b57e75193a3586c1847a0804f5ae0b17589ffb8157c4bf9bce",
+          "sha256": "90bca873966f94729e411924c257424901f35f680a03518230c8a617f0ce281e",
+          "task_id": "torch-pipeline-parallelism"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/torch-tensor-parallelism/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/torch-tensor-parallelism/attempt_1/resources.json",
+          "resources_sha256": "4894b0b48882bd7871d13d526f2aed9b6b77675791ed915778549310c5439575",
+          "sha256": "eaba1fbf4163770fb18322667a02d0060f622dbd1e4da790d8c7e082253be3c3",
+          "task_id": "torch-tensor-parallelism"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/train-bpe-tokenizer/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/train-bpe-tokenizer/attempt_1/resources.json",
+          "resources_sha256": "417508569f48603dcb85906395e73c1478a3a9190ef950d3c3d6edf3ba4966ce",
+          "sha256": "375ddb1b04cb9773bb0edc2b5918fa73e35cdfe45b1adcdc99bcb100750d6694",
+          "task_id": "train-bpe-tokenizer"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-2h-timeouts-20260721/train-fasttext/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-2h-timeouts-20260721/train-fasttext/attempt_1/resources.json",
+          "resources_sha256": "c90dff1087d8653c215c637a0b3ff556d23b48daa6a4d4f8dc9077a8ab9616b2",
+          "sha256": "7835c454675533efb899cd574b6f28d26a685ea4c5e68c9aed0e165651b78e51",
+          "task_id": "train-fasttext"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/tree-directory-parser/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/tree-directory-parser/attempt_1/resources.json",
+          "resources_sha256": "1212cdf786762263737c474588747325023d804a76a4444edf57a2fabb9e7e82",
+          "sha256": "c8a68f004a9da090b8004c6149e49dd9426d1d4a9219cacbc81d7681a748c7c7",
+          "task_id": "tree-directory-parser"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/triton-interpret/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/triton-interpret/attempt_1/resources.json",
+          "resources_sha256": "056aa89368c3ab0942a2df0707498f33ed96be09091643803217e1add4d1aaf1",
+          "sha256": "01b421b230249f9de2b09c0a3f99c21867a7b49f4152a693571985e3e049c22a",
+          "task_id": "triton-interpret"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/tune-mjcf/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/tune-mjcf/attempt_1/resources.json",
+          "resources_sha256": "f523e4815875ca6419515699964be26c7140ff84c917fbb2e4d11fdab31e4734",
+          "sha256": "6a4ed01e6fadee4cad0cc5294c3f2631a0c230ce70fa3374c44156ae9b841bee",
+          "task_id": "tune-mjcf"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/unprivileged-headless-pyrender/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/unprivileged-headless-pyrender/attempt_1/resources.json",
+          "resources_sha256": "92fe389d00495ca2a2b6164fcee87fdc55bf78cac8d0e8db870afd09c6dfd2ff",
+          "sha256": "4d141c23112260b658b4925880a7d13b6c433b3489c07b839a8fe26f39ddbea7",
+          "task_id": "unprivileged-headless-pyrender"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/vertex-solver/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/vertex-solver/attempt_1/resources.json",
+          "resources_sha256": "f1ef8ab5664cb87203172a9d21a9b02d0fc30afbba2be99ca04c8b86e7fa13d6",
+          "sha256": "b09e0d1a07fb2ab8c82ec0bd387505720c871ab0d73adee6319b8d9bfa19b7c6",
+          "task_id": "vertex-solver"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/video-processing/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/video-processing/attempt_1/resources.json",
+          "resources_sha256": "d5091090803c1b34f5b0c2846ff07790ae5fc9357c1a3370d9b50eeb03757b25",
+          "sha256": "4dda51b3cc48110b6c914176daeb5e635a879d4745dd44b11707784d38e7cb86",
+          "task_id": "video-processing"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/vimscript-vim-quine/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/vimscript-vim-quine/attempt_1/resources.json",
+          "resources_sha256": "4c95b0467c96a888a42d91138bedb75793786369f5755690bce9f1bf34e3ac2d",
+          "sha256": "ba83a21ebcc4a5bb24ed5f27e818ef15736ac4fbf4fbaed5209c76873ff8a14d",
+          "task_id": "vimscript-vim-quine"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/vul-flask/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/vul-flask/attempt_1/resources.json",
+          "resources_sha256": "defd8b6b5731581502579ec9628559bba08fc3be06965c61315590a35d96bc6d",
+          "sha256": "1b6e7cd63fcea0a9cd18eb90352de83c276afdedc2e85e914e1a1d04ba11f837",
+          "task_id": "vul-flask"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/vul-flink/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/vul-flink/attempt_1/resources.json",
+          "resources_sha256": "070c53899395d53def91d58b5e30d116edd6caac91f15e53a6dc1341dd032dba",
+          "sha256": "c4d00ac98dc02c08bf276883bfabc23511b77a9dd03092c876374ca9756aef10",
+          "task_id": "vul-flink"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/vulnerable-secret/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/vulnerable-secret/attempt_1/resources.json",
+          "resources_sha256": "9993984cadbfc9b4459c76d0b1aca1b09456db690dc438921e8ccd1209a9f367",
+          "sha256": "21f7e02314254ecb586d99cd6efcea90415935221528a33e9637f96be8ff8405",
+          "task_id": "vulnerable-secret"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/wasm-pipeline/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/wasm-pipeline/attempt_1/resources.json",
+          "resources_sha256": "7be30bbbb400e53f37647199aa7822b2baeb5aedf75aeb5d36109f9561240119",
+          "sha256": "3cc54bcc2f076e9220aecde70072abc000b1499ff9dab2d62e10e249bebf5ec4",
+          "task_id": "wasm-pipeline"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/weighted-max-sat-solver/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-glm100-unified-20260721/weighted-max-sat-solver/attempt_1/resources.json",
+          "resources_sha256": "7f4ea30c68fe321f20ff3f181a030c6262da4cbd0142a0dbde38828b9e02daff",
+          "sha256": "3cbec140c9884d9749c5e34560a65a8edea2f39ff66f40b79ae7515a6081958b",
+          "task_id": "weighted-max-sat-solver"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/winning-avg-corewars/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/winning-avg-corewars/attempt_1/resources.json",
+          "resources_sha256": "40f77f0ed60021543e6c03a811a73f2720a8cb96225623ce2bfc73ccf04fb076",
+          "sha256": "4c18d395436e7a89ebfdad19a4d080a4b683ae0bb20575161b69bd5258dd804c",
+          "task_id": "winning-avg-corewars"
+        },
+        {
+          "path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/write-compressor/attempt_1/trace.jsonl",
+          "resources_path": "/home/chiyu/workspace/agent-sched-bench/traces/terminal-bench/tb-all/runs/codex-remaining140-c1-30m-20260721/write-compressor/attempt_1/resources.json",
+          "resources_sha256": "5575b4770968af1a60f7c4422a45fea13faec5392c55448644ab9ab604e2f06c",
+          "sha256": "cc9093439863d568472afd0637bffe4c8ade4eb83c047cf480fff992821e85ed",
+          "task_id": "write-compressor"
+        }
+      ],
+      "zero_call_trace_count": 4
+    }
+  ],
+  "cpu_method": {
+    "aggregation": "linear interpolation and overlap-weighted trapezoid mean",
+    "expected_sample_interval_seconds": 2.0,
+    "interpretation": "exploratory secondary audit data only",
+    "maximum_allowed_gap_seconds": 3.0,
+    "minimum_call_duration_seconds": 4.0,
+    "minimum_strictly_interior_samples": 2,
+    "plotting": "not plotted; retained in cpu_exec_call_audit.csv only",
+    "sample_source": "resources.json samples",
+    "sampler_scope": "not encoded in resources.json; collector implementation samples AttemptContext.container_id",
+    "scope_limitation": "artifact-level sampler/container identity cannot be independently verified retrospectively"
+  },
+  "exec_command_classification": {
+    "all_content_category_counts": {
+      "7z": 1,
+      "R": 1,
+      "Rscript": 9,
+      "apt-cache": 8,
+      "apt-get": 46,
+      "aria2c": 2,
+      "attack.py": 1,
+      "awk": 2,
+      "aws": 2,
+      "bash": 61,
+      "cargo": 5,
+      "cat": 14,
+      "cbc": 1,
+      "chmod": 18,
+      "chsh": 1,
+      "cli_tool": 1,
+      "cmake": 11,
+      "command": 13,
+      "conda": 9,
+      "configure": 1,
+      "coqc": 1,
+      "count_corners": 1,
+      "cp": 9,
+      "curl": 23,
+      "dd": 1,
+      "dfrotz": 1,
+      "docker": 1,
+      "dpkg": 1,
+      "dpkg-query": 1,
+      "du": 1,
+      "echo": 9,
+      "env": 5,
+      "explore_mazes.py": 1,
+      "export": 17,
+      "ffmpeg": 1,
+      "file": 9,
+      "find": 19,
+      "frotz": 2,
+      "g++": 1,
+      "gcc": 7,
+      "gdb": 1,
+      "get_schedules": 1,
+      "git": 28,
+      "grep": 63,
+      "head": 1,
+      "install": 2,
+      "kill": 1,
+      "ldconfig": 1,
+      "ls": 23,
+      "main": 1,
+      "make": 10,
+      "mcopy": 1,
+      "mformat": 1,
+      "mips-linux-gnu-objdump": 1,
+      "mipsel-linux-gnu-addr2line": 1,
+      "mipsel-linux-gnu-objdump": 2,
+      "mkdir": 7,
+      "mkfs.vfat": 2,
+      "mteb": 3,
+      "mv": 3,
+      "mvn": 3,
+      "nginx": 2,
+      "nl": 1,
+      "nm": 2,
+      "node": 7,
+      "nohup": 1,
+      "npm": 5,
+      "objdump": 5,
+      "od": 1,
+      "pdflatex": 10,
+      "pdftotext": 1,
+      "perl": 2,
+      "pip": 2,
+      "pmars": 1,
+      "printf": 49,
+      "ps": 4,
+      "pwd": 2,
+      "pytest": 12,
+      "python": 9,
+      "python3": 89,
+      "qemu-img": 1,
+      "qemu-system-i386": 5,
+      "qemu-system-x86_64": 4,
+      "read_xp_key_from_cdrom_box": 1,
+      "rm": 9,
+      "rmdir": 1,
+      "runuser": 3,
+      "sed": 33,
+      "service": 1,
+      "set": 184,
+      "sh": 4,
+      "sha256sum": 1,
+      "shred": 3,
+      "sleep": 8,
+      "sqlite3": 1,
+      "stat": 2,
+      "stockfish": 1,
+      "strings": 2,
+      "tail": 4,
+      "tar": 3,
+      "test": 2,
+      "time": 1,
+      "timeout": 3,
+      "unclassified": 949,
+      "upcc": 1,
+      "valgrind": 1,
+      "wc": 10,
+      "websockify": 1,
+      "wget": 2,
+      "which": 2,
+      "xorriso": 6,
+      "yt-dlp": 2
+    },
+    "attribution": "first-head-only: the full exec-call latency is assigned to the first effective head; later commands receive no attribution",
+    "attribution_limitation": "multi-command latency may be dominated by a later command; use operator_pattern and full CSV summaries when interpreting heads",
+    "displayed_categories": [
+      "set"
+    ],
+    "head_extractor": "first non-cd top-level command word from the bashlex AST; leading environment assignments are skipped",
+    "operator_pattern": "no simple operator | sequential operators | pipeline/background operators | mixed operators | unclassified",
+    "operator_pattern_counts": {
+      "mixed operators": 331,
+      "no simple operator": 216,
+      "pipeline/background operators": 50,
+      "sequential operators": 399,
+      "unclassified": 934
+    },
+    "operator_pattern_scope": "bashlex top-level AST classification; leading cd segments are ignored, and operators nested in words, heredocs, command substitutions, process substitutions, or escaped arguments do not affect the outer call pattern; unsupported AST roots are unclassified",
+    "parse_status_counts": {
+      "parsed": 996,
+      "unsupported syntax": 934
+    },
+    "parser": "bashlex 0.18",
+    "plot_kind": "empirical CDF with a shared latency domain",
+    "plot_minimum_category_calls": 100,
+    "plot_threshold_rationale": "100 calls gives 0.010 empirical probability resolution; all categories remain available in exec_command_summary.csv",
+    "pytest_category_rule": "direct pytest executables and first-command Python '-m pytest' entry points are grouped as pytest"
+  },
+  "histogram": {
+    "binning": "numpy histogram_bin_edges with method='fd' on log1p milliseconds",
+    "edges_log1p_ms": [
+      0.38990274574671785,
+      1.1074007545967333,
+      1.8248987634467488,
+      2.5423967722967644,
+      3.2598947811467798,
+      3.977392789996795,
+      4.694890798846811,
+      5.412388807696826,
+      6.129886816546842,
+      6.847384825396857,
+      7.564882834246872,
+      8.282380843096888,
+      8.999878851946903,
+      9.717376860796918,
+      10.434874869646933,
+      11.15237287849695,
+      11.869870887346964,
+      12.58736889619698,
+      13.304866905046996
+    ],
+    "numpy_version": "2.2.6",
+    "series_normalization": "each displayed series has total weight 1"
+  },
+  "latency_source": "trace.jsonl tool_exec ts_end - ts_start",
+  "provenance": {
+    "analysis_script": "/home/chiyu/workspace/agent-sched-bench/scripts/figures/tool_time_analyze.py",
+    "analysis_script_sha256": "96019e586281a151d59e0ff474990ae38751732ebac011c74a54507dcb5de7b9",
+    "analysis_script_snapshot": "analysis_script_snapshot.py",
+    "command": [
+      "scripts/figures/tool_time_analyze.py",
+      "--cohort",
+      "Terminal-Bench All=239=traces/terminal-bench/tb-all/canonical",
+      "--output-dir",
+      "analysis/tool-time-tb-all/reference-style"
+    ],
+    "git_revision": "ab124cee845af380bac2c81d82b3c55bbbe753ff",
+    "git_tracked_status_short": [
+      " M analysis/CLOSED-QUESTIONS.md",
+      " D analysis/PAPER-SKELETON-20260720.md",
+      " M analysis/README.md",
+      " D analysis/ROADMAP-mlsys2027-20260717.md",
+      " A analysis/ROADMAP.md",
+      " M analysis/certification/prerestore-accounting-2026-07-20.md",
+      " M analysis/certification/prerestore-accounting-robust-2026-07-20.md",
+      " M analysis/certification/pressure-headroom-design-20260720.md",
+      " M analysis/certification/rolling-survival-design-20260720.md",
+      " D analysis/development/prequential-profile-update-2026-07-21-run-state.json",
+      " D analysis/development/same-repo-history-2026-07-21-records.jsonl.zst",
+      " D analysis/development/same-repo-history-2026-07-21.json",
+      " D analysis/development/same-repo-history-2026-07-21.md",
+      " M analysis/fresh-corpus-certification-20260717/findings.md",
+      " D analysis/offline/related-work-synthesis-20260715.md",
+      " D analysis/offline/tool-time-mechanism-analysis-20260715.md",
+      "A  analysis/results/prequential-task-update-20260721/optimized-replay-equivalence.md",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21-f1-records.jsonl.zst",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21-f2-records.jsonl.zst",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21-f3-records.jsonl.zst",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21-f4-records.jsonl.zst",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21-f5-records.jsonl.zst",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21-records.jsonl.zst",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21-run-state.json",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21.json",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-2026-07-21.md",
+      "A  analysis/results/prequential-task-update-20260721/prequential-profile-update-fresh277-pre-run-traces.sha256",
+      "A  analysis/results/prequential-task-update-20260721/prequential_profile_update.yaml",
+      "A  analysis/results/same-repo-history-20260721/same-repo-history-2026-07-21.json",
+      "A  analysis/results/same-repo-history-20260721/same-repo-history-2026-07-21.md",
+      " D analysis/tool-time-offline-gated-robust-confirmation-20260712/manifest.example.json",
+      " D analysis/tool-time-offline-gated-robust-confirmation-20260712/pipeline_hashes.sha256",
+      " D analysis/tool-time-offline-gated-robust-confirmation-20260712/review.md",
+      " D analysis/tool-time-offline-gated-robust-confirmation-swe-rebench-100-20260713/summary.md",
+      " M configs/README.md",
+      " M configs/experiments/prequential_profile_update.yaml",
+      " D configs/experiments/same_repo_history.yaml",
+      " M pyproject.toml",
+      " M scripts/certification/analyze_prerestore_accounting.py",
+      " D scripts/exploration/analyze_boundary_evidence_stage1.py",
+      " M scripts/exploration/analyze_corpus_opportunity_mass.py",
+      " M scripts/exploration/analyze_prequential_profile_updates.py",
+      " D scripts/exploration/analyze_same_repo_history.py",
+      " D scripts/exploration/analyze_segment_variance.py",
+      " D scripts/exploration/analyze_session_state_cv.py",
+      " D scripts/exploration/analyze_wrapper_transparency.py",
+      " M scripts/exploration/evaluate_profiled_latency_thresholds.py",
+      " M scripts/exploration/evaluate_swap_deadline_policy.py",
+      " D scripts/exploration/run_wtn_stage2.py",
+      " D scripts/figures/_real_trace_metrics.py",
+      " D scripts/figures/plot_execution_profile.py",
+      " D scripts/figures/plot_execution_profile_real.py",
+      " D scripts/figures/plot_resource_phase_alignment.py",
+      " D scripts/figures/plot_tool_ratio_progress.py",
+      " D scripts/figures/plot_tool_ratio_progress_real.py",
+      " M scripts/serving/measure_prefill_cost.py",
+      " M spike/P4_EVICTION_DESIGN.md",
+      " M spike/README.md",
+      " M spike/vllm_connector/__init__.py",
+      " M spike/vllm_connector/core.py",
+      " M spike/vllm_connector/gpu.py",
+      " M spike/vllm_connector/scheduler.py",
+      " M src/trace_collect/command_features.py",
+      " D src/trace_collect/segment_cost_model.py",
+      " M src/trace_collect/swap_deadline_policy.py",
+      " M src/trace_collect/tool_latency_offline_probe.py",
+      " M src/trace_collect/tool_latency_prequential.py",
+      " M src/trace_collect/tool_latency_profiled.py",
+      " M src/trace_collect/tool_latency_utility_clock.py",
+      " D tests/test_analyze_boundary_evidence_stage1.py",
+      " M tests/test_analyze_prequential_profile_updates.py",
+      " M tests/test_analyze_prerestore_accounting.py",
+      " D tests/test_analyze_same_repo_history.py",
+      " D tests/test_analyze_segment_variance.py",
+      " D tests/test_analyze_session_state_cv.py",
+      " D tests/test_analyze_wrapper_transparency.py",
+      " M tests/test_command_features.py",
+      " D tests/test_corpus_opportunity_mass.py",
+      " D tests/test_figure_real_trace_metrics.py",
+      " D tests/test_run_wtn_stage2.py",
+      " D tests/test_segment_cost_model.py",
+      " M tests/test_swap_deadline_policy.py",
+      " M tests/test_tool_latency_offline_probe.py",
+      " M tests/test_tool_latency_prequential.py",
+      " M tests/test_tool_latency_profiled.py"
+    ],
+    "matplotlib_version": "3.11.0",
+    "python_version": "3.12.13"
+  }
+}
